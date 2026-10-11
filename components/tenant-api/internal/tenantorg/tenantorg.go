@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
@@ -121,4 +122,25 @@ func parseConfig(data []byte) (*Config, error) {
 		cfg.TenantOrgs = make(map[string][]string)
 	}
 	return &cfg, nil
+}
+
+// OrgsInTree reads tenantID's organizations from the `_tenant_orgs.yaml` in
+// configDir as it is on disk now, not from the Manager's hot-reloaded copy.
+// A PR-mode write re-judges its scope on the fresh base its branch is cut
+// from (#2857): the copy follows the pod's local tree, which may lag it. A
+// missing file is the empty mapping, as for NewManager; a file that does not
+// parse is an error (it is the org boundary, so it is not read as empty).
+func OrgsInTree(configDir, tenantID string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(configDir, "_tenant_orgs.yaml"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := parseConfig(data)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.TenantOrgs[tenantID], nil
 }

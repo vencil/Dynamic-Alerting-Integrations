@@ -329,3 +329,104 @@ func TestPRModeScopeRejudgeAddsNoOrgCount(t *testing.T) {
 		t.Errorf("metadata_write would-deny: %d stale vs %d; want exactly one more for the stale base", counts[true]["metadata_write"], counts[false]["metadata_write"])
 	}
 }
+
+// The organization axis is judged on the base too: the base's
+// `_tenant_orgs.yaml` moved db-a out of the caller's organization (refused in
+// both modes: a tenant in another org is never the caller's), or left it
+// unlabeled (refused under enforce, a would-deny in shadow), while the
+// manager's copy (the local tree) still has it in.
+func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
+	orgsFile := func(org string) string { return "tenant_orgs:\n  db-a: [" + org + "]\n" }
+	run := func(t *testing.T, kind string, enforce bool, originOrgs string) (*staleFixture, *httptest.ResponseRecorder, map[string]int) {
+		local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles,
+			"db-a.yaml": freshScopeProduction, "_tenant_orgs.yaml": orgsFile("acme")}
+		var origin map[string]string
+		if originOrgs != "" {
+			origin = map[string]string{"_tenant_orgs.yaml": originOrgs}
+		}
+		f := newStaleFixture(t, local, origin)
+		claimHeaders := map[string]string{"org": "X-Org"}
+		mgr := newRBACManagerWithClaims(t, freshScopeOrgRBAC, claimHeaders)
+		audit := &countingScopeAuditor{n: map[string]int{}}
+		mgr.SetScopeAuditor(audit)
+		if enforce {
+			mgr.EnableOrgScopeEnforce()
+		}
+		f.deps.RBAC = mgr
+		f.deps.ClaimHeaders = claimHeaders
+		f.deps.TenantOrg = tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{"db-a": {"acme"}}})
+		var req *http.Request
+		if kind == "PUT" {
+			req = newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a",
+				bytes.NewBufferString(strings.Replace(freshScopeProduction, "'80'", "'90'", 1)))
+		} else {
+			req = httptest.NewRequest("POST", "/api/v1/tenants/batch",
+				bytes.NewBufferString(`{"operations":[{"tenant_id":"db-a","patch":{"mysql_connections":"90"}}]}`))
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Header.Set("X-Forwarded-Email", "alice@example.com")
+		req.Header.Set("X-Forwarded-Groups", "admins")
+		req.Header.Set("X-Org", "acme")
+		w := httptest.NewRecorder()
+		if kind == "PUT" {
+			wrapWithRBACMiddleware(PutTenant(f.deps), mgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+		} else {
+			mgr.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps)).ServeHTTP(w, req)
+		}
+		return f, w, audit.n
+	}
+	for _, kind := range []string{"PUT", "batch"} {
+		for name, c := range map[string]struct {
+			enforce bool
+			origin  string
+		}{"other org": {false, orgsFile("other")}, "unlabeled, enforce": {true, "tenant_orgs: {}\n"}} {
+			t.Run(kind+"/"+name, func(t *testing.T) {
+				f, w, _ := run(t, kind, c.enforce, c.origin)
+				if w.Code != http.StatusForbidden || f.prOpened {
+					t.Errorf("status %d, PR opened %v; want 403: %s", w.Code, f.prOpened, w.Body.String())
+				}
+			})
+		}
+		t.Run(kind+"/unlabeled, shadow", func(t *testing.T) {
+			_, w0, base := run(t, kind, false, "")
+			f, w, stale := run(t, kind, false, "tenant_orgs: {}\n")
+			if w0.Code != http.StatusOK || w.Code != http.StatusOK || !f.prOpened {
+				t.Fatalf("status %d / %d, PR opened %v; want both written in shadow: %s", w0.Code, w.Code, f.prOpened, w.Body.String())
+			}
+			if stale["org_write"] != base["org_write"]+1 {
+				t.Errorf("org_write would-deny: %d with the stale base, %d without; want exactly one more", stale["org_write"], base["org_write"])
+			}
+		})
+	}
+	t.Run("broken org file on the base", func(t *testing.T) {
+		local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles,
+			"db-a.yaml": freshScopeProduction, "_tenant_orgs.yaml": orgsFile("acme")}
+		f := newStaleFixture(t, local, map[string]string{"_tenant_orgs.yaml": "tenant_orgs: [unclosed\n"})
+		w := putStale(t, f, "db-a", freshScopeProduction)
+		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) || f.prOpened {
+			t.Errorf("status %d, PR opened %v; want 500 %s: %s", w.Code, f.prOpened, CodeConfigDecode, w.Body.String())
+		}
+	})
+}
+
+// A group batch refused for one member names that member only when the
+// caller may read it, and never its index among the stored members.
+func TestGroupMemberRefusalHidesUnreadableMembers(t *testing.T) {
+	f := newOrgEnfFixture(t, nil)
+	d := f.deps()
+	for member, wantNamed := range map[string]bool{orgEnfTenantIn: true, orgEnfTenantOut: false} {
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeGroupMemberRefusal(d, w, r, rbac.RequestPrincipal(r), &freshBaseScopeError{TenantID: member, Op: 13})
+		})
+		req := orgEnfIdentity(newRequestWithChiParam("POST", "/api/v1/groups/g/batch", "id", "g", nil), orgEnfMemberOrg)
+		w := httptest.NewRecorder()
+		wrapWithRBACMiddleware(h, f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+		body := w.Body.String()
+		if w.Code != http.StatusForbidden || strings.Contains(body, "operation") || strings.Contains(body, "13") {
+			t.Errorf("%s: status %d, body %s; want 403 without an op index", member, w.Code, body)
+		}
+		if named := strings.Contains(body, member); named != wantNamed {
+			t.Errorf("%s: named = %v, want %v: %s", member, named, wantNamed, body)
+		}
+	}
+}

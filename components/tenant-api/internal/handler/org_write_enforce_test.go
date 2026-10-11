@@ -89,7 +89,15 @@ type orgEnfFixture struct {
 // PR-mode branch writes succeed for the ALLOWED rows.
 func newOrgEnfFixture(t *testing.T, files map[string]string) *orgEnfFixture {
 	t.Helper()
-	configDir := setupConfigDir(t, files)
+	// The same mapping as f.tenantOrg below, also on disk: a PR-mode write
+	// re-reads it from the tree its branch is cut from (#2857).
+	seeded := map[string]string{"_tenant_orgs.yaml": "tenant_orgs:\n" +
+		"  " + orgEnfTenantIn + ": [" + orgEnfMemberOrg + "]\n" +
+		"  " + orgEnfTenantOut + ": [" + orgEnfOutsiderOrg + "]\n"}
+	for k, v := range files {
+		seeded[k] = v
+	}
+	configDir := setupConfigDir(t, seeded)
 	initGitRepo(t, configDir)
 	// initGitRepo leaves the repo on the init default branch; PR-mode writes
 	// check out base "main" — normalize (same as initGitConfigDir).

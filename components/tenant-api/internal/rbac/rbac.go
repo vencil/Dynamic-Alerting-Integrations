@@ -746,13 +746,12 @@ func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permi
 // on the fresh base its branch is cut from (#2857). The decision is the same
 // as AllowedInOrg's for the same inputs, so it is always taken; what differs
 // is the bookkeeping, because AllowedInOrg already counted the first
-// decision. Nothing is recorded on the org axis (organization membership is
-// not read from the tree, so a rejudge sees the same orgs), and the metadata
-// axis's would-deny is recorded only when countMetadata is set — the caller
-// sets it when the tenant's environment/domain on this tree differs from the
-// pair the first decision judged, so a write is counted once per pair.
+// decision. Each axis's would-deny is recorded only when the caller asks for
+// it — it sets countMetadata when the tenant's environment/domain on this tree
+// differs from what the first decision judged, and countOrg when its
+// organizations do — so a write is counted once per value it is judged on.
 func (m *Manager) AllowedInOrgRejudge(p *VerifiedPrincipal, tenantID string, want Permission,
-	tenantOrgs []string, environment, domain string, countMetadata bool) bool {
+	tenantOrgs []string, environment, domain string, countMetadata, countOrg bool) bool {
 	passSS, passSE, passES, passEE, _ := m.allowedScopedModes(p, tenantID, want, tenantOrgs, environment, domain)
 	metaFlag := m.metadataWriteScopeEnforce
 	orgFlag := m.orgScopeEnforce
@@ -761,6 +760,12 @@ func (m *Manager) AllowedInOrgRejudge(p *VerifiedPrincipal, tenantID string, wan
 			visAt(passSS, passSE, passES, passEE, false, orgFlag),
 			visAt(passSS, passSE, passES, passEE, true, orgFlag),
 			scopeAxisMetadataWrite)
+	}
+	if countOrg {
+		m.recordScopeShadowGap(
+			visAt(passSS, passSE, passES, passEE, metaFlag, false),
+			visAt(passSS, passSE, passES, passEE, metaFlag, true),
+			scopeAxisOrgWrite)
 	}
 	return visAt(passSS, passSE, passES, passEE, metaFlag, orgFlag)
 }

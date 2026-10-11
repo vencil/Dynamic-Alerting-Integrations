@@ -29,6 +29,8 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/vencil/tenant-api/internal/confd"
@@ -165,12 +167,11 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 	return ok
 }
 
-// requireOrgWriteAt is RequireOrgWrite that also returns the (environment,
-// domain) it judged, for a PR-mode write to pass to its in-lock re-judgement
-// (freshScopeAllowed).
-func requireOrgWriteAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) (scopePair, bool) {
+// requireOrgWriteAt is RequireOrgWrite that also returns what it judged, for
+// a PR-mode write to pass to its in-lock re-judgement (freshScopeAllowed).
+func requireOrgWriteAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) (writeGate, bool) {
 	pair := scopePairOf(WriteScopeMeta(d.ConfigDir), tenantID)
-	return pair, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
+	return writeGate{pair, gateOrgs(d, tenantID)}, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
 		"insufficient permissions for tenant "+tenantID+
 			" (permission and organization-scope checks, ADR-027)")
 }
@@ -204,12 +205,12 @@ func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
 	return ok
 }
 
-// requireOrgWriteProposedAt is RequireOrgWriteProposed that also returns the
-// pair it judged (see requireOrgWriteAt).
+// requireOrgWriteProposedAt is RequireOrgWriteProposed that also returns what
+// it judged (see requireOrgWriteAt).
 func requireOrgWriteProposedAt(w http.ResponseWriter, r *http.Request, d *Deps,
-	tenantID string, want rbac.Permission, proposedYAML string) (scopePair, bool) {
+	tenantID string, want rbac.Permission, proposedYAML string) (writeGate, bool) {
 	pair := scopePairOf(proposedScopeMeta(d.ConfigDir, proposedYAML), tenantID)
-	return pair, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
+	return writeGate{pair, gateOrgs(d, tenantID)}, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
 		"insufficient permissions for the tenant metadata this write proposes"+
 			" — the environment/domain in the body places tenant "+tenantID+
 			" outside your scope (#1597)")
@@ -233,6 +234,27 @@ type scopePair struct{ environment, domain string }
 func scopePairOf(meta ScopeMetaFunc, tenantID string) scopePair {
 	e, dm := meta(tenantID)
 	return scopePair{e, dm}
+}
+
+// writeGate is what a gate on the local tree judged a tenant on: its
+// (environment, domain) and its organizations (orgsKey). A PR-mode write
+// passes it down to the in-lock re-judgement, which counts a would-deny only
+// for a value that differs on the fresh base (freshScopeAllowed).
+type writeGate struct {
+	pair scopePair
+	orgs string
+}
+
+// orgsKey is a comparable form of an organization list (order-insensitive).
+func orgsKey(orgs []string) string {
+	s := append([]string(nil), orgs...)
+	sort.Strings(s)
+	return strings.Join(s, "\n")
+}
+
+func gateOrgs(d *Deps, tenantID string) string {
+	orgs, _ := d.TenantOrg.OrgsForTenant(tenantID)
+	return orgsKey(orgs)
 }
 
 func fixedScopeMeta(pair scopePair) ScopeMetaFunc {
@@ -267,19 +289,29 @@ func freshWriteScope(configDir, tenantID string) (pair scopePair, judged bool) {
 	return scopePair{meta.Environment, meta.Domain}, true
 }
 
-// freshScopeAllowed is the metadata write scope judged on the fresh base a
-// PR-mode write lands on (#2857). This verdict is the authoritative one: the
-// gate on the pod's local tree can only refuse early, because that tree may
-// lag the base. It is always taken. gate is the pair the gate on the local
-// tree judged (passed down, not read again); the shadow would-deny is
-// recorded only when the base's pair differs from it, so each write is
-// counted once per pair it is judged on.
-func freshScopeAllowed(d *Deps, p *rbac.VerifiedPrincipal, tenantID string, gate, fresh scopePair) bool {
+// freshScopeAllowed is the write scope judged on the fresh base a PR-mode
+// write lands on (#2857), configDir being that tree. This verdict is the
+// authoritative one: the gate on the pod's local tree can only refuse early,
+// because that tree may lag the base. It is always taken, with the tenant's
+// organizations read from the base's `_tenant_orgs.yaml` (not the
+// hot-reloaded copy, which follows the local tree) and fresh as its
+// (environment, domain) there.
+//
+// gate is what the gate on the local tree judged (passed down, not read
+// again). A shadow would-deny is recorded only for a value that differs from
+// it, so each write is counted once per value; countOrg is set on one of a
+// write's calls only, as the organizations are the same for all of them.
+// An org file that does not parse on the base refuses the write.
+func freshScopeAllowed(d *Deps, p *rbac.VerifiedPrincipal, configDir, tenantID string, gate writeGate, fresh scopePair, countOrg bool) (bool, error) {
 	if d.RBAC == nil {
-		return true // test-only state, see requireOrgWriteWithMeta
+		return true, nil // test-only state, see requireOrgWriteWithMeta
 	}
-	orgs, _ := d.TenantOrg.OrgsForTenant(tenantID)
-	return d.RBAC.AllowedInOrgRejudge(p, tenantID, rbac.PermWrite, orgs, fresh.environment, fresh.domain, fresh != gate)
+	orgs, err := tenantorg.OrgsInTree(configDir, tenantID)
+	if err != nil {
+		return false, &freshBaseOrgsError{Err: err}
+	}
+	return d.RBAC.AllowedInOrgRejudge(p, tenantID, rbac.PermWrite, orgs, fresh.environment, fresh.domain,
+		fresh != gate.pair, countOrg && orgsKey(orgs) != gate.orgs), nil
 }
 
 func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,

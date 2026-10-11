@@ -634,6 +634,32 @@ func (e *freshBaseScopeError) Error() string {
 		"This server's local config is behind the base branch. %s.", subject, e.TenantID, nothing)
 }
 
+// freshBaseOrgsError: the `_tenant_orgs.yaml` on the fresh base a PR-mode
+// write lands on does not parse, so the write's organization scope cannot be
+// judged there and the write is refused (#2857). Err names the server's path
+// and is for the log only.
+type freshBaseOrgsError struct{ Err error }
+
+func (e *freshBaseOrgsError) Error() string {
+	return "the tenant organization file (_tenant_orgs.yaml) on the latest base branch cannot be read, " +
+		"so this write's organization scope cannot be judged. Nothing was written and no PR/MR was opened; " +
+		"repair the file on the base branch."
+}
+
+func writeFreshBaseOrgsError(w http.ResponseWriter, r *http.Request, e *freshBaseOrgsError) {
+	slog.Error("PR write refused: _tenant_orgs.yaml on the fresh base cannot be read", "error", e.Err)
+	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, e.Error())
+}
+
+// orFreshScopeError is err when the in-lock scope check failed to run, and
+// refusal when it ran and refused.
+func orFreshScopeError(err error, refusal error) error {
+	if err != nil {
+		return err
+	}
+	return refusal
+}
+
 // writeFreshBaseScopeViolation answers a freshBaseScopeError with 403
 // FORBIDDEN, as the local check's refusal is, naming the tenant and, for a
 // batch, the op.

@@ -280,7 +280,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 //
 // advisories (#2325, non-blocking domain-policy notes) are appended to the
 // response's warnings on every success path.
-func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, advisories []string, gatePre, gatePost scopePair) {
+func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, advisories []string, gatePre, gatePost writeGate) {
 	// Atomically claim the tenant. Returns false if a PR/MR is
 	// already pending OR another request is mid-creation — both map
 	// to 409. The claim (not the async poll cache) is what makes two
@@ -337,11 +337,17 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	// gatePre/gatePost are the pairs the local gates judged.
 	p := rbac.RequestPrincipal(r)
 	check := func(configDir string) error {
-		if pre, judged := freshWriteScope(configDir, tenantID); judged && !freshScopeAllowed(d, p, tenantID, gatePre, pre) {
-			return &freshBaseScopeError{TenantID: tenantID, Put: true, PreState: true}
+		// The pre-state check counts the org axis; when the base's tenant
+		// file is unreadable it is skipped, so the post-state check does.
+		pre, judged := freshWriteScope(configDir, tenantID)
+		if judged {
+			if ok, err := freshScopeAllowed(d, p, configDir, tenantID, gatePre, pre, true); err != nil || !ok {
+				return orFreshScopeError(err, &freshBaseScopeError{TenantID: tenantID, Put: true, PreState: true})
+			}
 		}
-		if !freshScopeAllowed(d, p, tenantID, gatePost, scopePairOf(proposedScopeMeta(configDir, yamlContent), tenantID)) {
-			return &freshBaseScopeError{TenantID: tenantID, Put: true}
+		post := scopePairOf(proposedScopeMeta(configDir, yamlContent), tenantID)
+		if ok, err := freshScopeAllowed(d, p, configDir, tenantID, gatePost, post, !judged); err != nil || !ok {
+			return orFreshScopeError(err, &freshBaseScopeError{TenantID: tenantID, Put: true})
 		}
 		if d.Policy != nil {
 			v, loadErr := freshBasePutPolicyCheck(configDir, tenantID, []byte(yamlContent))
@@ -360,10 +366,16 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 			writeFreshBasePolicyViolation(rw, r, freshPolicy)
 			return
 		}
-		// #2857: the metadata write scope refuses it on the fresh base.
+		// #2857: the write scope refuses it on the fresh base, or the
+		// base's org file cannot be read.
 		var freshScope *freshBaseScopeError
 		if errors.As(err, &freshScope) {
 			writeFreshBaseScopeViolation(rw, r, freshScope)
+			return
+		}
+		var freshOrgs *freshBaseOrgsError
+		if errors.As(err, &freshOrgs) {
+			writeFreshBaseOrgsError(rw, r, freshOrgs)
 			return
 		}
 		// The body matched the branch base, so no commit — and therefore no

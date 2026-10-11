@@ -207,6 +207,10 @@ type batchPRMeta struct {
 	title  func(included int) string
 	source string // the PR body's **Source:** line
 	labels []string
+	// group: the ops are a group's stored members, not ids the caller sent.
+	// A refusal then names no op index and, for a member the caller cannot
+	// read, no tenant (writeGroupMemberRefusal).
+	group bool
 }
 
 var tenantBatchPRMeta = batchPRMeta{
@@ -258,19 +262,19 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	var advisoryTenants []string
 	metaOf := WriteScopeMeta(d.ConfigDir) // one resolver: the root platform files are read once per batch
 	// lastPost[t]: the local post-state pair of t's last op taken into the PR.
-	lastPost := map[string]scopePair{}
+	lastPost := map[string]writeGate{}
 	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}
-		gatePre := scopePairOf(metaOf, op.TenantID)
-		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(gatePre)) {
+		gatePre := writeGate{scopePairOf(metaOf, op.TenantID), gateOrgs(d, op.TenantID)}
+		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(gatePre.pair)) {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 			continue
 		}
-		gatePost := scopePairOf(postStateScopeMeta(d.ConfigDir, included[op.TenantID], op), op.TenantID)
-		if res, refused := gateBatchOpPostStateAt(gatePost, op, p, d.RBAC, d.TenantOrg); refused {
+		gatePost := writeGate{scopePairOf(postStateScopeMeta(d.ConfigDir, included[op.TenantID], op), op.TenantID), gatePre.orgs}
+		if res, refused := gateBatchOpPostStateAt(gatePost.pair, op, p, d.RBAC, d.TenantOrg); refused {
 			batchResults = append(batchResults, res)
 			continue
 		}
@@ -321,24 +325,35 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// first is its file with this request's earlier ops applied, so it
 		// is compared with the local post-state of the op before it.
 		comparePre := gatePre
-		if prev, seen := lastPost[op.TenantID]; seen {
+		prev, seen := lastPost[op.TenantID]
+		if seen {
 			comparePre = prev
 		}
+		firstOp := !seen
 		lastPost[op.TenantID] = gatePost
 		batchOps = append(batchOps, gitops.PRBatchOp{
 			TenantID: op.TenantID,
 			Merge:    merge,
 			FreshMerge: func(existing []byte) (string, error) {
-				if pre, judged := freshWriteScope(d.ConfigDir, op.TenantID); judged && !freshScopeAllowed(d, p, op.TenantID, comparePre, pre) {
-					return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i, PreState: true}
+				// The org axis is counted on the tenant's first op only:
+				// its organizations are the same for all of them.
+				countOrg := firstOp
+				pre, judged := freshWriteScope(d.ConfigDir, op.TenantID)
+				if judged {
+					if ok, err := freshScopeAllowed(d, p, d.ConfigDir, op.TenantID, comparePre, pre, countOrg); err != nil || !ok {
+						return "", orFreshScopeError(err, &freshBaseScopeError{TenantID: op.TenantID, Op: i, PreState: true})
+					}
+					countOrg = false
 				}
 				merged, err := merge(existing)
 				if err != nil {
 					return "", err
 				}
-				if touchesScopeMetadata(op) &&
-					!freshScopeAllowed(d, p, op.TenantID, gatePost, scopePairOf(proposedScopeMeta(d.ConfigDir, merged), op.TenantID)) {
-					return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i}
+				if touchesScopeMetadata(op) || countOrg {
+					post := scopePairOf(proposedScopeMeta(d.ConfigDir, merged), op.TenantID)
+					if ok, err := freshScopeAllowed(d, p, d.ConfigDir, op.TenantID, gatePost, post, countOrg); err != nil || !ok {
+						return "", orFreshScopeError(err, &freshBaseScopeError{TenantID: op.TenantID, Op: i})
+					}
 				}
 				if d.Policy != nil {
 					v, loadErr := freshBasePolicyCheck(d.ConfigDir, op, existing, merged)
@@ -377,6 +392,9 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// #2373 review F1: an op's tenant file is one threshold-exporter
 		// rejects; the whole PR is refused (nothing is written), like the
 		// other per-tenant refusals WritePRBatch reports.
+		if meta.group && writeGroupMemberRefusal(d, rw, r, p, err) {
+			return BatchResponse{}, false
+		}
 		var notLoadable *tenantFileNotLoadableError
 		if errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(rw, r, notLoadable)
@@ -391,11 +409,16 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			writeFreshBasePolicyViolation(rw, r, freshPolicy)
 			return BatchResponse{}, false
 		}
-		// #2830: likewise for an op the metadata write scope refuses on the
-		// fresh base.
+		// #2857: likewise for an op the write scope refuses on the fresh
+		// base, or whose org file there cannot be read.
 		var freshScope *freshBaseScopeError
 		if errors.As(err, &freshScope) {
 			writeFreshBaseScopeViolation(rw, r, freshScope)
+			return BatchResponse{}, false
+		}
+		var freshOrgs *freshBaseOrgsError
+		if errors.As(err, &freshOrgs) {
+			writeFreshBaseOrgsError(rw, r, freshOrgs)
 			return BatchResponse{}, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
