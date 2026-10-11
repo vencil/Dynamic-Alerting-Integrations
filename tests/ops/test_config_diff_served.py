@@ -200,6 +200,19 @@ def test_rejected_routing_text_is_redacted_whole(tmp_path, da_guard, receiver):
     assert any(e["key"] == "_routing" for e in diff["t"]), diff
 
 
+@pytest.mark.parametrize("key", ["_routng", "_Routing", "_receiver"])
+def test_a_misspelled_routing_key_served_as_text_is_redacted(tmp_path, da_guard, key):
+    """拼錯或大小寫不同的路由鍵，exporter 不讀，以原文字串進 unserved：不論鍵名都整段遮。"""
+    def body(suffix):
+        return {"t": {key: {"receiver": {"type": "webhook", "url": f"https://h/SEKRET{suffix}"}}}}
+    b, p = _served(tmp_path, da_guard, body("1"), body("2"))
+    diff = cd.served_setting_diff(b, p)
+    assert diff and "SEKRET" not in repr(diff), diff
+    import _render_diff as rd
+    served = rd.diff_served(b, p)
+    assert served and "SEKRET" not in repr(served), served
+
+
 def test_a_routing_timing_change_still_prints_its_values(tmp_path, da_guard):
     """對照：只有整段原文才遮；`_routing.group_wait` 這類一般欄位照常印出前後值。"""
     def body(gw):

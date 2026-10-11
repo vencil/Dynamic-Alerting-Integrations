@@ -212,6 +212,9 @@ TOOL_FILES=(
     # flat-layout image ImportErrors on startup. Imports _lib_io,
     # _lib_exitcodes and ops/guard_dispatch (all above).
     _lib_tenant_values.py
+    # #1516 — which receiver fields hold a credential and how a report
+    # prints them; imported by ops/config_diff. Stdlib-only.
+    _lib_redact.py
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup
