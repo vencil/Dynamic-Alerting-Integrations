@@ -15,7 +15,7 @@ lang: en
 ✅ **Accepted** (drafted and approved by the owner 2026-10-09).
 
 - **Revised 2026-10-11 (approved by the owner)**: the YAML syntax layer also keeps a single parser, and every read used to judge config content reads the JSON parsed by Go (exceptions in §2 and §8); a write goes ahead only when the whole tree afterwards passes the generator's check; no resolved config JSON; `--policy-unavailable-open` is removed; git is required.
-- **Revised again 2026-10-11 (approved by the owner)**: five steps merged in order on main, each releasable (§7); sets the `parse-tree` output envelope and fixed corpus (§2), the error code when the generator container is unavailable (§5), and da-guard's "not judged" exit code (§9).
+- **Revised again 2026-10-11 (approved by the owner)**: five steps merged in order on main, each releasable (§7); sets the `parse-tree` output envelope, its closed "unreadable" list and fixed corpus (§2), the error code when the generator container is unavailable (§5), and da-guard's "not judged" exit code (§9).
 - Both the design and the revision went through adversarial review (by a different model).
 
 ## Summary
@@ -36,12 +36,13 @@ lang: en
 - tenant-api gains a container (the da-tools image). When the container or the deployment policy file is unavailable, every write that changes file content gets 503 (thresholds-only writes included); there is no switch to let writes through while unavailable.
 - The whole tree after a write must pass the generator's check before the write goes ahead. While anything in the tree would be blocked, every write through tenant-api is refused until it is fixed (§4).
 - tenant-api requires git; deployments without git are no longer supported.
+- Some files today's generator refuses are read per yaml.v3 from §7 step 4 instead of being refused whole (§2). The migration audit command lists each such file and what it will be read as.
 - A CI that runs only da-guard no longer covers routing and policy, and needs an extra `da-tools generate-routes --validate --strict` step.
 
 **Non-negotiable acceptance conditions**:
 
 - No reader may be looser than the generator: it must neither read a policy the generator drops nor miss one the generator enforces. tenant-api's write criterion is the generator's own result (§4), so for tenant-api this holds by definition.
-- The generator reading the JSON must not be looser than the generator today: a file today's generator refuses under `--strict` must be unreadable to `parse-tree`, with each exception listed with its reason (§2).
+- `parse-tree`'s "unreadable" is a closed list (§2): it names only the forms different readers could read with different meanings; everything else is read per yaml.v3, including files today's generator refuses only because of PyYAML's limits. The migration audit command lists those files one by one before the switch (§8).
 
 ## Problem
 
@@ -136,9 +137,21 @@ The Python side no longer has its own copy of these rules. Differences between t
 
 These "unreadable" rules are `parse-tree`'s own. How the exporter reads thresholds does not change, so the exporter may read a file the generator refuses; the generator and CI then block it rather than let it through.
 
-**Never looser than today**: a fixed corpus holds the files today's generator refuses under `--strict`, and `parse-tree` must treat them as unreadable; any that it does not are listed one by one with their reason and reviewed. The known exceptions are spellings yaml.v3 already reads correctly and only PyYAML refuses: a TAB after a colon, a policy file indented with TABs, a deeply nested file (for example 600 levels). These files become readable and the generator enforces their policy as written; nothing is loosened.
+**"Unreadable" is a closed list**: only the cases listed above are unreadable — a syntax error, a read failure, not a regular file, invalid UTF-8, a yaml.v3 decode error, more than one document, duplicate keys, null or non-scalar keys, tags outside the allow-list (the non-specific `!` included), a BOM past the start of the file, and a top level that is not a mapping. These are the forms different readers could read with different meanings. Everything else is read per yaml.v3, including files today's generator refuses only because of PyYAML's limits, for example:
 
-The fixed corpus is `tests/shared/parse_tree_corpus.json`, built like the existing `merge_key_policy_corpus.json`: a Python test generates it, each row stores the file text and today's generator verdict, and it records the PyYAML version it was generated with. The verdicts must be frozen in the file, because once the generator reads the JSON (§7 step 4), "what today's generator would say" can no longer be computed.
+- An anchor name defined twice (`a: &x 1` and `b: &x 2`)
+- A date that does not exist (`2001-13-45`)
+- A flow value ending in a colon (`{b: 1:}`)
+- `\'` inside a double-quoted string
+- A block scalar header followed directly by `#` (`|#c`)
+- TAB separators (a TAB after `a:`)
+- Very deep nesting (for example 600 levels)
+
+These files used to be refused whole; from step 4 they are read per yaml.v3. The migration audit command (§8) lists, file by file, every "used to be refused, now read as X" case, so the change is visible before the switch.
+
+Why `parse-tree` does not refuse everything today's generator refuses: that would mean rewriting every PyYAML check in Go, exactly what this ADR rejects for two parsers; feeding random input to both sides and comparing kept finding new "only PyYAML refuses" classes. Measured on the riskiest example: yaml.v3 reads `{<<:, d: 1}` as a literal key `<<:` (with a null value), while PyYAML refuses the whole file. Handing that reading to today's generator leaves routing and policy outcomes unchanged: a tenant file still passes, with only an unknown-key warning and nothing merged in; inside `_domain_policy.yaml` the extra key is ignored and the policy still blocks the forbidden receiver.
+
+The fixed corpus is `tests/shared/parse_tree_corpus.json`, built like the existing `merge_key_policy_corpus.json`: a Python test generates it and records the PyYAML version it was generated with. Each row stores the file text, today's generator verdict, and the category `parse-tree` should give (unreadable with which `kind`, or read); the test checks that category, and every `kind` in the closed list has at least one row. Today's generator verdict is frozen in the file as the record for the migration audit, because once the generator reads the JSON (§7 step 4), "what today's generator would say" can no longer be computed.
 
 Example. Input:
 
@@ -320,10 +333,11 @@ The customers' conf.d trees are not available, so validation before each step me
 
 Once yaml.v3 parses the YAML, any value the two parsers read differently changes for the generator and the Python tools. The most common are unquoted `yes` / `no` / `on` / `off` (previously booleans, now strings); a key tagged `!!merge` (previously merged) makes the whole file unreadable.
 
-- da-tools provides a one-off migration audit command: it reads the customer's tree with both parsers and lists three kinds of result:
+- da-tools provides a one-off migration audit command: it reads the customer's tree with both parsers and lists four kinds of result:
   - Values read differently: file, line and suggested spelling (for example rewriting a boolean as `true` / `false`).
   - Keys read differently.
   - Files that become unreadable as a whole (for example `\/` inside a quoted string, more than one document, a null key, a tag outside the allow-list such as `!!merge`, a BOM inside the file).
+  - Files that used to be refused whole and will be read: what yaml.v3 reads each one as (the closed list in §2).
 
   This command and the writing tools of §2 are the only places in this ADR that still read or write conf.d with PyYAML; the audit command only lists differences and judges nothing.
 - The release notes list the affected spellings and the migration steps.
@@ -390,7 +404,7 @@ Duplicate keys, more than one document, tags outside the allow-list: today the g
 ## How it is accepted
 
 - **No second YAML parser**: a CI check lists every YAML loader call site on the Python side and allows only the parse-result JSON; the only exceptions are the migration audit command and the writing tools of §2, fixed in the check's allow-list.
-- **Never looser than today**: the fixed corpus `tests/shared/parse_tree_corpus.json` holds the files today's generator refuses under `--strict`, and `parse-tree` must treat them as unreadable; exceptions are listed one by one with their reason (§2).
+- **"Unreadable" is a closed list**: each row of the fixed corpus `tests/shared/parse_tree_corpus.json` carries the category `parse-tree` should give, and the test checks every row; every `kind` in the closed list has at least one row (§2).
 - **The fixed corpus** also includes the existing `merge_key_policy_corpus.json`, plus the samples from:
   - [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759): the remaining gaps for policy files.
   - [#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700): `!!merge` keys in tenant files.
@@ -437,6 +451,7 @@ The options whose reasons are already given in the body (keep both sides imitati
 | When a tenant already violates the policy, let the write through if the rendering is unchanged | It leaks: measured, adding an empty value to `group_by` makes the generator report one more blocking finding while the rendering is unchanged. Closing that would mean comparing whether findings are new — the row above. Kubernetes CRD validation ratcheting took five releases from 1.28 alpha to 1.33 GA and accumulated an ever-growing list of exceptions, which also shows how hard such exceptions are to converge |
 | Validate a batch twice: drop the violating items, then validate the remaining combination | Depends on per-finding attribution (two rows up); replaced by all-or-nothing batches |
 | Have the generator refuse aliases, merge keys and explicit tags | Its purpose was to narrow the gap between two parsers; with one parser there is no gap left to narrow, and it would make customers rewrite existing config files |
+| `parse-tree` refuses everything today's generator refuses | It would mean rewriting every PyYAML check in Go, once again having Go imitate the other parser; comparing the two sides kept finding new "only PyYAML refuses" classes. Instead the list is closed, everything else is read per yaml.v3, and the migration audit lists it (§2) |
 | A two-phase switch (old and new side by side, compare differences, delete the Go side once conditions hold) | The product has few adopters and can take breaking changes; the side-by-side period means maintaining two judges and a divergence catalog, and Go's judging is known to be looser, so keeping it buys nothing |
 | Ship all the steps in one release | Only possible as one huge PR covering every step, hard to review; or via an integration branch (next row) |
 | Finish on an integration branch, then merge into main at once | CI runs only on PRs to main (the trigger in `ci.yml`), so no step on the integration branch would be checked by CI; doing this would first need the CI triggers changed |
