@@ -26,6 +26,8 @@ updated_at: 2026-10-11
 
 **2026-10-11 修訂**：AccountID 帳本與 federation 白名單、子集移出 conf.d git 樹，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap，單機是一個目錄），寫入改為 compare-and-swap，不再 commit（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。原因：這些 commit 從不 push，chart 預設的 emptyDir 下重啟即失，帳本遺失正是本 ADR 要防的 AccountID 重發。下文的配發紀律、稽核與實作計畫已照此更新。
 
+**2026-10-11 修訂**：開機時比對仍有效的 logs token 與帳本，不一致即拒絕啟動；備份改經 `tenant-api state restore` 合併還原，不再以覆蓋還原（[#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884)）。見「單調性靠什麼守」。
+
 實作分層、版本定位：
 
 | 階段 | 內容 | 定位 |
@@ -134,7 +136,24 @@ ingestion plane（無論 (a) 租戶推送或 (b) 平台元件 stdout）**必須*
 | **JWT embed 數值 claim** | Envoy `claim_to_headers` 只支援 string/int/bool；AccountID 為數值 claim 才能 O(1) 注入 |
 | **禁用 hash 映射** | FNV-1a 等 hash 把 `tenant_id`(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 **帳本單調發號**（發號狀態在 tenant-api state store；**不引入外部 stateful DB**——ConfigMap 是叢集原生物件，且 uint32 空間 ~40 億充足） |
 
-**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕。帳本空白或遺失、而 conf.d 已有租戶時，tenant-api 拒絕配發；啟用 federation 時也拒絕啟動。⚠️ 已知限制：有人直接編輯 ConfigMap，把計數器連同已退租租戶的配發一起改小時，上面兩道都擋不住，已退租的 id 可能被重發。chart 的 Role 只給 tenant-api 的 ServiceAccount 對 `tenant-api-state` 的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
+**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕；帳本空白或遺失、而 conf.d 已有租戶時，拒絕配發。啟用 federation 時，tenant-api 開機另做兩項檢查，不通過就拒絕啟動：(1) 帳本空白或遺失、而 conf.d 已有租戶；(2) 任何仍有效的 logs token，其 `account_id` ≥ 計數器、或與帳本對該租戶的配發不一致。第 (2) 項在下次啟動時抓出「舊備份被蓋回帳本」：備份之後才配發的租戶，token 上的 id 不在帳本裡，也不低於倒退後的計數器。
+
+還原備份一律經 `tenant-api state restore`，帳本只合併、不覆蓋：配發取現行帳本、備份、有效 logs token 三者的聯集，計數器取三者推得的最大值，只升不降；同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次拒絕、不寫入。範例：
+
+```text
+# 現行帳本                  # 一週前的備份
+next_account_id: 1002      next_account_id: 1001
+allocations:               allocations:
+  t-a: 1000                  t-a: 1000
+  t-b: 1001
+```
+
+用 `kubectl apply` 把備份蓋回，下一個要 logs token 的租戶 `t-c` 會拿到 1001，讀得到 `t-b` 還在保留期內的 log；經 `state restore` 合併，帳本維持 `t-b: 1001`、`next_account_id: 1002`，`t-c` 拿到 1002。
+
+⚠️ 已知限制，上述檢查都擋不住（前兩條的補法在 [#2928](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2928) 討論：在帳本以外另記一份只升不降的高水位）：
+- **只在啟動時檢查**：舊備份在 pod 運行中被蓋回時，運行中的 pod 不比對 token，會照常從倒退的計數器配發，直到某個 pod 重啟才拒絕啟動。所以還原一律走 `state restore`，不靠開機檢查善後。
+- **過期 token 不留紀錄**：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，備份之後才配發、目前又沒有有效 logs token 的租戶，其 id 沒有任何地方記得，還原後的計數器可能不高於它，之後的配發可能重發它。縮小這個窗口靠備份頻率。
+- **直接編輯 ConfigMap**：有人把計數器連同已退租租戶的配發一起改小時，上述檢查都看不出來，已退租的 id 可能被重發。chart 的 Role 只給 tenant-api 的 ServiceAccount 對 `tenant-api-state` 的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
 
 #### Admission validator（結構性探測 + 告警，不熔斷）
 

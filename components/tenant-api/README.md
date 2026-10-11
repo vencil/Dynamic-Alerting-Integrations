@@ -125,7 +125,7 @@
 | `GET` | `/api/v1/groups/{id}` | read | 取得群組 |
 | `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單 |
 | `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限) |
-| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339)。成員名單中**已不存在**的租戶(例如退租後仍留在群組裡)不會被建回來:在寫入鎖內、以寫入所依據的 base 判定(PR 模式為最新 origin base),該筆結果 `status: skipped`、`message: "tenant does not exist"`,不寫入、不進 PR,`summary` 另計(`1 succeeded, 1 skipped`);`POST /tenants/batch` 指名的新租戶照常建立(#2882) |
+| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339) |
 | `GET` | `/api/v1/views` | read | 列出 saved view |
 | `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
 
@@ -212,6 +212,7 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_config_last_reload_successful{component}` | Gauge | 恆有 | 該設定最後一次重載是否成功;0 = 目前正用舊設定。值:`RBAC` / `federation-policy` / `groups` / `policy` / `tenantorg` / `views` |
 | `tenant_api_policy_available` | Gauge | 恆有 | 1 = 每個存在的 domain policy 檔都讀得了、或沿用它自己上一份讀得了的內容;0 = 有檔存在卻讀不了且沒有上一份,直寫模式下受 policy 判定的寫入回 503 `POLICY_UNAVAILABLE`(告警 `TenantApiPolicyUnavailable`) |
 | `tenant_api_policy_unavailable_open_total` | Counter | 恆有 | `--policy-unavailable-open` 開著時,在 policy 不可用下被放行的寫入數;一次寫入 = 一個 `PUT /tenants/{id}` 或 batch(tenant / group)中一個受 policy 判定的 op,batch 請求本身不另計;應維持 0 |
+| `tenant_api_async_task_panics_total` | Counter | 恆有 | 非同步批次(`?async=true`)的工作 panic 的次數;該 task 標為 `failed`(`error` 不帶 panic 內容),panic 與堆疊依 task id 寫進 log,worker 繼續處理後續 task。應維持 0 |
 | `tenant_api_dev_auth_bypass_active` | Gauge | 恆有 | 1 = `--dev-bypass-auth` 開著(僅限本機開發,正式環境須為 0) |
 | `tenant_api_sse_clients` | Gauge | 恆有 | 目前連線中的 SSE(`/api/v1/events`)客戶端數 |
 | `tenant_api_human_socket_up` | Gauge | 設了 `--human-socket` | 1 = human-plane Unix socket 回應了 readiness 自我探測 |
@@ -459,6 +460,45 @@ Smoke test:
 curl -s localhost:8080/health
 curl -s localhost:8080/metrics
 ```
+
+### state store 的備份與還原
+
+tenant-api 自己的紀錄（群組、saved views、federation 白名單與子集、AccountID 帳本）在 state store 裡，一份就是完整快照，匯出不需要工具（[#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884)）：
+
+```bash
+# Kubernetes（configmap 模式）
+kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state-backup.yaml
+# 單機（dir 模式）：複製整個 TA_STATE_DIR
+cp -a /state ./tenant-api-state-backup
+```
+
+⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。還原後的帳本格式完全正常，所以只有在仍有有效 logs token 時，開機檢查（見下）才看得出來；運行中的 pod 不會察覺，會照常從倒退的計數器配發。
+
+還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點）：
+
+```bash
+# 先看會改什麼（不寫入）
+kubectl -n tenant-api exec -i deploy/tenant-api -- \
+  tenant-api state restore --from - --dry-run --keys _groups.yaml,_views.yaml < tenant-api-state-backup.yaml
+# 確認後去掉 --dry-run 再跑一次
+```
+
+- `--from`：`kubectl get configmap ... -o yaml` 或 `-o json` 的輸出檔、dir 模式的目錄，或 `-` 讀標準輸入。備份至少要有一筆紀錄、且每個 key 都是 tenant-api 的 state 紀錄；其他 ConfigMap（例如 `threshold-config`、federation token store）或 conf.d 目錄會被拒絕（rc 1），不會被當成空備份「還原成功」。
+- **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份、聯集中最大 id + 1 三者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
+- **其他紀錄只有列在 `--keys` 才整筆覆蓋**；沒列的會印在「not restored」一行。
+- 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id`；讀不到就拒絕還原。
+- dir 模式下伺服器與子命令以檔案鎖（flock）序列化寫入，伺服器運行中也可以還原。
+- 結束碼：0 完成（或 dry run 完成）、1 拒絕或失敗、2 用法錯誤。
+- 啟用 federation 時，tenant-api 開機會比對有效 logs token 與帳本：token 的 `account_id` ≥ `next_account_id`、或與帳本對該租戶的配發不一致，就拒絕啟動並列出不一致的 token。帳本被舊備份蓋回時就是這個形狀；用 `state restore` 以同一份備份重做還原即可把這些 id 併回。此時 pod 起不來（CrashLoopBackOff），`kubectl exec` 進不去；改用 `kubectl debug` 複製一個 pod 並把主程式換成子命令（沿用同一個 ServiceAccount、`TA_*` 環境變數與掛載）：
+
+  ```bash
+  POD=$(kubectl -n tenant-api get pod -l app.kubernetes.io/name=tenant-api -o name | head -1)
+  kubectl -n tenant-api debug "$POD" -i --copy-to=tenant-api-restore --container=tenant-api -- \
+    tenant-api state restore --from - --dry-run < tenant-api-state-backup.yaml
+  kubectl -n tenant-api delete pod tenant-api-restore   # 用完刪掉
+  ```
+
+⚠️ 已知限制：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
 
 ## 開發
 

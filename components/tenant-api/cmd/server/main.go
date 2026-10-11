@@ -90,9 +90,17 @@ func (slogLogWriter) Write(p []byte) (int, error) {
 }
 
 func main() {
+	// #2884: `tenant-api state restore ...` runs in place of the server,
+	// with its own flags; see runStateCmd.
+	if stateSubcommand(os.Args) {
+		os.Exit(runStateCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
+
 	// ── Flags ──────────────────────────────────────────────────────────────────
-	configDir := flag.String("config-dir", envOrDefault("TA_CONFIG_DIR", "/conf.d"),
-		"Path to conf.d/ directory containing tenant YAML files")
+	// --config-dir and the state-store flags are shared with `tenant-api
+	// state restore` (#2884), so they are registered in one place.
+	sf := registerStateFlags(flag.CommandLine)
+	configDir := &sf.ConfigDir
 	gitDir := flag.String("git-dir", envOrDefault("TA_GIT_DIR", ""),
 		"Git repository root for commit-on-write (defaults to config-dir)")
 	rbacPath := flag.String("rbac", envOrDefault("TA_RBAC_PATH", ""),
@@ -198,23 +206,10 @@ func main() {
 
 	// #2856: tenant-api's own records (groups, views, federation whitelist and
 	// subsets, AccountID registry) live in a state store, not in conf.d.
-	stateStoreKind := flag.String("state-store", envOrDefault("TA_STATE_STORE", ""),
-		"Where tenant-api keeps its own records: configmap (Kubernetes) or dir (single host). Required (#2856).")
-	stateConfigMap := flag.String("state-configmap", envOrDefault("TA_STATE_CONFIGMAP", "tenant-api-state"),
-		"Name of the state ConfigMap (--state-store=configmap). The Helm chart pre-creates it.")
-	stateNamespace := flag.String("state-namespace", envOrDefault("TA_STATE_NAMESPACE", ""),
-		"Namespace of the state ConfigMap. Empty uses the pod's own namespace.")
-	stateDir := flag.String("state-dir", envOrDefault("TA_STATE_DIR", ""),
-		"State directory (--state-store=dir). Must be outside --config-dir.")
 
 	// v2.9.0 ADR-020 IV-2d: tenant federation token endpoint.
 	// An empty --federation-key disables the endpoint entirely.
-	federationKey := flag.String("federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
-		"Path to the RS256 private key (PEM) for signing federation tokens. Empty disables the federation endpoint.")
-	federationStore := flag.String("federation-store", envOrDefault("TA_FEDERATION_STORE", "tenant-federation-store"),
-		"Name of the ConfigMap holding the federation token record store (ADR-020 Posture B). The Helm chart pre-creates it.")
-	federationNamespace := flag.String("federation-namespace", envOrDefault("TA_FEDERATION_NAMESPACE", ""),
-		"Namespace of the federation store ConfigMap. Empty uses the pod's own namespace.")
+	ff := registerFederationStoreFlags(flag.CommandLine)
 	federationTTL := flag.Duration("federation-token-ttl",
 		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), token.DefaultTTL),
 		"Federation token lifetime (default 4h; ADR-020 §Token model)")
@@ -392,13 +387,7 @@ func main() {
 
 	// #2856: the state store, and the one-time move of these records out of
 	// conf.d. Import never overwrites a record the store already holds.
-	stateStore, err := wireStateStore(stateFlags{
-		Kind:          *stateStoreKind,
-		ConfigMapName: *stateConfigMap,
-		Namespace:     *stateNamespace,
-		Dir:           *stateDir,
-		ConfigDir:     *configDir,
-	}, func(entity string) {
+	stateStore, err := wireStateStore(*sf, func(entity string) {
 		eventHub.Broadcast(ws.Event{
 			Type:      "config_change",
 			TenantID:  entity,
@@ -507,6 +496,8 @@ func main() {
 
 	// v2.6.0: Async task manager for batch operations
 	taskMgr := async.NewManager(4) // 4 worker goroutines
+	// #2913: /metrics reads how many of its tasks panicked (recovered, failed).
+	handler.SetAsyncTaskSource(taskMgr)
 
 	// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab.
 	// PR-5/11: bootstrap logic lives in wire.go::wirePRBackend so main()
@@ -525,12 +516,8 @@ func main() {
 	// /federation routes below stay unregistered. Posture B: token
 	// records live in a Kubernetes ConfigMap so tenant-api stays
 	// stateless and can run multi-replica.
-	federationMgr, federationNS, err := wireFederation(federationFlags{
-		KeyPath:       *federationKey,
-		ConfigMapName: *federationStore,
-		Namespace:     *federationNamespace,
-		TTL:           *federationTTL,
-	})
+	ff.TTL = *federationTTL
+	federationMgr, federationNS, err := wireFederation(*ff)
 	if err != nil {
 		log.Fatalf("FATAL: federation init: %v", err)
 	}
@@ -554,9 +541,18 @@ func main() {
 		if err := account.VerifyRegistryNotResetWithFleet(context.Background(), *configDir, stateStore); err != nil {
 			log.Fatalf("FATAL: %v", err)
 		}
+		// #2884: a live logs token the registry does not account for means
+		// the registry went back in time (an older backup applied over it).
+		liveLogs, err := federationMgr.LiveLogsAccounts()
+		if err != nil {
+			log.Fatalf("FATAL: read live logs tokens for the AccountID registry check: %v", err)
+		}
+		if err := account.VerifyLiveTokensAgainstRegistry(context.Background(), stateStore, toTokenAllocations(liveLogs)); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
 		slog.Info("federation token endpoint enabled",
 			"token_ttl", federationMgr.TTL(),
-			"store_configmap", *federationStore, "store_namespace", federationNS,
+			"store_configmap", ff.ConfigMapName, "store_namespace", federationNS,
 			"account_registry", account.RegistryFileName)
 		if len(rbacMgr.Get().Groups) == 0 {
 			if rbacMgr.FailClosedOnEmpty() {

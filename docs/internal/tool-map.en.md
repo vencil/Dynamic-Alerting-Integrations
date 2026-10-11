@@ -51,6 +51,7 @@ lang: en
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
 | `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |
+| `migration_audit.py` | `da-tools migration-audit`: list where PyYAML and parse-tree differ. |
 | `notification_tester.py` | Multi-channel notification connectivity testing. |
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |

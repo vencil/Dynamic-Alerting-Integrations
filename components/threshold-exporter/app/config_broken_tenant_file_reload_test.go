@@ -103,6 +103,15 @@ var brokenFileCases = []struct {
 	// The broken file's tenant is taken over by another file in the same
 	// reload: dropping it unconditionally would be wrong (fresh Load serves it).
 	{"broken while moved to another file", []brokenFileStep{brokenFileMovedTo}, "acme=critical,zeta=critical", true},
+	// #2913: a non-scalar key beside a merge key `<<` made yaml.v3's typed
+	// decode panic (hash of unhashable type), taking the reload — and the
+	// exporter — down. It is an ordinary parse failure now.
+	{"non-scalar key beside a merge of an alias (#2913)",
+		[]brokenFileStep{writeA("base: &b {x: 1}\ntenants:\n  acme:\n    ? [a]\n    : 1\n    <<: *b\n")}, "zeta=critical", true},
+	{"non-scalar key beside a merge of a list (#2913)",
+		[]brokenFileStep{writeA("tenants:\n  acme:\n    ? [a]\n    : 1\n    <<: &y [{x: 1}]\n")}, "zeta=critical", true},
+	{"merge beside a mapping key (#2913)",
+		[]brokenFileStep{writeA("tenants:\n  acme:\n    <<: {x: 1}\n    ? {k: v}\n    : 1\n")}, "zeta=critical", true},
 }
 
 func buildBrokenFileTree(t *testing.T, dir string, hierarchical bool) {

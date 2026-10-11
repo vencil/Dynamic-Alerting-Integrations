@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,38 @@ type stateFlags struct {
 	Namespace     string // --state-namespace (empty → pod's own namespace)
 	Dir           string // --state-dir
 	ConfigDir     string // --config-dir: the state dir must lie outside it
+}
+
+// registerStateFlags registers --config-dir and the state-store flags on fs.
+// The server and `tenant-api state restore` (#2884) both call it, so the
+// two read the same settings from the same TA_* variables.
+func registerStateFlags(fs *flag.FlagSet) *stateFlags {
+	f := &stateFlags{}
+	fs.StringVar(&f.ConfigDir, "config-dir", envOrDefault("TA_CONFIG_DIR", "/conf.d"),
+		"Path to conf.d/ directory containing tenant YAML files")
+	fs.StringVar(&f.Kind, "state-store", envOrDefault("TA_STATE_STORE", ""),
+		"Where tenant-api keeps its own records: configmap (Kubernetes) or dir (single host). Required (#2856).")
+	fs.StringVar(&f.ConfigMapName, "state-configmap", envOrDefault("TA_STATE_CONFIGMAP", "tenant-api-state"),
+		"Name of the state ConfigMap (--state-store=configmap). The Helm chart pre-creates it.")
+	fs.StringVar(&f.Namespace, "state-namespace", envOrDefault("TA_STATE_NAMESPACE", ""),
+		"Namespace of the state ConfigMap. Empty uses the pod's own namespace.")
+	fs.StringVar(&f.Dir, "state-dir", envOrDefault("TA_STATE_DIR", ""),
+		"State directory (--state-store=dir). Must be outside --config-dir.")
+	return f
+}
+
+// registerFederationStoreFlags registers the federation key and token-store
+// flags on fs, shared like registerStateFlags: the restore reads live logs
+// tokens from the store the server writes them to. TTL is the server's own.
+func registerFederationStoreFlags(fs *flag.FlagSet) *federationFlags {
+	f := &federationFlags{}
+	fs.StringVar(&f.KeyPath, "federation-key", envOrDefault("TA_FEDERATION_KEY", ""),
+		"Path to the RS256 private key (PEM) for signing federation tokens. Empty disables the federation endpoint.")
+	fs.StringVar(&f.ConfigMapName, "federation-store", envOrDefault("TA_FEDERATION_STORE", "tenant-federation-store"),
+		"Name of the ConfigMap holding the federation token record store (ADR-020 Posture B). The Helm chart pre-creates it.")
+	fs.StringVar(&f.Namespace, "federation-namespace", envOrDefault("TA_FEDERATION_NAMESPACE", ""),
+		"Namespace of the federation store ConfigMap. Empty uses the pod's own namespace.")
+	return f
 }
 
 // wireStateStore builds the store for tenant-api's own records (groups,

@@ -83,6 +83,10 @@ _TAG_DISPOSITION = {
     "forge_e2e": "enrol",
     "linux": "default-build",
     "unix": "default-build",
+    # #2884: statestore's flock excludes these two unix GOOS values (no
+    # syscall.Flock there); the excluded side is the no-op lock_other.go.
+    "aix": "unlinted",
+    "solaris": "unlinted",
 }
 _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})
 
