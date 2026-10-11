@@ -261,6 +261,9 @@ const (
 	// NotFileDirLink: a symlink whose target is a directory — config-named,
 	// or one the walk does not reach by itself (see dirLinkTargetIsWalked).
 	NotFileDirLink = "directory_symlink"
+	// NotFileSpecial: a config-named entry that is neither a regular file
+	// nor a directory, or a symlink to one (ScanDirTreeFiles only).
+	NotFileSpecial = "special_file"
 )
 
 // NotFile is one entry of TreeScan.NotFiles.
@@ -332,8 +335,10 @@ type TreeScan struct {
 	// no other map. It exists because the route generator's walker
 	// (`_lib_confd.list_config_tree`) names each of them as unusable and
 	// refuses the tree, and `da-guard parse-tree` reports what the
-	// generator would read without a walker of its own. nil when there is
-	// none, and always nil for the root-only modes.
+	// generator would read without a walker of its own. ScanDirTreeFiles
+	// also records here, as NotFileSpecial, the entries it does not read
+	// because they are not regular files. nil when there is none, and
+	// always nil for the root-only modes.
 	NotFiles []NotFile
 
 	// attrib is every tenant's FIRST declaring file in walk order, recorded
@@ -500,7 +505,28 @@ const (
 	// platform files — so one walk answers both "which carrier" and "which
 	// files carry a per-tenant `tenants:` layer" (#2208).
 	walkRootPlatform
+	// walkListOnly is walkFull without the tenant-declaration parse, and
+	// with one more refusal before any read: an entry that is neither a
+	// regular file nor a directory (a FIFO, a socket, a device — or a
+	// symlink to one) is recorded in NotFiles (NotFileSpecial) and never
+	// read, since reading a FIFO blocks the walk forever. For ScanDirTreeFiles
+	// (`da-guard parse-tree`, #2897) only: walkFull's behaviour, the
+	// exporter's, is unchanged — it still reads such an entry.
+	walkListOnly
 )
+
+// ScanDirTreeFiles is the walk of ScanDirTree — the same files, the same
+// unreadable entries, the same defaults carriers, the same NotFiles — for a
+// reader that wants every kept file's bytes and nothing decoded (#2897): no
+// tenant file is parsed, so Tenants, Partials and Conflict are empty, and
+// no metric or mtime fast path is involved. Unlike ScanDirTree it does not
+// read an entry that is not a regular file (see walkListOnly).
+func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
+	if logger == nil {
+		logger = log.Default()
+	}
+	return walkDirTree(root, nil, nil, logger, walkListOnly)
+}
 
 // scanRootDefaults is the root-only, carriers-only mode of the ONE walker
 // (#1674 round 2). It exists for callers that need exactly one answer —
@@ -602,6 +628,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	var unreadable []UnreadableFile
 	var notFiles []NotFile
 	var rootWalkErr error
+	// fullTree: the modes that walk the whole tree (walkFull's rules).
+	fullTree := mode == walkFull || mode == walkListOnly
 	relKey := func(path string) string {
 		if r, err := filepath.Rel(absRoot, path); err == nil {
 			return filepath.ToSlash(r)
@@ -630,7 +658,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path != absRoot && (mode != walkFull || strings.HasPrefix(name, ".")) {
+			if path != absRoot && (!fullTree || strings.HasPrefix(name, ".")) {
 				return fs.SkipDir
 			}
 			// Descended like any directory; recorded only (TreeScan.NotFiles).
@@ -664,7 +692,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			// pays it once per such key on every tick. Only a directory link
 			// additionally pays EvalSymlinks. Repeats on every tick while the
 			// link exists, the same cadence as the dangling-target WARN below.
-			if mode == walkFull && d.Type()&fs.ModeSymlink != 0 && !strings.HasPrefix(name, ".") {
+			if fullTree && d.Type()&fs.ModeSymlink != 0 && !strings.HasPrefix(name, ".") {
 				if ti, terr := os.Stat(path); terr == nil && ti.IsDir() && !dirLinkTargetIsWalked(absRoot, path) {
 					logger.Printf("WARN: %s is a symlink to a directory and is not followed; config files under it are NOT loaded", path)
 					notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileDirLink})
@@ -738,9 +766,17 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				dropUnreadable(path, UnreadableStatError)
 				return nil
 			}
+			if mode == walkListOnly && !targetInfo.Mode().IsRegular() && !targetInfo.IsDir() {
+				notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileSpecial})
+				return nil
+			}
 			st = FileStat{ModTime: targetInfo.ModTime().UnixNano(), Size: targetInfo.Size()}
 			link = &FileStat{ModTime: linkInfo.ModTime().UnixNano(), Size: linkInfo.Size()}
 		} else {
+			if mode == walkListOnly && !d.Type().IsRegular() {
+				notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileSpecial})
+				return nil
+			}
 			entryInfo, ierr := d.Info()
 			if ierr != nil {
 				logger.Printf("WARN: cannot stat %s: %v", path, ierr)
@@ -813,7 +849,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				// this failure path.
 				if ti, serr := os.Stat(e.abs); serr != nil || !ti.IsDir() {
 					unreadable = append(unreadable, UnreadableFile{RelKey: e.rel, Reason: UnreadableReadError})
-				} else if mode == walkFull {
+				} else if fullTree {
 					notFiles = append(notFiles, NotFile{RelKey: e.rel, Reason: NotFileDirLink})
 				}
 				continue
@@ -823,8 +859,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				f.Data = data
 			}
 			switch {
-			case strings.HasPrefix(name, "_"):
-				// Never parsed for tenants.
+			case strings.HasPrefix(name, "_"), mode == walkListOnly:
+				// Never parsed for tenants (ScanDirTreeFiles parses nothing).
 			case pf != nil && pf.Hash == f.Hash && !pf.ParseFailed:
 				// Same bytes as the prior: the declarations cannot differ, so
 				// carry them instead of parsing again. A prior that failed to

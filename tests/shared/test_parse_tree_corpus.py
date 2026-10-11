@@ -204,6 +204,8 @@ _ROWS: tuple[tuple, ...] = (
      None),
     ("mapping-key", "t.yaml", "tenants:\n  ? {c: d}\n  : {a: 1}\n", None, "non_scalar_key", None,
      None),
+    ("collection-key-beside-merge", "t.yaml", "? [a]\n: 1\n<<: {a: 1}\n", None, "non_scalar_key",
+     None, "yaml.v3 decode panics (unhashable key)"),
     ("2759-k1-merge-collection-key", "_domain_policy.yaml", _POLICY + "x: {<<: {? [a] : 1}}\n",
      None, "non_scalar_key", None, "#2759 K1"),
     # ── null_key ──
@@ -225,6 +227,8 @@ _ROWS: tuple[tuple, ...] = (
      "ADR-036 §2"),
     ("merge-scalar", "t.yaml", "tenants:\n  t1:\n    <<: 1\n", None, "decode_error", None,
      "ADR-036 §2"),
+    ("merge-anchored-scalar-sequence", "t.yaml", "<<: &y [a, b]\n", None, "decode_error", None,
+     None),
     ("2713-overridden-merge-source", "_domain_policy.yaml",
      _POLICY + "x:\n  a: 1\n  <<: {a: !!bool y}\n", None, "decode_error", None, "#2713"),
     ("2713-overridden-merge-source-int", "t.yaml",

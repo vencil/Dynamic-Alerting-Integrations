@@ -111,6 +111,9 @@ func TestParseTree_Readers(t *testing.T) {
 		"team/_routing_profiles.yaml":  "routing_profiles: {}\n",
 		"team/_profiles.yaml":          "profiles: {}\n",
 		"_sub/deep/_defaults.yaml":     "defaults: {cpu: 3}\n",
+		"multi/_defaults.yaml":         "defaults: {cpu: 4}\n",
+		"multi/_defaults.yml":          "defaults: {cpu: 5}\n",
+		"multi/_defaults.YAML":         "a: [\n",
 		".hidden/x.yaml":               "tenants: {h: {}}\n",
 		"team/.h.yaml":                 "tenants: {h: {}}\n",
 		"notes.md":                     "x",
@@ -123,7 +126,7 @@ func TestParseTree_Readers(t *testing.T) {
 	both, gen := []string{"exporter", "generator"}, []string{"generator"}
 	want := map[string][]string{
 		"t1.yaml": both, "UPPER.YAML": both, "_defaults.yaml": both, "_domain_policy.yaml": both,
-		"team/t3.yaml": both, "team/_DEFAULTS.yml": both, "team/_defaults.yml": gen,
+		"team/t3.yaml": both, "team/_DEFAULTS.yml": both, "multi/_defaults.yaml": both,
 		"team/_domain_policy.yml": gen, "team/_routing_profiles.yaml": gen, "team/_profiles.yaml": gen,
 		"_sub/deep/_defaults.yaml": both,
 	}
@@ -131,11 +134,16 @@ func TestParseTree_Readers(t *testing.T) {
 		t.Fatalf("selected\n got %v\nwant %v", got, want)
 	}
 	if got := doc["defaults_carriers"]; !reflect.DeepEqual(got, map[string]any{
-		".": "_defaults.yaml", "team": "team/_DEFAULTS.yml", "_sub/deep": "_sub/deep/_defaults.yaml"}) {
+		".": "_defaults.yaml", "team": "team/_DEFAULTS.yml", "_sub/deep": "_sub/deep/_defaults.yaml",
+		"multi": "multi/_defaults.yaml"}) {
 		t.Fatalf("defaults_carriers %v", got)
 	}
+	// #1674: an unselected carrier is ignored whole, below the root as at it
+	// (the generator names it and reads only the selected one) — so a broken
+	// one is not reported unreadable.
+	unsel := func(f string) any { return map[string]any{"file": f, "reason": notReadUnselectedCarrier} }
 	if got := doc["not_read"]; !reflect.DeepEqual(got, []any{
-		map[string]any{"file": "_defaults.yml", "reason": notReadUnselectedCarrier}}) {
+		unsel("_defaults.yml"), unsel("multi/_defaults.YAML"), unsel("multi/_defaults.yml"), unsel("team/_defaults.yml")}) {
 		t.Fatalf("not_read %v", got)
 	}
 	checkSelectedInvariant(t, doc)
@@ -179,11 +187,32 @@ func TestParseTree_PathKinds(t *testing.T) {
 	checkSelectedInvariant(t, doc)
 }
 
+// TestParseTree_DecodePanicIsData: a file on which yaml.v3's decode panics
+// (a collection key in a mapping that also merges) is an unreadable file in
+// the document, not a crash of the run — parse-tree's walk decodes nothing.
+func TestParseTree_DecodePanicIsData(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{
+		"a.yaml":  "? [a]\n: 1\n<<: {a: 1}\n",
+		"b.yaml":  "<<: &y [a, b]\n",
+		"ok.yaml": "tenants: {t1: {cpu: 1}}\n",
+	})
+	code, doc, _ := runPT(t, "", "--config-dir", root)
+	if code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	want := map[string]string{"a.yaml": "non_scalar_key", "b.yaml": "decode_error"}
+	if got := unreadableKinds(doc); !reflect.DeepEqual(got, want) {
+		t.Fatalf("unreadable %v, want %v", got, want)
+	}
+}
+
 // TestParseTree_FileMode: one text for one path, its readers judged in the
 // tree once the path is written.
 func TestParseTree_FileMode(t *testing.T) {
 	t.Parallel()
-	root := writeTree(t, map[string]string{"_defaults.yaml": "defaults: {}\n", "team/t.yaml": "a: 1\n"})
+	root := writeTree(t, map[string]string{"_defaults.yaml": "defaults: {}\n", "team/t.yaml": "a: 1\n",
+		"sub/_defaults.yaml": "defaults: {}\n"})
 	for _, tc := range []struct {
 		path, input string
 		readers     []string
@@ -194,6 +223,7 @@ func TestParseTree_FileMode(t *testing.T) {
 		{"team/_domain_policy.yaml", "domain_policies: {}\n", []string{"generator"}, "", ""},
 		{"_defaults.yml", "defaults: {}\n", []string{}, notReadUnselectedCarrier, ""},
 		{"team/_defaults.yml", "defaults: {}\n", []string{"exporter", "generator"}, "", ""},
+		{"sub/_defaults.yml", "defaults: {}\n", []string{}, notReadUnselectedCarrier, ""},
 		{"team/x.txt", "a: 1\n", []string{}, notReadNotConfigName, ""},
 		{".git/x.yaml", "a: 1\n", []string{}, notReadHidden, ""},
 		{"team/t.yaml", "a: ! \"<<\"\n", []string{"exporter", "generator"}, "", "non_specific_tag"},

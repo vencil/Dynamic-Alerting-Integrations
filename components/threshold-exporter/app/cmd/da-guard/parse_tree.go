@@ -46,9 +46,8 @@ const (
 // Closed set of parseTreeNotRead.Reason values.
 const (
 	// notReadUnselectedCarrier: a defaults carrier (`_defaults.yaml` /
-	// `.yml`, any case) at the conf.d root that the root's chain does not
-	// select. Below the root the generator still reads one (for the
-	// `_routing_enforced` check), so it is "selected" by the generator there.
+	// `.yml`, any case) that its directory's chain does not select — at the
+	// root or below it (#1674: every plane ignores it whole).
 	notReadUnselectedCarrier = "unselected_defaults_carrier"
 	// notReadHidden: the path, or a directory on it, starts with '.'.
 	notReadHidden = "hidden"
@@ -118,7 +117,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"  {\"schema\", \"da_guard_version\", \"mode\": \"tree\"|\"file\",\n"+
 			"   \"selected\": {<path>: [\"exporter\", \"generator\"]},  every file a reader reads, and who\n"+
 			"   \"defaults_carriers\": {<dir>: <path>},  the one _defaults file each directory's chain reads\n"+
-			"   \"not_read\": [{\"file\", \"reason\"}],  files no reader reads (unselected_defaults_carrier;\n"+
+			"   \"not_read\": [{\"file\", \"reason\"}],  files no reader reads (unselected_defaults_carrier,\n"+
+			"                                       at the root or below it;\n"+
 			"                                       in file mode also hidden, not_config_name)\n"+
 			"   \"files\": {<path>: <content>},  every readable selected file\n"+
 			"   \"unreadable\": [{\"file\", \"kind\", \"message\"}]}  every selected file that cannot be read\n"+
@@ -198,7 +198,11 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 		}
 	}
 
-	scan, err := config.ScanDirTree(f.configDir, nil, nil, log.New(io.Discard, "", 0))
+	// ScanDirTreeFiles, not ScanDirTree: the exporter's walk without its
+	// tenant decode (yaml.v3 panics on some files parse-tree must name as
+	// unreadable, e.g. a collection key beside a merge) and without reading
+	// a FIFO, which would block forever.
+	scan, err := config.ScanDirTreeFiles(f.configDir, log.New(io.Discard, "", 0))
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -254,15 +258,6 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 			doc.NotRead = append(doc.NotRead, parseTreeNotRead{File: rel, Reason: notReadUnselectedCarrier})
 			continue
 		}
-		// The walker read the bytes through a symlink too; a regular file
-		// is the only thing the generator reads (`Path.is_file()`).
-		if fi, err := os.Stat(f.AbsPath); err != nil {
-			unreadable(rel, readers, parsetree.KindReadFailure, "the file cannot be statted")
-			continue
-		} else if !fi.Mode().IsRegular() {
-			unreadable(rel, readers, parsetree.KindNotRegularFile, "not a regular file ("+fi.Mode().Type().String()+")")
-			continue
-		}
 		content, bad := parsetree.Parse(f.Data)
 		if bad != nil {
 			unreadable(rel, readers, bad.Kind, bad.Message)
@@ -284,11 +279,17 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 		unreadable(".", []string{readerExporter, readerGenerator}, parsetree.KindReadFailure, unreadableMessage(config.UnreadableWalkError))
 	}
 	for _, nf := range scan.NotFiles {
-		msg := "a directory with a config file name"
-		if nf.Reason == config.NotFileDirLink {
+		readers, msg := []string{readerGenerator}, "a directory with a config file name"
+		switch nf.Reason {
+		case config.NotFileDirLink:
 			msg = "a symlink to a directory the walk does not follow"
+		case config.NotFileSpecial:
+			// The exporter's walk reads it (and blocks on a FIFO); the
+			// generator books it as unusable (`Path.is_file()`).
+			readers = readersFor(nf.RelKey, true)
+			msg = "not a regular file (a FIFO, a socket or a device, or a symlink to one); not read"
 		}
-		unreadable(nf.RelKey, []string{readerGenerator}, parsetree.KindNotRegularFile, msg)
+		unreadable(nf.RelKey, readers, parsetree.KindNotRegularFile, msg)
 	}
 	sort.Slice(doc.Unreadable, func(i, j int) bool { return doc.Unreadable[i].File < doc.Unreadable[j].File })
 	sort.Slice(doc.NotRead, func(i, j int) bool { return doc.NotRead[i].File < doc.NotRead[j].File })
@@ -351,21 +352,23 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 // path the walk keeps), given whether it is the carrier its directory's
 // chain selects (true for any file that is not a defaults carrier).
 //
-// ⛔ The generator's half is `_grar_parse._parse_config_files`: it opens
-// every file the walk lists, except a ROOT carrier its directory does not
-// select; a carrier BELOW the root that is not selected it still opens, for
-// the `_routing_enforced` refusal (_enforced_in_unread_file). The exporter
-// reads tenant files, the root's `_` files but an unselected carrier
-// (isRootPlatformKey), and each directory's selected carrier; another `_`
-// file below the root it only probes for syntax (isNestedPlatformFile).
+// ⛔ The generator's half is `_grar_parse._parse_config_files`: it reads
+// every file the walk lists except a carrier its directory does not select,
+// which it names as ignored (warn_multi_carrier). Below the root it still
+// opens such a file for one question — does it write `_routing_enforced`
+// (_enforced_in_unread_file) — and ignores the file when it does not parse;
+// it is not a file the generator reads, so it is "not_read" here, and that
+// probe has no counterpart in this document (an open question for the
+// switch, #2897). The exporter reads tenant files, the root's `_` files but
+// an unselected carrier (isRootPlatformKey), and each directory's selected
+// carrier; another `_` file below the root it only probes for syntax
+// (isNestedPlatformFile).
 func readersFor(rel string, selectedCarrier bool) []string {
 	nested := strings.Contains(rel, "/")
 	base := path.Base(rel)
 	switch {
-	case !selectedCarrier && !nested:
-		return nil
 	case !selectedCarrier:
-		return []string{readerGenerator}
+		return nil
 	case nested && confdname.IsReserved(base) && !confdname.IsDefaults(base):
 		return []string{readerGenerator}
 	}

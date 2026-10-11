@@ -195,7 +195,7 @@ func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
 	// the tree as a whole — an alias that contains itself, more alias
 	// expansion than its limit allows.
 	var whole any
-	if err := doc.Decode(&whole); err != nil {
+	if err := decode(doc, &whole); err != nil {
 		return nil, fail(KindDecodeError, "%s", oneLine(err))
 	}
 
@@ -398,7 +398,7 @@ func kindName(n *yaml.Node) string {
 // Scalar's contract (nil: no value).
 func scalarValue(n *yaml.Node) (json.RawMessage, error) {
 	var v any
-	if err := n.Decode(&v); err != nil {
+	if err := decode(n, &v); err != nil {
 		return nil, err
 	}
 	tag := n.Tag
@@ -435,6 +435,21 @@ func scalarValue(n *yaml.Node) (json.RawMessage, error) {
 		return nil, fmt.Errorf("the tag %s decodes to %T, which has no value form", tag, v)
 	}
 	return json.Marshal(s)
+}
+
+// decode is Node.Decode that turns a panic into an error. yaml.v3 re-panics
+// any runtime error raised inside its decoder (handleErr): measured, a
+// collection key in a mapping that also merges (`? [a]` beside `<<:`)
+// panics with "hash of unhashable type". The checks above refuse every shape
+// known to do that before any decode runs; this keeps a shape not yet known
+// a decode_error of its own file rather than a crash of the whole run.
+func decode(n *yaml.Node, v any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("yaml.v3 decode failed: %v", r)
+		}
+	}()
+	return n.Decode(v)
 }
 
 // ------------------------------------------------------------- expansion
