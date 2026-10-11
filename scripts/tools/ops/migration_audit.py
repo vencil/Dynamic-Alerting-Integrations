@@ -616,7 +616,8 @@ def exporter_changes(rel: str, text: str) -> list[dict]:
 
 def empty_report() -> dict:
     return {"schema": SCHEMA, "status": "ok", "config_dir": None, "da_guard_version": None,
-            "pyyaml_version": yaml.__version__, "summary": {k: 0 for k in ALL_LISTS},
+            "pyyaml_version": yaml.__version__,
+            "summary": {**{k: 0 for k in ALL_LISTS}, "files_compared": 0},
             "files_compared": [], **{k: [] for k in ALL_LISTS}}
 
 

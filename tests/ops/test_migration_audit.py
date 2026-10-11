@@ -391,6 +391,19 @@ def test_cli_without_da_guard_fails_and_does_not_parse_itself(tmp_path) -> None:
     assert proc.returncode == EXIT_CALLER_ERROR and proc.stdout == ""
 
 
+def test_caller_error_document_has_the_success_shape(tmp_path, da_guard_binary) -> None:
+    # One schema version, one shape: a consumer reading .summary.X must get a
+    # number on exit 2 as on exit 0/1, not a missing key.
+    root = _write(tmp_path / "conf.d", {"t.yaml": b"a: yes\n"})
+    ok = json.loads(_cli(["--config-dir", str(root), "--json"], da_guard_binary).stdout)
+    bad = json.loads(_cli(["--config-dir", str(root), "--json"],
+                          str(tmp_path / "no-such-da-guard")).stdout)
+    assert bad["status"] == "caller_error"
+    assert set(bad) - {"reason"} == set(ok)
+    assert set(bad["summary"]) == set(ok["summary"])
+    assert all(isinstance(v, int) for v in bad["summary"].values())
+
+
 def test_cli_missing_config_dir(tmp_path, da_guard_binary) -> None:
     proc = _cli(["--config-dir", str(tmp_path / "nope"), "--json"], da_guard_binary)
     assert proc.returncode == EXIT_CALLER_ERROR
