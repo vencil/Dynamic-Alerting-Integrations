@@ -254,6 +254,21 @@ type UnreadableFile struct {
 	Reason string // UnreadableStatError, UnreadableReadError or UnreadableWalkError
 }
 
+// Closed set of NotFile.Reason values.
+const (
+	// NotFileDirectory: a directory whose name is a config file name.
+	NotFileDirectory = "directory"
+	// NotFileDirLink: a symlink whose target is a directory — config-named,
+	// or one the walk does not reach by itself (see dirLinkTargetIsWalked).
+	NotFileDirLink = "directory_symlink"
+)
+
+// NotFile is one entry of TreeScan.NotFiles.
+type NotFile struct {
+	RelKey string // root-relative slash path
+	Reason string // NotFileDirectory or NotFileDirLink
+}
+
 // TreeScan is everything one walk of the conf.d tree yields.
 type TreeScan struct {
 	AbsRoot   string
@@ -306,6 +321,20 @@ type TreeScan struct {
 	// it to tell "empty" from "could not be listed" and name the root as
 	// RootUnreadable (#2588, #2627).
 	RootWalkErr error
+
+	// NotFiles is every entry the full walk met that a reader of conf.d
+	// could take for a config file but that is not one, sorted by RelKey
+	// (#2897): a config-named directory (NotFileDirectory — the walk
+	// descends it like any directory), a config-named symlink to a
+	// directory, and a symlink to a directory the walk does not reach by
+	// itself, whatever its name (NotFileDirLink — the #1972 WARN). The
+	// exporter loads nothing from these and never did; the record changes
+	// no other map. It exists because the route generator's walker
+	// (`_lib_confd.list_config_tree`) names each of them as unusable and
+	// refuses the tree, and `da-guard parse-tree` reports what the
+	// generator would read without a walker of its own. nil when there is
+	// none, and always nil for the root-only modes.
+	NotFiles []NotFile
 
 	// attrib is every tenant's FIRST declaring file in walk order, recorded
 	// even when the tree has a conflict. When Conflict is nil it is the very
@@ -571,13 +600,16 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	}
 	var entries []entry
 	var unreadable []UnreadableFile
+	var notFiles []NotFile
 	var rootWalkErr error
-	dropUnreadable := func(path, reason string) {
-		rel := path
+	relKey := func(path string) string {
 		if r, err := filepath.Rel(absRoot, path); err == nil {
-			rel = r
+			return filepath.ToSlash(r)
 		}
-		unreadable = append(unreadable, UnreadableFile{RelKey: filepath.ToSlash(rel), Reason: reason})
+		return filepath.ToSlash(path)
+	}
+	dropUnreadable := func(path, reason string) {
+		unreadable = append(unreadable, UnreadableFile{RelKey: relKey(path), Reason: reason})
 	}
 	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
@@ -600,6 +632,10 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		if d.IsDir() {
 			if path != absRoot && (mode != walkFull || strings.HasPrefix(name, ".")) {
 				return fs.SkipDir
+			}
+			// Descended like any directory; recorded only (TreeScan.NotFiles).
+			if path != absRoot && IsScannedFileName(name) {
+				notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileDirectory})
 			}
 			return nil
 		}
@@ -631,6 +667,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			if mode == walkFull && d.Type()&fs.ModeSymlink != 0 && !strings.HasPrefix(name, ".") {
 				if ti, terr := os.Stat(path); terr == nil && ti.IsDir() && !dirLinkTargetIsWalked(absRoot, path) {
 					logger.Printf("WARN: %s is a symlink to a directory and is not followed; config files under it are NOT loaded", path)
+					notFiles = append(notFiles, NotFile{RelKey: relKey(path), Reason: NotFileDirLink})
 				}
 			}
 			return nil
@@ -776,6 +813,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 				// this failure path.
 				if ti, serr := os.Stat(e.abs); serr != nil || !ti.IsDir() {
 					unreadable = append(unreadable, UnreadableFile{RelKey: e.rel, Reason: UnreadableReadError})
+				} else if mode == walkFull {
+					notFiles = append(notFiles, NotFile{RelKey: e.rel, Reason: NotFileDirLink})
 				}
 				continue
 			}
@@ -822,6 +861,10 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		scan.Unreadable = unreadable
 	}
 	scan.RootWalkErr = rootWalkErr
+	if len(notFiles) > 0 {
+		sort.Slice(notFiles, func(i, j int) bool { return notFiles[i].RelKey < notFiles[j].RelKey })
+		scan.NotFiles = notFiles
+	}
 	// One buffer for every per-file hash (#1939): `Write([]byte(h))` made a
 	// fresh copy per file, because Write is an interface call the conversion
 	// escapes through — 1000 allocations per tick on a 1000-file tree.
