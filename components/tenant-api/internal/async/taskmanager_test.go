@@ -1,8 +1,13 @@
 package async
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -438,6 +443,87 @@ func TestMultipleWorkers(t *testing.T) {
 			if completedCount == numTasks {
 				return // All tasks completed.
 			}
+		}
+	}
+}
+
+// panicChildEnv marks the child process TestWorkerSurvivesPanickingTask runs
+// its scenario in.
+const panicChildEnv = "TENANT_API_ASYNC_PANIC_CHILD"
+
+// TestWorkerSurvivesPanickingTask (#2913): a TaskFunc that panics makes its
+// task failed — with a message that leaks neither the panic value nor a
+// stack — counts once in PanicCount, logs the task id, the panic and the
+// stack, and the same (only) worker then runs the next task to completion.
+//
+// The scenario runs in a child process (this test re-executed with
+// panicChildEnv set): without the worker's recover the panic ends the
+// process, and the parent must see that as this test failing, not as the
+// whole package's test binary dying.
+func TestWorkerSurvivesPanickingTask(t *testing.T) {
+	if os.Getenv(panicChildEnv) == "" {
+		t.Parallel()
+		cmd := exec.Command(os.Args[0], "-test.run=^TestWorkerSurvivesPanickingTask$", "-test.v")
+		cmd.Env = append(os.Environ(), panicChildEnv+"=1")
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "--- PASS: TestWorkerSurvivesPanickingTask") {
+			t.Fatalf("child run failed (%v) — a panicking task took the worker or the process down:\n%s", err, out)
+		}
+		return
+	}
+
+	var logBuf bytes.Buffer
+	m := NewManager(1)
+	m.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+	defer m.Close()
+
+	m.Submit("boom", func(ctx context.Context) ([]TaskResult, error) {
+		keys := map[interface{}]bool{}
+		keys[[]int{1}] = true // the runtime panic #2913 hit: hash of unhashable type
+		return nil, nil
+	})
+	m.Submit("after", func(ctx context.Context) ([]TaskResult, error) {
+		return []TaskResult{{TenantID: "tenant-a", Status: "ok"}}, nil
+	})
+
+	after := waitTerminal(t, m, "after")
+	if after.Status != TaskCompleted || after.Summary != "1 succeeded" {
+		t.Fatalf("the task after the panic: %+v, want completed", after)
+	}
+	boom, _ := m.Get("boom")
+	if boom.Status != TaskFailed || boom.Error != msgTaskPanicked {
+		t.Fatalf("the panicking task: %+v, want failed with %q", boom, msgTaskPanicked)
+	}
+	if strings.Contains(boom.Error, "unhashable") || strings.Contains(boom.Error, "goroutine") {
+		t.Errorf("Task.Error leaks the panic: %q", boom.Error)
+	}
+	if n := m.PanicCount(); n != 1 {
+		t.Errorf("PanicCount = %d, want 1", n)
+	}
+	log := logBuf.String()
+	for _, want := range []string{"task_id=boom", "hash of unhashable type", "runTask"} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the panic log lacks %q:\n%s", want, log)
+		}
+	}
+}
+
+// waitTerminal polls Get until the task is completed or failed.
+func waitTerminal(t *testing.T, m *Manager, id string) *Task {
+	t.Helper()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.After(10 * time.Second)
+	for {
+		if task, ok := m.Get(id); ok && (task.Status == TaskCompleted || task.Status == TaskFailed) {
+			return task
+		}
+		select {
+		case <-tick.C:
+		case <-deadline:
+			task, _ := m.Get(id)
+			t.Fatalf("task %q not terminal after 10s: %+v", id, task)
+			return nil
 		}
 	}
 }

@@ -159,6 +159,9 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// judges answer 503 while it is 0) and the escape hatch's pass-throughs.
 	writePolicyAvailabilityMetrics(w)
 
+	// #2913: async batch tasks whose work panicked (recovered, marked failed).
+	writeAsyncTaskMetrics(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0

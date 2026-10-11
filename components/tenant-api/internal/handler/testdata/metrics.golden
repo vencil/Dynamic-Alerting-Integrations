@@ -61,6 +61,9 @@ tenant_api_policy_available 1
 # HELP tenant_api_policy_unavailable_open_total Writes let through an unavailable domain policy under --policy-unavailable-open (fail-closed disabled). Should stay 0.
 # TYPE tenant_api_policy_unavailable_open_total counter
 tenant_api_policy_unavailable_open_total 0
+# HELP tenant_api_async_task_panics_total Async batch tasks whose work panicked; each was marked failed and the worker went on. Should stay 0 (the tenant-api log has the panic and stack per task id).
+# TYPE tenant_api_async_task_panics_total counter
+tenant_api_async_task_panics_total 0
 # HELP tenant_api_dev_auth_bypass_active 1 if --dev-bypass-auth is enabled (LOCAL DEV ONLY; must be 0 in production).
 # TYPE tenant_api_dev_auth_bypass_active gauge
 tenant_api_dev_auth_bypass_active 0
