@@ -110,3 +110,139 @@ def test_a_receiver_carried_by_a_profile_is_redacted(tmp_path, da_guard_env):
             "change": "modified", "tenants": ["tx"]} in doc["setting_changes"]
     # 對照：同一個 profile 裡不是憑證的值照印
     assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", 55, 60)]
+
+
+# ── 以值遮罩（#2865）：憑證經 YAML alias 或手抄出現在非憑證欄位 ──────────────
+
+
+def test_credential_values_takes_what_credential_fields_hold():
+    doc = {"receiver": {"type": "webhook", "url": "https://h/S1", "send_resolved": True,
+                        "http_config": {"authorization": {"credentials": "S2"}, "follow_redirects": True},
+                        "headers": {"X-Token": ["S3", " "]}},
+           "owner": "https://h/S1", "group_wait": "30s", "token": 42,
+           "list": [{"api_key": "S4"}], "_routing_text": "type: webhook\nurl: https://h/S5\n"}
+    assert r.credential_values(doc) == {"https://h/S1", "S2", "S3", "S4"}
+    # 路由鍵寫成文字時整段收（diff_served 也整段遮）；不是字串的不收
+    got = r.credential_values(doc, text_key=lambda k: k.startswith("_routing"))
+    assert got == {"https://h/S1", "S2", "S3", "S4", "type: webhook\nurl: https://h/S5\n"}
+    # 路由鍵是 mapping 時只收其中憑證欄位的值，`type` 這類不收
+    assert r.credential_values({"_routing": {"type": "webhook"}},
+                               text_key=lambda k: k.startswith("_routing")) == set()
+
+
+def test_mask_values_masks_inside_strings_and_keys_and_counts():
+    Pair = rd.ValueChange
+    value = {"a": "see https://h/S1 now", "https://h/S1": [Pair("t", "f", "k", "S2", 3)],
+             "n": 7, "b": True, "none": None}
+    masked, n = r.mask_values(value, {"https://h/S1", "S2"})
+    assert masked == {"a": f"see {r.REDACTED} now", r.REDACTED: [Pair("t", "f", "k", r.REDACTED, 3)],
+                      "n": 7, "b": True, "none": None}
+    assert type(masked[r.REDACTED][0]) is Pair
+    assert n == 3
+    assert r.mask_values(value, set()) == (value, 0)
+
+
+def test_mask_values_is_one_pass_longest_first():
+    # 較長的先遮（含另一個秘密者整段遮）；放進去的 REDACTED 不會再被比對
+    masked, n = r.mask_values(["xS1y", "S1", "dact"], {"S1", "xS1y", "dact"})
+    assert masked == [r.REDACTED] * 3 and n == 3
+    masked, _ = r.mask_values(["S1"], {"S1", "dact"})
+    assert masked == [r.REDACTED]
+
+
+def test_render_diff_credentials_reads_both_renders():
+    cfg = {"route": {"receiver": "tenant-tx"}, "receivers": [{"name": "tenant-tx", "webhook_configs": [
+        {"url": "https://h/S1", "send_resolved": True}]}]}
+    assert rd.credentials(cfg) == {"https://h/S1"}
+    tvs = {"tx": r_tenant(values={"_routing": {"receiver": {"type": "webhook", "url": "https://h/S2"}},
+                                  "_metadata": {"owner": "https://h/S2"}},
+                          unserved={"_routing_bad": "url: https://h/S3"})}
+    assert rd.credentials(tvs) == {"https://h/S2", "url: https://h/S3"}
+
+
+def r_tenant(**fields):
+    import _lib_tenant_values as tv
+    base = {f: {} for f in tv.TenantValues._fields}
+    base.update(fields)
+    return tv.TenantValues(**base)
+
+
+def _tree(d, secret, cpu, *, alias):
+    d.mkdir()
+    url = f"https://hooks.example/T0/{secret}"
+    owner = "*u" if alias else url
+    (d / "tx.yaml").write_text(
+        "tenants:\n  tx:\n"
+        f"    container_cpu: {cpu}\n"
+        f"    _routing:\n      receiver: {{type: webhook, url: &u {url}}}\n"
+        f"    _metadata:\n      owner: {owner}\n", encoding="utf-8")
+    return d
+
+
+def _run(old, new, *extra):
+    import subprocess
+    import sys
+    return subprocess.run([sys.executable, cd.__file__, "--old-dir", str(old), "--new-dir", str(new),
+                           "--at", "2026-10-10T00:00:00Z", *extra],
+                          capture_output=True, text=True, encoding="utf-8", timeout=300)
+
+
+@pytest.mark.parametrize("alias", [True, False], ids=["yaml-alias", "copied-by-hand"])
+def test_a_credential_in_a_non_credential_field_is_masked_by_value(tmp_path, da_guard_env, alias):
+    """`_metadata.owner` 不是憑證欄位，exporter 照送；它的值與 receiver 的 url 相同時，
+    依值遮（#2865）。對照：同一棵樹不是憑證的閾值變更照印。"""
+    import json
+
+    old = _tree(tmp_path / "old", "SEKRETOLD", 80, alias=alias)
+    new = _tree(tmp_path / "new", "SEKRETNEW", 90, alias=alias)
+    js, md = _run(old, new, "--format", "json"), _run(old, new)
+    for p in (js, md):
+        assert p.returncode == 1, p.stderr
+        assert "SEKRET" not in p.stdout + p.stderr, p.stdout
+    doc = json.loads(js.stdout)
+    assert {"key": "_metadata.owner", "old": r.REDACTED, "new": r.REDACTED,
+            "change": "modified", "tenants": ["tx"]} in doc["setting_changes"]
+    assert doc["masked_by_value"] == 2
+    assert "Masked by value: 2 place(s)" in md.stdout
+    # 對照：不是憑證的值照印
+    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", "80", "90")]
+
+
+def test_nothing_masked_by_value_says_nothing(tmp_path, da_guard_env):
+    """對照組：owner 與 url 不同時不遮、不註記，且 owner 的變更照印。"""
+    import json
+
+    def tree(d, owner):
+        d.mkdir()
+        (d / "tx.yaml").write_text(
+            "tenants:\n  tx:\n    _routing:\n      receiver: {type: webhook, url: https://h/S1}\n"
+            f"    _metadata:\n      owner: {owner}\n", encoding="utf-8")
+        return d
+    old, new = tree(tmp_path / "old", "alice"), tree(tmp_path / "new", "bob")
+    js, md = _run(old, new, "--format", "json"), _run(old, new)
+    doc = json.loads(js.stdout)
+    assert doc["masked_by_value"] == 0
+    assert {"key": "_metadata.owner", "old": "alice", "new": "bob",
+            "change": "modified", "tenants": ["tx"]} in doc["setting_changes"]
+    assert "Masked by value" not in md.stdout
+
+
+def test_compare_collects_credentials_from_both_sides_and_both_views(monkeypatch):
+    """每一側、每個面向渲染成功就收；一側失敗不影響另一側已收的。"""
+    monkeypatch.setattr(rd, "has_config", lambda d: True)
+    served = {"base": {"tx": r_tenant(values={"_routing": {"receiver": {"url": "SB"}}})},
+              "pr": {"tx": r_tenant(values={"_routing": {"receiver": {"url": "SP"}}})}}
+    routes = {"base": {"route": {}, "receivers": [{"name": "x", "webhook_configs": [{"url": "RB"}]}]},
+              "pr": {"route": {}, "receivers": [{"name": "x", "webhook_configs": [{"url": "RP"}]}]}}
+    monkeypatch.setattr(rd, "render_served", lambda d, at, **kw: served[d])
+    monkeypatch.setattr(rd, "render_routes", lambda d, **kw: routes[d])
+    assert rd.compare("base", "pr", "2026-10-10T00:00:00Z").secrets == {"SB", "SP", "RB", "RP"}
+
+    def broken(d, **kw):
+        if d == "base":
+            raise rd.RenderError(rd.RenderFailure("config", "bad"))
+        return routes[d]
+    monkeypatch.setattr(rd, "render_routes", broken)
+    got = rd.compare("base", "pr", "2026-10-10T00:00:00Z")
+    assert got.routes.status == "not_compared"
+    assert got.secrets == {"SB", "SP", "RP"}

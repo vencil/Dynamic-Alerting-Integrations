@@ -69,7 +69,7 @@ updated_at: 2026-10-11
 - 兩側用**同一版**工具渲染（這次 CI 跑的那一版），所以差異只反映設定的差異，不會混進工具改版造成的輸出形狀變化。
 - served-values 的 `--at` 兩側用同一個時間點，並印在報告上。兩側各取各的執行時間的話，輸出裡的時間戳不同，連只改註解都會變成差異。config-diff 的 `--at` 選填：CI 傳 base commit 的時間，重跑時答案不變；沒有傳時，在執行當下取一次、兩側共用，所以沒有傳 `--at` 的既有 CI 照常運作。`--schedules` 讓排程生效的時段也納入比較，不只看單一時間點。
 - route 節點的身分是「從根到它的 matcher 路徑」，比較的欄位是 receiver、`group_by`、`group_wait`、`group_interval`、`repeat_interval`、`continue`。matcher 是 Alertmanager 用來決定告警走哪條路的條件，例如 `tenant="db-a"`。用 matcher 當身分，不依賴產生器替 receiver 取的名字。
-- receiver 定義裡的憑證欄位（webhook URL、token、密碼）比較時只報「有變」，前後值都遮罩，因為報告會貼成 PR 留言。
+- receiver 定義裡的憑證欄位（webhook URL、token、密碼）比較時只報「有變」，前後值都遮罩，因為報告會貼成 PR 留言。同一個值出現在不是憑證的欄位時也遮：YAML 的 anchor／alias 或手抄都會把它放到那裡，而渲染結果分不出來。
 
 ### 2. 差異歸給誰
 
