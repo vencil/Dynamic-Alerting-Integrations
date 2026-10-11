@@ -190,6 +190,17 @@ var reservedKeyValidators = map[string]reservedKeyValidator{
 	"_routing_profile": validateProfileReference,
 	"_profile":         validateProfileReference,
 	"_routing":         validateRoutingPatch,
+	"_metadata":        rejectMetadataPatch,
+}
+
+// rejectMetadataPatch refuses every batch patch of `_metadata` (#2859). A
+// patch value is a string and `_metadata` is a mapping; the write path
+// refuses the string form (validateShape), so a batch can never set it.
+// Refused here so the caller hears it as a 400 naming the field, before any
+// op is judged or written. Set it with PUT /api/v1/tenants/{id}.
+func rejectMetadataPatch(string) string {
+	return "_metadata is a mapping and a batch patch value is a string, so a batch cannot set it; " +
+		"write it as a mapping with PUT /api/v1/tenants/{id} (#2859)"
 }
 
 // validateSilentMode mirrors threshold-exporter's `config_resolve.go`

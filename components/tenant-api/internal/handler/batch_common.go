@@ -36,10 +36,10 @@ func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manag
 }
 
 // scopeMetadataKeys are the tenant keys a batch op can write that decide the
-// tenant's environment/domain (#2830): `_metadata` in its string form, and
-// `_profile`, whose profile's `_metadata` the tenant reads when no layer
-// writes its own.
-var scopeMetadataKeys = []string{"_metadata", "_profile"}
+// tenant's environment/domain (#2830): `_profile`, whose profile's
+// `_metadata` the tenant reads when no layer writes its own. `_metadata`
+// itself is not one: a batch cannot set it (rejectMetadataPatch, #2859).
+var scopeMetadataKeys = []string{"_profile"}
 
 // gateBatchOpPostState is the post-state half of a batch op's write gate, the
 // batch twin of RequireOrgWriteProposed: gateBatchOp authorized the op

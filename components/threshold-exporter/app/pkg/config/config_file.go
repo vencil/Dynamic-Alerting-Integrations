@@ -50,15 +50,25 @@ import (
 // threshold key of a `tenants:` / `profiles:` body), and inside `defaults:`
 // a spelling that writes nothing beside one that does is dropped
 // (dropNullShadowingSpellings, #2418). The tenant set of a file is the key
-// set of the returned Tenants.
+// set of the returned Tenants. It also records, without changing any value,
+// which entries write `_metadata` as a string (StringMetadataEntries, #2859).
 //
 // ⚠️ A TENANT FILE ASKS ParseTenantFile, NOT THIS. This accepts a tenant id
 // that is not valid UTF-8; that is right for a `_`-prefixed platform file
 // (see ParseTenantFile) and wrong for a file that DECLARES tenants.
 func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
-	err := yaml.Unmarshal(data, &cfg)
+	// Through a yaml.Node rather than straight into cfg: yaml.Unmarshal builds
+	// that node anyway, so the typed decode costs the same, and the node still
+	// shows what the typed decode erases — whether `_metadata` was written as
+	// a string (stringMetadataEntries, #2859).
+	var doc yaml.Node
+	err := yaml.Unmarshal(data, &doc)
+	if err == nil && doc.Kind != 0 {
+		err = doc.Decode(&cfg)
+	}
 	if err == nil {
+		cfg.stringMetadata = stringMetadataEntries(&doc)
 		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
@@ -301,4 +311,180 @@ func mayHaveStructuredReserved(bodies map[string]map[string]ScheduledValue) bool
 		}
 	}
 	return false
+}
+
+// StringMetadataEntries is the file's `tenants:` / `profiles:` entries that
+// write `_metadata` as a string, as "tenants.<id>" / "profiles.<name>"
+// (stringMetadataEntries). Set by ParseConfigFile only; nil for a merged
+// config.
+func (c *ThresholdConfig) StringMetadataEntries() []string { return c.stringMetadata }
+
+// TenantWritesStringMetadata reports whether a tenant config document writes
+// tenants.<tenantID>._metadata as a string. The write side refuses that
+// (#2859): the schema says `_metadata` is a mapping, and after the decode a
+// string that reads as YAML is indistinguishable from one. Bytes that do not
+// parse report false; the caller's own decode is what refuses them.
+func TenantWritesStringMetadata(data []byte, tenantID string) bool {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil {
+		return false
+	}
+	want := "tenants." + tenantID
+	for _, e := range stringMetadataEntries(&doc) {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+// stringMetadataEntries lists the `tenants:` entries, then the `profiles:`
+// ones, each in document order (merged ones last, effectivePairs), of a
+// decoded document whose effective `_metadata` is a non-null scalar:
+// "tenants.<id>" / "profiles.<name>".
+//
+// WHY IT READS THE NODE. ScheduledValue stores a scalar as its text and a
+// mapping as its re-serialized YAML, both in Default, so after the typed
+// decode `_metadata: "environment: production"` and `_metadata:
+// {environment: production}` are the same value. The exporter keeps reading
+// both (a load-side refusal would drop every tenant of the file); this list
+// is what lets it say which entries still use the string form.
+func stringMetadataEntries(doc *yaml.Node) []string {
+	root := derefAlias(doc)
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return nil
+		}
+		root = derefAlias(root.Content[0])
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []string
+	for _, section := range []string{"tenants", "profiles"} {
+		entries := effectiveValue(root, section, 0)
+		if entries == nil || entries.Kind != yaml.MappingNode {
+			continue
+		}
+		visit := func(name string, value *yaml.Node) {
+			body := derefAlias(value)
+			if body.Kind != yaml.MappingNode {
+				return
+			}
+			if v := effectiveValue(body, "_metadata", 0); v != nil && v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" {
+				out = append(out, section+"."+name)
+			}
+		}
+		if !hasMergeKey(entries) {
+			// The common shape, walked without allocating: no merge key, so
+			// the effective pairs are the written ones (duplicates are a
+			// decode error).
+			for i := 0; i+1 < len(entries.Content); i += 2 {
+				visit(entries.Content[i].Value, entries.Content[i+1])
+			}
+			continue
+		}
+		for _, e := range effectivePairs(entries, 0) {
+			visit(e.key, e.value)
+		}
+	}
+	return out
+}
+
+// maxMergeDepth bounds how deep effectivePairs follows merge keys into
+// merged mappings; a real config nests one or two.
+const maxMergeDepth = 16
+
+type nodePair struct {
+	key   string
+	value *yaml.Node
+}
+
+// effectivePairs is mapping m's keys as the typed decode sees them (#2859
+// review): every explicit key, in document order, then each key a merge key
+// (`<<`) brings in that no explicit key and no earlier merge source already
+// set. That is yaml.v3's precedence: an explicit key wins over a merged one,
+// and among the sources of `<<: [*a, *b]` the earlier wins. Without it,
+// `<<: {_metadata: "owner: x"}` decoded as a string `_metadata` while this
+// list did not name it.
+func effectivePairs(m *yaml.Node, depth int) []nodePair {
+	var out []nodePair
+	seen := map[string]bool{}
+	var merges []*yaml.Node
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := m.Content[i]
+		if isMergeKey(k) {
+			merges = append(merges, m.Content[i+1])
+			continue
+		}
+		if !seen[k.Value] {
+			seen[k.Value] = true
+			out = append(out, nodePair{k.Value, m.Content[i+1]})
+		}
+	}
+	if depth >= maxMergeDepth {
+		return out
+	}
+	for _, src := range merges {
+		src = derefAlias(src)
+		sources := []*yaml.Node{src}
+		if src.Kind == yaml.SequenceNode {
+			sources = src.Content
+		}
+		for _, s := range sources {
+			s = derefAlias(s)
+			if s.Kind != yaml.MappingNode {
+				continue
+			}
+			for _, p := range effectivePairs(s, depth+1) {
+				if !seen[p.key] {
+					seen[p.key] = true
+					out = append(out, p)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// effectiveValue is the value effectivePairs gives key in m, or nil.
+func effectiveValue(m *yaml.Node, key string, depth int) *yaml.Node {
+	if !hasMergeKey(m) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == key {
+				return derefAlias(m.Content[i+1])
+			}
+		}
+		return nil
+	}
+	for _, p := range effectivePairs(m, depth) {
+		if p.key == key {
+			return derefAlias(p.value)
+		}
+	}
+	return nil
+}
+
+// hasMergeKey reports whether mapping m writes a merge key.
+func hasMergeKey(m *yaml.Node) bool {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if isMergeKey(m.Content[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMergeKey reports whether k is a YAML merge key: yaml.v3's isMerge
+// (decode.go), restated because it is unexported.
+func isMergeKey(k *yaml.Node) bool {
+	return k.Kind == yaml.ScalarNode && k.Value == "<<" &&
+		(k.Tag == "" || k.Tag == "!" || k.Tag == "!!merge" || k.Tag == "tag:yaml.org,2002:merge")
+}
+
+func derefAlias(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	return n
 }

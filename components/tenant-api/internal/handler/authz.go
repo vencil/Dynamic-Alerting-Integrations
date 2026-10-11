@@ -189,9 +189,8 @@ func requireOrgWriteAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID
 // This is specific to the metadata axis. The org axis cannot be attacked this
 // way: org membership lives in the admin-only `_tenant_orgs.yaml`, a separate
 // file this path cannot write. The batch path reaches the metadata axis
-// through scalar keys alone — `_profile`, and `_metadata` in its string form
-// (#2830; it refuses to overwrite a `_metadata` mapping with a scalar,
-// tenant_batch.go) — and runs the same post-state check per op
+// through `_profile` alone (a batch cannot set `_metadata`, #2859:
+// rejectMetadataPatch) and runs the same post-state check per op
 // (gateBatchOpPostState).
 //
 // The check runs the SAME predicate against the PROPOSED metadata, so it

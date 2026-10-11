@@ -38,6 +38,7 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		{"non-tenants root key", "defaults:\n  x: 1\ntenants:\n  db-a:\n    _silent_mode: \"warning\"\n"},
 		{"body does not declare the URL id", "tenants:\n  someone-else:\n    _silent_mode: \"warning\"\n"},
 		{"content after the first document", ownOnly + "---\ntenants:\n  sneaky:\n    _silent_mode: \"all\"\n"},
+		{"string _metadata (#2859)", "tenants:\n  db-a:\n    _metadata: \"environment: production\"\n"},
 		// ⛔ THE ONE THAT ACTUALLY GUARDS THE DUPLICATION. The two validators each
 		// call cfg.ValidateTenantCustomAlerts on their own line; every other row
 		// here rides on the shared validateShape and so cannot drift. Without this

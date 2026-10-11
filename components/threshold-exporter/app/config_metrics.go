@@ -34,6 +34,9 @@ package main
 //     reason ∈ valuesNotServedReasons
 //     re-Set by every commit (auditValuesNotServed).
 //
+//   da_config_metadata_string_form         (Gauge)  [#2859]
+//     re-Set by every commit (metadataStringFormOf).
+//
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
 //     merged_hash moved (ADR-017 "quiet defaults edit"). v2.8.0 Issue #61
@@ -141,6 +144,8 @@ type configMetrics struct {
 	// #2065: da_config_values_not_served's children, keyed by
 	// valuesNotServedReasons.
 	valuesNotServed map[string]prometheus.Gauge
+	// #2859: da_config_metadata_string_form. See SetMetadataStringForm.
+	metadataStringForm prometheus.Gauge
 }
 
 // da_config_scan_failures_total{reason} label values (#2452, #2592). ⛔ A
@@ -314,6 +319,7 @@ func newConfigMetrics() *configMetrics {
 		unreadableFiles:             unreadable,
 		defaultsUnusable:            defaultsUnusable,
 		valuesNotServed:             valuesNotServed,
+		metadataStringForm:          s.MetadataStringForm,
 		set:                         s,
 		scanDuration:                s.ScanDuration,
 		reloadTriggers:              s.ReloadTriggers,
@@ -593,6 +599,17 @@ func (cm *configMetrics) SetValuesNotServed(counts map[string]int) {
 	for r, g := range cm.valuesNotServed {
 		g.Set(float64(counts[r]))
 	}
+}
+
+// SetMetadataStringForm publishes da_config_metadata_string_form (#2859):
+// the number of entries of the committed config that write `_metadata` as a
+// string (metadataStringFormOf). Called on every commit, including the
+// healthy one, so a fixed tree reads 0 again. Nil-receiver safe.
+func (cm *configMetrics) SetMetadataStringForm(n int) {
+	if cm == nil {
+		return
+	}
+	cm.metadataStringForm.Set(float64(n))
 }
 
 // SetConfigShape publishes the two whole-tree size maxima of the config

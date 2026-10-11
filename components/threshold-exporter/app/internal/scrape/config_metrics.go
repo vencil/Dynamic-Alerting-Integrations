@@ -63,6 +63,11 @@ type ConfigMetrics struct {
 	// of the committed config /metrics does not serve as written, by the
 	// not_served reason (package main's valuesNotServedReasons).
 	ValuesNotServed *prometheus.GaugeVec
+	// #2859: state-coded gauge, re-Set on every config commit: the
+	// `tenants:` / `profiles:` entries of the committed config that write
+	// `_metadata` as a string. The exporter still reads them; the write
+	// side (tenant-api, the conf.d schema lint) refuses the form.
+	MetadataStringForm prometheus.Gauge
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
@@ -173,6 +178,10 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_values_not_served",
 			Help: "Number of threshold values in the committed config that /metrics does not serve as written (#2065), by reason: value_unparsed (a tenant value that is not a number the exporter reads; the platform default is served instead), value_unparsed_dropped (the same for a `_critical`, dimensional or optional_overrides key, which has no default to fall back to: no series is served), window_invalid (a schedule override whose `window:` is not a UTC HH:MM-HH:MM with start different from end; that window never applies) and value_rejected (a subtree _defaults.yaml value that is not threshold-shaped and is the value the tenant is shown; the tenant keeps a shallower level's value). Counted per (tenant, key), for threshold keys only. The verdicts are the resolver's and the build's own, the same ones `da-guard effective` reports as not_served and `da-guard` as value_not_served. State-coded: re-Set on every config commit, so it returns to 0 once the values are fixed; all four reasons exist at 0 from the first scrape. The accompanying WARN (once per change of the set) names tenant, key and reason; `da-guard effective` names the file of each. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}, []string{"reason"}),
+		MetadataStringForm: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_metadata_string_form",
+			Help: "Number of `tenants:` and `profiles:` entries in the committed config that write `_metadata` as a string rather than a mapping (#2859). The exporter still reads such a string as YAML, so the metadata is served; the conf.d schema lint fails on it, and tenant-api refuses a write whose target tenant section writes the form, so a tenant whose own section in its file uses it cannot be edited through tenant-api until that section is rewritten as a mapping; a counted profile or platform-file entry does not block tenant writes. Counted per file of the committed config, so an entry written in two files counts twice; a file that failed to parse is not counted. State-coded: re-Set on every config commit, so it returns to 0 once every entry is a mapping. The accompanying WARN (once per commit) names the entries. Informational — no PrometheusRule ships for it.",
+		}),
 	}
 }
 
@@ -198,5 +207,6 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.UnreadableFiles,
 		s.DefaultsUnusable,
 		s.ValuesNotServed,
+		s.MetadataStringForm,
 	}
 }
