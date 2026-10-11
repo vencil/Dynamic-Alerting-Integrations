@@ -347,6 +347,12 @@ class TestRenderMarkdown:
         assert '- tenant `t1` — route `component="custom" / tenant="t1" / alertname="A"` (added)' in md
         assert '- 2 tenants: `t1`, `t2` — 2 routes (added), e.g. `tenant="t1" / alertname="A"`' in md
 
+    def test_a_repeated_sibling_keeps_its_place_in_the_shape(self):
+        """同層 matcher 相同的第二個兄弟節點（`#2`）通常被前一個遮住：不得與一般節點併成一筆。"""
+        assert cd._path_shape(('tenant="t1" #2',)) == ["tenant=* #2"]
+        assert cd._path_shape(('tenant="t1"',)) == ["tenant=*"]
+        assert cd._path_shape(('severity="critical", tenant="t1" #2',)) == ['severity="critical", tenant=* #2']
+
     def test_one_tenant_beside_the_platform_is_singular(self):
         recv = [rd.ReceiverChange("noc", (rd.PLATFORM, "a"), "changed", {"send_resolved": (True, False)})]
         assert "- `noc` (changed) — platform and 1 tenant: `a`" in cd.render_markdown(_report(receivers=recv))

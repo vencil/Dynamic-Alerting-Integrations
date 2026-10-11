@@ -968,9 +968,12 @@ def _group_per_tenant(per_tenant):
 
 
 def _path_shape(path):
-    """A route's matcher path with the tenant it names left out."""
-    return [", ".join("tenant=*" if rd._tenant_of_matcher(m.split(" #")[0]) is not None else m
-                      for m in step.split(", ")) for step in path]
+    """A route's matcher path with the tenant it names left out; a `#n`
+    repeat suffix (a sibling with the same matchers) is kept."""
+    def shape(m):
+        matcher, sep, repeat = m.partition(" #")
+        return f"tenant=*{sep}{repeat}" if rd._tenant_of_matcher(matcher) is not None else m
+    return [", ".join(shape(m) for m in step.split(", ")) for step in path]
 
 
 def _names(names):
