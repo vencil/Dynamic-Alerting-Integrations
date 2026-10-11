@@ -25,6 +25,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 # Canonical list, mirrored from check_playbook_freshness.py. Kept as a literal
 # (not imported) so this tool works when the lint module is not on sys.path
@@ -43,11 +44,12 @@ FRONTMATTER_LINE_RE = re.compile(
 
 
 def find_repo_root() -> Path:
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return Path(__file__).resolve().parents[3]
+    """This tree's root (#2852): the tool's own tree, never the cwd's.
+
+    It used to walk up from the cwd to the first `.git`, so a run from inside
+    another checkout rewrote THAT checkout's playbooks.
+    """
+    return require_project_root(_THIS_DIR)
 
 
 def _normalize_version(raw: str) -> str:

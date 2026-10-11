@@ -1,7 +1,8 @@
 """#2852 — dev-time tools read THIS tree, never an outer project's.
 
-Thirteen tools under ``scripts/tools/{dx,lint}`` took the nearest ancestor
-holding a ``.git`` as the repo root. A tree with no ``.git`` of its own (a
+Seventeen tools under ``scripts/tools/{dx,lint}`` took the nearest ancestor
+holding a ``.git`` as the repo root — thirteen from their own file, four from
+the current directory. A tree with no ``.git`` of its own (a
 vendored copy, a ``git archive`` tarball) nested in another project then read
 — and the generators wrote into — THAT project. They now take
 ``_lib_compat.require_project_root``: the root of the innermost
@@ -46,6 +47,14 @@ ROOT_FNS = [
     ("check_unpinned_deps", "lint"),
     ("check_workflow_git_push_permissions", "lint"),
 ]
+# Tools whose root used to be the CWD's nearest `.git`; the probe runs from
+# inside the outer project, which is exactly what used to pick it.
+CWD_FNS = [
+    ("bump_playbook_versions", "dx"),
+    ("check_devrules_size", "lint"),
+    ("check_path_metadata_consistency", "lint"),
+    ("check_playbook_freshness", "lint"),
+]
 # Tools that find the root inline in main(), with the inputs they require.
 import check_cross_ns_url_consistency as _cross_ns  # noqa: E402
 import check_single_writer_invariant as _single_writer  # noqa: E402
@@ -67,8 +76,9 @@ tools = sys.argv[1]
 for sub in ("", "/dx", "/lint"):
     sys.path.insert(0, tools + sub)
 out = {}
-for name in sys.argv[2:]:
-    out[name] = str(importlib.import_module(name)._repo_root())
+for spec in sys.argv[2:]:
+    name, fn = spec.split(":")
+    out[name] = str(getattr(importlib.import_module(name), fn)())
 print(json.dumps(out))
 '''
 
@@ -105,7 +115,8 @@ def layouts(tmp_path_factory):
 
 def _roots(tools: Path, cwd: Path) -> dict:
     r = subprocess.run([sys.executable, "-I", "-c", PROBE, str(tools),
-                        *(m for m, _ in ROOT_FNS)],
+                        *(f"{m}:_repo_root" for m, _ in ROOT_FNS),
+                        *(f"{m}:find_repo_root" for m, _ in CWD_FNS)],
                        cwd=str(cwd), capture_output=True, timeout=180, env=_env())
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[-2000:]
     return json.loads(r.stdout.decode("utf-8").strip().splitlines()[-1])
