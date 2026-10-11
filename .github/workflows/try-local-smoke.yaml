@@ -26,24 +26,15 @@ jobs:
           cp .env.example .env
           docker compose up -d
 
-      - name: Wait for healthchecked services (max 5 min)
+      # #2909: this used to pass every service whose .Health was "" — which is
+      # every service without a healthcheck AND every container that had exited
+      # or never started (plain `compose ps` does not list them). The
+      # recipe-preview image crash-looped for 6 weeks behind it (#2873). The
+      # script fails on a non-running / restarted long-running service and on a
+      # one-shot (restart: "no", derived from compose) that exited non-zero.
+      - name: Wait for every service to be ready (max 5 min)
         working-directory: try-local
-        run: |
-          deadline=$(( $(date +%s) + 300 ))
-          while :; do
-            unhealthy="$(docker compose ps --format json \
-              | jq -r 'select(.Health != "" and .Health != "healthy") | .Service' 2>/dev/null || true)"
-            if [ -z "$unhealthy" ]; then
-              echo "all healthchecked services healthy"
-              break
-            fi
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "::error::services not healthy within 5min: $unhealthy"
-              docker compose ps
-              exit 1
-            fi
-            sleep 5
-          done
+        run: bash ../scripts/ops/trylocal_wait_ready.sh 300
 
       - name: Run smoke.sh
         working-directory: try-local
@@ -52,7 +43,9 @@ jobs:
       - name: Dump compose logs on failure
         if: failure()
         working-directory: try-local
-        run: docker compose logs --no-color | tail -n 300
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color | tail -n 300
 
       - name: Tear down
         if: always()
