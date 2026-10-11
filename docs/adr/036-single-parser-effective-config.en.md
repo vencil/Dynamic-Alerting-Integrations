@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (drafted and approved by the owner 2026-10-09).
 
-- **Revised 2026-10-11 (proposed, pending PR approval)**:
+- **Revised 2026-10-11 (approved by the owner)**:
   - The YAML syntax layer also keeps a single parser: every read used to judge config content reads the same JSON parsed by Go (two exceptions: the migration audit command in §8 reads with both parsers; the tools in §2 that write conf.d still read the original with PyYAML and check the result with `parse-tree` before writing), and the generator is responsible only for routing and policy semantics. The direction was approved by the owner in [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858).
   - Folds in the switch-over design and write criterion the owner decided on 2026-10-10 and 2026-10-11 ([#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)): no two phases, a single-step switch; a write goes ahead only when the whole tree afterwards passes the generator's check; no resolved config JSON; the "let writes through while policy is unavailable" switch (`--policy-unavailable-open`) is removed; git is required.
 - Both the design and the revision went through adversarial review (by a different model).
