@@ -212,6 +212,7 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_config_last_reload_successful{component}` | Gauge | 恆有 | 該設定最後一次重載是否成功;0 = 目前正用舊設定。值:`RBAC` / `federation-policy` / `groups` / `policy` / `tenantorg` / `views` |
 | `tenant_api_policy_available` | Gauge | 恆有 | 1 = 每個存在的 domain policy 檔都讀得了、或沿用它自己上一份讀得了的內容;0 = 有檔存在卻讀不了且沒有上一份,直寫模式下受 policy 判定的寫入回 503 `POLICY_UNAVAILABLE`(告警 `TenantApiPolicyUnavailable`) |
 | `tenant_api_policy_unavailable_open_total` | Counter | 恆有 | `--policy-unavailable-open` 開著時,在 policy 不可用下被放行的寫入數;一次寫入 = 一個 `PUT /tenants/{id}` 或 batch(tenant / group)中一個受 policy 判定的 op,batch 請求本身不另計;應維持 0 |
+| `tenant_api_async_task_panics_total` | Counter | 恆有 | 非同步批次(`?async=true`)的工作 panic 的次數;該 task 標為 `failed`(`error` 不帶 panic 內容),panic 與堆疊依 task id 寫進 log,worker 繼續處理後續 task。應維持 0 |
 | `tenant_api_dev_auth_bypass_active` | Gauge | 恆有 | 1 = `--dev-bypass-auth` 開著(僅限本機開發,正式環境須為 0) |
 | `tenant_api_sse_clients` | Gauge | 恆有 | 目前連線中的 SSE(`/api/v1/events`)客戶端數 |
 | `tenant_api_human_socket_up` | Gauge | 設了 `--human-socket` | 1 = human-plane Unix socket 回應了 readiness 自我探測 |

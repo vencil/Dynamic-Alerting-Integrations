@@ -496,6 +496,8 @@ func main() {
 
 	// v2.6.0: Async task manager for batch operations
 	taskMgr := async.NewManager(4) // 4 worker goroutines
+	// #2913: /metrics reads how many of its tasks panicked (recovered, failed).
+	handler.SetAsyncTaskSource(taskMgr)
 
 	// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab.
 	// PR-5/11: bootstrap logic lives in wire.go::wirePRBackend so main()
