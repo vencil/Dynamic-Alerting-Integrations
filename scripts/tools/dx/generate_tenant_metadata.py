@@ -13,6 +13,12 @@ Usage:
     python3 scripts/tools/dx/generate_tenant_metadata.py --output /tmp/out.json
     python3 scripts/tools/dx/generate_tenant_metadata.py --check      # CI drift 偵測
     python3 scripts/tools/dx/generate_tenant_metadata.py --dry-run    # 只印出不寫檔
+    python3 scripts/tools/dx/generate_tenant_metadata.py --state state.yaml  # custom_groups 取自 tenant-api state store
+
+custom_groups come from tenant-api's state store (#2883): pass --state with
+the state directory or a saved `kubectl get configmap tenant-api-state -o yaml`
+(or -o json). Without it custom_groups is empty and stderr says why; a
+`_groups.yaml` left in conf.d is no longer read (tenant-api moved it in #2856).
 """
 import argparse
 import json
@@ -36,7 +42,6 @@ from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     receiver_field_state,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
     exit_on_served_values_error,
     load_served_tree,
@@ -50,6 +55,8 @@ from _lib_io import (  # noqa: E402  (#1789)
     output_write,
 )
 from _atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
+from _lib_confd import legacy_state_files  # noqa: E402  (#2883)
+from _lib_tenant_state import StateInputError, load_state  # noqa: E402  (#2883)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -272,7 +279,8 @@ def get_git_head_commit() -> str:
 # ---------------------------------------------------------------------------
 # Build tenant metadata
 # ---------------------------------------------------------------------------
-def build_tenant_metadata(config_dir: Path, at: str | None = None) -> dict[str, Any]:
+def build_tenant_metadata(config_dir: Path, at: str | None = None,
+                          state: Any = None) -> dict[str, Any]:
     """Build the metadata structure from what the exporter serves at `at`
     (RFC3339; None = now). `generated` records that instant, so `--check`
     can re-evaluate at it (`recorded_at`).
@@ -287,6 +295,9 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None) -> dict[str, 
     the exporter's load drops); a caller must not turn that into an empty
     result. Files the load serves no tenant from, and every line da-guard
     wrote to stderr, are printed to stderr (`print_load_warnings`).
+
+    `state` is a `_lib_tenant_state.TenantState` (custom_groups come from it,
+    #2883), or None: custom_groups is then empty.
     """
     tenant_groups = {}
     tenant_metadata = {}
@@ -346,8 +357,8 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None) -> dict[str, 
                 }
             tenant_groups[environment]["tenants"].append(tenant_name)
 
-    # v2.5.0: Load custom groups from _groups.yaml if it exists
-    custom_groups = _load_custom_groups(config_dir)
+    # #2883: custom groups live in tenant-api's state store, not conf.d.
+    custom_groups = _load_custom_groups(state, config_dir)
 
     # v2.5.0: Build multi-dimension group views
     dimension_groups = _build_dimension_groups(tenant_metadata)
@@ -367,32 +378,30 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None) -> dict[str, 
     }
 
 
-def _load_custom_groups(config_dir: Path) -> dict:
-    """Load custom groups from _groups.yaml if it exists."""
-    groups_file = config_dir / "_groups.yaml"
-    if not groups_file.exists():
-        return {}
+def _load_custom_groups(state: Any, config_dir: Path) -> dict:
+    """Custom groups from tenant-api's state store (#2883).
 
-    try:
-        # #2216: `members:` lists tenant ids, read as their source text —
-        # `members: [010]` names tenant "010", not 8.
-        data = load_exporter_keys(groups_file.read_text(encoding="utf-8"),
-                                  raw_text_sequences=("members",))
-        if data and isinstance(data.get("groups"), dict):
-            result = {}
-            for gid, gdef in data["groups"].items():
-                if isinstance(gdef, dict):
-                    result[gid] = {
-                        "label": gdef.get("label", gid),
-                        "description": gdef.get("description", ""),
-                        "members": gdef.get("members", []),
-                    }
-            return result
-        return {}
-    except Exception as exc:  # noqa: BLE001
-        print(f"WARN: failed to parse _groups.yaml: {safe_label(exc)}",
-              file=sys.stderr)
-        return {}
+    `state` is a `_lib_tenant_state.TenantState`, or None (no --state): the
+    groups are then unknown and come back empty (the CLI says so). A
+    `_groups.yaml` still in conf.d is named and not read — tenant-api has
+    kept groups in its state store since #2856, so that copy is stale.
+    """
+    for name in legacy_state_files(config_dir):
+        if name == "_groups.yaml":
+            print(f"WARN: {safe_label(str(Path(config_dir) / name))} is not read here: "
+                  "tenant-api imports it at startup only while its state store has no "
+                  "groups record (pass --state)",
+                  file=sys.stderr)
+    if state is None:
+        return {}  # main says so on stderr; generate_platform_data reads no groups
+    result = {}
+    for gid, gdef in state.groups().items():
+        result[gid] = {
+            "label": gdef.get("label", gid),
+            "description": gdef.get("description", ""),
+            "members": [str(m) for m in (gdef.get("members") or [])],
+        }
+    return result
 
 
 def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
@@ -504,6 +513,11 @@ def main():
         help="Print JSON to stdout without writing file",
     )
     parser.add_argument(
+        "--state",
+        help="tenant-api state store copy for custom_groups: the state directory, "
+             "or a saved `kubectl get configmap tenant-api-state -o yaml|json`",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Format output as pretty JSON",
@@ -523,7 +537,14 @@ def main():
     at = None
     if args.check and args.output and args.output.exists():
         at = recorded_at(_read_existing_for_check(args.output)[0])
-    data = build_tenant_metadata(args.config_dir, at=at)
+    state = None
+    if args.state:
+        try:
+            state = load_state(args.state)
+        except StateInputError as exc:
+            print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    data = build_tenant_metadata(args.config_dir, at=at, state=state)
 
     # Format output
     if args.check:
@@ -534,6 +555,7 @@ def main():
     # Handle output
     if args.dry_run or not args.output:
         print(content, end="")
+        _note_without_state(state)
         return
 
     if args.check:
@@ -567,6 +589,7 @@ def main():
             sys.exit(EXIT_VIOLATION)
 
         print(f"OK: {args.output} is up to date.")
+        _note_without_state(state)
         return
 
     # Write output file
@@ -591,6 +614,17 @@ def main():
         display_path = args.output
     print(f"✅ Generated {display_path}")
     print(f"   {data['totals']['tenants']} tenants, {data['totals']['groups']} groups")
+    _note_without_state(state)
+
+
+def _note_without_state(state: Any) -> None:
+    """Say on stderr that custom_groups is empty for want of --state (#2883).
+    Called on the success exits only, so a failing run does not also print
+    this NOTE after its ERROR line."""
+    if state is None:
+        print("NOTE: custom_groups is empty: no --state given "
+              "(the state directory, or a saved `kubectl get configmap tenant-api-state -o yaml`)",
+              file=sys.stderr)
 
 
 if __name__ == "__main__":

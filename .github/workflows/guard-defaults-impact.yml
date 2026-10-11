@@ -76,8 +76,8 @@ on:
       # exactly that file.
       # ⚠️ "Root platform file" is every `_` file at a conf.d root
       # (`isRootPlatformKey`, flat_build.go) — `try-local/seed/conf.d/_rbac.yaml`
-      # and `_views.yaml` included, whose `tenants:` / `profiles:` da-guard
-      # does read. So those are real input, not noise.
+      # included, whose `tenants:` / `profiles:` da-guard does read. So it is
+      # real input, not noise.
       # ⚠️ Deliberate over-trigger, never under: `**/` also fires on NESTED
       # `_` files that are not chain carriers (`conf.d/examples/_*.yaml`),
       # which da-guard does not read — that costs one extra run on the

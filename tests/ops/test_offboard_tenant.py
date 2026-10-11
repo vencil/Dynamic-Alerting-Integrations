@@ -246,7 +246,8 @@ class TestMainCLI:
         d = _make_config_dir(tmp_path, configs)
 
         import sys as _sys
-        _sys.argv = ["offboard_tenant.py", "db-a", "--config-dir", d, "--execute"]
+        # #2883: without --state, --execute needs an explicit --skip-state-check.
+        _sys.argv = ["offboard_tenant.py", "db-a", "--config-dir", d, "--execute", "--skip-state-check"]
         ot.main()
 
         captured = capsys.readouterr()
@@ -258,7 +259,8 @@ class TestMainCLI:
         d = _make_config_dir(tmp_path, {})
 
         import sys as _sys
-        _sys.argv = ["offboard_tenant.py", "db-nonexistent", "--config-dir", d, "--execute"]
+        _sys.argv = ["offboard_tenant.py", "db-nonexistent", "--config-dir", d, "--execute",
+                     "--skip-state-check"]
         with pytest.raises(SystemExit) as exc_info:
             ot.main()
         assert exc_info.value.code == 1

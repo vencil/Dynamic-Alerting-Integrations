@@ -54,6 +54,11 @@ services:
       context: ..
       dockerfile: components/tenant-api/Dockerfile
     image: da-try-local/tenant-api:source
+    # #2885: seeds the demo saved view into the state volume (never over a
+    # record already there), then execs tenant-api. Overriding the entrypoint
+    # clears the image's CMD; TA_ADDR / TA_CONFIG_DIR below carry the same
+    # settings.
+    entrypoint: ["/bin/sh", "/seed/state-seed.sh"]
     environment:
       TA_CONFIG_DIR: /conf.d
       TA_RBAC_PATH: /conf.d/_rbac.yaml
@@ -80,6 +85,9 @@ services:
     volumes:
       - ./seed/conf.d:/conf.d:rw
       - tenant-api-state:/state
+      # Demo state records + state-seed.sh (#2885). Directory mount, not
+      # single-file (the WSL2 single-file bind-mount landmine).
+      - ./seed:/seed:ro
     ports:
       # Loopback-only: dev-bypass injects an ADMIN identity for header-less
       # requests, so exposing this on 0.0.0.0 would hand anyone on the LAN

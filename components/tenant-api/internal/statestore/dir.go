@@ -15,9 +15,13 @@ import (
 
 // dirStore keeps every record as one file named after its key in a plain
 // directory. It is for deployments without Kubernetes (try-local's docker
-// compose): one tenant-api process owns the directory, so a process mutex
-// is the whole concurrency story. The directory must not be inside the
-// conf.d git tree — the writer would see these files as untracked config.
+// compose). The directory must not be inside the conf.d git tree — the
+// writer would see these files as untracked config.
+//
+// Writes are serialised twice: mu within this process, and an exclusive
+// flock on lockFile across processes (#2884) — `tenant-api state restore`
+// runs as a second process beside the server, and a read-transform-write
+// that two processes interleave loses one of them.
 type dirStore struct {
 	dir     string
 	onWrite OnWrite
@@ -36,6 +40,10 @@ func NewDir(dir string, onWrite OnWrite) (Store, error) {
 	return &dirStore{dir: dir, onWrite: onWrite}, nil
 }
 
+// lockFile is the file dirStore flocks for a write. Dot files are not
+// records: Keys skips them, as it skips the ".tmp-" files of writeAtomic.
+const lockFile = ".lock"
+
 func (s *dirStore) Describe() string { return "dir " + s.dir }
 
 func (s *dirStore) log() *slog.Logger {
@@ -47,9 +55,10 @@ func (s *dirStore) log() *slog.Logger {
 
 // path maps a key to its file. Keys never contain a path separator (they
 // are the constants and SubsetKey of a validated tenant id); refuse one that
-// does rather than write outside dir.
+// does rather than write outside dir, and a dot file, which is the store's
+// own (lockFile, writeAtomic's temp files).
 func (s *dirStore) path(key string) (string, error) {
-	if key == "" || key != filepath.Base(key) || strings.ContainsAny(key, `/\`) || strings.Contains(key, "..") || key == "." {
+	if key == "" || key != filepath.Base(key) || strings.ContainsAny(key, `/\`) || strings.Contains(key, "..") || strings.HasPrefix(key, ".") {
 		return "", fmt.Errorf("statestore: invalid key %q", key)
 	}
 	return filepath.Join(s.dir, key), nil
@@ -78,7 +87,7 @@ func (s *dirStore) Keys(_ context.Context, prefix string) ([]string, error) {
 	var keys []string
 	for _, e := range ents {
 		n := e.Name()
-		if e.Type().IsRegular() && strings.HasPrefix(n, prefix) && !strings.HasPrefix(n, ".tmp-") {
+		if e.Type().IsRegular() && strings.HasPrefix(n, prefix) && !strings.HasPrefix(n, ".") {
 			keys = append(keys, n)
 		}
 	}
@@ -93,6 +102,12 @@ func (s *dirStore) Mutate(ctx context.Context, key string, m Meta, t Transform) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	unlock, err := lockDir(filepath.Join(s.dir, lockFile))
+	if err != nil {
+		return false, fmt.Errorf("%w: lock %s: %v", ErrUnavailable, s.dir, err)
+	}
+	defer unlock()
 
 	cur, exists, err := s.Get(ctx, key)
 	if err != nil {

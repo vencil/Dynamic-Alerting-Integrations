@@ -96,7 +96,7 @@ SHAPES: dict[str, list[list[str]]] = {
                                "--markdown-output", "{named}/b.md"]],
     "config_history.py": [["snapshot"], ["log"]],
     "deprecate_rule.py": [["{metric}"], ["{metric}", "--execute"]],
-    "offboard_tenant.py": [["{tenant}"], ["{tenant}", "--execute"]],
+    "offboard_tenant.py": [["{tenant}"], ["{tenant}", "--execute", "--skip-state-check"]],
     "diagnose.py": [["{tenant}"]],
     "policy_opa_bridge.py": [["--policy-path", "{named}/p.rego"]],
     "run_chaos_soak.py": [["--target-url", "http://127.0.0.1:9",
@@ -128,7 +128,7 @@ EXPECTED_WRITES: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
     ("config_history.py", ("log",)): {"beside": "run/.da-history/"},
     # In-place edits of the tree pointed at, which is what --execute is for.
     ("deprecate_rule.py", ("{metric}", "--execute")): {"config": ""},
-    ("offboard_tenant.py", ("{tenant}", "--execute")): {"config": ""},
+    ("offboard_tenant.py", ("{tenant}", "--execute", "--skip-state-check")): {"config": ""},
     # Offline render of a CR into the tree --config-dir names.
     ("da_assembler.py", ("--render-cr", "{named}/tc.yaml")): {"config": ""},
 }

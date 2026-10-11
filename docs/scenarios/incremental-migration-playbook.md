@@ -533,7 +533,7 @@ promtool check rules prometheus-rules.yaml
 ```bash
 find conf.d -name 'tenant-*.yaml'
 da-tools offboard test-domain-1 --config-dir conf.d/            # Pre-check
-da-tools offboard test-domain-1 --config-dir conf.d/ --execute  # 實際下架
+da-tools offboard test-domain-1 --config-dir conf.d/ --state tenant-api-state.yaml --execute  # 實際下架（--state：kubectl get configmap tenant-api-state -o yaml 存下的檔）
 da-tools validate-config --config-dir conf.d/
 ```
 

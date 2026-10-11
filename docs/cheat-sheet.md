@@ -35,7 +35,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `scaffold` | 產生新 tenant 配置（互動式或非互動式） | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
 | `migrate` | 將傳統 Prometheus 規則轉換為動態格式（AST 引擎） | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
-| `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --execute | `da-tools offboard --help` |
+| `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --state <PATH>, --execute | `da-tools offboard --help` |
 | `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔刪除其 key | --config-dir <PATH>, --execute, --plane {root,subtree} | `da-tools deprecate --help` |
 | `lint` | 依平台治理政策（deny-list）檢查租戶自訂的 Prometheus 規則檔 | --policy <FILE>, --ci | `da-tools lint --help` |
 | `onboard` | 分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示 | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
