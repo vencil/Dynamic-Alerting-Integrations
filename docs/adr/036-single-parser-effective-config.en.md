@@ -16,7 +16,7 @@ lang: en
 
 - **Revised 2026-10-11 (approved by the owner)**: the YAML syntax layer also keeps a single parser, and every read used to judge config content reads the JSON parsed by Go (exceptions in §2 and §8); a write goes ahead only when the whole tree afterwards passes the generator's check; no resolved config JSON; `--policy-unavailable-open` is removed; git is required.
 - **Revised again 2026-10-11 (approved by the owner)**: five steps merged in order on main, each releasable (§7); sets the `parse-tree` output envelope, its closed "unreadable" list and fixed corpus (§2), the error code when the generator container is unavailable (§5), and da-guard's "not judged" exit code (§9).
-- **Third revision 2026-10-11 (approved by the owner)**: from step 1 the generator container parses in a long-running process with a content-addressed cache, and the container and the judging children get resource limits (§3); batch all-or-nothing moves forward to the multi-file-commit prerequisite and is released on its own (§4, §7).
+- **Third revision 2026-10-11 (approved by the owner)**: from step 1 the generator container caches parse results across requests and runs each judgement in a separate process with memory and time limits, and sets the timeouts and the line between "refuse this write" and "container unavailable" (§3); batches become all-or-nothing, released on their own before step 1, and are judged and committed in a temporary git worktree (§4, §7).
 - Both the design and the revision went through adversarial review (by a different model).
 
 ## Summary
@@ -36,6 +36,7 @@ lang: en
 - Python tools that read conf.d need da-guard. The da-tools image already bundles it; local pre-commit builds it with Go on the spot.
 - tenant-api gains a container (the da-tools image). When the container or the deployment policy file is unavailable, every write that changes file content gets 503 (thresholds-only writes included); there is no switch to let writes through while unavailable.
 - The whole tree after a write must pass the generator's check before the write goes ahead. While anything in the tree would be blocked, every write through tenant-api is refused until it is fixed (§4).
+- Batch writes become all-or-nothing: one commit, and if any item fails the whole batch is refused; today the violating items are refused and the rest are written. This ships on its own before step 1 (§4).
 - tenant-api requires git; deployments without git are no longer supported.
 - Some files today's generator refuses are read per yaml.v3 from §7 step 4 instead of being refused whole (§2). The migration audit command lists each such file and what it will be read as.
 - A CI that runs only da-guard no longer covers routing and policy, and needs an extra `da-tools generate-routes --validate --strict` step.
@@ -225,27 +226,36 @@ tenant-api pod
 
 The diagram shows the state from §7 step 4 on. During steps 1 to 3 the generator in the container still reads files with its own PyYAML reader; parsing through `parse-tree` applies only from step 4.
 
+The structure inside the container, conclusion first: a long-running process (a service process that stays up and keeps state across requests) checks files out and caches parse results, so a write does not re-parse the whole tree; each judgement goes to a new child process (copied from the long-running process, exiting after one judgement) that finishes within a memory limit and a timeout, one at a time. A child going wrong refuses only that one write; only the long-running process going wrong makes the whole container unavailable. Details follow.
+
 - **Image**: the existing da-tools image, which already contains the generator and da-guard. The service uses only the Python standard library.
 - **Communication**: HTTP/1.1 over a Unix socket; no network port. The socket lives in a shared scratch directory (emptyDir) inside the pod. Only processes that mount that directory and pass the socket file permissions can connect. The chart's existing human socket (for requests carrying a person's identity) works the same way.
-- **Execution**: from step 1 on, a long-running process checks files out of git and caches each file's parse result across requests; each write re-parses only the files it changes.
-  - The cache key is the git blob SHA of the file's content (the hash git computes from the file's bytes; the same content always gives the same SHA). New content not yet committed gets its SHA the same way (`git hash-object --stdin`, which writes nothing to the repo).
-  - Why it never serves stale content: the key is computed from the content itself, so changed content gets a different SHA and can never pick up an old result; no expiry by time or by commit is needed. The cache holds only a single file's YAML parse result, never a verdict that depends on the file's path or on other files; the parser version does not change within one process, so the parse result for a given SHA does not change either.
-  - The deployment policy file is not in git; it is not in this cache and is re-read on every judgement.
-  - From step 4 on, the cache holds `parse-tree`'s output for a single file instead, still keyed by blob SHA.
-  - Judging still happens in a child process: for each request the long-running process forks a child that does the judging and inherits the cache as of the fork; a batch is validated within that one child. This is for isolation: one malicious or oversized write can bring down only its own child (see "Resources" below).
+- **Execution**: from step 1 on, the long-running process checks files out of git and caches each file's parse result across requests, so each write re-parses only the files it changes.
+  - **Judging happens in a child process**: for each request the long-running process forks a child that does the judging. Forking is how the operating system copies a process: the child starts with the same memory as the long-running process, so it inherits the cache as it stands; the child exits once it has judged. A batch is validated within that one child. This is for isolation: one malicious or oversized write can bring down only its own child (see "Resources" below).
+  - **One judgement at a time**: the long-running process lets only one child judge at a time; other requests queue. A request that waits in the queue until it times out is refused, answered by the long-running process itself before tenant-api's call timeout, so it does not count as the container being unavailable (see "Timeouts" below).
   - The changed files are parsed in the child too, under the same memory limit and timeout; successful parse results are handed back to the long-running process and added to the cache. The long-running process never parses content that a write request brought in.
-  - Why from step 1: measured on a synthetic tree (one file per tenant, each with `_routing`; 4 cores, no CPU limit, no amtool), the generator's `--validate --strict` takes about 8–9 s for 1000 tenants and about 42 s for 5000, and about three quarters of that time goes to reading files with PyYAML's pure-Python parser; `da-guard parse-tree` reads the same 1000-tenant tree in under 1 s. The write timeout is 30 s, a third of it 10 s; the 1000-tenant tree on a single core with amtool already takes 9.4–9.8 s, and checking files out of git on top of that reaches 10 s. Re-parsing the whole tree on every request would bring a medium-sized tree close to the timeout.
-- **Timeout**: when judging times out, the child process is killed along with everything it started; the write is refused.
+  - Why from step 1: measured on a synthetic tree (one file per tenant, each with `_routing`; 4 cores, no CPU limit, no amtool), the generator's `--validate --strict` takes about 8–9 s for 1000 tenants and about 42 s for 5000, and about three quarters of that time goes to reading files with PyYAML's pure-Python parser; `da-guard parse-tree` reads the same 1000-tenant tree in under 1 s. The 1000-tenant tree on a single core with amtool already takes 9.4–9.8 s; re-parsing the whole tree on every request, a tree of medium size or larger hits the 20 s child timeout below.
+- **Cache**: a content-addressed cache, that is, a cache keyed by a hash computed from the content itself.
+  - The key is (the git blob SHA of the file's content, the parse mode). The blob SHA is the hash git computes from the file's bytes; the same content always gives the same SHA. New content not yet committed gets its SHA the same way (`git hash-object --stdin`, which writes nothing to the repo).
+  - Why it never serves stale content: the key is computed from the content itself, so changed content gets a different SHA and can never pick up an old result; no expiry by time or by commit is needed. The parser version does not change within one process, so the result for a given key does not change either.
+  - Only the decoded content structure is cached. Verdicts that depend on the file's path, such as which files are selected and which are unreadable, are not cached and are recomputed on every judgement. Objects handed to the generator cannot be modified (or are deep copies), so one judgement cannot alter the cache for the next.
+  - The deployment policy file is not in git; it is not in this cache and is re-read on every judgement.
+  - From step 4 on, the cache holds `parse-tree`'s output for a single file instead, with the same key rule.
+  - **Eviction**: blobs that appear in the tree of the latest base commit are always kept. Those not in that tree (for example content brought in by refused writes) are capped at 32 MiB in total, and when the cap is reached the least recently used entry goes first (LRU). A cache that only grows would make the long-running process's memory grow without bound.
+- **Timeouts**: three layers, from the inside out: the child 20 s, tenant-api's call to the generator container 25 s, and the HTTP server's write timeout (`--write-timeout`, 30 s by default; there is also a fixed 30 s request-timeout middleware).
+  - The child's timeout must fire first: when the child times out, the long-running process still has time to answer "refuse this write". If tenant-api's call timeout fired first, tenant-api would get no answer at all and could only treat the container as unavailable, returning 503.
+  - The child runs in its own process group via `setsid` (a process group is a set of processes, the child and everything it starts, sharing one group id). On timeout the whole group gets `killpg`, so amtool, da-guard and any other descendants end too, leaving nothing behind.
 - **Resources**: limits at two levels.
   - The container's request equals its limit: 512Mi of memory, 1 CPU.
-  - Each judging child additionally gets a data-segment limit (`RLIMIT_DATA`, 384Mi) and a timeout. Since Linux 4.7, `RLIMIT_DATA` counts the process's private, writable memory mappings, that is, memory data can actually be written to. The cache the child inherits at fork counts too, so the cache's size counts against those 384Mi.
-  - This limit is inherited by the programs the child starts and holds for both Python and Go: under a 384Mi `RLIMIT_DATA`, amtool and `da-guard parse-tree` run normally, and the generator plus amtool passes over the 1000-tenant tree; Python asking for 500Mi at once gets a MemoryError; a Go program that keeps allocating ends with out of memory at about 384Mi.
-  - Why not the address-space limit (`RLIMIT_AS`): amtool and da-guard are Go programs, and the Go runtime reserves a large range of virtual addresses as soon as it starts (addresses only, no writable memory yet, so not counted by `RLIMIT_DATA`). Measured, amtool does not start under an `RLIMIT_AS` anywhere from 384Mi to 700Mi and starts at 768Mi; and `RLIMIT_AS` is inherited by the programs a child starts, so setting it to 384Mi would refuse every write because amtool cannot start.
-  - A child that exceeds its limit or times out refuses only that one write; the container stays available. If that counted as the container being unavailable, a single write could make every later write get 503. Only the long-running process itself dying or not responding makes the container unavailable (`VALIDATOR_UNAVAILABLE`, §5).
-  - Refusing when judging cannot finish points the same way as a Kubernetes admission webhook with `failurePolicy: Fail`, where a webhook timeout rejects the request (this is an analogy; the generator container is not an admission webhook).
+  - Each judging child additionally gets a data-segment limit (`RLIMIT_DATA`, 192Mi). `RLIMIT_DATA` is one of Linux's per-process memory limits; since Linux 4.7 it counts the process's private, writable memory, that is, memory data can actually be written to, and allocations beyond it fail. The cache the child inherits at fork counts too, so the cache's size counts against those 192Mi.
+  - The limit is inherited by the programs the child starts: amtool and da-guard each get the same 192Mi. Measured under this limit, the generator plus amtool still passes over a 5000-tenant tree, and `da-guard parse-tree` (built with `CGO_ENABLED=0`, as in the image) reads the same tree fine; Python asking for 500Mi at once gets a MemoryError; a Go program that keeps allocating ends with out of memory at the limit.
+  - Why the total fits in 512Mi: with one judgement at a time, the worst case is the child and one Go program it started both using their full limit, plus the long-running process: about 192 + 192 + 70, roughly 454Mi, below 512Mi. Measured at 5000 tenants, the generator peaks at about 117 MiB and amtool checking the generated 2.3 MB config at about 104 MiB, both within 192Mi. The long-running process's 70Mi is an estimate: a Python process holding the parse results of 5000 files measured about 36 MiB, the rest is headroom.
+  - Why not the address-space limit (`RLIMIT_AS`): amtool and da-guard are Go programs, and the Go runtime reserves a large range of virtual addresses as soon as it starts (addresses only, no writable memory yet, so not counted by `RLIMIT_DATA`). Measured, amtool does not start with an `RLIMIT_AS` below 768Mi (384Mi to 700Mi all tried), far beyond the child's memory budget.
   - A cap on the total output of `parse-tree` over the whole tree is not decided in step 1; it is set in step 4 (when the generator switches to reading the JSON).
+- **Refusing one write versus the container being unavailable**: only a response that carries a complete verdict counts as "refuse this write".
+  - The child timing out, exceeding its memory limit or producing incomplete output, or a request timing out in the queue: the long-running process answers "refuse this write" with a dedicated error code (not `VALIDATOR_UNAVAILABLE`) and counts it in a metric. The container stays available; if these counted as the container being unavailable, a single write could make every later write get 503.
+  - The long-running process itself failing or not responding: the container is unavailable (`VALIDATOR_UNAVAILABLE`, 503, §5).
 - **amtool is required**: amtool is Alertmanager's config-checking tool. The generator's validation mode only prints a notice and passes when it is missing; the generator container does not accept that: before every judgement it checks that amtool is present, and counts itself unavailable if not. Otherwise the generator would exit 0 with zero findings, which looks like a pass.
-- **Watching judging time**: tenant-api exposes the write lock's hold time as a metric, with an alert when its p95 (the value 95% of writes stay under) exceeds a third of the write timeout (10 s by default). With parsing cached, the remaining semantic judging and amtool still grow with the tree; the alert firing means the tree has grown enough to bring writes close to the timeout, and the way of judging needs to be revisited. The write timeout is the HTTP server's (`--write-timeout`, 30 s by default); there is also a fixed 30 s request-timeout middleware; neither is the write lock's timeout.
 
 **Getting the files: the generator container reads git objects only, never the working directory.**
 
@@ -267,20 +277,19 @@ The diagram shows the state from §7 step 4 on. During steps 1 to 3 the generato
 - **Which writes are validated**: every write that changes file content. Whether to validate is not decided by Go guessing "does this touch routing".
 - **Error responses**: list the findings the generator reports (each problem it reports). Those related to the written files come first, marked with which existed before the write and whether they come from platform defaults, a routing profile or the tenant itself. This affects only the message, never the verdict.
 - **Batches**: one request, one commit, all or nothing. The batch is written only if the whole tree passes with the batch applied; otherwise the whole batch is refused, and the response lists the related findings item by item. Intermediate states are not validated and never reach the repo. Synchronous and asynchronous batches follow the same rule; an asynchronous batch is judged when it runs.
-  - All-or-nothing takes effect before step 1: the prerequisite that lets tenant-api's git writes commit several files at once (§7) also makes batches all-or-nothing, still judged by Go's existing checks at that point. Step 1 only switches the criterion to the generator; the all-or-nothing semantics do not change.
-  - Today's batches are judged item by item: the violating items are marked as errors and the rest are written. Switching to all-or-nothing is a breaking change and is released on its own.
+  - Each batch is applied, judged and committed in a separate temporary git worktree (another working directory checked out from the same repo); only on success are the branch and the serving working directory advanced. If it fails or the process crashes midway, the half-applied batch stays in the temporary worktree, and other readers (including reads that do not take the write lock) never see content that is later withdrawn. This follows the same principle as §3, where the generator container reads only git objects, never the working directory.
+  - All-or-nothing takes effect before step 1, as a breaking change released on its own: today batches are judged item by item, with the violating items marked as errors and the rest written. The prerequisite that lets git writes commit several files at once (§7) switches to all-or-nothing, still judged by Go's existing checks at that point; step 1 only switches the criterion to the generator, and the all-or-nothing semantics do not change.
 - **Merging batch patches**: Go still reads the file, applies the patch and writes it back; the merged content is always validated.
   - If a file to be written is already unreadable in the base, it is refused before merging. Otherwise Go's re-emission could drop the documents after a `---` or a duplicate key, making the merged content readable — a silent rewrite.
   - What validation cannot catch is a rewrite with no violation whose meaning Go changed; an offline differential test guards that: one side has Go merge and the generator read the result, the other has the generator read the base and apply the same patch; both must match, including the other tenants in the same file.
 - **What was validated is exactly what is written**: the container returns the "file paths, content hashes, base commit, deployment policy file content hash" it validated. tenant-api checks them under the write lock; it mounts the same deployment policy file read-only and computes that hash itself. On a mismatch it revalidates once, and refuses if they still differ; the bytes written must be exactly those validated.
 - **PR mode validates the branch point**: what is validated is the PR branch's base commit plus this write. The result after the PR merges into the main branch is outside tenant-api's verdict; the customer's CI or a merge queue guards it.
-- **Any anomaly is a refusal**:
-  - A judging child that times out, exceeds its memory limit or returns incomplete output: only that write is refused, and the container stays available (§3).
-  - The container unavailable (the long-running process down or not responding, amtool missing, and so on): every write that changes file content gets 503 (§5).
+- **Any anomaly is a refusal**: which cases refuse only that write and which make the container unavailable with 503 is set out in §3, "Refusing one write versus the container being unavailable".
 
 **Cost (a breaking change)**:
 
 - While anything anywhere in the tree would be blocked, every write through tenant-api is refused until it is fixed.
+- All-or-nothing batches: if one item fails, nothing in the batch is written; fix that item and resend the whole batch. This takes effect before step 1.
 - How to fix:
   - When the problem is in one tenant file and fixing that file makes the whole tree pass, it can be fixed through tenant-api.
   - Everything else goes through git, for example platform files, files in subdirectories, or several tenants violating at once (common after the platform tightens a policy). Problems that appear only after a PR-mode merge belong here too.
@@ -297,7 +306,7 @@ The diagram shows the state from §7 step 4 on. During steps 1 to 3 the generato
   - Its description counts "keeping the last usable content" as usable; once tenant-api asks the generator container, old content is no longer kept, so the description changes then.
 - **No escape hatch**: when the deployment policy file or the generator container is unavailable, every write that changes file content is refused (thresholds-only writes included) with 503.
   - 503 is used only for these two cases. An error in a policy file inside the repo (platform defaults, a routing profile) is a finding the generator reports and is refused per §4, not with 503.
-  - When the deployment policy file is unavailable the error code is `POLICY_UNAVAILABLE`. When the generator container is unavailable (the long-running process down or not responding, amtool missing, older than a policy requires) the error code is `VALIDATOR_UNAVAILABLE`, with which of these it is in the message. A single judging child exceeding its memory limit or timing out does not make the container unavailable; only that write is refused (§3).
+  - When the deployment policy file is unavailable the error code is `POLICY_UNAVAILABLE`. When the generator container is unavailable (the long-running process failing or not responding, amtool missing, older than a policy requires) the error code is `VALIDATOR_UNAVAILABLE`, with which of these it is in the message. A judging child timing out or exceeding its memory limit does not make the container unavailable (§3).
   - Today tenant-api's scope is narrower: only in direct write mode, and only when a policy file exists but none of its content is usable; a single PUT always gets it; a synchronous batch gets 503 for the whole request if any item touches routing; an asynchronous batch re-judges each item when it runs. The new rule does not depend on the mode.
   - `--policy-unavailable-open` and the counter `tenant_api_policy_unavailable_open_total` are removed. The alert `TenantApiPolicyUnavailable` stays (it reads the availability metric), but its description mentions the escape hatch and the counter and changes with them.
 - **No resolved config JSON is produced**: no code needs to read one today.
@@ -341,7 +350,7 @@ Deleting the patch before the generator reads with yaml.v3 would leave a release
 **What must be done before step 1**:
 
 - The config `da-tools init` generates pins the da-tools version.
-- tenant-api's git writes support committing several files at once, and batches become all-or-nothing at the same time: one commit, and if any item fails the whole batch is refused (§4). Judging still uses Go's checks of that time. This is a breaking change released on its own, not bundled with step 1's switch of judge; the two breaking changes ship separately.
+- tenant-api's git writes support committing several files at once, and batches become all-or-nothing at the same time (§4). This is a breaking change released on its own, not bundled with step 1's switch of judge.
 - The generator container (validation endpoint, status endpoint); the Helm chart adds the container, socket, policy-file mount and resources.
 - The checks only Go's da-guard has move into the generator (§9).
 
@@ -413,8 +422,8 @@ Duplicate keys, more than one document, tags outside the allow-list: today the g
 | Situation | Behaviour |
 |---|---|
 | The generator's exit code on the whole tree after the write is not 0 | Refused; the error response lists the findings, marking those that existed before the write and their source |
-| The generator container's long-running process is down or not responding, or amtool is missing | Every write that changes file content gets 503, error code `VALIDATOR_UNAVAILABLE`, the reason in the message; `tenant_api_policy_available` is 0 |
-| A single judging child exceeds its memory limit or times out | Only that write is refused, no 503; the container stays available and other writes are judged as usual |
+| The generator container is unavailable: the long-running process fails or does not respond, or amtool is missing | Every write that changes file content gets 503, error code `VALIDATOR_UNAVAILABLE`; `tenant_api_policy_available` is 0 (§5) |
+| A judging child times out, exceeds its memory limit or produces incomplete output, or a request times out in the queue | Only that write is refused, no 503 (the line is drawn in §3) |
 | The deployment policy file is unavailable | Every write that changes file content gets 503, error code `POLICY_UNAVAILABLE` |
 | A policy file inside the repo has an error | The generator reports a finding; refused as in the first row, not with 503 |
 | `parse-tree` cannot read a file (from §7 step 4) | The file is listed under unreadable files, the generator's check does not pass, and the write is refused |
@@ -434,7 +443,7 @@ Duplicate keys, more than one document, tags outside the allow-list: today the g
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674): a self-referencing YAML alias.
 - **The offline differential test for batch patch merging** (§4).
 - **da-guard's "not judged"**: exit code 4 and the report content are tested, including no 4 when there is no routing or policy content, and the precedence when 3 or 1 also applies.
-- **The generator container's refusal conditions**: amtool missing, validated and to-be-written content still differing after one revalidation, and a generator older than a policy requires each have a test, and each ends in a refusal. A judging child exceeding its memory limit or timing out also has a test: only that one write is refused, no 503, and the next write is judged as usual.
+- **The generator container's refusal conditions**: amtool missing, validated and to-be-written content still differing after one revalidation, and a generator older than a policy requires each have a test, and each ends in a refusal. A judging child exceeding its memory limit, timing out, and a request timing out in the queue each have a test too: only that one write is refused, no 503, the next write is judged as usual, and no descendant process (amtool, da-guard and so on) is left behind after a timeout.
 - In CI, run against the version pair the chart pins.
 
 ## Cost
@@ -451,7 +460,7 @@ Semantic layer (the generator, measured 2026-10-09):
 
 Generator container (measured 2026-10-10, a 1000-tenant tree): about 3.1 s with a new process per request; about 1.5–1.8 s in the same process with a parse cache.
 
-Scale of write judging (measured 2026-10-11; a synthetic tree, one file per tenant, each with `_routing`, thresholds and `_metadata`; not the tree used for the 2026-10-09 figures above, so the numbers are not directly comparable):
+Scale of write judging (measured 2026-10-11; a synthetic tree, one file per tenant, each with `_routing`, thresholds and `_metadata`; not the tree used for the rows above, so the numbers are not directly comparable):
 
 | Item | Measurement |
 |---|---|
@@ -461,6 +470,8 @@ Scale of write judging (measured 2026-10-11; a synthetic tree, one file per tena
 | Share spent reading files with PyYAML | about three quarters |
 | `da-guard parse-tree` reading the same 1000-tenant tree | under 1 s |
 | Keeping the parse results of 5000 files in the process | about 25 MB more resident memory |
+| 5000 tenants, generator peak memory | about 117 MiB |
+| 5000 tenants, amtool checking the generated 2.3 MB config | about 104 MiB |
 
 This is the basis for §3 using a long-running process with a parse cache from step 1.
 
@@ -488,7 +499,7 @@ The options whose reasons are already given in the body (keep both sides imitati
 | Have the generator refuse aliases, merge keys and explicit tags | Its purpose was to narrow the gap between two parsers; with one parser there is no gap left to narrow, and it would make customers rewrite existing config files |
 | `parse-tree` refuses everything today's generator refuses | It would mean rewriting every PyYAML check in Go, once again having Go imitate the other parser; comparing the two sides kept finding new "only PyYAML refuses" classes. Instead the list is closed, everything else is read per yaml.v3, and the migration audit lists it (§2) |
 | A two-phase switch (old and new side by side, compare differences, delete the Go side once conditions hold) | The product has few adopters and can take breaking changes; the side-by-side period means maintaining two judges and a divergence catalog, and Go's judging is known to be looser, so keeping it buys nothing |
-| The generator container parses the whole tree from scratch on every request, with no cross-request cache | Measured, 1000 tenants on a single core with amtool already take 9.4–9.8 s, close to a third of the write timeout, and about three quarters of the time goes to reading files ("Cost") |
+| The generator container parses the whole tree from scratch on every request, with no cross-request cache | Measured, 1000 tenants on a single core with amtool already take 9.4–9.8 s and 5000 tenants without amtool take 42 s, beyond the 20 s child timeout, and about three quarters of the time goes to reading files ("Cost") |
 | Judge inside the long-running process itself, without forking children | One oversized or malicious write would bring down the long-running process and make every later write get 503; children can each have their own memory limit and timeout and refuse only that one write |
 | Ship all the steps in one release | Only possible as one huge PR covering every step, hard to review; or via an integration branch (next row) |
 | Finish on an integration branch, then merge into main at once | CI runs only on PRs to main (the trigger in `ci.yml`), so no step on the integration branch would be checked by CI; doing this would first need the CI triggers changed |
