@@ -9,6 +9,8 @@
 """
 
 import json
+from pathlib import Path
+import os
 import subprocess
 import sys
 from unittest.mock import patch, MagicMock
@@ -596,3 +598,75 @@ def test_text_report_lists_unchecked_tenants(capsys):
     bd.print_text_report(report)
     out = capsys.readouterr().out
     assert "Unchecked" in out and "b" in out and "db_type=postgresql" in out
+
+
+# ── #2493：結束碼反映租戶檢查結果 ────────────────────────────────
+
+
+_PROM_FAIL = {"status": "error",
+              "issues": ["Prometheus query failed (http://prom:9090)"]}
+_OTHER_FAIL = {"status": "error", "issues": ["exporter down"]}
+
+
+class TestExitCode:
+    """#2493：租戶檢查失敗原本也回 0，拿它當 CI 閘門永遠放行。
+
+    與 diagnose 的單租戶分類（`diagnose.exit_code`）一致，再依 _lib_exitcodes
+    的慣例彙總：任一租戶的 Prometheus 查詢失敗 → 2（環境問題，同
+    validate_migration 的 has_query_error 優先）；否則任一租戶有其他失敗 → 1；
+    全部 healthy／unchecked → 0。
+    """
+
+    @pytest.mark.parametrize("statuses, want", [
+        ([{"status": "healthy"}, {"status": "unchecked"}], 0),
+        ([{"status": "healthy"}, _OTHER_FAIL], 1),
+        ([{"status": "healthy"}, _PROM_FAIL], 2),
+        ([_OTHER_FAIL, _PROM_FAIL], 2),
+    ])
+    def test_main_returns_the_aggregate(self, monkeypatch, capsys, cli_argv,
+                                        statuses, want):
+        by_tenant = {f"t{i}": s for i, s in enumerate(statuses)}
+        cli_argv("batch_diagnose", "--tenants", ",".join(by_tenant),
+                 "--prometheus", "http://prom:9090", "--json")
+        monkeypatch.setattr(
+            bd, "run_diagnose_for_tenant",
+            lambda tenant, prom_url, timeout=30: {"tenant": tenant,
+                                                  **by_tenant[tenant]})
+        assert bd.main() == want
+        json.loads(capsys.readouterr().out)   # the report is still printed
+
+    def test_dry_run_still_exits_zero(self, cli_argv, capsys):
+        cli_argv("batch_diagnose", "--tenants", "t1", "--dry-run")
+        assert bd.main() == 0
+
+    def test_the_process_exit_code_carries_it(self, tmp_path):
+        """端到端：票上的重現指令，Prometheus 連不上必須是 rc 2，不是 0。"""
+        script = Path(bd.__file__)
+        r = subprocess.run(
+            [sys.executable, str(script), "--tenants", "t1",
+             "--prometheus", "http://127.0.0.1:1", "--json"],
+            capture_output=True, timeout=120, cwd=str(tmp_path),
+            env={**os.environ, "PROMETHEUS_URL": ""})
+        assert r.returncode == 2, r.stderr.decode("utf-8", "replace")[-600:]
+        doc = json.loads(r.stdout.decode("utf-8"))
+        assert doc["tenants"]["t1"]["status"] == "error"
+
+    def test_missing_kubectl_is_2_as_in_diagnose(self, monkeypatch, capsys,
+                                                 cli_argv):
+        """`da-tools diagnose` alone exits 2 without kubectl; batch must too."""
+        def no_kubectl(tenant, prom_url, out=None):
+            raise bd.CommandNotFoundError("kubectl not found on PATH")
+        monkeypatch.setattr(bd, "diagnose_check", no_kubectl)
+        cli_argv("batch_diagnose", "--tenants", "t1",
+                 "--prometheus", "http://prom:9090", "--json")
+        assert bd.main() == 2
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["tenants"]["t1"]["status"] == "error"
+        assert "_environment_error" not in doc["tenants"]["t1"]
+
+    def test_workers_zero_is_a_caller_error(self, cli_argv):
+        cli_argv("batch_diagnose", "--tenants", "t1", "--workers", "0",
+                 "--prometheus", "http://prom:9090")
+        with pytest.raises(SystemExit) as exc:
+            bd.main()
+        assert exc.value.code == 2
