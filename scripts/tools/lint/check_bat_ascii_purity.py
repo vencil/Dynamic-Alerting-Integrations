@@ -89,6 +89,10 @@ from _lint_helpers import (  # noqa: E402
 
 
 def find_repo_root() -> Path:
+    # ⛔ The CWD's work tree is the target ON PURPOSE (#2852, class (c)): this
+    # lint checks the tree being committed, like pr_preflight. Do not move it to
+    # `require_project_root` — run from another work tree, it would then lint
+    # this repo instead of the one the caller is in.
     current = Path.cwd()
     for parent in [current, *current.parents]:
         if (parent / ".git").exists():
