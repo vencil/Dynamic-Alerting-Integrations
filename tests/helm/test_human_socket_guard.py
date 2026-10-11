@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 _CHART = "helm/tenant-api"
 _VALUES = "helm/tenant-api/values.yaml"
@@ -84,7 +85,7 @@ def test_deployment_gates_socket_on_flag(repo_root: Path):
 
 # ── render layer (helm-gated) ───────────────────────────────────────────────
 def _helm_template(repo_root: Path, *set_args: str, template: str | None = None):
-    cmd = ["helm", "template", "t", str(repo_root / _CHART)]
+    cmd = ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART)]
     if template:
         cmd += ["-s", template]
     for kv in set_args:
