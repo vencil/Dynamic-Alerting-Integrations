@@ -63,7 +63,7 @@ Only the two renderers together cover most platform-level settings; neither is e
 - Both sides are rendered with **the same version** of the tools (the version this CI run uses), so a difference reflects the config only and never a change in a tool's output shape.
 - served-values' `--at` is the same instant on both sides and printed in the report. If each side took its own run time, the timestamps in the output would differ and even a comment-only edit would show as a difference. config-diff's `--at` is optional: CI passes the base commit's time, so a re-run gives the same answer; without it, the time of the run is taken once and shared by both sides, so existing CI that passes no `--at` keeps working. `--schedules` brings scheduled time windows into the comparison instead of a single instant.
 - A route node's identity is its matcher path from the root; the fields compared are receiver, `group_by`, `group_wait`, `group_interval`, `repeat_interval` and `continue`. A matcher is the condition Alertmanager uses to decide where an alert goes, such as `tenant="db-a"`. Using matchers as identity means not depending on the names the generator gives receivers.
-- Credential fields in receiver definitions (webhook URLs, tokens, passwords) are reported only as "changed", with both values masked, because the report is posted as a PR comment.
+- Credential fields in receiver definitions (webhook URLs, tokens, passwords) are reported only as "changed", with both values masked, because the report is posted as a PR comment. The same value is masked in a field that is not a credential too: a YAML anchor / alias or a copy puts it there, and the rendered output cannot tell.
 
 ### 2. Who a difference belongs to
 
