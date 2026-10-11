@@ -249,6 +249,7 @@ lang: en
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_prometheus.py`: HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`: Shared library for Dynamic Alerting Python tools.
+- `scripts/tools/_lib_redact.py`: Which config fields hold a credential, and how a report prints them.
 - `scripts/tools/_lib_tenant_uniqueness.py`: Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_tenant_values.py`: Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
 - `scripts/tools/_lib_toolcount.py`: One scan behind the "N 個 Python 工具" sentence.

@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _render_baseline import baseline_args
 
 _CHARTS = {
     "tenant-api": "helm/tenant-api",
@@ -60,7 +61,7 @@ def test_template_carries_gitlab_arg_blocks(repo_root: Path, chart: str):
 
 # ── render layer (helm-gated) ────────────────────────────────────────────────
 def _render(repo_root: Path, chart: str, *set_args: str) -> subprocess.CompletedProcess:
-    cmd = ["helm", "template", "t", str(repo_root / _CHARTS[chart])]
+    cmd = ["helm", "template", "t", str(repo_root / _CHARTS[chart]), *baseline_args(_CHARTS[chart])]
     for kv in set_args:
         cmd += ["--set", kv]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)

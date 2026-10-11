@@ -53,6 +53,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 # ⛔ ONE literal path string per chart, never `/ "helm" / "..."`.
@@ -100,7 +101,7 @@ def _values(chart: Path) -> dict:
 
 
 def _render(chart: Path, *overrides: str, namespace: str = "ns-under-test") -> list[dict]:
-    cmd = ["helm", "template", "rel", str(chart), "--namespace", namespace]
+    cmd = ["helm", "template", "rel", str(chart), *baseline_args(chart), "--namespace", namespace]
     for o in overrides:
         cmd += ["--set", o]
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True, timeout=90)
@@ -108,7 +109,7 @@ def _render(chart: Path, *overrides: str, namespace: str = "ns-under-test") -> l
 
 
 def _render_fails(chart: Path, *overrides: str) -> str:
-    cmd = ["helm", "template", "rel", str(chart)]
+    cmd = ["helm", "template", "rel", str(chart), *baseline_args(chart)]
     for o in overrides:
         cmd += ["--set", o]
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=90)
@@ -417,14 +418,14 @@ def test_a_consumer_names_the_yaml_11_trap_for_an_unquoted_off(chart: Path, tmp_
     vf = tmp_path / "v.yaml"
     vf.write_text("preflight:\n  mode: off\n", encoding="utf-8")
     res = subprocess.run(
-        ["helm", "template", "rel", str(chart), "-f", str(vf)],
+        ["helm", "template", "rel", str(chart), *baseline_args(chart), "-f", str(vf)],
         capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert res.returncode != 0, "an unquoted `off` rendered — it is the boolean false, not the mode"
     assert "BOOLEAN" in res.stderr and "Quote it" in res.stderr, res.stderr[-400:]
     # ...and the quoted form must work, or the advice in the error is wrong.
     vf.write_text('preflight:\n  mode: "off"\n', encoding="utf-8")
     ok = subprocess.run(
-        ["helm", "template", "rel", str(chart), "-f", str(vf)],
+        ["helm", "template", "rel", str(chart), *baseline_args(chart), "-f", str(vf)],
         capture_output=True, text=True, encoding="utf-8", timeout=90)
     assert ok.returncode == 0, ok.stderr[-400:]
 

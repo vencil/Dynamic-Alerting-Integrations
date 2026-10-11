@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 _CHART = "helm/tenant-api"
 _RBAC_TEMPLATE = "helm/tenant-api/templates/rbac-machine-identity.yaml"
@@ -94,7 +95,7 @@ def test_deployment_automount_gate_includes_machine_identity(repo_root: Path):
 
 # ── render layer (helm-gated) ───────────────────────────────────────────────
 def _helm_template(repo_root: Path, *set_args: str):
-    cmd = ["helm", "template", "t", str(repo_root / _CHART)]
+    cmd = ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART)]
     for kv in set_args:
         cmd += ["--set", kv]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)

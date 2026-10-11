@@ -404,7 +404,7 @@ tenant_orgs:
 
 | 模式 | 行為 | 適用 |
 |------|------|------|
-| `direct` | 直接 `git commit` | dev、單人操作 |
+| `direct` | 直接 `git commit`，**不 push** | 與 exporter 共用同一棵樹的環境（try-local）；chart 部署下寫入送不到 exporter，confDir 用預設 emptyDir 時重啟即失，需 `writeBack.directAcknowledgeNotDelivered=true` 才肯 render（#2855） |
 | `pr` / `pr-github` | 建 feature branch + GitHub PR | GitHub.com / Enterprise |
 | `pr-gitlab` | 建 feature branch + GitLab MR | GitLab.com / 自託管 |
 
@@ -434,6 +434,8 @@ helm install tenant-api oci://ghcr.io/vencil/charts/tenant-api \
   -n monitoring --create-namespace -f values-override.yaml
 # 或指向本地 chart：helm install tenant-api ./helm/tenant-api -n monitoring -f values-override.yaml
 ```
+
+`values-override.yaml` 必須設 `writeBack.mode`(沒有預設值,不設 chart 就不 render;#2855),PR 模式另需 `gitRepoUrl`、`writeBack.github.repo`(或 `writeBack.gitlab.project`)與 `writeBack.token.secretName`,欄位說明見 chart 的 `values.yaml`。
 
 Chart 會建立:Deployment + oauth2-proxy sidecar、Service、RBAC ConfigMap、NetworkPolicy、PDB。
 

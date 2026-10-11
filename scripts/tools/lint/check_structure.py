@@ -52,6 +52,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_toolcount.py",   # #1511: single answer to "what counts as a Python tool" (lint checker + two dx writers)
     "_lib_tenant_uniqueness.py",  # #1794: one answer to "does this artifact declare a tenant twice" (two producers)
     "_lib_tenant_values.py",  # #2115/#2564: per-tenant values from Go (runs da-guard served-values / effective)
+    "_lib_redact.py",  # #1516: receiver credential fields (mirror of tenant-api credmask) and how reports print them
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

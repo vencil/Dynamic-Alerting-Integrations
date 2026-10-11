@@ -1,0 +1,8 @@
+# Render baseline for helm/tenant-api in tests that are not about writeBack.
+# The chart refuses to render without writeBack.mode (#2855); these tests
+# check other parts of the Deployment, so they render the acknowledged
+# direct mode, which adds no init container, Secret reference or forge flag.
+# Tests about writeBack itself are in test_write_back_guard.py.
+writeBack:
+  mode: direct
+  directAcknowledgeNotDelivered: true

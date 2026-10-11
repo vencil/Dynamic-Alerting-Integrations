@@ -105,10 +105,38 @@ resources:
 `;
 }
 
+// #2855: the chart refuses to render without writeBack.mode. local gets the
+// acknowledged direct mode (writes stay in the pod — a trial install);
+// staging / production get a PR mode on the config repo, the only mode whose
+// writes reach threshold-exporter. replicaCount is always 1: tenant-api is a
+// single writer and the chart refuses more (ADR-023).
+function writeBackBlock(environment) {
+  if (environment === 'local') {
+    return `# Trial install: writes stay in this pod's /conf.d — never pushed, never
+# delivered to threshold-exporter, lost on restart. Use a PR mode for real use.
+writeBack:
+  mode: direct
+  directAcknowledgeNotDelivered: true`;
+  }
+  return `# Each write opens a PR on your config repo; after merge your GitOps
+# pipeline builds the threshold-config ConfigMap threshold-exporter reads.
+# For GitLab: mode: pr-gitlab and gitlab.project instead of github.repo.
+gitRepoUrl: "https://github.com/your-org/your-config-repo.git"  # replace (no credentials in the URL)
+writeBack:
+  mode: pr-github
+  github:
+    repo: "your-org/your-config-repo"  # replace
+  token:
+    # kubectl -n tenant-api create secret generic tenant-api-vcs --from-literal=token=<token>
+    secretName: tenant-api-vcs`;
+}
+
 function tenantApiValues(config) {
   const { environment, auth } = config;
   return `${header('tenant-api', config)}
-replicaCount: ${pick(environment, 1, 2, 2)}
+replicaCount: 1
+
+${writeBackBlock(environment)}
 
 ${imageBlock('tenantApi')}
 
@@ -193,8 +221,8 @@ function deployNotes(config, size) {
       id: 'tier2-extra',
       title: t('Tier 2：這些仍需你自己補', 'Tier 2: what you still need to add yourself'),
       body: t(
-        `對外入口：在該 chart 的 values 設 \`ingress.enabled: true\`、\`ingress.className\` 與 \`ingress.hosts\`（兩個 chart 皆有 Ingress template，後端固定走 oauth2-proxy）。tenant-api 需另設 conf.d 來源（\`confDir\` / \`gitRepoUrl\`），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
-        `External access: set \`ingress.enabled: true\`, \`ingress.className\` and \`ingress.hosts\` in that chart's values (both charts ship an Ingress template; its backend is always oauth2-proxy). tenant-api also needs its conf.d source (\`confDir\` / \`gitRepoUrl\`); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
+        `對外入口：在該 chart 的 values 設 \`ingress.enabled: true\`、\`ingress.className\` 與 \`ingress.hosts\`（兩個 chart 皆有 Ingress template，後端固定走 oauth2-proxy）。tenant-api 的 \`gitRepoUrl\`、\`writeBack.github.repo\` 要換成你的設定 repo，並先建好 token Secret（staging／production 用 PR 模式；local 是不會送到 exporter 的試用模式），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
+        `External access: set \`ingress.enabled: true\`, \`ingress.className\` and \`ingress.hosts\` in that chart's values (both charts ship an Ingress template; its backend is always oauth2-proxy). For tenant-api, replace \`gitRepoUrl\` and \`writeBack.github.repo\` with your config repo and create the token Secret first (staging / production use a PR mode; local is a trial mode whose writes never reach the exporter); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
       ),
     });
   }

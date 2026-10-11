@@ -502,7 +502,7 @@ def test_output_without_aliases_is_refused(tmp_path):
 def test_output_without_schedules_is_refused(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
@@ -513,7 +513,7 @@ def test_output_without_series_is_refused(tmp_path):
     """#2750：da-guard 的輸出沒有 series → 這支 da-guard 比工具舊，不當成「沒有 series」讀。"""
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}, "state_filters": {}}}}')
+                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "series" in str(ei.value) and ei.value.binary_fault
@@ -534,13 +534,13 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
 _ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
-             '"dropped": {}, "schedules": {}, "state_filters": {}}}}')
+             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}}}}')
 
 
 @pytest.mark.parametrize("asked", [False, True])
@@ -629,7 +629,7 @@ def test_load_key_refs_from_a_da_guard_without_the_subcommand_is_stale(tmp_path)
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────
 
 _SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
-_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}'
+_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}'
 
 
 def _sv_doc(schema: str | None, tenant_extra: str = ', "state_filters": {}') -> str:
@@ -727,3 +727,26 @@ def test_state_filter_severity_only_change_is_visible(tmp_path, da_guard):
     # 對照組：關掉 filter 的租戶沒有條目，兩邊相同
     assert crit["b"].state_filters == warn["b"].state_filters == {}
     assert crit["b"].values["_state_crashloop"] is False
+
+
+def test_output_without_time_boxes_is_refused_as_older(tmp_path):
+    fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA).replace(', "time_boxes": {}', ''))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "time_boxes" in str(ei.value) and ei.value.stale
+
+
+@pytest.mark.parametrize("boxes", ['[]', '{"_silent_mode": {}}', '{"_silent_mode": [{"expires": "", "expired": false}]}',
+                                   '{"_silent_mode": [{"expires": "x", "expired": "no"}]}'],
+                         ids=["list", "not-a-list", "empty-expires", "expired-not-bool"])
+def test_time_boxes_not_of_their_shape_are_refused(tmp_path, boxes):
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"time_boxes": {}', f'"time_boxes": {boxes}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "time_boxes" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
+
+
+def test_real_da_guard_reports_a_silence_time_box(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: {target: warning, expires: \"2027-01-01T00:00:00Z\"}\n"})
+    got = tv.load_served_values(conf_d, at="2026-07-01T00:00:00Z", binary=da_guard)["t"].time_boxes
+    assert got == {"_silent_mode": (tv.TimeBox("warning", "2027-01-01T00:00:00Z", False),)}

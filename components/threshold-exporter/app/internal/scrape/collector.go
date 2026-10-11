@@ -51,6 +51,9 @@ type Reserved struct {
 	// ThresholdExpiries is the time-boxed threshold reading
 	// da_config_event{event="threshold_expired"} is emitted from.
 	ThresholdExpiries []config.ResolvedThresholdExpiry
+	// MaintenanceExpiries is the structured _state_maintenance reading
+	// da_config_event{event="maintenance_expired"} is emitted from.
+	MaintenanceExpiries []config.ResolvedMaintenanceExpiry
 }
 
 // NewCollector is the exporter's collector over src.
@@ -126,7 +129,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	ops := cfg.OperationalStatesAt(now)
 	c.collectStateFilters(ch, ops.StateFilters)
 	c.collectSilentModes(ch, ops)
-	c.collectMaintenanceExpiries(ch, cfg, now)
+	maintenance := c.collectMaintenanceExpiries(ch, cfg, now)
 	expiries := cfg.ResolveThresholdExpiriesAt(now)
 	c.collectThresholdExpiries(ch, expiries)
 	dedup := cfg.ResolveSeverityDedup()
@@ -141,7 +144,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectTenantExpectedExporter(ch, metadata)
 
 	if c.observe != nil {
-		c.observe(Reserved{Metadata: metadata, SeverityDedup: dedup, Ops: ops, ThresholdExpiries: expiries})
+		c.observe(Reserved{Metadata: metadata, SeverityDedup: dedup, Ops: ops, ThresholdExpiries: expiries,
+			MaintenanceExpiries: maintenance})
 	}
 }
 
@@ -365,7 +369,9 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 // Collect has already resolved the state filters (OperationalStatesAt), which
 // log the _state_maintenance parse WARNs when the maintenance filter is
 // declared, so this reading must not log them a second time (#2426).
-func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) {
+//
+// It returns the reading it emitted from, for Hooks.Observe.
+func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) []config.ResolvedMaintenanceExpiry {
 	if c.now == nil {
 		now = time.Now()
 	}
@@ -380,6 +386,7 @@ func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg 
 		}
 		emitConfigEvent(ch, me.Tenant, "maintenance_expired", reason, "", "")
 	}
+	return expiries
 }
 
 // collectThresholdExpiries emits da_config_event when a time-boxed threshold

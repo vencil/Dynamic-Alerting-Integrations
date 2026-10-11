@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "Producer sites under scripts/tools/ops whose generation warning-stream lines are still kind=unclassified (#2766, ADR-036 §3). 'path::function' -> number of such producer calls.",
+    "Producer sites under scripts/tools/ops whose generation warning-stream lines are still kind=unclassified (#2766, ADR-036 §4). 'path::function' -> number of such producer calls.",
     "Shrink-only: give a line a kind from _grar_merge.FINDING_KINDS, then lower its count here (a row at 0 is deleted). tests/ops/test_grar_findings.py refuses a new site and a stale row."
   ],
   "ticket": "#2766",

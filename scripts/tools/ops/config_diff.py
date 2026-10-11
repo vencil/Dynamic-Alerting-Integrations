@@ -35,6 +35,8 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
 )
 from _lib_io import load_yaml_file_strict  # noqa: E402  (#2231 duplicate key = YAML error)
+from _lib_redact import REDACTED, SECRET_FIELDS, redact, redact_pair  # noqa: E402
+from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_io import (  # noqa: E402  (#2297 `_profile` as source text)
     YamlFileError, load_yaml_file_strict_exporter_keys, strict_load_exporter_keys,
 )
@@ -182,6 +184,8 @@ def compute_profile_key_diff(old_data, new_data):
         change_type = classify_change(old_val, new_val)
         if change_type == "unchanged":
             continue
+        # A profile can carry a receiver (`_routing`) like a tenant file.
+        old_val, new_val = redact_pair(key, old_val, new_val)
         changes.append({
             "key": key,
             "old": old_val,
@@ -412,22 +416,10 @@ def load_custom_alerts_from_dir(dir_path):
 # Reserved keys this report already covers in its own section.
 _SETTING_KEYS_REPORTED_ELSEWHERE = frozenset({"_custom_alerts"})
 
-# Receiver fields in docs/schemas/tenant-config.schema.json that hold a
-# credential: a Slack / Teams / Rocket.Chat webhook URL *is* the secret, and
-# so are the PagerDuty keys, bearer tokens and passwords. The schema lets a
-# tenant file carry them inline, and this report is posted as a PR comment —
-# whose body is also mailed to every watcher and survives a history rewrite
-# that purges the file. So a change to one is reported as a change, with
-# both values replaced by _REDACTED. `url` and `proxy_url` are included
-# because either can embed a token or `user:pass@`. The schema parity test
-# fails when a new credential-shaped field is neither listed here nor named
-# as not a credential.
-_CREDENTIAL_KEYS = frozenset({
-    "api_url", "webhook_url", "url", "proxy_url",
-    "routing_key", "service_key", "bearer_token",
-    "auth_password", "password",
-})
-_REDACTED = "<redacted>"
+# Credential fields and how they print: one rule for every report
+# (`_lib_redact`, the fields Alertmanager types as secret).
+_CREDENTIAL_KEYS = SECRET_FIELDS
+_REDACTED = REDACTED
 
 
 def load_settings_from_dir(dir_path):
@@ -474,7 +466,11 @@ def _mapping_changes(old, new, prefix):
         if key in old and key in new:
             if old[key] == new[key]:
                 continue
-            if isinstance(old[key], dict) and isinstance(new[key], dict):
+            # A credential container (`http_config`, a header map, …) is
+            # compared and redacted whole: a leaf inside it need not be
+            # named like a credential to hold one.
+            if (isinstance(old[key], dict) and isinstance(new[key], dict)
+                    and not _lib_redact_is_secret(key)):
                 changes.extend(_mapping_changes(old[key], new[key], path))
                 continue
             change = "modified"
@@ -486,27 +482,8 @@ def _mapping_changes(old, new, prefix):
     return changes
 
 
-def _redact(value):
-    """`value` with every credential field inside it replaced by _REDACTED.
-
-    Walks mappings and lists: adding a whole `_routing`, or a list of
-    receivers, carries its credentials inside a value that is not itself
-    named like one.
-    """
-    if isinstance(value, dict):
-        return {k: (_REDACTED if str(k) in _CREDENTIAL_KEYS and v is not None
-                    else _redact(v))
-                for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact(v) for v in value]
-    return value
-
-
-def _redact_leaf(key, old, new):
-    if str(key) in _CREDENTIAL_KEYS:
-        return (None if old is None else _REDACTED,
-                None if new is None else _REDACTED)
-    return _redact(old), _redact(new)
+_redact = redact
+_redact_leaf = redact_pair
 
 
 def compute_setting_diff(old_settings, new_settings):
@@ -673,6 +650,7 @@ def compute_custom_alert_diff(old_alerts, new_alerts):
 #   the exporter rejects.
 
 SERVED_STATE_FILTERS_KEY = "state_filters"
+SERVED_TIME_BOXES_KEY = "time_boxes"
 SERVED_REMOVED_NOTE = ("no longer served: the recipe was deleted, its threshold "
                        "disabled, or the exporter rejected it (see da-guard's stderr)")
 
@@ -727,8 +705,11 @@ def served_setting_configs(tenants):
     """{tenant: {"_key": value}} for compute_setting_diff: the reserved keys
     the exporter reads for each tenant (`_custom_alerts` aside, in its own
     section), the reserved keys it does not serve as written, and the state
-    filters on for the tenant with their severity (SERVED_STATE_FILTERS_KEY,
-    not `_`-prefixed so no key a tenant writes can collide with it).
+    filters on for the tenant with their severity (SERVED_STATE_FILTERS_KEY),
+    and the time-boxes the exporter honours on `_silent_mode` /
+    `_state_maintenance` (SERVED_TIME_BOXES_KEY: extending a silence or making
+    it open-ended changes nothing the mode's own reading shows). Neither is
+    `_`-prefixed, so no key a tenant writes can collide with them.
 
     A routing key the exporter does not serve arrives as the text written
     (a receiver it rejects, a `type` left out): the text may hold a webhook
@@ -746,21 +727,29 @@ def served_setting_configs(tenants):
                 settings[key] = value
         settings.pop("_custom_alerts", None)
         settings[SERVED_STATE_FILTERS_KEY] = dict(tv.state_filters or {})
+        settings[SERVED_TIME_BOXES_KEY] = {
+            key: [{"target": b.target, "expires": b.expires, "expired": b.expired} for b in boxes]
+            for key, boxes in (tv.time_boxes or {}).items()}
         out[tenant] = settings
     return out
 
 
 def served_setting_diff(old_tenants, new_tenants):
-    """compute_setting_diff over the tenants both sides serve; a routing key
-    served as the text written is printed as _REDACTED (see
-    served_setting_configs)."""
+    """compute_setting_diff over the tenants both sides serve; a reserved key
+    served as the text written (`unserved`) is printed as _REDACTED whatever
+    its name — `_routng` or `_Routing` with a receiver under it is text no
+    key-name rule can see into (see served_setting_configs)."""
     both = set(old_tenants) & set(new_tenants)
     old = served_setting_configs({t: v for t, v in old_tenants.items() if t in both})
     new = served_setting_configs({t: v for t, v in new_tenants.items() if t in both})
+    as_text = {t: {str(k) for side in (old_tenants[t], new_tenants[t])
+                   for k, v in (side.unserved or {}).items()
+                   if str(k).startswith("_") and isinstance(v, str)}
+               for t in both}
     diff = compute_setting_diff(old, new)
-    for changes in diff.values():
+    for tenant, changes in diff.items():
         for c in changes:
-            if "." not in str(c["key"]) and str(c["key"]).startswith("_routing"):
+            if "." not in str(c["key"]) and str(c["key"]) in as_text[tenant]:
                 c["old"], c["new"] = (_REDACTED if isinstance(v, str) else v
                                       for v in (c["old"], c["new"]))
     return diff

@@ -91,13 +91,20 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 **tenant-api** (file-based config API, commit-on-write):
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace
+# FORGE_TOKEN: a GitHub/GitLab token that can push branches and open PRs/MRs
+kubectl create namespace tenant-api
+kubectl -n tenant-api create secret generic tenant-api-vcs --from-literal=token="$FORGE_TOKEN"
+helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace \
+  --set gitRepoUrl=https://github.com/your-org/your-config-repo.git \
+  --set writeBack.mode=pr-github \
+  --set writeBack.github.repo=your-org/your-config-repo \
+  --set writeBack.token.secretName=tenant-api-vcs
 ```
 
 Requires:
 - **Identity**: the chart ships an oauth2-proxy sidecar (`oauth2Proxy.enabled=true`, provider github); pre-create `oauth2-proxy-secrets` (see the chart's `secret-oauth2proxy.yaml` template). Production injects `X-Forwarded-Email` via oauth2-proxy; `--dev-bypass-auth` is local-dev only ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md), **not in the published image**). Without `X-Forwarded-Email`, `/api/v1/me` returns 401; with an `_rbac.yaml`, anyone whose rules lack a `tenants: ["*"]` read grant gets 403 — including callers with only single-tenant or prefix grants ([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)).
 - **conf.d source**: `gitRepoUrl` points at a git repo holding conf.d (an init container clones it); leave empty for an empty conf.d. `_rbac.yaml` is mounted at `/etc/rbac` from a ConfigMap.
-- **Write-back**: PR/MR mode (`--write-mode pr-github` / `pr-gitlab`, [ADR-011](../adr/011-pr-based-write-back.en.md)); the single-writer invariant needs `replicaCount=1`.
+- **Write-back (required)**: `writeBack.mode` has no default; the chart does not render until it is set ([#2855](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2855)). `pr-github` / `pr-gitlab` open one PR/MR per write; after merge your GitOps pipeline builds the `threshold-config` ConfigMap the exporter reads ([ADR-011](../adr/011-pr-based-write-back.en.md)). They need `gitRepoUrl` and a Secret holding the forge token (`writeBack.token.secretName`), which authenticates both clone and push; the token never appears in a URL or ConfigMap. `direct` keeps writes in the pod's own `/conf.d` only: never pushed, never delivered to the exporter, and lost on restart with the default emptyDir `confDir` — for a trial install only, and it also needs `writeBack.directAcknowledgeNotDelivered=true`. The single-writer invariant needs `replicaCount=1`.
 
 **da-portal** (Tenant Manager UI):
 
