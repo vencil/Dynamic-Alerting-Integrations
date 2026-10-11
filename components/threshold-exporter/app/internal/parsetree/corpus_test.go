@@ -2,12 +2,16 @@ package parsetree
 
 // Go half of tests/shared/parse_tree_corpus.json (#2897; Python half:
 // tests/shared/test_parse_tree_corpus.py, which freezes today's route
-// generator verdict on every row).
+// generator verdict on every row and checks each category against it).
 //
-// ADR-036's acceptance condition, as a test: a file the generator refuses
-// today under --strict, parse-tree must call unreadable — unless the row
-// names a written exception. The other direction (parse-tree refusing a
-// file the generator reads) is allowed: stricter, never looser.
+// ADR-036 §2, owner option B: parse-tree refuses a CLOSED LIST of kinds
+// (Kinds) and reads everything else as yaml.v3 does. Every corpus row carries
+// a category — unreadable:<kind>, pyyaml_only or both_read — and this test
+// holds parse-tree to it exactly, in both directions: a row refused with
+// another kind, a refused row that is read, or a read row that is refused,
+// is red. The merge_key_policy_corpus.json rows' categories are a snapshot
+// (parse_tree_merge_key_categories.json) this test writes with
+// UPDATE_PARSE_TREE_CATEGORIES=1; a change shows as a reviewed diff.
 
 import (
 	"crypto/sha256"
@@ -27,16 +31,17 @@ type corpusRow struct {
 	Encoding  string `json:"encoding"`
 	ID        string `json:"id"`
 	Generator string `json:"generator"`
-	Expect    string `json:"expect"`
-	Exception string `json:"exception"`
+	Category  string `json:"category"`
 }
 
 type corpus struct {
-	TextKinds    []string          `json:"text_kinds"`
-	Exceptions   map[string]string `json:"exceptions"`
-	Rows         []corpusRow       `json:"rows"`
-	MergeKeyRows []corpusRow       `json:"merge_key_rows"`
+	ClosedList   []string    `json:"closed_list"`
+	TextKinds    []string    `json:"text_kinds"`
+	Rows         []corpusRow `json:"rows"`
+	MergeKeyRows []corpusRow `json:"merge_key_rows"`
 }
+
+const categoriesFile = "parse_tree_merge_key_categories.json"
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -103,17 +108,36 @@ func encode(t *testing.T, doc, encoding string) []byte {
 	return nil
 }
 
-func verdict(data []byte) string {
+// category is parse-tree's verdict on a file, as a corpus category.
+// pyyaml_only and both_read are both "read" to parse-tree; which of the two
+// a read row is depends on the generator's frozen verdict.
+func category(data []byte, generator string) string {
 	if _, bad := Parse(data); bad != nil {
-		return string(bad.Kind)
+		return "unreadable:" + string(bad.Kind)
 	}
-	return "read"
+	if generator == "rejected" {
+		return "pyyaml_only"
+	}
+	return "both_read"
 }
 
-// TestCorpusNotLooserThanTheGenerator is the ADR-036 §2 condition over
-// every row of both corpora.
-func TestCorpusNotLooserThanTheGenerator(t *testing.T) {
-	t.Parallel()
+func sameSorted(a, b []string) bool {
+	a, b = append([]string(nil), a...), append([]string(nil), b...)
+	sort.Strings(a)
+	sort.Strings(b)
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func loadCorpus(t *testing.T) (corpus, map[string]corpusRow, string) {
+	t.Helper()
 	root := repoRoot(t)
 	var c corpus
 	readJSON(t, filepath.Join(root, "tests", "shared", "parse_tree_corpus.json"), &c)
@@ -128,87 +152,107 @@ func TestCorpusNotLooserThanTheGenerator(t *testing.T) {
 	if len(c.MergeKeyRows) != len(mk.Rows) || len(c.MergeKeyRows) < 1000 {
 		t.Fatalf("merge_key_rows: %d rows, merge_key_policy_corpus.json %d", len(c.MergeKeyRows), len(mk.Rows))
 	}
+	return c, docs, root
+}
 
-	rejected, excused := 0, 0
-	// handPicked: a row of `rows`, whose exception must still be needed. A
-	// merge_key row's exception is assigned from the generator's own reason
-	// (the Python half), so parse-tree may refuse such a row on another
-	// ground (a TAB row that also writes `!!merge`) — that is no stale entry.
-	check := func(where string, r corpusRow, data []byte, handPicked bool) {
-		sum := sha256.Sum256(data)
-		if id := hex.EncodeToString(sum[:])[:16]; id != r.ID {
-			t.Fatalf("%s: the bytes hash to %s, the row says %s (encoding %q)", where, id, r.ID, r.Encoding)
-		}
-		got := verdict(data)
-		if r.Exception != "" {
-			if c.Exceptions[r.Exception] == "" {
-				t.Errorf("%s: exception %q has no written reason", where, r.Exception)
-			}
-			if r.Generator != "rejected" || handPicked && got != "read" {
-				t.Errorf("%s: carries exception %q, but the generator %s it and parse-tree gives %s — "+
-					"an exception is only for a rejected row parse-tree reads; drop it", where, r.Exception, r.Generator, got)
-			}
-			excused++
-			return
-		}
-		if r.Generator == "rejected" {
-			rejected++
-			if got == "read" {
-				t.Errorf("%s: today's generator refuses this file, parse-tree reads it (looser; ADR-036 §2)", where)
-			}
-		}
+func fileBytes(t *testing.T, where string, r corpusRow) []byte {
+	t.Helper()
+	data := encode(t, r.Doc, r.Encoding)
+	sum := sha256.Sum256(data)
+	if id := hex.EncodeToString(sum[:])[:16]; id != r.ID {
+		t.Fatalf("%s: the bytes hash to %s, the row says %s (encoding %q)", where, id, r.ID, r.Encoding)
 	}
+	return data
+}
+
+// TestCorpusCategories: parse-tree's verdict on every hand-picked row is the
+// category written for it, exactly.
+func TestCorpusCategories(t *testing.T) {
+	t.Parallel()
+	c, _, _ := loadCorpus(t)
+	seen := map[string]int{}
 	for _, r := range c.Rows {
-		data := encode(t, r.Doc, r.Encoding)
-		check("row "+r.Name, r, data, true)
-		if got := verdict(data); got != r.Expect {
-			t.Errorf("row %s: parse-tree gives %s, the corpus expects %s", r.Name, got, r.Expect)
+		got := category(fileBytes(t, "row "+r.Name, r), r.Generator)
+		if got != r.Category {
+			t.Errorf("row %s: parse-tree gives %s, the corpus says %s", r.Name, got, r.Category)
 		}
+		seen[r.Category]++
 	}
+	if seen["pyyaml_only"] == 0 || seen["both_read"] == 0 {
+		t.Fatalf("categories seen: %v", seen)
+	}
+}
+
+// TestMergeKeyCorpusCategories: the same over every merge_key_policy_corpus
+// row, against the snapshot of categories (UPDATE_PARSE_TREE_CATEGORIES=1
+// rewrites it from parse-tree — review the diff).
+func TestMergeKeyCorpusCategories(t *testing.T) {
+	t.Parallel()
+	c, docs, root := loadCorpus(t)
+	got := make(map[string]string, len(c.MergeKeyRows))
 	for _, r := range c.MergeKeyRows {
 		src, ok := docs[r.ID]
 		if !ok {
 			t.Fatalf("merge_key_rows %s: no such row in merge_key_policy_corpus.json", r.ID)
 		}
 		r.Doc, r.Encoding = src.Doc, src.Encoding
-		check("merge_key row "+r.ID, r, encode(t, r.Doc, r.Encoding), false)
+		got[r.ID] = category(fileBytes(t, "merge_key row "+r.ID, r), r.Generator)
 	}
-	// Anti-vacuity: a corpus with nothing rejected proves nothing.
-	if rejected < 100 || excused < 3 {
-		t.Fatalf("only %d rejected rows and %d exceptions were checked", rejected, excused)
+	path := filepath.Join(root, "tests", "shared", categoriesFile)
+	if os.Getenv("UPDATE_PARSE_TREE_CATEGORIES") != "" {
+		b, err := json.MarshalIndent(map[string]any{
+			"_comment": "parse-tree's category for each merge_key_policy_corpus.json row (by id). " +
+				"Written by internal/parsetree's TestMergeKeyCorpusCategories with " +
+				"UPDATE_PARSE_TREE_CATEGORIES=1; checked against the generator verdict by " +
+				"tests/shared/test_parse_tree_corpus.py. Never edit by hand.",
+			"categories": got,
+		}, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil { // #nosec G306 -- repo fixture
+			t.Fatal(err)
+		}
+	}
+	var snap struct {
+		Categories map[string]string `json:"categories"`
+	}
+	readJSON(t, path, &snap)
+	if len(snap.Categories) != len(got) {
+		t.Errorf("%s holds %d rows, the corpus %d", categoriesFile, len(snap.Categories), len(got))
+	}
+	for id, cat := range got {
+		if snap.Categories[id] != cat {
+			t.Errorf("merge_key row %s: parse-tree gives %s, %s says %q", id, cat, categoriesFile, snap.Categories[id])
+		}
 	}
 }
 
-// TestCorpusCoversEveryTextKind: every kind Parse can give a text has a row
-// that expects it, and the Python half lists exactly those kinds.
-func TestCorpusCoversEveryTextKind(t *testing.T) {
+// TestCorpusCoversTheClosedList: the corpus's closed list is Kinds, and every
+// kind Parse can give a text has a row refused with it.
+func TestCorpusCoversTheClosedList(t *testing.T) {
 	t.Parallel()
-	var c corpus
-	readJSON(t, filepath.Join(repoRoot(t), "tests", "shared", "parse_tree_corpus.json"), &c)
-	var want []string
+	c, _, _ := loadCorpus(t)
+	var all, text []string
 	for _, k := range Kinds {
+		all = append(all, string(k))
 		if k != KindReadFailure && k != KindNotRegularFile {
-			want = append(want, string(k))
+			text = append(text, string(k))
 		}
 	}
-	got := append([]string(nil), c.TextKinds...)
-	sort.Strings(want)
-	sort.Strings(got)
-	if len(want) != len(got) {
-		t.Fatalf("text_kinds %v, Kinds gives %v", got, want)
+	if !sameSorted(all, c.ClosedList) {
+		t.Fatalf("closed_list %v, Kinds %v", c.ClosedList, all)
 	}
-	for i := range want {
-		if want[i] != got[i] {
-			t.Fatalf("text_kinds %v, Kinds gives %v", got, want)
-		}
+	if !sameSorted(text, c.TextKinds) {
+		t.Fatalf("text_kinds %v, Kinds gives %v", c.TextKinds, text)
 	}
-	expected := map[string]bool{}
+	cats := map[string]bool{}
 	for _, r := range c.Rows {
-		expected[r.Expect] = true
+		cats[r.Category] = true
 	}
-	for _, k := range want {
-		if !expected[k] {
-			t.Errorf("no corpus row expects %s", k)
+	for _, k := range text {
+		if !cats["unreadable:"+k] {
+			t.Errorf("no corpus row is refused with %s", k)
 		}
 	}
 }

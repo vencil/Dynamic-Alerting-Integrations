@@ -93,7 +93,11 @@ const (
 )
 
 // Kinds is every Kind, in the order the checks run (the first that applies
-// is the one reported).
+// is the one reported). It is a CLOSED LIST (ADR-036 §2, owner option B):
+// the shapes whose meaning is ambiguous between YAML readers. Anything else
+// is read as yaml.v3 reads it, even where today's route generator refuses
+// the file only because PyYAML does — tests/shared/parse_tree_corpus.json
+// pins both directions row by row.
 var Kinds = []Kind{
 	KindReadFailure, KindNotRegularFile, KindInvalidUTF8, KindBOMNotAtStart,
 	KindSyntaxError, KindMultipleDocuments, KindNonSpecificTag, KindTagNotAllowed, KindNonScalarKey,

@@ -134,7 +134,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"!!bool/!!null, the decimal text for !!int/!!float (\"0777\" is \"511\"), the string for\n"+
 			"!!str, absent for !!timestamp and for .inf/.nan. A scalar is the only object whose\n"+
 			"\"text\" is a JSON string. An empty file, or one holding only null, is {}.\n\n"+
-			"Unreadable kinds: %s.\n\n"+
+			"Unreadable kinds, a closed list (anything else is read as yaml.v3 reads it, even where\n"+
+			"today's route generator refuses the file): %s.\n\n"+
 			"File mode reads --input as the text of --path: \"selected\" holds --path with its readers\n"+
 			"(an empty list, and an entry in \"not_read\", when no reader would read it), and \"files\"\n"+
 			"or \"unreadable\" what the text holds.\n\n", kindList())
