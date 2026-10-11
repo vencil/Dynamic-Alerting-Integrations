@@ -16,9 +16,8 @@ lang: en
 
 - **Revised 2026-10-11 (proposed, pending PR approval)**:
   - The YAML syntax layer also keeps a single parser: every tool reads the same JSON parsed by Go, and the generator is responsible only for routing and policy semantics. The direction was approved by the owner in [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858).
-  - Folds in the switch-over design the owner decided on 2026-10-10 ([#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)): no two phases, a single-step switch; no resolved config JSON; the escape hatch is removed; git is required.
-  - How write validation ties the generator's result to "this write" (§4) still awaits the owner's decision.
-- The design went through one round of external adversarial review (by a different model); the revision went through two rounds of internal adversarial review (by a different model).
+  - Folds in the switch-over design and write criterion the owner decided on 2026-10-10 and 2026-10-11 ([#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)): no two phases, a single-step switch; a write goes ahead only when the whole tree afterwards passes the generator's check; no resolved config JSON; the "let writes through while policy is unavailable" switch (`--policy-unavailable-open`) is removed; git is required.
+- Both the design and the revision went through adversarial review (by a different model).
 
 ## Summary
 
@@ -35,13 +34,14 @@ lang: en
 
 - Values written under the old YAML rules may change meaning, and some files become unreadable. For example `send_resolved: yes` in a route used to be read by the generator as the boolean `true`; parsed by yaml.v3 it is the string `"yes"`. A one-off migration audit command lists every affected value and file.
 - Python tools that read conf.d need da-guard. The da-tools image already bundles it; local pre-commit builds it with Go on the spot.
-- tenant-api gains a container (the da-tools image). When the container or the policy file is unavailable, every write that changes file content gets 503 (thresholds-only writes included); there is no escape hatch.
+- tenant-api gains a container (the da-tools image). When the container or the policy file is unavailable, every write that changes file content gets 503 (thresholds-only writes included); there is no switch to let writes through while unavailable.
+- The whole tree after a write must pass the generator's check before the write goes ahead. While anything in the tree would be blocked, every write through tenant-api is refused until it is fixed (§4).
 - tenant-api requires git; deployments without git are no longer supported.
 - A CI that runs only da-guard no longer covers routing and policy, and needs an extra `da-tools generate-routes --validate --strict` step.
 
 **Non-negotiable acceptance conditions**:
 
-- No reader may be looser than the generator: it must neither read a policy the generator drops nor miss one the generator enforces.
+- No reader may be looser than the generator: it must neither read a policy the generator drops nor miss one the generator enforces. tenant-api's write criterion is the generator's own result (§4), so for tenant-api this holds by definition.
 - The generator reading the JSON must not be looser than the generator today: a file today's generator refuses under `--strict` must be unreadable to `parse-tree`, with each exception listed with its reason (§2).
 
 ## Problem
@@ -102,12 +102,17 @@ The third row is the existing precedent: thresholds already follow "one implemen
 
 da-guard gains a `parse-tree` subcommand. It takes a conf.d directory and outputs one JSON document. It also has a single-file mode, which file-writing tools use to check their output before writing (see the end of this section).
 
-**Which files were selected**: by the exporter's own file-selection rules (extension, case, hidden files, subdirectories), including which `_defaults` file each directory finally uses. The Python side no longer has its own copy of these rules.
+**Which files were selected**: every file some reader actually reads, marked with who reads it.
+
+- The exporter's file-selection rules (extension, case, hidden files, subdirectories), including which `_defaults` file each directory finally uses.
+- Files the generator reads and the exporter does not: policy and routing-profile files (`_domain_policy.yaml`, `_routing_profiles.yaml`, `_profiles.yaml`, including those in subdirectories and the `.yml` spelling). When both spellings of one file exist, the generator's current handling applies.
+
+The Python side no longer has its own copy of these rules. Differences between the two sides' selection go into the fixed corpus.
 
 **The content of each file**: the output is yaml.v3's structure **after decoding**, not the raw nodes.
 
 - The top level must be a mapping; an empty file counts as an empty mapping.
-- YAML aliases (`*x`, pointing back at content marked `&x`) and unquoted merge keys `<<` are expanded, under the same alias limit yaml.v3 applies when decoding; a file over the limit is listed as unreadable. A quoted `"<<"` is an ordinary key and is output as written. Readers need not expand anything.
+- YAML aliases (`*x`, pointing back at content marked `&x`) and unquoted merge keys `<<` (the spelling that merges another mapping in) are expanded, under the same alias limit yaml.v3 applies when decoding; a file over the limit is listed as unreadable. A quoted `"<<"` is an ordinary key and is output as written. Readers need not expand anything.
 - mapping **keys are always output as their source text** (`010` is `"010"`, the way the exporter reads tenant ids).
 - **Scalars carry their source text, the type yaml.v3 resolved, and the converted value**: for example `{"text": "yes", "tag": "!!str", "value": "yes"}`, `{"text": "0777", "tag": "!!int", "value": "511"}`.
   - Booleans and null are JSON `true` / `false` / `null`.
@@ -120,17 +125,18 @@ da-guard gains a `parse-tree` subcommand. It takes a conf.d directory and output
 **Unreadable files**: file name and reason; no content. Each of these counts as unreadable, rather than taking what yaml.v3 read:
 
 - A syntax error, a read failure, not a regular file, not valid UTF-8.
+- Anything yaml.v3 decoding reports as an error, for example an explicit type that does not fit the text (`!!int abc`) or a merge key whose value is not a mapping (`<<: 1`). PyYAML reads some of these (for example `!!bool yes` as `True`); afterwards they are all unreadable.
 - More than one document in a file (separated by `---`). yaml.v3 reads only the first and silently ignores the rest; copying that would disable any policy after the `---`.
 - A duplicate key within one mapping, compared by key source text after alias expansion. yaml.v3 silently keeps the last value when the duplicate comes from an alias used as a key, so `parse-tree` checks this itself.
-- A key resolved as null (`~:`, `null:`, an empty key), or a key that is not a scalar (`? [a]`, `? {c: d}`). Source-text output could not tell `~` from `"~"`, and the generator and the exporter have handled null keys differently.
-- A tag outside the allow-list. Scalars accept only `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!timestamp`; mappings and sequences accept only no tag or `!!map` / `!!seq`. `!foo`, `!!python/...`, `!!binary`, `!!set`, `!!omap` are all unreadable; yaml.v3 reads some of them as strings, and copying that would make spellings the generator used to refuse usable.
-- A BOM (U+FEFF, an invisible character that marks the encoding) anywhere but the start of the file. When the BOM straddles byte 512, yaml.v3 swallows the next character (measured: `domain_policies` read as `omain_policies`); anywhere else, the key name carries an invisible prefix. Either way a whole policy is silently disabled.
+- A key resolved as null (`~:`, `null:`, an empty key), or a key that is not a scalar (`? [a]`, `? {c: d}`). Source-text output could not tell `~` from `"~"`; yaml.v3 also silently keeps the last of `~:` and `null:` in one mapping; and the generator and the exporter have handled null keys differently.
+- A tag outside the allow-list. Scalars accept only `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`, `!!timestamp`; mappings and sequences accept only no tag or `!!map` / `!!seq`. `!foo`, `!!python/...`, `!!binary`, `!!set`, `!!omap`, `!!merge` are all unreadable; yaml.v3 reads some of them as strings, and copying that would make spellings the generator used to refuse usable.
+- A BOM (U+FEFF, an invisible character that marks the encoding) anywhere but the start of the file. When the BOM straddles byte 512, yaml.v3 swallows the next character (measured: `domain_policies` read as `omain_policies`, silently disabling the whole policy); anywhere else it can leave an invisible character in a key or value. Rather than tell the cases apart, any BOM past the start of the file makes it unreadable.
 
 The top level carries a format version and the da-guard version. A reader that does not recognise the format version treats the whole document as unusable.
 
 These "unreadable" rules are `parse-tree`'s own. How the exporter reads thresholds does not change, so the exporter may read a file the generator refuses; the generator and CI then block it rather than let it through.
 
-**Never looser than today**: a fixed corpus holds the files today's generator refuses under `--strict`, and `parse-tree` must treat them as unreadable; any that it does not are listed one by one with their reason and reviewed.
+**Never looser than today**: a fixed corpus holds the files today's generator refuses under `--strict`, and `parse-tree` must treat them as unreadable; any that it does not are listed one by one with their reason and reviewed. The known exceptions are spellings yaml.v3 already reads correctly and only PyYAML refuses: a TAB after a colon, a policy file indented with TABs, a deeply nested file (for example 600 levels). These files become readable and the generator enforces their policy as written; nothing is loosened.
 
 Example. Input:
 
@@ -171,10 +177,14 @@ Today the generator reads keys with a loader that imitates yaml.v3, so `010` is 
 
 **How the Python side gets it**: through the existing "Python calls a Go binary and reads its JSON" mechanism (da-tools already reads da-guard's `served-values` / `effective` this way). The shared YAML-reading and file-selection libraries read this JSON instead; the tools no longer call a YAML parser on conf.d directly. Every place the generator uses a value switches to the JSON's type and value, not just `send_resolved` (for example `_severity_dedup: off` used to read as `False` and is now the string `"off"`).
 
-**Python tools that write conf.d files are a stated exception**, both those that rewrite existing files (for example `patch_config`, `deprecate_rule`) and those that create new ones (for example `scaffold_tenant`, `init_project`, `onboard_platform`, `migrate_rule`). They produce the text to write with PyYAML. This ADR keeps that approach and adds two limits:
+**Python tools that write conf.d files are a stated exception**, both those that rewrite existing files (for example `patch_config`, `deprecate_rule`) and those that create new ones (for example `scaffold_tenant`, `init_project`, `onboard_platform`, `migrate_rule`). They read the original file and produce the text to write with PyYAML; the PyYAML loaders used for those two jobs are outside the deletion scope (§11). This ADR keeps that approach and adds limits:
 
 - What to change, and whether to change it, is always decided from the JSON; PyYAML only produces the text.
-- After producing the text and before writing it, the tool reads that text with `parse-tree`'s single-file mode (giving the path it will be written to, so the file-selection rules apply); every scalar's source text, type and value across the whole file must be as expected, or nothing is written. Strings PyYAML emits unquoted (for example `1e3`, `0o17`, which yaml.v3 reads as numbers) are therefore caught.
+- After producing the text and before writing it, the tool reads that text with `parse-tree`'s single-file mode, giving the path it will be written to:
+  - The expected content is "the original file's parse result with this change applied"; for a new file, it is what the tool means to write.
+  - Keys, structure and every scalar's source text, type and value across the whole file must match, or nothing is written.
+  - Nothing is written either when the original file is unreadable or when no reader would read the target path.
+- Known consequence: a file holding a spelling PyYAML rewrites on output (for example unquoted `1e3`, `0o17`, `0x1F`, which yaml.v3 reads as numbers) cannot be written at all until it is changed by hand to a quoted spelling. This errs on the safe side.
 
 If Go later provides a rewrite command, this exception can be removed.
 
@@ -198,10 +208,10 @@ tenant-api pod
 ```
 
 - **Image**: the existing da-tools image, which already contains the generator and da-guard. The service uses only the Python standard library.
-- **Communication**: HTTP/1.1 over a Unix socket; no network port. The socket lives in a shared scratch directory (emptyDir) inside the pod. Only processes that mount that directory and pass the socket file permissions can connect. The chart's existing human socket works the same way.
+- **Communication**: HTTP/1.1 over a Unix socket; no network port. The socket lives in a shared scratch directory (emptyDir) inside the pod. Only processes that mount that directory and pass the socket file permissions can connect. The chart's existing human socket (for requests carrying a person's identity) works the same way.
 - **Execution**: a long-running process checks files out of git and caches them by commit. Each request is judged in a fresh child process; a batch is validated within that one child process; parse results are reused only within a single request.
 - **Timeout**: when judging times out, the child process is killed along with everything it started; the write is refused.
-- **amtool is required**: the generator's validation mode only prints a notice and passes when amtool is missing; the generator container does not accept that, and without amtool the container counts as unavailable.
+- **amtool is required**: amtool is Alertmanager's config-checking tool. The generator's validation mode only prints a notice and passes when it is missing; the generator container does not accept that, and without amtool the container counts as unavailable.
 - **When to parse inside the long-running process instead**: watch the p95 of write-lock hold time (the value 95% of writes stay under). Once p95 exceeds a third of the write timeout, switch: the long-running process forks children and gains a cross-request parse cache. The write timeout is the HTTP server's (`--write-timeout`, 30 s by default); there is also a fixed 30 s request-timeout middleware; neither is the write lock's timeout.
 
 **Getting the files: the generator container reads git objects only, never the working directory.**
@@ -216,32 +226,37 @@ tenant-api pod
 
 ### 4. How writes are validated
 
-**The criterion is absolute**, the same as tenant-api today: the container replaces, in the base tree, the files being written with their new content, parses the result and runs the generator; if the generator blocks a problem related to this write in the resulting tree, the write is refused.
+**After a write, the generator checks the whole tree; the write goes ahead only if everything passes.**
 
-How "related to this write" is determined, and how to handle a base that already has errors, await the owner's decision ([#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)). Known limits:
-
-- Not by comparing "which error messages are new": when a tenant that already violates the policy changes its config, it produces exactly the same message line as the base, and a diff would let it through.
-- Not by letting an existing violation through when "the rendering is the same before and after the write": measured, adding an empty value to `group_by` makes the generator report one more blocking finding while the rendering is unchanged, so that exception would be looser than the generator.
-
-**Other rules**:
-
+- **Criterion**: the generator container replaces the files being written with their new content and runs `--validate --strict` on the whole resulting tree. Exit code 0 means write; anything else means refuse.
+  - It uses the same base commit, the same deployment policy file, the generator version in the container, and amtool must be present.
+  - The criterion is the generator's own result, so tenant-api is never looser than the generator in its container.
 - **Which writes are validated**: every write that changes file content. Whether to validate is not decided by Go guessing "does this touch routing".
-- **What was validated is exactly what is written**: the container returns the "file path, content hash, base commit" it validated. tenant-api checks all three under the write lock and revalidates on any mismatch; the bytes written must be exactly those validated.
-- **Batch writes**: one request, one commit, with a per-item result; intermediate states never reach the repo, so they are not validated. The batch criterion is set together with the pending criterion above. Prerequisite: tenant-api's git writes support committing several files at once.
-- **Merging batch patches**: Go still reads the file, applies the patch and writes it back. The merged content is always validated, so a violating result is blocked. What this cannot catch is a rewrite with no violation whose meaning Go changed; an offline differential test guards that instead of each write: one side has Go merge and the generator read the result, the other has the generator read the base and apply the same patch; both must match, including the other tenants in the same file.
+- **Error responses**: list the findings the generator reports (each problem it reports). Those related to the written files come first, marked with which existed before the write and whether they come from platform defaults, a routing profile or the tenant itself. This affects only the message, never the verdict.
+- **Batches**: one request, one commit, all or nothing. The batch is written only if the whole tree passes with the batch applied; otherwise the whole batch is refused, and the response lists the related findings item by item. Intermediate states are not validated and never reach the repo. Prerequisite: tenant-api's git writes support committing several files at once.
+- **Merging batch patches**: Go still reads the file, applies the patch and writes it back; the merged content is always validated.
+  - If a file to be written is already unreadable in the base, it is refused before merging. Otherwise Go's re-emission could drop the documents after a `---` or a duplicate key, making the merged content readable — a silent rewrite.
+  - What validation cannot catch is a rewrite with no violation whose meaning Go changed; an offline differential test guards that: one side has Go merge and the generator read the result, the other has the generator read the base and apply the same patch; both must match, including the other tenants in the same file.
+- **What was validated is exactly what is written**: the container returns the "file paths, content hashes, base commit, deployment policy file content hash" it validated. tenant-api checks them under the write lock and revalidates on any mismatch; the bytes written must be exactly those validated.
 - **Any anomaly is a refusal**: a container error, a timeout, incomplete output — all count as refusals.
-- **Error responses**: only the findings for the subject of this write, never other tenants' violations.
+
+**Cost (a breaking change)**:
+
+- While anything anywhere in the tree would be blocked, every write through tenant-api is refused until it is fixed.
+- How to fix: when the problem is in one tenant file and fixing that file makes the whole tree pass, it can be fixed through tenant-api. Everything else goes through git, for example platform files, files in subdirectories, or several tenants violating at once (common after the platform tightens a policy).
+- Why this is acceptable: the customer's CI runs the same generator, so a change that turns the whole tree red does not normally reach the main branch; when the whole tree is red, the customer's CI is already red. This amounts to "the main branch always stays green", the same as a merge queue (a queue that runs tests on the latest main branch before merging).
 
 ### 5. Policy files and policy status
 
 **The deployment's policy file is mounted into the generator container; when policy is unavailable, writes are refused.**
 
 - **The deployment's policy file** (`--policy`): its `allowed_domains` restrict webhook URL domains. The chart gains an optional value that mounts this file into the container, and it is passed along when judging. Reason: this is an SSRF control (stopping the service from being used to send requests into the internal network on an attacker's behalf) and belongs outside the tenant repo; someone with write access should not be able to change it. The customer CI template `da-tools init` generates does not pass `--policy` today.
-- **Status endpoint**: the generator container reports whether each policy file is usable, and tenant-api reads it to produce `tenant_api_policy_available`. Alerts read this metric, so it keeps its name; it has no labels today. Its description counts "keeping the last usable content" as usable; after the switch old content is no longer kept, so the description changes then.
+- **Status endpoint**: the generator container reports whether each policy file is usable, and tenant-api reads it to produce `tenant_api_policy_available`. Alerts read this metric, so it keeps its name; it has no labels today.
+  - When the status endpoint cannot be reached (container unreachable), the metric is 0, so the alert still fires.
+  - Its description counts "keeping the last usable content" as usable; after the switch old content is no longer kept, so the description changes then.
 - **No escape hatch**: when the policy file or the generator container is unavailable, every write that changes file content is refused (thresholds-only writes included) with 503.
   - When the policy file is unavailable the error code is `POLICY_UNAVAILABLE`; the code for an unavailable container is set during implementation.
   - Today tenant-api's scope is narrower: only in direct write mode, and only when a policy file exists but none of its content is usable; a single PUT always gets it; a synchronous batch gets 503 for the whole request if any item touches routing; an asynchronous batch re-judges each item when it runs. The new rule does not depend on the mode.
-  - Policy files are not covered by the "write as usual when another file in the base is broken" exception; when unavailable, writes are always refused.
   - `--policy-unavailable-open` and the counter `tenant_api_policy_unavailable_open_total` are removed. The alert `TenantApiPolicyUnavailable` stays (it reads the availability metric), but its description mentions the escape hatch and the counter and changes with them.
 - **No resolved config JSON is produced**: no code needs to read one today.
 
@@ -257,27 +272,27 @@ Neither case lets a violating config through; the cost is that the two sides can
 
 - tenant-api's chart pins a default da-tools version, and CI runs compatibility tests against that pair.
 - The config generated by `da-tools init` pins a version instead of `latest`.
-- A policy file can declare "requires at least generator version X"; a container older than that refuses writes. This is a new key, read only by the generator.
+- A policy file can declare "requires at least generator version X"; a container older than that refuses writes. This is a new key, read only by the generator; it must be added no later than the switch release, or older generators will not recognise it.
 - tenant-api exposes the generator and da-guard versions as metrics.
 
 ### 7. A single-step switch
 
-**The generator reading the JSON, tenant-api asking the generator container, and da-guard turning to "not judged" ship in the same release.** There is no side-by-side period and no catalog of differences between two judges.
+**The generator reading the JSON, tenant-api asking the generator container, and da-guard turning to "not judged" ship in the same release.** There is no side-by-side period and no divergence catalog (a list recording each config file Go and the generator judge differently).
 
 The reason: in any release where some Go code still imitates the old PyYAML reading while the generator already reads the yaml.v3 way, the syntax-layer gaps merely change direction; shipping together means no such release exists.
 
 **What must be done before the switch**:
 
 - The config `da-tools init` generates pins the da-tools version.
-- Checks that are not parsing (for example the guard against writing back masked-credential placeholders, the tenant id check, `IsDisabled`) move out of the packages to be deleted.
+- Checks that are not parsing (for example the guard against writing back masked-credential placeholders, the tenant id check, `IsDisabled` which tells whether a tenant is disabled) move out of the packages to be deleted.
 - The checks only Go's da-guard has move into the generator first (§9).
 - tenant-api's git writes support committing several files at once (§4).
-- `parse-tree` and its single-file mode; the shared Python libraries and ordinary tools read it; tools that write conf.d add the pre-write check; the migration audit command. These can ship earlier; the generator itself switches to the JSON in the switch release.
+- `parse-tree` and its single-file mode; the migration audit command. These two can ship earlier. The shared Python libraries and the tools (the generator included, which uses the shared libraries directly) switch to the JSON together in the switch release, and the tools that write conf.d add the pre-write check in that release; switching the shared libraries first would leave the generator reading half JSON, half PyYAML.
 
 **Done in the switch release as well**:
 
 - Delete the Go code that imitates PyYAML and imitates the generator's semantics (§11).
-- Delete the flat key `_routing_receiver_type`; writing it returns 400 again.
+- Delete the flat key `_routing_receiver_type` (the old single-level way to set the receiver type); writing it now returns 400.
 - Delete the divergence catalog and the expiry check in `make pre-tag`.
 
 **No falling back to Go when the container is unavailable**: Go's judging is deleted; and anyone who can send writes can affect whether the container is available (for example by sending many requests that need whole-tree recomputation), so falling back to a looser judge would let the requester pick the judge.
@@ -286,12 +301,12 @@ The customers' conf.d trees are not available, so validation before the switch c
 
 ### 8. Migration: values whose reading changes
 
-Once yaml.v3 parses the YAML, any value the two parsers read differently changes for the generator and the Python tools. The most common are unquoted `yes` / `no` / `on` / `off` (previously booleans, now strings) and keys tagged `!!merge` (previously merged, now ordinary keys).
+Once yaml.v3 parses the YAML, any value the two parsers read differently changes for the generator and the Python tools. The most common are unquoted `yes` / `no` / `on` / `off` (previously booleans, now strings); a key tagged `!!merge` (previously merged) makes the whole file unreadable.
 
 - da-tools provides a one-off migration audit command: it reads the customer's tree with both parsers and lists three kinds of result:
   - Values read differently: file, line and suggested spelling (for example rewriting a boolean as `true` / `false`).
   - Keys read differently.
-  - Files that become unreadable as a whole (for example `\/` inside a quoted string, more than one document, a null key, a tag outside the allow-list, a BOM inside the file).
+  - Files that become unreadable as a whole (for example `\/` inside a quoted string, more than one document, a null key, a tag outside the allow-list such as `!!merge`, a BOM inside the file).
 
   This command and the writing tools of §2 are the only places in this ADR that still read or write conf.d with PyYAML; the audit command only lists differences and judges nothing.
 - The release notes list the affected spellings and the migration steps.
@@ -308,7 +323,7 @@ da-guard gains `parse-tree` and stops judging routing and policy; the generator'
   - Migration: wherever CI ran da-guard, add a `da-tools generate-routes --validate --strict` step.
   - `--required-fields _routing.*` errors out instead of silently doing nothing.
 - **Before deleting Go checks**, move the checks only Go has into the generator, add them to both sides' comparison table, and prove the tests go red without them. The "only Go has" list is computed by code, not maintained by hand. A check that was a warning and becomes an error after the move is noted as "stricter" in the changelog.
-- `guard-defaults-impact.yml` also runs the generator.
+- `guard-defaults-impact.yml` (the CI that checks the impact of a PR changing defaults) also runs the generator.
 
 ### 10. tenant-api read endpoints
 
@@ -322,7 +337,7 @@ Decided by "is anyone still using it". CI already has a check: it lists the user
 
 | Item | When | Action |
 |---|---|---|
-| Python loaders that imitate yaml.v3, the Python copy of the file-selection rules | the switch release | delete |
+| Python loaders that imitate yaml.v3, the Python copy of the file-selection rules | the switch release | delete; the loaders the conf.d-writing tools use to read originals and produce text are not included (§2) |
 | Go code that imitates PyYAML's reading: the PyYAML-decoding imitation package, the function imitating PyYAML's type resolution, the "spaces only" option the policy decoder turns on | the switch release (tenant-api and da-guard stop using it in that release) | delete |
 | Go code that imitates the generator's semantics (the Go copy of routing and policy judging) | same | delete |
 | The two vendored yaml.v3 patches added to imitate PyYAML: "non-specific tag" (YAML's `!` marker, making a quoted string typed by the unquoted rules) and "spaces only" (refusing TAB indentation) | same | delete; "non-specific tag" changes two of the exporter's readings (§8), recorded as a breaking change |
@@ -332,15 +347,16 @@ Decided by "is anyone still using it". CI already has a check: it lists the user
 
 CI's declaration table records when each package and patch may be deleted; the PR that does the switch updates it.
 
-Duplicate keys, more than one document, tags outside the allow-list: today the Python loaders and the Go imitation package block these. Before they are deleted, `parse-tree` must treat these as unreadable (§2), confirmed by the fixed corpus.
+Duplicate keys, more than one document, tags outside the allow-list: today the generator's loader and the Go imitation package block these (some Python tools deliberately read only the first document). Before they are deleted, `parse-tree` must treat these as unreadable (§2), confirmed by the fixed corpus.
 
 ## When things fail
 
 | Situation | Behaviour |
 |---|---|
-| The generator container is down, times out, or has no amtool | Every write that changes file content gets 503 |
+| The generator's exit code on the whole tree after the write is not 0 | Refused; the error response lists the findings, marking those that existed before the write and their source |
+| The generator container is down, times out, or has no amtool | Every write that changes file content gets 503; `tenant_api_policy_available` is 0 |
 | The policy file is unavailable | Every write that changes file content gets 503, error code `POLICY_UNAVAILABLE` |
-| `parse-tree` cannot read a file | The file is listed under unreadable files; a write whose subject it is gets refused, otherwise the pending criterion of §4 applies |
+| `parse-tree` cannot read a file | The file is listed under unreadable files, the generator's check does not pass, and the write is refused |
 | Text produced by a Python tool that writes conf.d reads back through `parse-tree` differently from what was expected | Nothing is written, and the differing value is reported |
 | A reader meets an unknown format version | The whole document is treated as unusable |
 | The generator in the container is older than a policy requires | Writes are refused |
@@ -385,11 +401,15 @@ After switching to the JSON, the Python side's parsing cost falls to roughly a t
 
 ## Considered and rejected
 
-The options whose reasons are already given in the body (keep both sides imitating each other, diff error messages, let an existing violation through when the rendering is unchanged, check out with `git archive`, fall back to Go when the container is down) are not repeated.
+The options whose reasons are already given in the body (keep both sides imitating each other, check out with `git archive`, fall back to Go when the container is down) are not repeated.
 
 | Option | Why rejected |
 |---|---|
 | Restrict conf.d to what "the two parsers are guaranteed to read the same way" | Measured, it does not work: `\/` inside a quoted string and a TAB after a colon are read differently even with the value quoted and no advanced feature used. Such a subset can only be sampled, never defined |
+| On a write, look only at the findings that belong to this write (per-finding attribution) | The way the generator reports findings was not designed to assign responsibility: its validation short-circuits, so after an earlier error the assembly and amtool never run; a run-failure finding is added only when there is no other finding; platform-file and cross-tenant findings have no consistent subject. Both attribution rules were broken by measured counter-examples: a neighbour's violation hid amtool's refusal of the written file; a broken `_routing_defaults.yaml` dropped the platform's enforced routes, and that finding belonged to no write at all |
+| Compare only "which error messages are new" before and after the write | When a tenant that already violates the policy changes its config, it produces exactly the same message line as the base, and a diff would let it through |
+| When a tenant already violates the policy, let the write through if the rendering is unchanged | It leaks: measured, adding an empty value to `group_by` makes the generator report one more blocking finding while the rendering is unchanged. Closing that would mean comparing whether findings are new — the row above. Kubernetes CRD validation ratcheting took five releases from 1.28 alpha to 1.33 GA and accumulated an ever-growing list of exceptions, which also shows how hard such exceptions are to converge |
+| Validate a batch twice: drop the violating items, then validate the remaining combination | Depends on per-finding attribution (two rows up); replaced by all-or-nothing batches |
 | Have the generator refuse aliases, merge keys and explicit tags | Its purpose was to narrow the gap between two parsers; with one parser there is no gap left to narrow, and it would make customers rewrite existing config files |
 | A two-phase switch (old and new side by side, compare differences, delete the Go side once conditions hold) | The product has few adopters and can take breaking changes; the side-by-side period means maintaining two judges and a divergence catalog, and Go's judging is known to be looser, so keeping it buys nothing |
 | Produce a resolved config JSON for tenant-api to read | No code needs to read it; whether policy is usable is reported by the status endpoint instead |
@@ -408,7 +428,7 @@ The options whose reasons are already given in the body (keep both sides imitati
 3. Preparing the switch: the prerequisites listed in §7; the generator container (validation endpoint, status endpoint); the Helm chart adds the container, socket, policy-file mount and resources.
 4. The switch: the generator reads the parse-result JSON; tenant-api's writes ask the generator container; `--policy-unavailable-open` is removed.
 5. da-guard: add the "not judged" state and exit code; `guard-defaults-impact.yml` also runs the generator.
-6. Deletion: the Go and Python imitation code, the two vendored yaml.v3 patches, the divergence catalog; re-run #2759 and the other fixed corpus on main, and close the issues.
+6. Deletion: the Go and Python imitation code, the two vendored yaml.v3 patches, the flat key `_routing_receiver_type`, the divergence catalog and the expiry check in `make pre-tag`; re-run #2759 and the other fixed corpus on main, and close the issues.
 
 Steps 4 to 6 ship in the same release (§7).
 
@@ -421,7 +441,8 @@ Where the code is, for implementers; can be skipped when reading the decision.
 | The existing "Python calls a Go binary and reads its JSON" mechanism | `scripts/tools/_lib_tenant_values.py` (`served-values` / `effective`) |
 | The Python YAML-reading and file-selection libraries (switch to `parse-tree`) | `scripts/tools/_lib_io.py`, `_lib_confd.py`, `_lib_yaml_keys.py` |
 | Python loaders that imitate yaml.v3 | `_lib_yaml_keys.ExporterKeyLoader`, the `StrictExporterKeyLoader` family in `_lib_io`, `_GoKeyLoader` in `describe_tenant` |
-| Tools that write conf.d (text produced by PyYAML) | callers of `strict_load_for_rewrite` / `load_yaml_file_for_rewrite` in `_lib_io` and `_lib_yaml_keys.dump_for_rewrite` (for example `patch_config`, `deprecate_rule`); `scaffold_tenant` and the others that create new files with `yaml.safe_dump` |
+| Tools that write conf.d (text produced by PyYAML; kept) | `StrictRewriteLoader`, callers of `strict_load_for_rewrite` / `load_yaml_file_for_rewrite` in `_lib_io` and `_lib_yaml_keys.dump_for_rewrite` (for example `patch_config`, `deprecate_rule`, `da_assembler`); `scaffold_tenant` and the others that create new files with `yaml.safe_dump` |
+| Policy file names the generator reads on its own | `_POLICY_FILENAMES` in `_grar_parse.py`; the exporter skipping nested `_` files is explained in `flat_build.go` |
 | The portal's preview-only parsing | js-yaml via `tools/portal/src/interactive/tools/_common/validation/yaml-parser.js`; the hand-written line-by-line parsing `tools/portal/src/interactive/tools/config-lint/lint.js` |
 | Code that blocks duplicate keys and multiple documents today (taken over by `parse-tree` before deletion) | Python's `RejectDuplicateKeys`; Go's `pyyamlcompat.FindDuplicateKey`, `firstDocument` / `errMoreDocuments` in `routingpolicy`, da-guard's `pyyaml_duplicates.go` |
 | Go code that imitates PyYAML's reading | `pkg/pyyamlcompat`; `pyResolve` and the policy decoder that turns on `SpacesOnly` in `pkg/routingpolicy` |
@@ -438,7 +459,7 @@ Where the code is, for implementers; can be skipped when reading the decision.
 ## References
 
 - [#2766](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766): design discussion, measurements and external review of the semantic layer
-- [#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486): decisions and measurements for the switch-over design
+- [#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486): decisions, counter-examples and measurements for the switch-over design and the write criterion
 - [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858): tracking issue for keeping one parser at the syntax layer
 - [ADR-023 tenant-api write plane: the single-writer invariant](./023-write-plane-single-writer-invariant.md) (Chinese only)
 - [ADR-037 config-diff Compares Rendered Output](./037-config-diff-compares-rendered-output.en.md)
