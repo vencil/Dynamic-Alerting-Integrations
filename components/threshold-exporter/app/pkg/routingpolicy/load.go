@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
@@ -91,24 +92,21 @@ type Problem struct {
 	Message string
 }
 
-// File names the Python reader takes these blocks from (exact spelling:
-// _grar_parse._POLICY_FILENAMES and the routing_profiles branch).
-var (
-	policyFileNames  = []string{"_domain_policy.yaml", "_domain_policy.yml"}
-	profileFileNames = []string{"_routing_profiles.yaml", "_routing_profiles.yml"}
-)
+// profileFileNames are the file names the Python reader takes routing
+// profiles from (exact spelling: the routing_profiles branch). The domain
+// policy file names are confdlayout.IsDomainPolicyFile's
+// (_grar_parse._POLICY_FILENAMES).
+var profileFileNames = []string{"_routing_profiles.yaml", "_routing_profiles.yml"}
 
 // ReportsUnusable reports whether LoadRoot names a root file of this name
 // that it cannot parse as a Problem (domain_policy_unusable /
 // routing_profiles_unusable) — a duplicate key included — rather than
-// leaving it to the exporter's parse-failure list.
+// leaving it to the exporter's parse-failure list. Of the two kinds, the
+// domain policy file (confdlayout.IsDomainPolicyFile) is the one whose
+// Problem is an error.
 func ReportsUnusable(name string) bool {
-	return contains(policyFileNames, name) || contains(profileFileNames, name)
+	return confdlayout.IsDomainPolicyFile(name) || contains(profileFileNames, name)
 }
-
-// IsDomainPolicyFile reports whether name is a `_domain_policy.yaml` /
-// `.yml` — the one ReportsUnusable kind whose Problem is an error.
-func IsDomainPolicyFile(name string) bool { return contains(policyFileNames, name) }
 
 // errUnusable marks a block that decodes but has the wrong shape.
 var errUnusable = errors.New("unusable")
@@ -1408,7 +1406,7 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		if skip != nil && skip(f.Name) {
 			continue
 		}
-		isPolicy := contains(policyFileNames, f.Name)
+		isPolicy := confdlayout.IsDomainPolicyFile(f.Name)
 		isProfiles := contains(profileFileNames, f.Name)
 		top, err := parseDoc(f.Data, isPolicy)
 		if err != nil {

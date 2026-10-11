@@ -241,7 +241,7 @@ const (
 	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
 	FindingRoutingDefaultsNotMapping FindingKind = "routing_defaults_not_mapping"
 	// FindingInvalidTenantID (error; #2341, ADR-035): a declared tenant id
-	// the tenant-id rule refuses (routingpolicy.IsValidTenantID, a DNS-1123
+	// the tenant-id rule refuses (tenantid.Valid, a DNS-1123
 	// label); the route generator refuses the whole tree. TenantID is the id
 	// (it may be empty, so the finding is told from a platform one by its
 	// kind), Field `<tenant file>:tenants.<id>`.
@@ -416,7 +416,7 @@ type CheckInput struct {
 	// RoutingByTenant: the generator renders no route for them.
 	RoutingNotMapping map[string]any `json:"-"`
 
-	// InvalidTenantIDs maps each declared tenant id routingpolicy.IsValidTenantID
+	// InvalidTenantIDs maps each declared tenant id tenantid.Valid
 	// refuses to the tenant file that declares it (#2341). Such tenants are
 	// absent from RoutingByTenant.
 	InvalidTenantIDs map[string]string `json:"-"`

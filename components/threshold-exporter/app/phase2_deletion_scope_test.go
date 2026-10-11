@@ -6,16 +6,17 @@ package main
 // declares those users; this test lists them from the source and goes red
 // when the two differ, in either direction:
 //
-//   - every importer of <exporter module>/pkg/routingpolicy and
-//     <exporter module>/pkg/pyyamlcompat, as (repo-relative directory,
-//     whether the importing file is a _test.go file);
+//   - every importer of <exporter module>/pkg/routingpolicy,
+//     <exporter module>/pkg/pyyamlcompat and <exporter module>/pkg/receiverspec,
+//     as (repo-relative directory, whether the importing file is a _test.go
+//     file);
 //   - every `.SpacesOnly` selector (a call or a method value) outside
 //     third_party/, the vendored yaml.v3 option phase 2 deletes;
 //   - the set of third_party/*.patch files on disk vs the table's patches.
 //
 // Package level, not per symbol (owner decision on #2766, 2026-10-10):
-// routingpolicy mixes code to delete with helpers to keep, and that split is
-// prose in the table, not rows.
+// routingpolicy and receiverspec mix code to delete with code to keep, and
+// that split is prose in the table, not rows.
 //
 // What is read, deliberately wider than one `go build` sees:
 //   - BOTH modules, components/threshold-exporter/app and
@@ -66,7 +67,7 @@ const phase2TablePath = "tests/shared/phase2_deletion_scope.json"
 var phase2Modules = []string{"components/threshold-exporter/app", "components/tenant-api"}
 
 // phase2Packages are the module-relative packages whose importers are listed.
-var phase2Packages = []string{"pkg/pyyamlcompat", "pkg/routingpolicy"}
+var phase2Packages = []string{"pkg/pyyamlcompat", "pkg/receiverspec", "pkg/routingpolicy"}
 
 // phase2Selector is the vendored yaml.v3 option whose uses are listed.
 const phase2Selector = "SpacesOnly"
@@ -694,6 +695,7 @@ func validPhase2Table() *phase2Table {
 			{Package: "pkg/pyyamlcompat", Category: "c", Disposition: "delete", Notes: "n",
 				Importers: []phase2Site{{"components/tenant-api/internal/policy", false}}},
 			{Package: "pkg/routingpolicy", Category: "c", Disposition: "split", Notes: "n"},
+			{Package: "pkg/receiverspec", Category: "c", Disposition: "split", Notes: "n"},
 		},
 		SpacesOnlyCallers: []phase2Site{{"components/threshold-exporter/app/pkg/routingpolicy", false}},
 		Patches: []phase2Patch{

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/confd"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
@@ -45,7 +44,7 @@ func ValidateTenantID(id string) error {
 // ValidateWritableTenantID is ValidateTenantID for a request that writes the
 // tenant (PUT, its dry-run, custom-alerts PUT, batch ops, the federation
 // subset PUT), plus one more refusal (#2341 R8, ADR-035): an id the tenant-id
-// rule refuses — routingpolicy.IsValidTenantID, the predicate da-guard
+// rule refuses — tenantid.Valid, the predicate da-guard
 // reports as invalid_tenant_id; the route generator refuses a tree that
 // declares one. It is the early 400; the writer enforces the same rule again
 // (gitops.ErrInvalidTenantID). Reads keep ValidateTenantID alone, so an
@@ -54,7 +53,7 @@ func ValidateWritableTenantID(id string) error {
 	if err := ValidateTenantID(id); err != nil {
 		return err
 	}
-	if !routingpolicy.IsValidTenantID(id) {
+	if !tenantid.Valid(id) {
 		return fmt.Errorf("tenant ID %q is not valid: %s", id, tenantid.Description)
 	}
 	return nil
