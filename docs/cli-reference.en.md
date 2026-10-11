@@ -140,6 +140,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `state-reconcile` | Migration state directory declarative reconciliation (schema_version validation + manifest rebuild) | `--state-dir <dir>` (default `.da/state`) |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema) | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump) | `--silences-file <json> --rule-source <path>` |
+| `migration-audit` | Migration audit: read a conf.d with PyYAML and with `da-guard parse-tree`, list where they differ (ADR-036 §8) | `--config-dir <dir>` |
 
 ### Operator + Federation Tools
 
@@ -1434,6 +1435,55 @@ da-tools silencer-drift-check --silences-file silences.json --rule-source rule-p
 ```
 
 ⛔ **Do not wire `--ci` over a live silence dump** (the CI-gate example above targets a dump captured by hand at cutover). Measured 2026-08-27: all 122 alerts in `rule-packs/` carry a templated `tenant:` label (122 templated / 0 literal), while every silence `maintenance_scheduler.py` creates carries a literal `tenant=<id>` matcher ⇒ this platform's own scheduler-created silences all land in the existing templated-label false positive (see the tool's Known limitations), and the gate would fail on **every scheduled maintenance window**.
+
+#### migration-audit
+
+Migration audit ([ADR-036](adr/036-single-parser-effective-config.en.md) §8, [#2898](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2898)). conf.d YAML is moving to one reader in Go (yaml.v3, `da-guard parse-tree`); run this on your own tree before the switch to see what changes. It reads the conf.d twice — with today's route generator reader (PyYAML, the same file selection and loader) and with `da-guard parse-tree` — and **lists the differences without judging them**.
+
+```bash
+da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
+```
+
+**Main parameters**
+
+| Parameter | Purpose |
+|------|------|
+| `--config-dir <dir>` | conf.d root (required) |
+| `--json` | Print one JSON document (schema `da-tools.migration-audit/v1`) on stdout |
+| `--da-guard-binary <path>` | da-guard path; otherwise `$DA_GUARD_BINARY`, then `da-guard` on `$PATH` (the da-tools image ships it) |
+| `--timeout <seconds>` | How long da-guard may run (default 600) |
+
+**What it lists**
+
+| List (`--json` key) | Content |
+|------|------|
+| `values` | Values the two readers read differently: file, line, path, both readings, a suggested spelling (e.g. `on`: write `true` for a boolean, `"on"` for a string). `rewrites` lists each replacement (`meaning`, `text`) and `span` where the value is written (line and columns, its tag included, its anchor not); every replacement makes both readers read the same, and none is lossy (an integer past int64 or an item of a `tenants:` list gets the quoted string only; a non-finite number only `.inf` / `.nan`) |
+| `keys` | Keys only one side has |
+| `becomes_unreadable` | Files read today that `parse-tree` refuses, with the `kind` (one of the closed list of 13) |
+| `becomes_readable` | Files refused today that `parse-tree` reads, with today's error and what yaml.v3 reads |
+| `selection` | Files only one side reads |
+| `exporter_changes` | The two exporter readings that change when the vendored yaml.v3 "non-specific tag" patch is removed: `! "<<"` stops being a merge key, and an SLO `objective: ! "99.9"` goes from refused to accepted. `parse-tree` refuses both shapes (`non_specific_tag`), so such files are in `becomes_unreadable` too |
+| `still_unreadable` | Files both refuse (no change; does not set the exit code) |
+| `files_compared` | Files both read and compared value by value (the text output names them on its second line), so "no difference" and "nothing compared" read apart |
+
+Lines come from PyYAML's reading: a value is at the line it is written on, a key at its own line; a value reached through an alias or a merge is at the line of its anchor or of the merged mapping's definition — changing that line changes every place that uses it. A key only yaml.v3 has is at its parent's key line.
+
+A policy's `tenants: [010, 1e3, 0777]` is listed as a difference (today the source text `"010"`, `"1e3"`, `"0777"`; yaml.v3 reads 8, 1000, 511): that is the expected result of ADR-036 §2 (the semantic layer judges by type and converted value only); quote them to keep the text.
+
+**Without da-guard** it fails (exit 2) and says why; it never falls back to parsing the YAML itself.
+
+**Exit codes**
+
+| Code | Meaning |
+|------|------|
+| 0 | Both readers read the tree the same way (`still_unreadable` may be non-empty) |
+| 1 | A difference is listed |
+| 2 | Caller error (`--config-dir` missing or unreadable, no da-guard, da-guard failed or wrote no readable parse-tree document); with `--json`, stdout is still one JSON document with `status: "caller_error"` and a `reason` |
+
+```bash
+da-tools migration-audit --config-dir conf.d/
+da-tools migration-audit --config-dir conf.d/ --json | jq '.values[] | {file, line, suggestion}'
+```
 
 ---
 

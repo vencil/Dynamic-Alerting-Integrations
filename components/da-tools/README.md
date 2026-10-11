@@ -97,7 +97,7 @@ docker run --rm \
 | **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast`、`maintenance-scheduler` |
 | **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route` |
 | **GitOps** | Platform | 產 Alertmanager fragment、批次 PR、快照比對 | `generate-routes`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
-| **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check` |
+| **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check`、`migration-audit` |
 | **Decommission** | Platform | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
 | **Bridge** | Platform | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check`、`fed-key` |
 
@@ -185,6 +185,7 @@ docker run --rm \
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-packs-dir <dir> --output-dir <dir>` |
 | `rule-pack-diff` ✨v2.8.0 | Rule Pack 兩版本機械比對（added / removed / breaking label schema），供 upgrade audit | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` ✨v2.8.0 | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool silence query -o json dump），cutover 必跑 | `--silences-file <json> --rule-source <path>` |
+| `migration-audit` | 遷移稽核：conf.d 以 PyYAML（今天產生器的讀法）與 `da-guard parse-tree`（yaml.v3）各讀一次，列出讀法差異（ADR-036 §8）；需要 da-guard | `--config-dir <dir>` |
 
 ### 4.9 Decommission
 

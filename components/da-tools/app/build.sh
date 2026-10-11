@@ -142,6 +142,8 @@ TOOL_FILES=(
     ops/rule_pack_diff.py
     # v2.8.0 #405 Cat B — AM silence drift auditor (offline, eats amtool dump)
     ops/silencer_drift_check.py
+    # #2898 — ADR-036 §8 migration audit (PyYAML vs `da-guard parse-tree`)
+    ops/migration_audit.py
     # v2.3.0 Operator-native tools
     ops/operator_generate.py
     ops/operator_check.py
