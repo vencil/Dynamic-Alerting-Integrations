@@ -282,7 +282,14 @@ def test_keys_masked_alike_are_not_merged():
     assert set(masked) == {r.REDACTED, f"{r.REDACTED} #2", "x"} and n == 2
 
 
-def test_a_numeric_credential_in_a_non_credential_field_is_masked(tmp_path, da_guard_env):
+@pytest.mark.parametrize("old_key,new_key", [
+    ("98765432109876", "98765432101111"),
+    # exporter 以 Go 的格式送出：0012345678 → 1.2345678e+07，文字對不上，要以數值比
+    ("0012345678", "0087654321"),
+    ("1e12", "2e12"),
+    ("12345678.50", "87654321.50"),
+], ids=["int", "leading-zeros", "exponent", "decimal"])
+def test_a_numeric_credential_in_a_non_credential_field_is_masked(tmp_path, da_guard_env, old_key, new_key):
     """數字型憑證（PagerDuty `service_key`）經 alias 放到 `_metadata.owner`：同樣依值遮。"""
     import json
 
@@ -294,10 +301,41 @@ def test_a_numeric_credential_in_a_non_credential_field_is_masked(tmp_path, da_g
             f"    _routing:\n      receiver: {{type: pagerduty, service_key: &k {key}}}\n"
             "    _metadata:\n      owner: *k\n", encoding="utf-8")
         return d
-    old, new = tree(tmp_path / "old", 98765432109876, 80), tree(tmp_path / "new", 98765432101111, 90)
+    old, new = tree(tmp_path / "old", old_key, 80), tree(tmp_path / "new", new_key, 90)
     js = _run(old, new, "--format", "json")
     assert js.returncode == 1, js.stderr
-    assert "9876543210" not in js.stdout + js.stderr, js.stdout
     doc = json.loads(js.stdout)
+    owner = [c for c in doc["setting_changes"] if c["key"] == "_metadata.owner"]
+    assert [(c["old"], c["new"]) for c in owner] == [(r.REDACTED, r.REDACTED)], doc["setting_changes"]
+    for raw in (old_key, new_key):
+        assert raw not in js.stdout + js.stderr and str(float(raw)) not in js.stdout, js.stdout
     assert doc["masked_by_value"] == 2
     assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", "80", "90")]
+
+
+
+def test_a_number_is_matched_by_value_not_by_text():
+    """Go 送出 12345678 是 `1.2345678e+07`；同值的任何寫法都遮，不同值照印。"""
+    masked, n = r.mask_values(["1.2345678e+07", 12345678, 12345678.0, " 0012345678 ", "12345679", 12345679,
+                               True, "nan"], {"0012345678"})
+    assert masked == [r.REDACTED] * 4 + ["12345679", 12345679, True, "nan"]
+    assert n == 4
+    # 非有限數不當數值比（`nan` 不等於自己、`inf` 會讓所有無限大都遮）
+    assert r.mask_values(["inf", "nan", "-inf", "Infinity"], {"inf", "nan"})[0] == [
+        r.REDACTED, r.REDACTED, "-inf", "Infinity"]
+
+
+def test_renumbering_never_overwrites_a_key_left_alone():
+    """遮過的鍵改編號時要避開所有沒被改的鍵，不論先後；否則一筆值被覆寫。"""
+    masked, _ = r.mask_values({"SECRETAAAA": 1, "SECRETBBBB": 2, f"{r.REDACTED} #2": 3}, {"SECRETAAAA", "SECRETBBBB"})
+    assert sorted(masked.values()) == [1, 2, 3] and masked[f"{r.REDACTED} #2"] == 3
+    masked, _ = r.mask_values({"x-SECRETAAAA": 1, f"x-{r.REDACTED}": 2}, {"SECRETAAAA"})
+    assert sorted(masked.values()) == [1, 2] and masked[f"x-{r.REDACTED}"] == 2
+
+
+def test_secrets_has_no_set_operation_that_would_print_them():
+    s = r.Secrets({"SECRETAAAA"})
+    for op in (lambda: s | {"z"}, lambda: s - set(), lambda: s & {"z"}):
+        with pytest.raises(TypeError):
+            op()
+    assert "SECRETAAAA" in s and len(s) == 1 and s == {"SECRETAAAA"} and set(s) == {"SECRETAAAA"}

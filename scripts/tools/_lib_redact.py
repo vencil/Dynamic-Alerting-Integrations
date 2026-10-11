@@ -75,15 +75,60 @@ def redact_pair(key: object, old: Any, new: Any) -> tuple[Any, Any]:
 MIN_SUBSTRING_SECRET = 8
 
 
-class Secrets(frozenset):
-    """The credential values `credential_values` collected: a frozenset
-    whose repr and str never show them, so a log line or a traceback that
-    prints the object holding it does not leak them."""
+class Secrets:
+    """The credential values `credential_values` collected. Its repr and str
+    never show them, so a log line or a traceback that prints the object
+    holding it does not leak them. Not a set: a set operation on it would
+    return a plain set that prints them, so it has none; iterate it, or
+    compare it with a set."""
+
+    __slots__ = ("_values",)
+
+    def __init__(self, values: Any = ()) -> None:
+        self._values = frozenset(values)
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def __contains__(self, value: object) -> bool:
+        return value in self._values
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Secrets):
+            return self._values == other._values
+        if isinstance(other, (set, frozenset)):
+            return self._values == other
+        return NotImplemented
+
+    __hash__ = None  # type: ignore[assignment]
 
     def __repr__(self) -> str:
         return f"Secrets(<{len(self)} value(s)>)"
 
     __str__ = __repr__
+
+
+def _number(v: Any) -> float | None:
+    """`v` (text, or an int / float — never a bool, which callers pass by)
+    as a finite number, when it reads as one; else None. A number is printed
+    differently by each program that passes it on (Go serves `12345678` as
+    `1.2345678e+07`), so it is matched by value, not by text."""
+    if isinstance(v, (int, float)):
+        try:
+            f = float(v)
+        except OverflowError:
+            return None
+    elif isinstance(v, str):
+        try:
+            f = float(v.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
 def credential_values(value: Any, *, text_key: Callable[[str], bool] = lambda _k: False) -> Secrets:
@@ -130,23 +175,26 @@ def mask_values(value: Any, secrets: set[str] | frozenset[str]) -> tuple[Any, in
     """`value` with every credential value in `secrets` replaced by REDACTED
     wherever it occurs — a whole string, a number whose text it is, a
     mapping key, or, for a value at least MIN_SUBSTRING_SECRET long, a part
-    of a longer string — and how many were.
+    of a longer string — and how many were. A value that reads as a number
+    masks any number, or text reading as one, of the same value.
 
     Substrings: one pass of one pattern, longest first, so a secret that
     contains another is masked whole and REDACTED put in is never matched
-    again. Two mapping keys masked alike are told apart (`<redacted> #2`),
-    never merged. Named tuples keep their type; any other object is printed
+    again. A mapping key that masking changes is numbered (`<redacted> #2`)
+    clear of every other key, so no two keys merge; keys it leaves alone keep
+    their names. Named tuples keep their type; any other object is printed
     by `str` (as the JSON report's `default=str` would) and masked."""
     if not secrets:
         return value, 0
     whole = frozenset(secrets)
+    numbers = {n for n in map(_number, whole) if n is not None}
     long_ = sorted((s for s in secrets if len(s) >= MIN_SUBSTRING_SECRET), key=len, reverse=True)
     pattern = re.compile("|".join(re.escape(s) for s in long_)) if long_ else None
     count = 0
 
     def text(s: str) -> str:
         nonlocal count
-        if s in whole:
+        if s in whole or (numbers and _number(s) in numbers):
             count += 1
             return REDACTED
         if pattern is None:
@@ -155,14 +203,18 @@ def mask_values(value: Any, secrets: set[str] | frozenset[str]) -> tuple[Any, in
         count += n
         return new
 
-    def key(k: Any, taken: dict) -> Any:
-        new = text(k) if isinstance(k, str) else walk(k)
-        if new != k and new in taken:
-            n = 2
-            while f"{new} #{n}" in taken:
-                n += 1
-            new = f"{new} #{n}"
-        return new
+    def keys(mapping: dict) -> list:
+        new = [text(k) if isinstance(k, str) else walk(k) for k in mapping]
+        taken = {n for k, n in zip(mapping, new) if n == k}
+        out = []
+        for k, n in zip(mapping, new):
+            if n != k:
+                base, i = n, 2
+                while n in taken:
+                    n, i = f"{base} #{i}", i + 1
+                taken.add(n)
+            out.append(n)
+        return out
 
     def walk(v: Any) -> Any:
         nonlocal count
@@ -171,15 +223,12 @@ def mask_values(value: Any, secrets: set[str] | frozenset[str]) -> tuple[Any, in
         if v is None or isinstance(v, bool):
             return v
         if isinstance(v, (int, float)):
-            if str(v) in whole:
+            if str(v) in whole or _number(v) in numbers:
                 count += 1
                 return REDACTED
             return v
         if isinstance(v, dict):
-            out: dict = {}
-            for k, x in v.items():
-                out[key(k, out)] = walk(x)
-            return out
+            return {n: walk(x) for n, x in zip(keys(v), v.values())}
         if isinstance(v, tuple) and hasattr(v, "_fields"):
             return type(v)._make(walk(x) for x in v)
         if isinstance(v, (list, tuple, set, frozenset)):
