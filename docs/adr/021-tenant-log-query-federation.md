@@ -136,7 +136,7 @@ ingestion plane（無論 (a) 租戶推送或 (b) 平台元件 stdout）**必須*
 | **JWT embed 數值 claim** | Envoy `claim_to_headers` 只支援 string/int/bool；AccountID 為數值 claim 才能 O(1) 注入 |
 | **禁用 hash 映射** | FNV-1a 等 hash 把 `tenant_id`(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 **帳本單調發號**（發號狀態在 tenant-api state store；**不引入外部 stateful DB**——ConfigMap 是叢集原生物件，且 uint32 空間 ~40 億充足） |
 
-**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕；帳本空白或遺失、而 conf.d 已有租戶時，拒絕配發。啟用 federation 時，tenant-api 開機另做兩項檢查，不通過就拒絕啟動：(1) 帳本空白或遺失、而 conf.d 已有租戶；(2) 任何仍有效的 logs token，其 `account_id` ≥ 計數器、或與帳本對該租戶的配發不一致。第 (2) 項擋的是「舊備份被蓋回帳本」：備份之後才配發的租戶，token 上的 id 不在帳本裡，也不低於倒退後的計數器。
+**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕；帳本空白或遺失、而 conf.d 已有租戶時，拒絕配發。啟用 federation 時，tenant-api 開機另做兩項檢查，不通過就拒絕啟動：(1) 帳本空白或遺失、而 conf.d 已有租戶；(2) 任何仍有效的 logs token，其 `account_id` ≥ 計數器、或與帳本對該租戶的配發不一致。第 (2) 項在下次啟動時抓出「舊備份被蓋回帳本」：備份之後才配發的租戶，token 上的 id 不在帳本裡，也不低於倒退後的計數器。
 
 還原備份一律經 `tenant-api state restore`，帳本只合併、不覆蓋：配發取現行帳本、備份、有效 logs token 三者的聯集，計數器取三者推得的最大值，只升不降；同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次拒絕、不寫入。範例：
 
@@ -150,7 +150,8 @@ allocations:               allocations:
 
 用 `kubectl apply` 把備份蓋回，下一個要 logs token 的租戶 `t-c` 會拿到 1001，讀得到 `t-b` 還在保留期內的 log；經 `state restore` 合併，帳本維持 `t-b: 1001`、`next_account_id: 1002`，`t-c` 拿到 1002。
 
-⚠️ 已知限制，兩項都擋不住：
+⚠️ 已知限制，上述檢查都擋不住：
+- **只在啟動時檢查**：舊備份在 pod 運行中被蓋回時，運行中的 pod 不比對 token，會照常從倒退的計數器配發，直到某個 pod 重啟才拒絕啟動。所以還原一律走 `state restore`，不靠開機檢查善後。
 - **過期 token 不留紀錄**：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，備份之後才配發、目前又沒有有效 logs token 的租戶，其 id 沒有任何地方記得，還原後的計數器可能不高於它，之後的配發可能重發它。縮小這個窗口靠備份頻率。
 - **直接編輯 ConfigMap**：有人把計數器連同已退租租戶的配發一起改小時，上述檢查都看不出來，已退租的 id 可能被重發。chart 的 Role 只給 tenant-api 的 ServiceAccount 對 `tenant-api-state` 的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
 

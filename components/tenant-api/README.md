@@ -471,7 +471,7 @@ kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state-
 cp -a /state ./tenant-api-state-backup
 ```
 
-⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。開機檢查擋不住，因為還原後的帳本格式完全正常。
+⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。還原後的帳本格式完全正常，所以只有在仍有有效 logs token 時，開機檢查（見下）才看得出來；運行中的 pod 不會察覺，會照常從倒退的計數器配發。
 
 還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點）：
 
@@ -488,7 +488,14 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 - 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id`；讀不到就拒絕還原。
 - dir 模式下伺服器與子命令以檔案鎖（flock）序列化寫入，伺服器運行中也可以還原。
 - 結束碼：0 完成（或 dry run 完成）、1 拒絕或失敗、2 用法錯誤。
-- 啟用 federation 時，tenant-api 開機會比對有效 logs token 與帳本：token 的 `account_id` ≥ `next_account_id`、或與帳本對該租戶的配發不一致，就拒絕啟動並列出不一致的 token。帳本被舊備份蓋回時就是這個形狀；用 `state restore` 以同一份備份重做還原即可把這些 id 併回。
+- 啟用 federation 時，tenant-api 開機會比對有效 logs token 與帳本：token 的 `account_id` ≥ `next_account_id`、或與帳本對該租戶的配發不一致，就拒絕啟動並列出不一致的 token。帳本被舊備份蓋回時就是這個形狀；用 `state restore` 以同一份備份重做還原即可把這些 id 併回。此時 pod 起不來（CrashLoopBackOff），`kubectl exec` 進不去；改用 `kubectl debug` 複製一個 pod 並把主程式換成子命令（沿用同一個 ServiceAccount、`TA_*` 環境變數與掛載）：
+
+  ```bash
+  POD=$(kubectl -n tenant-api get pod -l app.kubernetes.io/name=tenant-api -o name | head -1)
+  kubectl -n tenant-api debug "$POD" -i --copy-to=tenant-api-restore --container=tenant-api -- \
+    tenant-api state restore --from - --dry-run < tenant-api-state-backup.yaml
+  kubectl -n tenant-api delete pod tenant-api-restore   # 用完刪掉
+  ```
 
 ⚠️ 已知限制：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
 

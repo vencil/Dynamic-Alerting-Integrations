@@ -152,6 +152,7 @@ func VerifyLiveTokensAgainstRegistry(ctx context.Context, s statestore.Store, to
 	sort.Strings(problems)
 	return fmt.Errorf("account: refusing to start — %s in %s disagrees with %d live logs token(s); "+
 		"the next allocation could re-issue an id in use (cross-tenant log leak). "+
-		"Restore the registry with `tenant-api state restore`, which merges these tokens' ids back in:\n  %s",
+		"Restore the registry with `tenant-api state restore`, which merges these tokens' ids back in "+
+		"(the pod cannot start, so run it in a copy of the pod: see the tenant-api README, state store backup and restore):\n  %s",
 		RegistryFileName, s.Describe(), len(problems), strings.Join(problems, "\n  "))
 }
