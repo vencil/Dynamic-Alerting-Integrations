@@ -38,8 +38,10 @@ const (
 // to ensure consistency.
 type TaskResult struct {
 	TenantID string `json:"tenant_id"`
-	Status   string `json:"status"` // "ok" | "error" | "skipped" (a group member that does not exist, #2882)
-	Message  string `json:"message,omitempty"`
+	// "ok" | "error" | "skipped" (a group member that does not exist, #2882) |
+	// "not_applied" (not refused itself, but its batch was rejected, #2900)
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
 	// Code mirrors handler.BatchResult.Code (#2078): the machine-readable
 	// failure code (e.g. TENANT_DECLARED_ELSEWHERE), empty when none applies.
 	Code string `json:"code,omitempty"`
@@ -257,7 +259,7 @@ func (m *Manager) runTask(item workItem) {
 			}
 			logger.Error("async task panicked; marked failed",
 				"task_id", item.taskID, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
-			m.setFailed(item.taskID, msgTaskPanicked)
+			m.setFailed(item.taskID, msgTaskPanicked, nil)
 		}
 	}()
 
@@ -269,7 +271,7 @@ func (m *Manager) runTask(item workItem) {
 
 	// Update task state atomically.
 	if err != nil {
-		m.setFailed(item.taskID, err.Error())
+		m.setFailed(item.taskID, err.Error(), results)
 	} else {
 		m.setCompleted(item.taskID, results)
 	}
@@ -303,14 +305,21 @@ func (m *Manager) setCompleted(taskID string, results []TaskResult) {
 	}
 }
 
-// setFailed marks a task as failed with an error message.
-func (m *Manager) setFailed(taskID string, errMsg string) {
+// setFailed marks a task as failed with an error message. results, when the
+// TaskFunc returned any with its error, are kept with their summary: a batch
+// rejected as a whole (#2900) fails the task, and its per-item results say
+// which item was refused and which were not applied because of it.
+func (m *Manager) setFailed(taskID string, errMsg string, results []TaskResult) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if t, ok := m.tasks[taskID]; ok {
 		t.Status = TaskFailed
 		t.Error = errMsg
+		if len(results) > 0 {
+			t.Results = results
+			t.Summary = SummarizeResults(results)
+		}
 		t.UpdatedAt = time.Now().UTC()
 	}
 }
@@ -352,7 +361,7 @@ func (m *Manager) cleanup() {
 // A "skipped" result (#2882) is neither: it is counted apart and appended
 // ("4 succeeded, 1 skipped"); with none the wording is unchanged.
 func SummarizeResults(results []TaskResult) string {
-	successes, failures, skipped := 0, 0, 0
+	successes, failures, skipped, notApplied := 0, 0, 0, 0
 
 	for _, r := range results {
 		switch r.Status {
@@ -360,6 +369,8 @@ func SummarizeResults(results []TaskResult) string {
 			successes++
 		case "skipped":
 			skipped++
+		case "not_applied":
+			notApplied++
 		default:
 			failures++
 		}
@@ -367,8 +378,13 @@ func SummarizeResults(results []TaskResult) string {
 
 	var summary string
 	switch {
-	case skipped > 0 && successes == 0 && failures == 0:
+	case skipped > 0 && successes == 0 && failures == 0 && notApplied == 0:
 		return fmt.Sprintf("%d skipped", skipped)
+	case successes == 0 && failures == 0 && notApplied > 0:
+		// Every visible op was held back by a refusal the caller cannot see
+		// (a group member hidden by #1530).
+		summary = fmt.Sprintf("%d not applied", notApplied)
+		notApplied = 0
 	case skipped > 0 && successes == 0:
 		summary = fmt.Sprintf("%d failed", failures)
 	case failures == 0:
@@ -377,6 +393,10 @@ func SummarizeResults(results []TaskResult) string {
 		summary = fmt.Sprintf("%d failed", failures)
 	default:
 		summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
+	}
+	// #2900: a rejected batch's ops that were not refused themselves.
+	if notApplied > 0 {
+		summary += fmt.Sprintf(", %d not applied", notApplied)
 	}
 	if skipped > 0 {
 		summary += fmt.Sprintf(", %d skipped", skipped)

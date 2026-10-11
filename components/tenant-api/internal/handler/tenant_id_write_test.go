@@ -104,8 +104,9 @@ func TestBatchTenants_RefusesUnroutableTenantID(t *testing.T) {
 	resp := runBatch(t, configDir, d, `[{"tenant_id":"bad tenant","patch":{"cpu_usage_percent":"90"}},
 		{"tenant_id":"Team_A","patch":{"cpu_usage_percent":"90"}},
 		{"tenant_id":"t-ok","patch":{"cpu_usage_percent":"90"}}]`)
-	if got := statuses(resp.Results); got != "error,error,ok" {
-		t.Fatalf("statuses = %s, want error,error,ok: %+v", got, resp.Results)
+	// #2900: the refused ids reject the batch; t-ok is not applied either.
+	if got := statuses(resp.Results); got != "error,error,not_applied" {
+		t.Fatalf("statuses = %s, want error,error,not_applied: %+v", got, resp.Results)
 	}
 	for _, f := range []string{"bad tenant.yaml", "Team_A.yaml"} {
 		if _, err := os.Stat(filepath.Join(configDir, f)); err == nil {

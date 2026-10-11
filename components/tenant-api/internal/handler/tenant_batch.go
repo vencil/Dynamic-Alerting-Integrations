@@ -54,23 +54,25 @@ type BatchRequest struct {
 // BatchResult is the per-tenant result in a batch response.
 type BatchResult struct {
 	TenantID string `json:"tenant_id"`
-	// "ok" | "error"; PR mode: "included" for an op taken into the PR/MR.
-	// A group batch also reports "skipped" for a member that does not exist
-	// on the base the write merges into (message "tenant does not exist");
-	// nothing is written for it.
+	// "ok" | "error" | "not_applied"; PR mode: "included" for an op taken into
+	// the PR/MR. A batch is all or nothing: when any op is "error", nothing in
+	// the batch is written and every op that was not refused itself is
+	// "not_applied". A group batch also reports "skipped" for a member that
+	// does not exist on the base the write merges into (message "tenant does
+	// not exist"); nothing is written for it, and it does not fail the batch.
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
 	// Code is a machine-readable error code for a FAILED op, set only for the
 	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
 	// (the per-op form of the 409 that PUT and the PR-mode batch return),
 	// TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
-	// config, #2373; nothing written), INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
-	// written) and POLICY_UNAVAILABLE (direct mode: the op is one the domain policy judges and a policy file is
-	// present but unusable with no last good version; nothing written). Empty for every other failure and for a
-	// successful op.
+	// config, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not run, or another server-side
+	// failure) and POLICY_UNAVAILABLE (direct mode: the op is one the domain policy judges and a policy file is
+	// present but unusable with no last good version). Empty for every other failure and for an op that was not
+	// refused.
 	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
-	// (#1231 deprecated-key alias notices from the direct WriteMerged path,
+	// (#1231 deprecated-key alias notices from the direct write path,
 	// and the #2325 require_critical_escalation advisories).
 	// Error results never carry warnings — Message owns the failure text.
 	Warnings []string `json:"warnings,omitempty"`
@@ -78,12 +80,12 @@ type BatchResult struct {
 
 // BatchResponse is the full response for POST /api/v1/tenants/batch.
 type BatchResponse struct {
-	Status   string        `json:"status"`              // "completed" | "pending_review" (PR mode)
+	Status   string        `json:"status"`              // "completed" | "pending_review" (PR mode) | "rejected" (HTTP 422: an op was refused, nothing written)
 	TaskID   string        `json:"task_id,omitempty"`   // async task ID
 	PRURL    string        `json:"pr_url,omitempty"`    // v2.6.0: PR/MR URL in PR mode
 	PRNumber int           `json:"pr_number,omitempty"` // v2.6.0: PR/MR number in PR mode
 	Results  []BatchResult `json:"results"`
-	Summary  string        `json:"summary"`           // e.g., "5 succeeded, 1 failed"
+	Summary  string        `json:"summary"`           // e.g., "5 succeeded"; a rejected batch: "1 failed, 4 not applied"
 	Message  string        `json:"message,omitempty"` // v2.6.0: human-readable message
 	// Warnings is the batch-level advisory list for PR mode (#1231): the
 	// per-op notices aggregated by WritePRBatch. Batch-level (not per-result)
@@ -94,7 +96,8 @@ type BatchResponse struct {
 
 // BatchTenants handles POST /api/v1/tenants/batch
 //
-// Executes a list of patch operations synchronously (default) or asynchronously (if ?async=true).
+// Executes a list of patch operations synchronously (default) or asynchronously (if ?async=true),
+// all or nothing in one commit (#2900): every op passes the checks, or nothing is written.
 // The sync.Mutex inside gitops.Writer ensures serial execution.
 // Response includes task_id for async tracking.
 //
@@ -107,9 +110,13 @@ type BatchResponse struct {
 //
 // @Summary     Batch tenant operations
 // @Description Apply patch operations to multiple tenants in one call.
+// @Description All or nothing, in one commit: every operation is checked (tenant id, write permission, domain policy, then merged and validated under the write lock on the tree the earlier operations leave),
+// @Description and only when every one passes are the changed files committed together — one commit in direct mode, a PR/MR with one commit in PR write-back mode.
+// @Description When any operation is refused, nothing is written: 422 with status rejected, the refused operations with status error (message, code) and every other operation with status not_applied.
+// @Description With ?async=true (direct mode) the same verdict is reached when the task runs; a rejected batch ends the task as failed, with the same per-operation results.
 // @Description An operation may also remove keys with unset (only "_routing"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off, judged by domain policy.
 // @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
-// @Description is not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
+// @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -118,11 +125,12 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
-// @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in results instead."
-// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead."
+// @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in a 422 instead."
+// @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in the 422's results[].code instead. Direct mode, CONFLICT: the repository moved outside tenant-api while the batch was committed; as for a single write, the batch's one commit is in place on top of that change."
 // @Failure     413  {object} ErrorResponse
+// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused, so nothing was written. results lists every operation in request order: status error (message, code) for the refused ones, not_applied for the rest."
 // @Failure     500  {object} ErrorResponse
-// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, an operation writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE)."
+// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE); or, in direct mode, an operation writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -190,24 +198,26 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
-			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
-				return toTaskResults(results), nil
-			})
-
+			task := d.Tasks.Submit(taskID, batchTaskFunc(d, req.Operations, email, p))
 			write202Pending(rw, task)
 			return
 		}
 
-		// Synchronous mode (default, backward compatible)
-		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
-
-		writeJSON(rw, http.StatusOK, BatchResponse{
-			Status:  "completed",
-			TaskID:  taskID,
-			Results: results,
-			Summary: summarizeBatchResults(results),
-		})
+		// Synchronous mode (default). #2900: all or nothing.
+		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy)
+		switch {
+		case run.Err != nil:
+			writeBatchFailure(rw, r, run.Err)
+		case run.Rejected:
+			writeJSON(rw, http.StatusUnprocessableEntity, rejectedBatchResponse(taskID, run.Results))
+		default:
+			writeJSON(rw, http.StatusOK, BatchResponse{
+				Status:  "completed",
+				TaskID:  taskID,
+				Results: run.Results,
+				Summary: summarizeBatchResults(run.Results),
+			})
+		}
 	}
 }
 
@@ -237,18 +247,20 @@ var tenantBatchPRMeta = batchPRMeta{
 // verified IsPRMode && PRClient != nil && PRTracker != nil. Always writes a
 // response.
 func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req BatchRequest, email string, p *rbac.VerifiedPrincipal) {
-	if resp, ok := runBatchPR(d, rw, r, req.Operations, email, p, tenantBatchPRMeta); ok {
-		writeJSON(rw, http.StatusOK, resp)
+	if resp, status, ok := runBatchPR(d, rw, r, req.Operations, email, p, tenantBatchPRMeta); ok {
+		writeJSON(rw, status, resp)
 	}
 }
 
 // runBatchPR is the PR write-back core shared by POST /tenants/batch and
 // POST /groups/{id}/batch (#2339): per-op RBAC and domain policy, one
-// WritePRBatch, one PR/MR. On an error it writes the error response itself
-// and returns ok=false; otherwise it returns the 200 body for the caller to
-// write (the group endpoint wraps it with its group id). The caller must have
-// verified d.prWritePath().
-func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, meta batchPRMeta) (BatchResponse, bool) {
+// WritePRBatch, one PR/MR with one commit. All or nothing (#2900): an op
+// refused by those checks rejects the whole batch — no branch, no PR/MR — and
+// the 422 body lists every op. On an error it writes the error response itself
+// and returns ok=false; otherwise it returns the body and its HTTP status (200,
+// or 422 for a rejected batch) for the caller to write (the group endpoint
+// wraps it with its group id). The caller must have verified d.prWritePath().
+func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, meta batchPRMeta) (BatchResponse, int, bool) {
 	// Pre-validate all ops (RBAC + policy) before creating any branch
 	var batchOps []gitops.PRBatchOp
 	var batchResults []BatchResult
@@ -295,9 +307,9 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		if d.Policy != nil {
 			// #2280: an op that sets `_routing_profile` / `_routing`, or
 			// unsets `_routing`, is judged on the routing it produces; see
-			// batchRoutingViolations. Checked here, not inside the merge
-			// closure, so one refused op is left out instead of aborting the
-			// whole PR.
+			// batchRoutingViolations. Checked here, before the branch is cut,
+			// so a refusal the local tree already shows is reported per op
+			// (and rejects the batch, #2900) without touching git.
 			violations := d.Policy.CheckWrite(op.TenantID, op.Patch)
 			routingViolations, adv, judged := batchRoutingViolations(d.ConfigDir, d.Policy, included[op.TenantID], op)
 			violations = append(violations, routingViolations...)
@@ -401,13 +413,15 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		advisories = append(advisories, advisoriesByTenant[t]...)
 	}
 
-	if len(batchOps) == 0 {
-		return BatchResponse{
-			Status:  "completed",
-			Results: batchResults,
-			Summary: prBatchSummary("completed", batchResults),
-			Message: "No valid operations to create PR/MR.",
-		}, true
+	// #2900: one refused op rejects the whole batch — no branch, no PR/MR.
+	// The ops the checks let through are reported as not applied.
+	if len(batchOps) < len(ops) {
+		for i := range batchResults {
+			if batchResults[i].Status == "included" {
+				batchResults[i] = BatchResult{TenantID: batchResults[i].TenantID, Status: resultNotApplied, Message: msgNotApplied}
+			}
+		}
+		return rejectedBatchResponse("", batchResults), http.StatusUnprocessableEntity, true
 	}
 
 	result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
@@ -426,18 +440,18 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the single-write path).
 		if writeWriteFlowError(rw, r, err) {
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		// #2373 review F1: an op's tenant file is one threshold-exporter
 		// rejects; the whole PR is refused (nothing is written), like the
 		// other per-tenant refusals WritePRBatch reports.
 		if meta.group && writeGroupMemberRefusal(d, rw, r, p, err) {
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		var notLoadable *tenantFileNotLoadableError
 		if errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(rw, r, notLoadable)
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		// B2 F1: an op breaks the domain policy on the fresh base although
 		// the pre-check (the pod's local tree) let it through. The whole PR
@@ -446,19 +460,19 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		var freshPolicy *freshBasePolicyError
 		if errors.As(err, &freshPolicy) {
 			writeFreshBasePolicyViolation(rw, r, freshPolicy)
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		// #2857: likewise for an op the write scope refuses on the fresh
 		// base, or whose org file there cannot be read.
 		var freshScope *freshBaseScopeError
 		if errors.As(err, &freshScope) {
 			writeFreshBaseScopeViolation(rw, r, freshScope)
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		var freshOrgs *freshBaseOrgsError
 		if errors.As(err, &freshOrgs) {
 			writeFreshBaseOrgsError(rw, r, freshOrgs)
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
 		// commits — return a clean "no changes" success, never a forge error.
@@ -478,23 +492,23 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				Summary:  prBatchSummary("completed", batchResults),
 				Message:  "No changes to apply; no PR/MR created.",
 				Warnings: append(warnings, advisories...),
-			}, true
+			}, http.StatusOK, true
 		}
 		// #795 F1: a malformed op body is a CLIENT error → 400, not a 500.
 		if errors.Is(err, gitops.ErrValidation) {
 			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		if writeBaseRestoreFailed(rw, r, "PR/MR batch write failed: ", err) {
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		if writeMergeFailed(rw, r, "PR/MR batch write failed: ", err) {
-			return BatchResponse{}, false
+			return BatchResponse{}, 0, false
 		}
 		// Anything else is an unexpected git failure → generic 500 (its text
 		// stays in the log — WriteErrorEnvelope, #1700).
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
-		return BatchResponse{}, false
+		return BatchResponse{}, 0, false
 	}
 
 	// PR-6/11: shared post-write flow via createPRAndRegister.
@@ -518,7 +532,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// the batch path was missing this and leaked a generic 503),
 		// circuit-open → sanitized 503, else generic 503.
 		writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
-		return BatchResponse{}, false
+		return BatchResponse{}, 0, false
 	}
 
 	return BatchResponse{
@@ -529,7 +543,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		Summary:  prBatchSummary("pending_review", batchResults),
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(written)),
 		Warnings: append(result.Notices, advisories...),
-	}, true
+	}, http.StatusOK, true
 }
 
 // prBatchSummary renders runBatchPR's summary line from its status and the
@@ -567,60 +581,172 @@ func prBatchSummary(status string, results []BatchResult) string {
 	return summary
 }
 
-// executeBatchOps runs batch operations synchronously and returns results.
-// This function is shared between sync and async paths to ensure consistency.
+// Result and response statuses of an all-or-nothing batch (#2900).
+const (
+	// batchStatusRejected is BatchResponse.Status of a batch refused because
+	// of its operations: nothing was written (HTTP 422).
+	batchStatusRejected = "rejected"
+	// resultNotApplied is BatchResult.Status of an op that was not refused
+	// itself but was not written either, because another op of its batch was.
+	resultNotApplied = "not_applied"
+	msgNotApplied    = "not written: another operation in this batch was refused, so nothing in the batch was written"
+)
+
+// directBatchRun is how a direct-mode batch ended (#2900).
+//
+//   - Rejected: at least one op was refused; Results says which (status
+//     "error") and which were not written because of it ("not_applied"; a
+//     group member that does not exist stays "skipped"). Nothing was written.
+//   - Err != nil: the batch failed as a whole — the write plane was busy, the
+//     tree was on a PR branch, the commit failed or conflicted. Results gives
+//     every op the same "error" text. Nothing was written, except that
+//     gitops.ErrConflict, as for a single write, is reported after the commit
+//     landed on top of an external one.
+//   - otherwise every op was accepted, and whatever changed is in ONE commit.
+type directBatchRun struct {
+	Results  []BatchResult
+	Rejected bool
+	Err      error
+}
+
+// executeBatchOps runs a direct-mode batch, all or nothing (#2900): every op
+// is judged first with the checks the batch has always run — tenant id,
+// org-scoped write permission before and after the op, domain policy
+// availability and violations — and when one refuses, nothing is written.
+// Otherwise gitops.Writer.WriteBatch merges and validates every op under the
+// writer lock and commits them together, or refuses them together. Shared by
+// the sync and async paths, and by the tenant and group endpoints.
+//
+// An op is judged on the tenant's file with the same request's earlier ops for
+// that tenant laid over it (prior), the state it will be merged onto — as the
+// PR-mode batch always did. Before #2900 each op was written before the next
+// was judged, which read the same state from disk.
 //
 // The per-op permission check is org-scope-aware (ADR-027 / LD-6 P4b) and the
-// tenant's org list is resolved INSIDE this loop, at execution time — not at
-// submit time. The async path runs this closure after the HTTP request has
-// returned, so a submit-time snapshot could authorize against orgs that a
-// _tenant_orgs.yaml hot-reload has since changed (stale-orgs hazard).
-func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) []BatchResult {
-	results := make([]BatchResult, 0, len(ops))
-	for _, op := range ops {
+// tenant's org list is resolved here, at execution time — not at submit time.
+// The async path runs this after the HTTP request has returned, so a
+// submit-time snapshot could authorize against orgs that a _tenant_orgs.yaml
+// hot-reload has since changed (stale-orgs hazard).
+func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) directBatchRun {
+	results := make([]BatchResult, len(ops))
+	refused := make([]bool, len(ops))
+	anyRefused := false
+	refuse := func(i int, res BatchResult) {
+		results[i], refused[i], anyRefused = res, true, true
+	}
+	advisories := make([][]string, len(ops))
+	// included[t]: t's earlier ops of this request that passed, in order.
+	included := map[string][]BatchOperation{}
+	for i, op := range ops {
 		// A resolver per op: its metadata, the root platform layer included
-		// (#2370), is read when that op runs.
+		// (#2370), is read when that op is judged.
 		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, WriteScopeMeta(configDir)); failed {
-			results = append(results, res)
+			refuse(i, res)
 			continue
 		}
-		// nil prior: each op is written before the next one is judged.
-		if res, refused := gateBatchOpPostState(configDir, nil, op, p, rbacMgr, tenantOrg); refused {
-			results = append(results, res)
+		if res, failed := gateBatchOpPostState(configDir, included[op.TenantID], op, p, rbacMgr, tenantOrg); failed {
+			refuse(i, res)
 			continue
 		}
-		var advisories []string
 		if policyMgr != nil {
 			// Hub #2486 Q7-2: judged again here, at execution time — an async
 			// batch runs after the request's own check, and the policy file
 			// may have broken in between.
-			if res, refused := batchOpPolicyUnavailable(policyMgr, op); refused {
-				results = append(results, res)
+			if res, failed := batchOpPolicyUnavailable(policyMgr, op); failed {
+				refuse(i, res)
 				continue
 			}
 			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
-			// nil prior: each op is written before the next one is judged,
-			// and the next one reads the file back.
-			routingViolations, adv, _ := batchRoutingViolations(configDir, policyMgr, nil, op)
+			routingViolations, adv, _ := batchRoutingViolations(configDir, policyMgr, included[op.TenantID], op)
 			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
-				for i, v := range violations {
-					msgs[i] = v.Message
+				for j, v := range violations {
+					msgs[j] = v.Message
 				}
-				results = append(results, BatchResult{TenantID: op.TenantID, Status: "error", Message: "domain policy violation: " + strings.Join(msgs, "; ")})
+				refuse(i, BatchResult{TenantID: op.TenantID, Status: "error", Message: "domain policy violation: " + strings.Join(msgs, "; ")})
 				continue
 			}
-			advisories = adv
+			advisories[i] = adv
 		}
-		result := applyPatch(ctx, w, configDir, op, email)
-		if result.Status == "ok" {
-			// #2325: non-blocking domain-policy notes ride on a successful op.
-			result.Warnings = append(result.Warnings, advisories...)
-		}
-		results = append(results, result)
+		included[op.TenantID] = append(included[op.TenantID], op)
 	}
-	return results
+	if anyRefused {
+		for i, op := range ops {
+			if !refused[i] {
+				results[i] = BatchResult{TenantID: op.TenantID, Status: resultNotApplied, Message: msgNotApplied}
+			}
+		}
+		return directBatchRun{Results: results, Rejected: true}
+	}
+	return writeBatchOps(ctx, w, ops, email, advisories)
+}
+
+// writeBatchOps is the write half of executeBatchOps: one WriteBatch for every
+// op, each a PARTIAL update (#1097) — mergePatchYAML merges the patch into the
+// tenant's existing keys under the writer lock, so keys the patch does not
+// name (other thresholds, `_metadata`, `_custom_alerts`) and the file's
+// comments survive. advisories[i] rides on op i's result when the batch is
+// written (#2325); advisories may be shorter than ops, or nil.
+func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, email string, advisories [][]string) directBatchRun {
+	// #2882: judged inside the merge, i.e. under the writer lock on the base
+	// the write lands on, not on a read taken before it.
+	absent := make([]bool, len(ops))
+	batch := make([]gitops.BatchOp, len(ops))
+	for i, op := range ops {
+		batch[i] = gitops.BatchOp{TenantID: op.TenantID, Merge: func(existing []byte) (string, error) {
+			absent[i] = op.skipAbsent && tenantAbsentIn(existing, op.TenantID)
+			if absent[i] {
+				return "", gitops.ErrMergeNoOp
+			}
+			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+		}}
+	}
+	outcomes, err := w.WriteBatch(ctx, batch, email)
+
+	results := make([]BatchResult, len(ops))
+	var rejected *gitops.BatchRejectedError
+	switch {
+	case errors.As(err, &rejected):
+		for i, op := range ops {
+			o := rejected.Outcomes[i]
+			switch {
+			case o.Err != nil:
+				results[i] = batchErrorResult(op.TenantID, o.Err)
+			case absent[i]:
+				results[i] = BatchResult{TenantID: op.TenantID, Status: "skipped", Message: msgTenantAbsent}
+			default:
+				results[i] = BatchResult{TenantID: op.TenantID, Status: resultNotApplied, Message: msgNotApplied}
+			}
+		}
+		return directBatchRun{Results: results, Rejected: true}
+	case err != nil:
+		// The batch failed as a whole: every op gets the same verdict
+		// (rendered and logged once).
+		first := batchErrorResult(ops[0].TenantID, err)
+		for i, op := range ops {
+			results[i] = first
+			results[i].TenantID = op.TenantID
+		}
+		return directBatchRun{Results: results, Err: err}
+	}
+	for i, op := range ops {
+		if absent[i] {
+			results[i] = BatchResult{TenantID: op.TenantID, Status: "skipped", Message: msgTenantAbsent}
+			continue
+		}
+		// #1231 1b: a successful op surfaces its non-blocking deprecation
+		// notices per tenant, so the operator sees exactly which member of the
+		// batch still carries an old key spelling; #2325: then the domain
+		// policy's notes.
+		var warnings []string
+		warnings = append(warnings, outcomes[i].Notices...)
+		if i < len(advisories) {
+			warnings = append(warnings, advisories[i]...)
+		}
+		results[i] = BatchResult{TenantID: op.TenantID, Status: "ok", Warnings: warnings}
+	}
+	return directBatchRun{Results: results}
 }
 
 // batchOpPolicyUnavailable is executeBatchOps' per-op availability gate (hub
@@ -639,71 +765,110 @@ func batchOpPolicyUnavailable(mgr *policy.Manager, op BatchOperation) (res Batch
 		Code: CodePolicyUnavailable}, true
 }
 
-// applyPatch applies a single patch operation to a tenant config file.
-//
-// #1097: the patch is a PARTIAL update — it merges into the tenant's existing
-// keys via WriteMerged (read-merge-write under the writer lock), so keys the
-// patch does not name (other thresholds, `_metadata`, `_custom_alerts`) and the
-// file's comments survive. A whole-document overwrite here would silently drop
-// them.
-func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op BatchOperation, authorEmail string) BatchResult {
-	// #2882: judged inside the merge, i.e. under the writer lock on the
-	// base the write lands on, not on a read taken before it.
-	absent := false
-	merge := func(existing []byte) (string, error) {
-		absent = op.skipAbsent && tenantAbsentIn(existing, op.TenantID)
-		if absent {
-			return "", gitops.ErrMergeNoOp
-		}
-		return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
-	}
-	notices, err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge)
-	if err == nil && absent {
-		return BatchResult{TenantID: op.TenantID, Status: "skipped", Message: msgTenantAbsent}
-	}
-	if err != nil {
-		msg := err.Error()
-		code := ""
-		var notLoadable *tenantFileNotLoadableError
-		switch {
-		case errors.Is(err, gitops.ErrConflict):
-			msg = "conflict: retry after refresh"
-		case errors.Is(err, gitops.ErrWriteOverloaded):
-			msg = "write plane busy: retry shortly"
-		case errors.Is(err, gitops.ErrTreeNotOnBase):
-			// #1723: fixed text — err names the stranded PR branch, and with
-			// it another tenant's id, which only the server log may see.
-			slog.Warn("batch op refused: worktree not on the base branch",
-				"tenant", op.TenantID, "error", err)
-			msg, code = "config worktree was not on the base branch; nothing written: retry shortly", CodeTreeNotOnBase
-		case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
-			// #2078: fixed text — err names the other file, which only the
-			// server log may see.
-			slog.Warn("batch op refused: tenant declared by another conf.d file",
-				"tenant", op.TenantID, "error", err)
-			msg, code = msgTenantDeclaredElsewhere, CodeTenantDeclaredElsewhere
-		case errors.Is(err, gitops.ErrTenantTreeScan):
-			slog.Error("batch op refused: conf.d scan failed", "tenant", op.TenantID, "error", err)
-			msg, code = msgTenantTreeScan, CodeInternal
-		case errors.As(err, &notLoadable):
-			// #2373 review F1: nothing written; the tenant file must be
-			// repaired first.
-			msg, code = notLoadable.Error(), CodeTenantConfigNotLoadable
-		case !writeErrorIsForClient(err):
-			// #1700: a file / git failure — its text carries server paths.
-			// The op may run async, after the request is gone, so the log
-			// line is keyed by tenant rather than request_id.
-			slog.Error("batch op failed; detail withheld from the client",
-				"tenant", op.TenantID, "error", err)
-			msg = msgBatchOpFailed
-		}
-		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg, Code: code}
-	}
-	// #1231 1b: a successful op surfaces its non-blocking deprecation notices
-	// per tenant, so the operator sees exactly which member of the batch still
-	// carries an old key spelling.
-	return BatchResult{TenantID: op.TenantID, Status: "ok", Warnings: notices}
+// applyPatch writes ONE op as a one-op batch and returns its result — the
+// direct write the batch endpoints run, without their permission and policy
+// gates (which sit one layer up, in executeBatchOps). A failure of the batch
+// as a whole is that op's "error" result.
+func applyPatch(ctx context.Context, w *gitops.Writer, _ string, op BatchOperation, authorEmail string) BatchResult {
+	return writeBatchOps(ctx, w, []BatchOperation{op}, authorEmail, nil).Results[0]
 }
+
+// batchErrorResult renders a write error as the "error" result of op
+// tenantID: a refusal of that op (gitops.BatchRejectedError's outcomes), or a
+// failure of the whole batch, which every op of it then reports.
+func batchErrorResult(tenantID string, err error) BatchResult {
+	msg := err.Error()
+	code := ""
+	var notLoadable *tenantFileNotLoadableError
+	switch {
+	case errors.Is(err, gitops.ErrConflict):
+		msg = "conflict: retry after refresh"
+	case errors.Is(err, gitops.ErrWriteOverloaded):
+		msg = "write plane busy: retry shortly"
+	case errors.Is(err, gitops.ErrTreeNotOnBase):
+		// #1723: fixed text — err names the stranded PR branch, and with
+		// it another tenant's id, which only the server log may see.
+		slog.Warn("batch refused: worktree not on the base branch",
+			"tenant", tenantID, "error", err)
+		msg, code = "config worktree was not on the base branch; nothing written: retry shortly", CodeTreeNotOnBase
+	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
+		// #2078: fixed text — err names the other file, which only the
+		// server log may see.
+		slog.Warn("batch op refused: tenant declared by another conf.d file",
+			"tenant", tenantID, "error", err)
+		msg, code = msgTenantDeclaredElsewhere, CodeTenantDeclaredElsewhere
+	case errors.Is(err, gitops.ErrTenantTreeScan):
+		slog.Error("batch op refused: conf.d scan failed", "tenant", tenantID, "error", err)
+		msg, code = msgTenantTreeScan, CodeInternal
+	case errors.As(err, &notLoadable):
+		// #2373 review F1: nothing written; the tenant file must be
+		// repaired first.
+		msg, code = notLoadable.Error(), CodeTenantConfigNotLoadable
+	case !writeErrorIsForClient(err):
+		// #1700: a file / git failure — its text carries server paths.
+		// The batch may run async, after the request is gone, so the log
+		// line is keyed by tenant rather than request_id.
+		slog.Error("batch write failed; detail withheld from the client",
+			"tenant", tenantID, "error", err)
+		msg = msgBatchOpFailed
+	}
+	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: code}
+}
+
+// writeBatchFailure answers a sync direct-mode batch that failed as a whole
+// (directBatchRun.Err) with the status a single write gets for the same
+// cause: 503 busy / tree on a PR branch, 409 conflict, else 500 with the
+// detail withheld (#1700).
+func writeBatchFailure(rw http.ResponseWriter, r *http.Request, err error) {
+	if writeWriteFlowError(rw, r, err) {
+		return
+	}
+	switch {
+	case errors.Is(err, gitops.ErrTreeNotOnBase):
+		WriteTreeNotOnBase(rw, r, err)
+	case errors.Is(err, gitops.ErrConflict):
+		WriteJSONError(rw, r, http.StatusConflict, err.Error())
+	default:
+		WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
+	}
+}
+
+// errBatchRejectedTask is the Task.Error of an async batch that was rejected
+// (#2900); its results say which ops were refused.
+var errBatchRejectedTask = errors.New("batch rejected: an operation was refused, so nothing in the batch was written; see results")
+
+// batchTaskFunc is the async form of a direct-mode batch: executeBatchOps at
+// execution time. A rejected batch, or one that failed as a whole, ends the
+// task as failed — with its per-op results, so a poller sees which op was
+// refused.
+func batchTaskFunc(d *Deps, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal) async.TaskFunc {
+	return func(ctx context.Context) ([]async.TaskResult, error) {
+		run := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
+		results := toTaskResults(run.Results)
+		switch {
+		case run.Rejected:
+			return results, errBatchRejectedTask
+		case run.Err != nil:
+			// The fixed per-op text, not err: err may carry server paths.
+			return results, errors.New("batch failed, nothing was written: " + run.Results[0].Message)
+		}
+		return results, nil
+	}
+}
+
+// rejectedBatchResponse is the body of the 422 a rejected batch gets (#2900).
+func rejectedBatchResponse(taskID string, results []BatchResult) BatchResponse {
+	return BatchResponse{
+		Status:  batchStatusRejected,
+		TaskID:  taskID,
+		Results: results,
+		Summary: summarizeBatchResults(results),
+		Message: msgBatchRejected,
+	}
+}
+
+// msgBatchRejected is BatchResponse.Message of a rejected batch.
+const msgBatchRejected = "Batch rejected: nothing was written. Fix or remove the operations with status error and resend the whole batch."
 
 // msgTenantAbsent is the message of a group member skipped because it does
 // not exist (#2882).

@@ -106,13 +106,15 @@ func TestBatchTenants_UnhashableMergeKeyInCurrentFileIsRefused(t *testing.T) {
 					t.Fatalf("%s async: status %d, body %s", name, w.Code, w.Body.String())
 				}
 				task := pollUntilTerminal(t, mgr, resp.TaskID, 10*time.Second)
-				if task.Status != async.TaskCompleted || len(task.Results) != 1 {
-					t.Fatalf("%s async: task %+v, want completed with one result", name, task)
+				// #2900: the refused op rejects the batch — the task fails,
+				// its results say why.
+				if task.Status != async.TaskFailed || len(task.Results) != 1 {
+					t.Fatalf("%s async: task %+v, want failed with one result", name, task)
 				}
 				status, code, msg = task.Results[0].Status, task.Results[0].Code, task.Results[0].Message
 			} else {
 				var resp BatchResponse
-				if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Results) != 1 {
+				if w.Code != http.StatusUnprocessableEntity || json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Results) != 1 {
 					t.Fatalf("%s sync: status %d, body %s", name, w.Code, w.Body.String())
 				}
 				status, code, msg = resp.Results[0].Status, resp.Results[0].Code, resp.Results[0].Message

@@ -1519,8 +1519,25 @@ func (w *Writer) commitParent() (string, error) {
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
 func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) (committed bool, err error) {
-	// Stage the file
-	addCmd, addCtx, addCancel := w.gitCmd("-C", w.gitDir, "add", filePath)
+	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
+		tenantID, time.Now().UTC().Format(time.RFC3339))
+	// Optional trailer — appended to the message body so an audit
+	// annotation (e.g. an admission-validator --force bypass) is
+	// permanently bound to the commit, not just an ephemeral log line.
+	if len(trailer) > 0 && trailer[0] != "" {
+		msg += "\n\n" + trailer[0]
+	}
+	return w.gitCommitPaths([]string{filePath}, msg, authorEmail)
+}
+
+// gitCommitPaths stages every path in paths and creates ONE commit with msg,
+// the operator as author (#2900: a batch's files land in a single commit).
+// committed is as for gitCommit: false when nothing was staged.
+func (w *Writer) gitCommitPaths(paths []string, msg, authorEmail string) (committed bool, err error) {
+	// Stage the files in one `git add`, so the index never holds part of them
+	// for longer than this command.
+	addArgs := append([]string{"-C", w.gitDir, "add", "--"}, paths...)
+	addCmd, addCtx, addCancel := w.gitCmd(addArgs...)
 	defer addCancel()
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return false, w.gitErr(addCtx, "add", err, out)
@@ -1532,15 +1549,6 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	if err := statusCmd.Run(); err == nil {
 		// Exit 0 means no changes staged — nothing to commit
 		return false, nil
-	}
-
-	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
-		tenantID, time.Now().UTC().Format(time.RFC3339))
-	// Optional trailer — appended to the message body so an audit
-	// annotation (e.g. an admission-validator --force bypass) is
-	// permanently bound to the commit, not just an ephemeral log line.
-	if len(trailer) > 0 && trailer[0] != "" {
-		msg += "\n\n" + trailer[0]
 	}
 
 	// author name defaults to email prefix when no display name is available

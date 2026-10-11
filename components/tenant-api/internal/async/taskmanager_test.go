@@ -199,6 +199,31 @@ func TestWorkerFailure(t *testing.T) {
 	}
 }
 
+// TestWorkerFailureKeepsResults: a TaskFunc that returns results WITH its
+// error (a rejected batch, #2900) fails the task and keeps the results and
+// their summary, so a poller sees which op was refused.
+func TestWorkerFailureKeepsResults(t *testing.T) {
+	t.Parallel()
+	m := NewManager(1)
+	defer m.Close()
+	results := []TaskResult{{TenantID: "a", Status: "error", Message: "refused"}, {TenantID: "b", Status: "not_applied"}}
+	m.Submit("rejected", func(ctx context.Context) ([]TaskResult, error) {
+		return results, errors.New("batch rejected")
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		got, ok := m.Get("rejected")
+		if ok && got.Status == TaskFailed {
+			if got.Error != "batch rejected" || len(got.Results) != 2 || got.Summary != "1 failed, 1 not applied" {
+				t.Errorf("task = %+v, want failed with both results and their summary", got)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timeout waiting for task failure")
+}
+
 // TestComputeSummary verifies summary computation.
 func TestComputeSummary(t *testing.T) {
 	t.Parallel()
@@ -236,6 +261,31 @@ func TestComputeSummary(t *testing.T) {
 			name:     "empty",
 			results:  []TaskResult{},
 			expected: "0 succeeded",
+		},
+		// #2900: a rejected batch — its refused op and the ops held back.
+		{
+			name: "rejected",
+			results: []TaskResult{
+				{TenantID: "a", Status: "not_applied"},
+				{TenantID: "b", Status: "error"},
+				{TenantID: "c", Status: "not_applied"},
+			},
+			expected: "1 failed, 2 not applied",
+		},
+		{
+			name: "rejected_with_skipped",
+			results: []TaskResult{
+				{TenantID: "a", Status: "error"},
+				{TenantID: "b", Status: "not_applied"},
+				{TenantID: "c", Status: "skipped"},
+			},
+			expected: "1 failed, 1 not applied, 1 skipped",
+		},
+		// What a caller sees when the refused op is one it may not read.
+		{
+			name:     "only_not_applied_visible",
+			results:  []TaskResult{{TenantID: "a", Status: "not_applied"}},
+			expected: "1 not applied",
 		},
 	}
 

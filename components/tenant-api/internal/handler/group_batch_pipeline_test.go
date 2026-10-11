@@ -85,14 +85,19 @@ func (f *groupBatchFixture) mainSHA(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
+// decodeGroupBatch decodes a 200, or (#2900) the 422 of a rejected batch,
+// which carries the same body shape with status "rejected".
 func decodeGroupBatch(t *testing.T, w *httptest.ResponseRecorder) GroupBatchResponse {
 	t.Helper()
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK && w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 200 or 422; body: %s", w.Code, w.Body.String())
 	}
 	var resp GroupBatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
+	}
+	if (w.Code == http.StatusUnprocessableEntity) != (resp.Status == batchStatusRejected) {
+		t.Fatalf("status %d with body status %q: 422 and \"rejected\" go together; body: %s", w.Code, resp.Status, w.Body.String())
 	}
 	return resp
 }

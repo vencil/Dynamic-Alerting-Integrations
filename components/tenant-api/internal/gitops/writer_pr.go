@@ -331,7 +331,10 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 }
 
 // WritePRBatch merges and writes multiple tenant configs to a single feature branch.
-// This supports batch PR mode where all changes are consolidated into one PR.
+// This supports batch PR mode where all changes are consolidated into one PR,
+// as ONE commit (#2900): every op is merged, validated and written in turn,
+// and the changed files are committed together only when all of them passed;
+// the first refused op aborts the branch with nothing committed.
 //
 // Each op carries a MergeFunc (not pre-built content): the authoritative merge
 // runs under the lock against the freshly-checked-out base so a partial patch
@@ -424,54 +427,48 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Merge, write, and commit each op against the freshly-checked-out base.
-	// readMergeValidate re-reads the on-disk file per op, so a second op for the
-	// same tenant merges onto the first op's just-committed result (not the base).
-	// Byte-identical (no-op) merges are skipped so an idempotent patch/retry never
-	// churns an empty write; `changed` tracks whether ANY op mutated content.
-	// notices aggregates every op's advisory deprecation channel (#1231 1b) —
-	// collected BEFORE the no-op short-circuit, because a merge that changed no
-	// bytes still re-committed to a body carrying a deprecated spelling.
-	changed := false
+	// Merge, validate and write each op against the freshly-checked-out base,
+	// in request order. readMergeValidate re-reads the on-disk file per op, so
+	// a second op for the same tenant merges onto the first op's result (not
+	// the base), and the placement walk sees the earlier ops' files. The first
+	// refused op aborts the branch with its own error, before anything is
+	// committed — the later ops' FreshMerge does not run. Byte-identical
+	// (no-op) merges write nothing, so an idempotent patch/retry never churns
+	// an empty write. notices aggregates every op's advisory deprecation
+	// channel (#1231 1b), the no-op ones' included: a merge that changed no
+	// bytes still lands on a body carrying a deprecated spelling.
+	//
+	// #2900: the files are committed TOGETHER, in one commit, after the last
+	// op passed. A rollback (a refused op, a failed write or commit) puts the
+	// touched files back first — abortFeatureBranch's `reset --hard` leaves a
+	// file the batch CREATED behind when it never reached the index — then
+	// abortFeatureBranch: back to a clean base, the branch dropped.
+	tx := newBatchTx()
 	var notices []string
 	for _, op := range ops {
-		// #1673: one resolution per op — the file read by readMergeValidate and
-		// the file written below must be the same one.
-		filePath, err := w.tenantFilePath(op.TenantID)
+		o := w.applyBatchOp(tx, BatchOp{TenantID: op.TenantID, Merge: op.freshMerge()}, false,
+			func(path string, content []byte) error { return os.WriteFile(path, content, 0644) })
+		if o.Err != nil {
+			tx.restore()
+			w.abortFeatureBranch(base, branchName)
+			return nil, o.Err
+		}
+		notices = append(notices, o.Notices...)
+	}
+	changed := false
+	if len(tx.files) > 0 {
+		committed, err := w.gitCommitPaths(tx.paths(), batchCommitMessage(tx.files), authorEmail)
 		if err != nil {
+			tx.restore()
 			w.abortFeatureBranch(base, branchName)
-			return nil, err
-		}
-		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, filePath, op.freshMerge())
-		if errors.Is(err, ErrMergeNoOp) {
-			// B2: the merge changes nothing — skipped like a byte-identical
-			// one, its notices kept like one's.
-			notices = append(notices, opNotices...)
-			continue
-		}
-		if err != nil {
-			w.abortFeatureBranch(base, branchName)
-			return nil, err
-		}
-		notices = append(notices, opNotices...)
-		if existing != nil && string(existing) == content {
-			continue // no-op for this tenant — nothing to write or commit
-		}
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
-			w.abortFeatureBranch(base, branchName)
-			return nil, fmt.Errorf("write file for %s: %w", op.TenantID, err)
-		}
-		committed, err := w.gitCommit(filePath, op.TenantID, authorEmail)
-		if err != nil {
-			w.abortFeatureBranch(base, branchName)
-			return nil, fmt.Errorf("commit for %s: %w", op.TenantID, err)
+			return nil, fmt.Errorf("commit batch: %w", err)
 		}
 		// Track the commit that actually happened, not the attempt: content
 		// can differ from the dirty working tree yet equal HEAD, in which case
 		// nothing is staged and the branch gains no commit. Marking `changed`
 		// there would push a commit-free branch and ask the forge to open a
 		// change-free PR/MR (the 422 the block below exists to avoid).
-		changed = changed || committed
+		changed = committed
 	}
 
 	// Every op was a no-op → the branch has no commits beyond base. Don't push an

@@ -42,7 +42,8 @@ func runOverlayBatch(t *testing.T, mode WriteMode, files map[string]string, ops 
 	f := newStaleFixture(t, files, nil)
 	f.deps.WriteMode = mode
 	w := postTenantBatch(t, f.deps, ops)
-	if w.Code != http.StatusOK {
+	// #2900: a refused op rejects the batch — 422, same per-op results body.
+	if w.Code != http.StatusOK && w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse

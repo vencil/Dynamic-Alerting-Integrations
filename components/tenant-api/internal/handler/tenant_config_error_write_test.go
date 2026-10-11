@@ -186,7 +186,8 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 			req = setRequestIdentity(req, "a@a.com")
 			w := httptest.NewRecorder()
 			rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
-			if w.Code != http.StatusOK {
+			// #2900: a refused member rejects the batch (422).
+			if want := http.StatusOK; c.reason != "" && w.Code != http.StatusUnprocessableEntity || c.reason == "" && w.Code != want {
 				t.Fatalf("status = %d; body: %s", w.Code, w.Body.String())
 			}
 			var resp GroupBatchResponse

@@ -292,7 +292,8 @@ func TestListGroups_EmptyGroupVisible(t *testing.T) {
 }
 
 // #1530, PR write-back mode: the group batch response names only members the
-// caller may read, and its summary counts only those.
+// caller may read, and its summary counts only those. The hidden member's
+// refusal rejects the batch (#2900): 422, the visible member not applied.
 func TestGroupBatch_PRMode_HidesUnreadableMembers(t *testing.T) {
 	t.Parallel()
 	f := newOrgEnfFixture(t, orgEnfGroupMemberFiles(visGroupsYAML))
@@ -306,8 +307,8 @@ func TestGroupBatch_PRMode_HidesUnreadableMembers(t *testing.T) {
 	d.PRTracker = &mockPlatformTracker{}
 
 	w := visCall(t, f, d, GroupBatch(d), rbac.PermRead, "POST+batch", "g-mixed", `{"patch":{"_silent_mode":"warning"}}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 	var resp GroupBatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -316,10 +317,10 @@ func TestGroupBatch_PRMode_HidesUnreadableMembers(t *testing.T) {
 	if strings.Contains(w.Body.String(), orgEnfTenantOut) {
 		t.Errorf("response names the member GET /groups/g-mixed hides: %s", w.Body.String())
 	}
-	if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Status != "included" {
-		t.Errorf("results = %+v, want only %s included", resp.Results, orgEnfTenantIn)
+	if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Status != resultNotApplied {
+		t.Errorf("results = %+v, want only %s not_applied", resp.Results, orgEnfTenantIn)
 	}
-	if want := "1 included in PR/MR, 0 failed"; resp.Summary != want {
+	if want := "1 not applied"; resp.Summary != want {
 		t.Errorf("summary = %q, want %q (it must not count the hidden member)", resp.Summary, want)
 	}
 }

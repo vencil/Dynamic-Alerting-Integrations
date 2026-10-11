@@ -186,21 +186,26 @@ func TestBatchTenants_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
 	}
 }
 
-// 4. Local and origin agree: the per-op pre-check still refuses per op, the
-// rest of the batch still becomes one PR — no whole-batch abort.
-func TestBatchTenants_PRMode_InSyncKeepsPerOpErrors(t *testing.T) {
+// 4. Local and origin agree: the per-op pre-check refuses the op, and since
+// #2900 the whole batch with it — 422 rejected, the refusal per op, the other
+// op not applied, no branch and no PR.
+func TestBatchTenants_PRMode_InSyncRefusalRejectsBatch(t *testing.T) {
 	f := newStaleFixture(t, staleTree("    _routing_profile: domain-ok\n"), nil)
+	before := gitRev(t, f.bare, "main")
 	w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
 		{"tenant_id":"t-other","patch":{"cpu_usage_percent":"90"}}]`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body: %s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Status != "pending_review" || statuses(resp.Results) != "error,included" || !f.prOpened {
-		t.Errorf("response = %+v (PR opened %v), want pending_review with error,included", resp, f.prOpened)
+	if resp.Status != batchStatusRejected || statuses(resp.Results) != "error,not_applied" || f.prOpened {
+		t.Errorf("response = %+v (PR opened %v), want rejected with error,not_applied and no PR", resp, f.prOpened)
+	}
+	if f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {
+		t.Errorf("rejected batch wrote something: branches %q", f.batchBranches(t))
 	}
 }
 
@@ -315,15 +320,16 @@ func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
 	})
 
 	// The base RELAXES the policy: the local pre-check still refuses the op
-	// per op (pre-existing behaviour — it never reaches the branch).
+	// (pre-existing behaviour — it never reaches the branch); since #2900 the
+	// batch is rejected with it (422).
 	t.Run("policy relaxed on the base", func(t *testing.T) {
 		local := staleTree("    _routing_profile: domain-ok\n")
 		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": policyListing("t-other")})
 		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
 		var resp BatchResponse
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		if w.Code != http.StatusOK || statuses(resp.Results) != "error" || f.prOpened {
-			t.Errorf("status %d, results %+v, PR %v; want 200 with the op refused per op by the local check", w.Code, resp.Results, f.prOpened)
+		if w.Code != http.StatusUnprocessableEntity || statuses(resp.Results) != "error" || f.prOpened {
+			t.Errorf("status %d, results %+v, PR %v; want 422 with the op refused per op by the local check", w.Code, resp.Results, f.prOpened)
 		}
 	})
 }

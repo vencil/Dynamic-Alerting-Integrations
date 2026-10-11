@@ -217,14 +217,14 @@ func TestBatchTenants_DeclaredElsewhere(t *testing.T) {
 		return w
 	}
 
-	// Direct mode answers per op (the batch as a whole is 200), so the stable
-	// code rides on results[].code.
+	// Direct mode answers per op — the batch as a whole is rejected (422,
+	// #2900) — so the stable code rides on results[].code.
 	t.Run("direct", func(t *testing.T) {
 		dir := seedElsewhereTree(t)
 		rbacMgr := adminRBAC(t)
 		w := serve(t, &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rbacMgr, WriteMode: WriteModeDirect}, rbacMgr)
-		if w.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
 		}
 		var resp BatchResponse
 		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {

@@ -575,18 +575,19 @@ func TestBatchTenants_PRMode_AllInvalid(t *testing.T) {
 	w := httptest.NewRecorder()
 	h(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (with error results), got %d: %s", w.Code, w.Body.String())
+	// #2900: a refused op rejects the batch — 422 with per-op results.
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 (with error results), got %d: %s", w.Code, w.Body.String())
 	}
 
 	var resp BatchResponse
 	json.Unmarshal(w.Body.Bytes(), &resp)
 
-	if resp.Status != "completed" {
-		t.Errorf("status = %q, want 'completed' (all ops failed)", resp.Status)
+	if resp.Status != batchStatusRejected || statuses(resp.Results) != "error" {
+		t.Errorf("response = %+v, want rejected with one error result", resp)
 	}
-	if resp.Message != "No valid operations to create PR/MR." {
-		t.Errorf("message = %q, want 'No valid operations...'", resp.Message)
+	if resp.Message != msgBatchRejected {
+		t.Errorf("message = %q, want %q", resp.Message, msgBatchRejected)
 	}
 }
 
