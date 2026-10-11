@@ -36,7 +36,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import sys
 import textwrap
 

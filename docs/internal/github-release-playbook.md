@@ -110,6 +110,12 @@ git push -u origin chore/vX.Y.Z-release-wrapup
 
 ⛔ **不能直接 `git push origin main`**：pre-push 的 `protect_main_push.sh` 會擋下任何推往 main 的 push，而且沒有繞過旗標。
 
+⛔ **收尾 PR 合併後立刻推 tag（Step 3），中間不要停。** `da-tools init` 產生的設定固定在 `ghcr.io/vencil/da-tools:v<VERSION>`（[#2900](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2900)，ADR-036 §6），而收尾 PR 會把 `components/da-tools/app/VERSION` 與 `nightly-image-scan.yaml` 的 delivered 矩陣一起調到新版。從合併到 `tools/v*` tag 的映像發布之前，那個 tag 還不存在：
+- 這段期間 nightly 的 delivered 映像掃描（`delivered-da-tools`）**預期有一晚 degraded**（拉不到映像），不是事故；
+- 這段期間碰到 `scripts/tools/ops/init_project.py` 的 PR，`image-ref-resolve` 的 delivered scope 也會紅（非必要 check）。
+
+間隔拉得越長，這兩個訊號越像真問題。推完 tag、`release.yaml` 發布映像後即恢復。
+
 ### Step 2.5: ⛔ Pre-tag 品質閘門（硬性要求）
 
 **所有檢查必須通過才能打 tag。** 跳過此步驟是 v2.4.0 re-tag 三輪的根本原因。

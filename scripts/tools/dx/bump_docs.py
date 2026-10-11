@@ -71,7 +71,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 # Importing the constant rather than re-spelling those three names keeps this
 # module from becoming a fourth, independently-rotting copy of the set.
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
-from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_compat import SEMVER_PATTERN, try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
 from _version_patterns import (  # noqa: E402
@@ -170,7 +170,11 @@ PORTAL_JSX_DIR = "tools/portal/src/interactive/tools"
 #
 # `test_rule_patterns_are_idempotent_on_prerelease_versions` is the mechanical
 # guard: no rule pattern may match a proper prefix of its own output.
-_SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
+#
+# ⛔ Imported, not spelled here: `_lib_compat.SEMVER_PATTERN` is the single
+# copy, shared with the shipped VERSION reader `da-tools init` derives its
+# pinned image tag from (#2900).
+_SEMVER = SEMVER_PATTERN
 
 
 def _shields_escape(value: str) -> str:

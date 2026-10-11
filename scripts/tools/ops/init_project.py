@@ -311,7 +311,9 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.22.0'
 # still overrides it, digest included.
 #
 # ⛔ NO FALLBACK TO `:latest`. Where VERSION cannot be read (a vendored
-# `scripts/` tree with no `components/`), DA_TOOLS_IMAGE is None and a run
+# `scripts/` tree with no `components/`), or holds something that is not a
+# version (`_lib_compat.SEMVER_PATTERN`, the grammar bump_docs writes,
+# pre-release suffix included), DA_TOOLS_IMAGE is None and a run
 # without `--da-tools-image` is refused at argument time — the convention of
 # `_lib_versions.require_platform_version`: a version written into a file is
 # read, never guessed.
@@ -319,7 +321,11 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.22.0'
 # ⛔ The repository is spelled once (here) and the tag derived, so the defaults
 # dict, the argparse default and `--help` all read this one value.
 _DA_TOOLS_REPOSITORY = 'ghcr.io/vencil/da-tools'
-_DA_TOOLS_VERSION = read_shipped_da_tools_version(_THIS_DIR)
+# (path, text) of each VERSION that exists but is not a valid version — kept so
+# the refusal can say THAT instead of "no VERSION" (two different fixes).
+_DA_TOOLS_VERSION_PROBLEMS: list = []
+_DA_TOOLS_VERSION = read_shipped_da_tools_version(
+    _THIS_DIR, problems=_DA_TOOLS_VERSION_PROBLEMS)
 DA_TOOLS_IMAGE: Optional[str] = (
     f'{_DA_TOOLS_REPOSITORY}:v{_DA_TOOLS_VERSION}' if _DA_TOOLS_VERSION else None)
 
@@ -5007,12 +5013,27 @@ def _prompt_missing_tenants(parser: argparse.ArgumentParser) -> list[str]:
 # #2900: printed when DA_TOOLS_IMAGE is None (no readable VERSION — a vendored
 # `scripts/` tree). Operator-facing, so English like the rest of this tool.
 _NO_DA_TOOLS_VERSION_HELP = 'none: no readable da-tools VERSION, so this flag is required'
-_NO_DA_TOOLS_VERSION_REFUSAL = (
-    'cannot tell which da-tools release this is (no readable VERSION beside '
-    'init_project.py or at components/da-tools/app/VERSION), so there is no '
-    'pinned default image to write, and init does not fall back to a floating '
-    ':latest. Pass --da-tools-image <ref>, e.g. '
+_NO_DEFAULT_IMAGE_TAIL = (
+    'so there is no pinned default image to write, and init does not fall back '
+    'to a floating :latest. Pass --da-tools-image <ref>, e.g. '
     f'--da-tools-image {_DA_TOOLS_REPOSITORY}:vX.Y.Z')
+_EMPTY_DA_TOOLS_IMAGE_REFUSAL = (
+    '--da-tools-image must not be empty: name the image the generated CI and '
+    'pre-commit hooks should run, or omit the flag to use the default '
+    f'({DA_TOOLS_IMAGE or "none available here"})')
+
+
+def _no_da_tools_version_refusal() -> str:
+    """Why there is no default image: no VERSION, or a VERSION that is not one."""
+    if _DA_TOOLS_VERSION_PROBLEMS:
+        found = '; '.join(f'{path} contains {text!r}'
+                          for path, text in _DA_TOOLS_VERSION_PROBLEMS)
+        return (f'the da-tools VERSION file is not a valid version ({found}; '
+                f'expected X.Y.Z or X.Y.Z-<pre-release>), '
+                + _NO_DEFAULT_IMAGE_TAIL)
+    return ('cannot tell which da-tools release this is (no VERSION beside '
+            'init_project.py or at components/da-tools/app/VERSION), '
+            + _NO_DEFAULT_IMAGE_TAIL)
 
 
 def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
@@ -5034,8 +5055,12 @@ def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
 
     # #2900: the default image is this release's own tag; without a readable
     # VERSION there is no default to write, and `:latest` is not one.
-    if not args.da_tools_image:
-        parser.error(_NO_DA_TOOLS_VERSION_REFUSAL)
+    # Two different mistakes, two different messages: None is "no default
+    # exists here" (VERSION), a blank string is "you passed an empty flag".
+    if args.da_tools_image is None:
+        parser.error(_no_da_tools_version_refusal())
+    if not args.da_tools_image.strip():
+        parser.error(_EMPTY_DA_TOOLS_IMAGE_REFUSAL)
 
     # ⛔ `is not None`, not truthiness: `--tenants ''` is a flag the caller
     # GAVE. Read as falsy it fell through to the full interactive flow, where

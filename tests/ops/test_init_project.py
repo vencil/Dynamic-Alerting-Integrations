@@ -4014,10 +4014,124 @@ class TestDaToolsImagePinnedToThisRelease:
         assert read_shipped_da_tools_version(flat) is None
         (flat / 'VERSION').write_text('7.8.9\n', encoding='utf-8')
         assert read_shipped_da_tools_version(flat) == '7.8.9'
+        # Pre-release accepted: same grammar bump_docs writes (one copy).
+        (flat / 'VERSION').write_text('2.10.0-rc.1\n', encoding='utf-8')
+        assert read_shipped_da_tools_version(flat) == '2.10.0-rc.1'
+        problems = []
         (flat / 'VERSION').write_text('latest\n', encoding='utf-8')
-        assert read_shipped_da_tools_version(flat) is None
+        assert read_shipped_da_tools_version(flat, problems=problems) is None
+        assert problems == [(str(flat / 'VERSION'), 'latest')], problems
         here = os.path.join(REPO_ROOT, 'scripts', 'tools', 'ops')
         assert read_shipped_da_tools_version(here) == self._version()
+
+    def test_the_version_grammar_is_bump_docs_own(self):
+        """g：VERSION 的合法形狀與 bump_docs 的 `_SEMVER` 是同一個物件，不是第二份。"""
+        import _lib_compat
+        sys.path.insert(0, os.path.join(REPO_ROOT, 'scripts', 'tools', 'dx'))
+        import bump_docs
+        assert bump_docs._SEMVER is _lib_compat.SEMVER_PATTERN
+
+    def test_an_empty_flag_is_named_as_the_empty_flag(self, capsys):
+        """`--da-tools-image ''` 是旗標空了，不是讀不到 VERSION。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parser = ip._build_parser()
+            for blank in ('', '   '):
+                args = parser.parse_args(['--ci', 'github', '--tenants', 'tenant-x',
+                                          '--non-interactive', '-o', tmpdir,
+                                          '--da-tools-image', blank])
+                with pytest.raises(SystemExit) as exc:
+                    ip._build_config_from_args(args, parser)
+                assert exc.value.code == EXIT_CALLER_ERROR
+                err = capsys.readouterr().err
+                assert '--da-tools-image must not be empty' in err, err
+                assert 'VERSION' not in err, err
+            assert not os.listdir(tmpdir)
+
+
+class TestDaToolsVersionInAVendoredTree:
+    """#2900：走真實程式路徑（子行程跑 init_project.py），不 monkeypatch。
+
+    把 `scripts/` 複製到沒有 `components/` 的樹（vendored 情境），再分別放入
+    缺 VERSION、格式錯的 VERSION、pre-release VERSION，觀察 CLI 實際行為。
+    `TestDaToolsImagePinnedToThisRelease` 的 monkeypatch 測試只證明
+    `None` 會被拒；這裡證明「讀 VERSION → None → 拒絕」整條路徑。
+    """
+
+    @pytest.fixture(scope='class')
+    @classmethod
+    def tree(cls, tmp_path_factory):
+        import subprocess
+        root = tmp_path_factory.mktemp('vendored')
+        # The data init reads besides VERSION (tenant-id schema, rule packs)
+        # comes along; `components/` deliberately does not.
+        ls = subprocess.run(['git', 'ls-files', '-z', 'scripts/tools',
+                             'docs/schemas', 'rule-packs'],
+                            cwd=REPO_ROOT, capture_output=True, check=True,
+                            timeout=60)
+        for rel in filter(None, ls.stdout.decode('utf-8').split('\0')):
+            src = os.path.join(REPO_ROOT, rel)
+            if os.path.isfile(src):
+                dst = root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+        return root
+
+    @staticmethod
+    def _run(tree, out, *extra):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(tree / 'scripts/tools/ops/init_project.py'),
+             '--ci', 'github', '--tenants', 'tenant-x', '--non-interactive',
+             '-o', str(out), *extra],
+            capture_output=True, text=True, encoding='utf-8', timeout=180,
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1', DA_LANG='en'))
+
+    @staticmethod
+    def _set_version(tree, text):
+        path = tree / 'components' / 'da-tools' / 'app' / 'VERSION'
+        if text is None:
+            if path.exists():
+                path.unlink()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+
+    def _workflow(self, out):
+        with open(out / '.github' / 'workflows' / 'dynamic-alerting.yaml',
+                  encoding='utf-8') as fh:
+            return yaml.safe_load(fh)['env']['DA_TOOLS_IMAGE']
+
+    def test_no_version_refuses_and_writes_nothing(self, tree, tmp_path):
+        self._set_version(tree, None)
+        out = tmp_path / 'out'
+        r = self._run(tree, out)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert 'no VERSION' in r.stderr and '--da-tools-image' in r.stderr, r.stderr
+        assert 'da-tools:latest' not in r.stdout + r.stderr
+        assert not out.exists() or not any(out.rglob('*'))
+
+    def test_a_malformed_version_says_so(self, tree, tmp_path):
+        self._set_version(tree, 'latest\n')
+        out = tmp_path / 'out'
+        r = self._run(tree, out)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert 'is not a valid version' in r.stderr, r.stderr
+        assert "'latest'" in r.stderr, r.stderr
+        assert 'no VERSION' not in r.stderr, r.stderr
+
+    def test_a_prerelease_version_is_pinned_verbatim(self, tree, tmp_path):
+        self._set_version(tree, '2.10.0-rc.1\n')
+        out = tmp_path / 'out'
+        r = self._run(tree, out)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert self._workflow(out) == 'ghcr.io/vencil/da-tools:v2.10.0-rc.1'
+
+    def test_the_flag_still_works_without_a_version(self, tree, tmp_path):
+        self._set_version(tree, None)
+        out = tmp_path / 'out'
+        r = self._run(tree, out, '--da-tools-image', 'registry.internal/x:v1')
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert self._workflow(out) == 'registry.internal/x:v1'
 
 
 class TestCustomerDeliveredImagePins:
