@@ -29,7 +29,7 @@ updated_at: 2026-10-10
 - `da-guard served-values`：exporter 實際送出的值。
 - 路由產生器 `generate_alertmanager_routes.py --output-configmap`：完整的 Alertmanager 設定。
 
-這兩支正是 [ADR-036](./036-single-parser-effective-config.md) 指定的唯一解析者，所以這裡不會出現第三種讀法。
+這兩支正是 [ADR-036](./036-single-parser-effective-config.md) 指定的唯一語意實作（閾值由 exporter、路由由產生器），所以這裡不會出現第三種讀法。
 
 ## 背景
 
