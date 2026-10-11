@@ -198,11 +198,11 @@ type countingScopeAuditor struct{ n map[string]int }
 
 func (a *countingScopeAuditor) IncWouldDeny(axis string) { a.n[axis]++ }
 
-// In shadow the fresh-base re-check does not run: it would refuse nothing,
-// and WritePRBatch's pre-flight runs it over the local tree without the
-// request's earlier ops, where it would count a would-deny for a batch
-// enforce lets through — here the second op alone reads dev, but stacked on
-// the first one's string `_metadata` the tenant stays in production.
+// No false would-deny in shadow: the fresh-base check runs only in the
+// post-checkout pass (FreshMerge), where the request's earlier ops for the
+// tenant are already applied — here the second op alone reads dev, but
+// stacked on the first one's string `_metadata` the tenant stays in
+// production (#2857).
 func TestBatchPRModeShadowCountsNoFalseWouldDeny(t *testing.T) {
 	dir := seedGitTree(t, postStateTree())
 	mgr := newRBACManager(t, postStateRBAC)

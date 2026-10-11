@@ -97,7 +97,8 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// BEFORE the body is read, so a denied caller triggers no side
 		// effect on either write path (direct commit or PR mode) and learns
 		// nothing from policy-violation details.
-		if !RequireOrgWrite(rw, r, d, tenantID, rbac.PermWrite) {
+		gatePre, ok := requireOrgWriteAt(rw, r, d, tenantID, rbac.PermWrite)
+		if !ok {
 			return
 		}
 		// #2477: a tenant file that is not a regular file is refused here,
@@ -135,7 +136,8 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// administer. Authorize the PROPOSED state too — same predicate, same
 		// flag, so shadow mode is unaffected and the gap closes exactly when
 		// the axis is enforced.
-		if !RequireOrgWriteProposed(rw, r, d, tenantID, rbac.PermWrite, string(body)) {
+		gatePost, ok := requireOrgWriteProposedAt(rw, r, d, tenantID, rbac.PermWrite, string(body))
+		if !ok {
 			return
 		}
 
@@ -196,7 +198,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 						"tracks the base branch, so it cannot witness a pending PR's change")
 				return
 			}
-			putTenantPRMode(d, rw, r, tenantID, email, string(body), advisories)
+			putTenantPRMode(d, rw, r, tenantID, email, string(body), advisories, gatePre, gatePost)
 			return
 		}
 
@@ -278,7 +280,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 //
 // advisories (#2325, non-blocking domain-policy notes) are appended to the
 // response's warnings on every success path.
-func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, advisories []string) {
+func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, advisories []string, gatePre, gatePost scopePair) {
 	// Atomically claim the tenant. Returns false if a PR/MR is
 	// already pending OR another request is mid-creation — both map
 	// to 409. The claim (not the async poll cache) is what makes two
@@ -326,19 +328,28 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	// tenant for retry instead of leaving a zombie 409-until-pod-restart.
 	defer d.PRTracker.ReleaseClaim(tenantID)
 
-	// Create feature branch + commit. #2486: the domain-policy check above
-	// read the pod's local tree, which may lag the base the branch is cut
-	// from; the body is judged again there, under the writer lock, before it
-	// is written (freshBasePutPolicyCheck). A refusal drops the branch.
-	var check gitops.PRBaseCheck
-	if d.Policy != nil {
-		check = func(configDir string) error {
+	// Create feature branch + commit. The checks above read the pod's local
+	// tree, which may lag the base the branch is cut from, so they can only
+	// refuse early (#2857). The authoritative verdict is taken there, under
+	// the writer lock, before anything is written, in the same order as above:
+	// the metadata write scope before and after the write (#1597), then the
+	// domain policy (#2486). A refusal drops the branch.
+	// gatePre/gatePost are the pairs the local gates judged.
+	p := rbac.RequestPrincipal(r)
+	check := func(configDir string) error {
+		if pre, judged := freshWriteScope(configDir, tenantID); judged && !freshScopeAllowed(d, p, tenantID, gatePre, pre) {
+			return &freshBaseScopeError{TenantID: tenantID, Put: true, PreState: true}
+		}
+		if !freshScopeAllowed(d, p, tenantID, gatePost, scopePairOf(proposedScopeMeta(configDir, yamlContent), tenantID)) {
+			return &freshBaseScopeError{TenantID: tenantID, Put: true}
+		}
+		if d.Policy != nil {
 			v, loadErr := freshBasePutPolicyCheck(configDir, tenantID, []byte(yamlContent))
 			if loadErr != nil || len(v) > 0 {
 				return &freshBasePolicyError{TenantID: tenantID, Put: true, Violations: v, LoadErr: loadErr}
 			}
-			return nil
 		}
+		return nil
 	}
 	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
@@ -347,6 +358,12 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		var freshPolicy *freshBasePolicyError
 		if errors.As(err, &freshPolicy) {
 			writeFreshBasePolicyViolation(rw, r, freshPolicy)
+			return
+		}
+		// #2857: the metadata write scope refuses it on the fresh base.
+		var freshScope *freshBaseScopeError
+		if errors.As(err, &freshScope) {
+			writeFreshBaseScopeViolation(rw, r, freshScope)
 			return
 		}
 		// The body matched the branch base, so no commit — and therefore no

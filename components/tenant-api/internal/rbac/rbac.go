@@ -235,14 +235,6 @@ func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
 // the writes this flip would start rejecting.
 func (m *Manager) EnableMetadataWriteScopeEnforce() { m.metadataWriteScopeEnforce = true }
 
-// MetadataWriteScopeEnforced reports whether the write plane's metadata axis
-// is in ENFORCE. A check that only refuses on that axis and whose verdict in
-// SHADOW is a foregone "allow" can skip itself in shadow, so it records no
-// would-deny of its own (#2830: the PR-mode batch re-check on the fresh base,
-// which also runs over the local tree without the request's earlier ops).
-// Nil-safe: a nil Manager is not enforcing.
-func (m *Manager) MetadataWriteScopeEnforced() bool { return m != nil && m.metadataWriteScopeEnforce }
-
 // EnableOrgScopeEnforce switches the org-scope axis from SHADOW (default) to
 // ENFORCE: an unlabeled tenant on an org-scoped rule is DENIED instead of
 // allowed-with-would-deny-signal (ADR-027 / LD-6 P4). Called from main when
@@ -747,6 +739,30 @@ func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permi
 	tenantOrgs []string, environment, domain string) bool {
 	return m.allowedScopedOnAxes(p, tenantID, want, tenantOrgs, environment, domain,
 		scopeAxisMetadataWrite, scopeAxisOrgWrite, "write-plane", true)
+}
+
+// AllowedInOrgRejudge is AllowedInOrg for a write-plane decision taken again
+// on another tree — a PR-mode write judged once more, under the writer lock,
+// on the fresh base its branch is cut from (#2857). The decision is the same
+// as AllowedInOrg's for the same inputs, so it is always taken; what differs
+// is the bookkeeping, because AllowedInOrg already counted the first
+// decision. Nothing is recorded on the org axis (organization membership is
+// not read from the tree, so a rejudge sees the same orgs), and the metadata
+// axis's would-deny is recorded only when countMetadata is set — the caller
+// sets it when the tenant's environment/domain on this tree differs from the
+// pair the first decision judged, so a write is counted once per pair.
+func (m *Manager) AllowedInOrgRejudge(p *VerifiedPrincipal, tenantID string, want Permission,
+	tenantOrgs []string, environment, domain string, countMetadata bool) bool {
+	passSS, passSE, passES, passEE, _ := m.allowedScopedModes(p, tenantID, want, tenantOrgs, environment, domain)
+	metaFlag := m.metadataWriteScopeEnforce
+	orgFlag := m.orgScopeEnforce
+	if countMetadata {
+		m.recordScopeShadowGap(
+			visAt(passSS, passSE, passES, passEE, false, orgFlag),
+			visAt(passSS, passSE, passES, passEE, true, orgFlag),
+			scopeAxisMetadataWrite)
+	}
+	return visAt(passSS, passSE, passES, passEE, metaFlag, orgFlag)
 }
 
 // AllowedInOrgRead is the org-scope-aware per-tenant permission check for the

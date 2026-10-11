@@ -53,10 +53,16 @@ var scopeMetadataKeys = []string{"_metadata", "_profile"}
 // pre-state check it inherits the metadata write axis's flag: inert in
 // shadow, refusing under --rbac-metadata-write-scope-enforce.
 func gateBatchOpPostState(configDir string, prior []BatchOperation, op BatchOperation, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {
+	return gateBatchOpPostStateAt(scopePairOf(postStateScopeMeta(configDir, prior, op), op.TenantID), op, p, rbacMgr, tenantOrg)
+}
+
+// gateBatchOpPostStateAt is gateBatchOpPostState over a post-state pair the
+// caller computed (and keeps, to pass to the in-lock re-judgement).
+func gateBatchOpPostStateAt(post scopePair, op BatchOperation, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {
 	if !touchesScopeMetadata(op) {
 		return BatchResult{}, false
 	}
-	if !OrgAllowed(rbacMgr, tenantOrg, p, op.TenantID, rbac.PermWrite, postStateScopeMeta(configDir, prior, op)) {
+	if !OrgAllowed(rbacMgr, tenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(post)) {
 		return BatchResult{TenantID: op.TenantID, Status: "error",
 			Message: "insufficient permissions for the tenant metadata this op proposes — its environment/domain would place tenant " +
 				op.TenantID + " outside your scope (#1597)"}, true

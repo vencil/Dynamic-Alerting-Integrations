@@ -257,16 +257,20 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
 	metaOf := WriteScopeMeta(d.ConfigDir) // one resolver: the root platform files are read once per batch
+	// lastPost[t]: the local post-state pair of t's last op taken into the PR.
+	lastPost := map[string]scopePair{}
 	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}
-		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, metaOf) {
+		gatePre := scopePairOf(metaOf, op.TenantID)
+		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(gatePre)) {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 			continue
 		}
-		if res, refused := gateBatchOpPostState(d.ConfigDir, included[op.TenantID], op, p, d.RBAC, d.TenantOrg); refused {
+		gatePost := scopePairOf(postStateScopeMeta(d.ConfigDir, included[op.TenantID], op), op.TenantID)
+		if res, refused := gateBatchOpPostStateAt(gatePost, op, p, d.RBAC, d.TenantOrg); refused {
 			batchResults = append(batchResults, res)
 			continue
 		}
@@ -300,31 +304,42 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// the fresh base (preserving untouched keys). op is per-iteration
 		// (Go 1.22+), so the closure binds this op's TenantID/Patch/Unset.
 		op := op
+		merge := func(existing []byte) (string, error) {
+			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+		}
+		// #2857: the checks above read the pod's local tree, which may lag
+		// the base the branch is cut from, so they can only refuse early.
+		// The authoritative verdict is FreshMerge's, on that base, in the
+		// same order: the metadata write scope before and after the op, then
+		// the domain policy; the writer validates after. existing there is
+		// the tenant's file on the base with this request's earlier ops for
+		// it already applied. A refusal aborts the whole batch, nothing
+		// written.
+		//
+		// The pairs passed down are the ones judged on the local tree, not
+		// read again. On the base, the pre-state of an op after the tenant's
+		// first is its file with this request's earlier ops applied, so it
+		// is compared with the local post-state of the op before it.
+		comparePre := gatePre
+		if prev, seen := lastPost[op.TenantID]; seen {
+			comparePre = prev
+		}
+		lastPost[op.TenantID] = gatePost
 		batchOps = append(batchOps, gitops.PRBatchOp{
 			TenantID: op.TenantID,
-			Merge: func(existing []byte) (string, error) {
-				merged, err := mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+			Merge:    merge,
+			FreshMerge: func(existing []byte) (string, error) {
+				if pre, judged := freshWriteScope(d.ConfigDir, op.TenantID); judged && !freshScopeAllowed(d, p, op.TenantID, comparePre, pre) {
+					return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i, PreState: true}
+				}
+				merged, err := merge(existing)
 				if err != nil {
 					return "", err
 				}
-				// #2830: the metadata write scope, judged on the fresh base
-				// the branch is cut from: merged is the tenant's file there
-				// with this request's earlier ops for it already applied, so
-				// it is the metadata the tenant will have. The per-op check
-				// (gateBatchOpPostState) read the pod's local tree, which is
-				// synced only at pod start. A refusal aborts the whole batch,
-				// as a policy refusal below does. Enforce only: in shadow the
-				// verdict is "allow" anyway, and this closure also runs in
-				// WritePRBatch's pre-flight over the local tree without the
-				// earlier ops, where it would record a would-deny for a write
-				// enforce would not refuse.
-				if touchesScopeMetadata(op) && d.RBAC.MetadataWriteScopeEnforced() &&
-					!OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, proposedScopeMeta(d.ConfigDir, merged)) {
+				if touchesScopeMetadata(op) &&
+					!freshScopeAllowed(d, p, op.TenantID, gatePost, scopePairOf(proposedScopeMeta(d.ConfigDir, merged), op.TenantID)) {
 					return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i}
 				}
-				// B2 F1: the check above read the pod's local tree; this one
-				// reads the fresh base the branch is cut from. A refusal here
-				// aborts the whole batch (WritePRBatch), nothing written.
 				if d.Policy != nil {
 					v, loadErr := freshBasePolicyCheck(d.ConfigDir, op, existing, merged)
 					if loadErr != nil || len(v) > 0 {

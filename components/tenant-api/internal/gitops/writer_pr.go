@@ -133,9 +133,10 @@ type PRBaseCheck func(configDir string) error
 
 // WritePRChecked is WritePR plus check, run under the writer lock after the
 // branch is cut from the fresh origin base and the tenant's file is resolved
-// there, before the body is validated and written (Step 3b'). PUT passes the
-// domain-policy check here, because its pre-check read the pod's local tree,
-// which may lag the base (#2486). A nil check is WritePR.
+// there, before the body is validated and written (Step 3b'). PUT passes its
+// authoritative checks here — the metadata write scope (#2857), then the
+// domain policy (#2486) — because its pre-checks read the pod's local tree,
+// which may lag the base. A nil check is WritePR.
 func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
@@ -398,17 +399,6 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			if errors.Is(err, ErrMergeBaseNotLoadable) {
 				continue
 			}
-			// B2: the same holds for a domain-policy refusal — the local
-			// tree may lag the base (and a same-tenant op is merged here
-			// without the ops before it); the post-checkout pass decides.
-			if errors.Is(err, ErrMergePolicyRefused) {
-				continue
-			}
-			// #2830: likewise for the metadata write scope — the tenant's
-			// metadata on the base decides where the op lands.
-			if errors.Is(err, ErrMergeScopeRefused) {
-				continue
-			}
 			return nil, err
 		}
 	}
@@ -452,7 +442,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			w.abortFeatureBranch(base, branchName)
 			return nil, err
 		}
-		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, filePath, op.Merge)
+		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, filePath, op.freshMerge())
 		if errors.Is(err, ErrMergeNoOp) {
 			// B2: the merge changes nothing — skipped like a byte-identical
 			// one, its notices kept like one's.
@@ -535,7 +525,24 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 // (#1097) — carrying a MergeFunc rather than pre-built content lets the
 // authoritative merge run under the writer lock against the fresh base, so a
 // partial patch preserves keys it did not name.
+//
+// FreshMerge, when set, replaces Merge in the post-checkout pass only — the
+// pass that merges onto the fresh base the branch is cut from. It is where
+// verdicts that depend on the tree belong (the caller's metadata write scope,
+// the domain policy, #2857): the pre-flight runs Merge over the pod's local
+// tree, which may lag the base, so a refusal there would be a verdict on a
+// tree the write does not land on, and an approval there is no approval at
+// all. A FreshMerge error aborts the feature branch and is returned as is;
+// nothing of the batch is written.
 type PRBatchOp struct {
-	TenantID string
-	Merge    MergeFunc
+	TenantID   string
+	Merge      MergeFunc
+	FreshMerge MergeFunc
+}
+
+func (op PRBatchOp) freshMerge() MergeFunc {
+	if op.FreshMerge != nil {
+		return op.FreshMerge
+	}
+	return op.Merge
 }
