@@ -338,9 +338,10 @@ func TenantWritesStringMetadata(data []byte, tenantID string) bool {
 	return false
 }
 
-// stringMetadataEntries lists, in document order, the `tenants:` and
-// `profiles:` entries of a decoded document whose `_metadata` is a non-null
-// scalar: "tenants.<id>" / "profiles.<name>".
+// stringMetadataEntries lists the `tenants:` entries, then the `profiles:`
+// ones, each in document order (merged ones last, effectivePairs), of a
+// decoded document whose effective `_metadata` is a non-null scalar:
+// "tenants.<id>" / "profiles.<name>".
 //
 // WHY IT READS THE NODE. ScheduledValue stores a scalar as its text and a
 // mapping as its re-serialized YAML, both in Default, so after the typed
@@ -360,34 +361,125 @@ func stringMetadataEntries(doc *yaml.Node) []string {
 		return nil
 	}
 	var out []string
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		switch section := root.Content[i].Value; section {
-		case "tenants", "profiles":
-			out = appendStringMetadata(out, section, derefAlias(root.Content[i+1]))
+	for _, section := range []string{"tenants", "profiles"} {
+		entries := effectiveValue(root, section, 0)
+		if entries == nil || entries.Kind != yaml.MappingNode {
+			continue
+		}
+		visit := func(name string, value *yaml.Node) {
+			body := derefAlias(value)
+			if body.Kind != yaml.MappingNode {
+				return
+			}
+			if v := effectiveValue(body, "_metadata", 0); v != nil && v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" {
+				out = append(out, section+"."+name)
+			}
+		}
+		if !hasMergeKey(entries) {
+			// The common shape, walked without allocating: no merge key, so
+			// the effective pairs are the written ones (duplicates are a
+			// decode error).
+			for i := 0; i+1 < len(entries.Content); i += 2 {
+				visit(entries.Content[i].Value, entries.Content[i+1])
+			}
+			continue
+		}
+		for _, e := range effectivePairs(entries, 0) {
+			visit(e.key, e.value)
 		}
 	}
 	return out
 }
 
-func appendStringMetadata(out []string, section string, entries *yaml.Node) []string {
-	if entries.Kind != yaml.MappingNode {
-		return out
-	}
-	for i := 0; i+1 < len(entries.Content); i += 2 {
-		body := derefAlias(entries.Content[i+1])
-		if body.Kind != yaml.MappingNode {
+// maxMergeDepth bounds how deep effectivePairs follows merge keys into
+// merged mappings; a real config nests one or two.
+const maxMergeDepth = 16
+
+type nodePair struct {
+	key   string
+	value *yaml.Node
+}
+
+// effectivePairs is mapping m's keys as the typed decode sees them (#2859
+// review): every explicit key, in document order, then each key a merge key
+// (`<<`) brings in that no explicit key and no earlier merge source already
+// set. That is yaml.v3's precedence: an explicit key wins over a merged one,
+// and among the sources of `<<: [*a, *b]` the earlier wins. Without it,
+// `<<: {_metadata: "owner: x"}` decoded as a string `_metadata` while this
+// list did not name it.
+func effectivePairs(m *yaml.Node, depth int) []nodePair {
+	var out []nodePair
+	seen := map[string]bool{}
+	var merges []*yaml.Node
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		k := m.Content[i]
+		if isMergeKey(k) {
+			merges = append(merges, m.Content[i+1])
 			continue
 		}
-		for j := 0; j+1 < len(body.Content); j += 2 {
-			if body.Content[j].Value != "_metadata" {
+		if !seen[k.Value] {
+			seen[k.Value] = true
+			out = append(out, nodePair{k.Value, m.Content[i+1]})
+		}
+	}
+	if depth >= maxMergeDepth {
+		return out
+	}
+	for _, src := range merges {
+		src = derefAlias(src)
+		sources := []*yaml.Node{src}
+		if src.Kind == yaml.SequenceNode {
+			sources = src.Content
+		}
+		for _, s := range sources {
+			s = derefAlias(s)
+			if s.Kind != yaml.MappingNode {
 				continue
 			}
-			if v := derefAlias(body.Content[j+1]); v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" {
-				out = append(out, section+"."+entries.Content[i].Value)
+			for _, p := range effectivePairs(s, depth+1) {
+				if !seen[p.key] {
+					seen[p.key] = true
+					out = append(out, p)
+				}
 			}
 		}
 	}
 	return out
+}
+
+// effectiveValue is the value effectivePairs gives key in m, or nil.
+func effectiveValue(m *yaml.Node, key string, depth int) *yaml.Node {
+	if !hasMergeKey(m) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == key {
+				return derefAlias(m.Content[i+1])
+			}
+		}
+		return nil
+	}
+	for _, p := range effectivePairs(m, depth) {
+		if p.key == key {
+			return derefAlias(p.value)
+		}
+	}
+	return nil
+}
+
+// hasMergeKey reports whether mapping m writes a merge key.
+func hasMergeKey(m *yaml.Node) bool {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if isMergeKey(m.Content[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMergeKey reports whether k is a YAML merge key: yaml.v3's isMerge
+// (decode.go), restated because it is unexported.
+func isMergeKey(k *yaml.Node) bool {
+	return k.Kind == yaml.ScalarNode && k.Value == "<<" &&
+		(k.Tag == "" || k.Tag == "!" || k.Tag == "!!merge" || k.Tag == "tag:yaml.org,2002:merge")
 }
 
 func derefAlias(n *yaml.Node) *yaml.Node {

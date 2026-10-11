@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -26,7 +27,7 @@ func TestParseConfigFileRecordsStringMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"profiles.gold", "tenants.t-str", "tenants.t-block", "tenants.t-int", "tenants.t-anchor", "tenants.t-alias"}
+	want := []string{"tenants.t-str", "tenants.t-block", "tenants.t-int", "tenants.t-anchor", "tenants.t-alias", "profiles.gold"}
 	if got := cfg.StringMetadataEntries(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("StringMetadataEntries = %q, want %q", got, want)
 	}
@@ -65,5 +66,41 @@ func TestTenantWritesStringMetadata(t *testing.T) {
 	// A profile's string form is not a tenant's.
 	if TenantWritesStringMetadata([]byte("profiles:\n  a:\n    _metadata: \"owner: x\"\n"), "a") {
 		t.Error("profiles.a: got true, want false")
+	}
+}
+
+// #2859 review: a `_metadata` brought in by a merge key (`<<`) is decoded
+// like a written one, so it is listed like one — with yaml.v3's precedence:
+// a written key wins over a merged one, and the earlier merge source wins.
+func TestStringMetadataThroughMergeKeys(t *testing.T) {
+	data := []byte("anchors:\n" +
+		"  - &str {_metadata: \"owner: a\"}\n" +
+		"  - &map {_metadata: {owner: b}}\n" +
+		"tenants:\n" +
+		"  t-merged:\n    <<: *str\n" +
+		"  t-inline:\n    <<: {_metadata: \"environment: production\"}\n" +
+		"  t-overridden:\n    <<: *str\n    _metadata: {owner: c}\n" +
+		"  t-written-str:\n    <<: *map\n    _metadata: \"owner: d\"\n" +
+		"  t-first-wins-str:\n    <<: [*str, *map]\n" +
+		"  t-first-wins-map:\n    <<: [*map, *str]\n" +
+		"  t-quoted-key:\n    \"<<\": \"owner: e\"\n" +
+		"  <<: {t-from-merge: {_metadata: \"owner: f\"}}\n")
+	cfg, err := ParseConfigFile(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"tenants.t-merged", "tenants.t-inline", "tenants.t-written-str", "tenants.t-first-wins-str", "tenants.t-from-merge"}
+	if got := cfg.StringMetadataEntries(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("StringMetadataEntries = %q, want %q", got, want)
+	}
+	// The typed decode agrees on every listed and unlisted entry.
+	for tenant, str := range map[string]bool{"t-merged": true, "t-inline": true, "t-overridden": false, "t-written-str": true, "t-first-wins-str": true, "t-first-wins-map": false, "t-from-merge": true} {
+		d := cfg.Tenants[tenant]["_metadata"].Default
+		if isMapping := strings.HasSuffix(d, "\n"); isMapping == str {
+			t.Errorf("%s: typed decode Default = %q; listed as string form = %v", tenant, d, str)
+		}
+	}
+	if !TenantWritesStringMetadata(data, "t-inline") || TenantWritesStringMetadata(data, "t-overridden") {
+		t.Error("TenantWritesStringMetadata does not follow merge keys")
 	}
 }
