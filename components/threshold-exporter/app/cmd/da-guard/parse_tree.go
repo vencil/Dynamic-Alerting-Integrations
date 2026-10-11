@@ -53,6 +53,13 @@ const (
 	notReadHidden = "hidden"
 	// notReadNotConfigName: the name does not end in .yaml / .yml (any case).
 	notReadNotConfigName = "not_config_name"
+	// notReadParentNotWalked (file mode): a directory on the path exists but
+	// is not a real directory the walk descends — a symlink (followed by no
+	// walk), a regular file, a dangling link.
+	notReadParentNotWalked = "parent_not_walked"
+	// notReadNotRegularFile (file mode): the path exists and is not a regular
+	// file, or a symlink to one (a directory, a dangling link, a FIFO).
+	notReadNotRegularFile = "not_regular_file"
 )
 
 // parseTreeDoc is the JSON document on stdout.
@@ -119,7 +126,8 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"   \"defaults_carriers\": {<dir>: <path>},  the one _defaults file each directory's chain reads\n"+
 			"   \"not_read\": [{\"file\", \"reason\"}],  files no reader reads (unselected_defaults_carrier,\n"+
 			"                                       at the root or below it;\n"+
-			"                                       in file mode also hidden, not_config_name)\n"+
+			"                                       in file mode also hidden, not_config_name,\n"+
+			"                                       parent_not_walked, not_regular_file)\n"+
 			"   \"files\": {<path>: <content>},  every readable selected file\n"+
 			"   \"unreadable\": [{\"file\", \"kind\", \"message\"}]}  every selected file that cannot be read\n"+
 			"Paths are relative to --config-dir, with '/'; <dir> is \".\" for the root. The keys of\n"+
@@ -133,12 +141,20 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"(!!str !!int !!float !!bool !!null !!timestamp), and its value — true/false/null for\n"+
 			"!!bool/!!null, the decimal text for !!int/!!float (\"0777\" is \"511\"), the string for\n"+
 			"!!str, absent for !!timestamp and for .inf/.nan. A scalar is the only object whose\n"+
-			"\"text\" is a JSON string. An empty file, or one holding only null, is {}.\n\n"+
+			"\"text\" is a JSON string. An empty file, or one holding only null, is {}. Aliases may\n"+
+			"add at most %d values to a file; past that the file is a decode_error.\n"+
+			"A file nested close to yaml.v3's limit (10,000 levels) nests the JSON as deep, which a\n"+
+			"JSON decoder may refuse (measured: Python 3.13's json raises RecursionError at 10,000\n"+
+			"nested arrays): a reader that cannot decode the document must treat the whole\n"+
+			"document as unusable, never a part of it as read.\n\n"+
 			"Unreadable kinds, a closed list (anything else is read as yaml.v3 reads it, even where\n"+
 			"today's route generator refuses the file): %s.\n\n"+
 			"File mode reads --input as the text of --path: \"selected\" holds --path with its readers\n"+
 			"(an empty list, and an entry in \"not_read\", when no reader would read it), and \"files\"\n"+
-			"or \"unreadable\" what the text holds.\n\n", kindList())
+			"or \"unreadable\" what the text holds. --path is also judged on disk: a directory on it\n"+
+			"that exists but is not a real directory (a symlink, a file) is parent_not_walked; an\n"+
+			"existing --path that is not a regular file (or a link to one) is not_regular_file.\n\n",
+			parsetree.MaxAliasExpansion, kindList())
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok — an unreadable file is data in the document, not a verdict\n"+
 			"  2  caller error: bad flags, --config-dir missing or not a directory, a --path that is\n"+
@@ -308,6 +324,9 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 	case !config.IsScannedPath(rel):
 		reason = notReadNotConfigName
 	default:
+		reason = pathOnDisk(scan.AbsRoot, rel)
+	}
+	if reason == "" {
 		selected := true
 		if confdname.IsDefaults(path.Base(rel)) {
 			// The directory's carriers once rel is written: the readable
@@ -347,6 +366,39 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 		doc.Files[rel] = content
 	}
 	return doc, nil
+}
+
+// pathOnDisk is why the walk would not read rel once it is written, judged on
+// what already exists under root ("" when it would): each directory on the
+// way that exists must be a real directory (the walk follows no symlink to a
+// directory), and rel itself, if it exists, a regular file or a symlink to
+// one. A missing component is fine: the writer creates it.
+func pathOnDisk(root, rel string) string {
+	parts := strings.Split(rel, "/")
+	cur := root
+	for i, part := range parts {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return ""
+		}
+		if i < len(parts)-1 {
+			if err != nil || !fi.IsDir() {
+				return notReadParentNotWalked
+			}
+			continue
+		}
+		if err != nil {
+			return notReadNotRegularFile
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			fi, err = os.Stat(cur)
+		}
+		if err != nil || !fi.Mode().IsRegular() {
+			return notReadNotRegularFile
+		}
+	}
+	return ""
 }
 
 // readersFor is who reads the config file at rel (a root-relative slash

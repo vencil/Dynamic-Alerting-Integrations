@@ -229,6 +229,10 @@ _ROWS: tuple[tuple, ...] = (
     ("nonspecific-verbatim", "t.yaml", "tenants:\n  t1:\n    a: !<!> x\n", None,
      "unreadable:non_specific_tag",
      "stricter than today: `!<!>` is `!`", None),
+    ("nonspecific-after-anchor", "t.yaml", "tenants:\n  t1:\n    a: &a ! x\n", None,
+     "unreadable:non_specific_tag",
+     "stricter than today: PyYAML reads the string \"x\"; `!` after an anchor is still `!`",
+     "#2897 review"),
     # ── non_scalar_key ──
     ("sequence-key", "t.yaml", "tenants:\n  ? [t1]\n  : {a: 1}\n", None, "unreadable:non_scalar_key",
      None,
@@ -454,3 +458,118 @@ def test_merge_key_rows_are_that_corpus_and_categorised() -> None:
     assert set(cats) == {r["id"] for r in mk}, "a merge_key row has no category, or a stale one"
     for r in corpus["merge_key_rows"]:
         _check_category("merge_key row " + r["id"], cats[r["id"]], r["generator"])
+
+
+# ── An oracle that does not come from parse-tree ──
+#
+# The merge-key categories are a snapshot of parse-tree's own output, so a
+# parse-tree that stopped refusing something would bless its own regression
+# on UPDATE_PARSE_TREE_CATEGORIES=1 (a review did exactly that: `&a ! x` read
+# once the `!` scan gave up at the anchor). This oracle reads every row
+# parse-tree READS (both_read, pyyaml_only) with PyYAML's parser and composer
+# — not its constructor — and requires none of the closed list's
+# PyYAML-visible shapes there. A row PyYAML cannot compose is skipped: that is
+# what pyyaml_only means.
+_Y = "tag:yaml.org,2002:"
+_SCALAR_TAGS = {_Y + t for t in ("str", "int", "float", "bool", "null", "timestamp")}
+# What PyYAML's YAML 1.1 resolver gives a plain `=` and a plain `<<`; yaml.v3
+# reads a string and a merge key (the `x: =` / `<<` rows).
+_IMPLICIT_ONLY = {_Y + "value", _Y + "merge"}
+# A cap per row, so a row of deep aliases cannot stall the walk.
+_ORACLE_NODES = 200_000
+
+# What the merge-key snapshot may hold as pyyaml_only, pinned: growth means a
+# row parse-tree used to refuse is read now, and needs an explicit edit here.
+MERGE_KEY_PYYAML_ONLY = 119
+
+
+def _oracle_problems(text: str) -> "list[str] | None":
+    """The closed-list shapes PyYAML sees in `text` (None: it cannot compose)."""
+    problems = []
+    try:
+        events = list(yaml.parse(text, Loader=yaml.SafeLoader))
+        docs = list(yaml.compose_all(text, Loader=yaml.SafeLoader))
+    except (yaml.YAMLError, RecursionError):
+        return None
+    for ev in events:
+        tag = getattr(ev, "tag", None)
+        if tag is None:
+            continue
+        if tag == "!":
+            problems.append("non-specific tag `!`")
+        elif isinstance(ev, yaml.ScalarEvent) and tag not in _SCALAR_TAGS:
+            problems.append(f"scalar tag {tag}")
+        elif isinstance(ev, yaml.MappingStartEvent) and tag != _Y + "map":
+            problems.append(f"mapping tag {tag}")
+        elif isinstance(ev, yaml.SequenceStartEvent) and tag != _Y + "seq":
+            problems.append(f"sequence tag {tag}")
+    if len(docs) > 1:
+        problems.append("a second document")
+    seen: set[int] = set()
+    stack = list(docs)
+    while stack and len(seen) < _ORACLE_NODES:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.ScalarNode):
+            if node.tag not in _SCALAR_TAGS | _IMPLICIT_ONLY:
+                problems.append(f"scalar resolves to {node.tag}")
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+        elif isinstance(node, yaml.MappingNode):
+            keys: set[str] = set()
+            for k, v in node.value:
+                if not isinstance(k, yaml.ScalarNode):
+                    problems.append("a non-scalar key")
+                elif k.tag == _Y + "null":
+                    problems.append("a null key")
+                elif k.value in keys:
+                    problems.append(f"duplicate key {k.value!r}")
+                else:
+                    keys.add(k.value)
+                stack.extend((k, v))
+    return problems
+
+
+def _read_rows():
+    """(where, text) of every row parse-tree reads."""
+    corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    for r in corpus["rows"]:
+        if r["category"] in ("both_read", "pyyaml_only"):
+            yield "row " + r["name"], _encode(r["doc"], r.get("encoding")).decode("utf-8")
+    cats = json.loads(MERGE_KEY_CATEGORIES_PATH.read_text(encoding="utf-8"))["categories"]
+    for r in json.loads(MERGE_KEY_CORPUS_PATH.read_text(encoding="utf-8"))["rows"]:
+        if cats[r["id"]] in ("both_read", "pyyaml_only"):
+            yield "merge_key row " + r["id"], _encode(r["doc"], r.get("encoding")).decode("utf-8")
+
+
+def test_rows_parse_tree_reads_hold_no_closed_list_shape() -> None:
+    checked = skipped = 0
+    bad = []
+    for where, text in _read_rows():
+        problems = _oracle_problems(text)
+        if problems is None:
+            skipped += 1
+            continue
+        checked += 1
+        if problems:
+            bad.append(f"{where}: {sorted(set(problems))}")
+    assert not bad, "parse-tree reads rows with a closed-list shape:\n" + "\n".join(bad[:20])
+    assert checked > 100, (checked, skipped)
+
+
+def test_oracle_bites() -> None:
+    """The oracle sees each shape it is for (anti-vacuity)."""
+    for text in ("a: ! x\n", "a: &a ! x\n", "a: !!set {b}\n", "? [a]\n: 1\n", "~: 1\n",
+                 "a: 1\na: 2\n", "&k a: 1\n*k : 2\n", "a: 1\n---\nb: 2\n", "a: !!binary aGk=\n"):
+        assert _oracle_problems(text), text
+    assert _oracle_problems("a: =\nb: {<<: {c: 1}}\n") == []
+
+
+def test_merge_key_pyyaml_only_is_pinned() -> None:
+    cats = json.loads(MERGE_KEY_CATEGORIES_PATH.read_text(encoding="utf-8"))["categories"]
+    n = sum(1 for c in cats.values() if c == "pyyaml_only")
+    assert n == MERGE_KEY_PYYAML_ONLY, (
+        f"{n} merge_key rows are pyyaml_only, pinned {MERGE_KEY_PYYAML_ONLY}: parse-tree reads "
+        f"rows it used to refuse (or the reverse) — review, then edit the pin")

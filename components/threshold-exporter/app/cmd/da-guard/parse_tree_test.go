@@ -310,3 +310,48 @@ func TestParseTree_NonUTF8FileName(t *testing.T) {
 		t.Fatalf("exit %d, %q", code, msg)
 	}
 }
+
+// TestParseTree_FileModeOnDisk: --path is judged against what already exists
+// under --config-dir, not by its name alone — a parent the walk does not
+// descend, or an existing --path that is not a regular file, is read by no
+// reader.
+func TestParseTree_FileModeOnDisk(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{"t.yaml": "a: 1\n", "sub/d.yaml/x.yaml": "a: 1\n", "real/r.yaml": "a: 1\n"})
+	outside := t.TempDir()
+	for link, target := range map[string]string{
+		"extlink":       outside,
+		"inlink":        filepath.Join(root, "real"),
+		"dangling.yaml": filepath.Join(root, "missing"),
+		"filelink.yaml": filepath.Join(root, "t.yaml"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
+			t.Skipf("symlink: %v", err)
+		}
+	}
+	for _, tc := range []struct{ path, reason string }{
+		{"extlink/a.yaml", notReadParentNotWalked},
+		{"inlink/a.yaml", notReadParentNotWalked},
+		{"t.yaml/a.yaml", notReadParentNotWalked},
+		{"dangling.yaml/a.yaml", notReadParentNotWalked},
+		{"sub/d.yaml", notReadNotRegularFile},
+		{"dangling.yaml", notReadNotRegularFile},
+		{"t.yaml", ""},
+		{"filelink.yaml", ""},
+		{"real/r.yaml", ""},
+		{"new/dir/n.yaml", ""},
+	} {
+		_, doc, _ := runPT(t, "a: 1\n", "--config-dir", root, "--path", tc.path, "--input", "-")
+		readers := readersOf(doc)[tc.path]
+		nr := doc["not_read"].([]any)
+		if tc.reason == "" {
+			if len(nr) != 0 || !reflect.DeepEqual(readers, []string{"exporter", "generator"}) {
+				t.Errorf("%s: readers %v, not_read %v; want read by both", tc.path, readers, nr)
+			}
+			continue
+		}
+		if len(readers) != 0 || len(nr) != 1 || nr[0].(map[string]any)["reason"] != tc.reason {
+			t.Errorf("%s: readers %v, not_read %v; want %s", tc.path, readers, nr, tc.reason)
+		}
+	}
+}

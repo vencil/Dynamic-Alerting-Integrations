@@ -197,3 +197,25 @@ func TestEmptyIsEmptyMapping(t *testing.T) {
 		}
 	}
 }
+
+// TestExpansionBound: a small file whose aliases expand past
+// MaxAliasExpansion — one yaml.v3's own alias ratio lets through — is a
+// decode_error; one just under the bound is read.
+func TestExpansionBound(t *testing.T) {
+	t.Parallel()
+	doc := func(aliases int) []byte {
+		return []byte("l0: &l0 [" + strings.TrimSuffix(strings.Repeat("x,", 999), ",") + "]\nl1: [" +
+			strings.TrimSuffix(strings.Repeat("*l0,", aliases), ",") + "]\n")
+	}
+	// Each alias expands to the list itself plus its 999 items: 1000 values.
+	over, under := doc(MaxAliasExpansion/1000+1), doc(MaxAliasExpansion/1000)
+	if len(over) > 5_000 {
+		t.Fatalf("the input is %d bytes; the point is a small file", len(over))
+	}
+	if _, bad := Parse(over); bad == nil || bad.Kind != KindDecodeError || !strings.Contains(bad.Message, "aliases expand") {
+		t.Fatalf("over the bound: got %v", bad)
+	}
+	if _, bad := Parse(under); bad != nil {
+		t.Fatalf("under the bound: %v", bad)
+	}
+}

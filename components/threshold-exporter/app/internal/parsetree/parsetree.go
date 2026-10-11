@@ -154,8 +154,11 @@ func Parse(data []byte) (Content, *Unreadable) {
 	}
 
 	doc, bad := parseDocument(data)
-	if bad != nil || doc == nil {
-		return Content{}, bad // doc nil, bad nil: empty, or comments only
+	if bad != nil {
+		return nil, bad
+	}
+	if doc == nil {
+		return Content{}, nil // empty, or comments only
 	}
 	return judge(data, doc)
 }
@@ -459,8 +462,37 @@ func decode(n *yaml.Node, v any) (err error) {
 // ------------------------------------------------------------- expansion
 
 type converter struct {
-	values map[*yaml.Node]json.RawMessage
-	active map[*yaml.Node]bool // alias targets being expanded (a cycle guard)
+	values   map[*yaml.Node]json.RawMessage
+	active   map[*yaml.Node]bool // alias targets being expanded (a cycle guard)
+	expanded int                 // values emitted through an alias so far (MaxAliasExpansion)
+}
+
+// MaxAliasExpansion bounds the values one file's content may gain through
+// aliases (an alias, or a merge from an alias: every scalar, mapping and
+// sequence emitted while expanding one). Values written out in the file are
+// not counted — the file's own size bounds them; only aliases make the
+// output grow faster than the input.
+//
+// yaml.v3's own alias limit is a ratio of the nodes it decodes, not a size:
+// measured, a 2.4 KB file of 100 aliases to a 1000-item list passes it and
+// expands to 100,100 values, 3.9 MB of JSON (a review measured an 8.3 KB
+// file at ~15 MB). In conf.d an anchor shares a small block — a receiver, a
+// set of thresholds — so 100,000 values reached through aliases is still,
+// e.g., 1,000 tenants each merging a 100-value block. Over the bound the
+// file is a decode_error rather than megabytes every reader must load.
+const MaxAliasExpansion = 100_000
+
+// count charges one value emitted while expanding an alias.
+func (c *converter) count(n *yaml.Node) *Unreadable {
+	if len(c.active) == 0 {
+		return nil
+	}
+	c.expanded++
+	if c.expanded > MaxAliasExpansion {
+		return fail(KindDecodeError, "line %d: aliases expand this file by more than %d values; "+
+			"write the repeated parts out, or split the file", n.Line, MaxAliasExpansion)
+	}
+	return nil
 }
 
 func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
@@ -472,6 +504,9 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		c.active[t] = true
 		defer delete(c.active, t)
 		return c.node(t)
+	}
+	if bad := c.count(n); bad != nil {
+		return nil, bad
 	}
 	switch n.Kind {
 	case yaml.ScalarNode:
