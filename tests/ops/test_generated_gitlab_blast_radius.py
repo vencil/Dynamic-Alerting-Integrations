@@ -19,7 +19,9 @@ How the job is stood in for:
   wrong report, not as a passing stub.
 * The predefined variables the job reads (`CI_MERGE_REQUEST_DIFF_BASE_SHA`,
   `CI_PROJECT_DIR`) are supplied here; `CONFIG_DIR` and `DA_TOOLS_IMAGE` are
-  read from the generated pipeline's own `variables:`.
+  read from the generated pipeline's own `variables:`. config_diff.py renders
+  through da-guard (ADR-037), which the image ships; here it is the one
+  conftest builds from this checkout (`$DA_GUARD_BINARY`).
 
 ⚠️ Not covered here, and not measurable on this host: a real GitLab runner
 (clone ownership, `GIT_DEPTH` honoured, the MR pipeline existing at all).
@@ -56,6 +58,8 @@ from test_generated_ci_artifacts import (  # noqa: E402
 )
 
 _SH = shutil.which("sh")
+
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 _needs_tools = pytest.mark.skipif(
     _SH is None or shutil.which("git") is None,
     reason="executing the generated job needs `sh` and `git` on PATH",
@@ -103,7 +107,8 @@ def _install_da_tools(bindir: Path, work: Path,
     else:
         (work / "_stub_stdout").write_text(diff_stub[1], encoding="utf-8",
                                            newline="\n")
-        diff = f'cat "{(work / "_stub_stdout").as_posix()}"; exit {diff_stub[0]}'
+        diff = (f'printf "%s\\n" "$@" > "{(work / "_stub_args").as_posix()}"; '
+                f'cat "{(work / "_stub_stdout").as_posix()}"; exit {diff_stub[0]}')
     shim = bindir / "da-tools"
     shim.write_text(
         "#!/bin/sh\n"
@@ -133,6 +138,7 @@ def _run_job(pipeline: dict, work: Path, *, base_sha: str | None,
         "CI_PROJECT_DIR": str(work),
         "CONFIG_DIR": variables["CONFIG_DIR"],
         "DA_TOOLS_IMAGE": variables["DA_TOOLS_IMAGE"],
+        "DA_GUARD_BINARY": os.environ.get("DA_GUARD_BINARY", ""),
     }
     if base_sha is not None:
         env["CI_MERGE_REQUEST_DIFF_BASE_SHA"] = base_sha
@@ -272,6 +278,30 @@ def test_gitlab_blast_radius_honours_the_config_diff_exit_contract(
         f"rc={p.returncode}\nstdout:\n{p.stdout}\nstderr:\n{p.stderr}")
     if want_err:
         assert want_err in p.stderr, p.stderr
+
+
+@_needs_tools
+def test_gitlab_blast_radius_reads_time_dependent_settings_at_the_base_commit(
+    pipeline, tmp_path,
+) -> None:
+    """`--at` is the base commit's time (ADR-037): schedules, silences and
+    maintenance windows are read at one instant on both sides, and a re-run of
+    the job gives the same answer. Without it config-diff reads them at the
+    time of the run."""
+    work = tmp_path / "at"
+    base_sha = _synthetic_repo(work, base_has_config=True)
+    # A head commit years later, so the base's time and the head's (or the
+    # run's) cannot be mistaken for each other.
+    subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "later"], cwd=work, check=True,
+                   env={**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00+00:00"}, timeout=60)
+    p = _run_job(pipeline, work, base_sha=base_sha,
+                 diff_stub=(0, "# Config Diff Report\n\nno changes\n"))
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    args = (work / "_stub_args").read_text(encoding="utf-8").splitlines()
+    want = _git(work, "show", "-s", "--format=%cI", base_sha)
+    assert want != _git(work, "show", "-s", "--format=%cI", "HEAD")   # the premise
+    assert args[args.index("--at") + 1] == want, args
 
 
 @_needs_tools

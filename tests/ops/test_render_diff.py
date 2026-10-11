@@ -241,6 +241,39 @@ def test_both_sides_broken_follows_the_pr_side(tmp_path, da_guard):
     assert d.exit_code == 2
 
 
+def test_generator_refusal_names_the_file_it_could_not_read(tmp_path, da_guard):
+    """#1405：租戶檔變成目錄時，served-values 照樣算得出來（它只當那個租戶不見了），
+    擋下來的只有產生器。報告要說出是哪個檔，不能只剩產生器最後那行通用警告。"""
+    def to_dir(c: Path) -> None:
+        (c / "db-a.yaml").unlink()
+        (c / "db-a.yaml").mkdir()
+    d = _diff(tmp_path, da_guard, to_dir)
+    assert d.routes.status == "not_computed", d.routes
+    assert "db-a.yaml: is a directory" in d.routes.reason
+    assert d.exit_code == 2
+
+
+def test_generator_refusal_on_stdout_is_in_the_reason(monkeypatch, tmp_path):
+    """產生器對「什麼都沒產生」的拒收寫在 stdout，stderr 最後一行只是 INFO：原因要帶到 stdout 那句。"""
+    class P:
+        returncode = 1
+        stdout = "Config files: 1 read\nNo valid routes or inhibit rules generated.\n"
+        stderr = "  INFO: t: severity_dedup disabled, skipping inhibit rule\n"
+    monkeypatch.setattr(rd.subprocess, "run", lambda *a, **k: P)
+    with pytest.raises(rd.RenderError) as ei:
+        rd.render_routes(tmp_path)
+    assert ei.value.failure.kind == "config"
+    assert "No valid routes or inhibit rules generated." in ei.value.failure.reason
+
+
+def test_refusal_reads_only_the_fail_block():
+    stderr = ("  WARN: skip a.yaml: x\nFAIL: 1 config file(s) could not be read:\n"
+              "  a.yaml: is a directory\n  ⛔ Every tenant in a skipped file is ABSENT\n"
+              "Done.\n  unrelated: indented line\n")
+    assert rd._refusal(stderr) == "FAIL: 1 config file(s) could not be read:; a.yaml: is a directory"
+    assert rd._refusal("no fail block\n") == ""
+
+
 # ── 分類與比對的單元行為（不需 da-guard） ────────────────────────────
 
 

@@ -164,11 +164,11 @@ def test_describe_reads_profile_as_go_does(tmp_path, name, profile, served, wher
                          SHAPES + [(n, p, 80) for n, p in MERGE_KEY_SHAPES],
                          ids=[s[0] for s in SHAPES] + [s[0] for s in MERGE_KEY_SHAPES])
 def test_config_diff_blast_radius_is_the_tenants_go_binds(tmp_path, name, profile, served, where):
-    """config_diff 的 profile 爆炸半徑（`affected_tenants`）要是 Go 綁到該 profile 的租戶（#2115）。
+    """config_diff 對 profile 變更報出的租戶，要是 Go 綁到該 profile 的租戶（#2115、#2120）。
 
     修正前 config_diff 只認字串 `_profile`：`{default: '010'}` 這類 Go 綁 `010` 的寫法列成 `[]`；
-    根平台檔 `tenants:` 裡寫的 `_profile` 也完全看不到。oracle 是 Go 服務的值（10 = 綁到
-    `010`，80 = 沒綁）——與 config_diff 現在問 da-guard 的那個欄位無關，所以不是套套邏輯。"""
+    根平台檔 `tenants:` 裡寫的 `_profile` 也完全看不到。ADR-037 起 config_diff 比的是
+    served-values 的值，oracle 是 da-guard effective 的值（10 = 綁到 `010`，80 = 沒綁）。"""
     (tmp_path / "old").mkdir()
     (tmp_path / "new").mkdir()
     old = _tree(tmp_path / "old", profile, where)
@@ -176,9 +176,15 @@ def test_config_diff_blast_radius_is_the_tenants_go_binds(tmp_path, name, profil
                                         encoding="utf-8")
     new = _tree(tmp_path / "new", profile, where)
     assert _oracle(new)["value"] == served, (name, _oracle(new))   # 前提
-    diffs = {d["profile"]: d for d in config_diff.compute_profile_diff(str(old), str(new))}
-    assert set(diffs) == {"010"}, diffs                              # 必響：010 確實改了
-    assert diffs["010"]["affected_tenants"] == (["t1"] if served == 10 else []), (name, where)
+    p = subprocess.run([sys.executable, config_diff.__file__, "--old-dir", str(old),
+                        "--new-dir", str(new), "--at", "2026-10-10T00:00:00Z", "--format", "json"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert p.returncode == 1, (name, where, p.stderr[-1000:])
+    doc = json.loads(p.stdout)
+    assert doc["uncovered_files"] == ["_profiles.yaml"], doc         # 必響：010 確實改了
+    reached = [t for c in doc["threshold_changes"] if c["key"] == "mysql_connections"
+               for t in c["tenants"]]
+    assert reached == (["t1"] if served == 10 else []), (name, where, doc["threshold_changes"])
 
 
 def test_the_comparison_can_ring(tmp_path):

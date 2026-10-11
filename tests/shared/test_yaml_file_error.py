@@ -413,7 +413,7 @@ _ROWS = [
      None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--policy", str(f["files"] / "policy.yaml")],
      EXIT_OK),
-    # existing catch-all: rc was already 2, the file name is what is new
+    # ADR-037: both renders refuse the file; the exporter's reason is carried
     ("config_diff", OPS / "config_diff.py",
      lambda f: ["--old-dir", str(f["confd_ok"]), "--new-dir", str(f["confd_bad"])], None,
      "alpha.yaml",
@@ -427,7 +427,7 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # #2116: threshold_recommend reads served-values (then effective) too.
 # #2751: maintenance_scheduler reads effective, and served-values for the
 # parse reason when effective refuses a file.
-_SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant",
+_SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
 assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
@@ -601,7 +601,6 @@ def _is_guard(handler: str) -> bool:
 _HAND_GUARDED: dict[str, tuple[str, str]] = {
     "ops/backtest_threshold.py": ("main", "YamlFileError"),   # --json envelope
     "ops/policy_engine.py": ("main", "YamlFileError"),        # --json envelope
-    "ops/config_diff.py": ("main", "Exception"),              # catch-all since #1448 era
     "ops/validate_config.py": ("_run_check", "_INPUT_ERRORS"),  # dispatch wrapper (#1448)
 }
 
@@ -723,13 +722,15 @@ def test_scan_sees_the_known_population():
     found = {p.name for p in _tool_modules() if _scan(p).sites}
     expected = {
         "check_routing_profiles.py", "analyze_rule_pack_gaps.py", "backtest_threshold.py",
-        "config_diff.py", "deprecate_rule.py", "generate_tenant_mapping_rules.py",
+        "deprecate_rule.py", "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
         "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
         "blind_spot_discovery.py",
         "threshold_recommend.py",
         # maintenance_scheduler.py left in #2751: it reads the tree through
         # `da-guard effective`, no `_lib_python` load site remains.
+        # config_diff.py left with ADR-037: it compares what da-guard and the
+        # route generator render; its row above pins the refusal.
     }
     # ⛔ notification_tester.py left the population on purpose (#2752): it
     # reads `_routing` through the route generator's `load_tenant_tree`,
@@ -774,7 +775,7 @@ def test_hand_guarded_list_only_shrinks():
     set may lose members, never gain them without editing this literal."""
     assert set(_HAND_GUARDED) == {
         "ops/backtest_threshold.py", "ops/policy_engine.py",
-        "ops/config_diff.py", "ops/validate_config.py",
+        "ops/validate_config.py",
     }
     for rel in _HAND_GUARDED:
         assert (TOOLS / rel).is_file(), rel

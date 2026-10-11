@@ -1,7 +1,7 @@
 ---
-section: Added
+section: Changed
 topic: da-tools
 issues: [1516]
 created: 2026-10-10T17:30:00+08:00
 ---
-- **ADR-037：config-diff 改為比較渲染結果（[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)）**：平台層設定（`_defaults.yaml` 裡 `defaults:` 以外的鍵、routing profile、根目錄平台檔的 `tenants`）的變更，目前的 PR 報告都說不出影響了誰。ADR-037 決定 config-diff 改成在 base 與 PR 兩側各跑一次 `da-guard served-values` 與路由產生器，比較兩邊的渲染結果，並具名列出比不到的設定。這是 breaking change：報告與 JSON 結構都會改，且一律需要 da-guard。渲染失敗時，base 側的設定已壞不擋 PR（該面向列為未比對），工具本身失敗一律結束碼 2。比較引擎（route 樹、receiver、inhibit rules 與 served-values 的逐租戶差異）與報告三個區段（閾值、設定、custom alert）改從 served-values 讀出的讀取函式已就緒，尚未接上 CLI。
+- **⚠️ Breaking：`config-diff` 改為比較兩側的渲染結果（ADR-037；[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)、[#1405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1405)、[#2120](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2120)）**：base 與 PR 兩側各跑一次 `da-guard served-values` 與路由產生器，比較 exporter 送出的值與完整的 Alertmanager 設定（route 節點、receiver、inhibit rules），所以平台預設、profile、根目錄平台檔的變更會報出受影響的租戶。新增 `--at`（讀排程、靜默與維護時段的時間點，兩側共用；沒給時取執行當下），`da-tools init` 產生的 CI 傳 base commit 的時間。JSON 改為 `schema: da-tools.config-diff/v1`，每筆變更帶它影響的租戶，舊的 `metric_diffs`、`profile_diffs` 等已移除，解析舊 JSON 的腳本要跟著改。一律需要 da-guard（映像內建）。PR 側有檔讀不了時結束碼 2 並點名該檔，不再讀成「閾值被移除」；base 側設定已壞時該面向列為未比對（結束碼 1），不擋修好它的 PR。重新產生的 CI 需要搭配本版以後的映像。

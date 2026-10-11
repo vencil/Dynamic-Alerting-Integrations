@@ -7,7 +7,8 @@ Python readers below each disagreed with the exporter on the same tree:
 `describe_tenant` served the chain's value (no profile), `check_profiles`
 skipped the int (a reference to a profile that does not exist passed),
 `config_diff`'s profile refs and `diagnose`'s lookup / inheritance chain
-lost the tenant's profile.
+lost the tenant's profile. config_diff now compares what da-guard serves
+(ADR-037), so it is checked here through its CLI, by what it reports.
 
 The oracle is the exporter's EFFECTIVE value (`da-guard served-values`:
 `container_cpu` 55 from the profile, 80 from the defaults), not a profile
@@ -29,7 +30,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS = REPO_ROOT / "scripts" / "tools"
 
 import _lib_tenant_values  # noqa: E402
-import config_diff  # noqa: E402
 import diagnose  # noqa: E402
 import validate_config  # noqa: E402
 
@@ -126,12 +126,6 @@ def test_every_reader_binds_the_profile_the_exporter_applies(
         assert (f'tenant=tx: _profile references unknown profile "{name}"'
                 in res["details"]), res
 
-    # config_diff: the ref is reported under the name, and that name is a
-    # key of the profiles it reads (so the impact report can join them).
-    assert config_diff.load_tenant_profile_refs(str(d)) == {name: ["tx"]}
-    assert (name in config_diff.load_profiles_from_dir(str(d))) == bound
-    assert config_diff.load_settings_from_dir(str(d)) == {"tx": {"_profile": name}}
-
     # diagnose: the lookup names the profile the exporter binds (#2526: None
     # when it binds none); the chain has a profile layer iff bound.
     assert diagnose.lookup_tenant_profile("tx", str(d)) == (name if bound else None)
@@ -141,58 +135,26 @@ def test_every_reader_binds_the_profile_the_exporter_applies(
     assert float(chain["resolved"]["container_cpu"]) == served, chain
 
 
-def _outcome(load, d: Path):
-    """What a loader does with `d`: its result, or the exception it raises
-    (type and the file it names) — a copy that raises where the original
-    returns, or the reverse, differs here."""
-    try:
-        return ("ok", load(str(d)))
-    except Exception as exc:  # noqa: BLE001 — compared, not handled
-        return ("raises", type(exc).__name__, getattr(exc, "path", None))
-
-
-# One conf.d per shape: a file that raises would hide the others' results.
-_LOADER_SHAPES = {
-    "mixed": {
-        "_defaults.yaml": "defaults:\n  a: 1\n",
-        ".hidden.yaml": "tenants:\n  h:\n    a: 1\n",
-        "w.yaml": "tenants:\n  010:\n    a: 2\n  yes:\n    a: 3\n",
-        "flat.YML": "a: 4\n_profile: std\n",
-        "empty.yaml": "",
-    },
-    # The shared loader reads ONE document: a second one is a YAML error,
-    # not "take the first".
-    "multi-document": {"m.yaml": "tenants:\n  m1:\n    a: 1\n---\ntenants:\n  m2:\n    a: 2\n"},
-    # A tenant whose value is not a mapping is dropped, not kept.
-    "non-mapping-tenant": {"n.yaml": "tenants:\n  a: 1\n  b:\n    x: 2\n"},
-    # `tenants:` that is not a mapping: the file is a flat tenant named
-    # after it, `tenants` key and all.
-    "tenants-list": {"l.yaml": "tenants: []\n"},
-}
-
-
-@pytest.mark.parametrize("shape", sorted(_LOADER_SHAPES))
-def test_config_diff_profile_loader_lists_the_shared_loaders_tenants(tmp_path, shape):
-    """`config_diff`'s `_profile`-as-text loader copies the shared loader's
-    walk (it may not change that loader, #2115): the same result — or the
-    same error — for every shape of file that walk distinguishes."""
-    d = tmp_path / "conf.d"
-    d.mkdir()
-    for name, body in _LOADER_SHAPES[shape].items():
-        (d / name).write_text(body, encoding="utf-8")
-    own = _outcome(config_diff._load_tenant_configs_profile_text, d)
-    shared = _outcome(config_diff._load_tenant_configs_raw, d)
-    assert own == shared, (own, shared)
+def _config_diff(old: Path, new: Path) -> dict:
+    p = subprocess.run(
+        [sys.executable, str(TOOLS / "ops" / "config_diff.py"), "--old-dir", str(old),
+         "--new-dir", str(new), "--at", "2026-10-10T00:00:00Z", "--format", "json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode in (0, 1), p.stderr[-2000:]
+    return json.loads(p.stdout)
 
 
 def test_config_diff_sees_a_switch_between_spellings_of_one_int(tmp_path):
     """`_profile: 010` → `_profile: 8` switches the exporter from profile
-    `010` to profile `8`; PyYAML reads both as 8, so the settings diff
-    printed no change."""
+    `010` (container_cpu 55) to no profile (80); PyYAML reads both as 8, so
+    the YAML settings diff printed no change."""
     old = _tree(tmp_path / "old", "010", "'010'")
     new = _tree(tmp_path / "new", "8", "'010'")
-    assert (config_diff.load_settings_from_dir(str(old))
-            != config_diff.load_settings_from_dir(str(new)))
+    doc = _config_diff(old, new)
+    assert [(c["key"], c["old"], c["new"], c["tenants"]) for c in doc["threshold_changes"]] == \
+        [("container_cpu", 55, 80, ["tx"])], doc
+    # Control: the same spelling on both sides is no change.
+    assert _config_diff(old, old)["exit_code"] == 0
 
 
 def _describe_json(*args) -> dict:
@@ -235,36 +197,38 @@ def test_describe_what_if_on_the_unchanged_carrier_changes_nothing(tmp_path, da_
 
 @pytest.mark.parametrize("ref", ["'010 '", "|\n      010"],
                          ids=["trailing-space", "block-scalar"])
-def test_config_diff_profile_refs_strip_the_name(tmp_path, da_guard, ref):
+def test_profile_refs_strip_the_name(tmp_path, da_guard, ref):
     """The exporter's `profileNameOf` trims the name, as describe_tenant,
     diagnose and validate_config do: `'010 '` and a block scalar (`"010\\n"`)
-    bind profile 010. config_diff's refs reported `'010 '` / `'010\\n'`, a
-    name no profile has, so the impact report lost the tenant."""
+    bind profile 010."""
     d = _tree(tmp_path / "conf.d", ref, "'010'")
     assert _served_cpu(d, da_guard) == _PROFILE_CPU
     assert diagnose.lookup_tenant_profile("tx", str(d)) == "010"
     assert validate_config.check_profiles(str(d))["status"] == validate_config.PASS
-    assert config_diff.load_tenant_profile_refs(str(d)) == {"010": ["tx"]}
 
 
-def test_config_diff_profile_refs_follow_the_layer_go_binds(tmp_path):
-    """#2115: config_diff's refs are da-guard's (`effective_config._profile`),
-    kept only where the tenant's own layer writes it. A `_profile` inherited
-    from a sub-directory `_defaults.yaml` shows in effective_config but binds
-    nothing (Go `profile` None) — not a ref. One written in the root platform
-    file's `tenants:` entry binds — a ref (the file walk before never saw it)."""
-    d = tmp_path / "conf.d"
-    (d / "sub").mkdir(parents=True)
-    (d / "_defaults.yaml").write_text(
-        "defaults:\n  container_cpu: 80\ntenants:\n  tp:\n    _profile: std\n", encoding="utf-8")
-    (d / "_profiles.yaml").write_text("profiles:\n  std:\n    container_cpu: 55\n",
-                                      encoding="utf-8")
-    (d / "tp.yaml").write_text("tenants:\n  tp: {}\n", encoding="utf-8")
-    (d / "sub" / "_defaults.yaml").write_text("defaults:\n  _profile: std\n", encoding="utf-8")
-    (d / "sub" / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 5\n",
-                                       encoding="utf-8")
-    eff = _lib_tenant_values.load_effective(d)
+def test_config_diff_profile_change_reaches_the_tenants_go_binds(tmp_path):
+    """#2115 / #2120: a profile change is reported for the tenants the exporter
+    binds to it. A `_profile` inherited from a sub-directory `_defaults.yaml`
+    shows in effective_config but binds nothing (Go `profile` None): not
+    reached. One written in the root platform file's `tenants:` entry binds:
+    reached (the YAML file walk before never saw it)."""
+    def tree(d: Path, cpu: int) -> Path:
+        (d / "sub").mkdir(parents=True)
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  container_cpu: 80\ntenants:\n  tp:\n    _profile: std\n", encoding="utf-8")
+        (d / "_profiles.yaml").write_text(f"profiles:\n  std:\n    container_cpu: {cpu}\n",
+                                          encoding="utf-8")
+        (d / "tp.yaml").write_text("tenants:\n  tp: {}\n", encoding="utf-8")
+        (d / "sub" / "_defaults.yaml").write_text("defaults:\n  _profile: std\n", encoding="utf-8")
+        (d / "sub" / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 5\n",
+                                           encoding="utf-8")
+        return d
+    old, new = tree(tmp_path / "old", 55), tree(tmp_path / "new", 60)
+    eff = _lib_tenant_values.load_effective(old)
     # The oracle: tx carries `_profile` from the chain, unbound; tp is bound.
     assert eff["tx"].effective_config.get("_profile") == "std" and eff["tx"].profile is None
     assert eff["tp"].profile == "std"
-    assert config_diff.load_tenant_profile_refs(str(d)) == {"std": ["tp"]}
+    doc = _config_diff(old, new)
+    assert [(c["key"], c["old"], c["new"], c["tenants"]) for c in doc["threshold_changes"]] == \
+        [("container_cpu", 55, 60, ["tp"])], doc

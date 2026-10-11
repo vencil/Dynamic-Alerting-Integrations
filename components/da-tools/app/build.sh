@@ -97,6 +97,10 @@ TOOL_FILES=(
     # File system tools (offline)
     ops/migrate_rule.py
     ops/config_diff.py
+    # #1516 (ADR-037) — renders both conf.d trees (da-guard served-values and
+    # generate_alertmanager_routes.py, run beside it) and compares the renders;
+    # imported by ops/config_diff, which ImportErrors without it.
+    ops/_render_diff.py
     # Reads the rule packs (REPO_DATA_FILES below) to name the alerts a
     # threshold key reaches; shared by config_diff and patch_config --diff.
     ops/_threshold_alerts.py

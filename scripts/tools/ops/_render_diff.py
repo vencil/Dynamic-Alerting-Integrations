@@ -52,7 +52,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 _TOOLS = Path(__file__).resolve().parent
 for _p in (_TOOLS, _TOOLS.parent):
@@ -129,6 +129,9 @@ class ViewResult(NamedTuple):
     status: str                    # "computed" | "not_computed" | "not_compared"
     reason: str                    # "" when computed
     changes: tuple = ()
+    # What `compare`'s `served_report` made of the two renders, when computed.
+    # The renders themselves are not kept: they hold credentials unmasked.
+    report: Any = None
 
 
 class RenderDiff(NamedTuple):
@@ -162,7 +165,12 @@ def render_served(conf_d: str | os.PathLike[str], at: str, *, binary: str | None
         return tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
                                    schedules=True).tenants
     except tv.ParseFailedError as e:
-        raise RenderError(RenderFailure("config", f"served-values: {e}")) from e
+        # The exporter's own reason for each file it skips (da-guard's
+        # stderr), not only that it skipped one: the reader has to fix it.
+        files = e.parse_failed or [os.path.basename(e.path)]
+        why = [ln.strip() for ln in e.stderr_lines if any(f in ln for f in files)]
+        raise RenderError(RenderFailure(
+            "config", "; ".join([f"served-values: {e}"] + why))) from e
     except tv.DaGuardNotFoundError as e:
         raise RenderError(RenderFailure("tool", f"served-values: {e}")) from e
     except tv.DaGuardError as e:
@@ -191,7 +199,11 @@ def render_routes(conf_d: str | os.PathLike[str], *,
         except OSError as e:
             raise RenderError(RenderFailure("tool", f"route generator could not be run: {e}")) from e
         if proc.returncode != 0:
-            last = _last_line(proc.stderr) or _last_line(proc.stdout)
+            # Its refusal is on stderr (`FAIL:` and the files it names), or on
+            # stdout ("No valid routes or inhibit rules generated."), its last
+            # stderr line then being any WARN / INFO: both, when there is no FAIL.
+            last = _refusal(proc.stderr) or "; ".join(
+                x for x in (_last_line(proc.stdout), _last_line(proc.stderr)) if x)
             crashed = "Traceback (most recent call last)" in proc.stderr
             refused = (proc.returncode == 1
                        or (proc.returncode == 2 and GENERATOR_TREE_REFUSAL in proc.stderr))
@@ -212,6 +224,23 @@ def render_routes(conf_d: str | os.PathLike[str], *,
         return cfg
 
 
+def _refusal(stderr: str) -> str:
+    """The generator's `FAIL:` line and the lines under it that name a file
+    (`  db-a.yaml: is a directory, ...`), joined: its last line is a generic
+    warning that names none, and a reviewer has to know which file to fix."""
+    lines = stderr.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.startswith("FAIL:"):
+            named = []
+            for x in lines[i + 1:]:
+                if not x.startswith("  "):
+                    break
+                if not x.strip().startswith("\u26d4"):
+                    named.append(x.strip())
+            return "; ".join([ln.strip()] + named)
+    return ""
+
+
 def _last_line(text: str) -> str:
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     return lines[-1] if lines else ""
@@ -221,15 +250,21 @@ def _last_line(text: str) -> str:
 
 
 def compare(base_dir: str | os.PathLike[str], pr_dir: str | os.PathLike[str], at: str, *,
-            binary: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> RenderDiff:
-    """Render both sides and compare them (see the module docstring)."""
+            binary: str | None = None, timeout: float = DEFAULT_TIMEOUT,
+            served_report: Callable[[dict, dict], Any] | None = None) -> RenderDiff:
+    """Render both sides and compare them (see the module docstring).
+
+    `served_report(base, pr)`, given, is called with the two sides' served
+    tenants when that view is computed, and its result kept as the view's
+    `report` — for a report that reads the renders itself without rendering
+    them again. It must mask what it keeps: the renders are not masked."""
     if not has_config(pr_dir):
         reason = f"PR side: {pr_dir} has no config file"
         miss = ViewResult("not_computed", reason)
         return RenderDiff(at, miss, miss)
     first_import = not has_config(base_dir)
 
-    def view(render, empty, diff) -> ViewResult:
+    def view(render, empty, diff, report=None) -> ViewResult:
         try:
             pr = render(pr_dir)
         except RenderError as e:
@@ -243,10 +278,11 @@ def compare(base_dir: str | os.PathLike[str], pr_dir: str | os.PathLike[str], at
                 if e.failure.kind == "tool":
                     return ViewResult("not_computed", f"base side: {e.failure.reason}")
                 return ViewResult("not_compared", f"base side does not render: {e.failure.reason}")
-        return ViewResult("computed", "", tuple(diff(base, pr)))
+        return ViewResult("computed", "", tuple(diff(base, pr)),
+                          report(base, pr) if report else None)
 
     served = view(lambda d: render_served(d, at, binary=binary, timeout=timeout),
-                  dict, diff_served)
+                  dict, diff_served, served_report)
     routes = view(lambda d: render_routes(d, timeout=timeout),
                   lambda: dict(EMPTY_ROUTES), diff_routes)
     return RenderDiff(at, served, routes)
