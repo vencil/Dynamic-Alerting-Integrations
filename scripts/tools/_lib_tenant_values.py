@@ -85,6 +85,12 @@ is what keeps either of them off column 0.
   filter name -> the `severity` label of its `user_state_filter` row on
   /metrics. A filter that is off has no entry; `values["_state_<filter>"]`
   stays the True / False reading.
+* `time_boxes` — every time-box the exporter honours on an operational mode,
+  `_silent_mode` (one `TimeBox` per silenced severity) or `_state_maintenance`
+  -> its `TimeBox(target, expires, expired)`s. The mode's reading in `values`
+  only says whether it is in force at `at`; extending it or making it
+  open-ended changes this instead. A da-guard whose output lacks the field is
+  named as older than this tool.
 
 The document must name its shape: a `schema` other than
 `SERVED_VALUES_SCHEMA` is refused, and a document with none is named as
@@ -293,6 +299,12 @@ class KeySchedule(NamedTuple):
     expired: bool | None    # the exporter's verdict at `at`; None without a time-box
 
 
+class TimeBox(NamedTuple):
+    target: str    # the silenced severity for `_silent_mode`; "" for `_state_maintenance`
+    expires: str   # RFC3339, as the exporter parsed it
+    expired: bool  # the exporter's verdict at `at`
+
+
 class TenantValues(NamedTuple):
     tenant_id: str
     values: dict[str, Any]
@@ -302,6 +314,7 @@ class TenantValues(NamedTuple):
     schedules: dict[str, KeySchedule] | None  # None unless asked for (schedules=True)
     series: dict[str, tuple[Series, ...]]     # threshold key -> its /metrics series (#2750)
     state_filters: dict[str, str]             # filter on at `at` -> its user_state_filter severity
+    time_boxes: dict[str, tuple[TimeBox, ...]]  # `_silent_mode` / `_state_maintenance` -> its time-boxes
 
 
 class SkippedFile(NamedTuple):
@@ -729,6 +742,16 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries state_filters that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
+        if "time_boxes" not in tv:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no time_boxes — this da-guard is "
+                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        try:
+            time_boxes = _time_boxes(tv["time_boxes"])
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries time_boxes that are not of their shape ({e!r})",
+                returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
             if "schedules" not in tv:
@@ -743,8 +766,26 @@ def load_served_tree(
                     returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
-                                     state_filters)
+                                     state_filters, time_boxes)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
+
+
+def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
+    """A tenant's `time_boxes`, as da-guard wrote it."""
+    if not isinstance(m, dict):
+        raise TypeError(f"not a mapping: {m!r}")
+    out = {}
+    for key, boxes in m.items():
+        if not isinstance(boxes, list):
+            raise TypeError(f"{key}: not a list: {boxes!r}")
+        items = []
+        for b in boxes:
+            expires, expired = b["expires"], b["expired"]
+            if not isinstance(expires, str) or not expires or not isinstance(expired, bool):
+                raise TypeError(f"{key}: not a time-box: {b!r}")
+            items.append(TimeBox(str(b.get("target", "")), expires, expired))
+        out[str(key)] = tuple(items)
+    return out
 
 
 def _state_filters(m: Any) -> dict[str, str]:

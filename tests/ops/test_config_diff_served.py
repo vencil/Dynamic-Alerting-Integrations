@@ -157,6 +157,22 @@ def test_state_filter_severity_change_is_a_setting_change(tmp_path, da_guard):
     assert (got[key]["old"], got[key]["new"]) == ("critical", "warning")
 
 
+@pytest.mark.parametrize("old, new, key", [
+    ({"_silent_mode": {"target": "all", "expires": "2027-01-01T00:00:00Z"}},
+     {"_silent_mode": {"target": "all", "expires": "2028-01-01T00:00:00Z"}}, "_silent_mode"),
+    ({"_silent_mode": {"target": "all", "expires": "2027-01-01T00:00:00Z"}}, {"_silent_mode": "all"}, "_silent_mode"),
+    ({"_state_maintenance": {"target": "enable", "expires": "2027-01-01T00:00:00Z"}},
+     {"_state_maintenance": {"target": "enable", "expires": "2028-01-01T00:00:00Z"}}, "_state_maintenance"),
+], ids=["silence-extended", "silence-made-open-ended", "maintenance-extended"])
+def test_time_box_change_is_a_setting_change(tmp_path, da_guard, old, new, key):
+    """延長靜音／維護，或把靜音改成無期限：當下的讀數不變，時效變了也要報。"""
+    maint = _DEFAULTS + "  maintenance:\n    reasons: []\n    default_state: disable\n"
+    b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections": "70", **old}},
+                   {"t": {"mysql_connections": "70", **new}}, base_defaults=maint, pr_defaults=maint)
+    keys = {e["key"] for e in cd.served_setting_diff(b, p)["t"]}
+    assert f"{cd.SERVED_TIME_BOXES_KEY}.{key}" in keys, keys
+
+
 def test_a_tenant_key_named_like_the_state_filters_entry_is_still_compared(tmp_path, da_guard):
     b, p = _served(tmp_path, da_guard, {"t": {"_state_filters": "enable"}}, {"t": {"_state_filters": "disable"}})
     assert "_state_filters" in {e["key"] for e in cd.served_setting_diff(b, p)["t"]}
@@ -322,6 +338,6 @@ def test_every_row_of_a_recipe_counts_not_only_the_first():
 
     def tenants(second_mode):
         return {"t": tv.TenantValues("t", {"_custom_alerts": [row("m1", "page"), row("m2", second_mode)]},
-                                     {}, {}, {}, None, {}, {})}
+                                     {}, {}, {}, None, {}, {}, {})}
     old, new = cd.served_custom_alerts(tenants("page")), cd.served_custom_alerts(tenants("silent"))
     assert old["t"]["x"]["mode"] == "page" and new["t"]["x"]["mode"] == "page, silent"

@@ -650,6 +650,7 @@ def compute_custom_alert_diff(old_alerts, new_alerts):
 #   the exporter rejects.
 
 SERVED_STATE_FILTERS_KEY = "state_filters"
+SERVED_TIME_BOXES_KEY = "time_boxes"
 SERVED_REMOVED_NOTE = ("no longer served: the recipe was deleted, its threshold "
                        "disabled, or the exporter rejected it (see da-guard's stderr)")
 
@@ -704,8 +705,11 @@ def served_setting_configs(tenants):
     """{tenant: {"_key": value}} for compute_setting_diff: the reserved keys
     the exporter reads for each tenant (`_custom_alerts` aside, in its own
     section), the reserved keys it does not serve as written, and the state
-    filters on for the tenant with their severity (SERVED_STATE_FILTERS_KEY,
-    not `_`-prefixed so no key a tenant writes can collide with it).
+    filters on for the tenant with their severity (SERVED_STATE_FILTERS_KEY),
+    and the time-boxes the exporter honours on `_silent_mode` /
+    `_state_maintenance` (SERVED_TIME_BOXES_KEY: extending a silence or making
+    it open-ended changes nothing the mode's own reading shows). Neither is
+    `_`-prefixed, so no key a tenant writes can collide with them.
 
     A routing key the exporter does not serve arrives as the text written
     (a receiver it rejects, a `type` left out): the text may hold a webhook
@@ -723,6 +727,9 @@ def served_setting_configs(tenants):
                 settings[key] = value
         settings.pop("_custom_alerts", None)
         settings[SERVED_STATE_FILTERS_KEY] = dict(tv.state_filters or {})
+        settings[SERVED_TIME_BOXES_KEY] = {
+            key: [{"target": b.target, "expires": b.expires, "expired": b.expired} for b in boxes]
+            for key, boxes in (tv.time_boxes or {}).items()}
         out[tenant] = settings
     return out
 

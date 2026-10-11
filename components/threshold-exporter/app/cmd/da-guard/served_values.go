@@ -161,6 +161,26 @@ type servedTenantValues struct {
 	// Severities (readers take those keys for threshold keys). Always
 	// present ({} when none).
 	StateFilters map[string]servedStateFilter `json:"state_filters"`
+	// TimeBoxes: every time-box the exporter honours on an operational
+	// mode, keyed by the reserved key that writes it — `_silent_mode` (one
+	// entry per silenced severity) and `_state_maintenance` (structured
+	// form, when the maintenance filter is declared) — with `expires` as the
+	// exporter parsed it (RFC3339, sub-second digits kept) and its
+	// verdict at `at`. The mode's own reading in Values says only whether
+	// it is in force at `at`, so extending a silence or making it
+	// open-ended changes nothing there; it changes this. A mode with no
+	// time-box (or one the exporter ignores) has no entry. Always present
+	// ({} when none).
+	TimeBoxes map[string][]servedTimeBox `json:"time_boxes"`
+}
+
+// servedTimeBox is one entry of servedTenantValues.TimeBoxes.
+type servedTimeBox struct {
+	// Target is the silenced severity for `_silent_mode`; empty (absent)
+	// for `_state_maintenance`.
+	Target  string `json:"target,omitempty"`
+	Expires string `json:"expires"`
+	Expired bool   `json:"expired"`
 }
 
 // servedStateFilter is one entry of servedTenantValues.StateFilters.
@@ -480,6 +500,36 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		routing[r.Tenant] = r
 	}
 	byTenant := res.Ops.ByTenant(cfg)
+	type keyedBox struct {
+		key string
+		box servedTimeBox
+	}
+	timeBoxes := map[string][]keyedBox{}
+	for _, sm := range append(append([]config.ResolvedSilentMode(nil), res.Ops.Silences...), res.Ops.ExpiredSilences...) {
+		if sm.Expires.IsZero() {
+			continue
+		}
+		timeBoxes[sm.Tenant] = append(timeBoxes[sm.Tenant], keyedBox{"_silent_mode", servedTimeBox{
+			Target: sm.TargetSeverity, Expires: sm.Expires.UTC().Format(time.RFC3339Nano), Expired: sm.Expired}})
+	}
+	// A maintenance time-box is listed only when the maintenance filter is
+	// declared: without it the mode is not in force at all, so its time-box
+	// changes nothing (the expiry reading itself does not look at the
+	// declaration).
+	if _, declared := cfg.StateFilters["maintenance"]; declared {
+		for _, me := range res.MaintenanceExpiries {
+			timeBoxes[me.Tenant] = append(timeBoxes[me.Tenant], keyedBox{"_state_maintenance", servedTimeBox{
+				Expires: me.Expires.UTC().Format(time.RFC3339Nano), Expired: me.Expired}})
+		}
+	}
+	for _, boxes := range timeBoxes {
+		sort.Slice(boxes, func(i, j int) bool {
+			if boxes[i].key != boxes[j].key {
+				return boxes[i].key < boxes[j].key
+			}
+			return boxes[i].box.Target < boxes[j].box.Target
+		})
+	}
 	stateOn := map[string]map[string]servedStateFilter{}
 	for _, sf := range res.Ops.StateFilters {
 		if stateOn[sf.Tenant] == nil {
@@ -498,6 +548,10 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			Dropped:    map[string][]string{},
 
 			StateFilters: map[string]servedStateFilter{},
+			TimeBoxes:    map[string][]servedTimeBox{},
+		}
+		for _, b := range timeBoxes[tenant] {
+			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)
 		}
 		for name, sf := range stateOn[tenant] {
 			tv.StateFilters[name] = sf

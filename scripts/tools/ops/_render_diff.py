@@ -78,7 +78,7 @@ DEFAULT_TIMEOUT = 600
 EMPTY_ROUTES: dict[str, Any] = {"route": {}, "receivers": [], "inhibit_rules": []}
 
 ROUTE_ATTRS = ("receiver", "group_by", "group_wait", "group_interval", "repeat_interval", "continue")
-SERVED_FIELDS = ("values", "severities", "state_filters", "unserved", "dropped", "schedules")
+SERVED_FIELDS = ("values", "severities", "state_filters", "time_boxes", "unserved", "dropped", "schedules")
 _TENANT_MATCHER = re.compile(r'^\s*tenant\s*=\s*"?(.*?)"?\s*$')
 # One Alertmanager matcher: name, operator, value (quoted or not).
 _MATCHER = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*(?:"((?:[^"\\]|\\.)*)"|(.*?))\s*$')

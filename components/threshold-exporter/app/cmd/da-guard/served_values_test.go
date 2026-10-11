@@ -50,6 +50,11 @@ type servedOut struct {
 		StateFilters map[string]struct {
 			Severity string `json:"severity"`
 		} `json:"state_filters"`
+		TimeBoxes map[string][]struct {
+			Target  string `json:"target"`
+			Expires string `json:"expires"`
+			Expired bool   `json:"expired"`
+		} `json:"time_boxes"`
 	} `json:"tenants"`
 	Aliases map[string]string `json:"aliases"`
 }
@@ -580,7 +585,7 @@ tenants:
     mysql_cpu: 44
     redis_memory: disable
     kafka_lag: 1000
-    _silent_mode: warning
+    _silent_mode: {target: warning, expires: "2026-06-01T00:00:00Z"}
     _severity_dedup: disable
     _state_crashloop: disable
     redis_queue_length{queue="tasks"}: "5"
@@ -602,7 +607,7 @@ tenants:
 	"tenant-b.yaml": `tenants:
   tenant-b:
     _profile: gold
-    _state_maintenance: enable
+    _state_maintenance: {target: enable, expires: "2027-01-01T00:00:00Z"}
     mysql_connections_critical: 95
 `,
 	"sub/_defaults.yaml": "defaults:\n  mysql_connections: 60\n",
@@ -705,6 +710,23 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 				}
 				wantSF[sf.Tenant][sf.FilterName] = sf.Severity
 			}
+			wantTB := map[string]map[string]string{}
+			addTB := func(tenant, key string, exp time.Time, expired bool) {
+				if wantTB[tenant] == nil {
+					wantTB[tenant] = map[string]string{}
+				}
+				wantTB[tenant][key] = fmt.Sprintf("%s|%v", exp.UTC().Format(time.RFC3339Nano), expired)
+			}
+			for _, sm := range append(append([]config.ResolvedSilentMode(nil), ops.Silences...), ops.ExpiredSilences...) {
+				if !sm.Expires.IsZero() {
+					addTB(sm.Tenant, "_silent_mode/"+sm.TargetSeverity, sm.Expires, sm.Expired)
+				}
+			}
+			if _, declared := cfg.StateFilters["maintenance"]; declared {
+				for _, me := range cfg.ResolveMaintenanceExpiriesAt(now) {
+					addTB(me.Tenant, "_state_maintenance/", me.Expires, me.Expired)
+				}
+			}
 			routed := map[string]bool{}
 			for _, r := range cfg.ResolveRouting() {
 				routed[r.Tenant] = true
@@ -738,6 +760,18 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 				}
 				if tv.StateFilters == nil {
 					t.Errorf("%s: state_filters is absent or null, want an object", tenant)
+				}
+				if tv.TimeBoxes == nil {
+					t.Errorf("%s: time_boxes is absent or null, want an object", tenant)
+				}
+				gotTB := map[string]string{}
+				for key, boxes := range tv.TimeBoxes {
+					for _, b := range boxes {
+						gotTB[key+"/"+b.Target] = fmt.Sprintf("%s|%v", b.Expires, b.Expired)
+					}
+				}
+				if want := wantTB[tenant]; !reflect.DeepEqual(gotTB, want) && (len(gotTB) > 0 || len(want) > 0) {
+					t.Errorf("%s: time_boxes %v, resolver %v", tenant, gotTB, want)
 				}
 				if _, ok := tv.Values["_routing"]; ok != routed[tenant] {
 					t.Errorf("%s: _routing present=%v, ResolveRouting has it=%v", tenant, ok, routed[tenant])
@@ -775,6 +809,8 @@ func TestServedValues_ConsistencyTreeIsNotVacuous(t *testing.T) {
 		{"state filter severity as written", b.StateFilters["maintenance"].Severity == "info"},
 		{"state filter severity defaulted", b.StateFilters["crashloop"].Severity == "warning"},
 		{"state filter switched off has no entry", a.Values["_state_crashloop"] == false && len(a.StateFilters) == 0},
+		{"silent mode time-box (expired at 07-01)", len(a.TimeBoxes["_silent_mode"]) == 1 && a.TimeBoxes["_silent_mode"][0].Expired},
+		{"maintenance time-box", len(b.TimeBoxes["_state_maintenance"]) == 1 && !b.TimeBoxes["_state_maintenance"][0].Expired},
 	}
 	for _, ch := range checks {
 		if !ch.ok {
@@ -1206,5 +1242,69 @@ func TestServedValues_StateFilterSeverityChangeIsVisible(t *testing.T) {
 	}
 	if n := len(crit.Tenants["b"].StateFilters); n != 0 {
 		t.Errorf("b switched crashloop off but has %d state_filters entries: %+v", n, crit.Tenants["b"].StateFilters)
+	}
+}
+
+// TestServedValues_TimeBoxChangeIsVisible: extending a silence or a
+// maintenance window, or making a silence open-ended, changes nothing that is
+// in force at `at` — the mode's own reading stays the same — but it changes
+// time_boxes, so a comparison of two trees sees it.
+func TestServedValues_TimeBoxChangeIsVisible(t *testing.T) {
+	t.Parallel()
+	const at = "2026-07-01T03:00:00Z"
+	const defaults = "defaults:\n  x: 1\nstate_filters:\n  maintenance:\n    reasons: []\n    default_state: disable\n"
+	read := func(tenant string) servedOut {
+		code, doc, _, stderr := served(t, map[string]string{"_defaults.yaml": defaults, "t.yaml": "tenants:\n  t:\n" + tenant}, at)
+		mustOK(t, code, stderr)
+		return doc
+	}
+	cases := []struct{ name, a, b, key string }{
+		{"silence extended",
+			"    _silent_mode: {target: all, expires: \"2027-01-01T00:00:00Z\"}\n",
+			"    _silent_mode: {target: all, expires: \"2028-01-01T00:00:00Z\"}\n", "_silent_mode"},
+		{"silence made open-ended",
+			"    _silent_mode: {target: all, expires: \"2027-01-01T00:00:00Z\"}\n",
+			"    _silent_mode: all\n", "_silent_mode"},
+		{"maintenance extended",
+			"    _state_maintenance: {target: enable, expires: \"2027-01-01T00:00:00Z\"}\n",
+			"    _state_maintenance: {target: enable, expires: \"2028-01-01T00:00:00Z\"}\n", "_state_maintenance"},
+	}
+	for _, c := range cases {
+		a, b := read(c.a), read(c.b)
+		ta, tb := a.Tenants["t"], b.Tenants["t"]
+		if !reflect.DeepEqual(ta.Values[c.key], tb.Values[c.key]) {
+			t.Errorf("%s: %s reading differs (%v vs %v); the case is meant to change only the time-box", c.name, c.key, ta.Values[c.key], tb.Values[c.key])
+		}
+		if reflect.DeepEqual(ta.TimeBoxes, tb.TimeBoxes) {
+			t.Errorf("%s: time_boxes identical (%v): the change is invisible", c.name, ta.TimeBoxes)
+		}
+	}
+	// Control: no time-box at all has an empty object, and the silenced
+	// severities are listed one entry each.
+	if n := len(read("    x: 2\n").Tenants["t"].TimeBoxes); n != 0 {
+		t.Errorf("no time-box: %d entries", n)
+	}
+	if n := len(read(cases[0].a).Tenants["t"].TimeBoxes["_silent_mode"]); n != 2 {
+		t.Errorf("target all: %d _silent_mode entries, want 2 (warning, critical)", n)
+	}
+	// Sub-second digits are kept: a change below the second is a change.
+	got := read("    _silent_mode: {target: warning, expires: \"2027-01-01T00:00:00.9Z\"}\n").Tenants["t"].TimeBoxes["_silent_mode"]
+	if len(got) != 1 || got[0].Expires != "2027-01-01T00:00:00.9Z" {
+		t.Errorf("sub-second expires: %+v", got)
+	}
+}
+
+// TestServedValues_UndeclaredMaintenanceHasNoTimeBox: without the maintenance
+// filter declared the mode is not in force, so its time-box changes nothing
+// and is not listed (the control above declares it and lists it).
+func TestServedValues_UndeclaredMaintenanceHasNoTimeBox(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  x: 1\n",
+		"t.yaml":         "tenants:\n  t:\n    _state_maintenance: {target: enable, expires: \"2027-01-01T00:00:00Z\"}\n",
+	}, "2026-07-01T03:00:00Z")
+	mustOK(t, code, stderr)
+	if tb := doc.Tenants["t"].TimeBoxes; len(tb) != 0 {
+		t.Errorf("undeclared maintenance filter: time_boxes %+v, want none", tb)
 	}
 }
