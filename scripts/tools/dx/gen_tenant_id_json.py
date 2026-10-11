@@ -28,6 +28,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 # --help. scripts/tools is the parent of dx/.
 sys.path.insert(0, os.path.dirname(_THIS_DIR))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 SCHEMA_REL = "docs/schemas/tenant-config.schema.json"
 
@@ -46,11 +47,8 @@ _HEADER = (
 
 
 def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return Path(_THIS_DIR).resolve().parents[2]
+    """This tree's root, never an enclosing project's (#2852)."""
+    return require_project_root(_THIS_DIR)
 
 
 def render(schema: dict) -> str:

@@ -54,6 +54,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
 except Exception:  # pragma: no cover
@@ -71,11 +72,8 @@ _AGG_OVER_USER_THRESHOLD = re.compile(
 
 
 def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+    """This tree's root, never an enclosing project's (#2852)."""
+    return require_project_root(_THIS_DIR)
 
 
 def _iter_rule_groups(path: Path):

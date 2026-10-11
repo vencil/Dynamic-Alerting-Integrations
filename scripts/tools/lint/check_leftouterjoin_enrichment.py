@@ -39,17 +39,15 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 ENRICH_MARKER = "* on(tenant) group_left(runbook_url, owner, tier)"
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
 
 
 def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+    """This tree's root, never an enclosing project's (#2852)."""
+    return require_project_root(_THIS_DIR)
 
 
 def count_pair(text: str) -> Tuple[int, int]:

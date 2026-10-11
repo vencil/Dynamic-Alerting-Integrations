@@ -50,6 +50,7 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 REQUIRED_LABEL = "app.kubernetes.io/version"
 _PODS_LIST = re.compile(r"pods=\[([^\]]*)\]")
@@ -57,11 +58,8 @@ _KSM_IMAGE = "kube-state-metrics"
 
 
 def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+    """This tree's root, never an enclosing project's (#2852)."""
+    return require_project_root(_THIS_DIR)
 
 
 def _iter_docs(path: Path):
