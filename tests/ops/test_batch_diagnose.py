@@ -670,3 +670,22 @@ class TestExitCode:
         with pytest.raises(SystemExit) as exc:
             bd.main()
         assert exc.value.code == 2
+
+    def test_workers_must_be_an_integer(self, cli_argv, capsys):
+        cli_argv("batch_diagnose", "--tenants", "t1", "--workers", "abc",
+                 "--prometheus", "http://prom:9090")
+        with pytest.raises(SystemExit) as exc:
+            bd.main()
+        assert exc.value.code == 2
+        # argparse alone would say "invalid _positive_int value"; name the problem.
+        assert "not an integer: 'abc'" in capsys.readouterr().err
+
+    def test_an_explicit_worker_count_is_used(self, monkeypatch, capsys, cli_argv):
+        """Must-fire for the two refusals above: a valid count still runs."""
+        cli_argv("batch_diagnose", "--tenants", "t1", "--workers", "3",
+                 "--prometheus", "http://prom:9090", "--json")
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant",
+                            lambda tenant, prom_url, timeout=30:
+                            {"tenant": tenant, "status": "healthy"})
+        assert bd.main() == 0
+        json.loads(capsys.readouterr().out)
