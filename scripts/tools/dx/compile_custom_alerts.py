@@ -68,6 +68,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import find_project_root  # noqa: E402  (#2852)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
@@ -90,12 +91,16 @@ DEFAULT_CONFIG_REL = "components/threshold-exporter/config/conf.d"
 OUT_REL = "rule-packs/rule-pack-custom-alerts.yaml"
 
 
-def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+def _repo_root() -> "Path | None":
+    """This tree's root, never an enclosing project's (#2852).
+
+    The nearest ancestor with a ``.git`` used to decide it, so a copy without
+    one (vendored, ``git archive``) took the OUTER project's conf.d as the
+    default input and its pack as the ``--check`` target. None outside a
+    ``scripts/tools`` tree, e.g. the recipe-preview image, which calls
+    ``build_pack`` / ``_render`` and never ``main``.
+    """
+    return find_project_root(_THIS_DIR)
 
 
 class _BlockDumper(yaml.SafeDumper):
@@ -401,7 +406,7 @@ def _rerun_command(args) -> str:
     # command the gate would have BLOCKED into one that works and destroys.
     if args.out:
         parts.append(f"--out {_shell_quote(args.out)}")
-    elif not args.config_dir:
+    elif not args.config_dir and _repo_root() is not None:
         parts.append(f"--out {_shell_quote(_repo_root() / OUT_REL)}")
     else:
         return ""  # no offer: see the third case above
@@ -554,6 +559,11 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
+    if repo is None and not (args.config_dir and args.out):
+        print(f"ERROR: {_THIS_DIR} is not inside a scripts/tools tree, so there "
+              f"is no repo to take the defaults from. Pass both --config-dir "
+              f"and --out.", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     config_dir = Path(args.config_dir) if args.config_dir else repo / DEFAULT_CONFIG_REL
     out_path = Path(args.out) if args.out else repo / OUT_REL
 
@@ -692,7 +702,7 @@ def main() -> int:
     # the success line does. A refusal that prints an absolute path while every other
     # line prints a repo-relative one reads like it is talking about a different file.
     try:
-        shown = out_path.relative_to(repo)
+        shown = out_path.relative_to(repo) if repo is not None else out_path
     except ValueError:
         shown = out_path
 
