@@ -26,8 +26,11 @@ package handler
 // ============================================================
 
 import (
+	"errors"
 	"net/http"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/vencil/tenant-api/internal/confd"
@@ -160,7 +163,15 @@ func OrgAllowedRead(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 // neither the tenant's org list nor any principal claim value (principal.go
 // logging discipline — the org names are an enumeration oracle).
 func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) bool {
-	return requireOrgWriteWithMeta(w, r, d, tenantID, want, WriteScopeMeta(d.ConfigDir),
+	_, ok := requireOrgWriteAt(w, r, d, tenantID, want)
+	return ok
+}
+
+// requireOrgWriteAt is RequireOrgWrite that also returns what it judged, for
+// a PR-mode write to pass to its in-lock re-judgement (freshScopeAllowed).
+func requireOrgWriteAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) (writeGate, bool) {
+	pair := scopePairOf(WriteScopeMeta(d.ConfigDir), tenantID)
+	return writeGate{pair, gateOrgs(d, tenantID)}, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
 		"insufficient permissions for tenant "+tenantID+
 			" (permission and organization-scope checks, ADR-027)")
 }
@@ -190,7 +201,16 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 // denied caller learns nothing from a body it was never allowed to submit.
 func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
 	tenantID string, want rbac.Permission, proposedYAML string) bool {
-	return requireOrgWriteWithMeta(w, r, d, tenantID, want, proposedScopeMeta(d.ConfigDir, proposedYAML),
+	_, ok := requireOrgWriteProposedAt(w, r, d, tenantID, want, proposedYAML)
+	return ok
+}
+
+// requireOrgWriteProposedAt is RequireOrgWriteProposed that also returns what
+// it judged (see requireOrgWriteAt).
+func requireOrgWriteProposedAt(w http.ResponseWriter, r *http.Request, d *Deps,
+	tenantID string, want rbac.Permission, proposedYAML string) (writeGate, bool) {
+	pair := scopePairOf(proposedScopeMeta(d.ConfigDir, proposedYAML), tenantID)
+	return writeGate{pair, gateOrgs(d, tenantID)}, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
 		"insufficient permissions for the tenant metadata this write proposes"+
 			" — the environment/domain in the body places tenant "+tenantID+
 			" outside your scope (#1597)")
@@ -206,6 +226,92 @@ func proposedScopeMeta(configDir, yamlContent string) ScopeMetaFunc {
 	return func(tenantID string) (string, string) {
 		return src.environmentDomainOf([]byte(yamlContent), tenantID)
 	}
+}
+
+// scopePair is one tenant's (environment, domain) as a ScopeMetaFunc reads it.
+type scopePair struct{ environment, domain string }
+
+func scopePairOf(meta ScopeMetaFunc, tenantID string) scopePair {
+	e, dm := meta(tenantID)
+	return scopePair{e, dm}
+}
+
+// writeGate is what a gate on the local tree judged a tenant on: its
+// (environment, domain) and its organizations (orgsKey). A PR-mode write
+// passes it down to the in-lock re-judgement, which counts a would-deny only
+// for a value that differs on the fresh base (freshScopeAllowed).
+type writeGate struct {
+	pair scopePair
+	orgs string
+}
+
+// orgsKey is a comparable form of an organization list (order-insensitive).
+func orgsKey(orgs []string) string {
+	s := append([]string(nil), orgs...)
+	sort.Strings(s)
+	return strings.Join(s, "\n")
+}
+
+func gateOrgs(d *Deps, tenantID string) string {
+	orgs, _ := d.TenantOrg.OrgsForTenant(tenantID)
+	return orgsKey(orgs)
+}
+
+func fixedScopeMeta(pair scopePair) ScopeMetaFunc {
+	return func(string) (string, string) { return pair.environment, pair.domain }
+}
+
+// freshWriteScope is WriteScopeMeta on the fresh base a PR-mode write lands
+// on (#2857), with one difference: judged is false when the tenant's file
+// there exists but cannot be read for its metadata (ambiguous, not a regular
+// file, does not decode, does not declare the tenant). WriteScopeMeta reads
+// such a file as unlabeled, which on the base would turn a broken file into a
+// scope refusal; the write is refused for what it is further on (the merge
+// or the writer's validation). A file absent on the base is unlabeled and
+// judged, as a new tenant is.
+func freshWriteScope(configDir, tenantID string) (pair scopePair, judged bool) {
+	path, err := confd.ResolveTenantFile(configDir, tenantID)
+	if errors.Is(err, confd.ErrTenantFileNotFound) {
+		return scopePair{}, true
+	}
+	if err != nil {
+		return scopePair{}, false
+	}
+	data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
+	if problem != confd.ProblemNone {
+		return scopePair{}, false
+	}
+	root, _ := platformMetadataOrNone(configDir, "write")
+	meta, ok, decoded := root.MetadataResolver().ResolveFile(tenantID, data)
+	if !ok || !decoded {
+		return scopePair{}, false
+	}
+	return scopePair{meta.Environment, meta.Domain}, true
+}
+
+// freshScopeAllowed is the write scope judged on the fresh base a PR-mode
+// write lands on (#2857), configDir being that tree. This verdict is the
+// authoritative one: the gate on the pod's local tree can only refuse early,
+// because that tree may lag the base. It is always taken, with the tenant's
+// organizations read from the base's `_tenant_orgs.yaml` (not the
+// hot-reloaded copy, which follows the local tree) and fresh as its
+// (environment, domain) there.
+//
+// gate is what the gate on the local tree judged (passed down, not read
+// again). A shadow would-deny is recorded only for a value that differs from
+// it, so each write is counted once per value; countOrg is set on one of a
+// write's calls only, as the organizations are the same for all of them.
+// An org file that does not parse on the base refuses the write.
+func freshScopeAllowed(d *Deps, p *rbac.VerifiedPrincipal, configDir, tenantID string, gate writeGate, fresh scopePair, countOrg bool) (bool, error) {
+	if d.RBAC == nil {
+		return true, nil // test-only state, see requireOrgWriteWithMeta
+	}
+	orgs, err := tenantorg.OrgsInTree(configDir, tenantID)
+	if err != nil {
+		return false, &freshBaseOrgsError{Err: err}
+	}
+	return d.RBAC.AllowedInOrgRejudge(p, tenantID, rbac.PermWrite, orgs, fresh.environment, fresh.domain,
+		fresh != gate.pair, countOrg && orgsKey(orgs) != gate.orgs), nil
 }
 
 func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,

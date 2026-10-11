@@ -227,7 +227,27 @@ func TestGroupBatch_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
 	f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
-	assertFreshBaseRefused(t, f, w, 1, "t-off", before)
+	// A group batch names the member, not its index among the group's
+	// stored members, hidden ones included (#2857).
+	var env map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	msg, _ := env["error"].(string)
+	if w.Code != http.StatusForbidden || env["code"] != CodePolicyViolation || env["tenant_id"] != "t-off" ||
+		!strings.Contains(msg, "group member t-off") || !strings.Contains(msg, "latest base branch") {
+		t.Errorf("status %d, body %s; want 403 %s naming group member t-off", w.Code, w.Body.String(), CodePolicyViolation)
+	}
+	if _, hasOp := env["operation"]; hasOp || strings.Contains(msg, "operations[") {
+		t.Errorf("the refusal carries the member's index: %s", w.Body.String())
+	}
+	if vs, _ := env["violations"].([]any); len(vs) == 0 {
+		t.Errorf("no policy violations listed: %s", w.Body.String())
+	}
+	if f.prOpened {
+		t.Error("a PR was opened")
+	}
+	if got := gitRev(t, f.bare, "main"); got != before {
+		t.Errorf("origin main moved: %s → %s", before, got)
+	}
 }
 
 // B2 round 3 (B-1): the domain policy itself is read from the branch, not

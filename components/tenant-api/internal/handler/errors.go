@@ -587,8 +587,6 @@ func (e *freshBasePolicyError) Error() string {
 		subject, strings.Join(msgs, "; "), check, nothing)
 }
 
-func (e *freshBasePolicyError) Unwrap() error { return gitops.ErrMergePolicyRefused }
-
 // writeFreshBasePolicyViolation answers a freshBasePolicyError with the
 // same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the
 // tenant and, for a batch, the op.
@@ -605,33 +603,80 @@ func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *fr
 	WriteErrorEnvelope(w, r, http.StatusForbidden, env)
 }
 
-// freshBaseScopeError is a PR-mode batch op the metadata write scope refuses
-// on the FRESH base the feature branch is cut from (#2830): the op sets
-// `_profile` or a string `_metadata`, and merged onto the tenant's file on the
-// base it would place the tenant outside the caller's environments/domains,
-// although the per-op check on the pod's local tree (synced only at pod
-// start) let it through. Op is as in freshBasePolicyError.
+// freshBaseScopeError is a PR-mode write the metadata write scope refuses on
+// the FRESH base the feature branch is cut from (#2857), although the check
+// on the pod's local tree let it through. Two halves:
+//   - PreState: the tenant as it is on the base is outside the caller's
+//     scope (it was moved there since the pod synced). The message is as
+//     generic as RequireOrgWrite's.
+//   - otherwise the post-state: the content this write would leave places
+//     the tenant outside the caller's scope.
+//
+// Put marks a single-tenant PUT; otherwise Op is the batch op's index, as in
+// freshBasePolicyError.
 type freshBaseScopeError struct {
 	TenantID string
 	Op       int
+	Put      bool
+	PreState bool
 }
 
 func (e *freshBaseScopeError) Error() string {
-	return fmt.Sprintf("insufficient permissions for the tenant metadata operations[%d] (tenant %s) proposes on the latest base branch: "+
+	subject := fmt.Sprintf("operations[%d] (tenant %s)", e.Op, e.TenantID)
+	nothing := "Nothing in this batch was written and no PR/MR was opened"
+	if e.Put {
+		subject = "this write to tenant " + e.TenantID
+		nothing = "Nothing was written and no PR/MR was opened"
+	}
+	if e.PreState {
+		// As generic as RequireOrgWrite's refusal: the tenant's state on the
+		// base is not the caller's to learn (#2857).
+		return fmt.Sprintf("insufficient permissions for tenant %s on the latest base branch "+
+			"(permission and organization-scope checks, ADR-027), so %s is refused. %s.", e.TenantID, subject, nothing)
+	}
+	return fmt.Sprintf("insufficient permissions for the tenant metadata %s proposes on the latest base branch: "+
 		"its environment/domain would place tenant %s outside your scope (#1597). "+
-		"This server's local config is behind the base branch, so the per-operation check did not catch it. "+
-		"Nothing in this batch was written and no PR/MR was opened.", e.Op, e.TenantID, e.TenantID)
+		"This server's local config is behind the base branch. %s.", subject, e.TenantID, nothing)
 }
 
-func (e *freshBaseScopeError) Unwrap() error { return gitops.ErrMergeScopeRefused }
+// freshBaseOrgsError: the `_tenant_orgs.yaml` on the fresh base a PR-mode
+// write lands on does not parse, so the write's organization scope cannot be
+// judged there and the write is refused (#2857). Err names the server's path
+// and is for the log only.
+type freshBaseOrgsError struct{ Err error }
+
+func (e *freshBaseOrgsError) Error() string {
+	return "the tenant organization file (_tenant_orgs.yaml) on the latest base branch cannot be read, " +
+		"so this write's organization scope cannot be judged. Nothing was written and no PR/MR was opened; " +
+		"repair the file on the base branch."
+}
+
+func writeFreshBaseOrgsError(w http.ResponseWriter, r *http.Request, e *freshBaseOrgsError) {
+	slog.Error("PR write refused: _tenant_orgs.yaml on the fresh base cannot be read", "error", e.Err)
+	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, e.Error())
+}
+
+// orFreshScopeError is err when the in-lock scope check failed to run, and
+// refusal when it ran and refused.
+func orFreshScopeError(err error, refusal error) error {
+	if err != nil {
+		return err
+	}
+	return refusal
+}
 
 // writeFreshBaseScopeViolation answers a freshBaseScopeError with 403
-// FORBIDDEN, as the per-op check's refusal is, naming the tenant and the op.
+// FORBIDDEN, as the local check's refusal is, naming the tenant and, for a
+// batch, the op.
 func writeFreshBaseScopeViolation(w http.ResponseWriter, r *http.Request, e *freshBaseScopeError) {
+	extra := map[string]any{"tenant_id": e.TenantID}
+	if !e.Put {
+		extra["operation"] = e.Op
+	}
 	WriteErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
 		Error: e.Error(),
 		Code:  CodeForbidden,
-		Extra: map[string]any{"tenant_id": e.TenantID, "operation": e.Op},
+		Extra: extra,
 	})
 }
 

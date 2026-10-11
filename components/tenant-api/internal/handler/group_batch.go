@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -177,6 +180,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 				},
 				source: "tenant-manager UI (group batch: " + groupID + ")",
 				labels: []string{"tenant-api", "auto-generated", "batch", "group"},
+				group:  true,
 			}
 			resp, ok := runBatchPR(d, w, r, ops, email, p, meta)
 			if !ok {
@@ -240,4 +244,56 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 func visibleGroupBatchResults(d *Deps, p *rbac.VerifiedPrincipal, results []BatchResult) []BatchResult {
 	return filterByRBAC(d.RBAC, d.TenantOrg, p, results,
 		func(r BatchResult) string { return r.TenantID }, rbac.PermRead)
+}
+
+// writeGroupMemberRefusal answers a PR-mode group batch that one member's
+// refusal aborted (#2857), with the status and code the same refusal gets on
+// POST /tenants/batch, and reports whether err was one. The op index is left
+// out: it counts the group's stored members, hidden ones included, so it
+// would tell the caller how many members precede this one. A member the
+// caller cannot read is not named at all (visibleGroupBatchResults hides the
+// same members from the results).
+func writeGroupMemberRefusal(d *Deps, w http.ResponseWriter, r *http.Request, p *rbac.VerifiedPrincipal, err error) bool {
+	var (
+		tenantID, reason, code string
+		status                 int
+		notLoadable            *tenantFileNotLoadableError
+		freshPolicy            *freshBasePolicyError
+		freshScope             *freshBaseScopeError
+	)
+	switch {
+	case errors.As(err, &notLoadable):
+		tenantID, status, code = notLoadable.TenantID, http.StatusConflict, CodeTenantConfigNotLoadable
+		reason = "its config file cannot be loaded as a tenant config (config_error: " + notLoadable.Reason + ")"
+	case errors.As(err, &freshPolicy):
+		tenantID, status, code = freshPolicy.TenantID, http.StatusForbidden, CodePolicyViolation
+		if freshPolicy.LoadErr != nil {
+			slog.Error("PR write refused: domain policy on the fresh base cannot be loaded",
+				"tenant", freshPolicy.TenantID, "error", freshPolicy.LoadErr)
+			reason = "the domain policy file on the latest base branch cannot be loaded"
+		} else {
+			msgs := make([]string, len(freshPolicy.Violations))
+			for i, v := range freshPolicy.Violations {
+				msgs[i] = v.Message
+			}
+			reason = "the patch breaks the domain policy on the latest base branch: " + strings.Join(msgs, "; ")
+		}
+	case errors.As(err, &freshScope):
+		tenantID, status, code = freshScope.TenantID, http.StatusForbidden, CodeForbidden
+		reason = "insufficient permissions on the latest base branch (permission and organization-scope checks, ADR-027)"
+	default:
+		return false
+	}
+	const nothing = " Nothing in this batch was written and no PR/MR was opened."
+	if !OrgAllowedRead(d.RBAC, d.TenantOrg, p, tenantID, rbac.PermRead) {
+		WriteJSONErrorWithCode(w, r, status, code, "a member of this group was refused."+nothing)
+		return true
+	}
+	env := ErrorResponse{Error: "group member " + tenantID + ": " + reason + "." + nothing, Code: code}
+	if freshPolicy != nil && freshPolicy.LoadErr == nil {
+		env = policyViolationEnvelope(env.Error, freshPolicy.Violations)
+	}
+	env.Extra = map[string]any{"tenant_id": tenantID}
+	WriteErrorEnvelope(w, r, status, env)
+	return true
 }
