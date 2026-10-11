@@ -700,7 +700,7 @@
         },
         "/api/v1/groups/{id}/batch": {
             "post": {
-                "description": "Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch\n(one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.\nunset removes keys from every member (only \"_routing\"): unset [\"_routing\"] turns routing back on for members a disabling _routing turned off, judged by domain policy.\nPR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.\nPR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.\nDirect mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
+                "description": "Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch\n(one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.\nunset removes keys from every member (only \"_routing\"): unset [\"_routing\"] turns routing back on for members a disabling _routing turned off, judged by domain policy.\nPR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.\nA member that does not exist (no tenant section on the base the write merges into, e.g. offboarded while still listed in the group) is not created:\nits result has status skipped and message \"tenant does not exist\", nothing is written for it, and the summary counts it apart (\"1 succeeded, 1 skipped\").\nPR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.\nDirect mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2516,7 +2516,7 @@
                     "type": "string"
                 },
                 "status": {
-                    "description": "\"ok\" | \"error\"",
+                    "description": "\"ok\" | \"error\"; PR mode: \"included\" for an op taken into the PR/MR.\nA group batch also reports \"skipped\" for a member that does not exist\non the base the write merges into (message \"tenant does not exist\");\nnothing is written for it.",
                     "type": "string"
                 },
                 "tenant_id": {
@@ -2788,7 +2788,7 @@
                     }
                 },
                 "unset": {
-                    "description": "keys to remove from every member's config block; at most 1000 entries. Only \"_routing\" is\naccepted: removing it resets the member to `_routing_defaults` and its routing profile,\nwhich turns routing back on for a member a disabling `_routing` turned off (the change is\njudged by domain policy like a `_routing` patch). A key the member does not carry, or a\nmember that does not exist, makes it a no-op: with no patch nothing is written and no\ntenant is created. A key must not appear twice, nor in both patch and unset.",
+                    "description": "keys to remove from every member's config block; at most 1000 entries. Only \"_routing\" is\naccepted: removing it resets the member to `_routing_defaults` and its routing profile,\nwhich turns routing back on for a member a disabling `_routing` turned off (the change is\njudged by domain policy like a `_routing` patch). A key the member does not carry makes it\na no-op. A key must not appear twice, nor in both patch and unset.",
                     "type": "array",
                     "maxItems": 1000,
                     "items": {

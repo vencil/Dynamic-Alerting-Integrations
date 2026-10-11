@@ -82,6 +82,13 @@
 // judges it (retired alias spellings, `_critical`, dimensional keys), beside
 // the load's parse_failed / unreadable, for deprecate_rule's pre-check. Same
 // exit codes as served-values.
+//
+// Subcommand `parse-tree` (#2897, parse_tree.go) prints, as JSON, which
+// conf.d files the exporter and the route generator read, every readable
+// file's content as yaml.v3 decodes it, and the files that cannot be read,
+// each with a fixed kind (ADR-036 §2); with --path / --input, the same for
+// one text meant for one path. Exit codes: 0 ok (an unreadable file is data,
+// not a verdict), 2 caller error.
 package main
 
 import (
@@ -181,14 +188,17 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --metric <key> [--metric <key> ...]\n", programName, keyRefsCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--path <rel> --input <file|->]\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "'%s' prints every tenant's effective config as tenant-api's /effective resolves it, "+
 			"with profile binding and per-key sources, as JSON (see '%s %s -h').\n", effectiveCmd, programName, effectiveCmd)
 		fmt.Fprintf(errOut, "'%s' prints every key that belongs to the given metric keys as the exporter judges it "+
-			"(retired alias spellings, _critical, dimensional keys), as JSON (see '%s %s -h').\n\n",
+			"(retired alias spellings, _critical, dimensional keys), as JSON (see '%s %s -h').\n",
 			keyRefsCmd, programName, keyRefsCmd)
+		fmt.Fprintf(errOut, "'%s' prints which conf.d files each reader reads and what each holds as yaml.v3 decodes it, "+
+			"or why it cannot be read, as JSON (see '%s %s -h').\n\n", parseTreeCmd, programName, parseTreeCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
 			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n")
@@ -219,6 +229,9 @@ func run(args []string, stdout, errOut io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == keyRefsCmd {
 		return runKeyRefs(args[1:], stdout, errOut)
+	}
+	if len(args) > 0 && args[0] == parseTreeCmd {
+		return runParseTree(args[1:], os.Stdin, stdout, errOut)
 	}
 
 	f, err := parseFlags(args, errOut)

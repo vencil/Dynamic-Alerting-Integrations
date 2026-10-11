@@ -2122,6 +2122,8 @@ da-tools offboard <tenant> [options]
 |--------|-------------|---------|
 | `--config-dir <PATH>` | Tenant config directory. ⚠️ The default points at a repo-internal path that does not exist in the image — pass it explicitly | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **Actually perform the change** (default is pre-check / preview only, nothing is written) | false |
+| `--state <PATH>` | A copy of tenant-api's state store: the state directory, or a saved `kubectl get configmap tenant-api-state -o yaml` (or `-o json`). Used to list the group memberships, view `filters` and federation subset that reference this tenant ([#2883](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2883)) | — |
+| `--skip-state-check` | Allow `--execute` without `--state` (state store references are not checked) | false |
 
 Without `--execute` it is already a preview; there is no separate dry-run flag.
 
@@ -2129,13 +2131,16 @@ Without `--execute` it is already a preview; there is no separate dry-run flag.
 
 A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. A config file that cannot be parsed is named and fails the pre-check (the cross-reference check cannot see inside it). With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
 
+Groups, views and federation subsets live in tenant-api's state store, not in conf.d; a `_groups.yaml` or similar left in conf.d only gets a ⚠️ saying it is no longer read, and is not used as the answer. With `--state` the report lists the state store references and the tenant-api call that removes each; a legacy file left in conf.d whose record the state store lacks is imported by tenant-api at its next start, so its references are listed too (e.g. `PUT /api/v1/groups/{id}` without the member); the tool itself never writes the state store. The AccountID allocation is listed for information only (it is never reused). Without `--state` this item reads "undetermined", and `--execute` runs only with `--skip-state-check` added.
+
 **Examples**
 
 ```bash
 # Pre-check only by default (writes nothing)
 da-tools offboard db-old --config-dir ./conf.d
-# Actually offboard
-da-tools offboard db-old --config-dir ./conf.d --execute
+# Actually offboard (save the state store for --state first)
+kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state.yaml
+da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --execute
 ```
 
 **Exit Codes**
@@ -2144,7 +2149,7 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 |------|-------------|
 | `0` | Success: the pre-check passed or only warned (e.g. a cross-file reference); with `--execute` the tenant file was deleted |
 | `1` | The pre-check failed (a ❌ item such as the tenant file not found or a config file that cannot be parsed, named in the report), with or without `--execute`; or I/O failed (#2179) |
-| `2` | Caller error: only arguments argparse rejects (missing tenant positional, unknown flag) |
+| `2` | Caller error: arguments argparse rejects (missing tenant positional, unknown flag); a `--state` that cannot be read, is not a ConfigMap document or directory, holds no records, or holds keys that are not tenant-api state records (for example a saved `threshold-config`, or conf.d itself); `--execute` with neither `--state` nor `--skip-state-check` |
 
 ---
 
@@ -2398,7 +2403,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 Both need da-guard (bundled in the image; in a checkout run `make da-guard-build` first, or set `DA_GUARD_BINARY`).
 
-**Report sections**: Not Computed / Not Compared (when a view has no result), Changed Platform Files, Tenants Added / Removed, Routing Changes, Custom Alert Changes, Tenant Setting Changes, Keys the Exporter Drops, Other Served Changes, and a threshold table per tenant. Values come from the PR's files: outside the threshold table they are printed inside code spans, and in its cells `|` and line breaks are escaped; a receiver's credential fields are reported as changed with both values masked as `<redacted>`.
+**Report sections**: Not Computed / Not Compared (when a view has no result), Changed Platform Files, Tenants Added / Removed, Routing Changes, Custom Alert Changes, Tenant Setting Changes, Keys the Exporter Drops, Other Served Changes, and a threshold table per tenant. Values come from the PR's files: outside the threshold table they are printed inside code spans, and in its cells `|` and line breaks are escaped; a receiver's credential fields are reported as changed with both values masked as `<redacted>`; the same value (a string or a number) in any other field (a YAML anchor / alias, or a copy) is masked too, and the report's head says in how many places. The whole value is matched, and a value of 8 characters or more is also masked inside a longer string; a partial copy, or one rewritten (case, URL encoding), is not.
 
 **Change Classifications** (threshold table)
 
@@ -2415,7 +2420,7 @@ Both need da-guard (bundled in the image; in a checkout run `make da-guard-build
 
 **The Custom Alert section is not a silencing verdict**: it reads the rows the exporter serves. `threshold` is `<value>:<severity>`, and an `op` / `window` / `for` change shows as a `recipe_id` change; a recipe no longer served is listed as removed, with a note that a deleted, a disabled and a rejected recipe are not told apart.
 
-**JSON output**: `schema` is `da-tools.config-diff/v1`, beside `at`, `exit_code`, `views` (for `served` and `routes`, a `status` of `computed` / `not_computed` / `not_compared` and a `reason`), `tenants_added`, `tenants_removed` and `uncovered_files`. Every kind of change is one entry per distinct change with the tenants it reaches (`tenants`): `threshold_changes`, `setting_changes`, `custom_alert_changes`, `dropped_key_changes`, `other_served_changes`, `route_changes` (with `paths`), `receiver_changes` (with `receivers`) and `inhibit_changes`. A platform change that reaches many tenants is one entry.
+**JSON output**: `schema` is `da-tools.config-diff/v1`, beside `at`, `exit_code`, `masked_by_value` (how many places outside a credential field held a credential's value and were masked), `views` (for `served` and `routes`, a `status` of `computed` / `not_computed` / `not_compared` and a `reason`), `tenants_added`, `tenants_removed` and `uncovered_files`. Every kind of change is one entry per distinct change with the tenants it reaches (`tenants`): `threshold_changes`, `setting_changes`, `custom_alert_changes`, `dropped_key_changes`, `other_served_changes`, `route_changes` (with `paths`), `receiver_changes` (with `receivers`) and `inhibit_changes`. A platform change that reaches many tenants is one entry.
 
 ⚠️ The v2.9.0 image still behaves the old way: it compares the values each top-level tenant file writes itself, names platform files without comparing them, has no `--at`, and prints the old JSON without `schema` (`metric_diffs`, `profile_diffs`, ...). <!-- image-caveat: v2.9.0 -->
 
@@ -2553,6 +2558,7 @@ da-tools guard <subcommand> [flags]
 | `served-values` | Print, as JSON, the values the exporter's `/metrics` serves per tenant ([#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)); Python readers call it through `scripts/tools/_lib_tenant_values.py`. Each tenant's `series` lists, for every threshold key of `severities`, the series it is on `/metrics` ([#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)): `name` and the full `labels` taken from the `/metrics` Gather, `metric_key` the key the resolver parsed the `component` / `metric` labels from (`X` for both `X_critical` and `X{db="a"}`), `dimensions` / `dimensions_regex` the dimensional labels the key writes. Every key derived from a retired alias's target (the target itself, its `_critical`, its dimensional keys) has two: its own row first (`legacy_twin: false`), then the same value served under the retired metric identity (`legacy_twin: true`, the resolver's own mark). A key `/metrics` serves no row for (`unserved`, or only in `dropped`) and `_custom_alerts` have no entry. With `--schedules` each served segment also carries that segment's `series` (a window overridden to `N:critical` is another series); a segment whose value is `null` or that carries `error` has none |
 | `effective` | Print, as JSON, every tenant's effective config as tenant-api's `/effective` resolves it, plus the bound profile and each key's source ([#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)); Python readers call it through `load_effective()` in `scripts/tools/_lib_tenant_values.py` |
 | `key-refs` | **Not forwarded by `da-tools guard`**; only `deprecate_rule` calls the da-guard binary with it directly (`da-guard key-refs --config-dir <dir> --metric <key> [--metric …]`, [#1822](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1822)): prints, as JSON, the keys the exporter assigns to each `--metric` (the classification ValidateTenantKeys uses: retired alias spellings, `_critical`, dimensional keys in any spelling), each `{file, section, owner, key, nested}` with `key` as written and `nested` marking a `_`-prefixed file below the root, beside `parse_failed` / `unreadable` read off the same load as `served-values`. Exit codes as for `served-values` (0 / 2 / 3) |
+| `parse-tree` | **Not forwarded by `da-tools guard`**, and nothing reads it yet ([ADR-036](adr/036-single-parser-effective-config.en.md) §2, [#2897](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2897)): `da-guard parse-tree --config-dir <dir>` prints the conf.d parse result as one line of JSON (`schema: "da-guard.parse-tree/v1"`) — `selected`: every file a reader reads and which readers read it (`exporter` / `generator`; a `_` file below the root other than its directory's selected `_defaults`, e.g. `team/_domain_policy.yaml`, is read by the generator only); `defaults_carriers`: the one `_defaults` file each directory uses; `not_read`: files no reader reads (a `_defaults` its directory does not select, at the root or below it); `files`: each readable file's content (the structure yaml.v3 decodes, aliases and unquoted `<<` merges expanded, keys always as written, scalars as `{text, tag, value}`: integers and floats have a decimal-string value, booleans and null a JSON value, timestamps and `.inf` / `.nan` no `value`); `unreadable`: each file that cannot be read (a FIFO or another non-regular file is never read, only listed as `not_regular_file`), `{file, kind, message}` with a `kind` from a closed list (anything else is read as yaml.v3 reads it, even where today's generator refuses the file, e.g. a TAB after a colon): `read_failure`, `not_regular_file`, `invalid_utf8`, `bom_not_at_start`, `syntax_error`, `multiple_documents`, `non_specific_tag` (a node tagged `!`, however yaml.v3 reads it), `tag_not_allowed`, `non_scalar_key`, `null_key`, `duplicate_key`, `decode_error`, `top_level_not_mapping`. File mode, `--path <relative path> --input <file or ->`, reads the input as that path's text and prints the same document, naming who would read the path (an empty `selected` list and a `not_read` reason when nobody would; the path is also judged against the disk: a directory on it that exists but is not a real directory, such as a symlink or a file, is `parent_not_walked`, with no reader; an existing path that is not a regular file is in `unreadable` exactly as tree mode reports the same path (`not_regular_file`, or `read_failure` for a dangling link), and the text is not read). One file's content, aliases expanded, may encode to at most 8 MiB of JSON; past that the file is a `decode_error` (yaml.v3's own alias ratio limit still applies). A file nested close to yaml.v3's limit (10,000 levels) nests the JSON as deep, which a JSON decoder may refuse (measured: Python 3.13's json raises RecursionError at 10,000 nested arrays); a reader that cannot decode the document must treat the whole document as unusable. The full shape is in `da-guard parse-tree -h`. Exit codes: 0 (an unreadable file is data in the output, not a verdict), 2 (caller error, including a file name that is not valid UTF-8) |
 
 **Binary resolution order**
 

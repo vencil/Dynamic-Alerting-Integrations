@@ -457,7 +457,11 @@ definitions:
       message:
         type: string
       status:
-        description: '"ok" | "error"'
+        description: |-
+          "ok" | "error"; PR mode: "included" for an op taken into the PR/MR.
+          A group batch also reports "skipped" for a member that does not exist
+          on the base the write merges into (message "tenant does not exist");
+          nothing is written for it.
         type: string
       tenant_id:
         type: string
@@ -674,9 +678,8 @@ definitions:
           keys to remove from every member's config block; at most 1000 entries. Only "_routing" is
           accepted: removing it resets the member to `_routing_defaults` and its routing profile,
           which turns routing back on for a member a disabling `_routing` turned off (the change is
-          judged by domain policy like a `_routing` patch). A key the member does not carry, or a
-          member that does not exist, makes it a no-op: with no patch nothing is written and no
-          tenant is created. A key must not appear twice, nor in both patch and unset.
+          judged by domain policy like a `_routing` patch). A key the member does not carry makes it
+          a no-op. A key must not appear twice, nor in both patch and unset.
         items:
           type: string
         maxItems: 1000
@@ -1768,6 +1771,8 @@ paths:
         (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
         unset removes keys from every member (only "_routing"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy.
         PR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.
+        A member that does not exist (no tenant section on the base the write merges into, e.g. offboarded while still listed in the group) is not created:
+        its result has status skipped and message "tenant does not exist", nothing is written for it, and the summary counts it apart ("1 succeeded, 1 skipped").
         PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
         Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
         is not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.

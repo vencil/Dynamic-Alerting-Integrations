@@ -37,6 +37,13 @@ type BatchOperation struct {
 	// tenant that does not exist, makes it a no-op: with no patch nothing is written and no
 	// tenant is created. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`
+	// skipAbsent: the op comes from a group's stored member list
+	// (POST /groups/{id}/batch, #2882). A member with no tenant section on
+	// the base the write merges into is skipped (status "skipped"), not
+	// created: a stale member list must not bring back an offboarded
+	// tenant. Not part of the request body — POST /tenants/batch naming an
+	// absent tenant is the caller's explicit intent and still creates it.
+	skipAbsent bool
 }
 
 // BatchRequest is the body for POST /api/v1/tenants/batch.
@@ -47,8 +54,12 @@ type BatchRequest struct {
 // BatchResult is the per-tenant result in a batch response.
 type BatchResult struct {
 	TenantID string `json:"tenant_id"`
-	Status   string `json:"status"` // "ok" | "error"
-	Message  string `json:"message,omitempty"`
+	// "ok" | "error"; PR mode: "included" for an op taken into the PR/MR.
+	// A group batch also reports "skipped" for a member that does not exist
+	// on the base the write merges into (message "tenant does not exist");
+	// nothing is written for it.
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
 	// Code is a machine-readable error code for a FAILED op, set only for the
 	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
 	// (the per-op form of the 409 that PUT and the PR-mode batch return),
@@ -263,6 +274,9 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	metaOf := WriteScopeMeta(d.ConfigDir) // one resolver: the root platform files are read once per batch
 	// lastPost[t]: the local post-state pair of t's last op taken into the PR.
 	lastPost := map[string]writeGate{}
+	// skipped: per op taken into the PR, its result's index and whether the
+	// in-lock merge found its tenant absent (#2882); read after WritePRBatch.
+	var skipped []skippedOp
 	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
@@ -309,8 +323,16 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// (Go 1.22+), so the closure binds this op's TenantID/Patch/Unset.
 		op := op
 		merge := func(existing []byte) (string, error) {
+			if op.skipAbsent && tenantAbsentIn(existing, op.TenantID) {
+				return "", gitops.ErrMergeNoOp
+			}
 			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
 		}
+		// #2882: set only by FreshMerge, the in-lock merge onto the fresh
+		// base; the pre-flight Merge above reads the local tree and decides
+		// nothing.
+		absent := new(bool)
+		skipped = append(skipped, skippedOp{result: len(batchResults), absent: absent})
 		// #2857: the checks above read the pod's local tree, which may lag
 		// the base the branch is cut from, so they can only refuse early.
 		// The authoritative verdict is FreshMerge's, on that base, in the
@@ -335,6 +357,12 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			TenantID: op.TenantID,
 			Merge:    merge,
 			FreshMerge: func(existing []byte) (string, error) {
+				// #2882: an absent group member is skipped before any verdict:
+				// nothing is written for it, so there is nothing to judge.
+				*absent = op.skipAbsent && tenantAbsentIn(existing, op.TenantID)
+				if *absent {
+					return "", gitops.ErrMergeNoOp
+				}
 				// The org axis is counted on the tenant's first op only:
 				// its organizations are the same for all of them.
 				countOrg := firstOp
@@ -383,6 +411,17 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	}
 
 	result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
+	// #2882: the members found absent on the fresh base were not written;
+	// their results and the PR's tenant list say so. Meaningful only when
+	// the batch was not aborted (every FreshMerge ran).
+	var written []gitops.PRBatchOp
+	for i, s := range skipped {
+		if *s.absent {
+			batchResults[s.result] = BatchResult{TenantID: batchOps[i].TenantID, Status: "skipped", Message: msgTenantAbsent}
+			continue
+		}
+		written = append(written, batchOps[i])
+	}
 	if err != nil {
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the single-write path).
@@ -462,9 +501,9 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	// Per-tenant tracker entries get every field of the PR
 	// response (Title / HeadRef / CreatedAt) preserved
 	// consistently with the single-tenant path.
-	prTitle := meta.title(len(batchOps))
-	tenantList := make([]string, len(batchOps))
-	for i, op := range batchOps {
+	prTitle := meta.title(len(written))
+	tenantList := make([]string, len(written))
+	for i, op := range written {
 		tenantList[i] = op.TenantID
 	}
 	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** %s\n**Tenants:** %s",
@@ -488,7 +527,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		PRNumber: pr.Number,
 		Results:  batchResults,
 		Summary:  prBatchSummary("pending_review", batchResults),
-		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
+		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(written)),
 		Warnings: append(result.Notices, advisories...),
 	}, true
 }
@@ -499,22 +538,33 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 // endpoint can re-render it over the results the caller may see (#1530) and
 // get the same wording as for a /tenants/batch response.
 func prBatchSummary(status string, results []BatchResult) string {
-	included := 0
+	included, skipped := 0, 0
 	for _, res := range results {
-		if res.Status == "included" {
+		switch res.Status {
+		case "included":
 			included++
+		case "skipped":
+			skipped++
 		}
 	}
-	failed := len(results) - included
+	failed := len(results) - included - skipped
+	var summary string
 	switch {
+	case included == 0 && (failed > 0 || skipped == 0):
+		summary = fmt.Sprintf("%d failed", failed)
 	case included == 0:
-		return fmt.Sprintf("%d failed", failed)
+		// Every op taken in was a skipped group member (#2882).
+		return fmt.Sprintf("%d skipped", skipped)
 	case status == "pending_review":
-		return fmt.Sprintf("%d included in PR/MR, %d failed", included, failed)
+		summary = fmt.Sprintf("%d included in PR/MR, %d failed", included, failed)
 	default:
 		// "completed" with ops taken in: WritePRBatch found nothing to change.
-		return fmt.Sprintf("%d unchanged", included)
+		summary = fmt.Sprintf("%d unchanged", included)
 	}
+	if skipped > 0 {
+		summary += fmt.Sprintf(", %d skipped", skipped)
+	}
+	return summary
 }
 
 // executeBatchOps runs batch operations synchronously and returns results.
@@ -597,10 +647,20 @@ func batchOpPolicyUnavailable(mgr *policy.Manager, op BatchOperation) (res Batch
 // file's comments survive. A whole-document overwrite here would silently drop
 // them.
 func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op BatchOperation, authorEmail string) BatchResult {
+	// #2882: judged inside the merge, i.e. under the writer lock on the
+	// base the write lands on, not on a read taken before it.
+	absent := false
 	merge := func(existing []byte) (string, error) {
+		absent = op.skipAbsent && tenantAbsentIn(existing, op.TenantID)
+		if absent {
+			return "", gitops.ErrMergeNoOp
+		}
 		return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
 	}
 	notices, err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge)
+	if err == nil && absent {
+		return BatchResult{TenantID: op.TenantID, Status: "skipped", Message: msgTenantAbsent}
+	}
 	if err != nil {
 		msg := err.Error()
 		code := ""
@@ -643,6 +703,40 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 	// per tenant, so the operator sees exactly which member of the batch still
 	// carries an old key spelling.
 	return BatchResult{TenantID: op.TenantID, Status: "ok", Warnings: notices}
+}
+
+// msgTenantAbsent is the message of a group member skipped because it does
+// not exist (#2882).
+const msgTenantAbsent = "tenant does not exist"
+
+// skippedOp ties an op taken into a PR-mode batch to its result, for the
+// in-lock absence verdict (#2882).
+type skippedOp struct {
+	result int
+	absent *bool
+}
+
+// tenantAbsentIn reports whether existing — the tenant's file as the writer
+// read it — declares no `tenants.<tenantID>` section: the file is missing or
+// blank, or carries no section for it (#2882). A file that cannot be read as
+// a `tenants:` document is not called absent; mergePatchYAML refuses it.
+func tenantAbsentIn(existing []byte, tenantID string) bool {
+	if len(bytes.TrimSpace(existing)) == 0 {
+		return true
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existing, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return false
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return false
+	}
+	tenants := yamlMapValue(root, "tenants")
+	if tenants == nil || tenants.Kind != yaml.MappingNode {
+		return false
+	}
+	return yamlMapValue(tenants, tenantID) == nil
 }
 
 // mergePatchYAML sets each patch key on `tenants.<tenantID>` in the existing

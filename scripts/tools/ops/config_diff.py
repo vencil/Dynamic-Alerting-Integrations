@@ -43,7 +43,7 @@ from _lib_python import (  # noqa: E402
     format_json_report,
     is_disabled as _is_disabled,
 )
-from _lib_redact import REDACTED, SECRET_FIELDS, redact, redact_pair  # noqa: E402
+from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import iter_config_files, printable_name  # noqa: E402  (#1420)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
@@ -639,6 +639,23 @@ def build_report(diff, old_dir, new_dir):
     }
 
 
+def mask_report(report, secrets):
+    """`report` with every string a credential field holds masked wherever
+    else it occurs (a YAML alias or a copy puts it in a field not named like
+    a credential, #2865), and the count as `masked_by_value`. Run on the data
+    both formats print, not on their text: escaping in either could turn a
+    secret into a string that no longer matches.
+
+    Of `views`, only status and reason are printed; the changes and served
+    report they keep were read into the sections already, and are dropped
+    here so the count is of what the report prints."""
+    report = dict(report, views={name: v._replace(changes=(), report=None)
+                                 for name, v in report["views"].items()})
+    masked, count = mask_values(report, secrets)
+    masked["masked_by_value"] = count
+    return masked
+
+
 def report_has_changes(report):
     return any(report[k] for k in (
         "metric", "setting", "custom_alert", "tenants_added", "tenants_removed",
@@ -719,6 +736,7 @@ def report_json(report, exit_code):
         "old_dir": report["old_dir"],
         "new_dir": report["new_dir"],
         "exit_code": exit_code,
+        "masked_by_value": report.get("masked_by_value", 0),
         "views": {name: {"status": v.status, "reason": v.reason}
                   for name, v in report["views"].items()},
         "tenants_added": report["tenants_added"],
@@ -929,6 +947,9 @@ def render_markdown(report):
              (f"Rendered at: {_code_span(report['at'])} (schedules, silences and maintenance "
               "windows are read at this instant, on both sides)"),
              ""]
+    if report.get("masked_by_value"):
+        lines += [f"Masked by value: {report['masked_by_value']} place(s) outside a credential "
+                  f"field held a credential's value; they print as {_code_span(REDACTED)}.", ""]
     _render_views(report, lines)
     if report["uncovered_files"]:
         _render_uncovered(report["uncovered_files"], lines)
@@ -1093,6 +1114,7 @@ def _run(args):
     diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections)
     report = build_report(diff, args.old_dir, args.new_dir)
     code = report_exit_code(diff, report)
+    report = mask_report(report, diff.secrets)
 
     # The reasons go to stderr too: a CI log shows them even where the report
     # is only posted, and an exit 2 never comes with an empty stderr (#1405).

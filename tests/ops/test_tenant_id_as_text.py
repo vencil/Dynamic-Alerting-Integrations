@@ -1056,9 +1056,11 @@ def _ids_mapping_file(d, spell):
 
 
 def _ids_custom_groups(d, spell):
+    # #2883: groups are read from tenant-api's state store (a state dir here).
     import generate_tenant_metadata as m
+    import _lib_tenant_state as lts
     _tree(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"})
-    return set(m._load_custom_groups(d)["g1"]["members"])
+    return set(m._load_custom_groups(lts.load_state(d), d / "conf.d")["g1"]["members"])
 
 
 def _ids_retire_namespaces(d, spell):
@@ -1087,8 +1089,7 @@ def test_value_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader,
 @pytest.mark.parametrize("fname,body", [
     ("_policy.yaml", "policies:\n  - name: p\n    exclude_tenants: [{id}]\n"),
     ("_domain_policy.yaml", "domains:\n  d1:\n    tenants: [{id}]\n"),
-    ("_groups.yaml", "groups:\n  g1:\n    members: [{id}]\n"),
-], ids=["exclude_tenants", "domain_tenants", "groups_members"])
+], ids=["exclude_tenants", "domain_tenants"])
 def test_offboard_finds_a_reference_written_as_a_list_value(
         tmp_path, capsys, variant, fname, body):
     """Before: UNQ `[010]` was read as [8], so the reference was not found."""
@@ -1098,6 +1099,18 @@ def test_offboard_finds_a_reference_written_as_a_list_value(
                      fname: body.format(id=spell)})
     configs = ot.load_all_configs(str(tmp_path))
     assert ot.check_cross_references("010", configs) == [fname]
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+def test_offboard_finds_a_group_member_written_as_a_list_value(tmp_path, capsys, variant):
+    """`members: [010]` in the state store's `_groups.yaml` names tenant
+    "010" (#2216); groups are read from the state store since #2883."""
+    import offboard_tenant as ot
+    import _lib_tenant_state as lts
+    _tree(tmp_path, {"_groups.yaml": "groups:\n  g1:\n    members: [{id}]\n".format(
+        id=_ID_SPELLINGS[variant])})
+    refs, _ = ot.check_state_references("010", lts.load_state(tmp_path))
+    assert [what for what, _ in refs] == ["群組 g1 的成員"]
 
 
 _AM_ROUTES_2216 = (

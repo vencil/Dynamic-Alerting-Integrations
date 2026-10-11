@@ -117,28 +117,13 @@ func toTaskResults(results []BatchResult) []async.TaskResult {
 	return asyncResults
 }
 
-// summarizeBatchResults renders the human-readable "N succeeded"/"N failed"/
-// "N succeeded, M failed" summary line from batch results, shared by both the
-// tenant and group batch sync responses.
+// summarizeBatchResults renders the human-readable summary line ("N
+// succeeded", "N succeeded, M failed", "…, K skipped") from batch results,
+// shared by both the tenant and group batch sync responses. It is
+// async.SummarizeResults over the same results, so the sync response and
+// GET /tasks/{id} for an async run cannot word one outcome two ways.
 func summarizeBatchResults(results []BatchResult) string {
-	successes := 0
-	failures := 0
-	for _, result := range results {
-		if result.Status == "ok" {
-			successes++
-		} else {
-			failures++
-		}
-	}
-	var summary string
-	if failures == 0 {
-		summary = fmt.Sprintf("%d succeeded", successes)
-	} else if successes == 0 {
-		summary = fmt.Sprintf("%d failed", failures)
-	} else {
-		summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
-	}
-	return summary
+	return async.SummarizeResults(toTaskResults(results))
 }
 
 // write202Pending writes the 202 Accepted async-submission response shared by

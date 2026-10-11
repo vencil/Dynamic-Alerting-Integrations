@@ -534,7 +534,7 @@ Remove any test or pilot tenants:
 ```bash
 find conf.d -name 'tenant-*.yaml'
 da-tools offboard test-domain-1 --config-dir conf.d/            # pre-check
-da-tools offboard test-domain-1 --config-dir conf.d/ --execute  # actually offboard
+da-tools offboard test-domain-1 --config-dir conf.d/ --state tenant-api-state.yaml --execute  # actually offboard (--state: a saved kubectl get configmap tenant-api-state -o yaml)
 da-tools validate-config --config-dir conf.d/
 ```
 

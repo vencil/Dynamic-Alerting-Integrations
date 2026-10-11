@@ -295,7 +295,7 @@ func TestListGroups_EmptyGroupVisible(t *testing.T) {
 // caller may read, and its summary counts only those.
 func TestGroupBatch_PRMode_HidesUnreadableMembers(t *testing.T) {
 	t.Parallel()
-	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": visGroupsYAML})
+	f := newOrgEnfFixture(t, orgEnfGroupMemberFiles(visGroupsYAML))
 	d := f.deps()
 	d.WriteMode = WriteModePR
 	d.PRClient = &mockPlatformClient{

@@ -2110,6 +2110,8 @@ da-tools offboard <tenant> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
+| `--state <PATH>` | tenant-api state store 的副本：state 目錄，或 `kubectl get configmap tenant-api-state -o yaml`（或 `-o json`）存下的檔。用來列出群組成員、views 的 `filters`、federation 子集對這個租戶的引用（[#2883](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2883)） | — |
+| `--skip-state-check` | 沒有 `--state` 時仍允許 `--execute`（state store 引用不檢查） | false |
 
 不帶 `--execute` 就是預覽，不需要另外的 dry-run 旗標。
 
@@ -2117,13 +2119,16 @@ da-tools offboard <tenant> [options]
 
 Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
+群組、views、federation 子集存在 tenant-api 的 state store，不在 conf.d；conf.d 裡若還留著 `_groups.yaml` 等舊檔，只印 ⚠️ 說明已不再被讀，不拿它當答案。有 `--state` 時列出 state store 裡的引用與要呼叫的 tenant-api API；conf.d 殘留的舊檔若 state store 沒有對應紀錄，tenant-api 下次開機會匯入它，所以其中的引用也一併列出（例如 `PUT /api/v1/groups/{id}` 移除成員），工具本身不寫 state store；AccountID 配發只列為資訊（永不回收）。沒給 `--state` 時這一項標為「未判定」，`--execute` 需另加 `--skip-state-check` 才會執行。
+
 **範例**
 
 ```bash
 # 預設只做 Pre-check（不寫入）
 da-tools offboard db-old --config-dir ./conf.d
-# 實際執行下架
-da-tools offboard db-old --config-dir ./conf.d --execute
+# 實際執行下架（先存一份 state store 給 --state）
+kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state.yaml
+da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --execute
 ```
 
 **結束碼**
@@ -2132,7 +2137,7 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
 | `1` | pre-check 未通過（找不到租戶檔、有無法解析的設定檔等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
-| `2` | 呼叫端錯誤：只有 argparse 拒絕的參數（缺 tenant 位置參數、未知旗標） |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check` |
 
 ---
 
@@ -2386,7 +2391,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 兩支都需要 da-guard（映像內建；repo 內先 `make da-guard-build`，或設 `DA_GUARD_BINARY`）。
 
-**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及每個租戶的閾值表。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`。
+**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及每個租戶的閾值表。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`；同一個憑證值（字串或數字）出現在其他欄位（YAML anchor／alias 或手抄）時也遮掉，報告頂端註記遮了幾處。比對的是完整的值，8 個字元以上的值出現在較長的字串裡也遮；只抄一部分、或改寫過（大小寫、URL 編碼）的副本遮不到。
 
 **變更分類**（閾值表）
 
@@ -2403,7 +2408,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 **Custom Alert 區段不判定消音**：讀的是 exporter 送出的 row，`threshold` 是 `<值>:<severity>`，`op`／`window`／`for` 的變更以 `recipe_id` 不同呈現；不再送出的 recipe 列為 removed，並註明分不出是刪除、停用或被 exporter 拒收。
 
-**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
+**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`masked_by_value`（憑證值出現在非憑證欄位而被遮的處數）、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
 
 ⚠️ v2.9.0 映像仍是舊行為：只比對頂層各租戶檔自己寫的值，平台檔只列檔名，沒有 `--at`，JSON 是沒有 `schema` 的舊結構（`metric_diffs`、`profile_diffs` 等）。 <!-- image-caveat: v2.9.0 -->
 
@@ -2539,6 +2544,7 @@ da-tools guard <subcommand> [flags]
 | `served-values` | 以 JSON 印出 exporter `/metrics` 對每個租戶實際發出的值（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫。每個租戶的 `series` 對 `severities` 裡的每個門檻 key 列出它在 `/metrics` 的 series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)）：`name` 與完整 `labels` 取自 `/metrics` 的 Gather 結果，`metric_key` 是 resolver 解析出 `component`／`metric` label 的那個 key（`X_critical` 與 `X{db="a"}` 都是 `X`），`dimensions`／`dimensions_regex` 是 key 寫的維度 label。凡由舊拼法別名的目標導出的 key（目標本身、它的 `_critical`、它的維度 key）都有兩筆：先是它自己的 row（`legacy_twin: false`），再是同一個值以舊 metric 身分送出的 twin（`legacy_twin: true`，resolver 自己的標記）。`/metrics` 不送的 key（`unserved`、只出現在 `dropped`）與 `_custom_alerts` 沒有這一項。`--schedules` 時每個有送的時段另帶該時段的 `series`（覆寫成 `N:critical` 的時段是另一條 series），值為 `null` 或帶 `error` 的時段沒有 |
 | `effective` | 以 JSON 印出每個租戶在 tenant-api `/effective` 的有效設定，另加綁定的 profile 與每個 key 的來源（[#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫 |
 | `key-refs` | **不經 `da-tools guard` 轉發**，只供 `deprecate_rule` 內部直接呼叫 da-guard binary（`da-guard key-refs --config-dir <dir> --metric <key> [--metric …]`，[#1822](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1822)）：以 JSON 列出經 exporter 判定（ValidateTenantKeys 的同一個分類：alias 表舊拼法、`_critical`、維度鍵各種拼法）屬於各 `--metric` 的 key，每筆 `{file, section, owner, key, nested}`，`key` 為原文，`nested` 標明子目錄的 `_` 開頭檔；另附與 `served-values` 同源的 `parse_failed`／`unreadable`。結束碼同 `served-values`（0／2／3） |
+| `parse-tree` | **不經 `da-tools guard` 轉發**，目前沒有讀取端（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#2897](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2897)）：`da-guard parse-tree --config-dir <dir>` 以一行 JSON（`schema: "da-guard.parse-tree/v1"`）印出 conf.d 的解析結果——`selected`：每個讀取端實際會讀的檔與讀它的是誰（`exporter`／`generator`；子目錄裡除被選中的 `_defaults` 以外的 `_` 檔，例如 `team/_domain_policy.yaml`，只有產生器讀）；`defaults_carriers`：每個目錄採用的那一份 `_defaults` 檔；`not_read`：沒有讀取端會讀的檔（各目錄未被選中的 `_defaults`，根目錄與子目錄皆然）；`files`：每份讀得了的檔的內容（yaml.v3 解碼後的結構，別名與未加引號的 `<<` 已展開，鍵一律是原文，純量是 `{text, tag, value}`：整數與浮點數的值是十進位字串，布林與 null 是 JSON 值，時間與 `.inf`／`.nan` 沒有 `value`）；`unreadable`：讀不了的檔（FIFO 等非一般檔不會去讀，直接列為 `not_regular_file`），每筆 `{file, kind, message}`，`kind` 是一份封閉清單（清單以外的寫法一律照 yaml.v3 讀，即使今天的產生器拒收，例如冒號後接 TAB）：`read_failure`、`not_regular_file`、`invalid_utf8`、`bom_not_at_start`、`syntax_error`、`multiple_documents`、`non_specific_tag`（帶 `!` 標記的節點，不論 yaml.v3 怎麼讀）、`tag_not_allowed`、`non_scalar_key`、`null_key`、`duplicate_key`、`decode_error`、`top_level_not_mapping`。單檔模式 `--path <相對路徑> --input <檔案或 ->` 把輸入當成該路徑的內容，輸出同一種文件，並標出該路徑由誰讀（沒人讀時 `selected` 為空清單、`not_read` 說明原因；路徑也對照磁碟現況判斷：路徑上已存在、但不是真正目錄的一層，例如 symlink 或一般檔，為 `parent_not_walked`，沒有讀取端；路徑本身已存在但不是一般檔時，列在 `unreadable`，內容與整棵樹模式對同一路徑的回報相同（`not_regular_file`，懸空連結為 `read_failure`），輸入的文字不解析）。一份檔的內容（別名展開後）編成 JSON 最多 8 MiB，超過即為 `decode_error`；yaml.v3 本身的別名比例上限照舊。巢狀接近 yaml.v3 上限（10,000 層）的檔，JSON 也一樣深，部分 JSON 解碼器會拒收（實測 Python 3.13 的 json 在 10,000 層巢狀陣列時 RecursionError）；讀取端解不開時，整份文件都要當成不可用。完整格式見 `da-guard parse-tree -h`。結束碼：0（讀不了的檔是輸出的資料，不影響結束碼）、2（呼叫錯誤，含檔名不是合法 UTF-8） |
 
 **Binary 解析順序**
 
