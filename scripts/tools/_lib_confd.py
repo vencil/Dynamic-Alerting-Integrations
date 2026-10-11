@@ -58,6 +58,8 @@ from pathlib import Path
 
 __all__ = [
     "CONFIG_SUFFIXES",
+    "LEGACY_STATE_FILES",
+    "legacy_state_files",
     "config_stem",
     "configmap_key_problem",
     "declared_tenant_ids",
@@ -1604,3 +1606,17 @@ def overlay_platform_tenants(
     for _fname, tenant, overrides in owned:
         apply(merged.setdefault(tenant, {}), overrides)
     return merged, orphans
+
+
+#: Files that held tenant-api's own records (groups, saved views, the
+#: federation whitelist, the AccountID registry) before #2856 moved them to
+#: tenant-api's state store. tenant-api no longer reads them from conf.d; a
+#: tool that finds one names it instead of using it (#2883).
+LEGACY_STATE_FILES = ("_groups.yaml", "_views.yaml", "_federation_policy.yaml",
+                      "_account_registry.yaml")
+
+
+def legacy_state_files(config_dir: "str | os.PathLike[str]") -> list[str]:
+    """The pre-#2856 state record files still sitting in *config_dir*."""
+    base = Path(config_dir)
+    return [n for n in LEGACY_STATE_FILES if (base / n).is_file()]
