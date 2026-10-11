@@ -703,11 +703,17 @@ ${pinNote}jobs:
           # Schedules, silences and maintenance windows are read at ONE
           # instant on both sides: the base commit's time, so a re-run of
           # this job gives the same answer. (Without --at the tool reads
-          # them at the time of the run.)
+          # them at the time of the run.) Passed only to an image whose
+          # config-diff lists --at: images up to v2.9.0 reject it, and
+          # DA_TOOLS_IMAGE may name one of those.
           at="$(git show -s --format=%cI "$BASE_SHA")" || {
             echo "::error::cannot read the time of base commit $BASE_SHA from this clone"
             exit 1
           }
+          at_args=""
+          if docker run --rm \${{ env.DA_TOOLS_IMAGE }} config-diff --help 2>/dev/null | grep -q -- '--at'; then
+            at_args="--at $at"
+          fi
           set +e
           # Two read-only mounts only: config-diff writes to stdout and the
           # HOST redirect below lands it in .output/. A writable output
@@ -717,7 +723,7 @@ ${pinNote}jobs:
             -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
             \${{ env.DA_TOOLS_IMAGE }} \\
             config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
-              --at "$at" --format markdown > .output/blast-radius.md
+              $at_args --format markdown > .output/blast-radius.md
           rc=$?
           set -e
           if [ "$rc" -gt 1 ]; then

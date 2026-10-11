@@ -1667,11 +1667,17 @@ def _gen_github_actions(
               # Schedules, silences and maintenance windows are read at ONE
               # instant on both sides: the base commit's time, so a re-run of
               # this job gives the same answer. (Without --at the tool reads
-              # them at the time of the run.)
+              # them at the time of the run.) Passed only to an image whose
+              # config-diff lists --at: images up to v2.9.0 reject it, and
+              # DA_TOOLS_IMAGE may name one of those.
               at="$(git show -s --format=%cI "$BASE_SHA")" || {{
                 echo "::error::cannot read the time of base commit $BASE_SHA from this clone"
                 exit 1
               }}
+              at_args=""
+              if docker run --rm ${{{{ env.DA_TOOLS_IMAGE }}}} config-diff --help 2>/dev/null | grep -q -- '--at'; then
+                at_args="--at $at"
+              fi
               set +e
               # Two read-only mounts only: config-diff writes to stdout and the
               # HOST redirect below lands it in .output/. A writable output
@@ -1681,7 +1687,7 @@ def _gen_github_actions(
                 -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
                 config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
-                  --at "$at" --format markdown > .output/blast-radius.md
+                  $at_args --format markdown > .output/blast-radius.md
               rc=$?
               set -e
               if [ "$rc" -gt 1 ]; then
@@ -2693,13 +2699,19 @@ def _gen_gitlab_ci(
         # Images up to v2.9.0 compared top-level tenant files only.
         # --at: schedules, silences and maintenance windows are read at the
         # base commit's time on both sides, so a re-run gives the same answer.
+        # Passed only when this image's config-diff lists it: images up to
+        # v2.9.0 reject it.
         - |
           at="$(git show -s --format=%cI "$CI_MERGE_REQUEST_DIFF_BASE_SHA")" || {{
             echo "ERROR: cannot read the time of base commit $CI_MERGE_REQUEST_DIFF_BASE_SHA from this clone" >&2
             exit 1
           }}
+          at_args=""
+          if da-tools config-diff --help 2>/dev/null | grep -q -- '--at'; then
+            at_args="--at $at"
+          fi
           set +e
-          da-tools config-diff --old-dir .output/base/"${{CONFIG_DIR%/}}" --new-dir "$CONFIG_DIR" --at "$at" --format markdown > .output/blast-radius.md
+          da-tools config-diff --old-dir .output/base/"${{CONFIG_DIR%/}}" --new-dir "$CONFIG_DIR" $at_args --format markdown > .output/blast-radius.md
           rc=$?
           set -e
           if [ "$rc" -gt 1 ]; then

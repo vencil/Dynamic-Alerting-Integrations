@@ -179,8 +179,12 @@ def render_served(conf_d: str | os.PathLike[str], at: str, *, binary: str | None
         panic = "goroutine " in e.stderr and any(
             ln.startswith("panic:") for ln in e.stderr.splitlines())
         tree = not e.binary_fault and e.returncode == 2 and not panic
-        raise RenderError(RenderFailure("config" if tree else "tool",
-                                        f"served-values: {e.message}")) from e
+        # da-guard's own last word (e.g. which tenant is declared twice):
+        # the reader has to know what to fix, not only that it exited 2.
+        last = _last_line(e.stderr)
+        raise RenderError(RenderFailure(
+            "config" if tree else "tool",
+            "; ".join(x for x in (f"served-values: {e.message}", last) if x))) from e
 
 
 def render_routes(conf_d: str | os.PathLike[str], *,

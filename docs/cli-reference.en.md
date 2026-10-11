@@ -2396,7 +2396,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 Both need da-guard (bundled in the image; in a checkout run `make da-guard-build` first, or set `DA_GUARD_BINARY`).
 
-**Report sections**: Not Computed / Not Compared (when a view has no result), Changed Platform Files, Tenants Added / Removed, Routing Changes, Custom Alert Changes, Tenant Setting Changes, Keys the Exporter Drops, Other Served Changes, and a threshold table per tenant. Values come from the PR's files and are always printed inside code spans; a receiver's credential fields are reported as changed with both values masked as `<redacted>`.
+**Report sections**: Not Computed / Not Compared (when a view has no result), Changed Platform Files, Tenants Added / Removed, Routing Changes, Custom Alert Changes, Tenant Setting Changes, Keys the Exporter Drops, Other Served Changes, and a threshold table per tenant. Values come from the PR's files: outside the threshold table they are printed inside code spans, and in its cells `|` and line breaks are escaped; a receiver's credential fields are reported as changed with both values masked as `<redacted>`.
 
 **Change Classifications** (threshold table)
 

@@ -412,11 +412,14 @@ class TestCLI:
         with pytest.raises(SystemExit):
             cd.build_parser().parse_args([])
 
-    @pytest.mark.parametrize("at", ["2026-10-10", "2026-10-10 00:00:00Z", "2026-10-10T00:00:00", "now"])
+    @pytest.mark.parametrize("at", ["2026-10-10", "2026-10-10 00:00:00Z", "2026-10-10T00:00:00", "now",
+                                    "2026-13-45T25:00:00Z"])
     def test_at_that_is_not_rfc3339_is_a_caller_error(self, tmp_path, at):
         _write_tenant(tmp_path, {"mysql_connections": "80"})
         p = _run_cli(tmp_path, tmp_path, at=at)
         assert p.returncode == 2 and "--at" in p.stderr, (p.returncode, p.stderr)
+        # Refused as an argument, before anything renders: no report at all.
+        assert p.stdout == "" and "is not RFC3339" in p.stderr, (p.stdout, p.stderr)
 
     def test_at_is_printed_and_defaults_to_now(self, tmp_path):
         _write_tenant(tmp_path, {"mysql_connections": "80"})
@@ -508,6 +511,30 @@ class TestCLI:
         assert p.returncode == 1, p.stderr
         assert _json(p)["tenants_removed"] == ["db-a"]
 
+    @pytest.mark.parametrize("side", ["old", "new"])
+    def test_threshold_table_cell_cannot_break_out(self, tmp_path, side):
+        """表格欄位的值來自 PR 的檔案：`|` 會結束欄位、換行會結束表格，後面的字就成了
+        PR 留言裡自己的 Markdown（標題、連結）。exporter 不送出、照原文列出的值也一樣。"""
+        evil = "70\n\n## Approved | [x](https://e.example)\n"
+        _write_tenant(tmp_path / "old", {"mysql_connections": evil if side == "old" else "70"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": evil if side == "new" else "70"})
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 1, p.stderr
+        assert not any(ln.startswith("## Approved") for ln in p.stdout.splitlines()), p.stdout
+        row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mysql_connections |"))
+        assert "\\|" in row and row.count(" | ") == 4, row
+
+    def test_da_guards_own_reason_reaches_the_report(self, tmp_path):
+        """da-guard 回 2（同一租戶宣告兩次）時，報告要帶它自己說的原因，不是只有「exited 2」。"""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        (tmp_path / "new" / "db-a-copy.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_connections: '90'\n", encoding="utf-8")
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 2, p.stderr
+        line = next(ln for ln in p.stderr.splitlines() if "Exporter values" in ln)
+        assert "duplicate" in line and "db-a" in line, line
+
     def test_base_side_that_does_not_read_is_not_compared_and_does_not_block(self, tmp_path):
         """main 上已經壞了、這個 PR 修好它：rc 1，報告寫出原因，不擋 PR。"""
         old, new = tmp_path / "old", tmp_path / "new"
@@ -517,6 +544,9 @@ class TestCLI:
         p = _run_cli(old, new)
         assert p.returncode == 1, (p.stdout, p.stderr)
         assert "not compared" in p.stdout and "zz.yaml" in p.stderr
+        for text in (p.stdout, p.stderr):
+            assert text.count("does not render") <= 2 and "does not render: base side does not render" \
+                not in text and "base side does not render: `base side" not in text, text
 
     def test_an_unexpected_crash_is_rc_2_not_1(self, tmp_path, monkeypatch, capsys):
         """未預期的例外 exit 1 會被讀成「有變更」：一律 rc 2，並寫出兩側目錄與例外型別。"""

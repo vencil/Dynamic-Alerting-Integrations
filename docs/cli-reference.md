@@ -2384,7 +2384,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 兩支都需要 da-guard（映像內建；repo 內先 `make da-guard-build`，或設 `DA_GUARD_BINARY`）。
 
-**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及每個租戶的閾值表。值來自 PR 的檔案，一律放在 code span 裡；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`。
+**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及每個租戶的閾值表。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`。
 
 **變更分類**（閾值表）
 

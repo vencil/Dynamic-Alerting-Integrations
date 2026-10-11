@@ -759,8 +759,8 @@ def _render_views(report, lines):
             lines.append(f"- :x: **{VIEW_TITLES[name]}: not computed.** No result for this view, "
                          f"which is not the same as no change: {reason}")
         else:
-            lines.append(f"- :warning: **{VIEW_TITLES[name]}: not compared.** The base side does "
-                         f"not render, so there is nothing sound to compare against: {reason}")
+            lines.append(f"- :warning: **{VIEW_TITLES[name]}: not compared.** Nothing sound to "
+                         f"compare against: {reason}")
     lines.append("")
 
 
@@ -907,6 +907,14 @@ def _render_keyed(title, note, per_tenant, lines):
         lines.append("")
 
 
+def _cell(value):
+    """A table cell from the PR's files (a key, a value as written): a `|`
+    would end the cell and a newline the table, letting the rest of the value
+    render as Markdown of its own (a heading, a link) in the PR comment."""
+    return (str(value).replace("\\", "\\\\").replace("|", "\\|")
+            .replace("\r\n", " ").replace("\n", " ").replace("\r", " "))
+
+
 def render_markdown(report):
     """Render the Markdown report."""
     lines = ["# Config Diff Report", "",
@@ -959,8 +967,8 @@ def render_markdown(report):
         lines.append("|--------|--------|-------|--------|-----------------|")
         for c in changes:
             lines.append(
-                f"| {c['key']} | {_format_value(c['old'])} "
-                f"| {_format_value(c['new'])} | {c['change']} "
+                f"| {_cell(c['key'])} | {_cell(_format_value(c['old']))} "
+                f"| {_cell(_format_value(c['new']))} | {c['change']} "
                 f"| {estimate_affected_alerts(c['key'])} |")
         lines.append("")
         total_changes += len(changes)
@@ -989,7 +997,12 @@ def render_markdown(report):
 
 
 def _at(value):
-    if not _RFC3339.match(value):
+    try:
+        ok = bool(_RFC3339.match(value)) and bool(
+            datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        ok = False  # the shape is right, the date is not (month 13, hour 25, ...)
+    if not ok:
         raise argparse.ArgumentTypeError(
             f"{value!r} is not RFC3339 (e.g. 2026-10-10T03:00:00Z)")
     return value
@@ -1083,14 +1096,17 @@ def _run(args):
             print(f"ERROR: cannot compare configs (--old-dir {args.old_dir} --new-dir "
                   f"{args.new_dir}): {VIEW_TITLES[name]}: not computed: {reason}", file=sys.stderr)
         elif v.status == "not_compared":
-            print(f"WARNING: {VIEW_TITLES[name]}: not compared, the base side does not render: "
-                  f"{reason}", file=sys.stderr)
+            print(f"WARNING: {VIEW_TITLES[name]}: not compared: {reason}", file=sys.stderr)
 
     if args.json_output or args.format == "json":
         print(format_json_report(report_json(report, code), default=str))
     else:
         print(render_markdown(report))
-    sys.exit(code)
+    # Spelled out, not `sys.exit(code)`: the CLI-contract lint reads which
+    # codes this tool can exit with from the literal arguments.
+    if code == EXIT_CALLER_ERROR:
+        sys.exit(EXIT_CALLER_ERROR)
+    sys.exit(EXIT_VIOLATION if code == EXIT_VIOLATION else EXIT_OK)
 
 
 if __name__ == "__main__":

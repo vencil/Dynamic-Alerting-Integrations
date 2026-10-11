@@ -92,7 +92,8 @@ def _job_script(pipeline: dict) -> str:
 
 
 def _install_da_tools(bindir: Path, work: Path,
-                      diff_stub: tuple[int, str] | None) -> None:
+                      diff_stub: tuple[int, str] | None,
+                      help_text: str = "  --at AT   Instant to read ... RFC3339\n") -> None:
     """Put a `da-tools` executable on PATH, as the image does.
 
     `diff_stub=None` runs the real config_diff.py; `(rc, payload)` replaces
@@ -107,7 +108,11 @@ def _install_da_tools(bindir: Path, work: Path,
     else:
         (work / "_stub_stdout").write_text(diff_stub[1], encoding="utf-8",
                                            newline="\n")
-        diff = (f'printf "%s\\n" "$@" > "{(work / "_stub_args").as_posix()}"; '
+        # `config-diff --help` is the job's probe for `--at`; `help_text` is
+        # what the image's config-diff prints (an image up to v2.9.0 has none).
+        (work / "_stub_help").write_text(help_text, encoding="utf-8", newline="\n")
+        diff = (f'case " $* " in *" --help "*) cat "{(work / "_stub_help").as_posix()}"; exit 0;; esac; '
+                f'printf "%s\\n" "$@" > "{(work / "_stub_args").as_posix()}"; '
                 f'cat "{(work / "_stub_stdout").as_posix()}"; exit {diff_stub[0]}')
     shim = bindir / "da-tools"
     shim.write_text(
@@ -125,10 +130,10 @@ def _install_da_tools(bindir: Path, work: Path,
 
 def _run_job(pipeline: dict, work: Path, *, base_sha: str | None,
              diff_stub: tuple[int, str] | None = None,
-             path: str | None = None) -> subprocess.CompletedProcess:
+             path: str | None = None, **stub) -> subprocess.CompletedProcess:
     variables = {k: str(v) for k, v in (pipeline.get("variables") or {}).items()}
     bindir = work.parent / f"{work.name}-bin"
-    _install_da_tools(bindir, work, diff_stub)
+    _install_da_tools(bindir, work, diff_stub, **stub)
     env = {
         "HOME": os.environ.get("HOME", "/tmp"),
         "PATH": (f"{bindir}{os.pathsep}{os.environ['PATH']}"
@@ -302,6 +307,20 @@ def test_gitlab_blast_radius_reads_time_dependent_settings_at_the_base_commit(
     want = _git(work, "show", "-s", "--format=%cI", base_sha)
     assert want != _git(work, "show", "-s", "--format=%cI", "HEAD")   # the premise
     assert args[args.index("--at") + 1] == want, args
+
+
+@_needs_tools
+def test_gitlab_blast_radius_leaves_out_at_for_an_older_image(pipeline, tmp_path) -> None:
+    """An image whose config-diff does not list `--at` (up to v2.9.0) rejects
+    it with exit 2: the job must not pass it then."""
+    work = tmp_path / "old-image"
+    base_sha = _synthetic_repo(work, base_has_config=True)
+    p = _run_job(pipeline, work, base_sha=base_sha,
+                 diff_stub=(0, "# Config Diff Report\n\nno changes\n"),
+                 help_text="  --old-dir OLD_DIR\n  --new-dir NEW_DIR\n")
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    args = (work / "_stub_args").read_text(encoding="utf-8").splitlines()
+    assert "--new-dir" in args and "--at" not in args, args
 
 
 @_needs_tools

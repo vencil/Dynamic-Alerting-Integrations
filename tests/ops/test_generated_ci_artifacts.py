@@ -4242,8 +4242,12 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'echo "::error::cannot read the time of base commit $BASE_SHA from this clone"',
     'exit 1',
     '}',
+    'at_args=""',
+    "if docker run --rm ${{ env.DA_TOOLS_IMAGE }} config-diff --help 2>/dev/null | grep -q -- '--at'; then",
+    'at_args="--at $at"',
+    'fi',
     'set +e',
-    'docker run --rm -v "${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --at "$at" --format markdown > .output/blast-radius.md',
+    'docker run --rm -v "${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d $at_args --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -4336,8 +4340,12 @@ _EXPECTED_GL_GENERATE: list[str] = [
     'echo "ERROR: cannot read the time of base commit $CI_MERGE_REQUEST_DIFF_BASE_SHA from this clone" >&2',
     'exit 1',
     '}',
+    'at_args=""',
+    "if da-tools config-diff --help 2>/dev/null | grep -q -- '--at'; then",
+    'at_args="--at $at"',
+    'fi',
     'set +e',
-    'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" --at "$at" --format markdown > .output/blast-radius.md',
+    'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" $at_args --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -5466,7 +5474,8 @@ def _synthetic_repo(root: Path, *, base_has_config: bool,
 def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
                         base_sha: str, env_overrides: dict | None = None, *,
                         expect_step_env: bool = True,
-                        stub_docker: tuple[int, str] | None = None):
+                        stub_docker: tuple[int, str] | None = None,
+                        stub_help: str = "  --at AT   Instant to read ... RFC3339\n"):
     (work / ".output").mkdir(parents=True, exist_ok=True)
     (work / "_runner_temp").mkdir(exist_ok=True)
     env = _resolve_step_env(step, wf_env, job_env, base_sha=base_sha,
@@ -5508,7 +5517,11 @@ def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
         # escaping rather than of the stub.
         (work / "_stub_stdout").write_text(payload, encoding="utf-8",
                                            newline="\n")
-        prologue += (f"docker() {{ printf '%s\\n' \"$@\" > _stub_args; "
+        # `config-diff --help` is the step's probe for `--at` (an image up
+        # to v2.9.0 rejects the flag); `stub_help` is what that image prints.
+        (work / "_stub_help").write_text(stub_help, encoding="utf-8", newline="\n")
+        prologue += (f"docker() {{ case \" $* \" in *\" --help \"*) cat _stub_help; return 0;; esac; "
+                     f"printf '%s\\n' \"$@\" > _stub_args; "
                      f"cat _stub_stdout; return {rc}; }}\n")
     # The runner expands `${{ ... }}` before bash ever sees the body. Skipping
     # that leaves a bad substitution in the script, which fails for a reason
@@ -5786,6 +5799,22 @@ def test_generated_blast_radius_step_honours_the_exit_contract(
             f"[{state}] the step succeeded but the report handed to the "
             "comment step is not what the tool produced."
         )
+
+
+def test_generated_blast_radius_step_leaves_out_at_for_an_older_image(generated, tmp_path) -> None:
+    """An image whose config-diff does not list `--at` (up to v2.9.0) rejects
+    it with exit 2: the step must not pass it then, and must pass it otherwise
+    (the exit-contract cases above)."""
+    step, wf_env, job_env = _extract_step(generated[("github", "kustomize")],
+                                          "Config diff (blast radius)")
+    work = tmp_path / "old-image"
+    base_sha = _synthetic_repo(work, base_has_config=True)
+    p = _run_generated_step(step, wf_env, job_env, work, base_sha=base_sha,
+                            stub_docker=(0, "# Config Diff Report\n\nno changes\n"),
+                            stub_help="  --old-dir OLD_DIR\n  --new-dir NEW_DIR\n  --format\n")
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    argv = (work / "_stub_args").read_text(encoding="utf-8").splitlines()
+    assert "config-diff" in argv and "--at" not in argv, argv
 
 
 def test_the_apply_pins_cover_every_deploy_method() -> None:
