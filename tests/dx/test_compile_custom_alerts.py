@@ -2012,3 +2012,41 @@ def test_an_unlistable_subdirectory_is_named_not_dropped(tmp_path, monkeypatch):
     assert [t for t, *_ in triples] == ["acme"]
     assert [e["origin"] for e in file_errors] == ["locked"], file_errors
     assert "NOT scanned" in file_errors[0]["reason"], file_errors
+
+
+# --- #2852: no tree root (the recipe-preview image layout) ------------------
+# `_repo_root` is None outside a scripts/tools tree. Every default hangs off it,
+# so a run that needs one must stop with rc 2; a run that names both paths needs
+# no root and must still compile.
+@pytest.mark.parametrize("argv", [
+    ["compile", "--check"],
+    ["compile", "--check", "--out", "x.yaml"],
+    ["compile", "--config-dir", "src"],
+])
+def test_a_default_with_no_tree_root_is_a_caller_error(tmp_path, monkeypatch, capsys, argv):
+    monkeypatch.setattr(cc, "_repo_root", lambda: None)
+    monkeypatch.chdir(tmp_path)
+    _write_tree(tmp_path / "src", _ONE_RECIPE_SOURCE)
+    monkeypatch.setattr(sys, "argv", argv)
+    assert cc.main() == cc.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "scripts/tools" in err and "--config-dir" in err and "--out" in err, err
+    assert not (tmp_path / "x.yaml").exists()
+
+
+def test_both_paths_named_compile_with_no_tree_root(tmp_path, monkeypatch):
+    """Must-fire control for the test above: the gate is about defaults only."""
+    monkeypatch.setattr(cc, "_repo_root", lambda: None)
+    src, out = tmp_path / "src", tmp_path / "out.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    monkeypatch.setattr(sys, "argv", ["compile", "--config-dir", str(src),
+                                      "--out", str(out)])
+    assert cc.main() == cc.EXIT_OK
+    assert out.exists() and "groups" in out.read_text(encoding="utf-8")
+
+
+def test_no_rerun_command_names_a_default_out_with_no_tree_root(monkeypatch):
+    monkeypatch.setattr(cc, "_repo_root", lambda: None)
+    a = _Args(None, None)
+    a.max_custom_recipes = cc._loader.MAX_CUSTOM_RECIPES_DEFAULT
+    assert cc._rerun_command(a) == ""

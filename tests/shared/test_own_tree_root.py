@@ -8,6 +8,12 @@ a plausible but different ``tenant-config.schema.json``, ``validate_config``
 and ``generate_alertmanager_routes --validate`` passed an invalid webhook URL
 with rc 0, and ``describe_tenant`` described the outer repo's ``conf.d``.
 
+#2852 brought in the two tools the recipe-preview image ships, which looked
+for the nearest ancestor with a ``.git`` instead: ``compile_custom_alerts``
+(its ``--check`` target and default ``--config-dir``) and
+``check_rulepack_sync`` (the rule packs it compares). The outer project here
+therefore carries a ``.git`` as well as a ``Makefile``.
+
 Two layouts, both built outside this repo under an outer project that has a
 marker and a decoy copy of every file the lookups read:
 
@@ -51,6 +57,7 @@ for sub in ("", "/ops", "/dx", "/lint"):
     sys.path.insert(0, root + "/scripts/tools" + sub)
 import validate_config, _threshold_alerts, _lib_validation, _registry_lib
 import _observed_map_lib, generate_alertmanager_routes, _grar_validate
+import compile_custom_alerts, check_rulepack_sync
 s = lambda p: None if p is None else str(p)
 print(json.dumps({
     "validate_config._find_schema": s(validate_config._find_schema(
@@ -66,6 +73,8 @@ print(json.dumps({
         generate_alertmanager_routes.da_tools_version(),
     "_grar_validate._find_platform_rules_configmap": s(
         _grar_validate._find_platform_rules_configmap()),
+    "compile_custom_alerts._repo_root": s(compile_custom_alerts._repo_root()),
+    "check_rulepack_sync._repo_root": s(check_rulepack_sync._repo_root()),
 }))
 '''
 
@@ -77,6 +86,9 @@ def _vendor(tmp: Path, own_data: bool) -> tuple[Path, Path]:
     tree = outer / "scripts" / "tools" / "third_party" / "da"
     (outer / "Makefile").parent.mkdir(parents=True)
     (outer / "Makefile").write_text("", encoding="utf-8")
+    # The marker #2852's tools looked for. Only its existence was tested, so
+    # an empty directory is enough; nothing here runs git against it.
+    (outer / ".git").mkdir()
     for rel in DATA:
         d = outer / rel
         d.parent.mkdir(parents=True, exist_ok=True)
@@ -148,6 +160,18 @@ def test_describe_tenant_never_describes_the_outer_projects_conf_d(layouts):
     assert str(outer / "conf.d") + ":" not in out and "Scanned " + str(
         outer / "conf.d") not in out, out[-600:]
     assert "--conf-d" in out, out[-600:]   # names the remedy
+
+
+def test_check_rulepack_sync_never_compares_the_outer_projects_packs(layouts):
+    """The bare tree has no rule packs, so the run must stop there (rc 2)."""
+    outer, tree = layouts["bare"]
+    r = subprocess.run(
+        [sys.executable, str(tree / "scripts/tools/lint/check_rulepack_sync.py"),
+         "--json"], cwd=str(outer), capture_output=True, timeout=120,
+        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    assert r.returncode == 2, out[-600:]
+    assert "no rule packs found" in out and "mariadb" not in out, out[-600:]
 
 
 def test_the_checkout_still_resolves_to_this_repo(tmp_path):

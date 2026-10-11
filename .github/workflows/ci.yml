@@ -850,12 +850,23 @@ jobs:
             --policy .github/custom-rule-policy.yaml \
             --ci
 
+      # #2858: the RETIRE gate reads db_type through `da-guard served-values`;
+      # its wrapper (scripts/ops/with_da_guard.sh) builds .build/da-guard with
+      # `make da-guard-build`, which needs go. Without this step the gate fails
+      # by name (go is not on PATH), never passes.
+      - name: Set up Go (da-guard for the RETIRE-ordering gate)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
       - name: RETIRE-ordering gate (#869 — no K8s-target delete with conf.d _metadata残留)
         # Unfiltered over HEAD (the pre-commit mirror's path filter can miss
         # delete-only PRs). Forbids stranding tenant_expected_exporter → a
         # false-positive TenantExporterAbsent critical against a de-provisioned tenant.
         run: |
-          python scripts/tools/lint/check_retire_drift.py --ci
+          bash scripts/ops/with_da_guard.sh python scripts/tools/lint/check_retire_drift.py --ci
 
       # Download-caches for the 3 pinned tarballs this job curls every run
       # (promtool / vmutils / pint — see the Lint job's hadolint step for the
