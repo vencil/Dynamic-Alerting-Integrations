@@ -31,10 +31,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @functools.lru_cache(maxsize=None)
-def _listing() -> tuple[str, ...]:
+def _listing(root: Path = REPO_ROOT) -> tuple[str, ...]:
     """Every tracked or untracked-not-ignored path, repo-relative, POSIX."""
     proc = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files", "-z",
+        ["git", "-C", str(root), "ls-files", "-z",
          "--cached", "--others", "--exclude-standard"],
         capture_output=True, timeout=60,
     )
@@ -46,8 +46,11 @@ def _listing() -> tuple[str, ...]:
     return tuple(p for p in proc.stdout.decode("utf-8").split("\0") if p)
 
 
-def repo_files(*suffixes: str) -> list[Path]:
+def repo_files(*suffixes: str, root: Path = REPO_ROOT) -> list[Path]:
     """Absolute paths of repository files, optionally filtered by suffix.
+
+    ``root`` defaults to this checkout; a test that has to show what the
+    enumeration *excludes* passes a throwaway repository instead.
 
     ``suffixes`` are compared against ``Path.suffix`` (``".yaml"``), or
     against the basename when they carry no leading dot and no wildcard
@@ -58,14 +61,14 @@ def repo_files(*suffixes: str) -> list[Path]:
     want_suffix = {s for s in suffixes if s.startswith(".")}
     want_name = {s for s in suffixes if not s.startswith(".")}
     out: list[Path] = []
-    for rel in _listing():
+    for rel in _listing(root):
         name = rel.rsplit("/", 1)[-1]
         if suffixes:
             dot = name.rfind(".")
             suffix = name[dot:] if dot > 0 else ""
             if suffix not in want_suffix and name not in want_name:
                 continue
-        p = REPO_ROOT / rel
+        p = root / rel
         if p.is_file():
             out.append(p)
     return out

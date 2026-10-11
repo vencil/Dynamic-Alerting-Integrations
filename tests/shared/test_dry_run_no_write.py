@@ -134,6 +134,7 @@ from typing import Callable
 import pytest
 
 import test_json_stdout_contract as _jsc
+from _tree import repo_files
 
 # #2476: `da_assembler --render-cr` 以 da-crdecode 解碼 CR；子行程經
 # `$DA_CRDECODE_BINARY` 找到本 repo 建出的那一支。#2115 0-B：`policy_opa_bridge
@@ -866,8 +867,54 @@ OUT_OF_SCOPE_DECLARERS: dict[str, str] = {
         "this file — its docstring and comments quote `add_argument(\"--dry-run\")`"
         " as the predicate being described; it is not a CLI tool"),
 }
-_REPO_SCAN_SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv",
-                                  "venv", ".tox", "site", "dist", "build"})
+
+
+def _dry_run_declarers(root: Path = REPO_ROOT) -> set[str]:
+    """`root` 底下宣告了 `--dry-run` 的 `*.py`，回傳 repo 相對路徑。
+
+    ⛔ 列舉走 `repo_files()`（`git ls-files`），不走 `os.walk`（#2846）：
+    `.claude/worktrees/<name>/` 是一整份 repo 副本，走訪會把副本裡的工具
+    當成本樹的、列為 uncovered，本機因此誤紅（CI 是全新 checkout，看不到）。
+    固定的 skip 名單擋不住——它永遠追不上下一個放副本的目錄名。
+    """
+    found: set[str] = set()
+    for p in repo_files(".py", root=root):
+        try:
+            src = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        if DRY_RUN_FLAG_RE.search(src):
+            found.add(p.relative_to(root).as_posix())
+    return found
+
+
+def test_repo_scan_ignores_worktree_copies(tmp_path):
+    """#2846：巢狀 worktree 與被 ignore 的副本不算本樹；本樹的宣告照算。"""
+    # 從 git hook 裡跑 pytest 時會繼承 GIT_DIR／GIT_INDEX_FILE，下面的
+    # add／commit 就會寫進真 repo；剝掉 GIT_* 讓它們只碰 tmp_path。
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+    def git(*args: str, cwd: Path = tmp_path) -> None:
+        subprocess.run(["git", "-C", str(cwd), *args], check=True,
+                       capture_output=True, timeout=60, env=env)
+
+    declarer = 'p.add_argument("--dry-run")\n'
+    tool = tmp_path / "scripts" / "tools" / "dx" / "real.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text(declarer, encoding="utf-8")
+    (tmp_path / ".gitignore").write_text(".claude/*\n", encoding="utf-8")
+    git("init", "-q")
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed")
+    # 被 ignore 的位置（repo 慣例）與沒被 ignore 的位置各放一份 worktree。
+    git("worktree", "add", "-q", str(tmp_path / ".claude" / "worktrees" / "x"))
+    git("worktree", "add", "-q", str(tmp_path / "nested_wt"))
+    # 沒被 ignore、也還沒 add 的新檔要被看見（PR 期間新建的工具）。
+    fresh = tmp_path / "scripts" / "tools" / "dx" / "fresh.py"
+    fresh.write_text(declarer, encoding="utf-8")
+
+    assert _dry_run_declarers(tmp_path) == {
+        "scripts/tools/dx/real.py", "scripts/tools/dx/fresh.py"}
 
 
 def test_no_dry_run_declarer_outside_the_gate():
@@ -879,19 +926,7 @@ def test_no_dry_run_declarer_outside_the_gate():
     宣告了 `--dry-run` 卻不在 RECIPES 裡、也沒有列在 OUT_OF_SCOPE_DECLARERS
     （附理由）的檔案都會紅。
     """
-    found: set[str] = set()
-    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
-        dirnames[:] = [d for d in dirnames if d not in _REPO_SCAN_SKIP_DIRS]
-        for fn in filenames:
-            if not fn.endswith(".py"):
-                continue
-            p = Path(dirpath) / fn
-            try:
-                src = p.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue
-            if DRY_RUN_FLAG_RE.search(src):
-                found.add(p.relative_to(REPO_ROOT).as_posix())
+    found = _dry_run_declarers()
     covered = {TOOL_SCRIPTS[r.tool].relative_to(REPO_ROOT).as_posix()
                for r in RECIPES}
     uncovered = sorted(found - covered - set(OUT_OF_SCOPE_DECLARERS))
