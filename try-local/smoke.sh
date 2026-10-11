@@ -12,6 +12,14 @@
 #      accessible_tenants==["*"]. The "2 tenants" the portal shows come from
 #      /api/v1/tenants, so that is what we assert. See README.
 #   4. da-portal :8081/ — Tenant Manager UI served (HTTP 200).
+#   5. recipe-preview :8082 — GET /healthz → 200 with promtool present, then
+#      two POST /preview for one threshold recipe on a tenant from check 3: a
+#      value above the threshold must come back `firing`, one below it
+#      `inactive`. #2873's missing modules fail app.py at import, so that
+#      container never listens and /healthz alone answers 000 (#2909). The
+#      two POSTs cover what /healthz cannot: a compiler or promtool that is
+#      present but returns a 500 or an `error` verdict. Two verdicts, not
+#      one, so a service that answers `firing` to everything cannot pass.
 #
 # Requires: curl, jq. Honors port overrides from a sibling .env.
 set -euo pipefail
@@ -28,6 +36,7 @@ HOST="${SMOKE_HOST:-localhost}"
 PROM_PORT="${EXPOSE_PROM_PORT:-9090}"
 API_PORT="${EXPOSE_API_PORT:-8080}"
 PORTAL_PORT="${EXPOSE_PORTAL_PORT:-8081}"
+PREVIEW_PORT="${EXPOSE_PREVIEW_PORT:-8082}"
 # Headroom: the mariadb pack's recording rules run at interval:15s, then the
 # alert is for:30s — plus scrape/eval slack and slow CI runners.
 ALERT_TIMEOUT="${SMOKE_ALERT_TIMEOUT:-120}"
@@ -72,9 +81,10 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PORTAL_PORT}/ap
 echo "[smoke] OK: browser path /api/v1/me via portal (dev-bypass injected) 200"
 
 # 3. /api/v1/tenants → exactly 2 tenants (db-demo, cache-demo).
-count="$(curl -sf \
+tenants="$(curl -sf \
   -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
-  "http://${HOST}:${API_PORT}/api/v1/tenants" | jq 'length')"
+  "http://${HOST}:${API_PORT}/api/v1/tenants")"
+count="$(printf '%s' "$tenants" | jq 'length')"
 [ "$count" = "2" ] || fail "/api/v1/tenants listed '${count}' tenants (want 2: db-demo, cache-demo)"
 echo "[smoke] OK: /api/v1/tenants lists 2 tenants"
 
@@ -82,5 +92,39 @@ echo "[smoke] OK: /api/v1/tenants lists 2 tenants"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PORTAL_PORT}/")"
 [ "$code" = "200" ] || fail "portal / returned HTTP ${code} (want 200)"
 echo "[smoke] OK: portal 200"
+
+# 5. recipe-preview: liveness, then two real verdicts through the compiler.
+# http_split <curl args…> → sets $code and $body. Runs in THIS shell
+# (not a $(...) subshell) so a fail() after it exits the script, not a subshell.
+http_split() {
+  local resp
+  resp="$(curl -s -w '\n%{http_code}' "$@" || true)"
+  code="${resp##*$'\n'}"
+  body="${resp%$'\n'*}"
+}
+http_split "http://${HOST}:${PREVIEW_PORT}/healthz"
+[ "$code" = "200" ] || fail "recipe-preview /healthz returned HTTP ${code} (want 200)"
+promtool="$(printf '%s' "$body" | jq -r '.promtool // "absent"' 2>/dev/null || echo absent)"
+[ "$promtool" != "absent" ] || fail "recipe-preview /healthz reports no promtool (body: ${body})"
+echo "[smoke] OK: recipe-preview /healthz 200 (promtool: ${promtool})"
+
+# The tenant comes from check 3's list, so this stays tenant-agnostic.
+tenant="$(printf '%s' "$tenants" | jq -r '.[0].id // empty')"
+[ -n "$tenant" ] || fail "no tenant id in /api/v1/tenants to preview against"
+for pair in 1500:firing 1:inactive; do
+  value="${pair%%:*}"
+  want="${pair#*:}"
+  req="$(jq -cn --arg t "$tenant" --argjson v "$value" '{
+    tenant: $t,
+    recipe: {recipe: "threshold", metric: "smoke_queue_depth", op: ">",
+             window: "5m", for: "1m", threshold: "1000:warning", name: "smoke"},
+    scenario: {value: $v}}')"
+  http_split -X POST -H 'Content-Type: application/json' --data "$req" \
+    "http://${HOST}:${PREVIEW_PORT}/preview"
+  [ "$code" = "200" ] || fail "recipe-preview POST /preview (value ${value}) returned HTTP ${code} (want 200; body: ${body})"
+  state="$(printf '%s' "$body" | jq -r '.states[0].state // "none"' 2>/dev/null || echo unparsable)"
+  [ "$state" = "$want" ] || fail "recipe-preview POST /preview (value ${value}, threshold 1000) gave '${state}' (want ${want}; body: ${body})"
+done
+echo "[smoke] OK: recipe-preview /preview verdicts firing / inactive"
 
 echo "[smoke] ALL CHECKS PASSED"
