@@ -268,7 +268,7 @@ spec:
             # falsy and silently drop a deliberate 0. Otherwise the binary's
             # default (5) applies.
             - name: TA_WRITE_QUEUE_DEPTH
-              value: {{ .Values.tenantApi.writeQueueDepth | quote }}
+              value: {{ include "tenant-api.intEnv" (list "tenantApi.writeQueueDepth" .Values.tenantApi.writeQueueDepth) }}
             {{- end }}
             # Server tuning (issue #144). The binary has working
             # defaults built in; emit env vars only when the chart
@@ -291,15 +291,15 @@ spec:
             {{- end }}
             {{- if .maxBodyBytes }}
             - name: TA_MAX_BODY_BYTES
-              value: {{ .maxBodyBytes | quote }}
+              value: {{ include "tenant-api.intEnv" (list "tenantApi.server.maxBodyBytes" .maxBodyBytes) }}
             {{- end }}
             {{- if .maxBatchBodyBytes }}
             - name: TA_MAX_BATCH_BODY_BYTES
-              value: {{ .maxBatchBodyBytes | quote }}
+              value: {{ include "tenant-api.intEnv" (list "tenantApi.server.maxBatchBodyBytes" .maxBatchBodyBytes) }}
             {{- end }}
             {{- if .maxTenantDocBytes }}
             - name: TA_MAX_TENANT_DOC_BYTES
-              value: {{ .maxTenantDocBytes | quote }}
+              value: {{ include "tenant-api.intEnv" (list "tenantApi.server.maxTenantDocBytes" .maxTenantDocBytes) }}
             {{- end }}
             {{- end }}
             {{- with .Values.tenantApi.sse }}
