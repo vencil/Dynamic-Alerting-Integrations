@@ -457,7 +457,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | `--watch` | 持續監控模式（每 N 秒比對一次） | false |
 | `--interval <SEC>` | 監控間隔（秒） | `60` |
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
-| `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1% | `0.001` |
+| `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1%。必須是 ≥ 0 的有限數，`inf`、`nan`、負值回 2 | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
 | `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡 | `validation_output` |
 

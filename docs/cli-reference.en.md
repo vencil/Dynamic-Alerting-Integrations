@@ -460,7 +460,7 @@ Choose one mode:
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
 | `--interval <SEC>` | Monitoring interval in seconds | `60` |
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
-| `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1% | `0.001` |
+| `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1%. Must be a finite number ≥ 0; `inf`, `nan` or a negative value exits 2 | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
 | `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there | `validation_output` |
 
