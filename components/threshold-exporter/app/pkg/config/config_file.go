@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"unicode/utf8"
 
@@ -42,7 +43,9 @@ import (
 //
 // Semantics are a plain yaml.Unmarshal into ThresholdConfig — the flat
 // plane's historical decode — pinned against that oracle over a variant
-// corpus by config_file_test.go, with TWO post-decode steps: a value written
+// corpus by config_file_test.go, with THREE post-decode steps: a reserved
+// key's mapping is kept whole even when it has a `default` key
+// (keepReservedMappings, #2859), a value written
 // as null is no write (dropNullThresholds, #2518 — a `defaults:` key, and a
 // threshold key of a `tenants:` / `profiles:` body), and inside `defaults:`
 // a spelling that writes nothing beside one that does is dropped
@@ -56,6 +59,7 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
 	if err == nil {
+		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
 		normalizeConfigKeys(&cfg)
@@ -201,4 +205,83 @@ func ParseTenantFile(data []byte) (ThresholdConfig, error) {
 		return ThresholdConfig{}, fmt.Errorf("tenant id %q is not valid UTF-8", bad[0])
 	}
 	return cfg, nil
+}
+
+// defaultKeyRE matches a `default` mapping key in any YAML spelling a file can
+// write it in (plain, quoted, flow): the cheap test for whether a decode can
+// have taken ScheduledValue's structured branch at all.
+var defaultKeyRE = regexp.MustCompile(`\bdefault['"]?\s*:`)
+
+// keepReservedMappings undoes ScheduledValue's structured decode for reserved
+// keys (#2859). ScheduledValue.UnmarshalYAML cannot see the key its value sits
+// under, so a mapping with a `default` key is decoded as a scheduled
+// threshold — {default, overrides, expires, reason} — and every other key is
+// dropped. For a threshold that is the format; for a reserved key such as
+// `_metadata: {default: x, environment: production}` it threw environment
+// away, while the same mapping without `default` kept it. A reserved key's
+// mapping is never a scheduled value, so it is stored the way every other
+// mapping is: re-serialized whole into Default (the arbitrary-mapping branch).
+//
+// Only the reserved keys whose value is a mapping by schema
+// (mappingReservedKeys). A name reference such as `_profile` keeps its
+// `{default: <name>}` form, which elects that name (#2433), and keys whose
+// schema admits a string or a mapping keep their decode.
+//
+// The bytes are re-read generically, as dropNullThresholds does, and only
+// when they can contain a `default` key at all.
+func keepReservedMappings(cfg *ThresholdConfig, data []byte) {
+	if !defaultKeyRE.Match(data) {
+		return
+	}
+	var raw struct {
+		Tenants  map[string]map[string]any `yaml:"tenants"`
+		Profiles map[string]map[string]any `yaml:"profiles"`
+	}
+	if yaml.Unmarshal(data, &raw) != nil {
+		return // cannot happen: the typed decode of the same bytes succeeded
+	}
+	keepReservedBodies(cfg.Tenants, raw.Tenants)
+	keepReservedBodies(cfg.Profiles, raw.Profiles)
+}
+
+func keepReservedBodies(typed map[string]map[string]ScheduledValue, raw map[string]map[string]any) {
+	for name, body := range raw {
+		if typed[name] == nil {
+			continue
+		}
+		for k, v := range body {
+			if !mappingReservedKeys[k] || !hasDefaultKey(v) {
+				continue // not a reserved mapping the structured branch took
+			}
+			out, err := yaml.Marshal(v)
+			if err != nil {
+				continue // not reachable for a mapping decoded from YAML
+			}
+			typed[name][k] = ScheduledValue{Default: string(out)}
+		}
+	}
+}
+
+// hasDefaultKey reports whether v is a mapping with a `default` key, in
+// either shape a generic decode gives a mapping.
+func hasDefaultKey(v any) bool {
+	switch m := v.(type) {
+	case map[string]any:
+		_, ok := m["default"]
+		return ok
+	case map[any]any:
+		_, ok := m["default"]
+		return ok
+	}
+	return false
+}
+
+// mappingReservedKeys are the reserved keys whose value is a mapping and
+// only a mapping (docs/schemas/tenant-config.schema.json): the ones
+// keepReservedMappings keeps whole.
+var mappingReservedKeys = map[string]bool{
+	"_metadata":         true,
+	"_routing":          true,
+	"_routing_enforced": true,
+	"_routing_defaults": true,
 }
