@@ -331,18 +331,21 @@ func batchOp(id, body string) PRBatchOp {
 
 // Every op of a batch walks conf.d again, and from the second op on that
 // walk is served from the prior: a file no op touched is not parsed again.
+// #2900: the batch walks its staging tree with that tree's own prior.
 func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{
 		"lo-a.yaml":              tenantBody("lo-a"),
 		"team/lo-bystander.yaml": tenantBody("lo-bystander"),
 	})
 	w := NewWriter(dir, dir)
-	// onTreeScan runs as walk n starts, when treePrior is walk n-1. Walk 1 is
-	// the cold one; every later walk must carry the untouched file.
+	var st *stagingTree
+	w.onBatchStaging = func(s *stagingTree) { st = s }
+	// onTreeScan runs as walk n starts, when the staging prior is walk n-1.
+	// Walk 1 is the cold one; every later walk must carry the untouched file.
 	var walks atomic.Int32
 	var parsedAgain []int32
 	bystanderParsed := func() bool {
-		f := w.treePrior.Load().Files["team/lo-bystander.yaml"]
+		f := st.prior.Files["team/lo-bystander.yaml"]
 		return f == nil || f.Parsed
 	}
 	w.onTreeScan = func() {
@@ -400,8 +403,11 @@ func TestTreePriorBatch_DanglingLinkToCreatedFile(t *testing.T) {
 	assertBatchRefusedAsDuplicate(t, dir, "dl-new")
 }
 
-// B1 (B): a subdirectory hardlink of the top-level file shares its bytes, so
-// writing the tenant into the top-level file declares it twice.
+// B1 (B): a subdirectory hardlink of the top-level file shares its bytes on
+// the serving tree — but git does not record hard links, so the base the PR
+// branch is cut from holds two independent files, and that is what the batch
+// is judged on and what lands (#2900, staging worktree): the write is not a
+// duplicate there, and the branch loads cleanly.
 func TestTreePriorBatch_HardlinkOfWrittenFile(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"hl-new.yaml": "tenants: {}\n"})
 	if err := os.MkdirAll(filepath.Join(dir, "team"), 0o755); err != nil {
@@ -412,7 +418,16 @@ func TestTreePriorBatch_HardlinkOfWrittenFile(t *testing.T) {
 	}
 	gitRun(t, dir, "add", "-A")
 	gitRun(t, dir, "commit", "-q", "-m", "hardlink")
-	assertBatchRefusedAsDuplicate(t, dir, "hl-new")
+	w := NewWriter(dir, dir)
+	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{batchOp("hl-new", tenantBody("hl-new"))}, "op@example.com")
+	if err != nil {
+		t.Fatalf("WritePRBatch: %v", err)
+	}
+	gitRun(t, dir, "fetch", "-q", "origin", res.BranchName)
+	gitRun(t, dir, "checkout", "-q", "FETCH_HEAD")
+	if _, _, err := cfg.LoadDir(dir, nil); err != nil {
+		t.Fatalf("the PR branch does not load: %v", err)
+	}
 }
 
 // An op that keeps a grandfathered co-tenant in its file keeps that

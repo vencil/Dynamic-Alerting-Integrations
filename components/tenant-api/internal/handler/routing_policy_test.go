@@ -148,12 +148,17 @@ func runBatch(t *testing.T, configDir string, d *Deps, ops string) BatchResponse
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
 	d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	// #2900: a batch with a refused op is rejected whole — 422 with the same
+	// per-op results body; anything else is 200.
+	if w.Code != http.StatusOK && w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 200 or 422; body: %s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
+	}
+	if (w.Code == http.StatusUnprocessableEntity) != (resp.Status == batchStatusRejected) {
+		t.Fatalf("status %d with body status %q: 422 and \"rejected\" go together; body: %s", w.Code, resp.Status, w.Body.String())
 	}
 	return resp
 }
@@ -194,8 +199,9 @@ func resultsByTenant(resp BatchResponse) map[string]BatchResult {
 }
 
 // Direct mode (executeBatchOps): the op that points the tenant at a
-// violating profile is refused and writes nothing; an op that touches no
-// routing key is not refused for the routing already on disk.
+// violating profile is refused, and (#2900) the batch with it — nothing is
+// written; an op that touches no routing key is not refused for the routing
+// already on disk, so on its own it is written.
 func TestBatchTenants_RoutingProfilePolicy_Direct(t *testing.T) {
 	configDir := seedGitTree(t, batchTree())
 	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
@@ -208,17 +214,24 @@ func TestBatchTenants_RoutingProfilePolicy_Direct(t *testing.T) {
 		!strings.Contains(r.Message, "routing profile 'team-chat'") {
 		t.Errorf("t-ok = %+v, want refused naming the profile", r)
 	}
-	if r := got["t-dirty"]; r.Status != "ok" {
-		t.Errorf("t-dirty = %+v, want ok (unrelated write is not refused for on-disk routing)", r)
+	if r := got["t-dirty"]; r.Status != resultNotApplied {
+		t.Errorf("t-dirty = %+v, want not_applied (the batch was rejected)", r)
 	}
 	b, _ := os.ReadFile(filepath.Join(configDir, "t-ok.yaml"))
 	if strings.Contains(string(b), "team-chat") {
 		t.Errorf("refused op reached disk:\n%s", b)
 	}
+	if b, _ := os.ReadFile(filepath.Join(configDir, "t-dirty.yaml")); strings.Contains(string(b), "90") {
+		t.Errorf("rejected batch wrote t-dirty.yaml:\n%s", b)
+	}
+	resp = runBatch(t, configDir, d, `[{"tenant_id":"t-dirty","patch":{"cpu_usage_percent":"90"}}]`)
+	if r := resultsByTenant(resp)["t-dirty"]; r.Status != "ok" {
+		t.Errorf("t-dirty alone = %+v, want ok (unrelated write is not refused for on-disk routing)", r)
+	}
 }
 
-// PR mode (batchTenantsPRMode): the refused op is left out and the rest of
-// the batch still becomes one PR.
+// PR mode (batchTenantsPRMode): the refused op rejects the batch (#2900) —
+// no PR; the unrelated op alone becomes one.
 func TestBatchTenants_RoutingProfilePolicy_PRMode(t *testing.T) {
 	configDir := seedGitTree(t, batchTree())
 	mockClient := &mockPlatformClient{
@@ -233,15 +246,19 @@ func TestBatchTenants_RoutingProfilePolicy_PRMode(t *testing.T) {
 	resp := runBatch(t, configDir, d, `[
 		{"tenant_id":"t-ok","patch":{"_routing_profile":"team-page"}},
 		{"tenant_id":"t-dirty","patch":{"cpu_usage_percent":"90"}}]`)
-	if resp.Status != "pending_review" {
-		t.Fatalf("status = %q, want pending_review: %+v", resp.Status, resp)
+	if resp.Status != batchStatusRejected {
+		t.Fatalf("status = %q, want rejected: %+v", resp.Status, resp)
 	}
 	got := resultsByTenant(resp)
 	if r := got["t-ok"]; r.Status != "error" || !strings.Contains(r.Message, "routes[0]") {
 		t.Errorf("t-ok = %+v, want refused on the profile's routes[0]", r)
 	}
-	if r := got["t-dirty"]; r.Status != "included" {
-		t.Errorf("t-dirty = %+v, want included in the PR", r)
+	if r := got["t-dirty"]; r.Status != resultNotApplied {
+		t.Errorf("t-dirty = %+v, want not_applied", r)
+	}
+	resp = runBatch(t, configDir, d, `[{"tenant_id":"t-dirty","patch":{"cpu_usage_percent":"90"}}]`)
+	if r := resultsByTenant(resp)["t-dirty"]; resp.Status != "pending_review" || r.Status != "included" {
+		t.Errorf("t-dirty alone: %+v, want included in a PR", resp)
 	}
 }
 
@@ -379,14 +396,10 @@ func statuses(results []BatchResult) string {
 
 // A REFUSED op is not stacked under the ops after it: nothing of it is
 // written, so judging a later op as if it were would judge a state that
-// never lands. Both write modes (PR mode stacks in memory, direct mode reads
-// the file back).
+// never lands. Both write modes stack the earlier ops in memory (direct mode
+// since #2900).
 func TestBatchTenants_RefusedOpIsNotStacked(t *testing.T) {
-	ok := "included"
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
-		if mode == WriteModeDirect {
-			ok = "ok"
-		}
 		t.Run(string(mode)+"/bypass: refused op carried _routing: disable", func(t *testing.T) {
 			// op1 is refused (its flat receiver-type key is forbidden) but
 			// also sets `_routing: disable`. Stacked, it would make op2's
@@ -396,11 +409,13 @@ func TestBatchTenants_RefusedOpIsNotStacked(t *testing.T) {
 				{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}},
 				{"tenant_id":"t-off","patch":{"_routing":"disable","_routing_receiver_type":"slack"}},
 				{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-			if got := statuses(results); got != ok+",error,error" {
-				t.Fatalf("statuses = %s, want %s,error,error: %+v", got, ok, results)
+			// #2900: the batch is rejected; op1 is not applied either. op3 is
+			// refused only because op2 is NOT stacked under it.
+			if got := statuses(results); got != "not_applied,error,error" {
+				t.Fatalf("statuses = %s, want not_applied,error,error: %+v", got, results)
 			}
-			if strings.Contains(file, "team-chat") || strings.Contains(file, "disable") || !strings.Contains(file, "domain-ok") {
-				t.Errorf("t-off.yaml must keep domain-ok, enabled:\n%s", file)
+			if strings.Contains(file, "team-chat") || strings.Contains(file, "disable") {
+				t.Errorf("t-off.yaml must not carry the refused ops:\n%s", file)
 			}
 		})
 	}

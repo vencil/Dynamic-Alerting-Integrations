@@ -279,8 +279,9 @@ func TestBatchTenants_PolicyViolationPerTenant(t *testing.T) {
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, nil).ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("BatchTenants() status = %d, body: %s", w.Code, w.Body.String())
+	// #2900: the violation is reported on its op and rejects the batch.
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("BatchTenants() status = %d, want 422, body: %s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -297,14 +298,13 @@ func TestBatchTenants_PolicyViolationPerTenant(t *testing.T) {
 	if fin.Status != "error" || !strings.Contains(fin.Message, "domain policy violation") {
 		t.Errorf("violating op result = %+v, want error with 'domain policy violation'", fin)
 	}
-	if gen := byTenant["gen-db"]; gen.Status != "ok" {
-		t.Errorf("compliant sibling op result = %+v, want ok (policy must block per-tenant, not the batch)", gen)
+	if gen := byTenant["gen-db"]; gen.Status != resultNotApplied {
+		t.Errorf("compliant sibling op result = %+v, want not_applied (the batch is rejected whole)", gen)
 	}
-	// The violating tenant's file must NOT exist; the compliant one must.
-	if _, err := os.Stat(filepath.Join(configDir, finTenant+".yaml")); !os.IsNotExist(err) {
-		t.Errorf("policy-violating batch op left %s.yaml on disk (err=%v)", finTenant, err)
-	}
-	if _, err := os.Stat(filepath.Join(configDir, "gen-db.yaml")); err != nil {
-		t.Errorf("compliant batch op did not write gen-db.yaml: %v", err)
+	// Neither file may exist: nothing of a rejected batch is written.
+	for _, name := range []string{finTenant, "gen-db"} {
+		if _, err := os.Stat(filepath.Join(configDir, name+".yaml")); !os.IsNotExist(err) {
+			t.Errorf("rejected batch left %s.yaml on disk (err=%v)", name, err)
+		}
 	}
 }

@@ -201,14 +201,8 @@ func TestBatchPRModeScopeJudgedOnFreshBase(t *testing.T) {
 		}
 		before := gitRev(t, f.bare, "main")
 		w := postTenantBatch(t, f.deps, ops)
-		var env map[string]any
-		_ = json.Unmarshal(w.Body.Bytes(), &env)
-		msg, _ := env["error"].(string)
-		if w.Code != http.StatusForbidden || env["code"] != CodeForbidden || env["tenant_id"] != "db-a" ||
-			env["operation"] != float64(0) || !strings.Contains(msg, "latest base branch") ||
-			!strings.Contains(msg, "Nothing in this batch was written") {
-			t.Errorf("status %d, body %s; want 403 %s naming operations[0] (db-a) on the latest base", w.Code, w.Body.String(), CodeForbidden)
-		}
+		// #2900 F4: refused per op on the fresh base, the batch rejected (422).
+		assertRejectedOp(t, w, 0, "db-a", CodeForbidden, "latest base branch")
 		if f.prOpened {
 			t.Error("a PR was opened")
 		}

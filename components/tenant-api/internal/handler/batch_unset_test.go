@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -89,9 +88,10 @@ func TestBatchTenants_UnsetRoutingJudgedByPolicy(t *testing.T) {
 	}
 }
 
-// Two ops on one tenant in one request. PR mode judges each over the ones
-// before it (WritePRBatch merges them onto one base); direct mode reads the
-// file back. Either way the verdicts are the same.
+// Two ops on one tenant in one request: both write modes judge each over the
+// ones before it (direct mode since #2900; before, it read the file back
+// after writing). The verdicts are the same; a refused op2 rejects the batch,
+// so op1 does not land either.
 func TestBatchTenants_UnsetRoutingStacked(t *testing.T) {
 	cases := []struct {
 		name, ops, want string // want: statuses, "ok" standing for okStatus(mode)
@@ -100,15 +100,15 @@ func TestBatchTenants_UnsetRoutingStacked(t *testing.T) {
 		// op1 is allowed (still disabled); op2 re-enables over op1's profile.
 		{"profile then unset", `[
 			{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},` + unsetRoutingOp + `]`,
-			"ok,error", func(f string) bool {
-				return strings.Contains(f, "team-chat") && strings.Contains(f, "_routing: disable")
+			"not_applied,error", func(f string) bool {
+				return !strings.Contains(f, "team-chat")
 			}},
 		// op1 re-enables (compliant); op2 then points the ENABLED tenant at
 		// the violating profile.
 		{"unset then profile", `[` + unsetRoutingOp + `,
 			{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`,
-			"ok,error", func(f string) bool {
-				return !hasRoutingKey(f) && strings.Contains(f, "domain-ok") && !strings.Contains(f, "team-chat")
+			"not_applied,error", func(f string) bool {
+				return !strings.Contains(f, "team-chat")
 			}},
 		// An unrelated op after the re-enable is not judged.
 		{"unset then unrelated", `[` + unsetRoutingOp + `,
@@ -264,26 +264,6 @@ func unsetGroupTree() map[string]string {
 	return files
 }
 
-// groupFile is name as it lands: on disk (direct) or on the PR branch.
-func (f *groupBatchFixture) groupFile(t *testing.T, mode WriteMode, name string) string {
-	t.Helper()
-	if mode != WriteModePR {
-		b, err := os.ReadFile(filepath.Join(f.configDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	if f.head == "" {
-		t.Fatal("no PR was opened")
-	}
-	out, err := exec.Command("git", "-C", f.configDir, "show", f.head+":"+name).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git show %s:%s: %v\n%s", f.head, name, err, out)
-	}
-	return string(out)
-}
-
 func TestGroupBatch_UnsetRouting(t *testing.T) {
 	for _, mode := range bothModes {
 		t.Run(string(mode), func(t *testing.T) {
@@ -294,17 +274,23 @@ func TestGroupBatch_UnsetRouting(t *testing.T) {
 			for _, r := range resp.Results {
 				got[r.TenantID] = r
 			}
-			if r := got["t-g-ok"]; r.Status != okStatus(mode) {
-				t.Errorf("t-g-ok = %+v, want %s", r, okStatus(mode))
+			// #2900: the refused member rejects the whole group batch.
+			if resp.Status != batchStatusRejected {
+				t.Errorf("status = %q, want rejected", resp.Status)
+			}
+			if r := got["t-g-ok"]; r.Status != resultNotApplied {
+				t.Errorf("t-g-ok = %+v, want not_applied", r)
 			}
 			if r := got["t-g-chat"]; r.Status != "error" || !strings.Contains(r.Message, "policy violation") {
 				t.Errorf("t-g-chat = %+v, want refused for domain policy", r)
 			}
-			if ok := f.groupFile(t, mode, "t-g-ok.yaml"); hasRoutingKey(ok) || !strings.Contains(ok, "domain-ok") {
-				t.Errorf("t-g-ok.yaml must lose _routing:\n%s", ok)
+			if f.head != "" {
+				t.Errorf("rejected group batch opened a PR on %s", f.head)
 			}
-			if chat := f.groupFile(t, mode, "t-g-chat.yaml"); chat != files["t-g-chat.yaml"] {
-				t.Errorf("refused member's file changed:\n%s", chat)
+			for _, name := range []string{"t-g-ok.yaml", "t-g-chat.yaml"} {
+				if b, _ := os.ReadFile(filepath.Join(f.configDir, name)); string(b) != files[name] {
+					t.Errorf("rejected group batch changed %s:\n%s", name, b)
+				}
 			}
 		})
 	}

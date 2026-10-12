@@ -500,24 +500,27 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 func TestGroupBatch_Success(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
-		"db-b.yaml": "tenants:\n  db-b:\n    mysql_connections: \"80\"\n",
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"db-a.yaml":      "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
+		"db-b.yaml":      "tenants:\n  db-b:\n    mysql_connections: \"80\"\n",
 	})
 	setupGroupsFile(t, configDir, testGroupsYAML)
+	initGitRepo(t, configDir)
 
 	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
+	rbacMgr := adminRBAC(t)
 
 	body := `{"patch":{"_silent_mode":"warning"}}`
 	req := newRequestWithChiParam("POST", "/api/v1/groups/production-dba/batch",
 		"id", "production-dba", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
 
 	w := httptest.NewRecorder()
 	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
-	h(w, req)
+	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("GroupBatch() status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
@@ -533,8 +536,8 @@ func TestGroupBatch_Success(t *testing.T) {
 	if resp.GroupID != "production-dba" {
 		t.Errorf("group_id = %q, want %q", resp.GroupID, "production-dba")
 	}
-	if len(resp.Results) != 2 {
-		t.Errorf("results = %d, want 2", len(resp.Results))
+	if statuses(resp.Results) != "ok,ok" {
+		t.Errorf("results = %+v, want both members ok", resp.Results)
 	}
 }
 

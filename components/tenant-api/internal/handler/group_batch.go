@@ -2,17 +2,12 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -35,13 +30,13 @@ type GroupBatchRequest struct {
 // The PR-mode fields mirror BatchResponse: the group is expanded into one op
 // per member and runs the POST /tenants/batch pipeline (#2339).
 type GroupBatchResponse struct {
-	Status   string        `json:"status"` // "completed" | "pending_review" (PR mode)
+	Status   string        `json:"status"` // "completed" | "pending_review" (PR mode) | "rejected" (HTTP 422: a member was refused, nothing written)
 	TaskID   string        `json:"task_id"`
 	GroupID  string        `json:"group_id"`
 	PRURL    string        `json:"pr_url,omitempty"`    // PR/MR URL in PR mode
 	PRNumber int           `json:"pr_number,omitempty"` // PR/MR number in PR mode
 	Results  []BatchResult `json:"results"`
-	Summary  string        `json:"summary"`           // e.g., "5 succeeded, 1 failed"
+	Summary  string        `json:"summary"`           // e.g., "5 succeeded"; a rejected batch: "1 failed, 4 not applied"
 	Message  string        `json:"message,omitempty"` // human-readable message (PR mode)
 	// Warnings is the batch-level advisory list for PR mode, as in
 	// BatchResponse.Warnings; each notice names its tenant.
@@ -66,12 +61,15 @@ type GroupBatchResponse struct {
 // @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
 // @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
 // @Description unset removes keys from every member (only "_routing"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy.
+// @Description All or nothing, in one commit, as POST /api/v1/tenants/batch: when any member is refused nothing is written (422, status rejected, the refused members with status error, the others not_applied);
+// @Description otherwise every changed member file is in one commit (direct mode) or one PR/MR with one commit (PR write-back mode). A rejected async run ends the task as failed with the same results.
+// @Description Results and summary list only the members the caller may read; a refusal of a member the caller cannot read still rejects the batch.
 // @Description PR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.
 // @Description A member that does not exist (no tenant section on the base the write merges into, e.g. offboarded while still listed in the group) is not created:
-// @Description its result has status skipped and message "tenant does not exist", nothing is written for it, and the summary counts it apart ("1 succeeded, 1 skipped").
+// @Description its result has status skipped and message "tenant does not exist", nothing is written for it, it does not reject the batch, and the summary counts it apart ("1 succeeded, 1 skipped").
 // @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
 // @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
-// @Description is not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
+// @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
 // @Tags        groups
 // @Accept      json
 // @Produce     json
@@ -81,12 +79,13 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
-// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written"
+// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A member refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     404   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in results[].code instead."
+// @Failure     409   {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413   {object} ErrorResponse
+// @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index."
 // @Failure     500   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE)."
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -115,8 +114,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		// #1722: same budget, same reason as POST /tenants/batch — and this
 		// endpoint needed it MORE, not less. It reaches the identical write
-		// path (executeBatchOps → applyPatch → WriteMerged → readMergeValidate
-		// → validate) and applies ONE patch to EVERY member, so the in-lock
+		// path (executeBatchOps → WriteBatch → readMergeValidate → validate) and applies ONE patch to EVERY member, so the in-lock
 		// cost is multiplied by the group size rather than paid once.
 		//
 		// ⛔ The read happens before the per-member permission gate, so an
@@ -183,21 +181,24 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 				},
 				source: "tenant-manager UI (group batch: " + groupID + ")",
 				labels: []string{"tenant-api", "auto-generated", "batch", "group"},
-				group:  true,
 			}
-			resp, ok := runBatchPR(d, w, r, ops, email, p, meta)
+			resp, status, ok := runBatchPR(d, w, r, ops, email, p, meta)
 			if !ok {
 				return
 			}
 			visible := visibleGroupBatchResults(d, p, resp.Results)
-			writeJSON(w, http.StatusOK, GroupBatchResponse{
+			summary := prBatchSummary(resp.Status, visible)
+			if resp.Status == batchStatusRejected {
+				summary = summarizeBatchResults(visible)
+			}
+			writeJSON(w, status, GroupBatchResponse{
 				Status:   resp.Status,
 				TaskID:   taskID,
 				GroupID:  groupID,
 				PRURL:    resp.PRURL,
 				PRNumber: resp.PRNumber,
 				Results:  visible,
-				Summary:  prBatchSummary(resp.Status, visible),
+				Summary:  summary,
 				Message:  resp.Message,
 				Warnings: resp.Warnings,
 			})
@@ -214,26 +215,31 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
-			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
-				return toTaskResults(results), nil
-			})
-
+			task := d.Tasks.Submit(taskID, batchTaskFunc(d, ops, email, p))
 			write202Pending(w, task)
 			return
 		}
 
-		// Synchronous mode (default, backward compatible)
-		results := visibleGroupBatchResults(d, p,
-			executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy))
-
-		writeJSON(w, http.StatusOK, GroupBatchResponse{
+		// Synchronous mode (default). #2900: all or nothing, as
+		// POST /tenants/batch.
+		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
+		if run.Err != nil {
+			writeBatchFailure(w, r, run.Err)
+			return
+		}
+		results := visibleGroupBatchResults(d, p, run.Results)
+		resp := GroupBatchResponse{
 			Status:  "completed",
 			TaskID:  taskID,
 			GroupID: groupID,
 			Results: results,
 			Summary: summarizeBatchResults(results),
-		})
+		}
+		status := http.StatusOK
+		if run.Rejected {
+			resp.Status, resp.Message, status = batchStatusRejected, msgBatchRejected, http.StatusUnprocessableEntity
+		}
+		writeJSON(w, status, resp)
 	}
 }
 
@@ -247,56 +253,4 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 func visibleGroupBatchResults(d *Deps, p *rbac.VerifiedPrincipal, results []BatchResult) []BatchResult {
 	return filterByRBAC(d.RBAC, d.TenantOrg, p, results,
 		func(r BatchResult) string { return r.TenantID }, rbac.PermRead)
-}
-
-// writeGroupMemberRefusal answers a PR-mode group batch that one member's
-// refusal aborted (#2857), with the status and code the same refusal gets on
-// POST /tenants/batch, and reports whether err was one. The op index is left
-// out: it counts the group's stored members, hidden ones included, so it
-// would tell the caller how many members precede this one. A member the
-// caller cannot read is not named at all (visibleGroupBatchResults hides the
-// same members from the results).
-func writeGroupMemberRefusal(d *Deps, w http.ResponseWriter, r *http.Request, p *rbac.VerifiedPrincipal, err error) bool {
-	var (
-		tenantID, reason, code string
-		status                 int
-		notLoadable            *tenantFileNotLoadableError
-		freshPolicy            *freshBasePolicyError
-		freshScope             *freshBaseScopeError
-	)
-	switch {
-	case errors.As(err, &notLoadable):
-		tenantID, status, code = notLoadable.TenantID, http.StatusConflict, CodeTenantConfigNotLoadable
-		reason = "its config file cannot be loaded as a tenant config (config_error: " + notLoadable.Reason + ")"
-	case errors.As(err, &freshPolicy):
-		tenantID, status, code = freshPolicy.TenantID, http.StatusForbidden, CodePolicyViolation
-		if freshPolicy.LoadErr != nil {
-			slog.Error("PR write refused: domain policy on the fresh base cannot be loaded",
-				"tenant", freshPolicy.TenantID, "error", freshPolicy.LoadErr)
-			reason = "the domain policy file on the latest base branch cannot be loaded"
-		} else {
-			msgs := make([]string, len(freshPolicy.Violations))
-			for i, v := range freshPolicy.Violations {
-				msgs[i] = v.Message
-			}
-			reason = "the patch breaks the domain policy on the latest base branch: " + strings.Join(msgs, "; ")
-		}
-	case errors.As(err, &freshScope):
-		tenantID, status, code = freshScope.TenantID, http.StatusForbidden, CodeForbidden
-		reason = "insufficient permissions on the latest base branch (permission and organization-scope checks, ADR-027)"
-	default:
-		return false
-	}
-	const nothing = " Nothing in this batch was written and no PR/MR was opened."
-	if !OrgAllowedRead(d.RBAC, d.TenantOrg, p, tenantID, rbac.PermRead) {
-		WriteJSONErrorWithCode(w, r, status, code, "a member of this group was refused."+nothing)
-		return true
-	}
-	env := ErrorResponse{Error: "group member " + tenantID + ": " + reason + "." + nothing, Code: code}
-	if freshPolicy != nil && freshPolicy.LoadErr == nil {
-		env = policyViolationEnvelope(env.Error, freshPolicy.Violations)
-	}
-	env.Extra = map[string]any{"tenant_id": tenantID}
-	WriteErrorEnvelope(w, r, status, env)
-	return true
 }

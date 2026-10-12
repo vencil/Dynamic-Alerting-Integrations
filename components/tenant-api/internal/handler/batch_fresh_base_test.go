@@ -14,7 +14,6 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -108,17 +107,9 @@ func (f *staleFixture) originFile(t *testing.T, name string) string {
 // tenant, no PR, no branch left, origin's main unmoved.
 func assertFreshBaseRefused(t *testing.T, f *staleFixture, w *httptest.ResponseRecorder, op int, tenant, originMainBefore string) {
 	t.Helper()
-	var env map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &env)
-	msg, _ := env["error"].(string)
-	if w.Code != http.StatusForbidden || env["code"] != CodePolicyViolation || env["tenant_id"] != tenant ||
-		env["operation"] != float64(op) || !strings.Contains(msg, "latest base branch") ||
-		!strings.Contains(msg, fmt.Sprintf("operations[%d] (tenant %s)", op, tenant)) || !strings.Contains(msg, "Nothing in this batch was written") {
-		t.Errorf("status %d, body %s; want 403 %s naming operations[%d] (%s) on the latest base", w.Code, w.Body.String(), CodePolicyViolation, op, tenant)
-	}
-	if vs, _ := env["violations"].([]any); len(vs) == 0 {
-		t.Errorf("no policy violations listed: %s", w.Body.String())
-	}
+	// #2900 F4: judged per op on the fresh base, answered like every refused
+	// batch — 422 rejected, the refused op's result carrying the code.
+	assertRejectedOp(t, w, op, tenant, CodePolicyViolation, "domain policy violation on the latest base branch")
 	if f.prOpened {
 		t.Error("a PR was opened")
 	}
@@ -127,6 +118,24 @@ func assertFreshBaseRefused(t *testing.T, f *staleFixture, w *httptest.ResponseR
 	}
 	if got := gitRev(t, f.bare, "main"); got != originMainBefore {
 		t.Errorf("origin main moved: %s → %s", originMainBefore, got)
+	}
+}
+
+// assertRejectedOp: w is the 422 of a rejected batch whose op-th result is
+// tenant's refusal with code and a message containing msg.
+func assertRejectedOp(t *testing.T, w *httptest.ResponseRecorder, op int, tenant, code, msg string) {
+	t.Helper()
+	var resp BatchResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if w.Code != http.StatusUnprocessableEntity || resp.Status != batchStatusRejected || op >= len(resp.Results) {
+		t.Fatalf("status %d, body %s; want 422 rejected with result %d", w.Code, w.Body.String(), op)
+	}
+	r := resp.Results[op]
+	if r.TenantID != tenant || r.Status != "error" || r.Code != code || !strings.Contains(r.Message, msg) {
+		t.Errorf("result %d = %+v; want %s refused with %s, message containing %q", op, r, tenant, code, msg)
+	}
+	if strings.Contains(r.Message, "operations[") {
+		t.Errorf("the per-op message carries an op index: %q", r.Message)
 	}
 }
 
@@ -186,21 +195,26 @@ func TestBatchTenants_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
 	}
 }
 
-// 4. Local and origin agree: the per-op pre-check still refuses per op, the
-// rest of the batch still becomes one PR — no whole-batch abort.
-func TestBatchTenants_PRMode_InSyncKeepsPerOpErrors(t *testing.T) {
+// 4. Local and origin agree: the per-op pre-check refuses the op, and since
+// #2900 the whole batch with it — 422 rejected, the refusal per op, the other
+// op not applied, no branch and no PR.
+func TestBatchTenants_PRMode_InSyncRefusalRejectsBatch(t *testing.T) {
 	f := newStaleFixture(t, staleTree("    _routing_profile: domain-ok\n"), nil)
+	before := gitRev(t, f.bare, "main")
 	w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
 		{"tenant_id":"t-other","patch":{"cpu_usage_percent":"90"}}]`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body: %s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Status != "pending_review" || statuses(resp.Results) != "error,included" || !f.prOpened {
-		t.Errorf("response = %+v (PR opened %v), want pending_review with error,included", resp, f.prOpened)
+	if resp.Status != batchStatusRejected || statuses(resp.Results) != "error,not_applied" || f.prOpened {
+		t.Errorf("response = %+v (PR opened %v), want rejected with error,not_applied and no PR", resp, f.prOpened)
+	}
+	if f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {
+		t.Errorf("rejected batch wrote something: branches %q", f.batchBranches(t))
 	}
 }
 
@@ -227,21 +241,9 @@ func TestGroupBatch_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
 	f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
-	// A group batch names the member, not its index among the group's
-	// stored members, hidden ones included (#2857).
-	var env map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &env)
-	msg, _ := env["error"].(string)
-	if w.Code != http.StatusForbidden || env["code"] != CodePolicyViolation || env["tenant_id"] != "t-off" ||
-		!strings.Contains(msg, "group member t-off") || !strings.Contains(msg, "latest base branch") {
-		t.Errorf("status %d, body %s; want 403 %s naming group member t-off", w.Code, w.Body.String(), CodePolicyViolation)
-	}
-	if _, hasOp := env["operation"]; hasOp || strings.Contains(msg, "operations[") {
-		t.Errorf("the refusal carries the member's index: %s", w.Body.String())
-	}
-	if vs, _ := env["violations"].([]any); len(vs) == 0 {
-		t.Errorf("no policy violations listed: %s", w.Body.String())
-	}
+	// A group batch names the member, never its index among the group's
+	// stored members, hidden ones included (#2857); #2900 F4: per op, 422.
+	assertRejectedOp(t, w, 1, "t-off", CodePolicyViolation, "domain policy violation on the latest base branch")
 	if f.prOpened {
 		t.Error("a PR was opened")
 	}
@@ -291,12 +293,9 @@ func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
 		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": "domain_policies: [unclosed\n"})
 		before := gitRev(t, f.bare, "main")
 		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-		var env map[string]any
-		_ = json.Unmarshal(w.Body.Bytes(), &env)
-		msg, _ := env["error"].(string)
-		if w.Code != http.StatusForbidden || env["code"] != CodePolicyViolation || env["tenant_id"] != "t-off" ||
-			!strings.Contains(msg, "(_domain_policy.yaml or .yml) on the latest base branch cannot be loaded") || strings.Contains(msg, f.dir) {
-			t.Errorf("status %d, body %s; want 403 %s naming the unloadable policy file (and no server path)", w.Code, w.Body.String(), CodePolicyViolation)
+		assertRejectedOp(t, w, 0, "t-off", CodePolicyViolation, "(_domain_policy.yaml or .yml) on the latest base branch cannot be loaded")
+		if strings.Contains(w.Body.String(), f.dir) {
+			t.Errorf("the refusal names a server path: %s", w.Body.String())
 		}
 		if f.prOpened || f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {
 			t.Errorf("fail-closed batch wrote something: PR %v, branches %q", f.prOpened, f.batchBranches(t))
@@ -315,15 +314,16 @@ func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
 	})
 
 	// The base RELAXES the policy: the local pre-check still refuses the op
-	// per op (pre-existing behaviour — it never reaches the branch).
+	// (pre-existing behaviour — it never reaches the branch); since #2900 the
+	// batch is rejected with it (422).
 	t.Run("policy relaxed on the base", func(t *testing.T) {
 		local := staleTree("    _routing_profile: domain-ok\n")
 		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": policyListing("t-other")})
 		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
 		var resp BatchResponse
 		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		if w.Code != http.StatusOK || statuses(resp.Results) != "error" || f.prOpened {
-			t.Errorf("status %d, results %+v, PR %v; want 200 with the op refused per op by the local check", w.Code, resp.Results, f.prOpened)
+		if w.Code != http.StatusUnprocessableEntity || statuses(resp.Results) != "error" || f.prOpened {
+			t.Errorf("status %d, results %+v, PR %v; want 422 with the op refused per op by the local check", w.Code, resp.Results, f.prOpened)
 		}
 	})
 }

@@ -115,9 +115,9 @@ func TestBatchTenants_Async_ReturnsTaskID(t *testing.T) {
 }
 
 // TestBatchTenants_Async_TaskCompletes verifies the submitted task actually
-// runs through the worker pool and reaches a terminal state. Individual op
-// status (ok/error) depends on RBAC + git availability and is covered by
-// sync-mode tests; here we assert lifecycle, not per-op success.
+// runs through the worker pool and reaches a terminal state. Without the RBAC
+// middleware there is no principal, so every op is refused and (#2900) the
+// batch is rejected: the task ends failed, with one result per op.
 func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
@@ -159,8 +159,8 @@ func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
 	}
 
 	final := pollUntilTerminal(t, taskMgr, taskID, 5*time.Second)
-	if final.Status != async.TaskCompleted {
-		t.Errorf("task status = %v, want %v", final.Status, async.TaskCompleted)
+	if final.Status != async.TaskFailed || final.Error == "" {
+		t.Errorf("task status = %v (error %q), want %v with an error", final.Status, final.Error, async.TaskFailed)
 	}
 	if len(final.Results) != 2 {
 		t.Errorf("results = %d, want 2 (one per submitted operation)", len(final.Results))

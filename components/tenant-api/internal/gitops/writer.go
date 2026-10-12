@@ -435,6 +435,16 @@ type Writer struct {
 	// other's hooks. Always nil in production.
 	beforeBaseRestore func(attempt int)
 
+	// beforeBatchSync is a TEST-ONLY seam (#2900): publishBatch calls it,
+	// when non-nil, after the serving branch was advanced to a batch's commit
+	// and before the serving worktree is brought up to it; an error it
+	// returns is a failure after the commit landed. Always nil in production.
+	beforeBatchSync func() error
+
+	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
+	// non-nil, with each staging tree it opened. Always nil in production.
+	onBatchStaging func(*stagingTree)
+
 	// Load-shedding admission control (TRK-320). Before taking w.mu, every write
 	// passes through acquireWrite(ctx): a single execution token (writeExec, cap 1)
 	// serialises the one in-flight write, while writeInFlight bounds the total
@@ -533,8 +543,23 @@ func (w *Writer) unlockTree() {
 // WritePR / WritePRBatch do not use it: they anchor on base themselves
 // (checkoutBaseClean) as their first step under the lock.
 func (w *Writer) lockTreeOnBase() error {
-	w.lockTree()
+	if err := w.lockTreeRecovered(); err != nil {
+		return err
+	}
 	if err := w.leavePRBranch(); err != nil {
+		w.unlockTree()
+		return err
+	}
+	return nil
+}
+
+// lockTreeRecovered is lockTree followed by RecoverBatchPublish (#2900): a
+// batch publish interrupted between the branch update and the worktree
+// update is finished before this write reads anything. On error the lock is
+// already released.
+func (w *Writer) lockTreeRecovered() error {
+	w.lockTree()
+	if err := w.RecoverBatchPublish(); err != nil {
 		w.unlockTree()
 		return err
 	}
@@ -1057,6 +1082,18 @@ func (w *Writer) walkTree(stuck *atomic.Int32) (*cfg.TreeScan, error) {
 // longer matches a file's bytes (ResolveEffective). Either walk is
 // published as the next prior under the same rule.
 func (w *Writer) walkTreeFrom(stuck *atomic.Int32, withPrior bool) (*cfg.TreeScan, error) {
+	var prior *cfg.TreeScan
+	if withPrior {
+		prior = w.treePrior.Load()
+	}
+	return w.walkDir(w.configDir, stuck, prior, func(s *cfg.TreeScan) { w.treePrior.Store(s) })
+}
+
+// walkDir is the bounded conf.d walk of root with prior as the walker's prior;
+// publish runs, on the walking goroutine under the abandonment mutex, for a
+// walk handed back to its caller (see walkTreeFrom for why only those). The
+// batch staging tree (#2900) walks its own root with its own prior through it.
+func (w *Writer) walkDir(root string, stuck *atomic.Int32, prior *cfg.TreeScan, publish func(*cfg.TreeScan)) (*cfg.TreeScan, error) {
 	if stuck.Load() > 0 {
 		return nil, errTreeScanStuck
 	}
@@ -1067,10 +1104,6 @@ func (w *Writer) walkTreeFrom(stuck *atomic.Int32, withPrior bool) (*cfg.TreeSca
 	type result struct {
 		scan *cfg.TreeScan
 		err  error
-	}
-	var prior *cfg.TreeScan
-	if withPrior {
-		prior = w.treePrior.Load()
 	}
 	// boundedcall.RunCommit keeps #2153's publication rule: the commit runs
 	// on the walking goroutine under the same mutex that decides abandonment,
@@ -1083,14 +1116,14 @@ func (w *Writer) walkTreeFrom(stuck *atomic.Int32, withPrior bool) (*cfg.TreeSca
 		}
 		// obs is a literal nil interface on purpose — see cfg.ScanObserver's
 		// typed-nil trap.
-		s, err := cfg.ScanDirTree(w.configDir, prior, nil, discardScanLogger)
+		s, err := cfg.ScanDirTree(root, prior, nil, discardScanLogger)
 		if err == nil {
 			s.ReleaseData() // before anyone else can see s
 		}
 		return result{s, err}
 	}, func(r result) {
 		if r.err == nil {
-			w.treePrior.Store(r.scan)
+			publish(r.scan)
 		}
 	})
 	switch {
@@ -1194,6 +1227,12 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 // the caller can detect a byte-identical (no-op) merge. notices is validate()'s
 // advisory deprecation channel (#1231 1b), meaningful only when err is nil.
 func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
+	return w.readMergeValidateIn(w.configDir, tenantID, filePath, merge)
+}
+
+// readMergeValidateIn is readMergeValidate judged against the conf.d tree at
+// configDir — the batch staging tree's (#2900), or w.configDir.
+func (w *Writer) readMergeValidateIn(configDir, tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
 	content, existing, err = w.readMerge(tenantID, filePath, merge)
 	if errors.Is(err, ErrMergeNoOp) && len(bytes.TrimSpace(existing)) > 0 {
 		// The file stays as it is: nothing is written, so nothing is refused
@@ -1202,13 +1241,13 @@ func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (
 		// a successful no-op into a 400). Only the file's notices are taken
 		// from validate (#1231 F5); its errors are deliberately dropped. The
 		// caller sees ErrMergeNoOp with the notices.
-		_, notices := validate(w.configDir, tenantID, filePath, string(existing))
+		_, notices := validate(configDir, tenantID, filePath, string(existing))
 		return "", existing, notices, err
 	}
 	if err != nil {
 		return "", existing, nil, err
 	}
-	errs, notices := validate(w.configDir, tenantID, filePath, content)
+	errs, notices := validate(configDir, tenantID, filePath, content)
 	if len(errs) > 0 {
 		return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
 	}
@@ -1519,21 +1558,6 @@ func (w *Writer) commitParent() (string, error) {
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
 func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) (committed bool, err error) {
-	// Stage the file
-	addCmd, addCtx, addCancel := w.gitCmd("-C", w.gitDir, "add", filePath)
-	defer addCancel()
-	if out, err := addCmd.CombinedOutput(); err != nil {
-		return false, w.gitErr(addCtx, "add", err, out)
-	}
-
-	// Check if there's actually something to commit
-	statusCmd, _, statusCancel := w.gitCmd("-C", w.gitDir, "diff", "--cached", "--quiet")
-	defer statusCancel()
-	if err := statusCmd.Run(); err == nil {
-		// Exit 0 means no changes staged — nothing to commit
-		return false, nil
-	}
-
 	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
 		tenantID, time.Now().UTC().Format(time.RFC3339))
 	// Optional trailer — appended to the message body so an audit
@@ -1541,6 +1565,32 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	// permanently bound to the commit, not just an ephemeral log line.
 	if len(trailer) > 0 && trailer[0] != "" {
 		msg += "\n\n" + trailer[0]
+	}
+	return w.gitCommitPaths(w.gitDir, []string{filePath}, msg, authorEmail)
+}
+
+// gitCommitPaths stages every path in paths and creates ONE commit with msg,
+// the operator as author (#2900: a batch's files land in a single commit).
+// committed is as for gitCommit: false when nothing was staged.
+//
+// dir is the worktree the commit is made in: w.gitDir, or a batch staging
+// worktree (#2900).
+func (w *Writer) gitCommitPaths(dir string, paths []string, msg, authorEmail string) (committed bool, err error) {
+	// Stage the files in one `git add`, so the index never holds part of them
+	// for longer than this command.
+	addArgs := append([]string{"-C", dir, "add", "--"}, paths...)
+	addCmd, addCtx, addCancel := w.gitCmd(addArgs...)
+	defer addCancel()
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		return false, w.gitErr(addCtx, "add", err, out)
+	}
+
+	// Check if there's actually something to commit
+	statusCmd, _, statusCancel := w.gitCmd("-C", dir, "diff", "--cached", "--quiet")
+	defer statusCancel()
+	if err := statusCmd.Run(); err == nil {
+		// Exit 0 means no changes staged — nothing to commit
+		return false, nil
 	}
 
 	// author name defaults to email prefix when no display name is available
@@ -1561,7 +1611,7 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 		committerEmail = authorEmail
 	}
 
-	commitCmd, commitCtx, commitCancel := w.gitCmd("-C", w.gitDir,
+	commitCmd, commitCtx, commitCancel := w.gitCmd("-C", dir,
 		"-c", "user.name="+committerName,
 		"-c", "user.email="+committerEmail,
 		"commit",

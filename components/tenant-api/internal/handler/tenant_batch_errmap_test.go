@@ -11,9 +11,9 @@ package handler
 // induced through the real machinery:
 //   - overload: TA_WRITE_QUEUE_DEPTH=0 + a WriteMerged parked inside its
 //     MergeFunc holds the single admission token; the next applyPatch sheds.
-//   - conflict: commitFileChange's parent check — a pre-commit hook advances
-//     the branch ref behind the writer's back, so the commit it then creates
-//     hangs off that external commit instead of the HEAD it recorded.
+//   - conflict: a pre-commit hook advances the serving branch while the batch
+//     commits in its staging worktree, so the compare-and-swap publish finds
+//     the branch moved (#2900).
 
 import (
 	"context"
@@ -42,6 +42,7 @@ func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "{{not yaml",
 	})
+	initGitRepo(t, configDir) // a batch runs in a staging worktree (#2900)
 	gw := newTestWriter(configDir)
 
 	res := applyPatch(context.Background(), gw, configDir,
@@ -99,49 +100,33 @@ func TestApplyPatch_WriteOverloadedMapsToRetryMessage(t *testing.T) {
 	}
 }
 
-// installExternalCommitHook makes the NEXT index update advance the current
-// branch by one commit behind the writer's back. That is the honest shape of
-// the conflict commitFileChange looks for: something else committed between
-// the HEAD it recorded and the commit it creates, so that commit's parent is
-// no longer the recorded HEAD.
-//
-// Two details are load-bearing:
-//   - post-index-change, not pre-commit. The hook has to land in the window
-//     between currentHEAD() and `git commit`; `git add` writes the index and
-//     opens exactly that window. Moving the ref from pre-commit instead is too
-//     late — git has already resolved HEAD for the commit it is building and
-//     aborts with "cannot lock ref 'HEAD'" rather than committing onto the new
-//     tip, so the conflict arm is never reached.
-//   - one-shot. `git commit` writes the index too and would re-fire the hook
-//     mid-commit, hitting the same ref-lock abort; the marker file makes the
-//     external commit happen exactly once, on the `git add`.
-//
-// commit-tree + update-ref (rather than `git commit`) leaves the index and
-// working tree alone, so the writer's own staged change survives and still
-// becomes a real commit afterwards. Needs git >= 2.22 for post-index-change.
-func installExternalCommitHook(t *testing.T, dir string) {
+// installBatchExternalCommitHook: a one-shot pre-commit hook that, while a
+// batch commits in its staging worktree (#2900), moves the SERVING branch
+// with an external commit — so the batch's compare-and-swap publish fails.
+func installBatchExternalCommitHook(t *testing.T, dir string) {
 	t.Helper()
-	hook := filepath.Join(dir, ".git", "hooks", "post-index-change")
+	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
 	const script = `#!/bin/sh
 set -e
-marker="$(git rev-parse --git-dir)/external-commit-done"
+common="$(git rev-parse --git-common-dir)"
+marker="$common/external-commit-done"
 [ -e "$marker" ] && exit 0
 : > "$marker"
-ref=$(git symbolic-ref HEAD)
-tree=$(git rev-parse HEAD^{tree})
-new=$(git commit-tree "$tree" -p HEAD -m "external commit")
+ref=$(git --git-dir="$common" symbolic-ref HEAD)
+tip=$(git rev-parse "$ref")
+new=$(git commit-tree "$tip^{tree}" -p "$tip" -m "external commit")
 git update-ref "$ref" "$new"
 `
 	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
-		t.Fatalf("install post-index-change hook: %v", err)
+		t.Fatalf("install pre-commit hook: %v", err)
 	}
 }
 
 func TestApplyPatch_ConflictMapsToRefreshMessage(t *testing.T) {
 	t.Parallel()
-	// Reach commitFileChange's ErrConflict arm deterministically: the writer
-	// records HEAD, a pre-commit hook moves the branch ref, and the writer's
-	// commit then hangs off that external commit → parent != recorded HEAD.
+	// Reach the batch's ErrConflict deterministically (#2900): while it
+	// commits in its staging worktree, a hook moves the serving branch, so
+	// the compare-and-swap publish finds it moved — and nothing is written.
 	const base = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	patch := map[string]string{"_silent_mode": "critical"}
 
@@ -152,17 +137,26 @@ func TestApplyPatch_ConflictMapsToRefreshMessage(t *testing.T) {
 	}
 	runGit(t, configDir, "add", "db-a.yaml")
 	runGit(t, configDir, "commit", "-m", "base content") // commit #2 → HEAD~1 exists
-	installExternalCommitHook(t, configDir)
+	installBatchExternalCommitHook(t, configDir)
 
 	gw := newTestWriter(configDir)
 	res := applyPatch(context.Background(), gw, configDir,
 		BatchOperation{TenantID: "db-a", Patch: patch}, "op@example.com")
 
 	if res.Status != "error" {
-		t.Fatalf("status = %q, want error for the stale-HEAD conflict shape", res.Status)
+		t.Fatalf("status = %q, want error for the moved-branch conflict", res.Status)
 	}
 	if res.Message != "conflict: retry after refresh" {
 		t.Errorf("message = %q, want the canonical conflict retry hint", res.Message)
+	}
+	// Nothing was written: the serving file is the base, the branch tip is
+	// the external commit, which does not carry the patch.
+	if got, _ := os.ReadFile(filepath.Join(configDir, "db-a.yaml")); string(got) != base {
+		t.Errorf("serving db-a.yaml = %q, want the base", got)
+	}
+	out, err := exec.Command("git", "-C", configDir, "show", "HEAD:db-a.yaml").Output()
+	if err != nil || strings.Contains(string(out), "critical") {
+		t.Errorf("HEAD:db-a.yaml = %q (err %v), want no batch content", out, err)
 	}
 }
 

@@ -356,8 +356,10 @@ func orgEnfCheckBatchResults(t *testing.T, results []BatchResult) {
 	for _, r := range results {
 		byTenant[r.TenantID] = r
 	}
-	if got := byTenant[orgEnfTenantIn]; got.Status != "ok" {
-		t.Errorf("member-org tenant result = %+v, want ok", got)
+	// #2900: the other-org op is refused and rejects the batch, so the
+	// member-org op is not written either.
+	if got := byTenant[orgEnfTenantIn]; got.Status != resultNotApplied {
+		t.Errorf("member-org tenant result = %+v, want not_applied", got)
 	}
 	out := byTenant[orgEnfTenantOut]
 	if out.Status != "error" || !strings.Contains(out.Message, "insufficient permissions") {
@@ -374,16 +376,16 @@ func TestOrgWriteEnforce_BatchTenants_Sync(t *testing.T) {
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(BatchTenants(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	orgEnfCheckBatchResults(t, resp.Results)
-	if n := f.writes.Load(); n != 1 {
-		t.Errorf("writer commits = %d, want exactly 1 (the member-org op only)", n)
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("writer commits = %d, want 0 (the batch is rejected whole)", n)
 	}
 }
 
@@ -419,8 +421,8 @@ func TestOrgWriteEnforce_BatchTenants_Async(t *testing.T) {
 		results = append(results, BatchResult{TenantID: r.TenantID, Status: r.Status, Message: r.Message})
 	}
 	orgEnfCheckBatchResults(t, results)
-	if n := f.writes.Load(); n != 1 {
-		t.Errorf("writer commits = %d, want exactly 1 (the member-org op only)", n)
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("writer commits = %d, want 0 (the batch is rejected whole)", n)
 	}
 }
 
@@ -495,9 +497,9 @@ func TestOrgWriteEnforce_BatchTenants_Async_ResolvesOrgsAtExecutionTime(t *testi
 	}
 }
 
-// PR-mode pre-validation (site #3): the inline OrgAllowed check must split
-// the ops BEFORE any branch is written, and the resulting PR must contain
-// only the authorized tenant.
+// PR-mode pre-validation (site #3): the inline OrgAllowed check must refuse
+// the denied op BEFORE any branch is written; since #2900 that rejects the
+// batch, so no PR is opened at all.
 func TestOrgWriteEnforce_BatchTenants_PRModePrevalidation(t *testing.T) {
 	t.Parallel()
 	f := newOrgEnfFixture(t, nil)
@@ -519,29 +521,16 @@ func TestOrgWriteEnforce_BatchTenants_PRModePrevalidation(t *testing.T) {
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(BatchTenants(d), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	byTenant := map[string]BatchResult{}
-	for _, r := range resp.Results {
-		byTenant[r.TenantID] = r
-	}
-	if got := byTenant[orgEnfTenantIn]; got.Status != "included" {
-		t.Errorf("member-org tenant result = %+v, want included", got)
-	}
-	out := byTenant[orgEnfTenantOut]
-	if out.Status != "error" || !strings.Contains(out.Message, "insufficient permissions") {
-		t.Errorf("other-org tenant result = %+v, want the unchanged per-item permissions error", out)
-	}
-	if strings.Contains(prTenants, orgEnfTenantOut) {
-		t.Errorf("PR body lists the DENIED tenant — pre-validation leaked it into the PR: %q", prTenants)
-	}
-	if !strings.Contains(prTenants, orgEnfTenantIn) {
-		t.Errorf("PR body missing the authorized tenant: %q", prTenants)
+	orgEnfCheckBatchResults(t, resp.Results)
+	if prTenants != "" {
+		t.Errorf("a rejected batch opened a PR: %q", prTenants)
 	}
 }
 
@@ -663,35 +652,38 @@ func TestOrgWriteEnforce_GroupBatch_Sync(t *testing.T) {
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(GroupBatch(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 	var resp GroupBatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// The other-org member is still refused (one commit, below), but it no
-	// longer appears in the response (#1530): GET /groups/g-mixed hides it,
+	// The other-org member is still refused — and since #2900 that rejects
+	// the batch, so nothing is committed — but it does not appear in the
+	// response (#1530): GET /groups/g-mixed hides it,
 	// and this endpoint runs over the stored member list rather than ids the
 	// caller sent. This used to pin its per-item error via
 	// orgEnfCheckBatchResults — a backward-compat pin from the org-enforce
 	// rollout, not a decision to disclose the member. The summary counts only
 	// what is shown, or it would disclose the member as a number.
 	orgEnfCheckGroupBatchVisible(t, resp.Results, resp.Summary)
-	if n := f.writes.Load(); n != 1 {
-		t.Errorf("writer commits = %d, want exactly 1 (the member-org member only)", n)
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("writer commits = %d, want 0 (the batch is rejected whole)", n)
 	}
 }
 
 // orgEnfCheckGroupBatchVisible: a group batch over g-mixed, seen by the
 // member-org caller, shows only the member-org tenant — in results AND summary.
+// The hidden member's refusal rejected the batch (#2900), so the visible one
+// is not applied.
 func orgEnfCheckGroupBatchVisible(t *testing.T, results []BatchResult, summary string) {
 	t.Helper()
-	if len(results) != 1 || results[0].TenantID != orgEnfTenantIn || results[0].Status != "ok" {
-		t.Errorf("results = %+v, want only %s ok", results, orgEnfTenantIn)
+	if len(results) != 1 || results[0].TenantID != orgEnfTenantIn || results[0].Status != resultNotApplied {
+		t.Errorf("results = %+v, want only %s not_applied", results, orgEnfTenantIn)
 	}
-	if summary != "1 succeeded" {
-		t.Errorf("summary = %q, want %q (it must not count the hidden member)", summary, "1 succeeded")
+	if summary != "1 not applied" {
+		t.Errorf("summary = %q, want %q (it must not count the hidden member)", summary, "1 not applied")
 	}
 }
 
@@ -761,8 +753,8 @@ func TestOrgWriteEnforce_GroupBatch_Async(t *testing.T) {
 	}
 	// The task manager keeps every result (both members, as executed)...
 	orgEnfCheckBatchResults(t, results)
-	if n := f.writes.Load(); n != 1 {
-		t.Errorf("writer commits = %d, want exactly 1 (the member-org member only)", n)
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("writer commits = %d, want 0 (the batch is rejected whole)", n)
 	}
 
 	// ...but GET /tasks/{id} shows this caller only what the sync response

@@ -13,7 +13,6 @@ package handler
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -124,7 +123,10 @@ func TestPutTenant_PRMode_BaseRestoreFailureIs500(t *testing.T) {
 	}
 }
 
-func TestBatchTenants_PRMode_BaseRestoreFailureIs500(t *testing.T) {
+// #2900: the batch cuts and pushes its branch in a staging worktree and the
+// serving tree never leaves main — there is no return to base for the hook's
+// index lock to break. The batch succeeds, and the serving tree is on main.
+func TestBatchTenants_PRMode_PushHookCannotStrandTheServingTree(t *testing.T) {
 	t.Parallel()
 	dir := repoWithLockingPrePush(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n",
@@ -151,14 +153,13 @@ func TestBatchTenants_PRMode_BaseRestoreFailureIs500(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(rec, req)
 
-	assertBaseRestore500(t, rec, dir, "PR/MR batch write failed", "tenant-api/batch/")
-	var resp map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err == nil {
-		if s, _ := resp["status"].(string); s == "pending_review" || s == "completed" {
-			t.Errorf("status %q on a failed restore", s)
-		}
+	if rec.Code != http.StatusOK || !prCreated {
+		t.Fatalf("status = %d, PR created = %v; want 200 and a PR; body: %s", rec.Code, prCreated, rec.Body.String())
 	}
-	if prCreated {
-		t.Error("a PR/MR was opened although the write failed")
+	if head, err := exec.Command("git", "-C", dir, "symbolic-ref", "--short", "HEAD").Output(); err != nil || strings.TrimSpace(string(head)) != "main" {
+		t.Errorf("serving HEAD = %q (err %v), want main", head, err)
+	}
+	if st, _ := exec.Command("git", "-C", dir, "status", "--porcelain").Output(); len(st) != 0 {
+		t.Errorf("serving tree not clean:\n%s", st)
 	}
 }

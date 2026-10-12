@@ -48,8 +48,8 @@ var scopeMetadataKeys = []string{"_profile"}
 // will have once it is written (postStateScopeMeta), so a caller scoped to
 // environment=production cannot move a tenant to dev by patching its
 // `_profile`. prior is as for batchRoutingViolations: the same tenant's
-// earlier ops merged onto the same base before this one (PR mode); nil when
-// each op is written before the next is judged (direct mode). Like the
+// earlier ops of the request, merged onto the same base before this one.
+// Like the
 // pre-state check it inherits the metadata write axis's flag: inert in
 // shadow, refusing under --rbac-metadata-write-scope-enforce.
 func gateBatchOpPostState(configDir string, prior []BatchOperation, op BatchOperation, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {

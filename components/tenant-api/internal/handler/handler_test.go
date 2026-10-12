@@ -928,8 +928,9 @@ func TestBatchTenants_InvalidTenantID(t *testing.T) {
 	w := httptest.NewRecorder()
 	h(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("BatchTenants() status = %d, want %d", w.Code, http.StatusOK)
+	// #2900: the refused op rejects the batch — 422 with per-op results.
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("BatchTenants() status = %d, want %d", w.Code, http.StatusUnprocessableEntity)
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -967,8 +968,9 @@ func TestBatchTenants_PermissionDenied(t *testing.T) {
 	w := httptest.NewRecorder()
 	h(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("BatchTenants() status = %d, want %d", w.Code, http.StatusOK)
+	// #2900: the refused op rejects the batch — 422 with per-op results.
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("BatchTenants() status = %d, want %d", w.Code, http.StatusUnprocessableEntity)
 	}
 	var resp BatchResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {

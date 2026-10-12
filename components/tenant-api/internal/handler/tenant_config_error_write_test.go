@@ -186,7 +186,8 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 			req = setRequestIdentity(req, "a@a.com")
 			w := httptest.NewRecorder()
 			rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
-			if w.Code != http.StatusOK {
+			// #2900: a refused member rejects the batch (422).
+			if want := http.StatusOK; c.reason != "" && w.Code != http.StatusUnprocessableEntity || c.reason == "" && w.Code != want {
 				t.Fatalf("status = %d; body: %s", w.Code, w.Body.String())
 			}
 			var resp GroupBatchResponse
@@ -254,12 +255,8 @@ func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
 			beforeA, beforeB := mustRead(t, filepath.Join(dir, "db-a.yaml")), mustRead(t, filepath.Join(dir, "db-b.yaml"))
 
 			w, created := prBatchRun(t, dir, rejTwoOps)
-			var env map[string]any
-			_ = json.Unmarshal(w.Body.Bytes(), &env)
-			if w.Code != http.StatusConflict || env["code"] != wantNotLoadableCode || env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
-				t.Errorf("status = %d, envelope = %v; want 409, code %s, tenant_id db-a, config_error %s",
-					w.Code, env, wantNotLoadableCode, c.reason)
-			}
+			// #2900 F4: refused per op on the fresh base, the batch rejected.
+			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
 			if created {
 				t.Error("a PR was created for a file the exporter rejects")
 			}
@@ -314,10 +311,9 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 					}
 					return
 				}
-				var env map[string]any
-				_ = json.Unmarshal(w.Body.Bytes(), &env)
-				if w.Code != http.StatusConflict || env["code"] != wantNotLoadableCode || created {
-					t.Errorf("status = %d, PR created = %v; want 409 %s; body: %s", w.Code, created, wantNotLoadableCode, w.Body.String())
+				assertRejectedOp(t, w, 0, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
+				if created {
+					t.Error("a PR was created for a file the exporter rejects on the base")
 				}
 			})
 		}

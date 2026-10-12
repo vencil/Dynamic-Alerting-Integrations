@@ -160,13 +160,11 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 // which always judges the whole body).
 //
 // prior is the SAME tenant's earlier ops of this request that will be
-// applied before this one without being written first — PR mode, where
-// WritePRBatch merges every op onto the same base in order. Only ops that
-// were taken into the batch belong there. Each carries its unset as well as
-// its patch: an earlier op that removes `_routing` re-enables routing under
-// every later op, and one that sets `_routing: disable` disables it. Direct
-// mode writes each op before judging the next, which reads the file back,
-// so it passes nil.
+// applied before this one: the batch's ops are all judged before any is
+// written (both write modes since #2900), then merged onto the same base in
+// order. Only ops that passed belong there. Each carries its unset as well
+// as its patch: an earlier op that removes `_routing` re-enables routing
+// under every later op, and one that sets `_routing: disable` disables it.
 //
 // advisories are the non-blocking `require_critical_escalation` leak
 // messages (#2325) for the same resolved routing; the caller adds them to

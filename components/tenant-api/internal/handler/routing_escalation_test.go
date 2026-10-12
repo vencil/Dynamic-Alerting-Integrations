@@ -78,9 +78,9 @@ func TestBatchTenants_EscalationAdvisory_Direct(t *testing.T) {
 	wantWarnings(t, r.Warnings, leakAdvisory("t-leak"))
 }
 
-// PR-mode batch (batchTenantsPRMode): a non-compliant op is refused and left
-// out; the leak advisory of an op taken into the PR is in the batch-level
-// warnings.
+// PR-mode batch (batchTenantsPRMode): a non-compliant op is refused and
+// (#2900) rejects the batch, which then carries no advisories; the leak
+// advisory of an op taken into a PR is in the batch-level warnings.
 func TestBatchTenants_Escalation_PRMode(t *testing.T) {
 	configDir := seedGitTree(t, escalationTree())
 	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
@@ -89,16 +89,22 @@ func TestBatchTenants_Escalation_PRMode(t *testing.T) {
 	resp := runBatch(t, configDir, d, `[
 		{"tenant_id":"t-miss","patch":{"_routing_profile":"esc-miss"}},
 		{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}}]`)
-	if resp.Status != "pending_review" {
-		t.Fatalf("status = %q, want pending_review: %+v", resp.Status, resp)
+	if resp.Status != batchStatusRejected {
+		t.Fatalf("status = %q, want rejected: %+v", resp.Status, resp)
 	}
 	got := resultsByTenant(resp)
 	if r := got["t-miss"]; r.Status != "error" || !strings.HasPrefix(r.Message, "policy violation: ") ||
 		!strings.Contains(r.Message, "requires critical escalation") {
 		t.Errorf("t-miss = %+v, want refused for require_critical_escalation", r)
 	}
-	if r := got["t-leak"]; r.Status != "included" {
-		t.Errorf("t-leak = %+v, want included in the PR", r)
+	if r := got["t-leak"]; r.Status != resultNotApplied {
+		t.Errorf("t-leak = %+v, want not_applied", r)
+	}
+	wantWarnings(t, resp.Warnings)
+
+	resp = runBatch(t, configDir, d, `[{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}}]`)
+	if r := resultsByTenant(resp)["t-leak"]; resp.Status != "pending_review" || r.Status != "included" {
+		t.Fatalf("t-leak alone: %+v, want included in a PR", resp)
 	}
 	wantWarnings(t, resp.Warnings, leakAdvisory("t-leak"))
 }
@@ -309,8 +315,9 @@ func TestBatchTenants_EscalationAdvisory_PRModeOncePerTenant(t *testing.T) {
 		want       []string
 	}{
 		{"A leak then threshold", false, ops(leak, thr), "pending_review", []string{leakAdvisory("t-leak")}},
-		{"B leak then refused", false, ops(leak, miss), "pending_review", []string{leakAdvisory("t-leak")}},
-		{"C refused then leak", false, ops(miss, leak), "pending_review", []string{leakAdvisory("t-leak")}},
+		// #2900: a refused op rejects the batch, which carries no advisories.
+		{"B leak then refused", false, ops(leak, miss), batchStatusRejected, nil},
+		{"C refused then leak", false, ops(miss, leak), batchStatusRejected, nil},
 		{"D2 no changes twice", true, ops(leak, leak), "completed", []string{leakAdvisory("t-leak")}},
 		{"H threshold only, leak on disk", true, ops(thr), "pending_review", nil},
 		{"I threshold then leak", false, ops(thr, leak), "pending_review", []string{leakAdvisory("t-leak")}},
