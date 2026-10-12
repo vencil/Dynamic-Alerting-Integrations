@@ -102,11 +102,12 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import pytest
 
@@ -223,15 +224,18 @@ POPULATION_AT_LANDING: frozenset[tuple[str, str]] = frozenset({
 POPULATION_AT_LANDING_SHA256 = "a432124249764d467e80fc162668ba35e813ef9adafe8d28dd34e4b25b43681d"
 
 # Not gated yet. Shrink-only: see test_pending_only_shrinks.
-PENDING: dict[tuple[str, str], str] = {
-    ("cardinality_forecasting", "--warn-days"): "#2908",
-    ("explain_route", "--severity"): "#2908",
-    ("threshold_govern", "--max-prs"): "#2908",
-}
+PENDING: dict[tuple[str, str], str] = {}
 
 # Name matches the pattern, but the flag decides no verdict. Each entry
 # says why. Empty when this gate landed.
-SAME_NAME_DIFFERENT_MEANING: dict[tuple[str, str], str] = {}
+SAME_NAME_DIFFERENT_MEANING: dict[tuple[str, str], str] = {
+    ("explain_route", "--severity"): (
+        "an INPUT label of the alert --trace simulates (beside --alertname / "
+        "--tenant / --label), not a threshold the tool judges against: the "
+        "route it takes is Alertmanager's own answer (amtool), and the tool's "
+        "exit code never depends on it. Accepted silently without --trace: "
+        "#2926"),
+}
 
 # A recipe whose flag was observed to change nothing: a real bug in that
 # tool, filed separately and xfailed here only while it still behaves as
@@ -272,6 +276,39 @@ def _alert_quality_matrix(now: float) -> list[dict]:
     ]
 
 
+# threshold_govern: every tenant writes GOVERN_KEY at GOVERN_CURRENT, and the
+# observed series it maps to (metric_observed_map.yaml) samples GOVERN_OBSERVED
+# GOVERN_SAMPLES times: P95 80 vs 50 is +60 % (past the 25 % gate) at MEDIUM
+# confidence (>= 100 samples), so each tenant plans exactly one change.
+GOVERN_TENANTS = ("tenant-one", "tenant-two", "tenant-three")
+GOVERN_KEY = "mysql_connections"
+GOVERN_SERIES = "tenant:mysql_threads_connected:max"
+GOVERN_CURRENT = 50
+GOVERN_OBSERVED = 80.0
+GOVERN_SAMPLES = 120
+# tenant-api paths, optionally under a per-run prefix /ta/<run>/ so the stub
+# can count each run's PUTs (and play a per-run personality, see below).
+_TENANT_PATH = re.compile(r"(?:/ta/([^/]+))?/api/v1/tenants/([^/]+)")
+# PUTs the stub received, per run prefix. A run whose prefix ends in
+# PENDING_SUFFIX answers tenant-one's PUT with 409 pending-PR (dedup), so a
+# cap that counted attempts instead of new PRs would show.
+GOVERN_PUTS: dict[str, int] = {}
+_GOVERN_PUTS_LOCK = threading.Lock()
+PENDING_SUFFIX = "-tenant-one-pending"
+
+
+def _govern_tenant_yaml(tenant: str) -> str:
+    return f'tenants:\n  {tenant}:\n    {GOVERN_KEY}: "{GOVERN_CURRENT}"\n'
+
+
+def _cardinality_matrix(now: float) -> list[dict]:
+    """One tenant's threshold-series count over the last 10 days: 100 -> 400,
+    +30/day. Against --limit 1000 that is 20 days to the limit."""
+    return [{"metric": {"tenant": "tenant-one"},
+             "values": [[now - (10 - i) * 86400, str(100 + 30 * i)]
+                        for i in range(11)]}]
+
+
 class _StubHandler(BaseHTTPRequestHandler):
     def _send(self, obj, status=200):
         data = json.dumps(obj).encode()
@@ -284,8 +321,23 @@ class _StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         url = urlsplit(self.path)
         params = parse_qs(url.query)
+        tenant_path = _TENANT_PATH.fullmatch(url.path)
         if url.path == "/api/v1/query":
             query = params.get("query", [""])[0]
+            if query.startswith(GOVERN_SERIES + "{"):
+                # threshold_recommend's range-vector query -> a matrix.
+                m = re.search(r'tenant="([^"]+)"', query)
+                if m is None:
+                    self._send({"error": "stub: no tenant label"}, status=400)
+                    return
+                tenant = m.group(1)
+                now = time.time()
+                self._send({"status": "success", "data": {
+                    "resultType": "matrix",
+                    "result": [{"metric": {"tenant": tenant},
+                                "values": [[now - 60 * i, str(GOVERN_OBSERVED)]
+                                           for i in range(GOVERN_SAMPLES)]}]}})
+                return
             value = INSTANT_VALUES.get(query)
             result = [] if value is None else [
                 {"metric": {"tenant": "tenant-one"},
@@ -301,16 +353,43 @@ class _StubHandler(BaseHTTPRequestHandler):
                 for job, inst in (("redis-exporter", "r1:9121"),
                                   ("postgres-exporter", "p1:9187"),
                                   ("mysql-exporter", "m1:9104"))]}})
+        elif (url.path == "/api/v1/query_range"
+              and "tenant_threshold_" in params.get("query", [""])[0]):
+            self._send({"status": "success",
+                        "data": {"resultType": "matrix",
+                                 "result": _cardinality_matrix(time.time())}})
         elif url.path == "/api/v1/query_range":
             self._send({"status": "success",
                         "data": {"resultType": "matrix",
                                  "result": _alert_quality_matrix(time.time())}})
         elif url.path == "/api/v2/alerts":
             self._send([])
+        elif tenant_path:
+            # tenant-api GET: the file threshold_govern edits surgically.
+            self._send({"raw_yaml": _govern_tenant_yaml(unquote(tenant_path.group(2)))})
         else:
             self._send({"error": f"stub: no route for {url.path}"}, status=404)
 
     do_POST = do_GET  # noqa: N815
+
+    def do_PUT(self):  # noqa: N802
+        # tenant-api PR write-mode: every PUT opens a PR.
+        url = urlsplit(self.path)
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        tenant_path = _TENANT_PATH.fullmatch(url.path)
+        if tenant_path is None:
+            self._send({"error": f"stub: no PUT route for {url.path}"}, status=404)
+            return
+        run, tenant = tenant_path.group(1) or "", unquote(tenant_path.group(2))
+        with _GOVERN_PUTS_LOCK:
+            GOVERN_PUTS[run] = GOVERN_PUTS.get(run, 0) + 1
+        if run.endswith(PENDING_SUFFIX) and tenant == "tenant-one":
+            self._send({"code": "PENDING_PR_EXISTS", "error": "pending_pr_exists",
+                        "existing_pr_url": "https://git.example/pulls/old"},
+                       status=409)
+            return
+        self._send({"status": "pending_review", "pr_number": 1,
+                    "pr_url": f"https://git.example/pulls/{tenant}"})
 
     def log_message(self, *args):
         pass
@@ -506,6 +585,48 @@ def _assembly(tmp: Path, malformed: bool) -> list[str]:
             "--output", str(out), "--json"]
 
 
+def _risk_and_rc(proc: subprocess.CompletedProcess) -> object:
+    try:
+        return (json.loads(proc.stdout)["tenants"][0]["risk_level"], proc.returncode)
+    except (ValueError, KeyError, TypeError, IndexError):
+        return UNPARSABLE
+
+
+def _govern_confd(tmp: Path) -> str:
+    """GOVERN_TENANTS, each in its own top-level file writing GOVERN_KEY."""
+    d = tmp / "confd-govern"
+    for tenant in GOVERN_TENANTS:
+        _write(d / f"{tenant}.yaml", _govern_tenant_yaml(tenant))
+    return str(d)
+
+
+def _govern_argv(tmp: Path, stub: str, pending: bool = False) -> list[str]:
+    """threshold_govern --apply against the stub, under a fresh run prefix
+    (one per call, so each run's PUTs are counted on their own)."""
+    run = uuid.uuid4().hex + (PENDING_SUFFIX if pending else "")
+    return ["--config-dir", _govern_confd(tmp), "--prometheus", stub,
+            "--apply", "--tenant-api-url", f"{stub}/ta/{run}",
+            "--identity-groups", "threshold-governance",
+            "--throttle-seconds", "0", "--json"]
+
+
+def _prs_opened_puts_and_rc(proc: subprocess.CompletedProcess) -> object:
+    """(outcomes reported pr_opened, PUTs the tenant-api actually received,
+    exit code). The cap skips with exit 0, so the exit code alone cannot see
+    it; and a cap applied after the PUT would still report `skipped`, so the
+    PUTs the stub saw are counted too."""
+    try:
+        outcomes = json.loads(proc.stdout)["outcomes"]
+        url = proc.args[proc.args.index("--tenant-api-url") + 1]
+        run = url.rsplit("/ta/", 1)[1]
+    except (ValueError, KeyError, TypeError, IndexError):
+        return UNPARSABLE
+    with _GOVERN_PUTS_LOCK:
+        puts = GOVERN_PUTS.get(run, 0)
+    return (sum(1 for o in outcomes if o["status"] == "pr_opened"), puts,
+            proc.returncode)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Recipes
 # ═══════════════════════════════════════════════════════════════════════════
@@ -556,6 +677,28 @@ def _json_status_and_rc(proc: subprocess.CompletedProcess) -> object:
 
 R = Recipe
 RECIPES: list[Recipe] = [
+    # Three tenants, one planned change each, a tenant-api that opens every
+    # PR. The default cap 10 and a cap equal to the tenant count open all
+    # three; a cap of 1 opens one, and the other two get no PUT at all.
+    R("threshold_govern", "--max-prs",
+      lambda t, s: _govern_argv(t, s),
+      flip=("--max-prs", "1"), boundary=("--max-prs", str(len(GOVERN_TENANTS))),
+      without=(3, 3, EXIT_OK), with_=(1, 1, EXIT_OK),
+      observe=_prs_opened_puts_and_rc,
+      note="3 actionable tenants: default 10 and 3 open 3 PRs, 1 opens 1 and "
+           "PUTs only once; every run exits 0"),
+
+    # The cap counts NEW PRs only (threshold_govern: "dedup skips / errors
+    # don't consume the alert-fatigue budget"). tenant-one is already pending
+    # (409), so a cap of 1 still opens a PR for the next tenant; a cap of 2
+    # opens both others, as the default does.
+    R("threshold_govern", "--max-prs", mode="one tenant already pending",
+      base=lambda t, s: _govern_argv(t, s, pending=True),
+      flip=("--max-prs", "1"), boundary=("--max-prs", "2"),
+      without=(2, 3, EXIT_OK), with_=(1, 2, EXIT_OK),
+      observe=_prs_opened_puts_and_rc,
+      note="409 on tenant-one does not use the cap: cap 1 -> 1 new PR after "
+           "2 PUTs; cap 2 and the default -> 2 new PRs after 3 PUTs"),
     # #2494's regression. New is 5 % above old: the 0.1 % default rejects it,
     # 10 % accepts it, 1 % still rejects it.
     R("validate_migration", "--tolerance",
@@ -700,6 +843,27 @@ RECIPES: list[Recipe] = [
            "flag over inactive silences on shipped alerts adds no orphan and "
            "still keeps the active one"),
 
+    # 20 days to the limit. classify_risk: critical when <= warn_days,
+    # warning when <= 3 * warn_days. Default 7 -> warning (--ci 0); 25 ->
+    # critical (1); 15 -> still warning (0).
+    R("cardinality_forecasting", "--warn-days",
+      lambda t, s: ["--prometheus", s, "--limit", "1000", "--ci", "--json"],
+      flip=("--warn-days", "20"), boundary=("--warn-days", "19"),
+      without=("warning", EXIT_OK), with_=("critical", EXIT_VIOLATION),
+      observe=_risk_and_rc,
+      note="exactly 20 days to the limit: critical needs warn_days >= 20 "
+           "(`<=`), so 20 flips it and 19 does not"),
+
+    # The warning band is 3 * warn_days and never reaches the --ci exit, so
+    # it is observed through the reported risk level.
+    R("cardinality_forecasting", "--warn-days", mode="warning band",
+      base=lambda t, s: ["--prometheus", s, "--limit", "1000", "--ci", "--json"],
+      flip=("--warn-days", "6"), boundary=("--warn-days", "7"),
+      without=("warning", EXIT_OK), with_=("safe", EXIT_OK),
+      observe=_risk_and_rc,
+      note="20 days to the limit: within 3*7 = 21 (warning), beyond 3*6 = 18 "
+           "(safe; 400 is under 80 % of 1000)"),
+
     R("generate_tenant_mapping_rules", "--validate",
       lambda t, s: ["--config-dir", _confd_with_instance_mapping(t, "tenant-ghost"),
                     "--metrics", "m1"],
@@ -802,6 +966,29 @@ def test_the_enumeration_sees_underscore_clis():
 def test_same_name_entries_carry_a_reason():
     empty = [k for k, why in SAME_NAME_DIFFERENT_MEANING.items() if not why.strip()]
     assert not empty, f"SAME_NAME_DIFFERENT_MEANING entries without a reason: {empty}"
+
+
+def test_explain_route_severity_stays_a_trace_input():
+    """Keeps the explain_route --severity entry honest: every read of
+    args.severity is an argument of a trace_alert_routing(...) call, and the
+    tool never exits with EXIT_VIOLATION. If either stops being true, the
+    flag may have become a verdict input and needs a recipe."""
+    path = OPS_DIR / "explain_route.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    reads = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Attribute) and n.attr == "severity"
+             and isinstance(n.value, ast.Name) and n.value.id == "args"]
+    trace_args = {id(a) for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == "trace_alert_routing"
+                  for a in [*n.args, *(k.value for k in n.keywords)]}
+    assert reads, "explain_route no longer reads args.severity"
+    stray = [n.lineno for n in reads if id(n) not in trace_args]
+    assert not stray, f"args.severity read outside trace_alert_routing(...): lines {stray}"
+    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    assert "EXIT_VIOLATION" not in names, (
+        "explain_route now uses EXIT_VIOLATION — its --severity may decide a "
+        "verdict; re-check the SAME_NAME_DIFFERENT_MEANING entry")
 
 
 def test_known_noop_entries_are_recipes():
