@@ -7180,9 +7180,10 @@ def test_a_spaced_offset_stays_one_value_in_every_yaml_face(
 # renamed export dies with a sentence instead of a node stack trace.
 #
 # Two probe images rather than one, and BOTH floating (`:latest`):
-#   * non-default on both sides, so the wizard's conditional `--da-tools-image`
-#     flag and the CLI's flag handling are exercised identically in both runs,
-#     which is what makes the A→B substitution an exact equality;
+#   * non-default on both sides, so the CLI's flag handling (and the wizard's
+#     `--da-tools-image` flag, which it now emits for every image, the default
+#     included) is exercised identically in both runs, which is what makes the
+#     A→B substitution an exact equality;
 #   * both floating, so the wizard's floating-tag note renders in both and does
 #     not itself become a difference;
 #   * `.invalid` is RFC 2606's reserved TLD — nothing resolves, nothing is

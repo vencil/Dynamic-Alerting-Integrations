@@ -3929,8 +3929,11 @@ class TestDaToolsImagePinnedToThisRelease:
         with open(os.path.join(REPO_ROOT, 'components', 'da-tools', 'app',
                                'VERSION'), encoding='utf-8') as fh:
             ver = fh.read().strip()
-        assert re.fullmatch(r'\d+\.\d+\.\d+', ver), (
-            f'anti-vacuity: VERSION is {ver!r}, not X.Y.Z')
+        # The same pattern the shipped reader validates with, so a pre-release
+        # VERSION (`2.10.0-rc.1`) is accepted here exactly when the CLI is.
+        from _lib_compat import SEMVER_PATTERN
+        assert re.fullmatch(SEMVER_PATTERN, ver), (
+            f'anti-vacuity: VERSION is {ver!r}, not X.Y.Z[-prerelease]')
         return ver
 
     def _expected(self):

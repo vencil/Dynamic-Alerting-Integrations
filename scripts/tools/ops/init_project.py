@@ -301,10 +301,12 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.22.0'
 # ⚠️ The cost, stated: our lever no longer reaches EXISTING customers. A fixed
 # da-tools image reaches a generated project only when the customer moves the
 # tag — they edit the `DA_TOOLS_IMAGE` line in their workflow / GitLab variables
-# / `.pre-commit-config.da.yaml`, or re-run `da-tools init --da-tools-image <ref>`
-# (or simply a newer `da-tools init`). That is the same contract as the
-# third-party pins above, and this ref now falls under the same floating-shape
-# guard in the init-project suite instead of being exempt from it.
+# / `.pre-commit-config.da.yaml` (the recommended path). Re-running `init` is
+# NOT an upgrade path: `_check_existing_init` refuses it on an initialized
+# project, and `--force` regenerates every file, discarding hand edits. That is
+# the same contract as the third-party pins above, and this ref now falls under
+# the same floating-shape guard in the init-project suite instead of being
+# exempt from it.
 #
 # ⛔ A TAG, NOT A DIGEST (#902 rejected first-party digest pinning; ADR-036 §6
 # asks for a fixed version, not an immutable reference). `--da-tools-image`

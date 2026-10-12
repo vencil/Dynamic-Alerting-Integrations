@@ -470,8 +470,10 @@ describe('da-tools image is configurable (#1351)', () => {
     // rule's glob, so a literal here would go stale on every release. Equality
     // with the CLI's actual default is the Python drift gate's job
     // (tests/ops/test_generated_ci_artifacts.py); this pins that the wizard
-    // side is a version tag on our repository and never `:latest` again.
-    expect(CICD_DEFAULT_DA_TOOLS_IMAGE).toMatch(/^ghcr\.io\/vencil\/da-tools:v\d+\.\d+\.\d+$/);
+    // side is a version tag on our repository and never `:latest` again. The
+    // optional pre-release suffix mirrors _lib_compat.SEMVER_PATTERN, which is
+    // what validates the VERSION the CLI default is built from.
+    expect(CICD_DEFAULT_DA_TOOLS_IMAGE).toMatch(/^ghcr\.io\/vencil\/da-tools:v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?$/);
     expect(cicdDaToolsImage(baseConfig())).toBe(CICD_DEFAULT_DA_TOOLS_IMAGE);
   });
 
@@ -505,13 +507,17 @@ describe('da-tools image is configurable (#1351)', () => {
     expect(out.indexOf('--da-tools-image')).toBeLessThan(out.indexOf('--non-interactive'));
   });
 
-  it('omits the flag at the default, where it would be a no-op', () => {
-    // The CLI's own default IS this value (init_project.py DA_TOOLS_IMAGE), so
-    // emitting it would add a line the customer has to read past. Pinned in
-    // both directions so "omit" cannot quietly become "never emit".
-    for (const cfg of [baseConfig(), baseConfig({ daToolsImage: '  ' }),
+  it('emits the flag at the default too, so the command writes what the preview shows', () => {
+    // ⛔ Not a no-op. The docker wrapper runs an already-published image, and
+    // the `init` inside it defaults to whatever THAT release defaulted to —
+    // v2.9.0's writes `:latest` (docs/scenarios/gitops-ci-integration.md,
+    // image-caveat). Omitting the flag at our default would hand the customer
+    // `:latest` while the preview names the pinned tag.
+    for (const cfg of [baseConfig(), baseConfig({ daToolsImage: '' }),
+      baseConfig({ daToolsImage: '  ' }),
       baseConfig({ daToolsImage: CICD_DEFAULT_DA_TOOLS_IMAGE })]) {
-      expect(cicdGenerateInitCommand(cfg)).not.toContain('--da-tools-image');
+      expect(cicdGenerateInitCommand(cfg)).toContain(`--da-tools-image ${CICD_DEFAULT_DA_TOOLS_IMAGE}`);
+      expect(cicdGenerateDockerCommand(cfg)).toContain(`--da-tools-image ${CICD_DEFAULT_DA_TOOLS_IMAGE}`);
     }
   });
 

@@ -119,11 +119,15 @@ function cicdGenerateInitCommand(config) {
   // which is #1351's headline defect ("預覽與 init 寫出的是兩個不同的東西")
   // reintroduced by the very change meant to close that row.
   //
-  // Emitted only when it differs from the default, because the CLI's own
-  // default IS that value: at the default the flag would be a no-op the
-  // customer has to read past.
+  // ⛔ Emitted ALWAYS, the default included. Omitting it at the default leans
+  // on the CLI's default matching ours, and the CLI that runs is whatever
+  // image `cicdGenerateDockerCommand` pulls — an already-published release
+  // whose `init` may still default to `:latest` (v2.9.0 does; see the
+  // image-caveat note in docs/scenarios/gitops-ci-integration.md). Stating the
+  // image makes the command write what the preview shows regardless of which
+  // da-tools version executes it; the flag itself ships in v2.9.0 and later.
   const image = cicdDaToolsImage(config);
-  if (image !== CICD_DEFAULT_DA_TOOLS_IMAGE) parts.push(`--da-tools-image ${image}`);
+  parts.push(`--da-tools-image ${image}`);
   parts.push('--non-interactive');
   return parts.join(' \\\n  ');
 }
