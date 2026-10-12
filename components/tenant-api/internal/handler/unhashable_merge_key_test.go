@@ -13,6 +13,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,38 +36,60 @@ var unhashableMergeKeyDocs = map[string]string{
 	"merge, then mapping key":              "tenants:\n  " + unhashableTenant + ":\n    <<: {x: 1}\n    ? {k: v}\n    : 1\n",
 }
 
+// failOnPanic runs f and turns a panic in it into a t.Fatalf of the calling
+// (per-shape) subtest. Without it, a regression (the vendored yaml.v3 patch
+// gone) panics the test goroutine and ends the whole test binary, so every
+// test in the package reports nothing instead of each shape failing on its own.
+func failOnPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked: %v", what, r)
+		}
+	}()
+	f()
+}
+
 // The whole-file PUT, in both write modes (putReceiverDoc), and once more in
 // direct mode with a domain policy present, so the policy's own reading of
 // the body (judgePutBody) is on the path too.
 func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 	for name, doc := range unhashableMergeKeyDocs {
-		for _, pr := range []bool{false, true} {
-			code, resp, written := putReceiverDoc(t, doc, pr)
-			if code != http.StatusBadRequest || written != "" || !strings.Contains(resp, "invalid YAML") {
-				t.Errorf("%s (pr=%v): status %d, written %q; want 400 invalid YAML, no write; body: %s",
-					name, pr, code, written, resp)
+		t.Run(name, func(t *testing.T) {
+			for _, pr := range []bool{false, true} {
+				var code int
+				var resp, written string
+				failOnPanic(t, fmt.Sprintf("%s (pr=%v) PUT", name, pr), func() {
+					code, resp, written = putReceiverDoc(t, doc, pr)
+				})
+				if code != http.StatusBadRequest || written != "" || !strings.Contains(resp, "invalid YAML") {
+					t.Errorf("%s (pr=%v): status %d, written %q; want 400 invalid YAML, no write; body: %s",
+						name, pr, code, written, resp)
+				}
 			}
-		}
 
-		dir := seedGitTree(t, map[string]string{
-			"_defaults.yaml":      "defaults:\n  cpu_usage_percent: 80\n",
-			"_domain_policy.yaml": policyListing(unhashableTenant),
+			dir := seedGitTree(t, map[string]string{
+				"_defaults.yaml":      "defaults:\n  cpu_usage_percent: 80\n",
+				"_domain_policy.yaml": policyListing(unhashableTenant),
+			})
+			rb := adminRBAC(t)
+			d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rb, WriteMode: WriteModeDirect,
+				Policy: policy.NewManager(dir)}
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+unhashableTenant, "id", unhashableTenant,
+				bytes.NewBufferString(doc))
+			req.Header.Set("X-Forwarded-Email", "alice@example.com")
+			req.Header.Set("X-Forwarded-Groups", "admins")
+			w := httptest.NewRecorder()
+			failOnPanic(t, name+" (domain policy present) PUT", func() {
+				wrapWithRBACMiddleware(PutTenant(d), rb, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+			})
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid YAML") {
+				t.Errorf("%s (domain policy present): status %d; want 400 invalid YAML; body: %s", name, w.Code, w.Body.String())
+			}
+			if _, err := os.Stat(filepath.Join(dir, unhashableTenant+".yaml")); !os.IsNotExist(err) {
+				t.Errorf("%s (domain policy present): the tenant file was written (stat err %v)", name, err)
+			}
 		})
-		rb := adminRBAC(t)
-		d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rb, WriteMode: WriteModeDirect,
-			Policy: policy.NewManager(dir)}
-		req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+unhashableTenant, "id", unhashableTenant,
-			bytes.NewBufferString(doc))
-		req.Header.Set("X-Forwarded-Email", "alice@example.com")
-		req.Header.Set("X-Forwarded-Groups", "admins")
-		w := httptest.NewRecorder()
-		wrapWithRBACMiddleware(PutTenant(d), rb, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid YAML") {
-			t.Errorf("%s (domain policy present): status %d; want 400 invalid YAML; body: %s", name, w.Code, w.Body.String())
-		}
-		if _, err := os.Stat(filepath.Join(dir, unhashableTenant+".yaml")); !os.IsNotExist(err) {
-			t.Errorf("%s (domain policy present): the tenant file was written (stat err %v)", name, err)
-		}
 	}
 }
 
@@ -78,54 +101,58 @@ func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 func TestBatchTenants_UnhashableMergeKeyInCurrentFileIsRefused(t *testing.T) {
 	const reqBody = `{"operations":[{"tenant_id":"` + unhashableTenant + `","patch":{"_silent_mode":"warning"}}]}`
 	for name, doc := range unhashableMergeKeyDocs {
-		for _, async_ := range []bool{false, true} {
-			dir := seedGitTree(t, map[string]string{
-				"_defaults.yaml":           "defaults:\n  cpu_usage_percent: 80\n",
-				unhashableTenant + ".yaml": doc,
-			})
-			rb := adminRBAC(t)
-			mgr := async.NewManager(1)
-			d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rb, WriteMode: WriteModeDirect, Tasks: mgr}
-			path := "/api/v1/tenants/batch"
-			if async_ {
-				path += "?async=true"
-			}
-			req := httptest.NewRequest("POST", path, bytes.NewBufferString(reqBody))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Forwarded-Email", "alice@example.com")
-			req.Header.Set("X-Forwarded-Groups", "admins")
-			w := httptest.NewRecorder()
-			rb.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+		t.Run(name, func(t *testing.T) {
+			for _, async_ := range []bool{false, true} {
+				dir := seedGitTree(t, map[string]string{
+					"_defaults.yaml":           "defaults:\n  cpu_usage_percent: 80\n",
+					unhashableTenant + ".yaml": doc,
+				})
+				rb := adminRBAC(t)
+				mgr := async.NewManager(1)
+				d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rb, WriteMode: WriteModeDirect, Tasks: mgr}
+				path := "/api/v1/tenants/batch"
+				if async_ {
+					path += "?async=true"
+				}
+				req := httptest.NewRequest("POST", path, bytes.NewBufferString(reqBody))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("X-Forwarded-Email", "alice@example.com")
+				req.Header.Set("X-Forwarded-Groups", "admins")
+				w := httptest.NewRecorder()
+				failOnPanic(t, fmt.Sprintf("%s (async=%v) batch", name, async_), func() {
+					rb.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+				})
 
-			var status, code, msg string
-			if async_ {
-				var resp struct {
-					TaskID string `json:"task_id"`
+				var status, code, msg string
+				if async_ {
+					var resp struct {
+						TaskID string `json:"task_id"`
+					}
+					if w.Code != http.StatusAccepted || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+						t.Fatalf("%s async: status %d, body %s", name, w.Code, w.Body.String())
+					}
+					task := pollUntilTerminal(t, mgr, resp.TaskID, 10*time.Second)
+					// #2900: the refused op rejects the batch — the task fails,
+					// its results say why.
+					if task.Status != async.TaskFailed || len(task.Results) != 1 {
+						t.Fatalf("%s async: task %+v, want failed with one result", name, task)
+					}
+					status, code, msg = task.Results[0].Status, task.Results[0].Code, task.Results[0].Message
+				} else {
+					var resp BatchResponse
+					if w.Code != http.StatusUnprocessableEntity || json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Results) != 1 {
+						t.Fatalf("%s sync: status %d, body %s", name, w.Code, w.Body.String())
+					}
+					status, code, msg = resp.Results[0].Status, resp.Results[0].Code, resp.Results[0].Message
 				}
-				if w.Code != http.StatusAccepted || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
-					t.Fatalf("%s async: status %d, body %s", name, w.Code, w.Body.String())
+				if status != "error" || code != CodeTenantConfigNotLoadable {
+					t.Errorf("%s (async=%v): result %s/%s %q, want error/%s", name, async_, status, code, msg, CodeTenantConfigNotLoadable)
 				}
-				task := pollUntilTerminal(t, mgr, resp.TaskID, 10*time.Second)
-				// #2900: the refused op rejects the batch — the task fails,
-				// its results say why.
-				if task.Status != async.TaskFailed || len(task.Results) != 1 {
-					t.Fatalf("%s async: task %+v, want failed with one result", name, task)
+				if got, _ := os.ReadFile(filepath.Join(dir, unhashableTenant+".yaml")); string(got) != doc {
+					t.Errorf("%s (async=%v): the current file changed:\n%s", name, async_, got)
 				}
-				status, code, msg = task.Results[0].Status, task.Results[0].Code, task.Results[0].Message
-			} else {
-				var resp BatchResponse
-				if w.Code != http.StatusUnprocessableEntity || json.Unmarshal(w.Body.Bytes(), &resp) != nil || len(resp.Results) != 1 {
-					t.Fatalf("%s sync: status %d, body %s", name, w.Code, w.Body.String())
-				}
-				status, code, msg = resp.Results[0].Status, resp.Results[0].Code, resp.Results[0].Message
+				_ = mgr.Close()
 			}
-			if status != "error" || code != CodeTenantConfigNotLoadable {
-				t.Errorf("%s (async=%v): result %s/%s %q, want error/%s", name, async_, status, code, msg, CodeTenantConfigNotLoadable)
-			}
-			if got, _ := os.ReadFile(filepath.Join(dir, unhashableTenant+".yaml")); string(got) != doc {
-				t.Errorf("%s (async=%v): the current file changed:\n%s", name, async_, got)
-			}
-			_ = mgr.Close()
-		}
+		})
 	}
 }
