@@ -284,6 +284,16 @@ func (w *Writer) mirrorServingConf(st *stagingTree) error {
 			if err != nil {
 				return err
 			}
+			// A relative target is resolved from the SERVING link: one that
+			// stays inside conf.d is copied as is (it resolves to the staging
+			// copy), one that leaves conf.d is made absolute, so the staging
+			// link reads the same file the serving one does.
+			if !filepath.IsAbs(target) {
+				resolved := filepath.Join(filepath.Dir(p), target)
+				if r, rerr := filepath.Rel(src, resolved); rerr != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+					target = resolved
+				}
+			}
 			_ = os.Remove(dst)
 			return os.Symlink(target, dst)
 		case t.IsRegular():
@@ -622,8 +632,16 @@ func (w *Writer) removePublishMarker() {
 }
 
 // syncServingPaths writes each path's content at commit into the serving
-// worktree (writeFileAtomic) and resets its index entry to HEAD.
+// worktree (writeFileAtomic) and resets its index entry to HEAD. A path
+// commit does not have — the branch moved on and deleted it after an
+// interrupted publish — is removed from the worktree, not treated as an
+// error: otherwise the publish marker naming it could never be cleared and
+// every later write would fail on it. An empty set is a no-op (a bare
+// `git reset --` would reset the whole index).
 func (w *Writer) syncServingPaths(commit string, rels []string) error {
+	if len(rels) == 0 {
+		return nil
+	}
 	top, err := w.gitOutput(w.gitDir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("locate the serving worktree: %w", err)
@@ -631,6 +649,12 @@ func (w *Writer) syncServingPaths(commit string, rels []string) error {
 	serving := make([]string, len(rels))
 	for i, rel := range rels {
 		serving[i] = filepath.Join(strings.TrimSpace(string(top)), filepath.FromSlash(rel))
+		if !w.gitCheck("cat-file", "-e", commit+":"+filepath.ToSlash(rel)) {
+			if err := os.Remove(serving[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("update the serving worktree: %w", err)
+			}
+			continue
+		}
 		content, err := w.gitOutput(w.gitDir, "show", commit+":"+filepath.ToSlash(rel))
 		if err == nil {
 			err = writeFileAtomic(serving[i], content, 0644)

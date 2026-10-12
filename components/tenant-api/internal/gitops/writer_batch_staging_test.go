@@ -315,3 +315,141 @@ func TestWriteBatchR2_InterruptedPublishIsRecovered(t *testing.T) {
 		}
 	}
 }
+
+// Round 3 (1): a publish marker names a path the branch no longer has
+// (interrupted publish, then an external commit deleted the file). Recovery
+// removes the serving copy and clears the marker instead of failing every
+// later write.
+func TestRecoverBatchPublish_PathGoneFromHead(t *testing.T) {
+	for _, via := range []string{"startup", "next write"} {
+		dir := seedTreeRepo(t, baseFiles())
+		w := NewWriter(dir, dir)
+		w.beforeBatchSync = func() error { return errors.New("killed after the ref update") }
+		if _, err := w.WriteBatch(context.Background(), []BatchOp{
+			setOp("s-a", silentBody("s-a", "critical")),
+			setOp("s-new", silentBody("s-new", "warning")),
+		}, "op@example.com"); err == nil {
+			t.Fatal("want the injected failure")
+		}
+		// External commit deleting s-new.yaml on the branch (index only; the
+		// serving worktree still has no s-new.yaml, s-a.yaml is stale).
+		externalCommitWithout(t, dir, "s-new.yaml")
+		w2 := NewWriter(dir, dir)
+		var err error
+		if via == "startup" {
+			err = w2.RecoverBatchPublish()
+		} else {
+			_, err = w2.Write(context.Background(), "s-b", "op@example.com", silentBody("s-b", "critical"))
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", via, err)
+		}
+		if p, _ := w2.publishMarkerPath(); fileExists(p) {
+			t.Errorf("%s: publish marker still present", via)
+		}
+		if fileExists(filepath.Join(dir, "s-new.yaml")) {
+			t.Errorf("%s: s-new.yaml on the serving tree, absent from HEAD", via)
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "s-a.yaml")); string(got) != gitOut(t, dir, "show", "HEAD:s-a.yaml")+"\n" {
+			t.Errorf("%s: s-a.yaml = %q, want HEAD's", via, got)
+		}
+		if st := gitOut(t, dir, "status", "--porcelain", "--untracked-files=all"); st != "" {
+			t.Errorf("%s: worktree differs from HEAD:\n%s", via, st)
+		}
+	}
+}
+
+// Round 3 (1): an empty path set never resets the whole index.
+func TestSyncServingPaths_EmptySetLeavesIndexAlone(t *testing.T) {
+	dir := seedTreeRepo(t, baseFiles())
+	if err := os.WriteFile(filepath.Join(dir, "s-a.yaml"), []byte(silentBody("s-a", "staged")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "s-a.yaml") // an operator's staged change
+	w := NewWriter(dir, dir)
+	if err := w.syncServingPaths("HEAD", nil); err != nil {
+		t.Fatalf("syncServingPaths(nil): %v", err)
+	}
+	if st := gitOut(t, dir, "diff", "--cached", "--name-only"); st != "s-a.yaml" {
+		t.Errorf("staged set = %q, want s-a.yaml still staged", st)
+	}
+}
+
+// Round 3 (2): a tenant file that is a relative symlink to a file OUTSIDE
+// conf.d. The staging copy must resolve to the same file, so the batch
+// merges onto the same existing content as a single write and keeps its
+// other keys.
+func TestWriteBatch_RelativeSymlinkOutsideConfDir(t *testing.T) {
+	repo := t.TempDir()
+	conf := filepath.Join(repo, "conf.d")
+	shared := filepath.Join(repo, "shared")
+	for _, d := range []string{conf, shared} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, repo, "init", "-q", "-b", "main")
+	gitRun(t, repo, "config", "user.email", "t@t.com")
+	gitRun(t, repo, "config", "user.name", "T")
+	const orig = "tenants:\n  ln-t:\n    _silent_mode: \"warning\"\n    _routing_profile: keep-me\n"
+	if err := os.WriteFile(filepath.Join(shared, "ln-t.yaml"), []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "shared", "ln-t.yaml"), filepath.Join(conf, "ln-t.yaml")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	gitRun(t, repo, "add", "-A")
+	gitRun(t, repo, "commit", "-q", "-m", "seed")
+
+	var single, batch []byte
+	capture := func(dst *[]byte) MergeFunc {
+		return func(existing []byte) (string, error) {
+			*dst = append([]byte(nil), existing...)
+			return strings.Replace(string(existing), "warning", "critical", 1), nil
+		}
+	}
+	w := NewWriter(conf, repo)
+	// The single write only reads (its merge result is discarded by a no-op).
+	if _, err := w.WriteMerged(context.Background(), "ln-t", "op@example.com", func(existing []byte) (string, error) {
+		single = append([]byte(nil), existing...)
+		return "", ErrMergeNoOp
+	}); err != nil {
+		t.Fatalf("WriteMerged: %v", err)
+	}
+	if _, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: "ln-t", Merge: capture(&batch)}}, "op@example.com"); err != nil {
+		t.Fatalf("WriteBatch: %v", err)
+	}
+	if string(single) != orig || string(batch) != string(single) {
+		t.Fatalf("existing: single %q, batch %q; want both the shared file", single, batch)
+	}
+	committed := gitOut(t, repo, "show", "HEAD:conf.d/ln-t.yaml")
+	if !strings.Contains(committed, "keep-me") || !strings.Contains(committed, "critical") {
+		t.Errorf("committed conf.d/ln-t.yaml = %q, want the other keys kept and the patch applied", committed)
+	}
+}
+
+// externalCommitWithout advances the serving branch with a commit that drops
+// path, without touching the serving index or worktree (another process).
+func externalCommitWithout(t *testing.T, dir, path string) {
+	t.Helper()
+	idx := filepath.Join(t.TempDir(), "index")
+	run := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+idx)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run("read-tree", "HEAD")
+	run("rm", "-q", "--cached", path)
+	tree := run("write-tree")
+	commit := run("commit-tree", tree, "-p", "HEAD", "-m", "external: drop "+path)
+	run("update-ref", "HEAD", commit)
+}
+
+func fileExists(p string) bool {
+	_, err := os.Lstat(p)
+	return err == nil
+}
