@@ -33,9 +33,14 @@ Each recipe names one fixture and runs the tool on it three times:
    value it was given — a value parsed and then ignored passes the flip only
    if the ignored path happens to agree, and fails here.
 
-The observed result is the exit code. Expected exit codes are 0 (EXIT_OK)
-or 1 (EXIT_VIOLATION) only: a 2 is a caller error and a crash also exits
-non-zero, so neither may stand in for a flip. Every run is also checked for
+The observed result is the exit code, and expected exit codes are 0
+(EXIT_OK) or 1 (EXIT_VIOLATION) only: a 2 is a caller error and a crash also
+exits non-zero, so neither may stand in for a flip. A tool whose documented
+verdict is NOT 0 vs 1 (assemble_config_dir exits 2 on a validation error)
+is observed through its ``--json`` report together with the exit code
+(``observe``); an unparsable report observes as ``UNPARSABLE``, which no
+recipe may expect. A flag read on more than one path of a tool (render vs
+``--validate``, ``--dry-run`` vs write) gets one recipe per path (``mode``). Every run is also checked for
 a traceback. Every recipe runs under ``DA_LANG=zh`` and ``DA_LANG=en``: some
 tools build a separate parser per help language (alert_quality declares
 ``--min-score`` once in each), and one language would leave the other's
@@ -109,6 +114,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+RULE_PACKS = REPO_ROOT / "rule-packs"
 OPS_DIR = REPO_ROOT / "scripts" / "tools" / "ops"
 
 TIMEOUT_S = 90
@@ -116,6 +122,7 @@ TIMEOUT_S = 90
 # scripts/tools/_lib_exitcodes.py is the SSOT; test_tool_exit_codes.py pins it.
 EXIT_OK = 0
 EXIT_VIOLATION = 1
+EXIT_CALLER_ERROR = 2
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Population — AST-enumerated, name-pattern scoped (#2908)
@@ -217,18 +224,9 @@ POPULATION_AT_LANDING_SHA256 = "a432124249764d467e80fc162668ba35e813ef9adafe8d28
 
 # Not gated yet. Shrink-only: see test_pending_only_shrinks.
 PENDING: dict[tuple[str, str], str] = {
-    ("alert_correlate", "--min-score"): "#2908",
-    ("assemble_config_dir", "--validate"): "#2908",
-    ("blind_spot_discovery", "--exclude-jobs"): "#2908",
     ("cardinality_forecasting", "--warn-days"): "#2908",
-    ("drift_detect", "--ignore-prefix"): "#2908",
     ("explain_route", "--severity"): "#2908",
-    ("generate_alertmanager_routes", "--strict"): "#2908",
-    ("generate_alertmanager_routes", "--validate"): "#2908",
-    ("generate_tenant_mapping_rules", "--validate"): "#2908",
-    ("silencer_drift_check", "--include-inactive"): "#2908",
     ("threshold_govern", "--max-prs"): "#2908",
-    ("validate_migration", "--stability-window"): "#2908",
 }
 
 # Name matches the pattern, but the flag decides no verdict. Each entry
@@ -249,6 +247,8 @@ KNOWN_FLAG_NOOP: dict[tuple[str, str], str] = {}
 INSTANT_VALUES = {
     "migration_old": 100.0,
     "migration_new": 105.0,   # 5 % above old
+    "steady_old": 100.0,      # equal on every round: converges
+    "steady_new": 100.0,
 }
 
 
@@ -292,6 +292,15 @@ class _StubHandler(BaseHTTPRequestHandler):
                  "value": [time.time(), str(value)]}]
             self._send({"status": "success",
                         "data": {"resultType": "vector", "result": result}})
+        elif url.path == "/api/v1/targets":
+            # redis, postgres and mysql exporter targets (blind_spot_discovery).
+            # Job names differ from the db_type they map to, so excluding by
+            # job name and by db_type give different answers.
+            self._send({"status": "success", "data": {"activeTargets": [
+                {"labels": {"job": job, "instance": inst, "namespace": "db"}}
+                for job, inst in (("redis-exporter", "r1:9121"),
+                                  ("postgres-exporter", "p1:9187"),
+                                  ("mysql-exporter", "m1:9104"))]}})
         elif url.path == "/api/v1/query_range":
             self._send({"status": "success",
                         "data": {"resultType": "matrix",
@@ -327,6 +336,11 @@ def _write(p: Path, text: str) -> None:
     p.write_text(text, encoding="utf-8")
 
 
+def _write_str(p: Path, text: str) -> str:
+    _write(p, text)
+    return str(p)
+
+
 def _confd_with_policy(tmp: Path, forbidden_receiver: str) -> str:
     """A conf.d whose one tenant inherits a slack receiver, under a domain
     policy forbidding `forbidden_receiver`. Forbidding slack is an ADR-007
@@ -348,6 +362,150 @@ def _confd_with_policy(tmp: Path, forbidden_receiver: str) -> str:
     return str(d)
 
 
+def _confd_with_group_wait(tmp: Path, group_wait: str) -> str:
+    """One tenant routing to a webhook with the given group_wait. An
+    unparsable duration ('5x') is rendered as the platform default and
+    reported as a blocking generation warning; '30s' is clean."""
+    d = tmp / f"confd-group-wait-{group_wait}"
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+    _write(d / "tenant-one.yaml", (
+        "tenants:\n  tenant-one:\n    mysql_connections: \"90\"\n"
+        "    _routing:\n      receiver:\n        type: webhook\n"
+        "        url: https://hooks.example/a\n"
+        f"      group_wait: {group_wait}\n"))
+    return str(d)
+
+
+def _confd_with_instance_mapping(tmp: Path, mapped_tenant: str) -> str:
+    """A conf.d declaring tenant-one, plus a 1:N instance mapping onto
+    `mapped_tenant` — a tenant that does or does not exist."""
+    d = tmp / f"confd-mapping-{mapped_tenant}"
+    _write(d / "tenant-one.yaml",
+           'tenants:\n  tenant-one:\n    mysql_connections: "90"\n')
+    _write(d / "_instance_mapping.yaml", (
+        "instance_tenant_mapping:\n  shared-db-01:\n"
+        f"    - tenant: {mapped_tenant}\n"
+        "      filter: 'schema=~\"app_.*\"'\n"))
+    return str(d)
+
+
+def _correlated_alerts(tmp: Path) -> str:
+    """Two critical alerts a minute apart in one namespace with unrelated
+    names: one cluster whose single pair scores 0.8 (overlap 0.4 + namespace
+    0.3 + severity 0.1, no name prefix), inside the flag's 0..1 range."""
+    labels = {"namespace": "monitoring", "severity": "critical"}
+    return _write_str(tmp / "alerts.json", json.dumps([
+        {"labels": {"alertname": "DiskFull", "tenant": "tenant-one", **labels},
+         "startsAt": "2026-07-01T00:00:00Z", "endsAt": ""},
+        {"labels": {"alertname": "CpuHigh", "tenant": "tenant-two", **labels},
+         "startsAt": "2026-07-01T00:01:00Z", "endsAt": ""},
+    ]))
+
+
+def _avg_correlations(proc: subprocess.CompletedProcess) -> object:
+    """Each cluster's avg_correlation: the mean of the pair scores at or
+    above --min-score (0.0 when none clears it)."""
+    try:
+        return [c["avg_correlation"] for c in json.loads(proc.stdout)["clusters"]]
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
+def _mysql_only_confd(tmp: Path) -> str:
+    """One tenant monitored for mysql only — the stub's redis and postgres
+    targets are the blind spots."""
+    d = tmp / "confd-mysql-only"
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+    _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connections: 90\n")
+    return str(d)
+
+
+def _blind_spots(proc: subprocess.CompletedProcess) -> object:
+    try:
+        return sorted(r["db_type"] for r in json.loads(proc.stdout)
+                      if r["status"] == "blind_spot")
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
+def _dirs_drifting_in_ignored_files(tmp: Path) -> str:
+    """Two conf.d dirs that differ only in files the default --ignore-prefix
+    (`_cluster_,_local_`) covers: a `_cluster_` file MODIFIED between them
+    and a `_local_` file present in one only (added/removed). Each prefix of
+    the default is needed, on a different diff path."""
+    a, b = tmp / "drift-a", tmp / "drift-b"
+    for d, value in ((a, "100"), (b, "200")):
+        _write(d / "_defaults.yaml", "defaults:\n  max_connections: 100\n")
+        _write(d / "tenant-one.yaml",
+               "tenants:\n  tenant-one:\n    max_connections: '120'\n")
+        _write(d / "_cluster_overrides.yaml", f"cluster_value: '{value}'\n")
+    _write(a / "_local_only_here.yaml", "local_value: '1'\n")
+    return f"{a},{b}"
+
+
+def _silences(tmp: Path, name: str, alertname_of) -> str:
+    """One silence per way of being (in)active: status active, expired,
+    pending, and no status with an endsAt in the past (decided by timestamp).
+    `alertname_of(id)` picks each silence's alertname — a gone alert makes
+    it an orphan once in scope, a shipped one never does."""
+    def silence(sid: str, state: str | None, ends: str) -> dict:
+        s = {"id": sid, "createdBy": "gate", "comment": "verdict-flag probe",
+             "matchers": [{"name": "alertname", "value": alertname_of(sid),
+                           "isRegex": False, "isEqual": True}],
+             "startsAt": "2026-01-01T00:00:00Z", "endsAt": ends}
+        if state:
+            s["status"] = {"state": state}
+        return s
+    return _write_str(tmp / f"silences-{name}.json", json.dumps([
+        silence("active", "active", "2030-01-01T00:00:00Z"),
+        silence("expired", "expired", "2026-01-02T00:00:00Z"),
+        silence("pending", "pending", "2030-01-01T00:00:00Z"),
+        silence("ended-by-timestamp", None, "2026-01-02T00:00:00Z"),
+    ]))
+
+
+def _orphan_ids(proc: subprocess.CompletedProcess) -> object:
+    try:
+        return sorted(o["silence_id"] for o in json.loads(proc.stdout)["orphans"])
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
+def _a_shipped_alertname() -> str:
+    """An alert a shipped rule pack really declares (read, not hardcoded)."""
+    m = re.search(r"^\s*-?\s*alert:\s*([A-Za-z0-9_]+)",
+                  (RULE_PACKS / "rule-pack-mariadb.yaml").read_text(encoding="utf-8"),
+                  re.MULTILINE)
+    assert m, "rule-pack-mariadb.yaml declares no alert"
+    return m.group(1)
+
+
+def _assembly(tmp: Path, malformed: bool) -> list[str]:
+    """assemble_config_dir argv over one or two sources; the second carries
+    a carrier whose top level is a list, which validates as an ERROR. Each
+    call gets its own --output, so no run sees another's artifact."""
+    name = "with-list" if malformed else "clean"
+    a, b = tmp / f"asm-{name}-a", tmp / f"asm-{name}-b"
+    _write(a / "tenant-one.yaml",
+           'tenants:\n  tenant-one:\n    mysql_connections: "90"\n')
+    sources = [a]
+    if malformed:
+        _write(b / "tenant-two.yaml", "- just\n- a list\n")
+        sources.append(b)
+    # Claimed by mkdir, not by counting: every call (one per run) gets an
+    # output directory no earlier call has.
+    n = 0
+    while True:
+        out = tmp / f"asm-out-{name}-{n}"
+        try:
+            out.mkdir(parents=True)
+            break
+        except FileExistsError:
+            n += 1
+    return ["--sources", ",".join(str(x) for x in sources),
+            "--output", str(out), "--json"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Recipes
 # ═══════════════════════════════════════════════════════════════════════════
@@ -361,11 +519,19 @@ class Recipe:
     base: Argv                    # the fixture's argv, WITHOUT the flag
     flip: tuple[str, ...]         # flag (+ value) that must change the result
     boundary: tuple[str, ...]     # flag (+ value) that must NOT change it
-    without: int = EXIT_OK        # must-fire result (no flag)
-    with_: int = EXIT_VIOLATION   # result under `flip`
+    without: object = EXIT_OK     # must-fire result (no flag)
+    with_: object = EXIT_VIOLATION   # result under `flip`
     boundary_base: Argv | None = None   # boundary on another fixture, if any
     note: str = ""
+    # A second recipe for the same flag in another mode of the tool (the flag
+    # can be read on one path and dropped on another); empty for the first.
+    mode: str = ""
+    # Reads the result from the run instead of its exit code (see docstring).
+    observe: Callable[[subprocess.CompletedProcess], object] | None = None
     expected: tuple[int, ...] = field(default=(EXIT_OK, EXIT_VIOLATION), repr=False)
+
+    def result(self, proc: subprocess.CompletedProcess) -> object:
+        return proc.returncode if self.observe is None else self.observe(proc)
 
     @property
     def key(self) -> tuple[str, str]:
@@ -373,7 +539,19 @@ class Recipe:
 
     @property
     def id(self) -> str:
-        return f"{self.tool}{self.flag}"
+        return f"{self.tool}{self.flag}" + (f"[{self.mode}]" if self.mode else "")
+
+
+UNPARSABLE = "<unparsable --json report>"
+
+
+def _json_status_and_rc(proc: subprocess.CompletedProcess) -> object:
+    """The --json status AND the exit code: reading the report alone would
+    pass a tool that reports the failure but exits 0 for it."""
+    try:
+        return (json.loads(proc.stdout)["status"], proc.returncode)
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
 
 
 R = Recipe
@@ -405,6 +583,131 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--prometheus", s, "--alertmanager", s, "--ci"],
       flip=("--min-score", "80"), boundary=("--min-score", "70"),
       note="score 75, no BAD alert: min 80 fails, min 70 and the 0 default pass"),
+
+    # Watch mode, 3 rounds, every round matching. Converged = the last
+    # `window` rounds all match, so the default 5 cannot converge in 3
+    # rounds (exit 1), 2 does (exit 0), 4 still cannot.
+    R("validate_migration", "--stability-window",
+      lambda t, s: ["--prometheus", s, "--old", "steady_old",
+                    "--new", "steady_new", "-o", str(t / "out"),
+                    "--watch", "--interval", "0", "--rounds", "3",
+                    "--auto-detect-convergence"],
+      flip=("--stability-window", "2"), boundary=("--stability-window", "4"),
+      without=EXIT_VIOLATION, with_=EXIT_OK,
+      note="3 matching rounds: window 5 (default) and 4 never converge, 2 does"),
+
+    # #1828's tool. A carrier whose top level is a list assembles fine and
+    # is caught only by --validate, whose documented exit for it is 2 — so
+    # the verdict is read from the --json status, not the exit code.
+    R("assemble_config_dir", "--validate",
+      lambda t, s: _assembly(t, malformed=True),
+      flip=("--validate",), boundary=("--validate",),
+      boundary_base=lambda t, s: _assembly(t, malformed=False),
+      without=("ok", EXIT_OK), with_=("validation_error", EXIT_CALLER_ERROR),
+      observe=_json_status_and_rc,
+      note="list-shaped carrier: (ok, 0) -> (validation_error, 2) — exit 2 is "
+           "the documented validation-error code (#1831, owner decision); "
+           "a clean assembly stays (ok, 0)"),
+
+    # Render mode replaces an unreadable group_wait with the default and
+    # exits 0; --validate counts that replacement as blocking.
+    R("generate_alertmanager_routes", "--validate",
+      lambda t, s: ["--config-dir", _confd_with_group_wait(t, "5x")],
+      flip=("--validate",), boundary=("--validate",),
+      boundary_base=lambda t, s: ["--config-dir", _confd_with_group_wait(t, "30s")],
+      note="group_wait 5x: render 0, --validate 1; group_wait 30s validates"),
+
+    # Same ADR-007 fixture as validate_config --strict: the generator's own
+    # --strict must fail on the violation it otherwise only warns about.
+    R("generate_alertmanager_routes", "--strict",
+      lambda t, s: ["--config-dir", _confd_with_policy(t, "slack")],
+      flip=("--strict",), boundary=("--strict",),
+      boundary_base=lambda t, s: ["--config-dir",
+                                  _confd_with_policy(t, "pagerduty")],
+      note="forbidden slack receiver: WARN -> exit 1; no violation stays 0"),
+
+    # --validate mode: there the policy violation reaches the verdict only
+    # through load_tenant_tree(strict_policies=...), a different path from
+    # render mode's `if args.strict` block above.
+    R("generate_alertmanager_routes", "--strict", mode="with --validate",
+      base=lambda t, s: ["--config-dir", _confd_with_policy(t, "slack"), "--validate"],
+      flip=("--strict",), boundary=("--strict",),
+      boundary_base=lambda t, s: ["--config-dir",
+                                  _confd_with_policy(t, "pagerduty"), "--validate"],
+      note="--validate alone passes the violation as WARN (0); --strict fails it"),
+
+    R("generate_tenant_mapping_rules", "--validate", mode="with --dry-run",
+      base=lambda t, s: ["--config-dir",
+                         _confd_with_instance_mapping(t, "tenant-ghost"),
+                         "--metrics", "m1", "--dry-run"],
+      flip=("--validate",), boundary=("--validate",),
+      boundary_base=lambda t, s: ["--config-dir",
+                                  _confd_with_instance_mapping(t, "tenant-one"),
+                                  "--metrics", "m1", "--dry-run"],
+      note="--dry-run has its own exit for a failed validation; same verdicts"),
+
+    # --min-score filters which pair scores a cluster reports (score_cluster:
+    # "pairs exceeding min_score"); it does NOT decide the --ci verdict, which
+    # reads the root cause's severity only. Observed through the pair scores.
+    # The pair scores 0.8, so both values sit inside the flag's 0..1 range
+    # and the boundary lands exactly on the `>=`.
+    R("alert_correlate", "--min-score",
+      lambda t, s: ["--input", _correlated_alerts(t), "--json"],
+      flip=("--min-score", "0.9"), boundary=("--min-score", "0.8"),
+      without=[0.8], with_=[0.0], observe=_avg_correlations,
+      note="one pair scoring 0.8: default 0.3 and 0.8 (>=) keep it, 0.9 drops "
+           "it; the flag does not change the --ci verdict"),
+
+    # Two job names in one comma list, and a boundary that names the same
+    # services by db_type instead of job: excluding is by job name.
+    R("blind_spot_discovery", "--exclude-jobs",
+      lambda t, s: ["--prometheus", s, "--config-dir", _mysql_only_confd(t),
+                    "--json-output"],
+      flip=("--exclude-jobs", "postgres-exporter,redis-exporter"),
+      boundary=("--exclude-jobs", "redis,postgresql"),
+      without=["postgresql", "redis"], with_=[], observe=_blind_spots,
+      note="unmonitored redis + postgres: excluding both jobs clears them; "
+           "their db_type names exclude nothing"),
+
+    # The flag's DEFAULT does the work: both of its prefixes are needed, one
+    # on the modified path and one on the added/removed path. Configmap mode
+    # only — operator mode needs a cluster (kubectl) and is not covered here.
+    R("drift_detect", "--ignore-prefix",
+      lambda t, s: ["--dirs", _dirs_drifting_in_ignored_files(t),
+                    "--mode", "configmap", "--ci"],
+      flip=("--ignore-prefix", "_cluster_"),
+      boundary=("--ignore-prefix", "_local_,_cluster_"),
+      note="drift only in a modified _cluster_ file and a one-sided _local_ "
+           "file: default and the reversed pair ignore both (0); _cluster_ "
+           "alone reports the _local_ file (1)"),
+
+    R("silencer_drift_check", "--include-inactive",
+      lambda t, s: ["--silences-file",
+                    _silences(t, "gone", lambda sid: f"GoneAlert_{sid.replace('-', '_')}"),
+                    "--rule-source", str(RULE_PACKS), "--json"],
+      flip=("--include-inactive",), boundary=("--include-inactive",),
+      boundary_base=lambda t, s: [
+          "--silences-file",
+          _silences(t, "inactive-live", lambda sid: "GoneAlert_active" if sid == "active"
+                    else _a_shipped_alertname()),
+          "--rule-source", str(RULE_PACKS), "--json"],
+      without=["active"],
+      with_=["active", "ended-by-timestamp", "expired", "pending"],
+      observe=_orphan_ids,
+      note="silences on gone alerts: only the active one is in scope by "
+           "default; --include-inactive adds expired, pending and the one "
+           "ended by timestamp, and keeps the active one. Boundary: the same "
+           "flag over inactive silences on shipped alerts adds no orphan and "
+           "still keeps the active one"),
+
+    R("generate_tenant_mapping_rules", "--validate",
+      lambda t, s: ["--config-dir", _confd_with_instance_mapping(t, "tenant-ghost"),
+                    "--metrics", "m1"],
+      flip=("--validate",), boundary=("--validate",),
+      boundary_base=lambda t, s: ["--config-dir",
+                                  _confd_with_instance_mapping(t, "tenant-one"),
+                                  "--metrics", "m1"],
+      note="mapping onto an undeclared tenant: 0 -> 1; a declared one stays 0"),
 ]
 
 
@@ -446,7 +749,7 @@ def test_each_flag_is_in_exactly_one_bucket():
         if buckets[a] & buckets[b]
     }
     assert not clashes, clashes
-    keys = [r.key for r in RECIPES]
+    keys = [(r.key, r.mode) for r in RECIPES]
     assert len(keys) == len(set(keys)), f"duplicate recipes: {keys}"
 
 
@@ -511,9 +814,12 @@ def test_recipes_expect_a_real_flip():
     and an expected 2 could be met by a caller error or a crash."""
     for r in RECIPES:
         assert r.without != r.with_, f"{r.id}: without == with_ ({r.without})"
-        assert {r.without, r.with_} <= set(r.expected), (
-            f"{r.id}: expectations must be EXIT_OK / EXIT_VIOLATION, "
-            f"got {r.without} -> {r.with_}")
+        if r.observe is None:
+            assert {r.without, r.with_} <= set(r.expected), (
+                f"{r.id}: expectations must be EXIT_OK / EXIT_VIOLATION, "
+                f"got {r.without} -> {r.with_}")
+        else:
+            assert UNPARSABLE not in (r.without, r.with_), r.id
         assert r.flag in r.flip and r.flag in r.boundary, r.id
 
 
@@ -541,13 +847,15 @@ def test_verdict_flag_changes_the_result(recipe: Recipe, lang: str, tmp_path: Pa
     env.pop("PROMETHEUS_URL", None)
     env.pop("ALERTMANAGER_URL", None)
 
-    base = recipe.base(tmp_path, stub_url)
-    boundary_base = (recipe.boundary_base or recipe.base)(tmp_path, stub_url)
+    # Each run builds its own fixture argv, so a builder that hands out a
+    # fresh output path per call gives every run its own artifact.
+    boundary_base = recipe.boundary_base or recipe.base
     runs = {
-        "must-fire (no flag)": (base, recipe.without),
-        f"flip ({' '.join(recipe.flip)})": (base + list(recipe.flip), recipe.with_),
+        "must-fire (no flag)": (recipe.base(tmp_path, stub_url), recipe.without),
+        f"flip ({' '.join(recipe.flip)})":
+            (recipe.base(tmp_path, stub_url) + list(recipe.flip), recipe.with_),
         f"boundary ({' '.join(recipe.boundary)})":
-            (boundary_base + list(recipe.boundary), recipe.without),
+            (boundary_base(tmp_path, stub_url) + list(recipe.boundary), recipe.without),
     }
     results = {label: _run(recipe.tool, argv, cwd, env)
                for label, (argv, _) in runs.items()}
@@ -557,7 +865,8 @@ def test_verdict_flag_changes_the_result(recipe: Recipe, lang: str, tmp_path: Pa
                  f"  note: {recipe.note}"]
         for label, (argv, want) in runs.items():
             p = results[label]
-            lines.append(f"  {label}: want {want}, got {p.returncode}  argv={argv}")
+            lines.append(f"  {label}: want {want!r}, got {recipe.result(p)!r} "
+                         f"(rc {p.returncode})  argv={argv}")
             lines.append(f"    stdout[-300:]={p.stdout[-300:]!r}")
             lines.append(f"    stderr[-300:]={p.stderr[-300:]!r}")
         return "\n".join(lines)
@@ -568,13 +877,13 @@ def test_verdict_flag_changes_the_result(recipe: Recipe, lang: str, tmp_path: Pa
 
     if recipe.key in KNOWN_FLAG_NOOP:
         must_fire, flip = list(results.values())[:2]
-        assert must_fire.returncode == recipe.without, (
+        assert recipe.result(must_fire) == recipe.without, (
             "KNOWN_FLAG_NOOP recipe: the must-fire run itself is off" + report())
-        assert flip.returncode == must_fire.returncode, (
+        assert recipe.result(flip) == recipe.result(must_fire), (
             f"{recipe.id} is listed in KNOWN_FLAG_NOOP but the flag now changes "
             f"the result — remove the entry" + report())
         pytest.xfail(f"known no-op flag: {KNOWN_FLAG_NOOP[recipe.key]}")
 
     for label, (_, want) in runs.items():
-        assert results[label].returncode == want, (
+        assert recipe.result(results[label]) == want, (
             f"{label} run: the flag did not decide the verdict" + report())
