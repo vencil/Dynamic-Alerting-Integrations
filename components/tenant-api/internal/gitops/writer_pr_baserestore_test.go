@@ -140,48 +140,16 @@ func TestWritePR_BaseRestoreFailsTwiceReturnsError(t *testing.T) {
 	}
 }
 
-// (c) The batch path has the same Step 7 and the same contract.
-func TestWritePRBatch_BaseRestoreFailsTwiceReturnsError(t *testing.T) {
+// (c) The batch path has no Step 7 any more (#2900): it cuts its branch in a
+// staging worktree and never moves the serving tree off base, so a base it
+// could not return to cannot happen — even with the index locked on every
+// attempt, no restore is attempted and the batch succeeds.
+func TestWritePRBatch_NeverLeavesTheServingTreeOnBase(t *testing.T) {
 	dir := seedTenantRepo(t)
 	addBareRemote(t, dir)
 	w := NewWriter(dir, dir)
 	hook, seen, unlock := lockIndexOnAttempts(t, dir, 1, 2)
-	w.beforeBaseRestore = hook
-
-	appendSilent := func(existing []byte) (string, error) {
-		return string(existing) + "    _silent_mode: warning\n", nil
-	}
-	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{
-		{TenantID: "db-a", Merge: appendSilent},
-	}, "op@example.com")
-	if res != nil {
-		t.Errorf("result = %+v, want nil on a failed restore", res)
-	}
-	assertBaseRestoreError(t, err, "tenant-api/batch/")
-	if *seen != 2 {
-		t.Errorf("restore attempts = %d, want 2", *seen)
-	}
-
-	unlock()
-	w.beforeBaseRestore = nil
-	if _, err := w.WritePR(context.Background(), "db-b", "op@example.com",
-		"tenants:\n  db-b:\n    _silent_mode: \"warning\"\n"); err != nil {
-		t.Fatalf("follow-up WritePR after the lock cleared: %v", err)
-	}
-	if cur := gitOut(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
-		t.Errorf("after recovery HEAD = %q, want main", cur)
-	}
-	if st := gitOut(t, dir, "status", "--porcelain"); st != "" {
-		t.Errorf("after recovery working tree dirty:\n%s", st)
-	}
-}
-
-// The batch retry arm: one transient failure is absorbed and the write succeeds.
-func TestWritePRBatch_BaseRestoreRetriesOnce(t *testing.T) {
-	dir := seedTenantRepo(t)
-	addBareRemote(t, dir)
-	w := NewWriter(dir, dir)
-	hook, seen, _ := lockIndexOnAttempts(t, dir, 1)
+	defer unlock()
 	w.beforeBaseRestore = hook
 
 	appendSilent := func(existing []byte) (string, error) {
@@ -190,10 +158,10 @@ func TestWritePRBatch_BaseRestoreRetriesOnce(t *testing.T) {
 	if _, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		{TenantID: "db-a", Merge: appendSilent},
 	}, "op@example.com"); err != nil {
-		t.Fatalf("WritePRBatch with one transient restore failure: %v", err)
+		t.Fatalf("WritePRBatch: %v", err)
 	}
-	if *seen != 2 {
-		t.Errorf("restore attempts = %d, want 2", *seen)
+	if *seen != 0 {
+		t.Errorf("restore attempts = %d, want 0", *seen)
 	}
 	assertCleanOnBase(t, dir, "main", "tenant-api/batch/")
 }

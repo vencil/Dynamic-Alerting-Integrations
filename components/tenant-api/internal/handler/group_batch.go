@@ -3,11 +3,8 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -82,11 +79,11 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
-// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written"
+// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A member refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     404   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in the 422's results[].code instead. Direct mode, CONFLICT: the repository moved outside tenant-api while the batch was committed; as for a single write, the batch's one commit is in place on top of that change."
+// @Failure     409   {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413   {object} ErrorResponse
-// @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused, so nothing was written. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest."
+// @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index."
 // @Failure     500   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
 // @Router      /api/v1/groups/{id}/batch [post]
@@ -184,7 +181,6 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 				},
 				source: "tenant-manager UI (group batch: " + groupID + ")",
 				labels: []string{"tenant-api", "auto-generated", "batch", "group"},
-				group:  true,
 			}
 			resp, status, ok := runBatchPR(d, w, r, ops, email, p, meta)
 			if !ok {
@@ -257,56 +253,4 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 func visibleGroupBatchResults(d *Deps, p *rbac.VerifiedPrincipal, results []BatchResult) []BatchResult {
 	return filterByRBAC(d.RBAC, d.TenantOrg, p, results,
 		func(r BatchResult) string { return r.TenantID }, rbac.PermRead)
-}
-
-// writeGroupMemberRefusal answers a PR-mode group batch that one member's
-// refusal aborted (#2857), with the status and code the same refusal gets on
-// POST /tenants/batch, and reports whether err was one. The op index is left
-// out: it counts the group's stored members, hidden ones included, so it
-// would tell the caller how many members precede this one. A member the
-// caller cannot read is not named at all (visibleGroupBatchResults hides the
-// same members from the results).
-func writeGroupMemberRefusal(d *Deps, w http.ResponseWriter, r *http.Request, p *rbac.VerifiedPrincipal, err error) bool {
-	var (
-		tenantID, reason, code string
-		status                 int
-		notLoadable            *tenantFileNotLoadableError
-		freshPolicy            *freshBasePolicyError
-		freshScope             *freshBaseScopeError
-	)
-	switch {
-	case errors.As(err, &notLoadable):
-		tenantID, status, code = notLoadable.TenantID, http.StatusConflict, CodeTenantConfigNotLoadable
-		reason = "its config file cannot be loaded as a tenant config (config_error: " + notLoadable.Reason + ")"
-	case errors.As(err, &freshPolicy):
-		tenantID, status, code = freshPolicy.TenantID, http.StatusForbidden, CodePolicyViolation
-		if freshPolicy.LoadErr != nil {
-			slog.Error("PR write refused: domain policy on the fresh base cannot be loaded",
-				"tenant", freshPolicy.TenantID, "error", freshPolicy.LoadErr)
-			reason = "the domain policy file on the latest base branch cannot be loaded"
-		} else {
-			msgs := make([]string, len(freshPolicy.Violations))
-			for i, v := range freshPolicy.Violations {
-				msgs[i] = v.Message
-			}
-			reason = "the patch breaks the domain policy on the latest base branch: " + strings.Join(msgs, "; ")
-		}
-	case errors.As(err, &freshScope):
-		tenantID, status, code = freshScope.TenantID, http.StatusForbidden, CodeForbidden
-		reason = "insufficient permissions on the latest base branch (permission and organization-scope checks, ADR-027)"
-	default:
-		return false
-	}
-	const nothing = " Nothing in this batch was written and no PR/MR was opened."
-	if !OrgAllowedRead(d.RBAC, d.TenantOrg, p, tenantID, rbac.PermRead) {
-		WriteJSONErrorWithCode(w, r, status, code, "a member of this group was refused."+nothing)
-		return true
-	}
-	env := ErrorResponse{Error: "group member " + tenantID + ": " + reason + "." + nothing, Code: code}
-	if freshPolicy != nil && freshPolicy.LoadErr == nil {
-		env = policyViolationEnvelope(env.Error, freshPolicy.Violations)
-	}
-	env.Extra = map[string]any{"tenant_id": tenantID}
-	WriteErrorEnvelope(w, r, status, env)
-	return true
 }

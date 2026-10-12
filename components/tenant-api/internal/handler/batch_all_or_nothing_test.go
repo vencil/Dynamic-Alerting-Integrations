@@ -184,12 +184,12 @@ func TestBatch_AllOrNothing_Matrix(t *testing.T) {
 			pass:      `{"operations":[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}},{"tenant_id":"t-a","patch":{"mysql_connections":"71"}},{"tenant_id":"t-b","patch":{"_silent_mode":"critical"}}]}`,
 			passFiles: []string{"t-a.yaml", "t-b.yaml"},
 			fail:      `{"operations":[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}},{"tenant_id":"t-bad","patch":{"_silent_mode":"warning"}}]}`,
-			failCode:  http.StatusConflict},
+			failCode:  http.StatusUnprocessableEntity},
 		{name: "group", group: "g-ok",
 			pass:      `{"patch":{"_silent_mode":"warning"}}`,
 			passFiles: []string{"t-a.yaml", "t-b.yaml"},
 			fail:      `{"patch":{"_silent_mode":"warning"}}`, // posted to g-bad
-			failCode:  http.StatusConflict},
+			failCode:  http.StatusUnprocessableEntity},
 	}
 	for _, mode := range []WriteMode{WriteModeDirect, WriteModePR} {
 		for _, async_ := range []bool{false, true} {
@@ -337,4 +337,20 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// #2900 F4: every op is judged, in both modes — a batch with two refused ops
+// reports both (PR mode used to stop at the first one refused on the fresh
+// base), with the op between them not applied.
+func TestBatch_AllOrNothing_EveryRefusalReported(t *testing.T) {
+	body := `{"operations":[{"tenant_id":"t-bad","patch":{"_silent_mode":"warning"}},` +
+		`{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}},` +
+		`{"tenant_id":"t-bad","patch":{"_silent_mode":"critical"}}]}`
+	for _, mode := range []WriteMode{WriteModeDirect, WriteModePR} {
+		f := newAONFixture(t, mode)
+		code, results, _ := f.run(t, "", body, false)
+		if code != http.StatusUnprocessableEntity || statuses(results) != "error,not_applied,error" {
+			t.Errorf("%s: status %d, results %+v; want 422 error,not_applied,error", mode, code, results)
+		}
+	}
 }

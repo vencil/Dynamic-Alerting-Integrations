@@ -183,6 +183,10 @@ func TestBatchTenants_PRModeAllNoOp_200CarriesWarnings(t *testing.T) {
 		t.Fatalf("build fixed-point seed: %v", err)
 	}
 	testutil.WriteYAML(t, configDir, "db-a.yaml", seed)
+	// Committed: a PR-mode batch is judged on the base it branches from
+	// (#2900, a staging worktree).
+	runGit(t, configDir, "add", "-A")
+	runGit(t, configDir, "commit", "-q", "-m", "seed")
 	writer := newTestWriter(configDir)
 
 	mockClient := &mockPlatformClient{

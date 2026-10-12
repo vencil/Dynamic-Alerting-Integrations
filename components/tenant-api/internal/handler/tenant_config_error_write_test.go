@@ -255,12 +255,8 @@ func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
 			beforeA, beforeB := mustRead(t, filepath.Join(dir, "db-a.yaml")), mustRead(t, filepath.Join(dir, "db-b.yaml"))
 
 			w, created := prBatchRun(t, dir, rejTwoOps)
-			var env map[string]any
-			_ = json.Unmarshal(w.Body.Bytes(), &env)
-			if w.Code != http.StatusConflict || env["code"] != wantNotLoadableCode || env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
-				t.Errorf("status = %d, envelope = %v; want 409, code %s, tenant_id db-a, config_error %s",
-					w.Code, env, wantNotLoadableCode, c.reason)
-			}
+			// #2900 F4: refused per op on the fresh base, the batch rejected.
+			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
 			if created {
 				t.Error("a PR was created for a file the exporter rejects")
 			}
@@ -315,10 +311,9 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 					}
 					return
 				}
-				var env map[string]any
-				_ = json.Unmarshal(w.Body.Bytes(), &env)
-				if w.Code != http.StatusConflict || env["code"] != wantNotLoadableCode || created {
-					t.Errorf("status = %d, PR created = %v; want 409 %s; body: %s", w.Code, created, wantNotLoadableCode, w.Body.String())
+				assertRejectedOp(t, w, 0, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
+				if created {
+					t.Error("a PR was created for a file the exporter rejects on the base")
 				}
 			})
 		}

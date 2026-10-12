@@ -250,7 +250,9 @@ func TestBatchTenants_DeclaredElsewhere(t *testing.T) {
 		}
 		w := serve(t, &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rbacMgr,
 			WriteMode: WriteModePR, PRClient: gh, PRTracker: &mockPlatformTracker{}}, rbacMgr)
-		assertDeclaredElsewhere409(t, w)
+		// #2900 F4: refused per op on the fresh base, the batch rejected.
+		assertRejectedOp(t, w, 0, elsewhereTenant, CodeTenantDeclaredElsewhere, msgTenantDeclaredElsewhere)
+		assertNoOtherFileLeak(t, w.Body.String())
 		assertNoTopLevelFile(t, dir)
 	})
 }

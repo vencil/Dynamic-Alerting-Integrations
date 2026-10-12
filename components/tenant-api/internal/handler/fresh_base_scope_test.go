@@ -93,18 +93,16 @@ func TestPRModeScopeAuthoritativeOnFreshBase(t *testing.T) {
 			}
 			before := gitRev(t, f.bare, "main")
 			w := c.run(t, f)
-			var env map[string]any
-			_ = json.Unmarshal(w.Body.Bytes(), &env)
-			msg, _ := env["error"].(string)
-			if w.Code != http.StatusForbidden || env["code"] != CodeForbidden || env["tenant_id"] != "db-a" ||
+			tenant, code, msg := freshRefusal(t, w)
+			if w.Code != freshRefusalStatus(c.put == "") || code != CodeForbidden || tenant != "db-a" ||
 				!strings.Contains(msg, "latest base branch") {
-				t.Fatalf("status %d, body %s; want 403 %s for db-a on the latest base", w.Code, w.Body.String(), CodeForbidden)
+				t.Fatalf("status %d, body %s; want %d %s for db-a on the latest base", w.Code, w.Body.String(), freshRefusalStatus(c.put == ""), CodeForbidden)
 			}
 			if pre := strings.Contains(msg, "permission and organization-scope checks"); pre != c.preState {
 				t.Errorf("pre-state message = %v, want %v: %s", pre, c.preState, msg)
 			}
-			if _, hasOp := env["operation"]; hasOp == (c.put != "") {
-				t.Errorf("operation index present = %v for a PUT = %v: %s", hasOp, c.put != "", w.Body.String())
+			if strings.Contains(msg, "operations[") {
+				t.Errorf("the refusal carries an op index: %s", w.Body.String())
 			}
 			if f.prOpened {
 				t.Error("a PR was opened")
@@ -243,8 +241,8 @@ func TestPRModeScopeReadsTheBaseRootPlatformLayer(t *testing.T) {
 			} else {
 				w = putStale(t, f, "db-a", "tenants:\n  db-a:\n    mysql_connections: '90'\n")
 			}
-			if w.Code != http.StatusForbidden || f.prOpened {
-				t.Errorf("status %d, PR opened %v; want 403: %s", w.Code, f.prOpened, w.Body.String())
+			if w.Code != freshRefusalStatus(kind == "batch") || f.prOpened {
+				t.Errorf("status %d, PR opened %v; want %d: %s", w.Code, f.prOpened, freshRefusalStatus(kind == "batch"), w.Body.String())
 			}
 		})
 	}
@@ -382,8 +380,8 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 		}{"other org": {false, orgsFile("other")}, "unlabeled, enforce": {true, "tenant_orgs: {}\n"}} {
 			t.Run(kind+"/"+name, func(t *testing.T) {
 				f, w, _ := run(t, kind, c.enforce, c.origin)
-				if w.Code != http.StatusForbidden || f.prOpened {
-					t.Errorf("status %d, PR opened %v; want 403: %s", w.Code, f.prOpened, w.Body.String())
+				if w.Code != freshRefusalStatus(kind == "batch") || f.prOpened {
+					t.Errorf("status %d, PR opened %v; want %d: %s", w.Code, f.prOpened, freshRefusalStatus(kind == "batch"), w.Body.String())
 				}
 			})
 		}
@@ -409,24 +407,65 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 	})
 }
 
-// A group batch refused for one member names that member only when the
-// caller may read it, and never its index among the stored members.
+// A group batch refused for one member (#2900: per op, 422) names that
+// member only when the caller may read it, and never its index among the
+// stored members: the per-op message carries no index, and the results the
+// caller sees are filtered by read permission.
 func TestGroupMemberRefusalHidesUnreadableMembers(t *testing.T) {
 	f := newOrgEnfFixture(t, nil)
 	d := f.deps()
-	for member, wantNamed := range map[string]bool{orgEnfTenantIn: true, orgEnfTenantOut: false} {
-		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			writeGroupMemberRefusal(d, w, r, rbac.RequestPrincipal(r), &freshBaseScopeError{TenantID: member, Op: 13})
-		})
-		req := orgEnfIdentity(newRequestWithChiParam("POST", "/api/v1/groups/g/batch", "id", "g", nil), orgEnfMemberOrg)
-		w := httptest.NewRecorder()
-		wrapWithRBACMiddleware(h, f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
-		body := w.Body.String()
-		if w.Code != http.StatusForbidden || strings.Contains(body, "operation") || strings.Contains(body, "13") {
-			t.Errorf("%s: status %d, body %s; want 403 without an op index", member, w.Code, body)
-		}
-		if named := strings.Contains(body, member); named != wantNamed {
-			t.Errorf("%s: named = %v, want %v: %s", member, named, wantNamed, body)
+	var results []BatchResult
+	for _, member := range []string{orgEnfTenantIn, orgEnfTenantOut} {
+		for _, err := range []error{
+			&freshBaseScopeError{TenantID: member, Op: 13},
+			&freshBaseScopeError{TenantID: member, Op: 13, PreState: true},
+			&freshBasePolicyError{TenantID: member, Op: 13},
+		} {
+			r := freshBaseOpResult(member, err)
+			if strings.Contains(r.Message, "13") || strings.Contains(r.Message, "operations[") {
+				t.Errorf("%s: per-op message carries the op index: %q", member, r.Message)
+			}
+			results = append(results, r)
 		}
 	}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, visibleGroupBatchResults(d, rbac.RequestPrincipal(r), results))
+	})
+	req := orgEnfIdentity(newRequestWithChiParam("POST", "/api/v1/groups/g/batch", "id", "g", nil), orgEnfMemberOrg)
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	if body := w.Body.String(); strings.Contains(body, orgEnfTenantOut) || !strings.Contains(body, orgEnfTenantIn) {
+		t.Errorf("visible results = %s; want %s only", body, orgEnfTenantIn)
+	}
+}
+
+// freshRefusalStatus: a PUT refused on the fresh base answers 403; a batch
+// answers 422 rejected with the refusal per op (#2900 F4).
+func freshRefusalStatus(batch bool) int {
+	if batch {
+		return http.StatusUnprocessableEntity
+	}
+	return http.StatusForbidden
+}
+
+// freshRefusal reads the refused tenant, code and message from either form:
+// a PUT's error envelope, or a rejected batch's first "error" result.
+func freshRefusal(t *testing.T, w *httptest.ResponseRecorder) (tenant, code, msg string) {
+	t.Helper()
+	if w.Code == http.StatusUnprocessableEntity {
+		var resp BatchResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		for _, r := range resp.Results {
+			if r.Status == "error" {
+				return r.TenantID, r.Code, r.Message
+			}
+		}
+		return "", "", ""
+	}
+	var env map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	tenant, _ = env["tenant_id"].(string)
+	code, _ = env["code"].(string)
+	msg, _ = env["error"].(string)
+	return tenant, code, msg
 }

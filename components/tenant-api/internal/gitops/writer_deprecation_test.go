@@ -178,6 +178,14 @@ func initMainBranchRepo(t *testing.T, dir string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("git branch -M main failed: %v\n%s", err, out)
 	}
+	// Commit the seeded files: a PR-mode batch is judged on the base it
+	// branches from (#2900, a staging worktree), which holds only what is
+	// committed.
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "--allow-empty", "-m", "seed"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
 }
 
 func TestWritePR_DeprecatedKeyBody_ResultCarriesNotices(t *testing.T) {

@@ -172,7 +172,9 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	defer w.releaseWrite()
 
-	w.lockTree()
+	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+		return nil, err
+	}
 	defer w.unlockTree()
 
 	// Step 2: generate branch name
@@ -406,13 +408,17 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 	}
 
-	w.lockTree()
+	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+		return nil, err
+	}
 	defer w.unlockTree()
 
 	ts := time.Now().UTC().Format("20060102-150405")
 	branchName := platform.BranchPrefix + "batch/" + ts
 
-	// Anchor on a clean base then branch from it (#638 — see WritePR Step 3).
+	// Anchor the serving tree on a clean base (#638 — see WritePR Step 3):
+	// the PR-mode invariant between writes. The batch itself never touches
+	// the serving tree (#2900).
 	base := w.base()
 	if err := w.checkoutBaseClean(base); err != nil {
 		return nil, err
@@ -423,92 +429,74 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	if err != nil {
 		return nil, err
 	}
-	if err := w.gitExec("checkout", "-b", branchName, "--no-track", branchPoint); err != nil {
-		return nil, fmt.Errorf("create branch: %w", err)
-	}
 
-	// Merge, validate and write each op against the freshly-checked-out base,
-	// in request order. readMergeValidate re-reads the on-disk file per op, so
-	// a second op for the same tenant merges onto the first op's result (not
-	// the base), and the placement walk sees the earlier ops' files. The first
-	// refused op aborts the branch with its own error, before anything is
-	// committed — the later ops' FreshMerge does not run. Byte-identical
-	// (no-op) merges write nothing, so an idempotent patch/retry never churns
-	// an empty write. notices aggregates every op's advisory deprecation
-	// channel (#1231 1b), the no-op ones' included: a merge that changed no
-	// bytes still lands on a body carrying a deprecated spelling.
-	//
-	// #2900: the files are committed TOGETHER, in one commit, after the last
-	// op passed. A rollback (a refused op, a failed write or commit) puts the
-	// touched files back first — abortFeatureBranch's `reset --hard` leaves a
-	// file the batch CREATED behind when it never reached the index — then
-	// abortFeatureBranch: back to a clean base, the branch dropped.
-	tx := newBatchTx()
-	var notices []string
-	for _, op := range ops {
-		o := w.applyBatchOp(tx, BatchOp{TenantID: op.TenantID, Merge: op.freshMerge()}, false,
-			func(path string, content []byte) error { return os.WriteFile(path, content, 0644) })
-		if o.Err != nil {
-			tx.restore()
-			w.abortFeatureBranch(base, branchName)
-			return nil, o.Err
+	// #2900: the branch is cut in a STAGING worktree at the fresh base, and
+	// every op is merged, validated and written there, in request order — a
+	// second op for the same tenant merges onto the first op's result, and
+	// the placement walk sees the earlier ops' files. EVERY op is judged
+	// (FreshMerge gets the staging conf.d), so a refusal reports each refused
+	// op (*BatchRejectedError); nothing is committed, pushed or left behind.
+	// notices aggregates every op's advisory channel (#1231 1b), the no-op
+	// ones' included.
+	st, err := w.openStaging(branchPoint, branchName, false)
+	if err != nil {
+		return nil, err
+	}
+	st.inPlace = true
+	pushed := false
+	defer func() {
+		w.closeStaging(st)
+		// The local branch only outlives the batch as the one copy of a
+		// commit whose push failed (#641).
+		if pushed || st.branchUnneeded {
+			if err := w.gitExec("branch", "-D", branchName); err != nil {
+				slog.Warn("gitops: failed to delete local batch branch", "branch", branchName, "error", err)
+			}
 		}
+	}()
+	st.branchUnneeded = true
+
+	batch := make([]BatchOp, len(ops))
+	for i, op := range ops {
+		batch[i] = BatchOp{TenantID: op.TenantID, Merge: op.mergeIn(st.configDir)}
+	}
+	outcomes, err := w.applyBatch(ctx, st, batch)
+	if err != nil {
+		return nil, err
+	}
+	var notices []string
+	for _, o := range outcomes {
 		notices = append(notices, o.Notices...)
 	}
-	changed := false
-	if len(tx.files) > 0 {
-		committed, err := w.gitCommitPaths(tx.paths(), batchCommitMessage(tx.files), authorEmail)
-		if err != nil {
-			tx.restore()
-			w.abortFeatureBranch(base, branchName)
-			return nil, fmt.Errorf("commit batch: %w", err)
-		}
-		// Track the commit that actually happened, not the attempt: content
-		// can differ from the dirty working tree yet equal HEAD, in which case
-		// nothing is staged and the branch gains no commit. Marking `changed`
-		// there would push a commit-free branch and ask the forge to open a
-		// change-free PR/MR (the 422 the block below exists to avoid).
-		changed = committed
-	}
 
+	before, err := w.gitOutput(st.root, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("read batch base: %w", err)
+	}
+	commit, err := w.commitStaging(st, strings.TrimSpace(string(before)), authorEmail)
+	if err != nil {
+		return nil, fmt.Errorf("commit batch: %w", err)
+	}
 	// Every op was a no-op → the branch has no commits beyond base. Don't push an
-	// empty branch or open a change-free PR/MR (a forge would 422). Roll the
-	// branch back and signal the handler to return a clean "no changes" result —
-	// the PR-mode analogue of WriteMerged's direct-path no-op success (#1102).
-	// #1231 review F5: the result still carries the aggregated notices — an
-	// idempotent retry of a body with a deprecated spelling must keep its
-	// migration signal, exactly like WriteMerged's no-op short-circuit does
-	// (the notices were deliberately collected BEFORE the per-op no-op skip
-	// above; dropping them here contradicted that comment's whole point).
-	if !changed {
-		w.abortFeatureBranch(base, branchName)
+	// empty branch or open a change-free PR/MR (a forge would 422); signal the
+	// handler to return a clean "no changes" result (#1102), with the
+	// aggregated notices (#1231 F5).
+	if commit == "" {
 		return &PRWriteResult{Notices: notices}, ErrNoChanges
 	}
-
-	pushed := true
-	if err := w.gitExec("push", "origin", branchName); err != nil {
-		pushed = false
-		slog.Warn("gitops: push batch branch failed",
-			"branch", branchName, "error", err)
-	}
-
-	// Return to a clean base, retrying once; on a second failure fail the write
-	// and skip the branch drop below (#2070 — same semantics as WritePR Step 7).
-	if err := w.restoreBase(base, branchName, pushed); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	// Drop the local batch branch after a confirmed push (#641, same rationale as
-	// WritePR Step 8). On push failure we keep it — the commit is only local.
-	if pushed {
-		if err := w.gitExec("branch", "-D", branchName); err != nil {
-			slog.Warn("gitops: failed to delete local batch branch after push",
-				"branch", branchName, "error", err)
-		}
+	if err := w.gitIn(st.root, "push", "origin", branchName); err != nil {
+		slog.Warn("gitops: push batch branch failed", "branch", branchName, "error", err)
+		st.branchUnneeded = false // keep the only copy of the commit
+	} else {
+		pushed = true
 	}
 
 	slog.Info("gitops: PR batch branch created",
-		"branch", branchName, "ops", len(ops), "author", authorEmail)
+		"branch", branchName, "commit", commit, "ops", len(ops), "author", authorEmail)
 
 	return &PRWriteResult{
 		BranchName: branchName,
@@ -524,22 +512,27 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 // partial patch preserves keys it did not name.
 //
 // FreshMerge, when set, replaces Merge in the post-checkout pass only — the
-// pass that merges onto the fresh base the branch is cut from. It is where
+// pass that merges onto the fresh base the branch is cut from, in the staging
+// worktree. It is where
 // verdicts that depend on the tree belong (the caller's metadata write scope,
 // the domain policy, #2857): the pre-flight runs Merge over the pod's local
 // tree, which may lag the base, so a refusal there would be a verdict on a
 // tree the write does not land on, and an approval there is no approval at
-// all. A FreshMerge error aborts the feature branch and is returned as is;
-// nothing of the batch is written.
+// all. A FreshMerge error refuses its op, which rejects the batch
+// (*BatchRejectedError, every op judged); nothing of the batch is written.
 type PRBatchOp struct {
-	TenantID   string
-	Merge      MergeFunc
-	FreshMerge MergeFunc
+	TenantID string
+	Merge    MergeFunc
+	// FreshMerge gets configDir: the conf.d of the staging worktree the
+	// branch is cut in (#2900), which is where its tree-dependent verdicts
+	// must read.
+	FreshMerge func(configDir string, existing []byte) (string, error)
 }
 
-func (op PRBatchOp) freshMerge() MergeFunc {
+// mergeIn is the post-checkout merge of op on the tree at configDir.
+func (op PRBatchOp) mergeIn(configDir string) MergeFunc {
 	if op.FreshMerge != nil {
-		return op.FreshMerge
+		return func(existing []byte) (string, error) { return op.FreshMerge(configDir, existing) }
 	}
 	return op.Merge
 }

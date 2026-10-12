@@ -763,7 +763,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A member refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -775,7 +775,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in the 422's results[].code instead. Direct mode, CONFLICT: the repository moved outside tenant-api while the batch was committed; as for a single write, the batch's one commit is in place on top of that change.",
+                        "description": "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -787,7 +787,7 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Batch rejected (status rejected): at least one member was refused, so nothing was written. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest.",
+                        "description": "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index.",
                         "schema": {
                             "$ref": "#/definitions/internal_handler.GroupBatchResponse"
                         }
@@ -892,7 +892,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/batch": {
             "post": {
-                "description": "Apply patch operations to multiple tenants in one call.\nAll or nothing, in one commit: every operation is checked (tenant id, write permission, domain policy, then merged and validated under the write lock on the tree the earlier operations leave),\nand only when every one passes are the changed files committed together — one commit in direct mode, a PR/MR with one commit in PR write-back mode.\nWhen any operation is refused, nothing is written: 422 with status rejected, the refused operations with status error (message, code) and every other operation with status not_applied.\nWith ?async=true (direct mode) the same verdict is reached when the task runs; a rejected batch ends the task as failed, with the same per-operation results.\nAn operation may also remove keys with unset (only \"_routing\"): unset [\"_routing\"] turns routing back on for a tenant a disabling _routing turned off, judged by domain policy.\nDirect mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.",
+                "description": "Apply patch operations to multiple tenants in one call.\nAll or nothing, in one commit: every operation is checked (tenant id, write permission, domain policy, then merged and validated under the write lock on the tree the earlier operations leave),\nand only when every one passes are the changed files committed together — one commit in direct mode, a PR/MR with one commit in PR write-back mode.\nWhen any operation is refused, nothing is written: 422 with status rejected, the refused operations with status error (message, code) and every other operation with status not_applied.\nWith ?async=true (direct mode) the same verdict is reached when the task runs; a rejected batch ends the task as failed, with the same per-operation results.\nThe batch is applied and judged in a separate staging git worktree; the branch is advanced first, then the served config files, so readers never see content that was not committed (while the files are updated they may see some of the batch's files new and others old, all committed).\nAn operation may also remove keys with unset (only \"_routing\"): unset [\"_routing\"] turns routing back on for a tenant a disabling _routing turned off, judged by domain policy.\nDirect mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -941,13 +941,13 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in a 422 instead.",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
                     "409": {
-                        "description": "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in the 422's results[].code instead. Direct mode, CONFLICT: the repository moved outside tenant-api while the batch was committed; as for a single write, the batch's one commit is in place on top of that change.",
+                        "description": "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -959,7 +959,7 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Batch rejected (status rejected): at least one operation was refused, so nothing was written. results lists every operation in request order: status error (message, code) for the refused ones, not_applied for the rest.",
+                        "description": "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest.",
                         "schema": {
                             "$ref": "#/definitions/internal_handler.BatchResponse"
                         }
@@ -2528,7 +2528,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return),\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not run, or another server-side\nfailure) and POLICY_UNAVAILABLE (direct mode: the op is one the domain policy judges and a policy file is\npresent but unusable with no last good version). Empty for every other failure and for an op that was not\nrefused.",
+                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not\nrun, or another server-side failure), POLICY_UNAVAILABLE (direct mode: the\nop is one the domain policy judges and a policy file is present but unusable\nwith no last good version), and — PR mode, judged on the latest base branch —\nPOLICY_VIOLATION, FORBIDDEN (write scope) and CONFIG_DECODE_ERROR (the base's\n_tenant_orgs.yaml cannot be read). Empty for every other failure and for an\nop that was not refused.",
                     "type": "string"
                 },
                 "message": {

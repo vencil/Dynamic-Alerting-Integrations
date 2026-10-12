@@ -2,9 +2,11 @@ package gitops
 
 // #2900: the single-commit batch at the writer. The handler matrix
 // (batch_all_or_nothing_test.go) covers the endpoints; these pin what only
-// the writer can show — what a refused or failed batch leaves in the tree,
-// the index and the repository, down to the inode a refused op rewrote, and
-// that an op is still judged on the tree the ops before it left.
+// the writer can show — that a refused or failed batch leaves the serving
+// tree, index and repository untouched (down to the inode of a file an op
+// would have rewritten), and that an op is still judged on the tree the ops
+// before it left. writer_batch_staging_test.go covers panics, cancellation,
+// readers during a batch and conflicts.
 
 import (
 	"context"
@@ -98,9 +100,9 @@ func TestWriteBatch_RefusedOpUndoesEveryWrite(t *testing.T) {
 	if err := os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A second hard link to the file, outside the repository: the original
-	// is back only if the name points at the same inode again (an inode
-	// NUMBER alone can be reused by a rewrite).
+	// A second hard link to the file, outside the repository: the serving
+	// file is untouched only if the name still points at the same inode (an
+	// inode NUMBER alone can be reused by a rewrite).
 	link := filepath.Join(t.TempDir(), "r-a.link")
 	if err := os.Link(path, link); err != nil {
 		t.Skipf("hard links unsupported here: %v", err)
@@ -135,13 +137,14 @@ func TestWriteBatch_RefusedOpUndoesEveryWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !os.SameFile(fiLink, fiAfter) || fiAfter.Mode().Perm() != 0o600 {
-		t.Errorf("r-a.yaml restored as a different file (still linked %v, mode %v), want the original back",
+		t.Errorf("r-a.yaml is not the original file any more (still linked %v, mode %v)",
 			os.SameFile(fiLink, fiAfter), fiAfter.Mode().Perm())
 	}
 }
 
-// A commit that fails after every op passed (here a pre-commit hook) undoes
-// the files and the index: nothing of the batch stays in the tree either.
+// A commit that fails after every op passed (here a pre-commit hook, run in
+// the staging worktree) publishes nothing: the serving tree and index are
+// untouched.
 func TestWriteBatch_CommitFailureUndoesEveryWrite(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"c-a.yaml": silentBody("c-a", "warning")})
 	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
@@ -160,7 +163,7 @@ func TestWriteBatch_CommitFailureUndoesEveryWrite(t *testing.T) {
 		"c-a.yaml": []byte(silentBody("c-a", "warning")), "c-new.yaml": nil})
 }
 
-// The PR-mode twin: no commit on a branch, no branch, the base clean.
+// The PR-mode twin: no commit on a branch, no branch, the serving tree clean.
 func TestWritePRBatch_CommitFailureLeavesNothing(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"p-a.yaml": silentBody("p-a", "warning")})
 	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
