@@ -649,7 +649,16 @@ func (w *Writer) syncServingPaths(commit string, rels []string) error {
 	serving := make([]string, len(rels))
 	for i, rel := range rels {
 		serving[i] = filepath.Join(strings.TrimSpace(string(top)), filepath.FromSlash(rel))
-		if !w.gitCheck("cat-file", "-e", commit+":"+filepath.ToSlash(rel)) {
+		// ⛔ Only a POSITIVE "not in this commit" deletes: ls-tree exits 0
+		// with no output. Any failure (a missing object, a timeout, a lock)
+		// is an error — `cat-file -e` fails the same way for a corrupt tree
+		// as for an absent path, and deleting a committed file on a broken
+		// repository cannot be undone. The marker stays for the next try.
+		listed, err := w.gitOutput(w.gitDir, "ls-tree", "-z", "--full-tree", commit, "--", filepath.ToSlash(rel))
+		if err != nil {
+			return fmt.Errorf("look up %s in %s: %w", filepath.ToSlash(rel), commit, err)
+		}
+		if len(listed) == 0 {
 			if err := os.Remove(serving[i]); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return fmt.Errorf("update the serving worktree: %w", err)
 			}

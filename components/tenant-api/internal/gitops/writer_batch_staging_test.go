@@ -453,3 +453,32 @@ func fileExists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil
 }
+
+// Round 4: recovery deletes a serving file only when git positively says the
+// commit does not have it. A broken repository (here the commit's tree
+// object is gone) is an error: the marker stays and no file is touched.
+func TestRecoverBatchPublish_BrokenTreeDeletesNothing(t *testing.T) {
+	dir := seedTreeRepo(t, baseFiles())
+	w := NewWriter(dir, dir)
+	w.beforeBatchSync = func() error { return errors.New("killed after the ref update") }
+	if _, err := w.WriteBatch(context.Background(), []BatchOp{
+		setOp("s-a", silentBody("s-a", "critical")),
+	}, "op@example.com"); err == nil {
+		t.Fatal("want the injected failure")
+	}
+	tree := gitOut(t, dir, "rev-parse", "HEAD^{tree}")
+	obj := filepath.Join(dir, ".git", "objects", tree[:2], tree[2:])
+	if err := os.Remove(obj); err != nil {
+		t.Skipf("tree object is not loose: %v", err)
+	}
+	w2 := NewWriter(dir, dir)
+	if err := w2.RecoverBatchPublish(); err == nil {
+		t.Error("RecoverBatchPublish on a broken tree returned nil, want an error")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "s-a.yaml")); err != nil || string(got) != silentBody("s-a", "warning") {
+		t.Errorf("serving s-a.yaml = %q (err %v), want it untouched", got, err)
+	}
+	if p, _ := w2.publishMarkerPath(); !fileExists(p) {
+		t.Error("publish marker removed although recovery failed")
+	}
+}
