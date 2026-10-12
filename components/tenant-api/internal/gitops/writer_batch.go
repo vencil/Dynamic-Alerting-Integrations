@@ -30,6 +30,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -682,7 +683,9 @@ func (w *Writer) syncServingPaths(commit string, rels []string) error {
 // batch publish that a crash (or a failed file sync) interrupted between the
 // branch update and the worktree update: the paths the publish marker names
 // are reset to HEAD. If the branch never moved, the worktree was never
-// touched and only the marker is dropped. It only touches the batch's own
+// touched and only the marker is dropped — but only when git positively
+// says so; a failed ancestry check is an error and keeps the marker for the
+// next try. It only touches the batch's own
 // conf.d paths — never an uncommitted edit of any other file. Called at
 // startup and, under the writer lock, before every write's first read of the
 // tree (lockTreeRecovered); a no-op when there is no marker.
@@ -696,23 +699,58 @@ func (w *Writer) RecoverBatchPublish() error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("read the batch publish marker: %w", err)
+		return markerBlocksWrites(p, fmt.Errorf("read the batch publish marker: %w", err))
 	}
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
 	commit, rels := lines[0], lines[1:]
 	head, err := w.currentHEAD()
 	if err != nil {
-		return fmt.Errorf("read HEAD to recover a batch publish: %w", err)
+		return markerBlocksWrites(p, fmt.Errorf("read HEAD to recover a batch publish: %w", err))
 	}
-	if head == commit || w.gitCheck("merge-base", "--is-ancestor", commit, head) {
+	published := head == commit
+	if !published {
+		// ⛔ Only a POSITIVE answer decides: dropping the marker without a
+		// sync on a failed check (a timeout, a lock, a missing object) would
+		// lose the only record of which paths are behind the branch.
+		if published, err = w.isAncestor(commit, head); err != nil {
+			return markerBlocksWrites(p, fmt.Errorf("recover an interrupted batch publish: %w", err))
+		}
+	}
+	if published {
 		if err := w.syncServingPaths("HEAD", rels); err != nil {
-			return fmt.Errorf("recover an interrupted batch publish: %w", err)
+			return markerBlocksWrites(p, fmt.Errorf("recover an interrupted batch publish: %w", err))
 		}
 		slog.Warn("gitops: brought the serving worktree up to the branch after an interrupted batch publish",
 			"commit", commit, "paths", len(rels))
 	}
 	w.removePublishMarker()
 	return nil
+}
+
+// markerBlocksWrites makes a recovery failure actionable: while it fails,
+// every write fails with it (lockTreeRecovered), so the error names the
+// marker and the way out.
+func markerBlocksWrites(marker string, err error) error {
+	return fmt.Errorf("%w (writes are blocked until the batch publish marker %s is resolved; "+
+		"if its commit is gone, remove the marker after checking the serving worktree against the branch)", err, marker)
+}
+
+// isAncestor reports whether commit is an ancestor of head
+// (`git merge-base --is-ancestor`). Exit 0 is yes and exit 1 is a positive
+// no; any other failure — a deadline kill, a missing object, a lock — is an
+// error, never a "no".
+func (w *Writer) isAncestor(commit, head string) (bool, error) {
+	cmd, ctx, cancel := w.gitCmd("--no-optional-locks", "-C", w.gitDir, "merge-base", "--is-ancestor", commit, head)
+	defer cancel()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if ctx.Err() == nil && errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, w.gitReadErr(ctx, "merge-base", err, out)
 }
 
 // batchCommitMessage is the message of a batch's single commit: the

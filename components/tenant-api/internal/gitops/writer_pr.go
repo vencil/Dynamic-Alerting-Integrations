@@ -335,8 +335,10 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 // WritePRBatch merges and writes multiple tenant configs to a single feature branch.
 // This supports batch PR mode where all changes are consolidated into one PR,
 // as ONE commit (#2900): every op is merged, validated and written in turn,
-// and the changed files are committed together only when all of them passed;
-// the first refused op aborts the branch with nothing committed.
+// and the changed files are committed together only when all of them passed.
+// Every op is judged, even after one is refused: a refusal returns
+// *BatchRejectedError with one outcome per op, and nothing is committed or
+// pushed unless every op passes.
 //
 // Each op carries a MergeFunc (not pre-built content): the authoritative merge
 // runs under the lock against the freshly-checked-out base so a partial patch

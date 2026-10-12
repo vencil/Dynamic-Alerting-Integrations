@@ -405,6 +405,17 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 			t.Errorf("status %d, PR opened %v; want 500 %s: %s", w.Code, f.prOpened, CodeConfigDecode, w.Body.String())
 		}
 	})
+	// A batch answers the same refusal per op: 422, the op's code
+	// CONFIG_DECODE_ERROR, no PR/MR.
+	t.Run("broken org file on the base, batch", func(t *testing.T) {
+		f, w, _ := run(t, "batch", false, "tenant_orgs: [unclosed\n")
+		if w.Code != http.StatusUnprocessableEntity || f.prOpened {
+			t.Fatalf("status %d, PR opened %v; want 422: %s", w.Code, f.prOpened, w.Body.String())
+		}
+		if tenant, code, _ := freshRefusal(t, w); tenant != "db-a" || code != CodeConfigDecode {
+			t.Errorf("refused op = (%q, %q), want (db-a, %s): %s", tenant, code, CodeConfigDecode, w.Body.String())
+		}
+	})
 }
 
 // A group batch refused for one member (#2900: per op, 422) names that

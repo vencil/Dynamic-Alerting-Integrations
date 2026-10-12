@@ -941,7 +941,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR. (An operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }

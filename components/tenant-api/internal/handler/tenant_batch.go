@@ -128,7 +128,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
-// @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
+// @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (An operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     409  {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413  {object} ErrorResponse
 // @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest."

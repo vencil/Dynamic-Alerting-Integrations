@@ -472,13 +472,60 @@ func TestRecoverBatchPublish_BrokenTreeDeletesNothing(t *testing.T) {
 		t.Skipf("tree object is not loose: %v", err)
 	}
 	w2 := NewWriter(dir, dir)
+	marker, _ := w2.publishMarkerPath()
 	if err := w2.RecoverBatchPublish(); err == nil {
 		t.Error("RecoverBatchPublish on a broken tree returned nil, want an error")
+	} else if !strings.Contains(err.Error(), marker) {
+		t.Errorf("recovery error = %q, want it to name the marker %s", err, marker)
 	}
 	if got, err := os.ReadFile(filepath.Join(dir, "s-a.yaml")); err != nil || string(got) != silentBody("s-a", "warning") {
 		t.Errorf("serving s-a.yaml = %q (err %v), want it untouched", got, err)
 	}
 	if p, _ := w2.publishMarkerPath(); !fileExists(p) {
 		t.Error("publish marker removed although recovery failed")
+	}
+}
+
+// Recovery drops a marker without a sync only on a POSITIVE "not an
+// ancestor" (merge-base exit 1). Any other failure of the ancestry check —
+// here the marker's commit object does not exist, which git reports with
+// exit 128 — is an error that keeps the marker and touches no file.
+func TestRecoverBatchPublish_AncestryCheckFailureKeepsMarker(t *testing.T) {
+	dir := seedTreeRepo(t, baseFiles())
+	if err := os.WriteFile(filepath.Join(dir, "s-a.yaml"), []byte("operator edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := NewWriter(dir, dir)
+	missing := strings.Repeat("ab", 20) // well-formed, absent from the object store
+	if err := w.writePublishMarker(missing, []string{"s-a.yaml"}); err != nil {
+		t.Fatal(err)
+	}
+	marker, _ := w.publishMarkerPath()
+	if err := w.RecoverBatchPublish(); err == nil {
+		t.Error("RecoverBatchPublish with an unresolvable marker commit returned nil, want an error")
+	} else if !strings.Contains(err.Error(), marker) {
+		t.Errorf("recovery error = %q, want it to name the marker %s", err, marker)
+	}
+	if p, _ := w.publishMarkerPath(); !fileExists(p) {
+		t.Error("publish marker removed although the ancestry check failed")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "s-a.yaml")); string(got) != "operator edit\n" {
+		t.Errorf("s-a.yaml = %q, want it untouched", got)
+	}
+
+	// A commit that exists but is not on the branch (merge-base exit 1): the
+	// publish never landed, so the marker is dropped and nothing is synced.
+	unrelated := gitOut(t, dir, "commit-tree", gitOut(t, dir, "rev-parse", "HEAD^{tree}"), "-m", "off-branch")
+	if err := w.writePublishMarker(unrelated, []string{"s-a.yaml"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RecoverBatchPublish(); err != nil {
+		t.Fatalf("RecoverBatchPublish with an off-branch commit: %v", err)
+	}
+	if p, _ := w.publishMarkerPath(); fileExists(p) {
+		t.Error("publish marker kept although the commit is positively not on the branch")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "s-a.yaml")); string(got) != "operator edit\n" {
+		t.Errorf("s-a.yaml = %q, want it untouched (nothing was published)", got)
 	}
 }
