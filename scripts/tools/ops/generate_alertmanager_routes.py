@@ -36,7 +36,6 @@ import argparse
 import contextlib
 import json
 import os
-import re
 import sys
 import textwrap
 
@@ -55,7 +54,7 @@ from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
 # #2766: the --findings-json temp-file write. Module form, because the bare
 # name is already a `_lib_python` re-export in the F401 block below.
 import _lib_io  # noqa: E402
-from _lib_compat import find_project_root  # noqa: E402  (#2766 VERSION)
+from _lib_compat import read_shipped_da_tools_version  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
@@ -971,7 +970,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 # ── #2766 (ADR-036 §4): --findings-json ────────────────────────────────
 FINDINGS_SCHEMA = "da-tools.findings/v1"
-_VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 
 
 def _sink_extend(sink: list | None, findings: list) -> None:
@@ -985,21 +983,10 @@ def da_tools_version() -> str | None:
 
     The image's flat layout puts ``VERSION`` beside this file
     (``/opt/da-tools``); the repo keeps it at ``components/da-tools/app``.
+    Shared with `da-tools init`, which pins the image it writes to the same
+    value (#2900), so the two cannot disagree about which release they are.
     """
-    cands = [os.path.join(_THIS_DIR, "VERSION")]
-    root = find_project_root(_THIS_DIR)  # None inside the image
-    if root is not None:
-        cands.append(os.path.join(root, "components", "da-tools", "app",
-                                  "VERSION"))
-    for cand in cands:
-        try:
-            with open(cand, encoding="utf-8") as fh:
-                text = fh.read().strip()
-        except (OSError, UnicodeDecodeError):
-            continue
-        if _VERSION_RE.fullmatch(text):
-            return text
-    return None
+    return read_shipped_da_tools_version(_THIS_DIR)
 
 
 def in_force_blocks(*, validate: bool, strict: bool) -> set[str]:

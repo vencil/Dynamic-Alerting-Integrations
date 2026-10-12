@@ -214,6 +214,57 @@ def find_project_root(start) -> "Path | None":
     return None
 
 
+# The shape of a release version: `X.Y.Z` with an optional pre-release suffix
+# (`2.10.0-rc.1`). ⛔ THE one copy. `bump_docs.py` imports it as `_SEMVER` for
+# every rule it rewrites at release, and `read_shipped_da_tools_version` below
+# validates VERSION with it, so the version a release writes and the version a
+# shipped tool accepts cannot be two different grammars (#2900). It lives here
+# rather than in bump_docs because this module ships in the da-tools image and
+# bump_docs does not.
+SEMVER_PATTERN = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
+
+
+def read_shipped_da_tools_version(start, problems=None) -> "str | None":
+    """The da-tools release the module in *start* ships in, or None.
+
+    *start* is a shipped module's directory. The image's flat layout puts
+    ``VERSION`` beside every tool (``/opt/da-tools``); a repo tree keeps it at
+    ``components/da-tools/app/VERSION`` under ``find_project_root(start)``.
+    Only a value matching ``SEMVER_PATTERN`` counts — the shape `bump_docs.py
+    --tools` writes and `release.yaml` holds equal to the ``tools/v*`` tag — so
+    a blank, garbled or decoy file reads as None, never as a version.
+
+    *problems*, when a list, receives one ``(path, text)`` per VERSION file
+    that EXISTS but does not hold a valid version, so a caller can tell "there
+    is no VERSION" from "VERSION says something that is not a version" — two
+    different fixes. Callers decide what None means; a generator that writes
+    the value into a file must refuse rather than guess (#2900).
+    """
+    import os
+    import re
+
+    cands = [os.path.join(str(start), "VERSION")]
+    root = find_project_root(start)  # None inside the image
+    if root is not None:
+        cands.append(os.path.join(str(root), "components", "da-tools", "app",
+                                  "VERSION"))
+    for cand in cands:
+        try:
+            with open(cand, encoding="utf-8") as fh:
+                text = fh.read().strip()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            if problems is not None:
+                problems.append((cand, "<unreadable>"))
+            continue
+        if re.fullmatch(SEMVER_PATTERN, text):
+            return text
+        if problems is not None:
+            problems.append((cand, text))
+    return None
+
+
 def require_project_root(start) -> "Path":
     """``find_project_root`` for a dev tool that only runs from a repo tree.
 

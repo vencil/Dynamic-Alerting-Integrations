@@ -68,6 +68,8 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 
 依分流推 tag；步驟、artifact、benchmark gate 見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。
 
+⛔ **收尾 PR 合併後立刻推 tag。** `da-tools init` 的預設映像是 `:v<VERSION>`（#2900），收尾 PR 一合併，VERSION 就指向還沒發布的 tag：期間 nightly 的 delivered 映像掃描**預期有一晚 degraded**，動到 `init_project.py` 的 PR 其 `image-ref-resolve` delivered scope 也會紅。不是事故，但空窗越長越難和真問題區分（playbook Step 2）。
+
 ## 使用法
 
 1. 收尾前對照四條規則跑完才宣告「ready to ship」（Rule 1–3 都在 v2.8.0 炸過：Rule 1 → 30 分 recovery、Rule 2 user 中途加、Rule 3 Gemini 抓；Rule 4 是預防性的——它防的東西**沒有任何其他機制會提醒你**）

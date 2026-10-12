@@ -3910,6 +3910,250 @@ class TestGitOpsNativeModeIsRefused:
         assert 'issue 1349' in ip._GIT_MODE_REFUSAL
         assert '#1349' not in ip._GIT_MODE_REFUSAL
 
+class TestDaToolsImagePinnedToThisRelease:
+    """#2900 / ADR-036 §6：產生的設定固定在「產生專案時那一版」的 da-tools tag。
+
+    原本預設是 `ghcr.io/vencil/da-tools:latest`（刻意浮動）。ADR-036 §6 改判：
+    客戶 CI 的判定要可重現，且要能和 tenant-api chart 固定的 da-tools 版本
+    對齊，所以預設改為 `ghcr.io/vencil/da-tools:v<VERSION>`；仍是 tag、不是
+    digest（#902 否決 first-party digest 釘選，這裡沒有推翻它）。
+
+    ⛔ 期望值讀自 `components/da-tools/app/VERSION`，不是寫死的版號：release
+    時 `bump_docs.py --tools` 只改那個檔，這裡跟著走，不需要另一處人工同步。
+    """
+
+    _REPO = 'ghcr.io/vencil/da-tools'
+
+    @staticmethod
+    def _version():
+        with open(os.path.join(REPO_ROOT, 'components', 'da-tools', 'app',
+                               'VERSION'), encoding='utf-8') as fh:
+            ver = fh.read().strip()
+        # The same pattern the shipped reader validates with, so a pre-release
+        # VERSION (`2.10.0-rc.1`) is accepted here exactly when the CLI is.
+        from _lib_compat import SEMVER_PATTERN
+        assert re.fullmatch(SEMVER_PATTERN, ver), (
+            f'anti-vacuity: VERSION is {ver!r}, not X.Y.Z[-prerelease]')
+        return ver
+
+    def _expected(self):
+        return f'{self._REPO}:v{self._version()}'
+
+    @staticmethod
+    def _generate(tmpdir, *extra):
+        """Run the CLI path (argparse default included) into *tmpdir*."""
+        args = ip._build_parser().parse_args(
+            ['--ci', 'both', '--tenants', 'tenant-x', '--non-interactive',
+             '-o', tmpdir, *extra])
+        config = ip._build_config_from_args(args, ip._build_parser())
+        ip.run_init(config, tmpdir)
+        out = {}
+        for root, _dirs, files in os.walk(tmpdir):
+            for fn in files:
+                path = os.path.join(root, fn)
+                with open(path, encoding='utf-8', errors='replace') as fh:
+                    out[os.path.relpath(path, tmpdir)] = fh.read()
+        return out
+
+    def test_the_default_is_this_releases_version_tag(self):
+        assert ip.DA_TOOLS_IMAGE == self._expected()
+        defaults = [a.default for a in ip._build_parser()._actions
+                    if a.dest == 'da_tools_image']
+        assert defaults == [self._expected()], defaults
+
+    def test_every_generated_carrier_names_the_pinned_tag_and_none_floats(self):
+        expected = self._expected()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = self._generate(tmpdir)
+        gh = yaml.safe_load(files[os.path.join('.github', 'workflows',
+                                               'dynamic-alerting.yaml')])
+        assert gh['env']['DA_TOOLS_IMAGE'] == expected, gh['env']
+        gl = yaml.safe_load(files[os.path.join('.gitlab-ci.d',
+                                               'dynamic-alerting.yml')])
+        assert gl['variables']['DA_TOOLS_IMAGE'] == expected, gl['variables']
+        pc = yaml.safe_load(files['.pre-commit-config.da.yaml'])
+        entries = [h['entry'] for r in pc['repos'] for h in r['hooks']]
+        assert entries and all(e.split()[0] == expected for e in entries), entries
+        floating = sorted(rel for rel, text in files.items()
+                          if re.search(re.escape(self._REPO) + r':latest\b', text))
+        assert not floating, f'still writes {self._REPO}:latest into {floating}'
+
+    def test_the_flag_still_overrides_the_pin(self):
+        custom = 'registry.internal/da-tools:v1.2.3'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = self._generate(tmpdir, '--da-tools-image', custom)
+        carriers = [rel for rel, text in files.items() if custom in text]
+        assert len(carriers) >= 3, carriers
+        leaked = [rel for rel, text in files.items() if self._REPO + ':' in text]
+        assert not leaked, f'the default image survived --da-tools-image in {leaked}'
+
+    def test_no_readable_version_refuses_instead_of_floating(self, monkeypatch, capsys):
+        """缺 VERSION（vendored 的 scripts/ 樹）時拒絕，而不是靜默寫 `:latest`。
+
+        與 `_lib_versions.require_platform_version` 同一條慣例：會寫進檔案的
+        版本讀不到就拒絕，不蓋一個猜的值。帶 `--da-tools-image` 則照常產生。
+        """
+        monkeypatch.setattr(ip, 'DA_TOOLS_IMAGE', None)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parser = ip._build_parser()
+            args = parser.parse_args(['--ci', 'github', '--tenants', 'tenant-x',
+                                      '--non-interactive', '-o', tmpdir])
+            with pytest.raises(SystemExit) as exc:
+                ip._build_config_from_args(args, parser)
+            assert exc.value.code == EXIT_CALLER_ERROR
+            assert '--da-tools-image' in capsys.readouterr().err
+            assert not os.listdir(tmpdir)
+            args = parser.parse_args(['--ci', 'github', '--tenants', 'tenant-x',
+                                      '--non-interactive', '-o', tmpdir,
+                                      '--da-tools-image', 'registry.internal/x:v1'])
+            assert ip._build_config_from_args(args, parser)[
+                'da_tools_image'] == 'registry.internal/x:v1'
+
+    def test_the_version_reader_covers_both_layouts(self, tmp_path):
+        """映像是扁平佈局（VERSION 與工具同目錄）；repo 是 components/…/VERSION。"""
+        from _lib_compat import read_shipped_da_tools_version
+        flat = tmp_path / 'flat'
+        flat.mkdir()
+        assert read_shipped_da_tools_version(flat) is None
+        (flat / 'VERSION').write_text('7.8.9\n', encoding='utf-8')
+        assert read_shipped_da_tools_version(flat) == '7.8.9'
+        # Pre-release accepted: same grammar bump_docs writes (one copy).
+        (flat / 'VERSION').write_text('2.10.0-rc.1\n', encoding='utf-8')
+        assert read_shipped_da_tools_version(flat) == '2.10.0-rc.1'
+        problems = []
+        (flat / 'VERSION').write_text('latest\n', encoding='utf-8')
+        assert read_shipped_da_tools_version(flat, problems=problems) is None
+        assert problems == [(str(flat / 'VERSION'), 'latest')], problems
+        here = os.path.join(REPO_ROOT, 'scripts', 'tools', 'ops')
+        assert read_shipped_da_tools_version(here) == self._version()
+
+    def test_an_unreadable_version_is_a_problem_not_a_missing_file(self, tmp_path):
+        """VERSION 存在但讀不了（是目錄、不是 UTF-8）要記進 problems，不能當成沒有這個檔。"""
+        from _lib_compat import read_shipped_da_tools_version
+        as_dir = tmp_path / 'as-dir'
+        (as_dir / 'VERSION').mkdir(parents=True)
+        problems = []
+        assert read_shipped_da_tools_version(as_dir, problems=problems) is None
+        assert problems == [(str(as_dir / 'VERSION'), '<unreadable>')], problems
+        not_utf8 = tmp_path / 'not-utf8'
+        not_utf8.mkdir()
+        (not_utf8 / 'VERSION').write_bytes(b'\xff\xfe2.9.0\n')
+        problems = []
+        assert read_shipped_da_tools_version(not_utf8, problems=problems) is None
+        assert problems == [(str(not_utf8 / 'VERSION'), '<unreadable>')], problems
+        # Without a problems list the reader still answers None, never raises.
+        assert read_shipped_da_tools_version(as_dir) is None
+
+    def test_the_version_grammar_is_bump_docs_own(self):
+        """g：VERSION 的合法形狀與 bump_docs 的 `_SEMVER` 是同一個物件，不是第二份。"""
+        import _lib_compat
+        sys.path.insert(0, os.path.join(REPO_ROOT, 'scripts', 'tools', 'dx'))
+        import bump_docs
+        assert bump_docs._SEMVER is _lib_compat.SEMVER_PATTERN
+
+    def test_an_empty_flag_is_named_as_the_empty_flag(self, capsys):
+        """`--da-tools-image ''` 是旗標空了，不是讀不到 VERSION。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parser = ip._build_parser()
+            for blank in ('', '   '):
+                args = parser.parse_args(['--ci', 'github', '--tenants', 'tenant-x',
+                                          '--non-interactive', '-o', tmpdir,
+                                          '--da-tools-image', blank])
+                with pytest.raises(SystemExit) as exc:
+                    ip._build_config_from_args(args, parser)
+                assert exc.value.code == EXIT_CALLER_ERROR
+                err = capsys.readouterr().err
+                assert '--da-tools-image must not be empty' in err, err
+                assert 'VERSION' not in err, err
+            assert not os.listdir(tmpdir)
+
+
+class TestDaToolsVersionInAVendoredTree:
+    """#2900：走真實程式路徑（子行程跑 init_project.py），不 monkeypatch。
+
+    把 `scripts/` 複製到沒有 `components/` 的樹（vendored 情境），再分別放入
+    缺 VERSION、格式錯的 VERSION、pre-release VERSION，觀察 CLI 實際行為。
+    `TestDaToolsImagePinnedToThisRelease` 的 monkeypatch 測試只證明
+    `None` 會被拒；這裡證明「讀 VERSION → None → 拒絕」整條路徑。
+    """
+
+    @pytest.fixture(scope='class')
+    @classmethod
+    def tree(cls, tmp_path_factory):
+        import subprocess
+        root = tmp_path_factory.mktemp('vendored')
+        # The data init reads besides VERSION (tenant-id schema, rule packs)
+        # comes along; `components/` deliberately does not.
+        ls = subprocess.run(['git', 'ls-files', '-z', 'scripts/tools',
+                             'docs/schemas', 'rule-packs'],
+                            cwd=REPO_ROOT, capture_output=True, check=True,
+                            timeout=60)
+        for rel in filter(None, ls.stdout.decode('utf-8').split('\0')):
+            src = os.path.join(REPO_ROOT, rel)
+            if os.path.isfile(src):
+                dst = root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+        return root
+
+    @staticmethod
+    def _run(tree, out, *extra):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(tree / 'scripts/tools/ops/init_project.py'),
+             '--ci', 'github', '--tenants', 'tenant-x', '--non-interactive',
+             '-o', str(out), *extra],
+            capture_output=True, text=True, encoding='utf-8', timeout=180,
+            env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1', DA_LANG='en'))
+
+    @staticmethod
+    def _set_version(tree, text):
+        path = tree / 'components' / 'da-tools' / 'app' / 'VERSION'
+        if text is None:
+            if path.exists():
+                path.unlink()
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding='utf-8')
+
+    def _workflow(self, out):
+        with open(out / '.github' / 'workflows' / 'dynamic-alerting.yaml',
+                  encoding='utf-8') as fh:
+            return yaml.safe_load(fh)['env']['DA_TOOLS_IMAGE']
+
+    def test_no_version_refuses_and_writes_nothing(self, tree, tmp_path):
+        self._set_version(tree, None)
+        out = tmp_path / 'out'
+        r = self._run(tree, out)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert 'no VERSION' in r.stderr and '--da-tools-image' in r.stderr, r.stderr
+        assert 'da-tools:latest' not in r.stdout + r.stderr
+        assert not out.exists() or not any(out.rglob('*'))
+
+    def test_a_malformed_version_says_so(self, tree, tmp_path):
+        self._set_version(tree, 'latest\n')
+        out = tmp_path / 'out'
+        r = self._run(tree, out)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+        assert 'is not a valid version' in r.stderr, r.stderr
+        assert "'latest'" in r.stderr, r.stderr
+        assert 'no VERSION' not in r.stderr, r.stderr
+
+    def test_a_prerelease_version_is_pinned_verbatim(self, tree, tmp_path):
+        self._set_version(tree, '2.10.0-rc.1\n')
+        out = tmp_path / 'out'
+        r = self._run(tree, out)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert self._workflow(out) == 'ghcr.io/vencil/da-tools:v2.10.0-rc.1'
+
+    def test_the_flag_still_works_without_a_version(self, tree, tmp_path):
+        self._set_version(tree, None)
+        out = tmp_path / 'out'
+        r = self._run(tree, out, '--da-tools-image', 'registry.internal/x:v1')
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert self._workflow(out) == 'registry.internal/x:v1'
+
+
 class TestCustomerDeliveredImagePins:
     """Every container image ref handed to a customer must name a version.
 
@@ -3922,10 +4166,13 @@ class TestCustomerDeliveredImagePins:
     `bitnami/kubectl` lost every version tag when Broadcom moved the free
     catalog to `latest`-only.
 
-    ⛔ Scope is deliberately THIRD-PARTY refs. First-party `ghcr.io/vencil/*`
-    currency is the release flow's job, not a pin here: #902 considered
-    first-party digest pinning and REJECTED it. Widening this guard to
-    first-party would silently reverse that decision.
+    ⛔ Scope: the pin-table checks are THIRD-PARTY refs, but the floating
+    walk (`test_no_generated_ref_floats`) covers first-party too since #2900:
+    ADR-036 §6 pins the delivered da-tools image to the generating release's
+    tag. That is a TAG requirement only — #902 rejected first-party DIGEST
+    pinning and nothing here asks for a digest; first-party currency stays the
+    release flow's job (`bump_docs.py --tools` moves VERSION, and the tag
+    follows it).
 
     ⚠️ Honest boundary — this suite checks FLOATING vs CONCRETE, never
     CURRENCY. Reverting a pin to a stale but concrete tag leaves every test
@@ -4207,12 +4454,20 @@ class TestCustomerDeliveredImagePins:
         assert 'registry.internal/da-tools:v2.9.0' in snippet
         assert 'ghcr.io/vencil/da-tools' not in snippet
 
-    def test_only_first_party_refs_may_float(self):
+    def test_no_generated_ref_floats(self):
         """Class-level guard over every generated customer artifact.
 
         Keyed on the floating tag itself rather than on a list of known
-        images, so a NEW third-party image added to any of these generators is
-        caught without anyone remembering to update this test.
+        images, so a NEW image added to any of these generators is caught
+        without anyone remembering to update this test.
+
+        ⛔ No first-party exemption any more (#2900, ADR-036 §6). This test was
+        `test_only_first_party_refs_may_float` and skipped `ghcr.io/vencil/`,
+        because the da-tools image floated ON PURPOSE. It is now pinned to the
+        generating release, so the exemption would only hide a regression back
+        to `:latest`. And the run uses the REAL default (no `da_tools_image`
+        override from this test): passing a value here would grade the value
+        the test chose, not the one a customer gets.
 
         ⛔ That claim is only true because the artifacts are obtained by RUNNING
         `run_init` into a temp dir and walking everything it wrote. An earlier
@@ -4220,7 +4475,8 @@ class TestCustomerDeliveredImagePins:
         `_gen_kustomize_base` (or the since-withdrawn git-sync overlay) sailed through —
         the list, not the scan, was the hole.
         """
-        offenders, scanned = [], 0
+        offenders, scanned, first_party = [], 0, 0
+        assert ip.DA_TOOLS_IMAGE, 'anti-vacuity: no default da-tools image to grade'
         for deploy in ('kustomize', 'helm'):
             with tempfile.TemporaryDirectory() as tmpdir:
                 ip.run_init({
@@ -4229,7 +4485,7 @@ class TestCustomerDeliveredImagePins:
                     'rule_packs': ['mariadb'],
                     'tenants': ['db-a'],
                     'namespace': 'monitoring',
-                    'da_tools_image': 'ghcr.io/vencil/da-tools:latest',
+                    'da_tools_image': ip.DA_TOOLS_IMAGE,
                 }, tmpdir)
                 for root, _dirs, files in os.walk(tmpdir):
                     for fn in files:
@@ -4238,9 +4494,10 @@ class TestCustomerDeliveredImagePins:
                         with open(path, encoding='utf-8', errors='replace') as fh:
                             for line in fh:
                                 for ref in self._FLOATING_RE.findall(line):
-                                    if not ref.startswith(self._FIRST_PARTY):
-                                        offenders.append(
-                                            f'{os.path.relpath(path, tmpdir)}: {line.strip()}')
+                                    if ref.startswith(self._FIRST_PARTY):
+                                        first_party += 1
+                                    offenders.append(
+                                        f'{os.path.relpath(path, tmpdir)}: {line.strip()}')
 
         # Floor from the walk itself, not from a list this test maintains.
         # ⚠️ 24 when there were three deploy methods; two since #1351.
@@ -4248,18 +4505,21 @@ class TestCustomerDeliveredImagePins:
             f'anti-vacuity: only {scanned} generated files scanned across three '
             f'deploy methods — run_init stopped emitting, or the walk is broken')
         assert not offenders, (
-            'floating third-party refs emitted to customers:\n  '
-            + '\n  '.join(sorted(set(offenders))))
+            f'floating refs emitted to customers ({first_party} of them '
+            f'first-party):\n  ' + '\n  '.join(sorted(set(offenders))))
 
     def test_the_floating_detector_actually_detects(self):
         """Positive control for the regex above.
 
         Without this, a regex that silently matches nothing would make
-        `test_only_first_party_refs_may_float` pass forever. Uses the exact
-        refs #1337 removed.
+        `test_no_generated_ref_floats` pass forever. Uses the exact refs
+        #1337 removed, plus the da-tools default #2900 retired.
         """
-        for bad in ('bitnami/kubectl:latest', 'alpine/helm:latest', 'argoproj/argocd:latest'):
+        for bad in ('bitnami/kubectl:latest', 'alpine/helm:latest', 'argoproj/argocd:latest',
+                    # #2900: the exact default `da-tools init` shipped before.
+                    'ghcr.io/vencil/da-tools:latest'):
             assert self._FLOATING_RE.findall(f'      image: {bad}') == [bad]
+        assert not self._FLOATING_RE.findall(f'      DA_TOOLS_IMAGE: {ip.DA_TOOLS_IMAGE}')
         # ...and must not fire on a pinned ref or on a GitHub runner label.
         assert not self._FLOATING_RE.findall('    runs-on: ubuntu-latest')
         pinned = next(iter(ip._GITLAB_APPLY_IMAGES.values()))[1]

@@ -28,9 +28,16 @@ purpose: |
 // (`DA_TOOLS_IMAGE`) and exposes it as `--da-tools-image`; this hand-kept twin
 // had the same string typed into four template literals with no way for a
 // customer to change it, which is the "da-tools 映像" row of #1351's divergence
-// table. Same default as the CLI, deliberately: `cicdGenerators.test.ts` pins
-// the literal, so changing it here alone goes red.
-const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest';
+// table. Same default as the CLI, deliberately: the Python drift gate in
+// tests/ops/test_generated_ci_artifacts.py holds the two equal, so changing it
+// here alone goes red.
+//
+// ⛔ A RELEASE TAG, not `:latest` (issue 2900, ADR-036 §6). The CLI now writes
+// the tag of the da-tools release that generated the project, read from its
+// VERSION file. This side cannot read that file, so the tag is a literal that
+// `bump_docs.py --tools` rewrites at release together with VERSION (its
+// `tools/portal/src/**/*.js` rule) — that bump is what keeps it equal to the CLI.
+const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:v2.9.0';
 
 // ⛔ There is deliberately no argocd CLI image pin here any more, and none in
 // the CLI leg either: `--deploy argocd` is retired (#1351). It scaffolded no
@@ -112,11 +119,15 @@ function cicdGenerateInitCommand(config) {
   // which is #1351's headline defect ("預覽與 init 寫出的是兩個不同的東西")
   // reintroduced by the very change meant to close that row.
   //
-  // Emitted only when it differs from the default, because the CLI's own
-  // default IS that value: at the default the flag would be a no-op the
-  // customer has to read past.
+  // ⛔ Emitted ALWAYS, the default included. Omitting it at the default leans
+  // on the CLI's default matching ours, and the CLI that runs is whatever
+  // image `cicdGenerateDockerCommand` pulls — an already-published release
+  // whose `init` may still default to `:latest` (v2.9.0 does; see the
+  // image-caveat note in docs/scenarios/gitops-ci-integration.md). Stating the
+  // image makes the command write what the preview shows regardless of which
+  // da-tools version executes it; the flag itself ships in v2.9.0 and later.
   const image = cicdDaToolsImage(config);
-  if (image !== CICD_DEFAULT_DA_TOOLS_IMAGE) parts.push(`--da-tools-image ${image}`);
+  parts.push(`--da-tools-image ${image}`);
   parts.push('--non-interactive');
   return parts.join(' \\\n  ');
 }

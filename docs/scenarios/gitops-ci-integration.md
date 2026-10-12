@@ -64,6 +64,8 @@ docker run --rm -it \
 
 CLI 會引導你選擇：CI/CD 平台、部署方式、Rule Pack 組合、租戶名稱。
 
+**產生的設定固定 da-tools 版本**：GitHub workflow 的 `env`、GitLab 的 `variables` 與 `.pre-commit-config.da.yaml` 裡的 `DA_TOOLS_IMAGE`，預設是**執行 `init` 的那一版** da-tools 的版號 tag（`ghcr.io/vencil/da-tools:v<版號>`），不是 `:latest`——同一個 commit 在你的 CI 永遠用同一版產生器判定，也才能和 tenant-api chart 固定的 da-tools 版本對齊（[ADR-036](../adr/036-single-parser-effective-config.md) §6）。只升映像時，直接改產生物裡那一行 `DA_TOOLS_IMAGE`（建議做法）；對已初始化的專案重跑 `init` 會被拒絕，除非帶 `--force`，而 `--force` 會覆寫你改過的檔案（產生時要指定別的映像就帶 `--da-tools-image`）。⚠️ v2.9.0 映像的 `init` 仍寫 `:latest`，下一版映像起才固定版號。 <!-- image-caveat: v2.9.0 -->
+
 **非互動模式（CI 友好）：**
 
 ```bash
@@ -258,8 +260,8 @@ fi
 讓 reviewer 快速判斷影響範圍。
 
 ⚠️ **`da-tools init` 產生的 GitHub workflow 是否已帶這段處理，取決於你用的映像。**
-`init` 預設拉 `ghcr.io/vencil/da-tools:latest`，而那個 tag 只在 `tools/v*` 線發版時
-移動——本文件會在 merge 當下更新，映像則不會。**判斷方式不要看版號，直接看產物**：
+產生的 workflow 用的是你執行 `init` 那一版的 da-tools（見 §1.1），而映像只在
+`tools/v*` 線發版時更新——本文件會在 merge 當下更新，映像則不會。**判斷方式不要看版號，直接看產物**：
 產出的 `.github/workflows/dynamic-alerting.yaml` 裡 `Config diff (blast radius)`
 那一步有沒有 `set +e` / `rc=$?`。沒有就照上面自己補。
 
@@ -393,7 +395,7 @@ spec:
 
 ⛔ **「合併」是指把下面的 `- repo: local` 這一項，接進你既有 `.pre-commit-config.yaml` 的 `repos:` 清單底下。** 下面整段是一份完整檔案（第一行就是 `repos:`），**整份附加在既有設定後面會多出第二個頂層 `repos:` 鍵，YAML 只留最後一個、而且不報錯**——實測 `pre-commit validate-config` 仍回 exit 0，你原本的 hook 全數消失。你若還沒有 `.pre-commit-config.yaml`，才可以整份採用。
 
-⚠️ 下面這段是**預設 image**（`ghcr.io/vencil/da-tools:latest`）下的產出內容。你若跑 `init` 時帶了 `--da-tools-image`，兩個 `entry` 的第一個 token 會是你指定的那顆——**以你 repo 根目錄那份 `.pre-commit-config.da.yaml` 為準**，不要照抄下面的 image。
+⚠️ 下面這段是**預設 image**（執行 `init` 那一版的版號 tag，本頁對應 `ghcr.io/vencil/da-tools:v2.9.0`）下的產出內容。⚠️ v2.9.0 映像的 `init` 實際寫的是 `ghcr.io/vencil/da-tools:latest`，下一版映像起才是下面的版號 tag。 <!-- image-caveat: v2.9.0 -->你若跑 `init` 時帶了 `--da-tools-image`，兩個 `entry` 的第一個 token 會是你指定的那顆——**以你 repo 根目錄那份 `.pre-commit-config.da.yaml` 為準**，不要照抄下面的 image。
 
 <!-- mirrors-artifact: .pre-commit-config.da.yaml -->
 <!-- merge-mode: merge-items -->
@@ -409,7 +411,7 @@ repos:
       - id: da-validate-config
         name: Validate Dynamic Alerting config
         entry: >-
-          ghcr.io/vencil/da-tools:latest
+          ghcr.io/vencil/da-tools:v2.9.0
           validate-config --config-dir "/src/conf.d"
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
@@ -418,7 +420,7 @@ repos:
       - id: da-generate-routes
         name: Generate Alertmanager routes (validate)
         entry: >-
-          ghcr.io/vencil/da-tools:latest
+          ghcr.io/vencil/da-tools:v2.9.0
           generate-routes --config-dir "/src/conf.d" --validate --strict
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$

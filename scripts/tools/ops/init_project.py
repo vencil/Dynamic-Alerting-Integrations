@@ -41,7 +41,7 @@ _THIS_DIR = Path(__file__).resolve().parent
 # legacy Windows cp950/cp936 consoles when printing emoji to stdout).
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_compat import read_shipped_da_tools_version, try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
@@ -138,8 +138,11 @@ _HELP = {
         'en': 'Kubernetes monitoring namespace (default: monitoring)',
     },
     'da_tools_image': {
-        'zh': 'da-tools Docker image (預設: ghcr.io/vencil/da-tools:latest)',
-        'en': 'da-tools Docker image (default: ghcr.io/vencil/da-tools:latest)',
+        # `{default}` is filled from DA_TOOLS_IMAGE when the parser is built:
+        # the default is this tool's own release tag, so no literal can say it.
+        'zh': 'da-tools Docker image (預設: {default}，即產生專案時這一版的 da-tools)',
+        'en': 'da-tools Docker image (default: {default}, the da-tools release '
+              'running this init)',
     },
     'config_source': {
         'zh': '配置來源: 目前只支援 configmap (預設)；git (GitOps Native Mode) 暫不支援，見 issue 1349',
@@ -284,18 +287,49 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.22.0'
 # block, AND in `.pre-commit-config.da.yaml` as a `language: docker_image` entry,
 # so it executes on developer workstations as well as in the customer's CI.
 #
-# ⛔ FLOATING ON PURPOSE, and that is a different decision from the four
-# third-party pins. A customer should get the current published tool without us
-# shipping them a new project, so the tag is mutable and we are the ones who move
-# it. That also makes it the one delivered ref where OUR lever reaches EXISTING
-# customers — which is why it belongs in the delivered scan face even though the
-# floating-shape guard deliberately exempts it.
+# ⛔ PINNED TO THE RELEASE THAT GENERATED THE PROJECT (ADR-036 §6, issue 2900).
+# This used to be the floating `:latest`, on the theory that a customer should
+# get the current tool without re-generating. ADR-036 §6 reversed that: what the
+# customer's CI accepts or rejects has to be reproducible, and has to be
+# alignable with the da-tools version the tenant-api chart pins — two sides
+# judging the same tree with different generator versions disagree, and a
+# floating tag makes that disagreement change under them with no edit on either
+# side. So the default is `ghcr.io/vencil/da-tools:v<VERSION>`, the release this
+# very init ships in (the image carries VERSION beside this file; release.yaml
+# holds VERSION equal to the `tools/v*` tag, which publishes `:v<VERSION>`).
 #
-# ⛔ A CONSTANT, not two literals. It used to be spelled out at the defaults dict
-# and again at the argparse default, which is exactly the "a ref exists in
-# exactly two places" contract this module documents for the pins below being
-# quietly violated for the most-executed image of the set.
-DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest'
+# ⚠️ The cost, stated: our lever no longer reaches EXISTING customers. A fixed
+# da-tools image reaches a generated project only when the customer moves the
+# tag — they edit the `DA_TOOLS_IMAGE` line in their workflow / GitLab variables
+# / `.pre-commit-config.da.yaml` (the recommended path). Re-running `init` is
+# NOT an upgrade path: `_check_existing_init` refuses it on an initialized
+# project, and `--force` regenerates every file, discarding hand edits. That is
+# the same contract as the third-party pins above, and this ref now falls under
+# the same floating-shape guard in the init-project suite instead of being
+# exempt from it.
+#
+# ⛔ A TAG, NOT A DIGEST (#902 rejected first-party digest pinning; ADR-036 §6
+# asks for a fixed version, not an immutable reference). `--da-tools-image`
+# still overrides it, digest included.
+#
+# ⛔ NO FALLBACK TO `:latest`. Where VERSION cannot be read (a vendored
+# `scripts/` tree with no `components/`), or holds something that is not a
+# version (`_lib_compat.SEMVER_PATTERN`, the grammar bump_docs writes,
+# pre-release suffix included), DA_TOOLS_IMAGE is None and a run
+# without `--da-tools-image` is refused at argument time — the convention of
+# `_lib_versions.require_platform_version`: a version written into a file is
+# read, never guessed.
+#
+# ⛔ The repository is spelled once (here) and the tag derived, so the defaults
+# dict, the argparse default and `--help` all read this one value.
+_DA_TOOLS_REPOSITORY = 'ghcr.io/vencil/da-tools'
+# (path, text) of each VERSION that exists but is not a valid version — kept so
+# the refusal can say THAT instead of "no VERSION" (two different fixes).
+_DA_TOOLS_VERSION_PROBLEMS: list = []
+_DA_TOOLS_VERSION = read_shipped_da_tools_version(
+    _THIS_DIR, problems=_DA_TOOLS_VERSION_PROBLEMS)
+DA_TOOLS_IMAGE: Optional[str] = (
+    f'{_DA_TOOLS_REPOSITORY}:v{_DA_TOOLS_VERSION}' if _DA_TOOLS_VERSION else None)
 
 # deploy method -> (GitLab CI variable name, pinned ref). Single source for
 # BOTH the `variables:` block and the apply stage's `image:` line, so the two
@@ -4978,6 +5012,32 @@ def _prompt_missing_tenants(parser: argparse.ArgumentParser) -> list[str]:
     return named if any(named) else []
 
 
+# #2900: printed when DA_TOOLS_IMAGE is None (no readable VERSION — a vendored
+# `scripts/` tree). Operator-facing, so English like the rest of this tool.
+_NO_DA_TOOLS_VERSION_HELP = 'none: no readable da-tools VERSION, so this flag is required'
+_NO_DEFAULT_IMAGE_TAIL = (
+    'so there is no pinned default image to write, and init does not fall back '
+    'to a floating :latest. Pass --da-tools-image <ref>, e.g. '
+    f'--da-tools-image {_DA_TOOLS_REPOSITORY}:vX.Y.Z')
+_EMPTY_DA_TOOLS_IMAGE_REFUSAL = (
+    '--da-tools-image must not be empty: name the image the generated CI and '
+    'pre-commit hooks should run, or omit the flag to use the default '
+    f'({DA_TOOLS_IMAGE or "none available here"})')
+
+
+def _no_da_tools_version_refusal() -> str:
+    """Why there is no default image: no VERSION, or a VERSION that is not one."""
+    if _DA_TOOLS_VERSION_PROBLEMS:
+        found = '; '.join(f'{path} contains {text!r}'
+                          for path, text in _DA_TOOLS_VERSION_PROBLEMS)
+        return (f'the da-tools VERSION file is not a valid version ({found}; '
+                f'expected X.Y.Z or X.Y.Z-<pre-release>), '
+                + _NO_DEFAULT_IMAGE_TAIL)
+    return ('cannot tell which da-tools release this is (no VERSION beside '
+            'init_project.py or at components/da-tools/app/VERSION), '
+            + _NO_DEFAULT_IMAGE_TAIL)
+
+
 def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
     """Build configuration from CLI args or interactive flow.
 
@@ -4994,6 +5054,15 @@ def _build_config_from_args(args, parser: argparse.ArgumentParser) -> dict:
             getattr(args, a) is not None
             for a in ('git_repo', 'git_branch', 'git_path', 'git_period')):
         parser.error(_GIT_MODE_REFUSAL)
+
+    # #2900: the default image is this release's own tag; without a readable
+    # VERSION there is no default to write, and `:latest` is not one.
+    # Two different mistakes, two different messages: None is "no default
+    # exists here" (VERSION), a blank string is "you passed an empty flag".
+    if args.da_tools_image is None:
+        parser.error(_no_da_tools_version_refusal())
+    if not args.da_tools_image.strip():
+        parser.error(_EMPTY_DA_TOOLS_IMAGE_REFUSAL)
 
     # ⛔ `is not None`, not truthiness: `--tenants ''` is a flag the caller
     # GAVE. Read as falsy it fell through to the full interactive flow, where
@@ -5321,7 +5390,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--namespace', default='monitoring', help=_h('namespace'))
     parser.add_argument('--da-tools-image',
                         default=DA_TOOLS_IMAGE,
-                        help=_h('da_tools_image'))
+                        help=_h('da_tools_image').format(
+                            default=DA_TOOLS_IMAGE or _NO_DA_TOOLS_VERSION_HELP))
     parser.add_argument('--config-source',
                         choices=['configmap', 'git'], default='configmap',
                         help=_h('config_source'))

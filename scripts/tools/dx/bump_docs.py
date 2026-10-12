@@ -71,7 +71,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 # Importing the constant rather than re-spelling those three names keeps this
 # module from becoming a fourth, independently-rotting copy of the set.
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
-from _lib_compat import try_utf8_stdout  # noqa: E402
+from _lib_compat import SEMVER_PATTERN, try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_toolcount import count_by_subdir, count_scope  # noqa: E402
 from _version_patterns import (  # noqa: E402
@@ -170,7 +170,11 @@ PORTAL_JSX_DIR = "tools/portal/src/interactive/tools"
 #
 # `test_rule_patterns_are_idempotent_on_prerelease_versions` is the mechanical
 # guard: no rule pattern may match a proper prefix of its own output.
-_SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9._-]+)?"
+#
+# ⛔ Imported, not spelled here: `_lib_compat.SEMVER_PATTERN` is the single
+# copy, shared with the shipped VERSION reader `da-tools init` derives its
+# pinned image tag from (#2900).
+_SEMVER = SEMVER_PATTERN
 
 
 def _shields_escape(value: str) -> str:
@@ -306,7 +310,14 @@ def _build_tools_rules():
     # `da-tools init --ci gitlab` 產生，不是 checked-in 範本。規則指向不存在的
     # 檔案時 apply_rules() 只會回 SKIP，過去所有 gate 都不看 SKIP，於是這條
     # 規則靜靜死了五個版本（#1407）。B 段已讓 missing 變成 failing signal。
+    #
+    # ⛔ nightly-image-scan.yaml since issue 2900: its scan-delivered matrix
+    # mirrors `da-tools init`'s default image, which is now `:v<VERSION>`
+    # derived from the VERSION file this same rule set bumps. Without this rule
+    # the release bump moves the generator and leaves the matrix behind, and
+    # the nightly matrix-drift guard goes red on the release PR.
     for f in [".github/workflows/config-diff.yaml",
+              ".github/workflows/nightly-image-scan.yaml",
               "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml",
               "k8s/03-monitoring/cronjob-threshold-govern.yaml"]:
         rules.append({

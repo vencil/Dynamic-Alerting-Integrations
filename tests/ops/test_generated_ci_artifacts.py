@@ -7180,9 +7180,10 @@ def test_a_spaced_offset_stays_one_value_in_every_yaml_face(
 # renamed export dies with a sentence instead of a node stack trace.
 #
 # Two probe images rather than one, and BOTH floating (`:latest`):
-#   * non-default on both sides, so the wizard's conditional `--da-tools-image`
-#     flag and the CLI's flag handling are exercised identically in both runs,
-#     which is what makes the A→B substitution an exact equality;
+#   * non-default on both sides, so the CLI's flag handling (and the wizard's
+#     `--da-tools-image` flag, which it now emits for every image, the default
+#     included) is exercised identically in both runs, which is what makes the
+#     A→B substitution an exact equality;
 #   * both floating, so the wizard's floating-tag note renders in both and does
 #     not itself become a difference;
 #   * `.invalid` is RFC 2606's reserved TLD — nothing resolves, nothing is
@@ -7352,37 +7353,55 @@ def test_the_cli_help_for_da_tools_image_states_the_real_default() -> None:
 
     The constant's own comment says "A CONSTANT, not two literals", recording
     that this exact split (defaults dict + argparse default) had already been
-    fixed once. The help text is the copy that survived: it spells the ref out
-    per language, so a bump moves the value and leaves `--help` telling the
-    customer something that is no longer true.
+    fixed once. The help text is the copy that survived: it spelled the ref out
+    per language, so a bump moved the value and left `--help` telling the
+    customer something that was no longer true.
+
+    ⛔ Since #2900 the default is derived from VERSION, so no help literal CAN
+    name it: each language's entry carries a `{default}` slot, and the help the
+    parser actually renders must contain the real default. Both halves are
+    checked — the slot in every language (the other language is not rendered
+    in this process), and the rendered string in this one.
     """
     entry = ip._HELP["da_tools_image"]
     assert entry, "the --da-tools-image help entry vanished; re-point this check"
     for lang, text in sorted(entry.items()):
-        assert ip.DA_TOOLS_IMAGE in text, (
-            f"`--da-tools-image` help ({lang}) does not name the actual "
-            f"default {ip.DA_TOOLS_IMAGE}:\n  {text}\n"
-            f"Either update the sentence or derive it from DA_TOOLS_IMAGE."
-        )
+        assert "{default}" in text, (
+            f"`--da-tools-image` help ({lang}) has no {{default}} slot, so it "
+            f"cannot name the actual default {ip.DA_TOOLS_IMAGE}:\n  {text}")
+    rendered = [a.help for a in ip._build_parser()._actions
+                if a.dest == "da_tools_image"]
+    assert rendered and ip.DA_TOOLS_IMAGE and ip.DA_TOOLS_IMAGE in rendered[0], (
+        f"rendered `--da-tools-image` help does not name the actual default "
+        f"{ip.DA_TOOLS_IMAGE}: {rendered}")
 
 
 def test_the_cli_spells_the_da_tools_image_exactly_once() -> None:
-    """One literal, so `--da-tools-image` cannot be honoured in only some places.
+    """One spelling, so `--da-tools-image` cannot be honoured in only some places.
 
-    Counts string constants EQUAL to the ref, which is why the two `--help`
-    sentences and the `_gen_precommit_snippet` docstring — both of which merely
-    contain it — do not register here. The test above owns the help strings.
+    ⛔ #2900 changed WHAT is spelled once. The default used to be a literal
+    (`…:latest`); it is now `<repository>:v<VERSION>`, derived. So the check is
+    twofold: no string constant equals the full default ref (a second, frozen
+    copy of the tag — the shape that would keep shipping one release after a
+    bump), and the repository itself is spelled as a constant exactly once —
+    the `_DA_TOOLS_REPOSITORY` assignment. Docstrings and help sentences merely
+    CONTAIN the repository and do not register.
     """
     tree = ast.parse(_INIT_PROJECT.read_text(encoding="utf-8"))
-    spelled = [n for n in ast.walk(tree)
-               if isinstance(n, ast.Constant) and n.value == ip.DA_TOOLS_IMAGE]
-    assert len(spelled) == 1, (
-        f"{ip.DA_TOOLS_IMAGE} is spelled as a string constant "
-        f"{len(spelled)} time(s) in init_project.py (lines "
-        f"{[n.lineno for n in spelled]}); it must be exactly one — the "
-        f"DA_TOOLS_IMAGE assignment. A second literal is a code path that "
-        f"keeps shipping ghcr.io after the customer passed --da-tools-image."
-    )
+    consts = [n for n in ast.walk(tree)
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    frozen = [n.lineno for n in consts if n.value == ip.DA_TOOLS_IMAGE]
+    assert not frozen, (
+        f"{ip.DA_TOOLS_IMAGE} is spelled as a literal at line(s) {frozen}; the "
+        f"default is derived from VERSION and a literal copy freezes it at one "
+        f"release.")
+    repo = [n.lineno for n in consts if n.value == ip._DA_TOOLS_REPOSITORY]
+    assert len(repo) == 1, (
+        f"{ip._DA_TOOLS_REPOSITORY} is spelled as a string constant "
+        f"{len(repo)} time(s) in init_project.py (lines {repo}); it must be "
+        f"exactly one — the _DA_TOOLS_REPOSITORY assignment.")
+    assert ip.DA_TOOLS_IMAGE.startswith(ip._DA_TOOLS_REPOSITORY + ":v"), (
+        ip.DA_TOOLS_IMAGE)
 
 
 # ============================================================
@@ -7477,9 +7496,10 @@ def test_the_wizard_preview_is_the_file_init_writes(
     preview = _load_portal_preview(tmp_path, deploy)
     _assert_same_file(
         cli_text,
-        # The default image is `:latest`, which is mutable, so the note must
-        # be there — and its absence would be its own defect.
-        _without_pin_note(preview, expect_note=True),
+        # #2900: the default is OUR repository at a release tag, which the
+        # wizard (like the CLI) treats as immutable, so the note must be absent
+        # — its presence would tell the customer their pin floats.
+        _without_pin_note(preview, expect_note=False),
         f"deploy={deploy}, default image",
     )
 
