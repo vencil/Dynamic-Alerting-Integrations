@@ -66,6 +66,10 @@ type tenantAPIParityTree struct {
 	// EnforcedGroupBy (#2503) is the platform's `_routing_enforced`, which a
 	// tenant PUT cannot write: not judged here.
 	EnforcedGroupBy json.RawMessage `json:"enforced_group_by_invalid"`
+	// RouteFindings (#2904) are da-guard's receiver / override findings, its
+	// half's to assert: not judged here.
+	RouteFindings              json.RawMessage `json:"route_findings"`
+	RouteFindingsPythonDiffers json.RawMessage `json:"route_findings_python_differs"`
 }
 
 func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {
@@ -81,6 +85,9 @@ func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {
 		Comment       []string        `json:"_comment"`
 		BlockingKinds json.RawMessage `json:"blocking_kinds"`
 		TenantIDs     json.RawMessage `json:"tenant_ids"` // pinned by pkg/routingpolicy
+		// #2904: da-guard's half and the Python half read these.
+		RouteFindingKinds json.RawMessage `json:"route_finding_kinds"`
+		GoSeverity        json.RawMessage `json:"go_severity"`
 		// Why a tenant_api cell is null (not measured): the Python half asserts it.
 		TenantAPIUnmeasured json.RawMessage       `json:"tenant_api_unmeasured"`
 		Trees               []tenantAPIParityTree `json:"trees"`

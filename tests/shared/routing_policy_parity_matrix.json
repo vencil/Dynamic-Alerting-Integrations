@@ -78,8 +78,8 @@
     "replaced WHOLE by the tenant file's). Routing in a defaults block (a `defaults:` mapping, or",
     "the whole top level of a defaults file without one) or in a threshold profile (`profiles:`)",
     "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
-    "platform row, field = the key path in that file. The generator itself reports nothing there,",
-    "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
+    "platform row, field = the key path in that file. Since #2904 the generator reports the same row (a blocking",
+    "`WARN ... skipping`, --validate fails), so both halves compare it.",
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
     "#2677 - merge precedence is PyYAML's SafeConstructor.flatten_mapping in the generator and da-guard: a key the mapping writes itself wins; among several merge keys in one mapping (`<<:` beside a tagged `!!merge x:`) the LATER one wins; within one merge sequence (`<<: [*a, *b]`) the EARLIER source wins; a merge source is itself flattened by the same rules first. The trees domain-policy-merge-key-order(-top) pin it; their policy cells are the generator's own --strict lines.",
@@ -135,13 +135,44 @@
     "and checks the kind: nested_tree (the tenant's own file `<sub>/<tenant>.yaml` is below the root), no_put_body (no files[<tenant>.yaml] anywhere),",
     "outside_table (a root files[<tenant>.yaml] PUT tenant-api refuses with a verdict the put values do not express; the reason says which).",
     "Every measured cell is held to the generator's verdict on that PUT (test_routing_policy_parity._generator_put),",
-    "so a null cannot hide a difference."
+    "so a null cannot hide a difference.",
+    "#2904 (ADR-036 section 9) - the da-guard routing checks that only Go had are pinned here before the Go copies go:",
+    "route_finding_kinds: the da-guard kinds of the receiver contract and the override checks; route_findings (per tree): [tenant, kind, field]",
+    "per da-guard finding of one of those kinds, sorted ('' for no tenant) - da-guard's half asserts it; the Python half holds the generator's",
+    "findings document (--validate --strict --findings-json) to it, or to route_findings_python_differs {reason, rows} where the two differ",
+    "(null otherwise). go_severity: kind -> the severity da-guard gives it (da-guard's half asserts every such finding carries it); the",
+    "Python half asserts every generator finding of an `error` kind is in force under --validate --strict (never looser than da-guard).",
+    "routing_profiles_unusable (a routing_profiles block that is not a mapping) is a platform row both halves compare.",
+    "tests/shared/test_routing_policy_parity.py test_no_routing_check_is_go_only computes da-guard's routing kinds from its source (the",
+    "FindingKind constants internal/guard/routing.go emits) and is red while any is pinned by no column of this table."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
     "routing_enforced_below_root",
     "routing_profile_duplicate"
   ],
+  "route_finding_kinds": [
+    "conflicting_override_matcher",
+    "conflicting_receiver_field",
+    "duplicate_override_matcher",
+    "empty_override_matcher",
+    "invalid_receiver_field",
+    "missing_receiver_field",
+    "redundant_override_receiver",
+    "unknown_receiver_type"
+  ],
+  "go_severity": {
+    "conflicting_override_matcher": "error",
+    "conflicting_receiver_field": "error",
+    "duplicate_override_matcher": "warn",
+    "empty_override_matcher": "error",
+    "invalid_receiver_field": "error",
+    "missing_receiver_field": "error",
+    "redundant_override_receiver": "warn",
+    "routing_in_unread_location": "error",
+    "routing_profiles_unusable": "warn",
+    "unknown_receiver_type": "error"
+  },
   "tenant_ids": {
     "valid": [
       "t-a",
@@ -321,6 +352,16 @@
         "reason": "tenant-api refuses this PUT 400 BAD_REQUEST for a reason unrelated to routing or policy (`q` is no threshold key of defaults: 'unknown key \"q\" not in defaults'); the table's put verdicts do not express it. t2 of the same tree carries the routing difference with a known key"
       }
     },
+    "routing-in-unread-location-nested-2904": {
+      "t-a": {
+        "kind": "nested_tree",
+        "reason": "the tenant's own file is team-a/t-a.yaml, below the conf.d root; tenant-api lists tenant files at the root only"
+      },
+      "t-b": {
+        "kind": "nested_tree",
+        "reason": "the tenant's own file is team-b/t-b.yaml, below the conf.d root; tenant-api lists tenant files at the root only"
+      }
+    },
     "routing-ignored-keys-2960": {
       "t3": {
         "kind": "nested_tree",
@@ -363,7 +404,15 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "tenant-x",
+          "unknown_receiver_type",
+          "routes[0].receiver.type"
+        ]
+      ],
+      "route_findings_python_differs": null
     },
     {
       "name": "ii-routes-entry-forbidden-type",
@@ -405,7 +454,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "iii-override-unknown-receiver-type",
@@ -441,7 +492,15 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "tenant-x",
+          "unknown_receiver_type",
+          "overrides[0].receiver.type"
+        ]
+      ],
+      "route_findings_python_differs": null
     },
     {
       "name": "iv-override-forbidden-type",
@@ -483,7 +542,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "adr007-five-tenants",
@@ -693,7 +754,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "tenant-empty-routes-drops-profile-routes",
@@ -757,7 +820,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "unknown-routing-profile",
@@ -833,7 +898,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-disable-with-profile",
@@ -898,7 +965,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-unset-reenable",
@@ -954,7 +1023,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "main-receiver-empty-and-override-matchers",
@@ -1023,7 +1094,30 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t-matcher",
+          "conflicting_override_matcher",
+          "overrides[0]"
+        ],
+        [
+          "t-matcher",
+          "empty_override_matcher",
+          "overrides[1]"
+        ],
+        [
+          "t-matcher",
+          "missing_receiver_field",
+          "overrides[3].receiver"
+        ],
+        [
+          "t-nomain",
+          "missing_receiver_field",
+          "receiver"
+        ]
+      ],
+      "route_findings_python_differs": null
     },
     {
       "name": "tenant-in-two-domains",
@@ -1087,7 +1181,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "forbidden-and-allowed-both-fire",
@@ -1135,7 +1231,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-defaults-supply-receiver",
@@ -1200,7 +1298,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routes-entry-shapes",
@@ -1294,7 +1394,15 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t-routes",
+          "missing_receiver_field",
+          "routes[8].receiver"
+        ]
+      ],
+      "route_findings_python_differs": null
     },
     {
       "name": "yaml11-bool-match-value",
@@ -1330,7 +1438,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-yml-spelling",
@@ -1368,7 +1478,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-defaults-routes-in-other-platform-file",
@@ -1407,7 +1519,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "allowed-list-non-string-entries",
@@ -1466,7 +1580,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "whitespace-profile-reference",
@@ -1493,7 +1609,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "threshold-profile-routing-is-not-read",
@@ -1527,7 +1645,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "unwrapped-defaults-routing-is-not-read",
@@ -1565,7 +1685,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "platform-overlay-routing-is-read",
@@ -1653,7 +1775,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "platform-overlay-yaml-merge-key",
@@ -1740,7 +1864,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-yaml-merge-key",
@@ -1880,7 +2006,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-merge-key-order-top",
@@ -1918,7 +2046,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-merge-key-order",
@@ -2111,7 +2241,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-merge-anchor-aliased",
@@ -2149,7 +2281,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-tagged-merge-value-scalar",
@@ -2203,7 +2337,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "top-level-yaml-merge-key",
@@ -2401,7 +2537,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "top-level-yaml-merge-key-subtree",
@@ -2511,7 +2649,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "yaml-alias-key-names",
@@ -2604,7 +2744,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "require-critical-escalation",
@@ -2976,7 +3118,15 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t-ovr-shadow",
+          "duplicate_override_matcher",
+          "overrides[1]"
+        ]
+      ],
+      "route_findings_python_differs": null
     },
     {
       "name": "require-critical-escalation-yaml11-bool",
@@ -3104,7 +3254,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "require-critical-escalation-explicit-bool-tag",
@@ -3242,7 +3394,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-a-routing-defaults-chain-deeper-wins",
@@ -3338,7 +3492,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-a-null-receiver-below-root",
@@ -3399,7 +3555,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-b-routing-enforced-below-root",
@@ -3440,7 +3598,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-c-profiles-scoped-to-subtree",
@@ -3535,7 +3695,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-c-profile-name-defined-twice",
@@ -3598,7 +3760,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-d-subtree-policy-additive-and-scoped",
@@ -3672,7 +3836,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-e-duplicate-tenant-id",
@@ -3707,7 +3873,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-b-enforced-in-unselected-carrier-spelling",
@@ -3743,7 +3911,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-e-duplicate-tenant-with-null-body",
@@ -3778,7 +3948,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-f-routing-defaults-in-nested-non-carrier",
@@ -3813,7 +3985,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-a-root-routing-defaults-not-a-mapping",
@@ -3885,7 +4059,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-a-root-later-file-not-a-mapping-replaces",
@@ -3918,7 +4094,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "hier-a-root-earlier-file-not-a-mapping-is-replaced",
@@ -3956,7 +4134,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-values-yaml11",
@@ -4326,7 +4506,18 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": {
+        "reason": "t-o-no's `alertname: no` is the boolean False to PyYAML: the generator's truthiness reads the override as having no matcher (empty_override_matcher, blocking under --validate) besides its strict routing_value_not_string; da-guard counts a non-string, non-null matcher as set, so it reports the routing_value_not_string alone. Both refuse the override.",
+        "rows": [
+          [
+            "t-o-no",
+            "empty_override_matcher",
+            "overrides[0]"
+          ]
+        ]
+      }
     },
     {
       "name": "routing-values-yaml11-routing-defaults",
@@ -4384,7 +4575,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-values-invalid-label-keys",
@@ -4724,7 +4917,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "group-by-elements",
@@ -5176,7 +5371,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routes-match-null-key",
@@ -5337,7 +5534,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-single",
@@ -5389,7 +5588,9 @@
           "_routing_enforced.group_by[4]",
           "wildcard_mixed"
         ]
-      ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-per-tenant",
@@ -5448,7 +5649,9 @@
           "_routing_enforced (alertname).group_by[1]",
           "duplicate"
         ]
-      ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-per-tenant-unrouted",
@@ -5497,7 +5700,9 @@
           "_routing_enforced (alertname).group_by[1]",
           "duplicate"
         ]
-      ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-per-tenant-null-body",
@@ -5525,7 +5730,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-per-tenant-null-body-platform-entry",
@@ -5575,7 +5782,9 @@
           "_routing_enforced (alertname).group_by[1]",
           "duplicate"
         ]
-      ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-disabled",
@@ -5606,7 +5815,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-no-receiver",
@@ -5637,7 +5848,18 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": {
+        "reason": "the generator judges the receiver of the `_routing_enforced` route it renders (missing_receiver_field with no tenant, blocking under --validate); da-guard reads only that route's group_by (#2503), never its receiver.",
+        "rows": [
+          [
+            "",
+            "missing_receiver_field",
+            "_routing_enforced.receiver"
+          ]
+        ]
+      }
     },
     {
       "name": "routing-enforced-group-by-receiver-refused",
@@ -5668,7 +5890,18 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": {
+        "reason": "the generator judges the receiver of the `_routing_enforced` route it renders (missing_receiver_field on receiver.url, no tenant, blocking under --validate); da-guard reads only that route's group_by (#2503), never its receiver.",
+        "rows": [
+          [
+            "",
+            "missing_receiver_field",
+            "_routing_enforced.receiver.url"
+          ]
+        ]
+      }
     },
     {
       "name": "routing-enforced-group-by-valid",
@@ -5699,7 +5932,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-enforced-group-by-last-enabled-root-file",
@@ -5738,7 +5973,9 @@
           "_routing_enforced.group_by[1]",
           "not_string"
         ]
-      ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-not-mapping",
@@ -5994,7 +6231,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-defaults-not-mapping-below-root",
@@ -6048,7 +6287,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "invalid-tenant-ids",
@@ -6128,7 +6369,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "every-tenant-id-invalid",
@@ -6151,7 +6394,9 @@
           "refused": "invalid_tenant_id"
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "domain-policy-null",
@@ -6205,7 +6450,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "tenant-merge-tag-key-2700",
@@ -6286,7 +6533,18 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t2",
+          "missing_receiver_field",
+          "receiver"
+        ]
+      ],
+      "route_findings_python_differs": {
+        "reason": "the reader difference this tree's t2 python_differs already carries (#2700): for PyYAML `!!merge _routing:` merges a slack receiver into t2, so the generator finds no receiver problem; yaml.v3 reads a plain `_routing` holding no receiver, so da-guard reports missing_receiver_field on t2's receiver.",
+        "rows": []
+      }
     },
     {
       "name": "tenant-merge-overridden-unconstructable-2713",
@@ -6329,7 +6587,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "tenant-receiver-type-not-string-2780",
@@ -6382,7 +6642,219 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t-list",
+          "missing_receiver_field",
+          "receiver.type"
+        ],
+        [
+          "t-map",
+          "missing_receiver_field",
+          "receiver.type"
+        ]
+      ],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "override-and-receiver-findings-2904",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-dup.yaml": "tenants:\n  t-dup:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://main.example/hook\n      overrides:\n      - alertname: CpuHigh\n        receiver:\n          type: webhook\n          url: https://a.example/hook\n      - alertname: CpuHigh\n        receiver:\n          type: webhook\n          url: https://b.example/hook\n      - metric_group: disk\n        receiver:\n          type: webhook\n          url: https://main.example/hook\n",
+        "t-bad-url.yaml": "tenants:\n  t-bad-url:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: not-a-url\n",
+        "t-two-keys.yaml": "tenants:\n  t-two-keys:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: k1\n        routing_key: k2\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-dup": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "webhook"
+            },
+            {
+              "ref": "overrides[1]",
+              "type": "webhook"
+            },
+            {
+              "ref": "overrides[2]",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-bad-url": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-two-keys": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t-bad-url",
+          "invalid_receiver_field",
+          "receiver.url"
+        ],
+        [
+          "t-dup",
+          "duplicate_override_matcher",
+          "overrides[1]"
+        ],
+        [
+          "t-dup",
+          "redundant_override_receiver",
+          "overrides[2].receiver"
+        ],
+        [
+          "t-two-keys",
+          "conflicting_receiver_field",
+          "receiver.routing_key"
+        ]
+      ],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-profiles-not-a-mapping-2904",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n- p-team\n",
+        "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing_profile: p-team\n"
+      },
+      "platform": [
+        [
+          "routing_profiles_unusable",
+          "_routing_profiles.yaml",
+          "routing_profiles"
+        ]
+      ],
+      "expect": {
+        "t1": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": "p-team",
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-in-unread-location-nested-2904",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "team-a/_defaults.yaml": "defaults:\n  cpu_usage_percent: 70\n  _routing:\n    receiver:\n      type: webhook\n      url: https://a.example/hook\n",
+        "team-a/t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n",
+        "team-b/_defaults.yaml": "cpu_usage_percent: 60\n_routing_profile: p-b\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://b.example/hook\n",
+        "team-b/t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "team-a/_defaults.yaml",
+          "defaults._routing"
+        ],
+        [
+          "routing_key_ignored",
+          "team-b/_defaults.yaml",
+          "_routing_profile"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-b": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-ignored-keys-2960",
@@ -6480,7 +6952,15 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t2",
+          "missing_receiver_field",
+          "overrides[0].receiver"
+        ]
+      ],
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-unknown-keys-2983",
@@ -6546,7 +7026,9 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": []
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
     }
   ]
 }

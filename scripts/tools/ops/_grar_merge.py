@@ -118,6 +118,9 @@ FINDING_KINDS: dict[str, str] = {
         "One routing-profile name is defined in two files.",
     "routing_in_unread_location":
         "A routing block in a file the generator never reads it from.",
+    "routing_profiles_unusable":
+        "A routing_profiles block that is not a mapping; no profile in it is "
+        "applied.",
     # routing blocks
     "routing_not_mapping":
         "A tenant's _routing is neither a mapping nor a disabling string; "
@@ -163,6 +166,12 @@ FINDING_KINDS: dict[str, str] = {
     "conflicting_override_matcher":
         "An override with both alertname and metric_group; it is not "
         "rendered.",
+    "duplicate_override_matcher":
+        "An override with the same matcher as an earlier one; the earlier "
+        "one catches those alerts first, so it never takes effect.",
+    "redundant_override_receiver":
+        "An override whose receiver is identical to the main receiver; it "
+        "changes no destination.",
     "invalid_route_entry":
         "A routes value or entry the generator does not render.",
     "routing_key_ignored":
@@ -531,6 +540,23 @@ def _exactly_one_kind(spec: dict, receiver_obj: dict) -> str:
     return "invalid_receiver_field"
 
 
+def _exactly_one_field(spec: dict, receiver_obj: dict) -> str | None:
+    """#2904: the receiver field a ``receiver_exactly_one_problem`` finding is
+    about, from the same field states — da-guard's choice
+    (``receiverspec.exactlyOneProblem``): the first non-string field of the
+    group, else the group's first field when none is set, else the LAST field
+    set. None when no group has a problem."""
+    for group in spec.get("exactly_one_of", []):
+        states = [receiver_field_state(receiver_obj, f) for f in group]
+        if FIELD_NOT_STRING in states:
+            return group[states.index(FIELD_NOT_STRING)]
+        set_fields = [f for f, st in zip(group, states) if st == FIELD_SET]
+        if len(set_fields) == 1:
+            continue
+        return set_fields[-1] if set_fields else group[0]
+    return None
+
+
 def receiver_type(receiver_obj: object) -> str:
     """The receiver type every check reads: the receiver's ``type`` when the
     receiver is a mapping and the type a non-empty string, else ``""``.
@@ -609,9 +635,11 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             return None, warnings
     problem = receiver_exactly_one_problem(rtype, receiver_obj)
     if problem:
+        sub = _exactly_one_field(spec, receiver_obj)
         warnings.append(skipped_entry_warning(
             f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping",
-            kind=_exactly_one_kind(spec, receiver_obj), **at()))
+            kind=_exactly_one_kind(spec, receiver_obj),
+            **at(f".{sub}" if sub else "")))
         return None, warnings
     # #2295: optional values Alertmanager cannot load (non-boolean
     # send_resolved / require_tls, a malformed http_config) — without this the

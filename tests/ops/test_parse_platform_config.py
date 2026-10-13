@@ -203,12 +203,19 @@ class TestParsePlatformConfig:
         assert result["routing_profiles"] == {}
         assert "WARN" in capsys.readouterr().err
 
-    def test_routing_profiles_non_dict_warns(self, capsys):
+    def test_routing_profiles_non_dict_warns(self):
+        # #2904: a routing_profiles_unusable finding (never blocking, as
+        # da-guard's warn) and a routing-tree record, not a stderr print.
         result = _empty_result()
         data = {"routing_profiles": "bad"}
         _parse_platform_config(data, "_routing_profiles.yaml", result)
         assert result["routing_profiles"] == {}
-        assert "WARN" in capsys.readouterr().err
+        [line] = result["routing_profiles_errors"]
+        assert line.lstrip().startswith("WARN")
+        assert (line.kind, line.blocks, line.file, line.field) == (
+            "routing_profiles_unusable", "never", "_routing_profiles.yaml", "routing_profiles")
+        assert [p[:3] for p in result["routing_tree_problems"]] == [
+            ("routing_profiles_unusable", "_routing_profiles.yaml", "routing_profiles")]
 
     def test_routing_profiles_yml_extension(self):
         result = _empty_result()

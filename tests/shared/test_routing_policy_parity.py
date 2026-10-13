@@ -43,9 +43,24 @@ What this half measures, per tree written to a tmp dir:
   strict "domain policy file could not be used" line (#2659: the whole file
   dropped — field `domain_policies` when that block is not a mapping, `""`
   when the file does not load, as da-guard names them) and
-  (#2326) its routing-tree findings, `TenantTree.routing_tree_problems`; the
-  Go-only `routing_in_unread_location` rows (#2291) are left out here, their
-  `targets` column pins that the generator renders nothing from those bytes.
+  (#2326) its routing-tree findings, `TenantTree.routing_tree_problems` —
+  `routing_in_unread_location` (#2291) and `routing_profiles_unusable`
+  included since #2904, when the generator took both over from da-guard;
+* `route_findings` (#2904, per tree) — the generator's own findings document
+  (`--validate --strict --findings-json`) rows [tenant, kind, field] for the
+  `route_finding_kinds` (receiver contract, override matcher, dead
+  overrides), against da-guard's findings of the same kinds; a tree's
+  `route_findings_python_differs` replaces the Go rows where they disagree,
+  with the reason;
+* `go_severity` (#2904) — every generator finding of a kind da-guard reports
+  as an error is in force under `--validate --strict` (never looser than
+  da-guard).
+
+`test_no_routing_check_is_go_only` (#2904, ADR-036 §9) is the gate for
+deleting da-guard's routing checks: the routing / policy finding kinds are
+computed from da-guard's source (the `FindingKind` constants
+internal/guard/routing.go emits), and every one must be pinned against the
+generator by this half.
 
 A cell's `python_differs` replaces the Go value where the YAML readers
 disagree (see the matrix `_comment`): `targets`, `policy`, `rejected_routes`,
@@ -87,7 +102,8 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 
 # Exact key sets: a misspelt key read as absent would turn a row into one
 # that tests nothing while staying green.
-TOP_KEYS = {"_comment", "blocking_kinds", "tenant_ids", "tenant_api_unmeasured", "trees"}
+TOP_KEYS = {"_comment", "blocking_kinds", "route_finding_kinds", "go_severity", "tenant_ids",
+            "tenant_api_unmeasured", "trees"}
 # Why a tenant_api cell may be null (tenant-api's verdict is not measured).
 UNMEASURED_KINDS = {"nested_tree", "no_put_body", "outside_table"}
 # Every `outside_table` cell, with the refusal tenant-api actually answers
@@ -97,7 +113,8 @@ OUTSIDE_TABLE = {
     ("tenant-merge-tag-key-2700", "t1"): '400 BAD_REQUEST',
     ("hier-e-duplicate-tenant-id", "t-x"): "409 TENANT_DECLARED_ELSEWHERE",
 }
-TREE_KEYS = {"name", "files", "platform", "expect", "enforced_group_by_invalid"}
+TREE_KEYS = {"name", "files", "platform", "expect", "enforced_group_by_invalid", "route_findings",
+             "route_findings_python_differs"}
 PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
                   "domain_policy_unusable",
                   # #2326: the hierarchical routing plane's tree findings.
@@ -108,12 +125,11 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
                   "routing_defaults_not_mapping",
                   # #2960: a key in a profile / `_routing_defaults` /
                   # `_routing_enforced` the generator does not read.
-                  "routing_key_ignored"}
-# #2291: routing where the generator never reads it. The Go side reports it;
-# the generator says nothing (it does not read those bytes), so this half
-# leaves the kind out of its platform comparison — the tree's `targets`
-# column is what pins "not rendered" here.
-GO_ONLY_PLATFORM_KINDS = {"routing_in_unread_location"}
+                  "routing_key_ignored",
+                  # #2904: a `routing_profiles:` block that is not a mapping.
+                  "routing_profiles_unusable"}
+ROUTE_FINDING_KINDS = set(MATRIX["route_finding_kinds"])
+GO_SEVERITY = MATRIX["go_severity"]
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "values_not_string",
                "group_by_invalid", "unknown_profile", "tenant_api",
                "python_differs", "escalation", "refused"}
@@ -187,14 +203,6 @@ _ESC_LEAK = re.compile(
     r"|: severity=critical alerts that no sub-route catches go to the main receiver)")
 
 
-def _python_reports(row: list[str]) -> bool:
-    """A Go-only kind row the generator reports too (#2326 review F3): a top-level
-    `_routing_defaults` in a `_` non-carrier file below the root. No other row
-    of that kind has this bare field (the others name a key path inside a
-    defaults block or a profile)."""
-    return row[0] == "routing_in_unread_location" and row[2] == "_routing_defaults"
-
-
 def test_blocking_kinds_are_the_generators() -> None:
     """#2326 review F5: the table's blocking kinds ARE the generator's; Go
     asserts `routingpolicy.IsBlocking` against the same list."""
@@ -248,7 +256,11 @@ def test_matrix_is_not_vacuous() -> None:
                      "iii-override-unknown-receiver-type", "iv-override-forbidden-type",
                      "adr007-five-tenants", "yaml11-bool-match-value",
                      "require-critical-escalation", "routing-values-yaml11",
-                     "group-by-elements", "routing-unset-reenable"):
+                     "group-by-elements", "routing-unset-reenable",
+                     # #2904: the checks moved from da-guard.
+                     "override-and-receiver-findings-2904",
+                     "routing-profiles-not-a-mapping-2904",
+                     "routing-in-unread-location-nested-2904"):
         assert required in names, required
 
 
@@ -364,6 +376,14 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
             assert len(row) == 3 and row[0] in PLATFORM_KINDS, (tree["name"], row)
         for row in tree["enforced_group_by_invalid"]:
             assert len(row) == 3 and row[2] in GROUP_BY_KINDS, (tree["name"], row)
+        differs = tree["route_findings_python_differs"]
+        assert differs is None or (set(differs) == {"reason", "rows"} and str(differs["reason"]).strip()
+                                   and differs["rows"] != tree["route_findings"]), tree["name"]
+        for rows in [tree["route_findings"]] + ([differs["rows"]] if differs else []):
+            assert rows == sorted(rows), tree["name"]
+            for row in rows:
+                assert (len(row) == 3 and all(isinstance(c, str) for c in row)
+                        and row[1] in ROUTE_FINDING_KINDS), (tree["name"], row)
         for tenant, want in tree["expect"].items():
             where = (tree["name"], tenant)
             assert set(want) == EXPECT_KEYS, (where, set(want) ^ EXPECT_KEYS)
@@ -574,6 +594,139 @@ def _generator_put(want: dict, blocking: set) -> dict | None:
     return api
 
 
+def route_rows(doc: dict) -> list[list[str]]:
+    """The `route_findings` rows of a findings document: [tenant, kind,
+    field] per finding of a `route_finding_kinds` kind ("" for an absent
+    tenant / field), sorted."""
+    return sorted([f["tenant"] or "", f["kind"], f["field"] or ""]
+                  for f in doc["findings"] if f["kind"] in ROUTE_FINDING_KINDS)
+
+
+def severity_floor_errors(doc: dict) -> list[str]:
+    """The findings of *doc* whose kind da-guard reports as an error
+    (`go_severity`) but which are not in force in the run (the generator
+    would let pass what da-guard blocks). A `warn` kind may be anything:
+    the row comparison already pins that it is reported."""
+    in_force = gar.in_force_blocks(validate=doc["validate"], strict=doc["strict"])
+    return [f"{f['kind']} {f['tenant']} {f['file']} {f['field']}: blocks={f['blocks']}"
+            for f in doc["findings"]
+            if GO_SEVERITY.get(f["kind"]) == "error" and f["blocks"] not in in_force]
+
+
+# ── #2904 (ADR-036 §9): which da-guard routing checks only Go has ─────────
+# The routing / policy finding kinds are da-guard's `FindingKind` constants
+# (internal/guard, non-test sources) that internal/guard/routing.go — the
+# file that builds every routing and domain-policy finding — refers to in
+# code. The other kinds (thresholds, defaults, cardinality) are built in
+# their own files and stay with da-guard. Nothing here is a hand list of
+# kinds: the set is read from the Go source on every run.
+GUARD_DIR = REPO_ROOT / "components" / "threshold-exporter" / "app" / "internal" / "guard"
+ROUTING_FINDINGS_FILE = "routing.go"
+_GO_KIND_CONST = re.compile(r'\b(Finding[A-Za-z0-9]+)\s+FindingKind\s*=\s*"([a-z0-9_]+)"')
+# Go string / rune literals and comments, blanked before identifiers are read
+# (a URL in a message is no comment; a kind named in a comment is no use).
+_GO_NON_CODE = re.compile(r'"(?:\\.|[^"\\\n])*"|`[^`]*`|\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*.*?\*/',
+                          re.DOTALL)
+
+
+def _go_code(text: str) -> str:
+    return _GO_NON_CODE.sub(" ", text)
+
+
+def go_finding_kinds(guard_dir: Path = GUARD_DIR) -> tuple[dict[str, str], set[str]]:
+    """(every da-guard kind as {const name: kind}, the routing kinds)."""
+    sources = {p.name: p.read_text(encoding="utf-8") for p in sorted(guard_dir.glob("*.go"))
+               if not p.name.endswith("_test.go")}
+    consts = {name: kind for text in sources.values() for name, kind in _GO_KIND_CONST.findall(text)}
+    routing_code = _go_code(sources[ROUTING_FINDINGS_FILE])
+    routing = {kind for name, kind in consts.items() if re.search(rf"\b{name}\b", routing_code)}
+    return consts, routing
+
+
+# The da-guard kinds this half pins through a dedicated column (the column ->
+# the kind its Go half reads). Not a list of routing kinds: what decides
+# whether a kind is routing is go_finding_kinds.
+COLUMN_KINDS = {
+    "rejected_routes": {"invalid_route_entry"},
+    "values_not_string": {"routing_value_not_string"},
+    "group_by_invalid / enforced_group_by_invalid": {"routing_group_by_invalid"},
+    "policy": {"domain_policy_violation"},
+    "escalation": {"critical_escalation_missing", "critical_escalation_leak"},
+    "unknown_profile": {"unknown_routing_profile"},
+    "refused": REFUSED_KINDS,
+}
+
+
+def pinned_kinds(matrix: dict) -> set[str]:
+    """Every da-guard kind this half compares with the generator: the
+    dedicated columns, every platform kind, and `route_finding_kinds`."""
+    out = set().union(*COLUMN_KINDS.values()) | PLATFORM_KINDS | set(matrix["route_finding_kinds"])
+    return out
+
+
+def go_only_routing_kinds(matrix: dict, guard_dir: Path = GUARD_DIR) -> list[str]:
+    _consts, routing = go_finding_kinds(guard_dir)
+    return sorted(routing - pinned_kinds(matrix))
+
+
+def test_routing_kinds_are_read_from_the_go_source() -> None:
+    """Not vacuous, and the split is the one da-guard's files make: both
+    groups non-empty, and every kind this half pins exists in da-guard."""
+    consts, routing = go_finding_kinds()
+    assert routing and set(consts.values()) - routing, (sorted(routing), sorted(consts.values()))
+    assert "domain_policy_violation" in routing and "cardinality_exceeded" not in routing
+    unknown = pinned_kinds(MATRIX) - set(consts.values())
+    assert not unknown, f"pinned kinds da-guard does not have: {sorted(unknown)}"
+
+
+def test_no_routing_check_is_go_only() -> None:
+    """ADR-036 §9: before a da-guard routing check is deleted (#2903,
+    #2905), the generator has it and this table pins the two against each
+    other. Red while any routing kind da-guard emits is pinned by no column."""
+    left = go_only_routing_kinds(MATRIX)
+    assert not left, (
+        f"da-guard routing / policy kinds the generator is not pinned against: {left} — implement "
+        "each in the generator and add it to tests/shared/routing_policy_parity_matrix.json "
+        "(a column, `platform` rows or `route_finding_kinds`) before deleting the Go check")
+
+
+def test_go_only_gate_is_red(tmp_path: Path) -> None:
+    """The gate reads the source, so a new routing kind turns it red: a copy
+    of internal/guard with one more kind emitted from routing.go."""
+    for p in GUARD_DIR.glob("*.go"):
+        (tmp_path / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "zz_new.go").write_text(
+        'package guard\n\nconst FindingZzNewRouting FindingKind = "zz_new_routing"\n', encoding="utf-8")
+    routing = tmp_path / ROUTING_FINDINGS_FILE
+    routing.write_text(routing.read_text(encoding="utf-8")
+                       + "\nvar _ = FindingZzNewRouting\n", encoding="utf-8")
+    assert go_only_routing_kinds(MATRIX, tmp_path) == ["zz_new_routing"]
+    # Named only in a comment or a string of routing.go: not emitted there.
+    routing.write_text(routing.read_text(encoding="utf-8").replace(
+        "var _ = FindingZzNewRouting", '// FindingZzNewRouting\nvar _ = "FindingZzNewRouting"'),
+        encoding="utf-8")
+    assert go_only_routing_kinds(MATRIX, tmp_path) == []
+    # A kind dropped from route_finding_kinds is Go-only again.
+    m = json.loads(json.dumps(MATRIX))
+    m["route_finding_kinds"].remove("duplicate_override_matcher")
+    assert go_only_routing_kinds(m) == ["duplicate_override_matcher"]
+
+
+def test_route_finding_kinds_are_exercised() -> None:
+    """Every kind the gate counts as pinned through `route_findings` /
+    `go_severity` occurs in some tree, on both sides — else the row
+    comparison would pin "never reported" only."""
+    assert ROUTE_FINDING_KINDS <= set(GO_SEVERITY), ROUTE_FINDING_KINDS - set(GO_SEVERITY)
+    assert set(GO_SEVERITY.values()) <= {"error", "warn"}
+    go_seen = {r[1] for t in MATRIX["trees"] for r in t["route_findings"]}
+    go_seen |= {r[0] for t in MATRIX["trees"] for r in t["platform"]}
+    py_seen = {r[1] for t in MATRIX["trees"]
+               for r in (t["route_findings_python_differs"] or {"rows": t["route_findings"]})["rows"]}
+    py_seen |= {r[0] for t in MATRIX["trees"] for r in t["platform"]}
+    assert set(GO_SEVERITY) <= go_seen, set(GO_SEVERITY) - go_seen
+    assert set(GO_SEVERITY) <= py_seen, set(GO_SEVERITY) - py_seen
+
+
 @pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])
 def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     _build(tree, tmp_path)
@@ -631,9 +784,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         # #2326: the tree findings travel as data on the tree, not as text.
         + [[kind, fname, fld] for kind, fname, fld, _msg in got.routing_tree_problems])
     # domain_policy_unusable (#2325) is compared on kind and field below.
-    want_platform = sorted(r for r in tree["platform"]
-                           if (r[0] not in GO_ONLY_PLATFORM_KINDS or _python_reports(r))
-                           and r[0] != "domain_policy_unusable")
+    want_platform = sorted(r for r in tree["platform"] if r[0] != "domain_policy_unusable")
     assert got_platform == want_platform, (tree["name"], got_platform)
     got_unusable = sorted(
         [f"domain_policies.{m['domain']}.constraints.require_critical_escalation"
@@ -642,6 +793,17 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
            for m in map(_POLICY_FILE_DROPPED.search, got.schema_warnings) if m])
     want_unusable = sorted(r[2] for r in tree["platform"] if r[0] == "domain_policy_unusable")
     assert got_unusable == want_unusable, (tree["name"], got_unusable)
+
+    # #2904: the receiver / override findings, from the generator's own
+    # findings document, against da-guard's rows (or the tree's recorded
+    # difference); and no finding of a kind da-guard reports as an error is
+    # looser in the generator than "in force under --validate --strict".
+    got_route = route_rows(doc)
+    differs = tree["route_findings_python_differs"]
+    assert got_route == (differs["rows"] if differs else tree["route_findings"]), (
+        tree["name"], got_route)
+    loose = severity_floor_errors(doc)
+    assert not loose, (tree["name"], loose)
 
     # #2503: the enforced route(s)' group_by, in the generator's order (tenants
     # in name order, element index order). The file column is Go's alone.
