@@ -108,7 +108,7 @@ default:                  → 直接 commit
 
 ⚠️ **終態必須是報錯**——「先出一版只警告」等於仍舊落到合法值上再多印一行 log，而本文的論證正是那行 log 不可靠。過渡要怎麼排（要不要先警告一版、警告多久）是那張票的 rollout 決定，但不改變終態。
 
-**已於本規則生效後修正**（`parseWriteMode` + `wirePRBackend`）。三件值得記下的，因為它們是「套用本規則」在真實程式碼上的具體形狀：
+**已於本規則生效後修正**（`parseWriteMode` + `wirePRBackend`）。四件值得記下的，因為它們是「套用本規則」在真實程式碼上的具體形狀：
 
 - **`default:` 分支不再是任何合法值的家。** `direct` 升為具名 `case`，`default:` 改成 `log.Fatalf("BUG: ...")`。這一步不是為了擋使用者輸入（那由 `parseWriteMode` 擋掉了），而是擋**下一次的自己**：往合法值集合加第五個模式卻忘了配線，會 fail-loud，而不是無聲落回 direct commit-on-write——那正是本 ADR 講的同一個形狀，只是往上挪了一層。
 - **設成空字串不等於沒設。** 環境變數 `TA_WRITE_MODE` 沒設時沿用預設的 `direct`；設成空字串或只有空白（常見於 Helm、Kustomize、Compose 模板沒渲染到值）則拒絕啟動，不會當成沒設而落到 `direct`。判準是：**空值只能落到偏保守的預設值；預設值是比較開放的那一側時，空值必須拒絕。** 案例二的布林旗標預設值都是 `false`（不放寬），所以那裡把空白當成沒設；`direct` 是不經審核的那一側，所以這裡不行。同一條判準也套用在 tenant-api 的 RBAC 路徑：它不是列舉值、不在本規則範圍內，但空路徑會進入「所有已認證身分可讀」的 open-read 模式，失敗形狀相同，所以空值一樣拒絕；要 open-read 就完全不設。追蹤於 [#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)。
