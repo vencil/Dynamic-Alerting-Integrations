@@ -11,6 +11,7 @@ purpose: |
 
   Public API:
     CICD_DEFAULT_DA_TOOLS_IMAGE                default da-tools image ref
+    CICD_THRESHOLD_EXPORTER_CHART_VERSION      helm apply step's chart --version
     cicdDaToolsImage(config)                   image ref this config resolves to
     cicdImageIsMutable(image)                  can this ref be repointed?
     cicdSplitImageRef(image)                   {repo, tag, digest} of a ref
@@ -38,6 +39,16 @@ purpose: |
 // `bump_docs.py --tools` rewrites at release together with VERSION (its
 // `tools/portal/src/**/*.js` rule) — that bump is what keeps it equal to the CLI.
 const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:v2.9.0';
+
+// ⛔ The threshold-exporter chart version the helm apply step pins (issue 2932).
+// Twin of `THRESHOLD_EXPORTER_CHART_VERSION` in scripts/tools/ops/init_project.py,
+// held equal to it by the byte-for-byte drift gate in
+// tests/ops/test_generated_ci_artifacts.py. It is the chart's own release line
+// (`exporter/v*`, SSOT `version:` in helm/threshold-exporter/Chart.yaml), not
+// the da-tools tag above; `bump_docs.py --exporter` rewrites this line at
+// release. Without `--version` the helm step installs whatever chart is newest
+// in the registry on the day it runs.
+const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0';
 
 // ⛔ There is deliberately no argocd CLI image pin here any more, and none in
 // the CLI leg either: `--deploy argocd` is retired (#1351). It scaffolded no
@@ -328,7 +339,7 @@ const _CICD_APPLY_BLOCKS = {
     steps: `      - name: Helm upgrade threshold-exporter
         run: |
           helm upgrade --install threshold-exporter \\
-            oci://ghcr.io/vencil/charts/threshold-exporter \\
+            oci://ghcr.io/vencil/charts/threshold-exporter --version ${CICD_THRESHOLD_EXPORTER_CHART_VERSION} \\
             -f "environments/prod/values.yaml" \\
             -n \${{ env.MONITORING_NS }} \\
             --wait --timeout 5m
@@ -843,4 +854,4 @@ ${APPLY[config.deploy].header}  # \`needs: [validate]\` only — \`generate\` is
 ${APPLY[config.deploy].steps}`;
 }
 
-export { CICD_DEFAULT_DA_TOOLS_IMAGE, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };
+export { CICD_DEFAULT_DA_TOOLS_IMAGE, CICD_THRESHOLD_EXPORTER_CHART_VERSION, cicdDaToolsImage, cicdImageIsMutable, cicdSplitImageRef, cicdGenerateInitCommand, cicdGenerateDockerCommand, cicdGeneratedPaths, cicdGenerateFileTree, cicdGenerateGitHubActionsPreview };

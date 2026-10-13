@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import {
   CICD_DEFAULT_DA_TOOLS_IMAGE,
+  CICD_THRESHOLD_EXPORTER_CHART_VERSION,
   cicdDaToolsImage,
   cicdImageIsMutable,
   cicdSplitImageRef,
@@ -687,5 +688,24 @@ describe('cicdSplitImageRef', () => {
       tag: CICD_DEFAULT_DA_TOOLS_IMAGE.split(':').pop(),
       digest: false,
     });
+  });
+});
+
+describe('helm apply step pins the chart version (issue 2932)', () => {
+  // Without `--version`, `helm upgrade --install oci://…` installs whatever
+  // chart the registry holds as newest when the job runs. Equality with the
+  // CLI's `THRESHOLD_EXPORTER_CHART_VERSION` (and so with Chart.yaml) is the
+  // Python drift gate's job; this pins the shape on the wizard side.
+  it('is an exact chart version, never a range or a floating word', () => {
+    expect(CICD_THRESHOLD_EXPORTER_CHART_VERSION).toMatch(/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/);
+  });
+
+  it('reaches the helm command in the preview, and only the helm preview', () => {
+    const helm = cicdGenerateGitHubActionsPreview(baseConfig({ deploy: 'helm' }));
+    expect(helm).toContain(
+      `oci://ghcr.io/vencil/charts/threshold-exporter --version ${CICD_THRESHOLD_EXPORTER_CHART_VERSION} \\`,
+    );
+    expect(cicdGenerateGitHubActionsPreview(baseConfig({ deploy: 'kustomize' })))
+      .not.toContain('oci://ghcr.io/vencil/charts/');
   });
 });

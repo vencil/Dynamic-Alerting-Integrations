@@ -4525,6 +4525,121 @@ class TestCustomerDeliveredImagePins:
         pinned = next(iter(ip._GITLAB_APPLY_IMAGES.values()))[1]
         assert not self._FLOATING_RE.findall(f'      image: {pinned}')
 
+    # ── Helm charts are refs too (issue 2932) ─────────────────────────────
+    # An image tag is not the only thing that floats. `helm upgrade --install
+    # <chart>` with no `--version` installs whatever chart the registry holds
+    # as newest on the day the job runs — the chart-shaped `:latest`, and the
+    # image regex above cannot see it because nothing in the line says
+    # `:latest`. These checks are keyed on the helm COMMAND, not on the one
+    # chart init ships today, so a second chart or a second install line added
+    # to any generator is held to the same rule without editing this test.
+    _HELM_INSTALL_RE = re.compile(r'\bhelm\s+(?:upgrade|install)\b')
+    # An exact release: `^2.9.0`, `~2.9`, `>=2.0.0`, `2.x` and `latest` are all
+    # constraints helm resolves at run time, i.e. floating spelled differently.
+    _HELM_PINNED_RE = re.compile(
+        r'(?:^|\s)--version[ =]v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?=\s|$)')
+
+    @classmethod
+    def _unpinned_helm_installs(cls, text):
+        """(helm commands found, those without an exact `--version`).
+
+        Shell continuations (`\\` at end of line) are joined first, because the
+        generated command puts the chart and its flags on separate lines. Lines
+        that are comments are skipped: the generated YAML explains itself in
+        comments that mention `helm upgrade` without being one.
+        """
+        logical, buf = [], ''
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not buf and line.startswith('#'):
+                continue
+            if line.endswith('\\'):
+                buf += line[:-1] + ' '
+                continue
+            logical.append(buf + line)
+            buf = ''
+        if buf:
+            logical.append(buf)
+        found = [ln for ln in logical if cls._HELM_INSTALL_RE.search(ln)]
+        return found, [ln for ln in found if not cls._HELM_PINNED_RE.search(ln)]
+
+    def test_no_generated_helm_install_floats(self):
+        """Every `helm install` / `helm upgrade` init writes names an exact chart version.
+
+        Same discipline as `test_no_generated_ref_floats`: obtained by RUNNING
+        `run_init` and walking every file it wrote, not by listing generators.
+        """
+        commands, offenders = [], []
+        for deploy in ('kustomize', 'helm'):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ip.run_init({
+                    'ci': 'both',
+                    'deploy': deploy,
+                    'rule_packs': ['mariadb'],
+                    'tenants': ['db-a'],
+                    'namespace': 'monitoring',
+                    'da_tools_image': ip.DA_TOOLS_IMAGE,
+                }, tmpdir)
+                for root, _dirs, files in os.walk(tmpdir):
+                    for fn in files:
+                        path = os.path.join(root, fn)
+                        with open(path, encoding='utf-8', errors='replace') as fh:
+                            found, bad = self._unpinned_helm_installs(fh.read())
+                        rel = os.path.relpath(path, tmpdir)
+                        commands += [f'{deploy}:{rel}' for _ in found]
+                        offenders += [f'{deploy}:{rel}: {ln}' for ln in bad]
+        # Anti-vacuity: `--deploy helm` writes one helm apply into the GitHub
+        # workflow and one into the GitLab pipeline. Fewer means the detector
+        # (or the generator) stopped seeing them, and "no offenders" would then
+        # mean nothing was looked at.
+        assert len(commands) >= 2, f'anti-vacuity: helm commands found: {commands}'
+        assert not offenders, (
+            'helm installs emitted to customers without an exact chart '
+            '--version (resolves to the newest chart at run time):\n  '
+            + '\n  '.join(offenders))
+
+    def test_the_helm_pin_detector_actually_detects(self):
+        """Positive control: the exact command init shipped before issue 2932."""
+        before = ('helm upgrade --install threshold-exporter \\\n'
+                  '  oci://ghcr.io/vencil/charts/threshold-exporter \\\n'
+                  '  -f "environments/prod/values.yaml" \\\n'
+                  '  -n $MONITORING_NS \\\n'
+                  '  --wait --timeout 5m\n')
+        assert self._unpinned_helm_installs(before)[1], 'missed the pre-2932 command'
+        for spec in ('latest', '^2.9.0', '~2.9', '>=2.0.0', '2.x', '2.9'):
+            line = f'helm install x oci://r/c --version {spec}\n'
+            assert self._unpinned_helm_installs(line)[1], f'accepted --version {spec}'
+        for spec in ('--version 2.9.0', '--version=2.9.0', '--version 2.10.0-rc.1'):
+            line = f'helm upgrade --install x oci://r/c {spec} -n ns\n'
+            found, bad = self._unpinned_helm_installs(line)
+            assert found and not bad, f'rejected {spec}'
+        # A comment that talks about the command is not the command.
+        assert self._unpinned_helm_installs(
+            '# interrupts `kubectl apply` / `helm upgrade` partway\n') == ([], [])
+
+    def test_the_chart_pin_is_the_charts_own_version(self):
+        """The pinned version is the threshold-exporter chart's, read from its SSOT.
+
+        ⛔ Chart.yaml `version:` (the `exporter/v*` line), not da-tools VERSION
+        (`tools/v*`): the two are independent release lines. The constant is a
+        literal because the da-tools image carries no `helm/`; this is what
+        keeps it from silently staying behind when the chart moves.
+        """
+        with open(os.path.join(REPO_ROOT, 'helm', 'threshold-exporter',
+                               'Chart.yaml'), encoding='utf-8') as fh:
+            chart = yaml.safe_load(fh)
+        assert chart['name'] == 'threshold-exporter', chart.get('name')
+        assert str(chart['version']) == ip.THRESHOLD_EXPORTER_CHART_VERSION, (
+            f'init pins chart {ip.THRESHOLD_EXPORTER_CHART_VERSION!r} but '
+            f'helm/threshold-exporter/Chart.yaml is {chart["version"]!r}; '
+            f'`bump_docs.py --exporter` moves both')
+        assert ip.THRESHOLD_EXPORTER_CHART.endswith('/' + chart['name'])
+        gl = ip._gen_gitlab_ci('monitoring', 'ghcr.io/vencil/da-tools:v9.9.9', 'helm')
+        gh = ip._gen_github_actions('monitoring', 'ghcr.io/vencil/da-tools:v9.9.9', 'helm')
+        want = (f'{ip.THRESHOLD_EXPORTER_CHART} --version '
+                f'{ip.THRESHOLD_EXPORTER_CHART_VERSION}')
+        assert want in gl and want in gh, 'a generator dropped the chart pin'
+
 
 class TestSubdirectoryContentsAreNotOnlyAPlacementProblem:
     """⛔ 第七輪盲審 lens W：照著我們自己的指示做，pipeline 永遠不會跑。
