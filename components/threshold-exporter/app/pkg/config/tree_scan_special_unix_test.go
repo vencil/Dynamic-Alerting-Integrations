@@ -219,10 +219,52 @@ func TestReadConfFile(t *testing.T) {
 	if got, err := ReadConfFile(regular); err != nil || !bytes.Equal(got, body) {
 		t.Errorf("regular file: %d bytes, err %v; want %d bytes", len(got), err, len(body))
 	}
-	if _, err := ReadConfFile(dir); err == nil || errors.Is(err, ErrSpecialFile) {
-		t.Errorf("directory: err = %v, want the read error os.ReadFile gives", err)
+	if _, err := ReadConfFile(dir); !errors.Is(err, ErrDirectory) || errors.Is(err, ErrSpecialFile) {
+		t.Errorf("directory: err = %v, want ErrDirectory", err)
 	}
 	if _, err := ReadConfFile(filepath.Join(dir, "missing.yaml")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing: err = %v, want fs.ErrNotExist", err)
+	}
+}
+
+// OpenConfFile is ReadConfFile without the read, for a caller that wants the
+// fd (tenant-api's existence-and-kind checks): the same judgement, decided on
+// the opened fd, the same errors. Only a regular file comes back open.
+func TestOpenConfFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "t1.yaml")
+	if err := os.WriteFile(regular, []byte("a: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "fifo.yaml")
+	mkfifoOrSkip(t, fifo)
+	f, fi, err := OpenConfFile(regular)
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != 5 {
+		t.Fatalf("regular: fi %v, err %v", fi, err)
+	}
+	_ = f.Close()
+	type res struct {
+		f   *os.File
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		f, _, err := OpenConfFile(fifo)
+		done <- res{f, err}
+	}()
+	select {
+	case r := <-done:
+		if r.f != nil || !errors.Is(r.err, ErrSpecialFile) {
+			t.Errorf("fifo: f %v, err %v; want nil and ErrSpecialFile", r.f, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("fifo: OpenConfFile blocked")
+	}
+	if f, _, err := OpenConfFile(dir); f != nil || !errors.Is(err, ErrDirectory) {
+		t.Errorf("directory: f %v, err %v; want nil and ErrDirectory", f, err)
+	}
+	if _, _, err := OpenConfFile(filepath.Join(dir, "missing.yaml")); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("missing: err = %v, want fs.ErrNotExist", err)
 	}
 }

@@ -304,13 +304,15 @@ func (w *Writer) mirrorServingConf(st *stagingTree) error {
 			if err != nil {
 				return err
 			}
-			raw, err := os.ReadFile(p)
+			// cfg.ReadConfFile, not os.ReadFile: an entry swapped for a FIFO
+			// since the listing fails the copy instead of blocking it (#2939).
+			raw, err := cfg.ReadConfFile(p)
 			if err != nil {
 				return err
 			}
 			_ = os.Remove(dst)
 			return os.WriteFile(dst, raw, fi.Mode().Perm())
-		case cfg.IsScannedPath(filepath.ToSlash(rel)):
+		case cfg.IsSpecialFile(t) && cfg.IsScannedPath(filepath.ToSlash(rel)):
 			return fmt.Errorf("%w: conf.d holds a special file %s", ErrTenantTreeScan, filepath.ToSlash(rel))
 		}
 		return nil
