@@ -2487,8 +2487,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | Code | Description |
 |------|-------------|
 | `0` | No configuration changes |
-| `1` | Changes detected; or a changed `_`-prefixed file; or the base side's configuration is broken and does not render (that view is Not Compared, so the PR that fixes it is not blocked) |
-| `2` | No result: a PR-side file cannot be read (stderr names the file and the exporter's or generator's own reason), the PR side has no config file, da-guard is missing or a tool failed, or bad arguments (for example `--at` that is not RFC3339, a file given as a directory). Except for bad arguments, the report is still printed and says which view was not computed; a changed `_`-prefixed file that cannot be read, or an unexpected error in the tool, prints one `ERROR:` line on stderr and no report |
+| `1` | Changes detected; or a platform setting to review (see Platform settings above: a changed key whose renders show no difference, one neither render reads, one not read where it is written, or a `_` file that cannot be read; a comment- or formatting-only edit, and `_policies` / `domain_policies` where their check reads them, do not count); or the base side's configuration is broken and does not render (that view is Not Compared, so the PR that fixes it is not blocked) |
+| `2` | No result: a PR-side file cannot be read (stderr names the file and the exporter's or generator's own reason), the PR side has no config file, da-guard is missing or a tool failed, or bad arguments (for example `--at` that is not RFC3339, a file given as a directory). Except for bad arguments, the report is still printed and says which view was not computed (`da-guard parse-tree` failing is the Platform settings view not computed); an unexpected error in the tool prints one `ERROR:` line on stderr and no report |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls
 > this command bare will fail whenever the command is working correctly.
