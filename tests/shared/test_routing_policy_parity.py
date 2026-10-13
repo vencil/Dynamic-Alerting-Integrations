@@ -92,6 +92,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
+from _grar_merge import FINDING_KINDS  # noqa: E402
 from _grar_parse import BLOCKING_TREE_KINDS, _parse_config_files, load_tenant_tree  # noqa: E402
 from _grar_validate import list_tenant_subroutes, route_entry_matchers  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402
@@ -260,7 +261,10 @@ def test_matrix_is_not_vacuous() -> None:
                      # #2904: the checks moved from da-guard.
                      "override-and-receiver-findings-2904",
                      "routing-profiles-not-a-mapping-2904",
-                     "routing-in-unread-location-nested-2904"):
+                     "routing-in-unread-location-nested-2904",
+                     "unread-location-wrapped-non-string-key-2904",
+                     "unread-location-non-string-key-elsewhere-2904",
+                     "override-not-a-mapping-2904"):
         assert required in names, required
 
 
@@ -379,11 +383,15 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
         differs = tree["route_findings_python_differs"]
         assert differs is None or (set(differs) == {"reason", "rows"} and str(differs["reason"]).strip()
                                    and differs["rows"] != tree["route_findings"]), tree["name"]
-        for rows in [tree["route_findings"]] + ([differs["rows"]] if differs else []):
+        # A differs row may name the generator's own kind for what da-guard
+        # calls one of route_finding_kinds (#2904 N4): any kind of its
+        # catalog.
+        for rows, kinds in [(tree["route_findings"], ROUTE_FINDING_KINDS)] + (
+                [(differs["rows"], set(FINDING_KINDS))] if differs else []):
             assert rows == sorted(rows), tree["name"]
             for row in rows:
                 assert (len(row) == 3 and all(isinstance(c, str) for c in row)
-                        and row[1] in ROUTE_FINDING_KINDS), (tree["name"], row)
+                        and row[1] in kinds), (tree["name"], row)
         for tenant, want in tree["expect"].items():
             where = (tree["name"], tenant)
             assert set(want) == EXPECT_KEYS, (where, set(want) ^ EXPECT_KEYS)
@@ -594,23 +602,36 @@ def _generator_put(want: dict, blocking: set) -> dict | None:
     return api
 
 
-def route_rows(doc: dict) -> list[list[str]]:
+def _differs_kinds(tree: dict) -> set[str]:
+    """The generator-only kinds a tree's route_findings_python_differs names
+    (#2904 N4: the generator's name for what da-guard reports under one of
+    route_finding_kinds, e.g. invalid_override_entry for an override that
+    is not a mapping)."""
+    differs = tree["route_findings_python_differs"]
+    return {r[1] for r in differs["rows"]} - ROUTE_FINDING_KINDS if differs else set()
+
+
+def route_rows(doc: dict, extra_kinds: set[str] = frozenset()) -> list[list[str]]:
     """The `route_findings` rows of a findings document: [tenant, kind,
-    field] per finding of a `route_finding_kinds` kind ("" for an absent
-    tenant / field), sorted."""
+    field] per finding of a `route_finding_kinds` kind, or of *extra_kinds*
+    ("" for an absent tenant / field), sorted."""
+    kinds = ROUTE_FINDING_KINDS | extra_kinds
     return sorted([f["tenant"] or "", f["kind"], f["field"] or ""]
-                  for f in doc["findings"] if f["kind"] in ROUTE_FINDING_KINDS)
+                  for f in doc["findings"] if f["kind"] in kinds)
 
 
-def severity_floor_errors(doc: dict) -> list[str]:
+def severity_floor_errors(doc: dict, stand_ins: set[str] = frozenset()) -> list[str]:
     """The findings of *doc* whose kind da-guard reports as an error
-    (`go_severity`) but which are not in force in the run (the generator
-    would let pass what da-guard blocks). A `warn` kind may be anything:
-    the row comparison already pins that it is reported."""
+    (`go_severity`) — or that stand in for one (*stand_ins*: the generator
+    kinds a tree's differs rows name in place of an `error` row) — but which
+    are not in force in the run (the generator would let pass what da-guard
+    blocks). A `warn` kind may be anything: the row comparison already pins
+    that it is reported."""
     in_force = gar.in_force_blocks(validate=doc["validate"], strict=doc["strict"])
     return [f"{f['kind']} {f['tenant']} {f['file']} {f['field']}: blocks={f['blocks']}"
             for f in doc["findings"]
-            if GO_SEVERITY.get(f["kind"]) == "error" and f["blocks"] not in in_force]
+            if (GO_SEVERITY.get(f["kind"]) == "error" or f["kind"] in stand_ins)
+            and f["blocks"] not in in_force]
 
 
 # ── #2904 (ADR-036 §9): which da-guard routing checks only Go has ─────────
@@ -667,6 +688,68 @@ def pinned_kinds(matrix: dict) -> set[str]:
 def go_only_routing_kinds(matrix: dict, guard_dir: Path = GUARD_DIR) -> list[str]:
     _consts, routing = go_finding_kinds(guard_dir)
     return sorted(routing - pinned_kinds(matrix))
+
+
+# The other side of the split, listed by hand ON PURPOSE: the da-guard kinds
+# that are no routing / policy check and stay with da-guard (ADR-036 §9:
+# "閾值相關的檢查不變") — thresholds, defaults, cardinality. go_finding_kinds
+# only sees what routing.go emits, so a routing kind a NEW file emits would
+# be counted as neither; test_every_guard_kind_is_classified turns that red
+# instead, and the fix is a decision a person makes, not a recount.
+THRESHOLD_KINDS = frozenset({
+    "cardinality_exceeded", "cardinality_warning",
+    "custom_alert_duplicate_series",
+    "defaults_toplevel_ignored", "root_defaults_unwrapped", "root_defaults_critical_key",
+    "root_default_null_undeclared",
+    "subtree_default_reserved_key", "subtree_default_undeliverable",
+    "schedule_null_value", "value_not_served", "metrics_not_gatherable",
+    "redundant_override",
+    # schema.go, from --required-fields. A `_routing.*` path is judged
+    # against the RESOLVED routing, so with such a path it is a routing
+    # check — but it does not move to the generator: ADR-036 §9 makes
+    # `--required-fields _routing.*` an outright error instead (the second
+    # half of #2904). What is left is a check on the effective config.
+    "missing_required",
+})
+
+
+def unclassified_guard_kinds(guard_dir: Path = GUARD_DIR) -> list[str]:
+    """da-guard kinds in neither group: not emitted from routing.go and not
+    in THRESHOLD_KINDS."""
+    consts, routing = go_finding_kinds(guard_dir)
+    return sorted(set(consts.values()) - routing - THRESHOLD_KINDS)
+
+
+def test_every_guard_kind_is_classified() -> None:
+    """#2904 review N2: every da-guard FindingKind is routing / policy (the
+    gate above holds it to the generator) or threshold (stays in da-guard).
+    One that is neither is red until someone decides which."""
+    consts, routing = go_finding_kinds()
+    left = unclassified_guard_kinds()
+    assert not left, (
+        f"da-guard finding kinds classified neither as routing / policy nor as threshold: {left}. "
+        "Decide which, by what the check judges: routing / policy if it judges `_routing*` keys, "
+        "routing profiles, domain policies, receivers / overrides / routes, or which tenants the "
+        "route generator renders — then build the finding in internal/guard/routing.go (where "
+        "go_finding_kinds counts it) and pin it in tests/shared/routing_policy_parity_matrix.json, "
+        "since ADR-036 §9 moves those checks to the generator; threshold if it judges threshold "
+        "values, defaults files or cardinality, which stay with da-guard — then add it to "
+        "THRESHOLD_KINDS in this file")
+    assert not THRESHOLD_KINDS & routing, sorted(THRESHOLD_KINDS & routing)
+    stale = THRESHOLD_KINDS - set(consts.values())
+    assert not stale, f"THRESHOLD_KINDS names kinds da-guard does not have: {sorted(stale)}"
+
+
+def test_unclassified_kind_is_red(tmp_path: Path) -> None:
+    """The classification gate reads the source too: a kind built in a new
+    file (not routing.go) and in no list is unclassified."""
+    for p in GUARD_DIR.glob("*.go"):
+        (tmp_path / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    assert unclassified_guard_kinds(tmp_path) == []
+    (tmp_path / "zz_new.go").write_text(
+        'package guard\n\nconst FindingZzNewCheck FindingKind = "zz_new_check"\n\n'
+        'var _ = Finding{Kind: FindingZzNewCheck}\n', encoding="utf-8")
+    assert unclassified_guard_kinds(tmp_path) == ["zz_new_check"]
 
 
 def test_routing_kinds_are_read_from_the_go_source() -> None:
@@ -798,11 +881,16 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # findings document, against da-guard's rows (or the tree's recorded
     # difference); and no finding of a kind da-guard reports as an error is
     # looser in the generator than "in force under --validate --strict".
-    got_route = route_rows(doc)
+    stand_ins = _differs_kinds(tree)
+    got_route = route_rows(doc, stand_ins)
     differs = tree["route_findings_python_differs"]
     assert got_route == (differs["rows"] if differs else tree["route_findings"]), (
         tree["name"], got_route)
-    loose = severity_floor_errors(doc)
+    # A generator kind standing in for a da-guard `error` row is held to the
+    # same floor (#2904 N4).
+    if not any(GO_SEVERITY[r[1]] == "error" for r in tree["route_findings"]):
+        stand_ins = set()
+    loose = severity_floor_errors(doc, stand_ins)
     assert not loose, (tree["name"], loose)
 
     # #2503: the enforced route(s)' group_by, in the generator's order (tenants

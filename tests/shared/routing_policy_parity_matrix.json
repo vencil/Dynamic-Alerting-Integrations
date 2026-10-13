@@ -144,7 +144,12 @@
     "Python half asserts every generator finding of an `error` kind is in force under --validate --strict (never looser than da-guard).",
     "routing_profiles_unusable (a routing_profiles block that is not a mapping) is a platform row both halves compare.",
     "tests/shared/test_routing_policy_parity.py test_no_routing_check_is_go_only computes da-guard's routing kinds from its source (the",
-    "FindingKind constants internal/guard/routing.go emits) and is red while any is pinned by no column of this table."
+    "FindingKind constants internal/guard/routing.go emits) and is red while any is pinned by no column of this table.",
+    "A route_findings_python_differs row may name the generator's own kind (any kind of _grar_merge.FINDING_KINDS) for what da-guard",
+    "reports under one of route_finding_kinds - e.g. invalid_override_entry for an override that is not a mapping, da-guard's",
+    "missing_receiver_field; when it replaces a da-guard `error` row it is held to the same floor (in force under --validate --strict).",
+    "test_every_guard_kind_is_classified: every da-guard FindingKind is routing / policy (emitted from routing.go) or in the test's",
+    "THRESHOLD_KINDS; a kind in neither is red until someone decides which."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -6855,6 +6860,180 @@
       "enforced_group_by_invalid": [],
       "route_findings": [],
       "route_findings_python_differs": null
+    },
+    {
+      "name": "unread-location-wrapped-non-string-key-2904",
+      "files": {
+        "_defaults.yaml": "defaults:\n  1: 5\n  cpu_usage_percent: 80\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
+        "team-a/_defaults.yaml": "defaults:\n  ~: 1\n  cpu_usage_percent: 70\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
+        "team-b/_defaults.yaml": "defaults:\n  1: 5\n  cpu_usage_percent: 60\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
+        "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://t1.example/hook\n"
+      },
+      "platform": [
+        [
+          "routing_key_ignored",
+          "_defaults.yaml",
+          "_routing"
+        ],
+        [
+          "routing_key_ignored",
+          "team-a/_defaults.yaml",
+          "_routing"
+        ],
+        [
+          "routing_key_ignored",
+          "team-b/_defaults.yaml",
+          "_routing"
+        ]
+      ],
+      "expect": {
+        "t1": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "unread-location-non-string-key-elsewhere-2904",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "profiles:\n  1:\n    cpu_usage_percent: 50\n    _routing_profile: p-x\n  p:\n    2: 3\n    _routing:\n      receiver:\n        type: webhook\n        url: https://x.example/hook\n",
+        "team-a/_defaults.yaml": "~: 1\ncpu_usage_percent: 70\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
+        "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://t1.example/hook\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "_platform.yaml",
+          "profiles.1._routing_profile"
+        ],
+        [
+          "routing_in_unread_location",
+          "_platform.yaml",
+          "profiles.p._routing"
+        ],
+        [
+          "routing_key_ignored",
+          "team-a/_defaults.yaml",
+          "_routing"
+        ]
+      ],
+      "expect": {
+        "t1": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "override-not-a-mapping-2904",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://t1.example/hook\n      overrides:\n      - 5\n      - alertname: CpuHigh\n        receiver:\n          type: webhook\n          url: https://a.example/hook\n"
+      },
+      "platform": [],
+      "expect": {
+        "t1": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            },
+            {
+              "ref": "overrides[1]",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_override_entry for the tenant (blocks=validate: a generation-stage finding) and fails. overrides[0] is no mapping.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "webhook"
+              },
+              {
+                "ref": "overrides[1]",
+                "type": "webhook"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [
+        [
+          "t1",
+          "missing_receiver_field",
+          "overrides[0]"
+        ]
+      ],
+      "route_findings_python_differs": {
+        "reason": "an override that is not a mapping (`- 5`): the generator reports it as invalid_override_entry (blocking under --validate, held to the floor of da-guard's error row), da-guard as missing_receiver_field on the entry. Both refuse it and render the other overrides.",
+        "rows": [
+          [
+            "t1",
+            "invalid_override_entry",
+            "overrides[0]"
+          ]
+        ]
+      }
     },
     {
       "name": "routing-ignored-keys-2960",
