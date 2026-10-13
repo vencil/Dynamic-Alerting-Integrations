@@ -1184,6 +1184,94 @@ def _ci_trigger_paths_block(
     )
 
 
+# ── Deployment policy file (`--policy`), optional in customer CI (#2900) ──
+#
+# The policy file (`allowed_domains`) is the SSRF control and lives OUTSIDE
+# the tenant repository on purpose (ADR-036 §5), so the generated CI can only
+# bring it in from a CI variable. Doing so lets the customer's CI give the
+# same webhook-domain answer tenant-api gives; it is not itself a security
+# control, since anyone who can write the repository can edit the workflow.
+# Unset means "not checked", announced rather than failed: the owner ruling
+# for #2900 is a notice, not a red job.
+#
+# ⛔ The `lint` step/job deliberately gets none of this. `lint --policy` names
+# the custom-rule GOVERNANCE policy (denied functions, required labels), a
+# different file with different keys; this variable holds the DEPLOYMENT
+# policy. Passing it there would read as "linted against your policy" while
+# the deny-list in force is still the built-in one.
+_POLICY_VAR = 'DA_TOOLS_POLICY'
+_POLICY_DOCS_URL = (
+    'https://vencil.github.io/Dynamic-Alerting-Integrations/'
+    'scenarios/gitops-ci-integration/#deployment-policy'
+)
+
+
+def _github_policy_prelude(indent: str) -> str:
+    """Bash lines that turn `DA_TOOLS_POLICY` into docker args, or a notice.
+
+    Returned indented by `indent` on EVERY line, for a placeholder that sits at
+    the template's own margin (the `_ci_trigger_paths_block` convention).
+
+    ⛔ The variable arrives through the step's `env:`, never as an Actions
+    expression inside `run:`: an expression there is pasted into the script
+    text before bash sees it, so a value containing `"` or `$(...)` would
+    become shell syntax (script injection). Through `env:` it is data.
+    The value is the policy's YAML CONTENT (a repository/organization
+    variable has no file form), written to `$RUNNER_TEMP` and mounted
+    read-only. 0644 is explicit because the container reads it as a non-root
+    user, and a runner umask tighter than 022 would otherwise make the mount
+    unreadable.
+    """
+    lines = [
+        f'# Deployment policy (allowed webhook domains), optional: the {_POLICY_VAR}',
+        '# repository/organization variable holds the policy YAML itself.',
+        'policy_mount=()',
+        'policy_args=()',
+        f'if [ -n "${{{_POLICY_VAR}:-}}" ]; then',
+        '  policy_file="$RUNNER_TEMP/da-tools-policy.yaml"',
+        f"  printf '%s\\n' \"${_POLICY_VAR}\" > \"$policy_file\"",
+        '  chmod 0644 "$policy_file"',
+        '  policy_mount=(-v "$policy_file:/data/policy.yaml:ro")',
+        '  policy_args=(--policy /data/policy.yaml)',
+        'else',
+        f'  echo "::notice::{_POLICY_VAR} is not set, so webhook domains were '
+        f'not checked against a deployment policy. See {_POLICY_DOCS_URL}"',
+        'fi',
+    ]
+    return '\n'.join(indent + line for line in lines)
+
+
+def _gitlab_policy_prelude(indent: str) -> str:
+    """POSIX sh lines that set `"$@"` to `--policy <file>`, or announce none.
+
+    The da-tools image is Alpine, so GitLab runs `script:` under busybox `sh`
+    (no bash, no arrays) — hence positional parameters instead of an array.
+    A File-type CI/CD variable's value is the PATH of a temp file the runner
+    wrote; anything else non-empty is refused, because the usual cause is a
+    Variable-type variable whose value is the YAML content itself, and passing
+    that as a path would surface as a confusing "file not found" from the tool.
+    """
+    lines = [
+        f'# Deployment policy (allowed webhook domains), optional: {_POLICY_VAR}',
+        '# must be a File-type CI/CD variable (its value is a path to the file).',
+        f'if [ -z "${{{_POLICY_VAR}:-}}" ]; then',
+        f'  echo "NOTICE: {_POLICY_VAR} is not set, so webhook domains were '
+        f'not checked against a deployment policy. See {_POLICY_DOCS_URL}"',
+        '  set --',
+        f'elif [ -f "${_POLICY_VAR}" ]; then',
+        f'  set -- --policy "${_POLICY_VAR}"',
+        'else',
+        f'  echo "ERROR: {_POLICY_VAR} is set but is not a path to a file. It must '
+        'be a CI/CD variable of type File, whose value the runner turns into a '
+        'file path. The usual cause is a Variable-type variable, whose value is '
+        'the policy YAML itself: recreate it with type File. '
+        f'See {_POLICY_DOCS_URL}" >&2',
+        '  exit 1',
+        'fi',
+    ]
+    return '\n'.join(indent + line for line in lines)
+
+
 def _build_github_apply_stage(
     deploy_method: str, namespace: str, offset: str = '',
 ) -> str:
@@ -1481,6 +1569,11 @@ def _gen_github_actions(
           - uses: actions/checkout@v6
 
           - name: Validate config (schema + routing + policy)
+            env:
+              # Through `env:`, never as an expression inside `run:` (that
+              # would paste the value into the script as shell syntax). Unset
+              # variables read as an empty string.
+              DA_TOOLS_POLICY: ${{{{ vars.DA_TOOLS_POLICY }}}}
             run: |
               # ⛔ The same guard the config-diff step carries, and for the same
               # reason: `docker -v` CREATES a missing host path instead of
@@ -1494,10 +1587,12 @@ def _gen_github_actions(
                 echo "::error::CONFIG_DIR is set to '${{{{ env.CONFIG_DIR }}}}', which does not exist in this commit. Refusing to validate, because mounting a path that is not there yields an empty directory and a PASS that checked nothing."
                 exit 1
               fi
+    {policy_prelude}
               docker run --rm \\
                 -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
+                "${{policy_mount[@]}}" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
-                validate-config --config-dir /data/conf.d
+                validate-config --config-dir /data/conf.d "${{policy_args[@]}}"
 
           - name: Lint custom rules (if any)
             run: |
@@ -1585,6 +1680,9 @@ def _gen_github_actions(
             # with nothing to say the new run died. Held by
             # `test_step_timeouts_leave_room_under_the_job_timeout`.
             timeout-minutes: 5
+            env:
+              # Same binding, and the same reason, as the validate step.
+              DA_TOOLS_POLICY: ${{{{ vars.DA_TOOLS_POLICY }}}}
             run: |
               # Read-only, deliberately: this step VALIDATES the routes it
               # would generate; nothing downstream consumes a written file.
@@ -1598,10 +1696,12 @@ def _gen_github_actions(
               # quietly. With no writable mount there is nothing for a
               # `--user` override to fix; the config-diff step below writes
               # on the HOST via a shell redirect.
+    {policy_prelude}
               docker run --rm \\
                 -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
+                "${{policy_mount[@]}}" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
-                generate-routes --config-dir /data/conf.d --validate --strict
+                generate-routes --config-dir /data/conf.d --validate --strict "${{policy_args[@]}}"
 
           - name: Resolve base config snapshot
             id: snapshot
@@ -1858,6 +1958,9 @@ def _gen_github_actions(
         # assertion in tests/ops/test_generated_ci_artifacts.py, which is what
         # would red if a future deploy method reads no namespace.
         monitoring_ns_env=f"MONITORING_NS: {namespace}",
+        # #2900: both `run:` bodies sit at column 10 after dedent. Substituted
+        # twice (validate-config and generate-routes), one rendering.
+        policy_prelude=_github_policy_prelude(' ' * 10),
     )
 
 
@@ -2622,7 +2725,9 @@ def _gen_gitlab_ci(
         - changes:
     {trigger_changes}
       script:
-        - da-tools validate-config --config-dir $CONFIG_DIR
+        - |
+    {policy_prelude}
+          da-tools validate-config --config-dir $CONFIG_DIR "$@"
 
     lint-custom-rules:
       stage: validate
@@ -2755,7 +2860,9 @@ def _gen_gitlab_ci(
             echo "ERROR: $config_dir at $base_sha is a $kind, not a directory, so no baseline can be built from it. A kind of 'commit' means a submodule is mounted there; 'blob' means either a file has that name, or the path is a symlink. Reporting any of those as a first import would hide the fault." >&2
             exit 1
           fi
-        - da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict
+        - |
+    {policy_prelude}
+          da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict "$@"
         # config-diff signals findings through its exit code: 0 = no config
         # change, 1 = changes detected (the ordinary answer on a merge request
         # that edits tenants), 2 and above = the run did not complete. A bare
@@ -2825,6 +2932,9 @@ def _gen_gitlab_ci(
         # whose sibling had already been fixed.
         monitoring_ns_var=f"MONITORING_NS: {namespace}",
         apply_stage=apply_stage,
+        # #2900: both `- |` bodies sit at column 6 after dedent. Substituted
+        # twice (validate-config and blast-radius), one rendering.
+        policy_prelude=_gitlab_policy_prelude(' ' * 6),
     )
 
 
@@ -3156,6 +3266,12 @@ def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
         "# Trade-off, stated: that mount is the whole repo read-WRITE, wider than the\n"
         "# read-only conf.d mount the broken form asked for — but it is pre-commit's\n"
         "# own mechanism, and a hook that cannot run protects nothing.\n"
+        "#\n"
+        "# Webhook domains are NOT checked here: neither hook passes `--policy`.\n"
+        "# The deployment policy file lives outside this repository on purpose,\n"
+        "# and a docker_image hook mounts only the repository, so it cannot reach\n"
+        "# that file. CI is the gate: set DA_TOOLS_POLICY there (see the\n"
+        "# generated CI files).\n"
         "\n"
         "repos:\n"
         "  - repo: local\n"

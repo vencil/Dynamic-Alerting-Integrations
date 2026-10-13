@@ -271,6 +271,37 @@ fi
 
 手動觸發（`workflow_dispatch`），需要 `production` environment 審批。各部署路徑的具體操作見下方 §3。
 
+<!-- da-tools init 產出的 CI 在提示訊息裡連到這個錨點（init_project.py 的 _POLICY_DOCS_URL）；改名要一起改。 -->
+<a id="deployment-policy"></a>
+
+### 2.5 帶入部署端 policy 檔（`DA_TOOLS_POLICY`）
+
+部署端 policy 檔裡的 `allowed_domains` 限制 webhook 網址能指向哪些網域。這是防 SSRF 的控制，刻意放在租戶 repo 之外（[ADR-036](../adr/036-single-parser-effective-config.md) §5），所以 `da-tools init` 產出的 CI 只能從 CI 變數拿到它。設了之後，Stage 1 的 `validate-config` 與 Stage 2 的 `generate-routes --validate --strict` 會帶 `--policy`，客戶 CI 判的就和 tenant-api 判的是同一份規則；webhook 網域不在清單內時，`generate-routes` 結束碼 1，PR 轉紅。
+
+⚠️ CI 這一側**不是**安全控制：有 repo 寫入權限的人本來就能改 workflow。它的用處是讓你在 PR 上提早看到 tenant-api 會給的答案。
+
+**沒設時**：兩個步驟照常執行、不帶 `--policy`，webhook 網域不檢查，並印一行提示（GitHub 是 `::notice::`，GitLab 是 job log 裡的 `NOTICE:`）。不會因此失敗。
+
+**GitHub Actions**：在 repository 或 organization 層建立 **variable**（Settings → Secrets and variables → Actions → Variables），名稱 `DA_TOOLS_POLICY`，值是 policy 檔的 **YAML 內容本身**（不是路徑），例如：
+
+```yaml
+allowed_domains:
+  - hooks.example.com
+  - "*.chat.example.com"
+```
+
+workflow 經由 step 的 `env:` 讀它（不會把值直接展開進 `run:` 腳本），寫到 `$RUNNER_TEMP/da-tools-policy.yaml`（權限 0644，容器以非 root 身分讀），再唯讀掛進容器。單一 variable 上限 48 KB。⚠️ 從 fork 開的 PR 拿不拿得到 `vars` 我們沒有實測；拿不到時會走「沒設」那條路：印提示，不失敗。
+
+**GitLab CI**：在 Settings → CI/CD → Variables 建立 `DA_TOOLS_POLICY`，**Type 選 File**，值貼 policy 的 YAML 內容。runner 會把內容寫成暫存檔，變數本身是那個檔的路徑，pipeline 直接把路徑傳給 `--policy`。
+
+- ⛔ **不要勾 Protected**：Protected 變數不會傳給從未保護分支開的 merge request pipeline，那些 pipeline 會變成「沒設」，只印提示。
+- policy 不是機密，不需要勾 Masked。
+- 變數非空、但不是檔案時，`validate-config` 與 `blast-radius` 兩個 job 都會失敗並說明原因。最常見的原因是 Type 選成 Variable：這時變數的值就是 YAML 內容，不是路徑。改成 File 型即可。
+
+**pre-commit hook 不帶 `--policy`**：`language: docker_image` 的 hook 只掛 repo 本身，掛不進 repo 外的檔。webhook 網域的閘門在 CI。
+
+⚠️ 內容是空的、不是 mapping（例如誤把路徑字串當內容貼進 GitHub variable），或沒有 `allowed_domains` 這個鍵，`generate-routes` 會結束碼 2，job 失敗。`allowed_domains: []` 的意思是「不限制」，不是「全部擋掉」。清單項目是 fnmatch 樣式，所以可以寫 `*.chat.example.com`。
+
 ## 3. 部署模式
 
 ### 3.1 Kustomize（推薦入門）
