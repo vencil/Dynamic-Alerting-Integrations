@@ -35,11 +35,16 @@
 # sticky comment was stamped with, what the report said (or did not say),
 # and what the config change actually did.
 #
-# What triggers it: the platform's conf.d tree, the config-diff modules
-# themselves, and this file. ⚠️ Not everything the result depends on is in
-# the list — the da-guard Go sources and the shared `_lib_*` modules the
-# renderers import are not — so a change there alone does not run this; the
-# next conf.d PR does.
+# What triggers it: the platform's conf.d tree, config-diff and the modules
+# that decide what it compares (the renderers, the masking, which files count
+# as config files), and this file. ⚠️ Not everything the result depends on is
+# in the list — the da-guard Go sources and the other shared `_lib_*` modules
+# are not — so a change there alone does not run this; the next conf.d PR
+# does.
+#
+# A PR from a fork gets a read-only token: the comment step then fails and
+# the job is red although the report was computed (it is in the artifact).
+# The sibling report workflows behave the same way.
 
 name: Config Diff (rendered, advisory)
 
@@ -53,6 +58,8 @@ on:
       - "scripts/tools/ops/generate_alertmanager_routes.py"
       - "scripts/tools/ops/_grar_*.py"
       - "scripts/tools/_lib_redact.py"
+      - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/_threshold_alerts.py"
       - "scripts/tools/_lib_tenant_values.py"
       - ".github/workflows/config-diff-advisory.yml"
 
@@ -130,6 +137,12 @@ jobs:
           fi
           if ! git worktree add --detach "$RUNNER_TEMP/base" "$mb"; then
             echo "::error::could not check out the merge-base $mb into $RUNNER_TEMP/base — refusing to compare against a missing base side"
+            exit 1
+          fi
+          # config-diff takes a missing --old-dir as a first import (every
+          # tenant added), so a base without this tree must stop here.
+          if [ ! -d "$RUNNER_TEMP/base/$CONF_D" ]; then
+            echo "::error::the merge-base $mb has no $CONF_D — did the tree move? Update CONF_D rather than compare against nothing"
             exit 1
           fi
           if ! at=$(git show -s --format=%cI "$mb") || [ -z "$at" ]; then

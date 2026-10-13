@@ -4,7 +4,8 @@ ADR-037 decision 6, step 1: config-diff on rendered output runs on the
 platform's PRs as an ADVISORY report before anyone may make it a required
 check. Two properties make it advisory and comparable, and this module holds
 both by RUNNING the steps' own `run:` scripts under the shell the runner uses
-(`bash --noprofile --norc -eo pipefail`), not by matching their text:
+for a step that names none (`bash -e {0}`: no pipefail), not by matching
+their text:
 
   * **It never fails on a verdict.** config-diff's exit 1 ("a change") and
     exit 2 ("no result") leave the step green; exit 2 is a `::warning::`.
@@ -17,7 +18,9 @@ both by RUNNING the steps' own `run:` scripts under the shell the runner uses
 The base step's failures are fatal in the other direction: a missing or empty
 base side would make every tenant read as added (see
 `test_ci_baseline_substitution.py`), so an unresolvable ref, no merge-base or
-a worktree that cannot be created each fail the step.
+a worktree that cannot be created each fail the step, and so does a base
+that lacks the conf.d tree (config-diff reads a missing `--old-dir` as a
+first import).
 
 The last test runs the two steps end to end, with the real config-diff and a
 da-guard built from this checkout, on a copy of the platform conf.d tree: a
@@ -38,10 +41,13 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _platform_fs import symlink_or_skip
+
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/config-diff-advisory.yml"
-# What the runner runs a `run:` block with when `shell:` is not set.
-_RUNNER_BASH = ["bash", "--noprofile", "--norc", "-eo", "pipefail"]
+# What the runner runs a `run:` block with when `shell:` is not set. (`shell:
+# bash` would add `--noprofile --norc -o pipefail`; these steps do not set it.)
+_RUNNER_BASH = [shutil.which("bash") or "bash", "-e"]
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
@@ -232,6 +238,21 @@ def test_base_step_fails_when_the_worktree_cannot_be_created(pr_repo) -> None:
     assert proc.returncode != 0 and "at" not in out, proc.stdout
 
 
+def test_base_step_fails_when_the_base_has_no_conf_d(pr_repo) -> None:
+    repo, _, env = pr_repo
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "rm", "-q", "-r", _conf_d())
+    _git(repo, "commit", "-q", "-m", "tree moved")
+    _git(repo, "update-ref", "refs/remotes/origin/main", _git(repo, "rev-parse", "HEAD"))
+    _git(repo, "checkout", "-q", "-b", "pr2")
+    _write(repo, f"{_conf_d()}/marker.yaml", "side: pr\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "pr")
+    proc, out = _run_step(_step("base"), repo, env)
+    assert proc.returncode != 0 and "at" not in out, proc.stdout
+    assert "has no" in proc.stdout, proc.stdout
+
+
 # ── end to end: the real config-diff on the platform tree ───────────────
 
 def _e2e(tmp_path: Path, da_guard: str, edit) -> tuple[subprocess.CompletedProcess, dict, Path]:
@@ -246,7 +267,7 @@ def _e2e(tmp_path: Path, da_guard: str, edit) -> tuple[subprocess.CompletedProce
     edit(repo / _conf_d())
     _git(repo, "commit", "-q", "--allow-empty", "-am", "pr")
     # The run step calls the tool by its repo path; the tool is this checkout's.
-    (repo / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
+    symlink_or_skip(ROOT / "scripts", repo / "scripts", target_is_directory=True)
     temp = tmp_path / "runner-temp"
     temp.mkdir()
     env = {"RUNNER_TEMP": str(temp), "BASE_REF": "main"}
