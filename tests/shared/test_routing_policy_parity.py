@@ -58,9 +58,10 @@ What this half measures, per tree written to a tmp dir:
 
 `test_no_routing_check_is_go_only` (#2904, ADR-036 §9) is the gate for
 deleting da-guard's routing checks: the routing / policy finding kinds are
-computed from da-guard's source (the `FindingKind` constants
-internal/guard/routing.go emits), and every one must be pinned against the
-generator by this half.
+the ones da-guard's own type-checking test (internal/guard/
+finding_kind_gate_test.go, run by `go_finding_kinds`) computes from its
+sources and puts on the routing plane, and every one must be pinned against
+the generator by this half.
 
 A cell's `python_differs` replaces the Go value where the YAML readers
 disagree (see the matrix `_comment`): `targets`, `policy`, `rejected_routes`,
@@ -78,9 +79,13 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import functools
 import io
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 from collections import Counter
@@ -635,41 +640,68 @@ def severity_floor_errors(doc: dict, stand_ins: set[str] = frozenset()) -> list[
 
 
 # ── #2904 (ADR-036 §9): which da-guard routing checks only Go has ─────────
-# The routing / policy finding kinds are da-guard's `FindingKind` constants
-# (internal/guard, non-test sources) that internal/guard/routing.go — the
-# file that builds every routing and domain-policy finding — refers to in
-# code. The other kinds (thresholds, defaults, cardinality) are built in
-# their own files and stay with da-guard. Nothing here is a hand list of
-# kinds: the set is read from the Go source on every run.
-GUARD_DIR = REPO_ROOT / "components" / "threshold-exporter" / "app" / "internal" / "guard"
-ROUTING_FINDINGS_FILE = "routing.go"
-_GO_KIND_CONST = re.compile(r'\b(Finding[A-Za-z0-9]+)\s+FindingKind\s*=\s*"([a-z0-9_]+)"')
-# Go string / rune literals and comments, blanked before identifiers are read
-# (a URL in a message is no comment; a kind named in a comment is no use).
-_GO_NON_CODE = re.compile(r'"(?:\\.|[^"\\\n])*"|`[^`]*`|\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*.*?\*/',
-                          re.DOTALL)
+# The da-guard finding kinds and their plane (routing / threshold) come from
+# Go: internal/guard/finding_kind_gate_test.go type-checks the package
+# (go/types, files chosen by go/build), computes every FindingKind constant
+# its non-test sources produce, and holds that set equal to the registry in
+# internal/guard/finding_kind_planes_test.go, where each kind is put on a
+# plane by hand (a kind routing.go refers to must be routing). Run with
+# DA_GUARD_EMIT_KINDS=<path>, it writes {kind: {"plane", "files"}} there;
+# that table is what this half reads.
+#
+# It replaces reading the Go source here (a regex over
+# `FindingXxx FindingKind = "xxx"`, plus "named in routing.go" for the
+# routing split, plus a hand THRESHOLD_KINDS list): a regex cannot see what
+# the type checker sees (several names in one declaration, an alias type, a
+# conversion, a literal), and an AST rule limiting kinds to that one shape
+# was beaten nine ways. An unclassified kind is now red in Go, where it is
+# declared.
+GO_APP = REPO_ROOT / "components" / "threshold-exporter" / "app"
+GUARD_KINDS_TEST = "TestFindingKindPlanes"
+PLANES = {"routing", "threshold"}
+_HAS_GO = shutil.which("go") is not None
+_REQUIRE_GO = os.environ.get("VIBE_REQUIRE_GO") == "1"
 
 
-def _go_code(text: str) -> str:
-    return _GO_NON_CODE.sub(" ", text)
+@functools.lru_cache(maxsize=1)
+def _go_finding_kinds() -> dict[str, dict]:
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "kinds.json"
+        proc = subprocess.run(
+            ["go", "test", "./internal/guard/", "-run", f"^{GUARD_KINDS_TEST}$", "-count=1"],
+            cwd=GO_APP, env={**os.environ, "DA_GUARD_EMIT_KINDS": str(out)},
+            capture_output=True, text=True, encoding="utf-8", timeout=600, check=False)
+        assert proc.returncode == 0, (
+            f"go test -run {GUARD_KINDS_TEST} (rc {proc.returncode}):\n{proc.stdout}{proc.stderr}")
+        # rc 0 with no file: -run matched nothing, or the test stopped writing.
+        assert out.is_file(), f"{GUARD_KINDS_TEST} passed but wrote no kind table:\n{proc.stdout}"
+        return json.loads(out.read_text(encoding="utf-8"))
 
 
-def go_finding_kinds(guard_dir: Path = GUARD_DIR) -> tuple[dict[str, str], set[str]]:
-    """(every da-guard kind as {const name: kind}, the routing kinds).
+def go_finding_kinds() -> dict[str, dict]:
+    """{kind: {"plane": "routing" | "threshold", "files": [...]}}, from
+    da-guard's own test (see above). Without `go` this skips — or fails
+    when VIBE_REQUIRE_GO=1 (CI's Python test jobs set Go up), so a lost Go
+    setup is never a gate that silently stopped looking."""
+    if not _HAS_GO:
+        if _REQUIRE_GO:
+            pytest.fail("VIBE_REQUIRE_GO=1 but `go` is not on PATH: the da-guard finding kinds "
+                        f"come from `go test ./internal/guard/ -run {GUARD_KINDS_TEST}`")
+        pytest.skip(f"go not on PATH: the da-guard finding kinds come from `go test "
+                    f"./internal/guard/ -run {GUARD_KINDS_TEST}` (set up Go, or "
+                    "VIBE_REQUIRE_GO=1 to fail instead)")
+    return _go_finding_kinds()
 
-    Reads kinds out of the Go source by one shape only, `FindingXxx
-    FindingKind = "xxx"`. That is sound because the guard package refuses
-    every other way of writing a kind (a `FindingKind(...)` conversion, a
-    literal or a non-`Finding*` name in `Kind:`, an untyped `Finding*` string
-    const): internal/guard/finding_kind_shape_test.go. Without that test a
-    kind written another way would be invisible here.
-    """
-    sources = {p.name: p.read_text(encoding="utf-8") for p in sorted(guard_dir.glob("*.go"))
-               if not p.name.endswith("_test.go")}
-    consts = {name: kind for text in sources.values() for name, kind in _GO_KIND_CONST.findall(text)}
-    routing_code = _go_code(sources[ROUTING_FINDINGS_FILE])
-    routing = {kind for name, kind in consts.items() if re.search(rf"\b{name}\b", routing_code)}
-    return consts, routing
+
+def routing_kinds(kinds: dict[str, dict]) -> set[str]:
+    return {k for k, v in kinds.items() if v.get("plane") == "routing"}
+
+
+def unclassified_guard_kinds(kinds: dict[str, dict]) -> list[str]:
+    """Kinds in the table on neither plane. The Go test refuses to write
+    such a table; this keeps a reader of it from treating a plane it does
+    not know as "not routing"."""
+    return sorted(k for k, v in kinds.items() if v.get("plane") not in PLANES)
 
 
 # The da-guard kinds this half pins through a dedicated column (the column ->
@@ -693,80 +725,40 @@ def pinned_kinds(matrix: dict) -> set[str]:
     return out
 
 
-def go_only_routing_kinds(matrix: dict, guard_dir: Path = GUARD_DIR) -> list[str]:
-    _consts, routing = go_finding_kinds(guard_dir)
-    return sorted(routing - pinned_kinds(matrix))
-
-
-# The other side of the split, listed by hand ON PURPOSE: the da-guard kinds
-# that are no routing / policy check and stay with da-guard (ADR-036 §9:
-# "閾值相關的檢查不變") — thresholds, defaults, cardinality. go_finding_kinds
-# only sees what routing.go emits, so a routing kind a NEW file emits would
-# be counted as neither; test_every_guard_kind_is_classified turns that red
-# instead, and the fix is a decision a person makes, not a recount.
-THRESHOLD_KINDS = frozenset({
-    "cardinality_exceeded", "cardinality_warning",
-    "custom_alert_duplicate_series",
-    "defaults_toplevel_ignored", "root_defaults_unwrapped", "root_defaults_critical_key",
-    "root_default_null_undeclared",
-    "subtree_default_reserved_key", "subtree_default_undeliverable",
-    "schedule_null_value", "value_not_served", "metrics_not_gatherable",
-    "redundant_override",
-    # schema.go, from --required-fields. A `_routing.*` path is judged
-    # against the RESOLVED routing, so with such a path it is a routing
-    # check — but it does not move to the generator: ADR-036 §9 makes
-    # `--required-fields _routing.*` an outright error instead (the second
-    # half of #2904). What is left is a check on the effective config.
-    "missing_required",
-})
-
-
-def unclassified_guard_kinds(guard_dir: Path = GUARD_DIR) -> list[str]:
-    """da-guard kinds in neither group: not emitted from routing.go and not
-    in THRESHOLD_KINDS."""
-    consts, routing = go_finding_kinds(guard_dir)
-    return sorted(set(consts.values()) - routing - THRESHOLD_KINDS)
+def go_only_routing_kinds(matrix: dict, kinds: dict[str, dict] | None = None) -> list[str]:
+    kinds = go_finding_kinds() if kinds is None else kinds
+    return sorted(routing_kinds(kinds) - pinned_kinds(matrix))
 
 
 def test_every_guard_kind_is_classified() -> None:
     """#2904 review N2: every da-guard FindingKind is routing / policy (the
-    gate above holds it to the generator) or threshold (stays in da-guard).
-    One that is neither is red until someone decides which."""
-    consts, routing = go_finding_kinds()
-    left = unclassified_guard_kinds()
-    assert not left, (
-        f"da-guard finding kinds classified neither as routing / policy nor as threshold: {left}. "
-        "Decide which, by what the check judges: routing / policy if it judges `_routing*` keys, "
-        "routing profiles, domain policies, receivers / overrides / routes, or which tenants the "
-        "route generator renders — then build the finding in internal/guard/routing.go (where "
-        "go_finding_kinds counts it) and pin it in tests/shared/routing_policy_parity_matrix.json, "
-        "since ADR-036 §9 moves those checks to the generator; threshold if it judges threshold "
-        "values, defaults files or cardinality, which stay with da-guard — then add it to "
-        "THRESHOLD_KINDS in this file")
-    assert not THRESHOLD_KINDS & routing, sorted(THRESHOLD_KINDS & routing)
-    stale = THRESHOLD_KINDS - set(consts.values())
-    assert not stale, f"THRESHOLD_KINDS names kinds da-guard does not have: {sorted(stale)}"
+    gate below holds it to the generator) or threshold (stays in da-guard).
+    Deciding which is done in Go (finding_kind_planes_test.go), where an
+    unregistered kind is red; here: the table that came back is whole."""
+    kinds = go_finding_kinds()
+    left = unclassified_guard_kinds(kinds)
+    assert not left, f"da-guard kinds on neither plane: {left}"
+    assert all(v.get("files") for v in kinds.values()), kinds
 
 
-def test_unclassified_kind_is_red(tmp_path: Path) -> None:
-    """The classification gate reads the source too: a kind built in a new
-    file (not routing.go) and in no list is unclassified."""
-    for p in GUARD_DIR.glob("*.go"):
-        (tmp_path / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
-    assert unclassified_guard_kinds(tmp_path) == []
-    (tmp_path / "zz_new.go").write_text(
-        'package guard\n\nconst FindingZzNewCheck FindingKind = "zz_new_check"\n\n'
-        'var _ = Finding{Kind: FindingZzNewCheck}\n', encoding="utf-8")
-    assert unclassified_guard_kinds(tmp_path) == ["zz_new_check"]
+def test_unclassified_kind_is_red() -> None:
+    """A table entry on no known plane is unclassified, not "threshold"."""
+    kinds = {"cardinality_exceeded": {"plane": "threshold", "files": ["types.go"]},
+             "domain_policy_violation": {"plane": "routing", "files": ["routing.go"]}}
+    assert unclassified_guard_kinds(kinds) == []
+    kinds["zz_new_check"] = {"plane": "policy", "files": ["zz_new.go"]}
+    kinds["zz_no_plane"] = {"files": ["zz_new.go"]}
+    assert unclassified_guard_kinds(kinds) == ["zz_new_check", "zz_no_plane"]
 
 
 def test_routing_kinds_are_read_from_the_go_source() -> None:
-    """Not vacuous, and the split is the one da-guard's files make: both
-    groups non-empty, and every kind this half pins exists in da-guard."""
-    consts, routing = go_finding_kinds()
-    assert routing and set(consts.values()) - routing, (sorted(routing), sorted(consts.values()))
+    """Not vacuous, and the split is the one da-guard makes: both planes
+    non-empty, and every kind this half pins exists in da-guard."""
+    kinds = go_finding_kinds()
+    routing = routing_kinds(kinds)
+    assert routing and set(kinds) - routing, kinds
     assert "domain_policy_violation" in routing and "cardinality_exceeded" not in routing
-    unknown = pinned_kinds(MATRIX) - set(consts.values())
+    unknown = pinned_kinds(MATRIX) - set(kinds)
     assert not unknown, f"pinned kinds da-guard does not have: {sorted(unknown)}"
 
 
@@ -781,23 +773,15 @@ def test_no_routing_check_is_go_only() -> None:
         "(a column, `platform` rows or `route_finding_kinds`) before deleting the Go check")
 
 
-def test_go_only_gate_is_red(tmp_path: Path) -> None:
-    """The gate reads the source, so a new routing kind turns it red: a copy
-    of internal/guard with one more kind emitted from routing.go."""
-    for p in GUARD_DIR.glob("*.go"):
-        (tmp_path / p.name).write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
-    (tmp_path / "zz_new.go").write_text(
-        'package guard\n\nconst FindingZzNewRouting FindingKind = "zz_new_routing"\n', encoding="utf-8")
-    routing = tmp_path / ROUTING_FINDINGS_FILE
-    routing.write_text(routing.read_text(encoding="utf-8")
-                       + "\nvar _ = FindingZzNewRouting\n", encoding="utf-8")
-    assert go_only_routing_kinds(MATRIX, tmp_path) == ["zz_new_routing"]
-    # Named only in a comment or a string of routing.go: not emitted there.
-    routing.write_text(routing.read_text(encoding="utf-8").replace(
-        "var _ = FindingZzNewRouting", '// FindingZzNewRouting\nvar _ = "FindingZzNewRouting"'),
-        encoding="utf-8")
-    assert go_only_routing_kinds(MATRIX, tmp_path) == []
-    # A kind dropped from route_finding_kinds is Go-only again.
+def test_go_only_gate_is_red() -> None:
+    """A routing kind the Go table reports and no column pins is red; a
+    threshold one is not; a kind dropped from route_finding_kinds is Go-only
+    again."""
+    kinds = {k: dict(v) for k, v in go_finding_kinds().items()}
+    assert go_only_routing_kinds(MATRIX, kinds) == []
+    kinds["zz_new_routing"] = {"plane": "routing", "files": ["routing.go", "types.go"]}
+    kinds["zz_new_threshold"] = {"plane": "threshold", "files": ["types.go"]}
+    assert go_only_routing_kinds(MATRIX, kinds) == ["zz_new_routing"]
     m = json.loads(json.dumps(MATRIX))
     m["route_finding_kinds"].remove("duplicate_override_matcher")
     assert go_only_routing_kinds(m) == ["duplicate_override_matcher"]

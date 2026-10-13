@@ -32,7 +32,6 @@ package guard
 
 import (
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 
@@ -96,9 +95,10 @@ func decodeDefaultsDoc(data []byte) map[string]any {
 
 // wrappedInMapping reports whether the merge reads only `defaults:` of doc:
 // config.ExtractDefaultsBlock returns a map other than the document itself.
+// (Asked of config rather than by comparing map pointers through reflect:
+// finding_kind_gate_test.go refuses reflect in this package, #2904.)
 func wrappedInMapping(doc map[string]any) bool {
-	block := config.ExtractDefaultsBlock(doc)
-	return block != nil && reflect.ValueOf(block).UnsafePointer() != reflect.ValueOf(doc).UnsafePointer()
+	return config.DefaultsBlockWrapped(doc)
 }
 
 // keysActingWhenMerged lists, sorted, doc's top-level keys for which
