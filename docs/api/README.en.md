@@ -26,13 +26,7 @@ Threshold Exporter is the core component of the Multi-Tenant Dynamic Alerting pl
 
 ## API Overview
 
-```
-GET /metrics          → Prometheus metrics export (200 OK)
-GET /health           → Liveness probe (200 OK)
-GET /ready            → Readiness probe (200 OK / 503 Service Unavailable)
-GET /api/v1/config    → Configuration state debug endpoint (200 OK)
-GET /api/v1/config/identity → Identity of the config being served (machine-read JSON contract, 200 OK)
-```
+Endpoints are listed in one place: [threshold-exporter README §3.1 Endpoints](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#31-endpoints). A test checks that table against the source (`ops_readme_parity_test.go`), so it is not copied here; the sections below give the details of the GET endpoints.
 
 ---
 
