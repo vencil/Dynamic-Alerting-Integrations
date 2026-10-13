@@ -83,3 +83,39 @@ func TestMergeForRestore_RefusesBadInput(t *testing.T) {
 		t.Error("a token in the reserved range was merged")
 	}
 }
+
+// #2928: the margin lifts the counter above the backup's, applied to the
+// backup so a second identical restore changes nothing; no backup, no margin.
+func TestMergeForRestore_Margin(t *testing.T) {
+	bak := []byte("schema_version: v1\nnext_account_id: 1002\nallocations:\n  t-a: 1000\n  t-b: 1001\n")
+	lim := RestoreLimits{Margin: 500}
+
+	m, rep, err := MergeForRestore(bak, bak, nil, lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.NextAccountID != 1502 || !rep.Changed() {
+		t.Fatalf("next = %d (changed %v), want 1502", m.NextAccountID, rep.Changed())
+	}
+	again, _ := m.Marshal()
+	if _, rep, err := MergeForRestore(again, bak, nil, lim); err != nil || rep.Changed() {
+		t.Fatalf("second identical restore: changed %v, err %v — want unchanged", rep.Changed(), err)
+	}
+
+	if m, _, err := MergeForRestore(bak, nil, nil, lim); err != nil || m.NextAccountID != 1002 {
+		t.Fatalf("no backup: next = %d, %v; want 1002 (margin ignored)", m.NextAccountID, err)
+	}
+
+	big := []byte("schema_version: v1\nnext_account_id: 4294967000\nallocations: {}\n")
+	if _, _, err := MergeForRestore(nil, big, nil, RestoreLimits{Margin: 10000}); err == nil {
+		t.Fatal("a margin past the id space was accepted")
+	}
+}
+
+func TestDefaultRestoreMargin(t *testing.T) {
+	for fleet, want := range map[int]uint32{0: 10000, 3: 10000, 5000: 10000, 5001: 10002, 40000: 80000} {
+		if got := DefaultRestoreMargin(fleet); got != want {
+			t.Errorf("DefaultRestoreMargin(%d) = %d, want %d", fleet, got, want)
+		}
+	}
+}

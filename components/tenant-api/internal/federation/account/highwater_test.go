@@ -464,3 +464,42 @@ func newMapStore(t *testing.T, recs map[string][]byte) statestore.Store {
 	}
 	return s
 }
+
+// The worked example in ADR-021 ("單調性靠什麼守"), number for number.
+func TestADR021Example(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	backup := regBytes(t, 1001, map[string]uint32{"t-a": 1000})
+
+	// Live: t-b allocated after the backup, so the mark is {1001, base 1001}.
+	hw := &fakeHighWater{}
+	fw := &fakeWriter{data: append([]byte(nil), backup...)}
+	a := NewAllocator(fw, nil).WithHighWater(hw)
+	if id, err := a.EnsureAccountID(ctx, "t-b", "op"); err != nil || id != 1001 {
+		t.Fatalf("t-b = %d, %v", id, err)
+	}
+	if hw.mark != (Mark{Max: 1001, Base: 1001}) {
+		t.Fatalf("mark = %+v, want {1001 1001}", hw.mark)
+	}
+	current := append([]byte(nil), fw.data...)
+
+	// kubectl apply of the backup: t-c skips 1001.
+	fw.data = append([]byte(nil), backup...)
+	if id, err := a.EnsureAccountID(ctx, "t-c", "op"); err != nil || id != 1002 {
+		t.Fatalf("after the put-back t-c = %d, %v; want 1002", id, err)
+	}
+
+	// state restore instead (default margin 10000): t-b kept, next 11001.
+	m, _, err := MergeForRestore(current, backup, nil, RestoreLimits{HighWater: 1001, Margin: DefaultRestoreMargin(2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := m.Lookup("t-b"); !ok || id != 1001 || m.NextAccountID != 11001 {
+		t.Fatalf("restored: t-b = %d (%v), next = %d; want t-b 1001, next 11001", id, ok, m.NextAccountID)
+	}
+	merged, _ := m.Marshal()
+	fw.data = merged
+	if id, err := a.EnsureAccountID(ctx, "t-c2", "op"); err != nil || id != 11001 {
+		t.Fatalf("after the restore t-c = %d, %v; want 11001", id, err)
+	}
+}

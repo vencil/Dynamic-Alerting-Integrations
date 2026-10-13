@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -12,10 +13,12 @@ import (
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/staterestore"
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
 // stateCmdUsage is printed for `tenant-api state` without a known verb.
-const stateCmdUsage = `usage: tenant-api state restore --from FILE|DIR|- [--keys k1,k2] [--dry-run]
+const stateCmdUsage = `usage: tenant-api state restore --from FILE|DIR|- [--keys k1,k2] [--account-id-margin N] [--dry-run]
+       tenant-api state restore --no-backup [--dry-run]
 
 Restores tenant-api's state store from a backup (#2884). A backup is the
 state ConfigMap as "kubectl get configmap tenant-api-state -o yaml" (or
@@ -30,6 +33,18 @@ replaced: allocations are the union of the current registry, the backup and
 the ids live logs tokens carry, and next_account_id only rises. Sources that
 disagree refuse the restore and nothing is written. Other records are
 replaced whole, and only those named in --keys.
+
+next_account_id also goes above the AccountID high-water mark and at least
+--account-id-margin above the backup's next_account_id (#2928): ids handed
+out after the backup may be recorded nowhere that survived. The default is
+twice the number of tenants in --config-dir, at least 10000. Running the same
+restore again with the same margin changes nothing.
+
+--no-backup merges only the current registry, live logs tokens and the
+high-water mark: for a registry that is blank while the mark remains (a
+reinstall), which the server refuses to start against. It needs federation
+on, where the mark and the tokens live, and takes no --keys or
+--account-id-margin.
 
 The store is chosen by the same settings as the server (--state-store,
 TA_STATE_STORE, ...). When federation is on (TA_FEDERATION_KEY set), the
@@ -50,20 +65,58 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	keys := fs.String("keys", "", "Comma-separated record keys to replace whole from the backup")
 	dryRun := fs.Bool("dry-run", false, "Print what would change; write nothing")
 	author := fs.String("author", "state-restore", "Name recorded in each write's audit event")
+	noBackup := fs.Bool("no-backup", false, "Merge without a backup: the current registry, live logs tokens and the high-water mark")
+	margin := fs.Int64("account-id-margin", -1, "Ids to add to the backup's next_account_id (default: twice the tenants in --config-dir, at least 10000)")
 	sf := registerStateFlags(fs)
 	ff := registerFederationStoreFlags(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if *from == "" || fs.NArg() > 0 {
+	if (*from == "") == !*noBackup || fs.NArg() > 0 {
 		fmt.Fprintln(stderr, stateCmdUsage)
 		return 2
 	}
+	if *noBackup && *keys != "" {
+		fmt.Fprintln(stderr, "state restore: --keys needs a backup to replace records from; --no-backup has none")
+		return 2
+	}
+	if *noBackup && *margin >= 0 {
+		fmt.Fprintln(stderr, "state restore: --account-id-margin is added to the backup's next_account_id; --no-backup has none")
+		return 2
+	}
+	if *noBackup && ff.KeyPath == "" {
+		// Without federation there is no high-water mark and no live tokens,
+		// so the merge has nothing to add to the current registry.
+		fmt.Fprintln(stderr, "state restore: --no-backup merges the AccountID high-water mark and live logs tokens, which exist only with federation on (TA_FEDERATION_KEY)")
+		return 2
+	}
+	if *margin < -1 || *margin > int64(^uint32(0)) {
+		fmt.Fprintf(stderr, "state restore: --account-id-margin %d is out of range\n", *margin)
+		return 2
+	}
 
-	bak, err := staterestore.Load(*from, stdin)
-	if err != nil {
-		fmt.Fprintf(stderr, "state restore: %v\n", err)
-		return 1
+	bak := staterestore.Backup{}
+	if !*noBackup {
+		var err error
+		if bak, err = staterestore.Load(*from, stdin); err != nil {
+			fmt.Fprintf(stderr, "state restore: %v\n", err)
+			return 1
+		}
+	}
+	lim := account.RestoreLimits{}
+	switch {
+	case *margin >= 0:
+		lim.Margin = uint32(*margin)
+	case len(bytes.TrimSpace(bak[statestore.KeyAccountRegistry])) == 0:
+		// No backup registry: the margin would not be applied, so its
+		// default is not worth reading conf.d for.
+	default:
+		tenants, err := account.ListTenantIDs(sf.ConfigDir)
+		if err != nil {
+			fmt.Fprintf(stderr, "state restore: count tenants in %s for the default --account-id-margin (or pass it): %v\n", sf.ConfigDir, err)
+			return 1
+		}
+		lim.Margin = account.DefaultRestoreMargin(len(tenants))
 	}
 	s, err := wireStateStore(*sf, nil)
 	if err != nil {
@@ -71,6 +124,7 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	tokens, mark, err := federationRestoreInputs(*ff)
+	lim.HighWater = mark.Max
 	if err != nil {
 		fmt.Fprintf(stderr, "state restore: read live logs tokens and the AccountID high-water mark (refusing to merge the registry without them): %v\n", err)
 		return 1
@@ -80,7 +134,7 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	err = staterestore.Run(ctx, s, bak, staterestore.Options{
 		Keys:   strings.Split(*keys, ","),
 		Tokens: tokens,
-		Limits: account.RestoreLimits{HighWater: mark.Max},
+		Limits: lim,
 		DryRun: *dryRun,
 		Author: *author,
 	}, stdout)

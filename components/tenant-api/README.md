@@ -484,7 +484,9 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 ```
 
 - `--from`：`kubectl get configmap ... -o yaml` 或 `-o json` 的輸出檔、dir 模式的目錄，或 `-` 讀標準輸入。備份至少要有一筆紀錄、且每個 key 都是 tenant-api 的 state 紀錄；其他 ConfigMap（例如 `threshold-config`、federation token store）或 conf.d 目錄會被拒絕（rc 1），不會被當成空備份「還原成功」。
-- **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份、聯集中最大 id + 1、AccountID 高水位 + 1 四者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
+- **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份加上安全邊際、聯集中最大 id + 1、AccountID 高水位 + 1 四者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
+- **安全邊際**（`--account-id-margin N`，預設 conf.d 租戶數的兩倍、至少 10000）：加在備份的 `next_account_id` 上。帳本與 federation token store 一起從同一份備份還原時（預設兩者在同一個 namespace），備份之後配發的 id 沒有任何地方記得，只能整段跳過；邊際就是跳過的長度。加在備份上，所以同一份備份以同樣的邊際還原兩次，第二次不會再變（租戶數變動使預設邊際改變時，會再往上跳，計數器仍只升不降）。conf.d 讀不到時要明示 `--account-id-margin`。
+- **`--no-backup`**：不讀備份，只合併現行帳本、有效 logs token 與高水位。用在帳本空白、高水位還在（重新安裝）而 tenant-api 拒絕啟動時。需要啟用 federation（高水位與 token 都在 federation token store）；不能與 `--from`、`--keys`、`--account-id-margin` 並用。
 - **其他紀錄只有列在 `--keys` 才整筆覆蓋**；沒列的會印在「not restored」一行。
 - 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id` 與 AccountID 高水位；讀不到就拒絕還原。
 - dir 模式下伺服器與子命令以檔案鎖（flock）序列化寫入，伺服器運行中也可以還原。
@@ -504,7 +506,7 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
   kubectl -n tenant-api delete pod tenant-api-restore   # 用完刪掉
   ```
 
-⚠️ 已知限制：token 紀錄只保留到過期為止，而高水位與 token 紀錄同在 federation token store ConfigMap；這份 ConfigMap 也一起被還原成舊版（預設兩者在同一個 namespace，整個 namespace 從備份還原時就是如此）、帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
+⚠️ 已知限制：帳本與 federation token store 一起被還原成同一份舊備份時，高水位與 token 紀錄也一樣舊，只剩安全邊際擋著：備份之後配發的 id 數超過邊際，之後的配發**可能重發它們**（跨租戶 log 洩漏）。備份越新，需要的邊際越小；預期配發量大時調高 `--account-id-margin`。
 
 ## 開發
 

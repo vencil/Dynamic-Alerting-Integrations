@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-24
-updated_at: 2026-10-11
+updated_at: 2026-10-13
 ---
 
 # ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled
@@ -27,6 +27,8 @@ updated_at: 2026-10-11
 **2026-10-11 修訂**：AccountID 帳本與 federation 白名單、子集移出 conf.d git 樹，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap，單機是一個目錄），寫入改為 compare-and-swap，不再 commit（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。原因：這些 commit 從不 push，chart 預設的 emptyDir 下重啟即失，帳本遺失正是本 ADR 要防的 AccountID 重發。下文的配發紀律、稽核與實作計畫已照此更新。
 
 **2026-10-11 修訂**：開機時比對仍有效的 logs token 與帳本，不一致即拒絕啟動；備份改經 `tenant-api state restore` 合併還原，不再以覆蓋還原（[#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884)）。見「單調性靠什麼守」。
+
+**2026-10-13 修訂**：AccountID 高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際（[#2928](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2928)）。見「單調性靠什麼守」。
 
 實作分層、版本定位：
 
@@ -136,9 +138,22 @@ ingestion plane（無論 (a) 租戶推送或 (b) 平台元件 stdout）**必須*
 | **JWT embed 數值 claim** | Envoy `claim_to_headers` 只支援 string/int/bool；AccountID 為數值 claim 才能 O(1) 注入 |
 | **禁用 hash 映射** | FNV-1a 等 hash 把 `tenant_id`(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 **帳本單調發號**（發號狀態在 tenant-api state store；**不引入外部 stateful DB**——ConfigMap 是叢集原生物件，且 uint32 空間 ~40 億充足） |
 
-**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕；帳本空白或遺失、而 conf.d 已有租戶時，拒絕配發。啟用 federation 時，tenant-api 開機另做兩項檢查，不通過就拒絕啟動：(1) 帳本空白或遺失、而 conf.d 已有租戶；(2) 任何仍有效的 logs token，其 `account_id` ≥ 計數器、或與帳本對該租戶的配發不一致。第 (2) 項在下次啟動時抓出「舊備份被蓋回帳本」：備份之後才配發的租戶，token 上的 id 不在帳本裡，也不低於倒退後的計數器。
+**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕；帳本空白或遺失、而 conf.d 已有租戶時，拒絕配發。但帳本和它的備份同在 `tenant-api-state`：把舊備份蓋回去，計數器與配發表會一起倒退，而且彼此一致，帳本本身看不出來。所以另有一個不跟帳本一起還原的見證者：
 
-還原備份一律經 `tenant-api state restore`，帳本只合併、不覆蓋：配發取現行帳本、備份、有效 logs token 三者的聯集，計數器取三者推得的最大值，只升不降；同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次拒絕、不寫入。範例：
+- **高水位**：配發過的最大 AccountID，記在 federation token store ConfigMap（`tenant-federation-store`）的 annotation `tenant-api.vibe/account-id-high-water`，旁邊的 `…-base` 記下預留當時帳本的 `next_account_id`。用 annotation 而不用 data key，是因為 federation-gateway 把這份 ConfigMap 的 data 整份掛進 pod，annotation 不會被掛進去。
+- **先預留高水位、再寫帳本**。兩個寫入落在不同物件，無法一次原子寫完；先寫高水位，中途失敗時高水位只會領先、不會落後，任何寫進帳本的 id 都已被它涵蓋。反過來先寫帳本，高水位寫入失敗後若再發生倒退，倒退會被誤認成「高水位落後」而放過。
+- **每次配發前、以及開機時比對**帳本的 `next_account_id`：
+
+  | 狀況 | 意思 | 處置 |
+  |---|---|---|
+  | 高於高水位 | 帳本涵蓋所有已配發的 id | 照常；高水位若落後（例如升級後第一次啟動）就補齊 |
+  | 介於 base 與高水位之間 | 上一次預留沒寫進帳本：寫入失敗，或剛好那次寫入被蓋回。一次 Backfill 算一次預留 | 跳過整段再配發；跳號不會重發任何 id |
+  | 低於 base | 帳本倒退到更早的狀態 | 拒絕配發，開機時拒絕啟動，直到經 `tenant-api state restore` 合併 |
+
+  已有 id 的租戶照常取得原 id：它在帳本裡的配發不是倒退弄丟的那部分。
+- **開機另比對仍有效的 logs token**：token 的 `account_id` ≥ 計數器、或與帳本對該租戶的配發不一致，就拒絕啟動。
+
+還原備份一律經 `tenant-api state restore`，帳本只合併、不覆蓋：配發取現行帳本、備份、有效 logs token 三者的聯集，同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次拒絕、不寫入。計數器取下列最大值，只升不降：現行計數器、備份計數器加上安全邊際、聯集中最大 id + 1、高水位 + 1。安全邊際預設是 conf.d 租戶數的兩倍、至少 10000，可用 `--account-id-margin` 指定。它涵蓋「兩份 ConfigMap 一起從同一份備份還原」的情況：這時高水位與 token 紀錄也一樣舊，備份之後配發的 id 沒有任何地方記得，只能整段跳過（etcd 還原快照時用 `--bump-revision` 處理同一個問題）。邊際加在備份的計數器上，所以同一份備份以同樣的邊際還原兩次，第二次不會再變。帳本空白但高水位還在（重新安裝）時，用 `state restore --no-backup` 只合併現行帳本、token 與高水位。範例：
 
 ```text
 # 現行帳本                  # 一週前的備份
@@ -146,14 +161,17 @@ next_account_id: 1002      next_account_id: 1001
 allocations:               allocations:
   t-a: 1000                  t-a: 1000
   t-b: 1001
+# 高水位：1001（預留時帳本 next 為 1001）
 ```
 
-用 `kubectl apply` 把備份蓋回，下一個要 logs token 的租戶 `t-c` 會拿到 1001，讀得到 `t-b` 還在保留期內的 log；經 `state restore` 合併，帳本維持 `t-b: 1001`、`next_account_id: 1002`，`t-c` 拿到 1002。
+- 用 `kubectl apply` 把備份蓋回後，帳本 `next_account_id` 變成 1001，等於高水位的 base，屬「上一次預留沒寫進帳本」：下一個要 logs token 的租戶 `t-c` 拿到 1002，跳過 1001，不會讀到 `t-b` 的 log。若備份更舊（計數器低於 base），配發一律拒絕，直到還原。
+- 經 `state restore`（預設邊際 10000）合併：帳本保有 `t-b: 1001`，`next_account_id` 變成 11001，`t-c` 拿到 11001。
 
-⚠️ 已知限制，上述檢查都擋不住（前兩條的補法在 [#2928](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2928) 討論：在帳本以外另記一份只升不降的高水位）：
-- **只在啟動時檢查**：舊備份在 pod 運行中被蓋回時，運行中的 pod 不比對 token，會照常從倒退的計數器配發，直到某個 pod 重啟才拒絕啟動。所以還原一律走 `state restore`，不靠開機檢查善後。
-- **過期 token 不留紀錄**：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，備份之後才配發、目前又沒有有效 logs token 的租戶，其 id 沒有任何地方記得，還原後的計數器可能不高於它，之後的配發可能重發它。縮小這個窗口靠備份頻率。
-- **直接編輯 ConfigMap**：有人把計數器連同已退租租戶的配發一起改小時，上述檢查都看不出來，已退租的 id 可能被重發。chart 的 Role 只給 tenant-api 的 ServiceAccount 對 `tenant-api-state` 的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
+⚠️ 已知限制：
+- **升級後第一次啟動以當下帳本為基準**：高水位從那時起才存在；升級當下帳本若已倒退，這個機制救不回。
+- **安全邊際是估計**：兩份 ConfigMap 一起被還原時，只有在備份之後配發的 id 數不超過邊際時才安全。
+- **直接編輯 ConfigMap**：能改 `tenant-api-state` 或 token store ConfigMap 的人，可以把計數器或高水位改小，上述檢查看不出來。chart 的 Role 只給 tenant-api 的 ServiceAccount 對這兩個物件的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
+- **跳號後的租戶可能換 id**：帳本剛好倒退一次寫入時，被倒退掉的租戶下次要 token 會拿到新 id，舊 id 保留不重發。這是身分漂移，不是洩漏。
 
 #### Admission validator（結構性探測 + 告警，不熔斷）
 

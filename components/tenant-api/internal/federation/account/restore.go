@@ -68,6 +68,32 @@ type RestoreLimits struct {
 	// has been allocated at some point, recorded or not, so the merged
 	// counter goes above it. 0 when there is no mark.
 	HighWater uint32
+	// Margin is added to the backup's next_account_id (#2928). Ids handed
+	// out after the backup was taken may be recorded nowhere that survived —
+	// the registry and the token store restored together from the same
+	// backup — so the counter jumps past as many ids as could plausibly have
+	// been allocated since (etcd restores a snapshot with --bump-revision for
+	// the same reason). Applied to the backup, not the result, so running the
+	// same restore twice changes nothing the second time. Ignored without a
+	// backup registry.
+	Margin uint32
+}
+
+// minRestoreMargin is DefaultRestoreMargin's floor.
+const minRestoreMargin = 10000
+
+// DefaultRestoreMargin is the margin `state restore` applies unless told
+// otherwise: twice the fleet, so a Backfill of the whole fleet after the
+// backup is covered, and at least 10000. ~4.29e9 ids leave room for
+// hundreds of thousands of restores at that rate.
+func DefaultRestoreMargin(fleet int) uint32 {
+	if fleet > minRestoreMargin/2 {
+		if uint64(fleet)*2 >= uint64(^uint32(0)) {
+			return ^uint32(0) - 1
+		}
+		return uint32(fleet) * 2
+	}
+	return minRestoreMargin
 }
 
 // MergeForRestore merges the backup registry and the ids live logs tokens
@@ -76,9 +102,9 @@ type RestoreLimits struct {
 //   - allocations are the union of the three; a tenant held at two
 //     different ids, or an id held by two tenants, is a conflict and the
 //     whole merge is refused (RestoreConflictError);
-//   - next_account_id is the largest of the current one, the backup's, one
-//     above the largest id in the union, and one above lim.HighWater — it
-//     never decreases.
+//   - next_account_id is the largest of the current one, the backup's plus
+//     lim.Margin, one above the largest id in the union, and one above
+//     lim.HighWater — it never decreases.
 //
 // current may be blank (a lost registry), as may backup. Both must
 // otherwise pass Parse. The result passes Parse.
@@ -165,6 +191,15 @@ func MergeForRestore(current, backup []byte, tokens []TokenAllocation, lim Resto
 				return nil, RestoreReport{}, fmt.Errorf("account: id space exhausted at %d", id)
 			}
 			next = id + 1
+		}
+	}
+	if !isBlank(backup) && lim.Margin > 0 {
+		bumped := uint64(bak.NextAccountID) + uint64(lim.Margin)
+		if bumped >= uint64(^uint32(0)) {
+			return nil, RestoreReport{}, fmt.Errorf("account: the backup's next_account_id %d plus the restore margin %d exhausts the id space", bak.NextAccountID, lim.Margin)
+		}
+		if uint32(bumped) > next {
+			next = uint32(bumped)
 		}
 	}
 	if lim.HighWater >= next {
