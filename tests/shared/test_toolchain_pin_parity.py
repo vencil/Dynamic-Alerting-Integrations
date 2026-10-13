@@ -47,6 +47,7 @@ _DEVCONTAINER = _REPO / ".devcontainer" / "devcontainer.json"
 _INSTALL_TRIVY = _REPO / ".devcontainer" / "install-trivy.sh"
 _MAKEFILE = _REPO / "Makefile"
 _IAC_HELM = _REPO / "scripts" / "tools" / "lint" / "check_iac_helm.py"
+_SESSION_START = _REPO / ".claude" / "hooks" / "session-start.sh"
 
 _RUNNER = "ubuntu-24.04"
 
@@ -265,6 +266,32 @@ def test_helm_is_pinned_everywhere_and_matches_the_dev_container() -> None:
     assert not bad, "helm pin drift:\n  " + "\n  ".join(bad)
 
 
+# ── remote-session bootstrap ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("pin,feature,option", [
+    ("HELM", "kubectl-helm-minikube", "helm"),
+    ("GOLANGCI_LINT", "go", "golangciLintVersion"),
+])
+def test_session_start_installs_the_dev_container_version(pin: str, feature: str,
+                                                          option: str) -> None:
+    """The remote-session bootstrap installs helm and golangci-lint itself
+    (#2955). Behind the dev container it would bring back the split this file
+    exists to stop — a test run on a different helm, a lint run that cannot
+    read the config — in exactly the sessions that have no dev container."""
+    src = _SESSION_START.read_text(encoding="utf-8")
+    ver = _one(rf"^{pin}_VERSION=(\S+)\s*$", src, f"session-start.sh {pin}_VERSION")
+    _one(rf"^{pin}_SHA256=([0-9a-f]{{64}})\s*$", src, f"session-start.sh {pin}_SHA256")
+    dc = str(_feature(feature)[option])
+    assert ver == dc, (
+        f"session-start.sh {pin}_VERSION={ver} but devcontainer.json "
+        f"{feature}.{option}={dc}. Bump both, and re-verify {pin}_SHA256 against "
+        f"the upstream checksum for the new tarball.")
+    assert f"${{{pin}_VERSION}}" in src and f'"${pin}_SHA256"' in src, (
+        f"session-start.sh no longer builds its download from {pin}_VERSION and "
+        f"checks {pin}_SHA256 — the pin this test binds is not what gets installed.")
+
+
 # ── CI binary vs lint-wrapper Docker fallback ──────────────────────────────
 
 
@@ -348,6 +375,7 @@ def test_each_action_is_used_at_a_single_version() -> None:
         + "\n  ".join(f"{a}: {r}  ({', '.join(where[a])})" for a, r in split.items()))
 
 
-@pytest.mark.parametrize("path", [_DEVCONTAINER, _INSTALL_TRIVY, _MAKEFILE, _IAC_HELM])
+@pytest.mark.parametrize("path", [_DEVCONTAINER, _INSTALL_TRIVY, _MAKEFILE, _IAC_HELM,
+                                  _SESSION_START])
 def test_inputs_exist(path: Path) -> None:
     assert path.is_file(), f"missing {path}"

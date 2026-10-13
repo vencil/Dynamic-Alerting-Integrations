@@ -29,6 +29,16 @@
 #                                  exits 0. Installing the guards while leaving
 #                                  this one inert is worse than not installing
 #                                  them: it LOOKS wired.
+#   6. helm / golangci-lint      → the container has no helm, so every helm-
+#      absent or off-pin           gated test (tests/helm and more) skips
+#                                  silently: 17 skipped looked like a pass in
+#                                  #2927. Its golangci-lint was 2.5.0 against
+#                                  a 2.12.2 pin and failed reading the config
+#                                  (#2955). Both are installed below at the
+#                                  pinned version, checksum-verified; the
+#                                  helm-gated tests treat a remote session as
+#                                  "helm required" (tests/_helm_gate.py), so a
+#                                  missing helm is now red, not skipped.
 #
 #   Items 2 and 3 have been misfiled as "pre-existing debt / BLOCKED hooks" in a
 #   handoff note before. They are neither — they are this list.
@@ -46,8 +56,21 @@
 #   VISIBLE instead of silent. Do not remove the marker to tidy up.
 #
 # VERSIONS come from requirements/ci-constraints.txt, the repo's own SSOT, so a
-# local run and a CI run agree. Do not add unpinned installs here.
+# local run and a CI run agree. Do not add unpinned installs here. The two
+# binaries pinned below follow .devcontainer/devcontainer.json (`helm`,
+# `golangciLintVersion`); tests/shared/test_toolchain_pin_parity.py turns a
+# bump in one place and not the other red.
 set -euo pipefail
+
+# --- Pinned binaries (step 6) -----------------------------------------------
+# ⛔ The sha256 is pinned HERE, not fetched next to the tarball: a checksum
+# from the same server only proves the download was not truncated. Bumping a
+# version means re-verifying the upstream checksum once and writing it here
+# (docs/internal/toolchain-versions.md, "升版的通則").
+HELM_VERSION=4.3.0
+HELM_SHA256=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+GOLANGCI_LINT_VERSION=2.12.2
+GOLANGCI_LINT_SHA256=8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553
 
 # Local machines already have a configured environment; only the ephemeral
 # remote containers need this.
@@ -71,6 +94,56 @@ cd "$ROOT"
 MARKER="${VIBE_SESSION_START_MARKER:-/tmp/vibe-session-start-hook.ran}"
 say() { printf '  [session-start] %s\n' "$1"; }
 note() { printf '%s\n' "$1" >> "$MARKER"; }
+
+# Set, VIBE_SESSION_START_BIN moves where the pinned binaries go. Only the
+# tests set it.
+TOOL_BIN="${VIBE_SESSION_START_BIN:-/usr/local/bin}"
+
+# at_pin <tool> <version>: does the <tool> that PATH resolves report <version>?
+# ⛔ PATH's copy, not $TOOL_BIN's: the tests call whichever comes first, so an
+# older one earlier on PATH would shadow a correct install and still be used.
+# Output is captured before matching: `cmd | grep -q` under pipefail can fail on
+# SIGPIPE with the version present.
+at_pin() {
+  local out
+  command -v "$1" >/dev/null 2>&1 || return 1
+  case "$1" in
+    helm) out="$(helm version --short 2>/dev/null)" || return 1
+          case "$out" in "v$2" | "v$2+"*) return 0 ;; esac ;;
+    # Reads "golangci-lint has version X built with ...". If upstream rewords
+    # that line this fails closed (RESULT=failed every start), never open.
+    golangci-lint) out="$(golangci-lint version 2>/dev/null)" || return 1
+          case "$out" in *" version $2 "*) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# install_pinned <tool> <version> <url> <sha256> <path inside the tarball>
+# On failure returns 1 with the reason in $why.
+install_pinned() {
+  local tmp
+  why=""
+  if at_pin "$1" "$2"; then return 0; fi
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) ;;
+    *) why="no pinned checksum for $(uname -s)-$(uname -m)"; return 1 ;;
+  esac
+  tmp="$(mktemp -d)" || { why="mktemp"; return 1; }
+  # Bounded: a stalled server must not hang session start.
+  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$tmp/pkg.tgz" "$3"; then
+    why="download"
+  elif ! printf '%s  %s\n' "$4" "$tmp/pkg.tgz" | sha256sum -c - >/dev/null 2>&1; then
+    why="sha256 mismatch"
+  elif ! tar -xzf "$tmp/pkg.tgz" -C "$tmp" "$5"; then
+    why="unpack"
+  elif ! install -m 0755 "$tmp/$5" "$TOOL_BIN/$1"; then
+    why="install into $TOOL_BIN"
+  elif ! at_pin "$1" "$2"; then
+    why="PATH resolves $(command -v "$1" || echo nothing), not $2"
+  fi
+  rm -rf "$tmp"
+  [ -z "$why" ]
+}
 
 # --- Pre-push guards, first and on every run --------------------------------
 # ⛔ Every run, the no-op below included (#2761): a .git/hooks/pre-push being
@@ -96,7 +169,8 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
 # reinstalls it every time. So no-op when the last run ended in RESULT=ok, the
 # guards are in place, the e2e deps that run installed are still there, and
-# `pre-commit install` succeeds. Anything else runs the whole script again.
+# `pre-commit install` succeeds, and helm and golangci-lint are still at their
+# pins. Anything else runs the whole script again.
 # ⛔ The commit hook is reinstalled, not inspected (#2790): one that exists may
 # still not run (mode 0644) or not be pre-commit's (an `exit 0` stub), and
 # `pre-commit install` is idempotent. Its stdout is kept, as in step 3. A
@@ -104,6 +178,7 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
+  && at_pin helm "$HELM_VERSION" && at_pin golangci-lint "$GOLANGCI_LINT_VERSION" \
   && pre-commit install; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing else to do"
@@ -240,7 +315,31 @@ if [ -f tests/e2e/package.json ]; then
   fi
 fi
 
-# --- 6. Pre-build pre-commit's hook environments ---------------------------
+# --- 6. helm + golangci-lint at their pins (#2955) --------------------------
+# A failure here does not stop the steps around it, but it is in RESULT: a
+# remote session without helm turns the helm-gated tests red (tests/_helm_gate.py).
+toolchain_failed=""
+say "installing helm v$HELM_VERSION and golangci-lint v$GOLANGCI_LINT_VERSION (sha256-pinned)"
+if install_pinned helm "$HELM_VERSION" \
+     "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
+     "$HELM_SHA256" linux-amd64/helm; then
+  note "helm=$HELM_VERSION"
+else
+  say "  ⛔ helm v$HELM_VERSION not installed: $why"
+  note "helm=FAILED ($why)"
+  toolchain_failed="helm: $why"
+fi
+if install_pinned golangci-lint "$GOLANGCI_LINT_VERSION" \
+     "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz" \
+     "$GOLANGCI_LINT_SHA256" "golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64/golangci-lint"; then
+  note "golangci-lint=$GOLANGCI_LINT_VERSION"
+else
+  say "  ⛔ golangci-lint v$GOLANGCI_LINT_VERSION not installed: $why"
+  note "golangci-lint=FAILED ($why)"
+  toolchain_failed="${toolchain_failed:+$toolchain_failed; }golangci-lint: $why"
+fi
+
+# --- 7. Pre-build pre-commit's hook environments ---------------------------
 # Optional but high-value: the first `pre-commit run` otherwise spends minutes
 # building venvs. The container image is cached after this hook completes, so
 # paying it here means every later session starts warm.
@@ -255,6 +354,9 @@ fi
 if [ -n "${bootstrap_incomplete:-}" ]; then
   failed="${failed:+$failed; }not importable:$bootstrap_incomplete"
   say "⛔ bootstrap INCOMPLETE — not importable:$bootstrap_incomplete"
+fi
+if [ -n "$toolchain_failed" ]; then
+  failed="${failed:+$failed; }$toolchain_failed"
 fi
 if [ -n "$failed" ]; then
   note "RESULT=failed ($failed)"
