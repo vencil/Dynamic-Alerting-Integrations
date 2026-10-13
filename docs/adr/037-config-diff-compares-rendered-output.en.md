@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes.
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the current two-step approach, the carriers that CI checks own, and how files neither renderer reads are listed.
 
 ## Summary
 
@@ -91,9 +91,23 @@ Carriers not covered yet, and when they will be:
 | Platform-level `_custom_alerts` (recipes at the top of a `_` file) | Read by the custom-alert compiler, which is neither renderer | When the compiler has comparable output, or the first missed change |
 | `instance_tenant_mapping` | Read by the tenant mapping generator | When that generator has a stable output format |
 | `max_metrics_per_tenant` | served-values does not output the limit itself | When someone needs it |
-| `domain_policies` | The route generator's `--validate --strict` already blocks violations in CI | When "which violations were added" is needed: read the generator's `--findings-json` |
 
-`domain_policies` is guarded elsewhere, so it is listed as a note only and does not affect the exit code.
+**Carriers a CI check owns.** The route generator's `--validate --strict` blocks `domain_policies` violations; `validate-config` checks `_policies` and fails when a rule of `severity: error` is violated. Written where the check reads them (`domain_policies` in `_domain_policy.yaml`, `_policies` in the root defaults file), they are listed as a note only and do not affect the exit code. Written anywhere else they are listed as "not read here", exit code 1, so the report never implies that a rule nothing reads is enforced. To see which violations a change adds, read the generator's `--findings-json`.
+
+**Files neither renderer reads.** tenant-api's files such as `_tenant_orgs.yaml` and `_rbac.yaml` are listed as not compared, exit code 1. The report states only what config-diff knows for certain, that neither the exporter nor the route generator reads the file, plus one line on who may read it, because that depends on how tenant-api is deployed: `_rbac.yaml`, for example, is read from conf.d only when tenant-api's `--rbac` points there.
+
+**Current approach: two steps.** Values are compared as `da-guard parse-tree` reads them (ADR-036: Python does not parse the YAML itself); scalars by type and value, so a change only to comments, indentation, quoting or key order is no change. What cannot be told apart yet is "really has no effect" from "written where no reader reads it": which file and which level a key is written in decides whether a reader reads it. `defaults`, for example, is read only in a defaults file (`_defaults.yaml`), and `tenants:` in a `_` file in a sub-directory is not read. So until the readers can say, key by key, where they read it, the rule above for a **fully covered** carrier ("one line, exit code unaffected") is not applied: a changed value whose covering renders show no difference is always listed, with exit code 1.
+
+Example: add `defaults: {cpu: 1}` to the root `_platform.yaml` (not a defaults file, so the exporter does not read its `defaults`). The report's "Platform Settings" section lists:
+
+```text
+**:warning: Changed, but the renders show no difference** (1)
+
+- `_platform.yaml` `defaults` (added)
+  - the renders show no difference: it may have no effect, or a reader may not read it where it is written
+```
+
+Exit code 1.
 
 ### 4. Exit codes and the report
 
@@ -171,6 +185,8 @@ db-b sets `container_memory` to 90 itself, so it is unaffected.
 - **The current report must not regress**: tighter/looser classification of tenant thresholds, setting changes and custom-alert comparison are rebuilt on served-values' values.
 - **Keys the exporter does not serve** (such as `_namespaces`): served-values lists them as "not served", so a change is still seen, but the report can only say "the config changed", not "alerting behaviour changed".
 - **Sibling nodes with identical matchers** are paired by order; if their order changes, the report may show one removal and one addition.
+- **Loosening or removing a rule does not show**: `domain_policies` and `_policies` are listed as notes only, so loosening or removing a rule is not blocked by CI and does not raise the exit code; a violated `_policies` rule of `severity: warning` does not fail CI either.
+- **`_routing` written in a profile**: the exporter applies it, the route generator does not read it. The report lists a setting change in the exporter plane and nothing in the routing plane; that is two readers disagreeing ([#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)), not something the comparison misses.
 - **The platform's blast-radius report** (`blast_radius.py`) overlaps with this decision; retiring it is evaluated separately.
 
 ## Rejected alternatives

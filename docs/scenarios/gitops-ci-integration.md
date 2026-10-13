@@ -166,8 +166,8 @@ GitLab 那一份也有 blast-radius 那一步（`generate` stage 的 `blast-radi
 
 config-diff 比較的是兩側渲染出來的結果（exporter 送出的值與 Alertmanager 設定，
 [ADR-037](../adr/037-config-diff-compares-rendered-output.md)），所以 `conf.d/_defaults.yaml`
-這類平台檔的變更會報出它影響的租戶。改過的 `_` 開頭檔另在「Changed Platform Files」列出、
-結束碼為 1：兩支渲染程式都讀不到的設定只能靠這份清單人工審。GitHub 那一份也一樣。
+這類平台檔的變更會報出它影響的租戶。`_` 開頭檔裡值變了的鍵另在「Platform Settings」列出；
+兩支渲染程式都讀不到、或渲染結果沒有差異的，結束碼為 1，要人工審。GitHub 那一份也一樣。
 ⚠️ v2.9.0 映像仍只比較頂層租戶檔：平台檔只列檔名，不列受影響的租戶。 <!-- image-caveat: v2.9.0 -->
 
 ## 2. 三階段 CI/CD Pipeline

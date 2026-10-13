@@ -222,7 +222,7 @@ TOOL_FILES=(
     # prints them; imported by ops/config_diff. Stdlib-only.
     _lib_redact.py
     # #1516 — reads `da-guard parse-tree`'s document (ADR-036 §2); imported
-    # by ops/migration_audit. Imports ops/guard_dispatch (above).
+    # by ops/migration_audit and ops/config_diff. Imports ops/guard_dispatch (above).
     _lib_parse_tree.py
     # #2883 — reads a tenant-api state store copy (--state); imported by
     # ops/offboard_tenant. Imports _lib_io (above).
