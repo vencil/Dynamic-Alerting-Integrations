@@ -263,7 +263,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// direct write (writeFileAtomic): a tenant file that is a symlink —
 	// dangling, or pointing outside conf.d — becomes a regular file, and
 	// nothing is written where it pointed (#2939, ADR-036 §4's repair path).
-	if err := writeFileAtomic(filePath, []byte(yamlContent), 0644); err != nil {
+	if err := w.writeTenant(filePath, []byte(yamlContent), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.
 		w.abortFeatureBranch(base, branchName)

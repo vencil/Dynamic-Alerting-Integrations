@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -260,6 +261,47 @@ func TestTreeUnreadable_AsyncBatchStoresNoEntryNames(t *testing.T) {
 	f.d.Tasks = tasks
 	w := f.do(t, BatchTenants(f.d), rbac.PermRead, "platform", "POST", "/api/v1/tenants/batch?async=true", "",
 		`{"operations":[{"tenant_id":"tu-a","patch":{"_silent_mode":"critical"}}]}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("async submit = %d, want 202: %s", w.Code, w.Body.String())
+	}
+	var sub map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &sub); err != nil {
+		t.Fatal(err)
+	}
+	taskID, _ := sub["task_id"].(string)
+	if final := pollUntilTerminal(t, tasks, taskID, 10*time.Second); final.Status != async.TaskFailed {
+		t.Fatalf("task = %+v, want failed (rejected)", final)
+	}
+	for _, poller := range []string{"platform", "team,readers"} {
+		got := f.do(t, GetTask(f.d), rbac.PermRead, poller, "GET", "/api/v1/tasks/"+taskID, taskID, "")
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), CodeTenantTreeUnreadable) ||
+			!strings.Contains(got.Body.String(), "(unreadable entries: 1)") {
+			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, got.Body.String(), CodeTenantTreeUnreadable)
+		}
+		if strings.Contains(got.Body.String(), "secret-other-team-file") {
+			t.Errorf("%s polls: the stored result names the entry: %s", poller, got.Body.String())
+		}
+	}
+}
+
+// The group batch form of TestTreeUnreadable_AsyncBatchStoresNoEntryNames:
+// POST /groups/{id}/batch?async=true runs the same pipeline
+// (executeBatchOps, batchResultsStored), so its stored results name no
+// entry either, for any poller.
+func TestTreeUnreadable_AsyncGroupBatchStoresNoEntryNames(t *testing.T) {
+	t.Parallel()
+	f := newTreeFixture(t)
+	setupGroupsFile(t, f.dir, "groups:\n  tu-team:\n    label: TU\n    members:\n      - tu-a\n")
+	if err := os.Symlink("missing-target.yaml", filepath.Join(f.dir, "secret-other-team-file.yaml")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	tasks := async.NewManager(1)
+	defer tasks.Close()
+	f.d.Tasks = tasks
+	f.d.Groups = groups.NewDirManager(f.dir)
+	f.d.State = mustDirState(f.dir)
+	w := f.do(t, GroupBatch(f.d), rbac.PermRead, "platform", "POST", "/api/v1/groups/tu-team/batch?async=true", "tu-team",
+		`{"patch":{"_silent_mode":"critical"}}`)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("async submit = %d, want 202: %s", w.Code, w.Body.String())
 	}

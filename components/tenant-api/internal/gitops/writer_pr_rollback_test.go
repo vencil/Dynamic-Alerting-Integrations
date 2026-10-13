@@ -10,10 +10,11 @@ package gitops
 // local git repos (initRepoOnMain / seedTenantRepo / addBareRemote) with the
 // failure induced structurally — an empty commit ident (the in-repo `git
 // commit` itself fails after write + add succeeded), or a MergeFunc that
-// succeeds at pre-flight and fails under the lock. (A tenant file committed
-// as a dangling symlink used to make the in-place write fail; since #2939
-// the write replaces the link by rename, which is the repair path, so the
-// tests below pin that instead: success, and a clean base afterwards.)
+// succeeds at pre-flight and fails under the lock. A tenant-file write
+// failure is injected through the per-Writer writeTenantFile seam: since
+// #2939 the write replaces the entry by rename, and a tenant file committed
+// as a dangling symlink — the structural injection it used to be — is now
+// the repair path (pinned below: success, and a clean base afterwards).
 
 import (
 	"context"
@@ -79,6 +80,56 @@ func TestWritePR_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	if st := gitOut(t, repo, "status", "--porcelain"); st != "" {
 		t.Errorf("working tree dirty after the write:\n%s", st)
 	}
+}
+
+// errInjectedWrite is the tenant-file write failure the writeTenantFile seam
+// injects: under euid 0 nothing structural makes the rename fail once the
+// write is reached (a directory or a FIFO is refused earlier, as not a
+// regular file).
+var errInjectedWrite = errors.New("injected: no space left on device")
+
+// failTenantWrite makes w's tenant-file writes fail (writeTenantFile seam).
+func failTenantWrite(w *Writer) {
+	w.writeTenantFile = func(string, []byte, os.FileMode) error { return errInjectedWrite }
+}
+
+// TestWritePR_WriteFileFailureRollsBack: the tenant-file write fails AFTER
+// the feature branch was created → WritePR must delete the branch and
+// re-anchor on a clean base.
+func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
+	repo := initRepoOnMain(t)
+	w := NewWriter(repo, repo)
+	failTenantWrite(w)
+
+	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
+	if !errors.Is(err, errInjectedWrite) {
+		t.Fatalf("err = %v, want the injected write failure", err)
+	}
+	if !strings.Contains(err.Error(), "write file") {
+		t.Errorf("error = %q, want it to carry the 'write file' failure semantics", err.Error())
+	}
+	assertCleanOnBase(t, repo, "main", "tenant-api/")
+}
+
+// TestWritePRBatch_WriteFileFailureRollsBack: the per-op write-failure arm —
+// branch dropped, base clean, error names the tenant.
+func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
+	repo := initRepoOnMain(t)
+	w := NewWriter(repo, repo)
+	failTenantWrite(w)
+
+	merge := func(existing []byte) (string, error) {
+		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
+	}
+	_, err := w.WritePRBatch(context.Background(),
+		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
+	if !errors.Is(err, errInjectedWrite) {
+		t.Fatalf("err = %v, want the injected write failure", err)
+	}
+	if !strings.Contains(err.Error(), "write file for db-a") {
+		t.Errorf("error = %q, want 'write file for db-a'", err.Error())
+	}
+	assertCleanOnBase(t, repo, "main", "tenant-api/batch/")
 }
 
 // TestWritePR_CommitFailureRollsBack: the IN-REPO commit-failure arm — the

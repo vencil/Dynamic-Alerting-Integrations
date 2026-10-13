@@ -441,6 +441,13 @@ type Writer struct {
 	// returns is a failure after the commit landed. Always nil in production.
 	beforeBatchSync func() error
 
+	// writeTenantFile is a TEST-ONLY seam (#2939): writeTenant calls it,
+	// when non-nil, instead of writeFileAtomic for the tenant file a PR-mode
+	// write or a batch op writes — so a test can fail that write (there is
+	// no structural way to make the rename fail under euid 0). Per-Writer,
+	// as beforeBaseRestore. Always nil in production.
+	writeTenantFile func(path string, content []byte, perm os.FileMode) error
+
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
 	onBatchStaging func(*stagingTree)
@@ -1467,6 +1474,15 @@ func writeFileAtomic(filePath string, content []byte, perm os.FileMode) error {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
+}
+
+// writeTenant writes a tenant file for WritePR's Step 4 and a batch op
+// (applyBatchOp): writeFileAtomic, or the writeTenantFile test seam.
+func (w *Writer) writeTenant(path string, content []byte, perm os.FileMode) error {
+	if w.writeTenantFile != nil {
+		return w.writeTenantFile(path, content, perm)
+	}
+	return writeFileAtomic(path, content, perm)
 }
 
 // commitFileChange is the write+commit+conflict-detect+notify flow of the

@@ -448,7 +448,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
 	if existing != nil && string(existing) == content {
 		return BatchOpOutcome{NoOp: true, Notices: notices}
 	}
-	if werr := writeFileAtomic(filePath, []byte(content), 0644); werr != nil {
+	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
 		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}
 	}
 	rel, err := filepath.Rel(st.root, filePath)
