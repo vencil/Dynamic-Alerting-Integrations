@@ -162,7 +162,7 @@ Raises (both loaders):
   drop its tenants, an unreadable `_defaults.yaml` the values every tenant
   inherits from it); `path` names the first, the one-line message names all
   (an unreadable one with its reason, `stat_error` / `read_error` /
-  `walk_error`), `unreadable` lists the unreadable ones, `stderr_lines`
+  `walk_error` / `special_file`), `unreadable` lists the unreadable ones, `stderr_lines`
   carries da-guard's stderr whole (the exporter's reasons among it).
   A tree from which the load keeps no file at all because every config
   file is unreadable (or its only entries are sub-directories it cannot
@@ -331,7 +331,7 @@ class ServedTree(NamedTuple):
 
 class UnreadableFile(NamedTuple):
     file: str    # root-relative slash path (a directory's, for walk_error)
-    reason: str  # closed set: "stat_error" | "read_error" | "walk_error"
+    reason: str  # closed set: "stat_error" | "read_error" | "walk_error" | "special_file"
 
 
 class ParseFailedError(YamlFileError):

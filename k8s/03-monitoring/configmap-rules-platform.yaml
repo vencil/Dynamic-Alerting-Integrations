@@ -641,8 +641,9 @@ data:
           # tenants in that file (or under that directory) are no longer
           # served, and before #2592 nothing but a WARN log said so.
           # da_config_unreadable_files{reason} is a state gauge, re-Set by
-          # every walk (reason ∈ {stat_error, read_error, walk_error},
-          # pkg/config's closed UnreadableFile set; all pre-initialised at 0),
+          # every walk (reason ∈ {stat_error, read_error, walk_error,
+          # special_file}, pkg/config's closed UnreadableFile set; all
+          # pre-initialised at 0; special_file since #2939),
           # so it stays up exactly as long as the entries are unreadable. A
           # walk that itself fails (root missing) keeps the previous value;
           # ConfigScanFailing (walk_error) fires for that state.
@@ -667,11 +668,15 @@ data:
                 symlink's target) cannot be statted, e.g. a dangling link;
                 read_error = it cannot be read, e.g. permission denied;
                 walk_error = a directory cannot be listed, so nothing under
-                it is loaded. Every tenant declared there has no thresholds
+                it is loaded; special_file = it is not a regular file (a
+                FIFO, a socket or a device, or a symlink to one) and is
+                never opened. Every tenant declared there has no thresholds
                 on /metrics, while every other tenant keeps reloading. The
                 exporter log names each entry ("WARN: cannot read ...",
-                "WARN: cannot stat ...", "WARN: walk error at ..."). Fix the
-                file mode / ownership or the link; the next tick picks it up.
+                "WARN: cannot stat ...", "WARN: walk error at ...",
+                "WARN: ... is a special file ..."). Fix the file mode /
+                ownership or the link, or replace the special file with a
+                regular one; the next tick picks it up.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
 
           # --- Config Defaults Unusable (issue #2592) ---

@@ -254,9 +254,11 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 // gitignored `team/x.yaml` declaring a tenant is a declaration). Nothing of
 // it is committed except the batch's own paths, and the copy is thrown away.
 // Directories and symlinks are recreated as such; `.git` is skipped. A
-// special file the conf.d walker would read (a FIFO named *.yaml) cannot be
-// copied without reading it, and a single write's walk would block on it and
-// fail closed — so the batch fails closed too, with ErrTenantTreeScan.
+// special file named like a config file (a FIFO named *.yaml) cannot be
+// copied without reading it, so the batch fails closed with
+// ErrTenantTreeScan. (A single write's walk used to block on one and fail
+// closed the same way; since #2939 the walker does not open it and records
+// it as unreadable instead, so a single write goes through.)
 func (w *Writer) mirrorServingConf(st *stagingTree) error {
 	src, err := filepath.Abs(w.configDir)
 	if err != nil {

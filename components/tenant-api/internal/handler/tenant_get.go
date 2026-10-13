@@ -308,7 +308,7 @@ var defaultRootReadGuard = &boundedcall.Guard{}
 // ADR-024 PR4 / #704 write-vs-read asymmetry).
 //
 // ⛔ THE ROOT READ IS BOUNDED AND SHARED (#2208, PR #2214 review). It reads
-// every root `_*.yaml`, and a read that never returns (a FIFO, a hung mount)
+// every root `_*.yaml`, and a read that never returns (a hung mount)
 // would hang this GET — before #2208 only a file named like the defaults
 // carrier could. So:
 //

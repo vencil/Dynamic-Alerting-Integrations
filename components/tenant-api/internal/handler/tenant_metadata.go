@@ -34,13 +34,12 @@ func metadataRootReadGuard(configDir string) *boundedcall.Guard {
 //
 // It returns an error when that layer could not be read in full: the root
 // could not be walked, a root platform file could not be read, or the read
-// did not return in time (a FIFO named `_*.yaml`, a hung mount). A file that
+// did not return in time (a hung mount). A file that
 // was read but that the exporter's decode rejects is not an error: it adds
 // no metadata, on /metrics as here.
 //
-// ⚠️ A read that timed out stays blocked until the file returns (for a FIFO:
-// until something opens it for writing; removing the file does not end a
-// read already in progress). Until then every call here fails at once with
+// ⚠️ A read that timed out stays blocked until the file returns (removing
+// the file does not end a read already in progress). Until then every call here fails at once with
 // boundedcall.ErrStuck instead of starting another read; the first call
 // after the blocked read returns reads the files again.
 func loadPlatformMetadata(configDir string) (cfg.RootPlatform, error) {

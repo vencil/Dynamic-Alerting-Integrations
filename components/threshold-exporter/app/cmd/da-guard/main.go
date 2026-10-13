@@ -516,7 +516,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 			// A read error leaves nil: every receiver of the file's tenants
 			// is then Unmatched and refused (fail-closed), not judged as
 			// yaml.v3 read it.
-			data, err := os.ReadFile(filepath.Join(config.AbsScanRoot(f.configDir), filepath.FromSlash(ec.SourceFile)))
+			data, err := config.ReadConfFile(filepath.Join(config.AbsScanRoot(f.configDir), filepath.FromSlash(ec.SourceFile)))
 			if err == nil {
 				pyRouting[ec.SourceFile] = routingpolicy.PyYAMLRoutingByTenant(data)
 				pyNotMapping[ec.SourceFile] = routingpolicy.PyYAMLTenantBodyNotMapping(data)
