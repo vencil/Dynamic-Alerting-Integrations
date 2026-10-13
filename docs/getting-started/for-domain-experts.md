@@ -278,7 +278,7 @@ _policies:
     severity: warning
 ```
 
-執行：`da-tools evaluate-policy --config-dir conf.d/ --ci`。運算子寫在 `operator:`，沒寫時預設 `required`；可用的運算子、`when` 條件式與萬用字元目標見 [CLI 參考 evaluate-policy](../cli-reference.md#evaluate-policy)。`severity: warning` 的違規只報告，`--ci` 不會因此失敗。
+執行：`da-tools evaluate-policy --config-dir conf.d/ --ci`。運算子寫在 `operator:`，沒寫時預設 `required`；可用的運算子、`when` 條件式與萬用字元目標見 [CLI 參考 evaluate-policy](../cli-reference.md#evaluate-policy)。`severity: warning` 的違規只報告，`--ci` 不會因此失敗。`_routing` 讀的是路由產生器解析後的結果（含 `_routing_defaults`），所以 `require-routing` 只抓得到最後完全沒有路由的租戶。
 
 ### Cross-Domain Routing Profiles & Domain Policies (v2.1.0 ADR-007)
 

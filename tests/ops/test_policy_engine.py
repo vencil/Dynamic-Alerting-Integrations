@@ -1131,6 +1131,11 @@ class TestDocsPolicyExample:
             assert set(rule) <= known, f"{rule.get('name')}: {sorted(set(rule) - known)}"
             # The default `required` must never stand in for a forgotten operator.
             assert "operator" in rule, rule.get("name")
+            # `when` reads the same way one level down (default `required` too).
+            when = rule.get("when")
+            if when is not None:
+                assert set(when) <= {"target", "operator", "value"}, rule.get("name")
+                assert "operator" in when, rule.get("name")
 
     @pytest.mark.usefixtures("da_guard_env")
     def test_example_fails_ci_on_a_tree_that_breaks_it(self, path, tmp_path, capsys):
