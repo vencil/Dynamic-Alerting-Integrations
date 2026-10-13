@@ -86,6 +86,7 @@ func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail s
 		return 0, fmt.Errorf("account: empty tenant id")
 	}
 	var allocated uint32
+	var ours Mark // this call's reservation, kept across transform re-runs
 	transform := func(current []byte) ([]byte, error) {
 		allocated = 0 // re-derived on every attempt
 		reg, err := a.parseGuarded(current)
@@ -98,7 +99,8 @@ func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail s
 			// brought up to what the registry accounts for.
 			return nil, raiseHighWater(ctx, a.hw, reg.NextAccountID)
 		}
-		if err := guardAgainstHighWater(ctx, a.hw, reg); err != nil {
+		base := reg.NextAccountID
+		if err := guardAgainstHighWater(ctx, a.hw, reg, ours); err != nil {
 			return nil, err
 		}
 		id, _, err := reg.ensure(tenantID)
@@ -107,7 +109,7 @@ func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail s
 		}
 		// The mark first: a failure after this leaves it ahead of the
 		// registry, which the next allocation skips past.
-		if err := raiseHighWater(ctx, a.hw, reg.NextAccountID); err != nil {
+		if ours, err = reserveHighWater(ctx, a.hw, base, reg.NextAccountID); err != nil {
 			return nil, err
 		}
 		allocated = id
@@ -147,13 +149,15 @@ func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmai
 	sort.Strings(ids)
 
 	var res BackfillResult
+	var ours Mark // this call's reservation, kept across transform re-runs
 	transform := func(current []byte) ([]byte, error) {
 		res = BackfillResult{} // re-derived on every attempt: the store re-runs this on a lost race
 		reg, err := a.parseGuarded(current)
 		if err != nil {
 			return nil, err
 		}
-		if err := guardAgainstHighWater(ctx, a.hw, reg); err != nil {
+		base := reg.NextAccountID
+		if err := guardAgainstHighWater(ctx, a.hw, reg, ours); err != nil {
 			return nil, err
 		}
 		anyChange := false
@@ -175,8 +179,9 @@ func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmai
 			// nobody needed an id → no write; bring a lagging mark up
 			return nil, raiseHighWater(ctx, a.hw, reg.NextAccountID)
 		}
-		// The mark first, at the last id of the batch.
-		if err := raiseHighWater(ctx, a.hw, reg.NextAccountID); err != nil {
+		// The mark first, at the last id of the batch: one reservation, so
+		// a failed batch is skipped whole.
+		if ours, err = reserveHighWater(ctx, a.hw, base, reg.NextAccountID); err != nil {
 			return nil, err
 		}
 		return reg.Marshal()

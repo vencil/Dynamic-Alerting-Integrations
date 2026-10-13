@@ -13,30 +13,26 @@ import (
 // changing the mark; onRaise, when set, runs on every successful Raise.
 type fakeHighWater struct {
 	mu       sync.Mutex
-	mark     uint32
+	mark     Mark
 	raises   int
 	raiseErr error
-	onRaise  func(v uint32)
 }
 
-func (f *fakeHighWater) Get(context.Context) (uint32, error) {
+func (f *fakeHighWater) Get(context.Context) (Mark, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.mark, nil
 }
 
-func (f *fakeHighWater) Raise(_ context.Context, v uint32) (uint32, error) {
+func (f *fakeHighWater) Raise(_ context.Context, m Mark) (Mark, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.raiseErr != nil {
 		return f.mark, f.raiseErr
 	}
-	if v > f.mark {
-		f.mark = v
+	if m.Max > f.mark.Max {
+		f.mark = m
 		f.raises++
-		if f.onRaise != nil {
-			f.onRaise(v)
-		}
 	}
 	return f.mark, nil
 }
@@ -44,8 +40,11 @@ func (f *fakeHighWater) Raise(_ context.Context, v uint32) (uint32, error) {
 func (f *fakeHighWater) get() uint32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.mark
+	return f.mark.Max
 }
+
+// at is a mark reserved one id at a time (Base == Max).
+func at(max uint32) Mark { return Mark{Max: max, Base: max} }
 
 func regBytes(t *testing.T, next uint32, allocs map[string]uint32) []byte {
 	t.Helper()
@@ -73,19 +72,24 @@ func parsed(t *testing.T, b []byte) *Registry {
 func TestJudgeHighWater(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		next, mark uint32
-		want       hwVerdict
+		next uint32
+		mark Mark
+		want hwVerdict
 	}{
-		{1000, 0, hwOK},      // nothing allocated, no mark
-		{1003, 1002, hwOK},   // in step: the mark is the last id
-		{1010, 1002, hwOK},   // mark lagging
-		{1003, 1003, hwSkip}, // the marked id never reached the registry
-		{1002, 1003, hwBehind},
-		{1000, 1020, hwBehind}, // registry blank, mark kept (reinstall)
+		{1000, Mark{}, hwOK},                        // nothing allocated, no mark
+		{1003, at(1002), hwOK},                      // in step: the mark is the last id
+		{1010, at(1002), hwOK},                      // mark lagging
+		{1003, at(1003), hwSkip},                    // the marked id never reached the registry
+		{1002, at(1003), hwBehind},                  // went back past the base
+		{1000, Mark{Max: 1009, Base: 1000}, hwSkip}, // a 10-id batch never reached the registry
+		{1004, Mark{Max: 1009, Base: 1000}, hwSkip}, // ...or was rolled back to inside itself
+		{999, Mark{Max: 1009, Base: 1000}, hwBehind},
+		{1000, Mark{Max: 1020}, hwBehind}, // no base recorded: only the last id may be missing
+		{1000, at(1020), hwBehind},        // registry blank, mark kept (reinstall)
 	}
 	for _, c := range cases {
 		if got := judgeHighWater(c.next, c.mark); got != c.want {
-			t.Errorf("judgeHighWater(next=%d, mark=%d) = %d, want %d", c.next, c.mark, got, c.want)
+			t.Errorf("judgeHighWater(next=%d, mark=%+v) = %d, want %d", c.next, c.mark, got, c.want)
 		}
 	}
 }
@@ -125,7 +129,7 @@ func TestAllocator_RaisesMarkBeforeRegistryWrite(t *testing.T) {
 	t.Parallel()
 	hw := &fakeHighWater{}
 	fw := &fakeWriter{data: regBytes(t, 1005, map[string]uint32{"t-a": 1004})}
-	hw.mark = 1004
+	hw.mark = at(1004)
 	var markAtWrite uint32
 	w := &observingWriter{fakeWriter: fw, onCommit: func() { markAtWrite = hw.get() }}
 
@@ -145,7 +149,7 @@ func TestAllocator_RaisesMarkBeforeRegistryWrite(t *testing.T) {
 // unrecorded.
 func TestAllocator_MarkWriteFailure_WritesNothing(t *testing.T) {
 	t.Parallel()
-	hw := &fakeHighWater{mark: 1000, raiseErr: errors.New("configmap update: 503")}
+	hw := &fakeHighWater{mark: at(1000), raiseErr: errors.New("configmap update: 503")}
 	fw := &fakeWriter{data: regBytes(t, 1001, map[string]uint32{"t-a": 1000})}
 	before := append([]byte(nil), fw.data...)
 
@@ -162,7 +166,7 @@ func TestAllocator_MarkWriteFailure_WritesNothing(t *testing.T) {
 // refusing, and does not hand it out.
 func TestAllocator_MarkOneAhead_SkipsTheMarkedID(t *testing.T) {
 	t.Parallel()
-	hw := &fakeHighWater{mark: 1001}
+	hw := &fakeHighWater{mark: at(1001)}
 	fw := &fakeWriter{data: regBytes(t, 1001, map[string]uint32{"t-a": 1000})}
 
 	id, err := NewAllocator(fw, nil).WithHighWater(hw).EnsureAccountID(context.Background(), "t-b", "ops@example.com")
@@ -185,7 +189,7 @@ func TestAllocator_MarkOneAhead_SkipsTheMarkedID(t *testing.T) {
 // registry.
 func TestAllocator_LaggingMarkIsRaised(t *testing.T) {
 	t.Parallel()
-	hw := &fakeHighWater{mark: 0}
+	hw := &fakeHighWater{}
 	fw := &fakeWriter{data: regBytes(t, 1003, map[string]uint32{"t-a": 1000, "t-b": 1001, "t-c": 1002})}
 
 	id, err := NewAllocator(fw, nil).WithHighWater(hw).EnsureAccountID(context.Background(), "t-b", "ops@example.com")
@@ -205,7 +209,7 @@ func TestAllocator_LaggingMarkIsRaised(t *testing.T) {
 // tokens away from tenants that are fine.
 func TestAllocator_BehindRegistry_ExistingTenantStillResolves(t *testing.T) {
 	t.Parallel()
-	hw := &fakeHighWater{mark: 1009}
+	hw := &fakeHighWater{mark: at(1009)}
 	fw := &fakeWriter{data: regBytes(t, 1002, map[string]uint32{"t-a": 1000, "t-b": 1001})}
 
 	id, err := NewAllocator(fw, nil).WithHighWater(hw).EnsureAccountID(context.Background(), "t-a", "ops@example.com")
@@ -214,6 +218,9 @@ func TestAllocator_BehindRegistry_ExistingTenantStillResolves(t *testing.T) {
 	}
 }
 
+// A batch is one reservation: the mark goes to its last id, based on the
+// registry the batch was planned from. A registry put back to before an
+// earlier, committed allocation is refused.
 func TestBackfill_RaisesMarkToTheLastIDAndRefusesWhenBehind(t *testing.T) {
 	t.Parallel()
 	hw := &fakeHighWater{}
@@ -222,14 +229,17 @@ func TestBackfill_RaisesMarkToTheLastIDAndRefusesWhenBehind(t *testing.T) {
 	ctx := context.Background()
 
 	backup := append([]byte(nil), fw.data...)
+	if _, err := a.EnsureAccountID(ctx, "t-0", "ops@example.com"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := a.Backfill(ctx, []string{"t-c", "t-a", "t-b", "t-d"}, "ops@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if hw.get() != 1003 {
-		t.Fatalf("mark = %d after backfilling 4 tenants, want 1003", hw.get())
+	if got := hw.mark; got != (Mark{Max: 1004, Base: 1001}) {
+		t.Fatalf("mark after backfilling 4 tenants onto next=1001 = %+v, want {1004 1001}", got)
 	}
 
-	fw.data = backup
+	fw.data = backup // next=1000: before t-0's committed allocation
 	if _, err := a.Backfill(ctx, []string{"t-e"}, "ops@example.com"); !errors.Is(err, ErrRegistryBehindHighWater) {
 		t.Fatalf("backfill against the put-back registry: err = %v, want ErrRegistryBehindHighWater", err)
 	}
@@ -242,7 +252,7 @@ func TestVerifyRegistryAgainstHighWater(t *testing.T) {
 	t.Run("behind refuses to start", func(t *testing.T) {
 		t.Parallel()
 		s := newMapStore(t, map[string][]byte{RegistryFileName: regBytes(t, 1002, map[string]uint32{"t-a": 1000, "t-b": 1001})})
-		err := VerifyRegistryAgainstHighWater(ctx, s, &fakeHighWater{mark: 1005})
+		err := VerifyRegistryAgainstHighWater(ctx, s, &fakeHighWater{mark: at(1005)})
 		if err == nil {
 			t.Fatal("started against a registry 4 allocations behind the mark")
 		}
@@ -261,7 +271,7 @@ func TestVerifyRegistryAgainstHighWater(t *testing.T) {
 	t.Run("one ahead starts; the next allocation skips", func(t *testing.T) {
 		t.Parallel()
 		s := newMapStore(t, map[string][]byte{RegistryFileName: regBytes(t, 1002, map[string]uint32{"t-a": 1000, "t-b": 1001})})
-		if err := VerifyRegistryAgainstHighWater(ctx, s, &fakeHighWater{mark: 1002}); err != nil {
+		if err := VerifyRegistryAgainstHighWater(ctx, s, &fakeHighWater{mark: at(1002)}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -277,7 +287,7 @@ func TestVerifyRegistryAgainstHighWater(t *testing.T) {
 	})
 	t.Run("blank registry with a kept mark refuses", func(t *testing.T) {
 		t.Parallel()
-		if err := VerifyRegistryAgainstHighWater(ctx, newMapStore(t, nil), &fakeHighWater{mark: 1020}); err == nil {
+		if err := VerifyRegistryAgainstHighWater(ctx, newMapStore(t, nil), &fakeHighWater{mark: at(1020)}); err == nil {
 			t.Fatal("started from the floor although ids up to 1020 were allocated")
 		}
 	})
@@ -293,9 +303,75 @@ func TestMergeForRestore_GoesAboveTheHighWaterMark(t *testing.T) {
 	if m.NextAccountID != 1008 || !rep.Changed() {
 		t.Fatalf("next = %d (changed %v), want 1008: ids up to the mark were handed out", m.NextAccountID, rep.Changed())
 	}
-	if judgeHighWater(m.NextAccountID, 1007) != hwOK {
+	if judgeHighWater(m.NextAccountID, at(1007)) != hwOK {
 		t.Fatal("the merged registry would still be refused against the mark")
 	}
+}
+
+// A Backfill batch whose registry write fails leaves the mark several ids
+// ahead. The batch is one reservation, so the next allocation skips it whole
+// — and startup does not refuse — instead of wedging until a restore.
+func TestBackfill_FailedRegistryWrite_IsSkippedNotWedged(t *testing.T) {
+	t.Parallel()
+	hw := &fakeHighWater{}
+	fw := &failingWriter{fakeWriter: &fakeWriter{data: regBytes(t, 1000, nil)}, fail: errors.New("update: etcdserver timeout")}
+	ctx := context.Background()
+
+	if _, err := NewAllocator(fw, nil).WithHighWater(hw).Backfill(ctx, []string{"t-a", "t-b", "t-c"}, "ops@example.com"); err == nil {
+		t.Fatal("backfill reported success although the registry write failed")
+	}
+	if got := hw.get(); got != 1002 {
+		t.Fatalf("mark = %d, want 1002 (reserved before the failed write)", got)
+	}
+
+	fw.fail = nil
+	s := newMapStore(t, map[string][]byte{RegistryFileName: fw.data})
+	if err := VerifyRegistryAgainstHighWater(ctx, s, hw); err != nil {
+		t.Fatalf("startup refused after a failed batch write: %v", err)
+	}
+	id, err := NewAllocator(fw, nil).WithHighWater(hw).EnsureAccountID(ctx, "t-d", "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 1003 {
+		t.Fatalf("id = %d, want 1003 (1000..1002 were reserved, so they are skipped)", id)
+	}
+}
+
+// A compare-and-swap retry of the same call — another record in the same
+// ConfigMap changed, the registry did not — keeps the plan: no id skipped.
+func TestAllocator_RetryOfTheSameCall_SkipsNothing(t *testing.T) {
+	t.Parallel()
+	data := regBytes(t, 1002, map[string]uint32{"t-a": 1000, "t-b": 1001})
+	hw := &fakeHighWater{mark: at(1001)}
+	fw := &fakeWriter{data: data, rerunOnce: append([]byte(nil), data...)}
+
+	id, err := NewAllocator(fw, nil).WithHighWater(hw).EnsureAccountID(context.Background(), "t-c", "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 1002 {
+		t.Fatalf("id = %d, want 1002 (the retry found its own reservation and kept it)", id)
+	}
+	if r := parsed(t, fw.data); r.NextAccountID != 1003 {
+		t.Fatalf("next_account_id = %d, want 1003", r.NextAccountID)
+	}
+}
+
+// failingWriter fails every registry write with fail while it is set.
+type failingWriter struct {
+	*fakeWriter
+	fail error
+}
+
+func (f *failingWriter) Mutate(ctx context.Context, key string, m statestore.Meta, t statestore.Transform) (bool, error) {
+	if f.fail == nil {
+		return f.fakeWriter.Mutate(ctx, key, m, t)
+	}
+	if _, err := t(f.data); err != nil {
+		return false, err
+	}
+	return false, f.fail
 }
 
 // observingWriter calls onCommit right before a registry write lands.

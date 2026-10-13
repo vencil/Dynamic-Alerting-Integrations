@@ -158,8 +158,8 @@ func VerifyLiveTokensAgainstRegistry(ctx context.Context, s statestore.Store, to
 }
 
 // VerifyRegistryAgainstHighWater is the startup check against the AccountID
-// high-water mark (#2928). A registry counter more than one allocation below
-// the mark means an older registry was put back; tenant-api refuses to start
+// high-water mark (#2928). A registry counter below the base of the last
+// reservation means an older registry was put back; tenant-api refuses to start
 // until `tenant-api state restore` merges it, which also lifts the counter
 // above the mark. Otherwise a lagging mark — the first start after the mark
 // was introduced, or its ConfigMap restored older — is raised to what the
@@ -182,10 +182,10 @@ func VerifyRegistryAgainstHighWater(ctx context.Context, s statestore.Store, hw 
 	}
 	if judgeHighWater(reg.NextAccountID, mark) == hwBehind {
 		return fmt.Errorf("account: refusing to start — %s in %s has next_account_id %d, but AccountIDs up to %d have been allocated "+
-			"(high-water mark); an older registry was put back, and the next allocation could re-issue an id in use (cross-tenant log leak). "+
+			"from next_account_id %d (high-water mark); an older registry was put back, and the next allocation could re-issue an id in use (cross-tenant log leak). "+
 			"Restore the registry with `tenant-api state restore`, which lifts next_account_id above the mark "+
 			"(the pod cannot start, so run it in a copy of the pod: see the tenant-api README, state store backup and restore)",
-			RegistryFileName, s.Describe(), reg.NextAccountID, mark)
+			RegistryFileName, s.Describe(), reg.NextAccountID, mark.Max, mark.Base)
 	}
 	return raiseHighWater(ctx, hw, reg.NextAccountID)
 }

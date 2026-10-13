@@ -80,7 +80,7 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	err = staterestore.Run(ctx, s, bak, staterestore.Options{
 		Keys:   strings.Split(*keys, ","),
 		Tokens: tokens,
-		Limits: account.RestoreLimits{HighWater: mark},
+		Limits: account.RestoreLimits{HighWater: mark.Max},
 		DryRun: *dryRun,
 		Author: *author,
 	}, stdout)
@@ -99,33 +99,33 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 // federationRestoreInputs reads, from the federation token store, the ids
 // live logs tokens carry and the AccountID high-water mark (#2928) — or
 // neither when federation is off.
-func federationRestoreInputs(f federationFlags) ([]account.TokenAllocation, uint32, error) {
+func federationRestoreInputs(f federationFlags) ([]account.TokenAllocation, account.Mark, error) {
 	if f.KeyPath == "" {
-		return nil, 0, nil
+		return nil, account.Mark{}, nil
 	}
 	client, err := buildInClusterClientset()
 	if err != nil {
-		return nil, 0, err
+		return nil, account.Mark{}, err
 	}
 	ns := f.Namespace
 	if ns == "" {
 		if ns, err = inClusterNamespace(); err != nil {
-			return nil, 0, err
+			return nil, account.Mark{}, err
 		}
 	}
 	rs, err := token.NewConfigMapStore(client, ns, f.ConfigMapName)
 	if err != nil {
-		return nil, 0, err
+		return nil, account.Mark{}, err
 	}
 	tokens, err := tokenAllocations(rs)
 	if err != nil {
-		return nil, 0, err
+		return nil, account.Mark{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	mark, err := token.NewHighWater(client, ns, f.ConfigMapName).Get(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, account.Mark{}, err
 	}
 	return tokens, mark, nil
 }

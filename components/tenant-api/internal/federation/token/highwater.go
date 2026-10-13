@@ -24,12 +24,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
+
+	"github.com/vencil/tenant-api/internal/federation/account"
 )
 
-// HighWaterAnnotation holds the largest AccountID ever allocated, as a
+// HighWaterAnnotation holds the largest AccountID ever reserved, as a
 // decimal string. ⛔ helm/tenant-api's namespace data-move guard looks for it
 // by this name.
 const HighWaterAnnotation = "tenant-api.vibe/account-id-high-water"
+
+// HighWaterBaseAnnotation holds the registry's next_account_id that the
+// reservation in HighWaterAnnotation was planned from (account.Mark.Base).
+// Both are written in one update.
+const HighWaterBaseAnnotation = "tenant-api.vibe/account-id-high-water-base"
 
 // HighWater is the mark on the store ConfigMap (account.HighWater).
 type HighWater struct {
@@ -43,21 +50,21 @@ func NewHighWater(client kubernetes.Interface, namespace, name string) *HighWate
 	return &HighWater{client: client, namespace: namespace, name: name}
 }
 
-// Get returns the mark, or 0 when the annotation is absent.
-func (h *HighWater) Get(ctx context.Context) (uint32, error) {
+// Get returns the mark, or the zero Mark when the annotations are absent.
+func (h *HighWater) Get(ctx context.Context) (account.Mark, error) {
 	cctx, cancel := context.WithTimeout(ctx, k8sCallTimeout)
 	defer cancel()
 	cm, err := h.client.CoreV1().ConfigMaps(h.namespace).Get(cctx, h.name, metav1.GetOptions{})
 	if err != nil {
-		return 0, fmt.Errorf("federation: get %s/%s: %w", h.namespace, h.name, err)
+		return account.Mark{}, fmt.Errorf("federation: get %s/%s: %w", h.namespace, h.name, err)
 	}
 	return h.parse(cm)
 }
 
-// Raise sets the mark to max(current, v) and returns the result. It never
-// lowers the mark.
-func (h *HighWater) Raise(ctx context.Context, v uint32) (uint32, error) {
-	var result uint32
+// Raise records m when m.Max is above the current Max and returns the mark
+// now recorded. It never lowers the mark.
+func (h *HighWater) Raise(ctx context.Context, m account.Mark) (account.Mark, error) {
+	var result account.Mark
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cctx, cancel := context.WithTimeout(ctx, k8sCallTimeout)
 		defer cancel()
@@ -69,33 +76,38 @@ func (h *HighWater) Raise(ctx context.Context, v uint32) (uint32, error) {
 		if err != nil {
 			return err
 		}
-		if v <= cur {
+		if m.Max <= cur.Max {
 			result = cur
 			return nil
 		}
 		if cm.Annotations == nil {
 			cm.Annotations = map[string]string{}
 		}
-		cm.Annotations[HighWaterAnnotation] = strconv.FormatUint(uint64(v), 10)
+		cm.Annotations[HighWaterAnnotation] = strconv.FormatUint(uint64(m.Max), 10)
+		cm.Annotations[HighWaterBaseAnnotation] = strconv.FormatUint(uint64(m.Base), 10)
 		if _, err := h.client.CoreV1().ConfigMaps(h.namespace).Update(cctx, cm, metav1.UpdateOptions{}); err != nil {
 			return err
 		}
-		result = v
+		result = m
 		return nil
 	})
 	return result, err
 }
 
-// parse reads the annotation. A value that is not a uint32 fails closed: the
-// mark is unknown, so nothing may be allocated against it.
-func (h *HighWater) parse(cm *corev1.ConfigMap) (uint32, error) {
-	raw, ok := cm.Annotations[HighWaterAnnotation]
-	if !ok {
-		return 0, nil
+// parse reads the annotations. A value that is not a uint32 fails closed:
+// the mark is unknown, so nothing may be allocated against it.
+func (h *HighWater) parse(cm *corev1.ConfigMap) (account.Mark, error) {
+	var m account.Mark
+	for key, dst := range map[string]*uint32{HighWaterAnnotation: &m.Max, HighWaterBaseAnnotation: &m.Base} {
+		raw, ok := cm.Annotations[key]
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil {
+			return account.Mark{}, fmt.Errorf("federation: annotation %s on %s/%s holds %q, not an AccountID", key, h.namespace, h.name, raw)
+		}
+		*dst = uint32(v)
 	}
-	v, err := strconv.ParseUint(raw, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("federation: annotation %s on %s/%s holds %q, not an AccountID", HighWaterAnnotation, h.namespace, h.name, raw)
-	}
-	return uint32(v), nil
+	return m, nil
 }

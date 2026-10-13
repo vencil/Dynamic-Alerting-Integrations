@@ -6,6 +6,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/vencil/tenant-api/internal/federation/account"
 )
 
 func TestHighWater_AbsentReadsZero_RaiseNeverLowers(t *testing.T) {
@@ -14,17 +16,18 @@ func TestHighWater_AbsentReadsZero_RaiseNeverLowers(t *testing.T) {
 	hw := NewHighWater(client, testCMNamespace, testCMName)
 	ctx := context.Background()
 
-	if got, err := hw.Get(ctx); err != nil || got != 0 {
-		t.Fatalf("Get on a fresh store = %d, %v; want 0, nil", got, err)
+	if got, err := hw.Get(ctx); err != nil || got != (account.Mark{}) {
+		t.Fatalf("Get on a fresh store = %+v, %v; want the zero Mark", got, err)
 	}
-	if got, err := hw.Raise(ctx, 1004); err != nil || got != 1004 {
-		t.Fatalf("Raise(1004) = %d, %v", got, err)
+	want := account.Mark{Max: 1004, Base: 1000}
+	if got, err := hw.Raise(ctx, want); err != nil || got != want {
+		t.Fatalf("Raise(%+v) = %+v, %v", want, got, err)
 	}
-	if got, err := hw.Raise(ctx, 1001); err != nil || got != 1004 {
-		t.Fatalf("Raise(1001) after 1004 = %d, %v; want 1004 (never lowers)", got, err)
+	if got, err := hw.Raise(ctx, account.Mark{Max: 1001, Base: 1001}); err != nil || got != want {
+		t.Fatalf("Raise(1001) after 1004 = %+v, %v; want %+v (never lowers, base kept)", got, err, want)
 	}
-	if got, _ := hw.Get(ctx); got != 1004 {
-		t.Fatalf("Get = %d, want 1004", got)
+	if got, _ := hw.Get(ctx); got != want {
+		t.Fatalf("Get = %+v, want %+v", got, want)
 	}
 }
 
@@ -33,7 +36,7 @@ func TestHighWater_AbsentReadsZero_RaiseNeverLowers(t *testing.T) {
 func TestHighWater_IsAnAnnotationNotData(t *testing.T) {
 	t.Parallel()
 	_, client := newFakeConfigMapStore(t)
-	if _, err := NewHighWater(client, testCMNamespace, testCMName).Raise(context.Background(), 1000); err != nil {
+	if _, err := NewHighWater(client, testCMNamespace, testCMName).Raise(context.Background(), account.Mark{Max: 1000, Base: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	cm, err := client.CoreV1().ConfigMaps(testCMNamespace).Get(context.Background(), testCMName, metav1.GetOptions{})
@@ -54,7 +57,7 @@ func TestHighWater_SurvivesTokenWrites(t *testing.T) {
 	st, client := newFakeConfigMapStore(t)
 	hw := NewHighWater(client, testCMNamespace, testCMName)
 	ctx := context.Background()
-	if _, err := hw.Raise(ctx, 1007); err != nil {
+	if _, err := hw.Raise(ctx, account.Mark{Max: 1007, Base: 1005}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -64,8 +67,8 @@ func TestHighWater_SurvivesTokenWrites(t *testing.T) {
 	if _, err := st.revoke("ftk_1", now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := hw.Get(ctx); got != 1007 {
-		t.Fatalf("mark after token writes = %d, want 1007", got)
+	if got, _ := hw.Get(ctx); got != (account.Mark{Max: 1007, Base: 1005}) {
+		t.Fatalf("mark after token writes = %+v, want {1007 1005}", got)
 	}
 }
 
@@ -87,7 +90,7 @@ func TestHighWater_UnparsableFailsClosed(t *testing.T) {
 	if _, err := hw.Get(ctx); err == nil {
 		t.Fatal("Get accepted a mark of -1")
 	}
-	if _, err := hw.Raise(ctx, 1000); err == nil {
+	if _, err := hw.Raise(ctx, account.Mark{Max: 1000, Base: 1000}); err == nil {
 		t.Fatal("Raise overwrote an unparsable mark instead of failing")
 	}
 }
