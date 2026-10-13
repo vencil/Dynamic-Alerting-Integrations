@@ -272,18 +272,24 @@ func putTenantBody(tenantID string) string {
 	return "tenants:\n  " + tenantID + ":\n    _silent_mode: \"critical\"\n"
 }
 
-// assertOtherTenantWritable is a PUT to another tenant on the same Writer.
-// It guards only that no blocked conf.d walk was left behind on the shared
-// Writer — which the refusal's `immediate` bound already implies. It is not
-// an independent check of the fix: on a tree without it this PUT is also 200
-// once the refused request has returned.
-func (f *nonRegularFixture) assertOtherTenantWritable(t *testing.T) {
+// assertOtherTenantRefusedWholeTree is a PUT to another tenant on the same
+// Writer. #2939 (ADR-036 §4): the tree after that write still holds the
+// special file, which the route generator refuses, so the write is refused —
+// at once (no conf.d walk blocks on the entry, nor was one left blocked by
+// the refused request), with TENANT_TREE_UNREADABLE, and nothing is written.
+func (f *nonRegularFixture) assertOtherTenantRefusedWholeTree(t *testing.T) {
 	t.Helper()
-	w, _ := f.serve(t, PutTenant(f.d), rbac.PermWrite,
+	before := f.state(t)
+	w, took := f.serve(t, PutTenant(f.d), rbac.PermWrite,
 		"PUT", "/api/v1/tenants/"+regularTenantID, regularTenantID, putTenantBody(regularTenantID))
-	if w.Code != http.StatusOK {
-		t.Fatalf("PUT to another tenant after the refusal = %d, want 200: %s", w.Code, w.Body.String())
+	if took >= immediate {
+		t.Errorf("answered after %v, want under %v", took, immediate)
 	}
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantTreeUnreadable) {
+		t.Fatalf("PUT to another tenant after the refusal = %d, want 409 %s: %s",
+			w.Code, CodeTenantTreeUnreadable, w.Body.String())
+	}
+	f.assertNothingWritten(t, before)
 }
 
 func TestPutTenant_NonRegularTenantFileRefusedAtOnce(t *testing.T) {
@@ -298,11 +304,7 @@ func TestPutTenant_NonRegularTenantFileRefusedAtOnce(t *testing.T) {
 				"PUT", "/api/v1/tenants/"+nonRegularTenantID, nonRegularTenantID, putTenantBody(nonRegularTenantID))
 			f.assertNotRegularRefusal(t, w, took)
 			f.assertNothingWritten(t, before)
-			if kind.name != "fifo" {
-				// With a FIFO still in conf.d every write's walk fails closed
-				// at its bound (#2078), so this runs for the other kinds only.
-				f.assertOtherTenantWritable(t)
-			}
+			f.assertOtherTenantRefusedWholeTree(t)
 		})
 	}
 }

@@ -816,7 +816,9 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	// whose base is stale must hear ErrPrecondition (refresh and retry), not a
 	// validation verdict about a file it has not seen.
 	if baseHash != "" {
-		existing, rerr := os.ReadFile(filePath)
+		// confd.ReadRegularFile (cfg.ReadConfFile): a tenant file that is a
+		// FIFO is refused without blocking under the writer lock (#2939).
+		existing, rerr := confd.ReadRegularFile(filePath)
 		if rerr != nil && !os.IsNotExist(rerr) {
 			return nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 		}
@@ -923,14 +925,26 @@ func (w *Writer) previewTenantFilePath(tenantID string) (string, error) {
 }
 
 // resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath;
-// walk is the conf.d walk the #2078 guard judges.
+// walk is the conf.d walk the #2078 guard judges. The same walk then decides
+// #2939's whole-tree verdict (refuseUnreadableTree): an unreadable conf.d
+// entry other than path refuses the write — and, the preview resolving here
+// too, the preview — with *TreeUnreadableError.
 func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeScan, error)) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
 		return "", err
 	}
-	if err := w.ensureNotDeclaredElsewhereIn(walk, tenantID, path); err != nil {
+	var scan *cfg.TreeScan
+	walked := func() (*cfg.TreeScan, error) {
+		s, err := walk()
+		scan = s
+		return s, err
+	}
+	if err := w.ensureNotDeclaredElsewhereIn(walked, tenantID, path); err != nil {
 		return "", err
+	}
+	if err := refuseUnreadableTree(scan, map[string]bool{confRelKey(w.configDir, path): true}); err != nil {
+		return "", fmt.Errorf("tenant %s: %w", tenantID, err)
 	}
 	return path, nil
 }
@@ -1181,8 +1195,15 @@ func (w *Writer) ensureNotDeclaredElsewhereIn(walk func() (*cfg.TreeScan, error)
 // the current file, hand it to the caller's merge. Split out so the pre-flight
 // and the authoritative pass can run the SAME read+merge under DIFFERENT
 // validators (#1718) without a second copy of either step.
+//
+// The read is confd.ReadRegularFile — cfg.ReadConfFile with the refusal
+// mapped to confd.ErrNotRegularFile: a tenant file that is a FIFO (or a
+// socket, a device) fails at once instead of blocking under the writer lock
+// (#2939); the handlers refuse such a file before calling, but the Writer
+// does not rely on that. A missing file (a dangling symlink included) is
+// os.IsNotExist, as before.
 func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, err error) {
-	existing, rerr := os.ReadFile(filePath)
+	existing, rerr := confd.ReadRegularFile(filePath)
 	if rerr != nil && !os.IsNotExist(rerr) {
 		return "", nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 	}
@@ -1342,7 +1363,7 @@ func (w *Writer) PreviewCurrent(tenantID string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	existing, err := os.ReadFile(filePath)
+	existing, err := confd.ReadRegularFile(filePath) // never blocks on a FIFO (#2939)
 	if os.IsNotExist(err) {
 		return nil, false, nil
 	}
@@ -1727,7 +1748,7 @@ func CheckTenantDocSize(yamlContent string) []string {
 // STATIC" (#1718). Three of validate's checks read the tree and are therefore
 // only meaningful against the tree the write lands on:
 //
-//   - addedTenantKeys      ← os.ReadFile(tenantFilePath)
+//   - addedTenantKeys      ← confd.ReadRegularFile(tenantFilePath)
 //   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>'s root defaults
 //     carrier (the one the exporter's chain selects, #1674) and the root
 //     platform files' per-tenant `tenants:` entries (#2208)
@@ -1930,7 +1951,7 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 	var baseRaw []byte
 	var baseErr error
 	if configDir != "" {
-		baseRaw, baseErr = os.ReadFile(tenantFilePath)
+		baseRaw, baseErr = confd.ReadRegularFile(tenantFilePath) // never blocks on a FIFO (#2939)
 	}
 	// DELTA, not absolute: a flat conf.d file may legitimately declare several
 	// tenants and the exporter serves them, so sections already in the file

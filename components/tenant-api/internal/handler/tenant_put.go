@@ -80,7 +80,7 @@ type PutTenantResponse struct {
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it), and a group_by entry the body writes (group_by, overrides[].group_by, routes[].group_by) that is not a string as the route generator reads it (unquoted 8, on), is empty, repeats a label or is ... beside other labels (#2503; quote or remove it), and a _routing the body writes that is neither a mapping nor a disabling string (disable / disabled / off / false), e.g. "slack", a list, null or an unquoted false / off, which the route generator reads as a boolean (#2341; to turn routing off quote it, 'off'). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
 // @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions, or the body breaks the domain policy (code POLICY_VIOLATION; nothing written). In PR write-back mode the body is judged again on the latest base branch, which this server's local copy may lag: a violation there, or a base whose _domain_policy.yaml / .yml cannot be loaded, is the same 403 with tenant_id, and no PR/MR or branch is left"
-// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)"
+// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an entry that cannot be read — a FIFO, socket or device named like a config file, a dangling symlink, a file whose read fails, a sub-directory that cannot be listed — other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). A tenant file that is itself a dangling symlink does not count: the write replaces it"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
 // @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
@@ -252,7 +252,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			}
 			// #2078: the id is declared by another conf.d file → 409
 			// TENANT_DECLARED_ELSEWHERE (fixed message, path only in the log).
-			if writeTenantPlacementError(rw, r, err) {
+			if writeTenantPlacementError(rw, r, d, err) {
 				return
 			}
 			// #1700: the text is the caller's only when it is about the
@@ -397,7 +397,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		}
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the batch path).
-		if writeWriteFlowError(rw, r, err) {
+		if writeWriteFlowError(rw, r, d, err) {
 			return
 		}
 		// #795 F1: malformed body is a CLIENT error → 400 (matches the

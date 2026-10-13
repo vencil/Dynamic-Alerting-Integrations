@@ -57,7 +57,7 @@ type DiffResponse struct {
 // @Param       body  body     DiffRequest true "Proposed YAML"
 // @Success     200   {object} DiffResponse
 // @Failure     400   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse
+// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an entry that cannot be read — a FIFO, socket or device named like a config file, a dangling symlink, a file whose read fails, a sub-directory that cannot be listed — other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants)"
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse
@@ -93,7 +93,7 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		if !masked {
 			diff, err := d.Writer.Diff(tenantID, proposed)
 			if err != nil {
-				writeDiffError(rw, r, err)
+				writeDiffError(rw, r, d, err)
 				return
 			}
 			writeJSON(rw, http.StatusOK, DiffResponse{
@@ -112,7 +112,7 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		}
 		current, exists, err := d.Writer.PreviewCurrent(tenantID)
 		if err != nil {
-			writeDiffError(rw, r, err)
+			writeDiffError(rw, r, d, err)
 			return
 		}
 		var maskedCurrent []byte
@@ -133,7 +133,7 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		}
 		diff, err := d.Writer.DiffTexts(tenantID, string(maskedCurrent), exists, string(maskedProposed))
 		if err != nil {
-			writeDiffError(rw, r, err)
+			writeDiffError(rw, r, d, err)
 			return
 		}
 		writeJSON(rw, http.StatusOK, DiffResponse{
@@ -146,7 +146,7 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 }
 
 // writeDiffError answers a preview that could not be computed.
-func writeDiffError(rw http.ResponseWriter, r *http.Request, err error) {
+func writeDiffError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) {
 	// #1673: two files claim this tenant, so there is no single
 	// "current file" to diff against. Server state, not a bad request.
 	if errors.Is(err, confd.ErrAmbiguousTenantFile) {
@@ -155,7 +155,7 @@ func writeDiffError(rw http.ResponseWriter, r *http.Request, err error) {
 	}
 	// #2078: the PUT this previews would be refused (409) — say so
 	// instead of showing a "new file" diff for a write that cannot land.
-	if writeTenantPlacementError(rw, r, err) {
+	if writeTenantPlacementError(rw, r, d, err) {
 		return
 	}
 	WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())

@@ -75,6 +75,8 @@ type PutCustomAlertsResponse struct {
 // @Description repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
 // @Description not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
 // @Description whole-file PUT refuses it too, so replace it with a regular file in git.
+// @Description 409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an entry that cannot be read
+// @Description other than the tenant's file (#2939; nothing written).
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -84,7 +86,7 @@ type PutCustomAlertsResponse struct {
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse
+// @Failure     409   {object} ErrorResponse "Conflict: base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an entry that cannot be read — a FIFO, socket or device named like a config file, a dangling symlink, a file whose read fails, a sub-directory that cannot be listed — other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants)"
 // @Failure     413   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
@@ -323,7 +325,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			}
 			// #2078: the id is also declared by another conf.d file (the
 			// exporter already rejects that tree) → 409, fixed message.
-			if writeTenantPlacementError(w, r, err) {
+			if writeTenantPlacementError(w, r, d, err) {
 				return
 			}
 			// #1700: as PutTenant's fallback — the error's own text only

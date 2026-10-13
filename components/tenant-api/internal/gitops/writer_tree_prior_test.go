@@ -331,7 +331,8 @@ func batchOp(id, body string) PRBatchOp {
 
 // Every op of a batch walks conf.d again, and from the second op on that
 // walk is served from the prior: a file no op touched is not parsed again.
-// #2900: the batch walks its staging tree with that tree's own prior.
+// #2900: the batch walks its staging tree with that tree's own prior. #2939:
+// so does the PR batch's whole-tree verdict, one walk after the last op's.
 func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{
 		"lo-a.yaml":              tenantBody("lo-a"),
@@ -360,8 +361,10 @@ func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
 	}, "op@example.com"); err != nil {
 		t.Fatalf("WritePRBatch: %v", err)
 	}
-	if n := walks.Load(); n != 3 {
-		t.Fatalf("a 3-op batch walked conf.d %d times, want one walk per op", n)
+	// One walk per op, plus the whole-tree verdict's (#2939, applyBatch),
+	// which is served from the same prior.
+	if n := walks.Load(); n != 4 {
+		t.Fatalf("a 3-op batch walked conf.d %d times, want one walk per op plus the whole-tree verdict's", n)
 	}
 	if bystanderParsed() {
 		parsedAgain = append(parsedAgain, walks.Load())

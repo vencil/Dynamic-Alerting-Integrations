@@ -206,6 +206,30 @@ Behaviour change: `GET /tenants/{id}`, `/effective` and `POST /tenants/{id}/diff
 
 This is an interim measure: the long-term fix is a reference form for credentials (a Secret reference that is never returned after it is written; #1560 option c).
 
+### 3.8 A write is refused while conf.d holds an entry that cannot be read ([#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939))
+
+**Behaviour change (breaking)**: a write is judged on the whole conf.d tree as it will be after the write ([ADR-036 §4](../adr/036-single-parser-effective-config.en.md)). The route generator's `--validate --strict` refuses a tree holding any entry it cannot read, and `da-guard` exits 3 on one; so tenant-api refuses the write too, with error code `TENANT_TREE_UNREADABLE`, and writes nothing.
+
+| Entry | `reason` the walker records |
+|---|---|
+| A FIFO, socket or device named like a config file, or a symlink to one | `special_file` |
+| A dangling symlink, or another failed stat | `stat_error` |
+| A file whose stat succeeds but whose read fails (e.g. an I/O error) | `read_error` |
+| A sub-directory that cannot be listed | `walk_error` |
+
+| Endpoint | Response |
+|---|---|
+| `PUT /tenants/{id}`, `PUT /tenants/{id}/custom-alerts` | 409 `TENANT_TREE_UNREADABLE` |
+| `POST /tenants/{id}/diff` | 409 `TENANT_TREE_UNREADABLE` (the same as the PUT it previews) |
+| `POST /tenants/{id}/validate` | 200 with `valid: false`; `warnings` is the text PUT would return |
+| `POST /tenants/batch`, `POST /groups/{id}/batch` (direct and PR mode) | 422, nothing of the batch written; every op not refused for another reason is `status: error`, `code: TENANT_TREE_UNREADABLE` |
+
+- **The file the write replaces does not count**: when the tenant file being written is itself a dangling symlink, the write replaces it with a regular file and goes through — ADR-036 §4's repair path. A batch leaves out the tenant files of all its ops. When the tenant file is itself a FIFO, socket or device, tenant-api does not replace it and still answers 409 `TENANT_CONFIG_NOT_LOADABLE` (the same code on that op of a batch). When the tenant file cannot be read (`read_error`), the whole-tree check does not count it either, but the existing eol check still refuses the write (it does not pass a current file it cannot read; see #2405).
+- **What these requests got before**: with a FIFO elsewhere in conf.d, a single write hung for about 5 seconds (the walk's time limit) and then answered 500, and a batch answered 500 while copying conf.d; a dangling symlink and the other entries did not stop a write. They now get the 409 / 422 above.
+- **PR mode** judges the latest base the branch is cut from, i.e. the tree as git holds it: an entry that is not committed (a FIFO in the serving directory, for example) is not there. A single PR-mode write walks the serving worktree and does see it; a PR-mode batch does not.
+- **Who sees the entry names**: an unreadable entry can be any tenant's file, so only a caller with write permission on **all** tenants (an RBAC rule with `tenants: ["*"]` and `write`, and no org-scope, environments or domains — the same bar #2405 sets for replacing a file that cannot be parsed) is told which entries and their `reason`: in a single write's 409 the `error` text lists them, and `unreadable: [{path, reason}]` carries them; in a batch, the op's `message`. Every other caller gets the fixed text and the number of entries (`unreadable_count`; `(unreadable entries: N)` in a batch op's `message`). The full names always go to the server log, whoever the caller is.
+- **How to fix it**: repair or remove the entries in git (a FIFO or another non-regular file, or a dangling symlink, is fixed in git or in whatever mounts conf.d). Until then every write through tenant-api is refused.
+
 ---
 
 ## 4. Upgrade guidance

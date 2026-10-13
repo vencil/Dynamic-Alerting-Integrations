@@ -20,6 +20,7 @@ lang: en
 | Multi-replica / multi-tenant values double-counted | Platform / SRE | [Dual-Replica Scrape Double-Counting](#dual-replica-scrape-double-counting) |
 | Platform self-monitoring alerts are Firing in Prometheus but nobody is notified | Platform / SRE | [Platform Alerts Never Reach Anyone](#platform-alerts-never-reach-anyone) |
 | Rules not loaded in an Operator environment | Platform Engineer | [Prometheus Operator Common Issues](#prometheus-operator-common-issues) |
+| Every write through tenant-api answers 409 / 422 `TENANT_TREE_UNREADABLE` | Platform Engineer | [Every tenant-api Write Is Refused](#every-tenant-api-write-is-refused-tenant_tree_unreadable) |
 
 ## SHA-256 Hot-Reload Delay
 
@@ -204,6 +205,12 @@ da-tools validate-config --config-dir ./conf.d/
 ```
 
 > See also: [Operator Prometheus Integration](integration/operator-prometheus-integration.en.md) · [Operator Alertmanager Integration](integration/operator-alertmanager-integration.en.md) · [Operator GitOps Deployment](integration/operator-gitops-deployment.en.md)
+
+## Every tenant-api Write Is Refused (`TENANT_TREE_UNREADABLE`)
+
+> 👤 **For:** Platform Engineer / maintainers of tools that call tenant-api
+
+**Every write through tenant-api is refused with 409 / 422 `TENANT_TREE_UNREADABLE`**: the same conf.d holds an entry that cannot be read — a FIFO / socket / device named like a config file, a dangling symlink, a file whose read fails, or a subdirectory that cannot be listed (`da_config_unreadable_files{reason}` is non-zero, see [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay)), and it is not the tenant file the write replaces. A write is judged on the whole tree after the write, and the route generator's `--validate --strict` refuses a tree holding such an entry, so tenant-api refuses the write as well ([#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939), ADR-036 §4). A single write answers 409; a batch answers 422 with `code: TENANT_TREE_UNREADABLE` on its ops; `/validate` answers `valid: false`. The response names the entries only to a caller with write permission on all tenants; others see how many there are, and the full names are in tenant-api's server log (`conf.d holds unreadable entries`). Fix: repair or remove those entries in git; when the tenant file being written is itself a dangling symlink, writing it through tenant-api replaces it with a regular file (the repair path). Details in [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md).
 
 ---
 

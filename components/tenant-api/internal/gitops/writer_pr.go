@@ -462,7 +462,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	for i, op := range ops {
 		batch[i] = BatchOp{TenantID: op.TenantID, Merge: op.mergeIn(st.configDir)}
 	}
-	outcomes, err := w.applyBatch(ctx, st, batch)
+	outcomes, err := w.applyBatch(ctx, st, batch, w.stagingScan(st))
 	if err != nil {
 		return nil, err
 	}

@@ -182,8 +182,19 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 		"db-c.yml":  "tenants:\n  db-c:\n    _silent_mode: \"warning\"\n",
 	})
 	initGitRepo(t, configDir)
-	// db-a's file is a directory: reading it fails server-side.
-	if err := os.MkdirAll(filepath.Join(configDir, "db-a.yaml", "x"), 0o755); err != nil {
+	// db-a's file reads with an I/O error: a symlink to /proc/self/mem, a
+	// regular file whose read at offset 0 fails (EIO) even for root —
+	// reading it fails server-side. (Its entry is the op's own file, so
+	// #2939's whole-tree verdict does not count it.)
+	if _, err := os.ReadFile("/proc/self/mem"); err == nil {
+		t.Skip("no /proc/self/mem that fails to read: cannot build a server-side read failure")
+	}
+	if err := os.Symlink("/proc/self/mem", filepath.Join(configDir, "db-a.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	// db-d's file is a directory: tenant-api neither reads nor replaces it,
+	// so the op is refused like PUT's not-regular-file 409 (#2939).
+	if err := os.MkdirAll(filepath.Join(configDir, "db-d.yaml", "x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rbacMgr := adminRBAC(t)
@@ -191,7 +202,8 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	body := `{"operations":[
 		{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}},
 		{"tenant_id":"db-b","patch":{"_silent_mode":"warning"}},
-		{"tenant_id":"db-c","patch":{"_silent_mode":"critical"}}
+		{"tenant_id":"db-c","patch":{"_silent_mode":"critical"}},
+		{"tenant_id":"db-d","patch":{"_silent_mode":"critical"}}
 	]}`
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -219,6 +231,9 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	}
 	if got := byTenant["db-c"]; got.Status != "error" || !strings.Contains(got.Message, "is claimed by") {
 		t.Errorf("db-c (two files claim it) = %+v, want its own ambiguous-tenant text", got)
+	}
+	if got := byTenant["db-d"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-d.yaml") {
+		t.Errorf("db-d (its file is a directory) = %+v, want %s naming db-d.yaml", got, CodeTenantConfigNotLoadable)
 	}
 }
 

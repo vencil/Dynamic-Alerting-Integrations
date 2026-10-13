@@ -83,7 +83,7 @@ type GroupBatchResponse struct {
 // @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413   {object} ErrorResponse
-// @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index."
+// @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index. Code TENANT_TREE_UNREADABLE as on POST /api/v1/tenants/batch (#2939)."
 // @Failure     500   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
 // @Router      /api/v1/groups/{id}/batch [post]
@@ -224,7 +224,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// POST /tenants/batch.
 		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
 		if run.Err != nil {
-			writeBatchFailure(w, r, run.Err)
+			writeBatchFailure(w, r, d, run.Err)
 			return
 		}
 		results := visibleGroupBatchResults(d, p, run.Results)

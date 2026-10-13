@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // ValidateResponse is returned by POST /api/v1/tenants/{id}/validate.
@@ -33,6 +34,8 @@ type ValidateResponse struct {
 //
 // @Summary     Validate tenant config
 // @Description Dry-run validation of a tenant YAML without writing to disk.
+// @Description When conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is
+// @Description valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json
@@ -74,7 +77,7 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			errs, notices, err = wr.DryRunValidate(withReplaceUnparseable(r, d).Context(), tenantID, string(body))
 		}
 		if err != nil {
-			errs = []string{dryRunRefusalMessage(err)}
+			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}
 		}
 		writeJSON(w, http.StatusOK, ValidateResponse{
 			Valid:    len(errs) == 0,
@@ -94,7 +97,15 @@ const msgTenantFileUnresolved = "cannot resolve the tenant's config file in conf
 // names only the id and the rule) and ErrAmbiguousTenantFile,
 // whose text names only this tenant's own files and which PUT already returns
 // as is. Everything else gets fixed text; the full error goes to the log.
-func dryRunRefusalMessage(err error) string {
+// A TENANT_TREE_UNREADABLE refusal (#2939) is the text PUT's 409 carries,
+// naming the entries only when treeVisible (treePathsVisible) — the same
+// verdict and the same disclosure as the write this previews.
+func dryRunRefusalMessage(err error, treeVisible bool) string {
+	var te *gitops.TreeUnreadableError
+	if errors.As(err, &te) {
+		logTreeUnreadable("tenant dry-run: conf.d holds unreadable entries", "", err)
+		return treeUnreadableText(te, treeVisible)
+	}
 	switch {
 	case errors.Is(err, gitops.ErrReservedTenantID), errors.Is(err, gitops.ErrInvalidTenantID),
 		errors.Is(err, confd.ErrAmbiguousTenantFile):

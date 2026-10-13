@@ -41,11 +41,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // Common error codes. Add new ones here as new error classes appear;
@@ -131,6 +133,22 @@ const (
 	// neither reads nor replaces such an entry, so the answer is immediate
 	// and names the reason instead of waiting on the file.
 	CodeTenantConfigNotLoadable = "TENANT_CONFIG_NOT_LOADABLE"
+	// CodeTenantTreeUnreadable marks a write refused because conf.d holds an
+	// entry that cannot be read — a FIFO, socket or device named like a
+	// config file (special_file), a dangling symlink or another failed stat
+	// (stat_error), a failed read (read_error), a sub-directory that cannot
+	// be listed (walk_error) — other than the file(s) the write itself
+	// replaces (#2939, ADR-036 §4: the tree after the write is judged, and
+	// the route generator refuses such a tree whole). 409 on a single write
+	// (PUT /tenants/{id}, PUT …/custom-alerts, and the POST …/diff preview);
+	// carried per op on a rejected (422) tenant or group batch
+	// (BatchResult.Code), in both write modes. Nothing was written; a retry
+	// cannot succeed until the entries are repaired in git — except a tenant
+	// file that is itself a dangling symlink or unreadable, which the write
+	// replaces and so does not count. The entries are named only to a caller
+	// with write permission on all tenants (rbac.PlatformUnrestricted); every
+	// other caller gets their number (treeUnreadableText).
+	CodeTenantTreeUnreadable = "TENANT_TREE_UNREADABLE"
 	// CodePolicyUnavailable marks an HTTP 503 from a direct-mode write that
 	// reads the domain policy (PUT /tenants/{id}, a routing op of a tenant or
 	// group batch) while a `_domain_policy.yaml` / `.yml` is present but
@@ -199,14 +217,85 @@ const msgTenantDeclaredElsewhere = "tenant id is declared by another conf.d file
 // (the declared-elsewhere check could not run, so nothing was written).
 const msgTenantTreeScan = "cannot verify where the tenant is declared in conf.d; nothing was written"
 
-// writeTenantPlacementError renders the two #2078 write-guard outcomes and
-// reports whether err was one of them. The full error (with the other file's
-// path) goes to slog only; the response carries a fixed message.
+// msgTenantTreeUnreadable is the fixed head of every TENANT_TREE_UNREADABLE
+// text (treeUnreadableText).
+const msgTenantTreeUnreadable = "conf.d holds entries that cannot be read (not a regular file, " +
+	"a dangling symlink, a failed read, or a directory that cannot be listed), and the route " +
+	"generator refuses a tree with any of them; nothing was written — repair them in git"
+
+// treePathsVisible reports whether the caller may see conf.d entry names in
+// a TENANT_TREE_UNREADABLE refusal: write permission on all tenants,
+// rbac.PlatformUnrestricted(p, PermWrite) — the same bar #2405 sets for
+// replacing a file nobody can read (withReplaceUnparseable). Entries can be
+// any tenant's files, so a narrower caller learns only how many there are. A
+// nil manager (a test-only Deps) sees no names: the fail-closed side.
+func treePathsVisible(m *rbac.Manager, p *rbac.VerifiedPrincipal) bool {
+	return m != nil && m.PlatformUnrestricted(p, rbac.PermWrite)
+}
+
+// treeUnreadableText is the client text of a TENANT_TREE_UNREADABLE refusal:
+// msgTenantTreeUnreadable and the number of entries, plus their names and
+// reasons when visible (treePathsVisible). The names always go to the log —
+// logTreeUnreadable — whatever the caller sees.
+func treeUnreadableText(te *gitops.TreeUnreadableError, visible bool) string {
+	text := fmt.Sprintf("%s (unreadable entries: %d)", msgTenantTreeUnreadable, len(te.Entries))
+	if !visible {
+		return text
+	}
+	parts := make([]string, len(te.Entries))
+	for i, u := range te.Entries {
+		parts[i] = u.RelKey + " (" + u.Reason + ")"
+	}
+	return text + ": " + strings.Join(parts, ", ")
+}
+
+// logTreeUnreadable writes a TENANT_TREE_UNREADABLE refusal to the server
+// log with every entry's name (#2939 D3a: the operator repairing the tree
+// needs them whoever was refused).
+func logTreeUnreadable(msg, tenantID string, err error) {
+	slog.Warn(msg, "tenant", tenantID, "error", err)
+}
+
+// writeTenantTreeUnreadable renders the single-write TENANT_TREE_UNREADABLE
+// 409 and reports whether err was one. unreadable_count is always there;
+// unreadable (path + reason per entry) only for a visible caller.
+func writeTenantTreeUnreadable(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
+	var te *gitops.TreeUnreadableError
+	if !errors.As(err, &te) {
+		return false
+	}
+	logTreeUnreadable("tenant write refused: conf.d holds unreadable entries", chi.URLParam(r, "id"), err)
+	visible := d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
+	extra := map[string]any{"unreadable_count": len(te.Entries)}
+	if visible {
+		entries := make([]map[string]string, len(te.Entries))
+		for i, u := range te.Entries {
+			entries[i] = map[string]string{"path": u.RelKey, "reason": u.Reason}
+		}
+		extra["unreadable"] = entries
+	}
+	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
+		Error: treeUnreadableText(te, visible),
+		Code:  CodeTenantTreeUnreadable,
+		Extra: extra,
+	})
+	return true
+}
+
+// writeTenantPlacementError renders the #2078 write-guard outcomes and the
+// #2939 whole-tree refusal, and reports whether err was one of them. The
+// full error (with the other file's path) goes to slog only; the response
+// carries a fixed message — for TENANT_TREE_UNREADABLE, with the entries'
+// names only for a caller treePathsVisible admits (d is how it is asked).
 //
 //   - gitops.ErrTenantDeclaredElsewhere → 409 TENANT_DECLARED_ELSEWHERE
+//   - gitops.ErrTenantTreeUnreadable    → 409 TENANT_TREE_UNREADABLE
 //   - gitops.ErrTenantTreeScan          → 500 INTERNAL_ERROR (the conf.d walk
 //     could not run; the guard fails closed rather than risk a duplicate)
-func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, err error) bool {
+func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
+	if writeTenantTreeUnreadable(w, r, d, err) {
+		return true
+	}
 	switch {
 	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
 		slog.Warn("tenant write refused: tenant declared by another conf.d file", "error", err)
@@ -756,12 +845,13 @@ func WriteTreeNotOnBase(w http.ResponseWriter, r *http.Request, err error) {
 //   - confd.ErrAmbiguousTenantFile → 409 (#1673: two files claim one tenant, so
 //     the server cannot know which one the write should land on — the REQUEST is
 //     fine, the on-disk state is not, which is why this is not a 400)
-//   - gitops.ErrTenantDeclaredElsewhere / ErrTenantTreeScan → 409 / 500 via
-//     writeTenantPlacementError (#2078)
+//   - gitops.ErrTenantDeclaredElsewhere / ErrTenantTreeUnreadable /
+//     ErrTenantTreeScan → 409 / 409 / 500 via writeTenantPlacementError
+//     (#2078, #2939)
 //   - gitops.ErrInvalidTenantID   → 400 (ADR-035: the writer's own copy of the
 //     tenant-id rule; ValidateWritableTenantID normally refuses first)
-func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool {
-	if writeTenantPlacementError(w, r, err) {
+func writeWriteFlowError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
+	if writeTenantPlacementError(w, r, d, err) {
 		return true
 	}
 	switch {
