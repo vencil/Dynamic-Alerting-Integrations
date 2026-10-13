@@ -332,7 +332,7 @@ da-tools batch-diagnose [options]
 |------|------|--------|
 | `--tenants <LIST>` | 逗號分隔租戶列表（若不指定則自動探索） | （自動） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
-| `--timeout <SEC>` | 單一 diagnose 超時時間（秒） | `30` |
+| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)） | `60` |
 | `--output <FILE>` | 輸出至檔案（JSON 格式） | stdout |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | K8s namespace（auto-discover 用） | `monitoring` |
@@ -354,7 +354,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|------|
 | `0` | 所有租戶都是 `healthy` 或 `unchecked`（含 `--dry-run`） |
 | `1` | 一個或多個租戶檢查失敗（看輸出裡各租戶的 `status` 與 `issues`） |
-| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1）、任一租戶的 Prometheus 查詢失敗或缺少 `kubectl`（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl`，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：租戶檢查失敗與 Prometheus 查詢失敗都回 `0`。用 v2.9.0 時請讀輸出裡各租戶的 `status`。 <!-- image-caveat: v2.9.0 -->
 
