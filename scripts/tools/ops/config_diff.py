@@ -96,6 +96,8 @@ _RFC3339 = re.compile(
 # second.
 
 VIEW_PLATFORM = "platform"
+# The parse-tree reader behind each render.
+_VIEW_READER = {rd.VIEW_SERVED: "exporter", rd.VIEW_ROUTES: "generator"}
 
 # Carrier -> (views that render it, coverage). Coverage is what the
 # self-test (tests/ops/test_config_diff_carriers.py) holds the renders to;
@@ -159,21 +161,28 @@ SETTING_NOT_COMPARED = "not_compared"
 SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
                                 SETTING_NOT_COMPARED})
 
-_EMPTY_TREE = {"files": {}, "unreadable": [], "defaults_carriers": {}}
+_EMPTY_TREE = {"files": {}, "unreadable": [], "not_read": [], "selected": {},
+               "defaults_carriers": {}}
 
 
-def _canonical(node):
+def _canonical(node, *, by_text=False):
     """`node` (a parse-tree content node) as one string that is equal for
     equal values: a scalar by tag and value (its source text only where it
     has no value, a timestamp), mappings by sorted key. Iterative: content
-    nests thousands deep (aliases expanded)."""
+    nests thousands deep (aliases expanded).
+
+    `by_text`: a scalar that is not a string by tag and source text. For a
+    key no render reads: yaml.v3 reads `007` and `7` as the same int, but a
+    reader that decodes the field as a string (tenant-api's org lists) or
+    with YAML 1.1 rules does not, and no render shows the difference."""
     out, stack = [], [node]
     while stack:
         v = stack.pop()
         if isinstance(v, _Token):
             out.append(v.text)
         elif _lib_parse_tree.is_scalar(v):
-            out.append(json.dumps([v["tag"], v["value"] if "value" in v else v["text"]]))
+            plain = "value" in v and (v["tag"] == "!!str" or not by_text)
+            out.append(json.dumps([v["tag"], v["value"] if plain else v["text"]]))
         elif isinstance(v, list):
             stack.append(_Token("]"))
             for item in reversed(v):
@@ -214,13 +223,16 @@ def _setting_row(rel, key, change, status, note, views=()):
             "note": note, "views": list(views)}
 
 
-def platform_settings(old_doc, new_doc, changed_views, view_status):
-    """One row per changed carrier and per unreadable `_` file, sorted.
+def platform_settings(old_doc, new_doc, changed_views, view_status, old_dir=None, new_dir=None):
+    """One row per changed carrier, per unreadable `_` file and per changed
+    `_` file no reader reads, sorted.
 
     `changed_views`: the views whose sections show a change; `view_status`:
     {view: status} — a carrier whose covering view was not compared cannot
-    be said to be rendered."""
-    rows = []
+    be said to be rendered. `old_dir` / `new_dir`: where a file parse-tree
+    lists as read by no reader (`not_read`) is compared, byte for byte —
+    its content is in no document."""
+    rows = _not_read_rows(old_doc, new_doc, old_dir, new_dir)
     old_files, new_files = _platform_files(old_doc), _platform_files(new_doc)
     old_bad, new_bad = _unreadable_platform_files(old_doc), _unreadable_platform_files(new_doc)
     for rel in sorted(set(old_bad) | set(new_bad)):
@@ -230,21 +242,49 @@ def platform_settings(old_doc, new_doc, changed_views, view_status):
                                  f"cannot be read on the {side} side ({kind})"))
     for rel in sorted((set(old_files) | set(new_files)) - set(old_bad) - set(new_bad)):
         old, new = old_files.get(rel, {}), new_files.get(rel, {})
-        stem = PurePosixPath(rel).stem
+        stem = PurePosixPath(rel).stem.lower()
         for key in sorted(set(old) | set(new)):
-            if key in old and key in new and _canonical(old[key]) == _canonical(new[key]):
+            by_text = key not in RENDERED_CARRIERS
+            if key in old and key in new and (_canonical(old[key], by_text=by_text)
+                                              == _canonical(new[key], by_text=by_text)):
                 continue
             change = "added" if key not in old else "removed" if key not in new else "modified"
             rows.append(_classify(rel, key, change, stem, new_doc if key in new else old_doc,
                                   changed_views, view_status))
+    return sorted(rows, key=lambda r: (r["file"], r["key"] or ""))
+
+
+def _not_read_rows(old_doc, new_doc, old_dir, new_dir):
+    """A `_` file parse-tree lists as read by no reader (an unselected
+    defaults carrier: `_defaults.yml` beside `_defaults.yaml`), when its
+    bytes differ between the sides or it is on one side only."""
+    reasons = {}
+    for doc in (old_doc, new_doc):
+        for e in doc.get("not_read") or []:
+            if PurePosixPath(e["file"]).name.startswith("_"):
+                reasons.setdefault(e["file"], e["reason"])
+    rows = []
+    for rel in sorted(reasons):
+        old = _read_bytes(old_dir, rel)
+        new = _read_bytes(new_dir, rel)
+        if old == new:
+            continue
+        change = "added" if old is None else "removed" if new is None else "modified"
+        rows.append(_setting_row(rel, None, change, SETTING_NOT_READ_HERE,
+                                 f"no reader reads this file ({reasons[rel]})"))
     return rows
 
 
+def _read_bytes(root, rel):
+    """The file's bytes, or None when it is not there. Bytes only: nothing
+    here parses it (ADR-036)."""
+    if root is None:
+        return None
+    path = Path(root) / rel
+    return path.read_bytes() if path.is_file() else None
+
+
 def _classify(rel, key, change, stem, doc, changed_views, view_status):
-    if stem in OTHER_SERVICE_FILES:
-        return _setting_row(rel, key, change, SETTING_NOT_COMPARED,
-                            "neither the exporter nor the route generator reads this file; "
-                            + OTHER_SERVICE_FILES[stem])
     if key in CHECKED_CARRIERS:
         checker, read_here = CHECKED_CARRIERS[key]
         if read_here(rel, doc):
@@ -254,9 +294,18 @@ def _classify(rel, key, change, stem, doc, changed_views, view_status):
     if key in DEFERRED_CARRIERS:
         return _setting_row(rel, key, change, SETTING_NOT_COMPARED, DEFERRED_CARRIERS[key])
     if key not in RENDERED_CARRIERS:
-        return _setting_row(rel, key, change, SETTING_NOT_COMPARED,
-                            "not a setting either render reads")
-    views, _coverage = RENDERED_CARRIERS[key]
+        note = "neither the exporter nor the route generator reads this key"
+        if stem in OTHER_SERVICE_FILES:
+            note += "; " + OTHER_SERVICE_FILES[stem]
+        return _setting_row(rel, key, change, SETTING_NOT_COMPARED, note)
+    # A view counts only where its reader reads the file at all (parse-tree's
+    # `selected`); which keys of the file it reads is #2962.
+    readers = (doc.get("selected") or {}).get(rel) or []
+    views = tuple(v for v in RENDERED_CARRIERS[key][0]
+                  if _VIEW_READER[v] in readers)
+    if not views:
+        return _setting_row(rel, key, change, SETTING_NOT_READ_HERE,
+                            "no reader that renders this key reads this file")
     if any(view_status.get(v) != "computed" for v in views):
         return _setting_row(rel, key, change, SETTING_NOT_COMPARED,
                             "a view that renders it was not computed or not compared", views)
@@ -820,7 +869,7 @@ def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
             changed_views.add(rd.VIEW_ROUTES)
         rows = platform_settings(old_doc, new_doc, changed_views,
                                  {rd.VIEW_SERVED: diff.served.status,
-                                  rd.VIEW_ROUTES: diff.routes.status})
+                                  rd.VIEW_ROUTES: diff.routes.status}, old_dir, new_dir)
     report["platform_settings"] = rows
     report["uncovered_files"] = sorted({r["file"] for r in rows if r["status"] in SETTINGS_TO_REVIEW})
     return report
@@ -992,6 +1041,15 @@ _SETTING_HEADINGS = (
 )
 
 
+# How much of one file or key name the Markdown prints: a name comes from the
+# PR's tree, and one long name must not fill the comment (the JSON keeps it).
+SETTING_NAME_LIMIT = 200
+
+
+def _shorten(name):
+    return name if len(name) <= SETTING_NAME_LIMIT else name[:SETTING_NAME_LIMIT] + "…"
+
+
 def _render_platform_settings(rows, lines):
     """The changed top-level keys of `_` files, grouped by what the report can
     say about them. File and key names come from the PR's tree: each goes
@@ -1016,9 +1074,10 @@ def _render_platform_settings(rows, lines):
             if not listed:
                 break
             for r in listed:
-                what = _code_span(printable_name(r["file"]))
+                what = _code_span(_shorten(printable_name(r["file"])))
                 if r["key"] is not None:
-                    what += " " + _code_span(printable_name(r["key"])) + f" ({r['change']})"
+                    what += " " + _code_span(_shorten(printable_name(r["key"])))
+                what += f" ({r['change']})"
                 lines.append(f"- {what}")
             shown += len(listed)
             lines.append(f"  - {printable_name(first['note'])}")

@@ -100,9 +100,9 @@ updated_at: 2026-10-13
 
 **由 CI 檢查負責的載體。** `domain_policies` 由路由產生器的 `--validate --strict` 擋下違規；`_policies` 由 `validate-config` 檢查，`severity: error` 的規則違反時失敗。兩者寫在檢查會讀的位置時（`domain_policies` 在 `_domain_policy.yaml`，`_policies` 在根目錄的預設檔）只列為提示，不影響結束碼；寫在其他位置時列為「這裡不會被讀」，結束碼 1，免得報告暗示一條沒有人讀的規則有被執行。需要看「新增了哪些違規」時，讀產生器的 `--findings-json`。
 
-**兩支渲染程式都不讀的檔。** `_tenant_orgs.yaml`、`_rbac.yaml` 等 tenant-api 相關的檔列為沒有比對，結束碼 1。報告只寫 config-diff 確定的事：exporter 與路由產生器都不讀這個檔；另附一句誰可能讀它，因為讀不讀取決於 tenant-api 怎麼部署，例如 `_rbac.yaml` 只有在 tenant-api 的 `--rbac` 指到 conf.d 時才從這裡讀。
+**兩支渲染程式都不讀的鍵。** 表上沒有的鍵（例如 `_tenant_orgs.yaml` 的 `tenant_orgs`、`_rbac.yaml` 的 `groups`）列為沒有比對，結束碼 1。報告只寫 config-diff 確定的事：exporter 與路由產生器都不讀這個鍵；在 tenant-api 相關的檔裡另附一句誰可能讀它，因為讀不讀取決於 tenant-api 怎麼部署，例如 `_rbac.yaml` 只有在 tenant-api 的 `--rbac` 指到 conf.d 時才從這裡讀。同一個檔裡渲染程式會讀的鍵（例如根目錄任何 `_` 檔裡的 `tenants:`）照常比較。沒有比對的鍵，非字串的值以原文比較：`007` 與 `7` 在 YAML 1.2 是同一個整數，但以字串讀它的程式看到的是兩個值，而這裡沒有渲染結果可以佐證。
 
-**目前的做法：分兩步。** 值以 `da-guard parse-tree` 讀出的結果比較（ADR-036：Python 不自己解析 YAML），純量比型別與值，所以只改註解、縮排、引號或鍵的順序都不算變更。但目前還分不出「真的沒有效果」與「寫在讀取端不讀的位置」：同一個鍵寫在哪個檔、哪一層，決定讀取端讀不讀它，例如 `defaults` 只在預設檔（`_defaults.yaml`）裡被讀，`tenants:` 寫在子目錄的 `_` 檔不會被讀。所以在讀取端能逐鍵說出它讀哪些位置之前，上面「標為完整涵蓋、渲染結果沒有差異：只印一行、不影響結束碼」這一條暫不啟用：值變了而涵蓋它的渲染結果沒有差異，一律列出並以結束碼 1 結束。
+**目前的做法：分兩步。** 值以 `da-guard parse-tree` 讀出的結果比較（ADR-036：Python 不自己解析 YAML），純量比型別與值，所以只改註解、縮排、引號或鍵的順序都不算變更。parse-tree 列為沒有讀取端讀的 `_` 檔（例如 `_defaults.yaml` 旁邊另一個沒被選上的 `_defaults.yml`）內容不在它的輸出裡，以位元組比較，有差異就列為「這裡不會被讀」。渲染程式所讀的鍵，若寫在那支程式根本不讀的檔裡（parse-tree 會說每個檔由哪些讀取端讀），也列為「這裡不會被讀」。但目前還分不出「真的沒有效果」與「寫在讀取端不讀的位置」：同一個鍵寫在哪個檔、哪一層，決定讀取端讀不讀它，例如 `defaults` 只在預設檔（`_defaults.yaml`）裡被讀，`tenants:` 寫在子目錄的 `_` 檔不會被讀。所以在讀取端能逐鍵說出它讀哪些位置之前，上面「標為完整涵蓋、渲染結果沒有差異：只印一行、不影響結束碼」這一條暫不啟用：值變了而涵蓋它的渲染結果沒有差異，一律列出並以結束碼 1 結束。
 
 範例：在根目錄的 `_platform.yaml` 加上 `defaults: {cpu: 1}`（這個檔不是預設檔，exporter 不讀它的 `defaults`），報告的「Platform Settings」段列出：
 

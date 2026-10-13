@@ -423,13 +423,15 @@ class TestRenderMarkdown:
         assert sum(line.startswith("- `_f") for line in md.splitlines()) == cd.UNCOVERED_LIST_LIMIT
         assert f"**:warning: Not compared** ({n})" in md
 
-    def test_settings_only_report_is_capped_for_a_comment(self):
-        rows = [_row(f"{i:02d}/_" + "c" * 2000 + ".yaml", "defaults")
+    def test_long_names_are_shortened_so_the_list_fits_a_comment(self):
+        """名稱來自 PR 的樹：一個 7 萬字元的鍵不得把整則留言擠掉（JSON 保留全名）。"""
+        rows = [_row(f"{i:02d}/_" + "c" * 2000 + ".yaml", "k" * 70_000)
                 for i in range(cd.UNCOVERED_LIST_LIMIT)]
         md = cd.render_markdown(_report(platform_settings=rows,
                                         uncovered_files=[r["file"] for r in rows]))
         assert len(md) <= cd.COMMENT_SAFETY_LIMIT
-        assert "truncated to fit GitHub's comment limit" in md
+        assert "truncated to fit GitHub's comment limit" not in md
+        assert "k" * (cd.SETTING_NAME_LIMIT + 1) not in md and "k" * cd.SETTING_NAME_LIMIT + "…" in md
 
 
 class TestBuildReport:
@@ -954,8 +956,56 @@ class TestPlatformSettings:
         base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
         old, new = _pair(tmp_path, base, {**base, "_rbac.yaml": "groups: {}\n"})
         (row,) = _json(_run_cli(old, new, "--format", "json"))["platform_settings"]
-        assert row["note"].startswith("neither the exporter nor the route generator reads this file")
+        assert row["note"].startswith("neither the exporter nor the route generator reads this key")
         assert "--rbac" in row["note"]
+
+    def test_a_key_a_render_reads_in_a_tenant_api_file_is_rendered(self, tmp_path):
+        """根目錄的 `_rbac.yaml` exporter 也會讀（它讀每個根目錄 `_` 檔的 `tenants:`）：
+        不得說「渲染程式都不讀這個檔」。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS, "_rbac.yaml": "groups: {}\n"}
+        old, new = _pair(tmp_path, base, {**base, "_rbac.yaml": "groups: {}\ntenants:\n"
+                                          "  db-a:\n    _silent_mode: \"warning\"\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert _settings(_json(p)) == [("_rbac.yaml", "tenants", cd.SETTING_RENDERED)]
+
+    def test_an_unselected_defaults_carrier_is_listed(self, tmp_path):
+        """`_defaults.yml` 放在 `_defaults.yaml` 旁邊：parse-tree 列為沒有讀取端讀
+        （not_read），內容不在文件裡；仍要列出、rc 1，不能消失。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, base, {**base, "_defaults.yml": "defaults:\n  cpu: 1\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        rows = _json(p)["platform_settings"]
+        assert [(r["file"], r["change"], r["status"]) for r in rows] == [
+            ("_defaults.yml", "added", cd.SETTING_NOT_READ_HERE)]
+        assert "unselected_defaults_carrier" in rows[0]["note"]
+
+    def test_a_key_no_render_reads_is_compared_by_source_text(self, tmp_path):
+        """yaml.v3 把 `007` 與 `7` 讀成同一個 int，但 tenant-api 以字串讀 org 清單，是兩個 org。
+        渲染讀不到的鍵沒有渲染可以作證，所以非字串純量比原文。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, {**base, "_tenant_orgs.yaml": "tenant_orgs:\n  db-a: [007]\n"},
+                         {**base, "_tenant_orgs.yaml": "tenant_orgs:\n  db-a: [7]\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert _settings(_json(p)) == [("_tenant_orgs.yaml", "tenant_orgs", cd.SETTING_NOT_COMPARED)]
+
+    def test_a_rendered_key_in_a_file_its_reader_does_not_read_is_not_read_here(self, tmp_path):
+        """`defaults` 寫在子目錄的非預設載體 `_` 檔：exporter 不讀那個檔（parse-tree 的
+        selected 只有 generator）。同一個 PR 另有真的閾值變更時，也不能被算成 rendered。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n"}
+        old, new = _pair(tmp_path, base,
+                         {**base, "_defaults.yaml": self.DEFAULTS.replace("cpu: 80", "cpu: 81"),
+                          "team/_x.yaml": "defaults:\n  cpu: 5\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        doc = _json(p)
+        assert dict(((f, k), st) for f, k, st in _settings(doc)) == {
+            ("_defaults.yaml", "defaults"): cd.SETTING_RENDERED,
+            ("team/_x.yaml", "defaults"): cd.SETTING_NOT_READ_HERE}
+        assert doc["uncovered_files"] == ["team/_x.yaml"]
 
     @pytest.mark.parametrize("rel,text", [
         ("_defaults.yaml", "defaults:\n  cpu: 80\n_policies: []\n"),
