@@ -655,7 +655,15 @@ def _go_code(text: str) -> str:
 
 
 def go_finding_kinds(guard_dir: Path = GUARD_DIR) -> tuple[dict[str, str], set[str]]:
-    """(every da-guard kind as {const name: kind}, the routing kinds)."""
+    """(every da-guard kind as {const name: kind}, the routing kinds).
+
+    Reads kinds out of the Go source by one shape only, `FindingXxx
+    FindingKind = "xxx"`. That is sound because the guard package refuses
+    every other way of writing a kind (a `FindingKind(...)` conversion, a
+    literal or a non-`Finding*` name in `Kind:`, an untyped `Finding*` string
+    const): internal/guard/finding_kind_shape_test.go. Without that test a
+    kind written another way would be invisible here.
+    """
     sources = {p.name: p.read_text(encoding="utf-8") for p in sorted(guard_dir.glob("*.go"))
                if not p.name.endswith("_test.go")}
     consts = {name: kind for text in sources.values() for name, kind in _GO_KIND_CONST.findall(text)}
