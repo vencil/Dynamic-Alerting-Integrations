@@ -800,6 +800,7 @@ def format_text_report(
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
+    max_prs: Optional[int] = None,
 ) -> str:
     lines: list[str] = []
     mode = "APPLY" if applied else "DRY-RUN (no writes — pass --apply to open PRs)"
@@ -958,9 +959,17 @@ def format_text_report(
         )
     else:
         total_changes = sum(len(p.changes) for p in prable)
+        if max_prs is not None and max_prs < len(prable):
+            # #2929: --apply stops at the cap. "at most": a dry run does not ask
+            # tenant-api, so it cannot foresee a 409 (already pending) or error.
+            head = (f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) "
+                    f"actionable; with --max-prs {max_prs}, at most {max_prs} PR(s) "
+                    "would be opened. ")
+        else:
+            head = (f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) "
+                    "would get a PR. ")
         lines.append(
-            f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) would get a PR. "
-            "Re-run with --apply to open them." + nested_note + _deferred_note()
+            head + "Re-run with --apply to open them." + nested_note + _deferred_note()
         )
     return "\n".join(lines)
 
@@ -1169,8 +1178,9 @@ def main() -> None:
                               "space — same knob, different sensitivity (25%% miss on a 0.95 floor "
                               "≈ 1.3%% value)"))
     parser.add_argument("--max-prs", type=int, default=DEFAULT_MAX_PRS,
-                        help=("每次最多開幾個 PR（防洪，預設 10）" if _LANG == "zh"
-                              else "Max PRs opened per run (anti-flood, default 10)"))
+                        help=("每次最多開幾個 PR（防洪，預設 10；須 ≥ 1）" if _LANG == "zh"
+                              else "Max PRs opened per run (anti-flood, default 10; "
+                                   "must be >= 1)"))
     parser.add_argument("--apply", action="store_true",
                         help=("真正經 tenant-api 開 PR（預設僅 dry-run，不寫入）"
                               if _LANG == "zh" else
@@ -1227,6 +1237,13 @@ def main() -> None:
         print(msg, file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    if args.max_prs < 1:
+        # #2929: 0 or less used to skip every tenant and still exit 0.
+        msg = (f"--max-prs 必須 ≥ 1: {args.max_prs}" if _LANG == "zh"
+               else f"--max-prs must be >= 1: {args.max_prs}")
+        print(msg, file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     if args.apply:
         if not args.tenant_api_url:
             msg = ("--apply 需要 --tenant-api-url" if _LANG == "zh"
@@ -1250,7 +1267,8 @@ def main() -> None:
     else:
         print(format_text_report(
             result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual, result.inherited))
+            result.not_applicable, result.force_manual, result.inherited,
+            max_prs=args.max_prs))
 
     # #656: surface a governance run where EVERY write failed as a non-zero exit
     # (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale can

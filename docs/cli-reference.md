@@ -3023,7 +3023,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--lookback` | 歷史資料回溯期間 | `7d` |
 | `--min-samples` | 最低樣本數門檻 | `100` |
 | `--min-delta-pct` | 治理介入門檻：\|delta%\| 須 ≥ 此值才開 PR | `25` |
-| `--max-prs` | 每次最多開幾個 PR（防洪 / alert-fatigue budget） | `10` |
+| `--max-prs` | 每次最多開幾個 PR（防洪 / alert-fatigue budget）。須 ≥ 1，小於 1 時結束碼 `2`（[#2929](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2929)）；dry-run 的 Summary 在上限小於可處理租戶數時寫出「最多開幾個 PR」（dry-run 不查 tenant-api，預知不了已開過的 PR，所以只能寫「最多」） | `10` |
 | `--apply` | 真正經 tenant-api 開 PR（預設僅 dry-run，不寫入） | - |
 | `--tenant-api-url` | tenant-api base URL（`--apply` 必填） | `$TENANT_API_URL` |
 | `--identity-email` | X-Forwarded-Email（PR git author / 治理身分） | `threshold-governance@platform.local` |

@@ -3037,7 +3037,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--lookback` | Historical lookback period | `7d` |
 | `--min-samples` | Minimum sample count | `100` |
 | `--min-delta-pct` | Governance gate: only open a PR when \|delta%\| >= this | `25` |
-| `--max-prs` | Max PRs opened per run (anti-flood / alert-fatigue budget) | `10` |
+| `--max-prs` | Max PRs opened per run (anti-flood / alert-fatigue budget). Must be at least 1; below that the exit code is `2` ([#2929](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2929)). When the cap is below the number of actionable tenants, the dry-run Summary says how many PRs at most would be opened ("at most": a dry run does not ask tenant-api, so it cannot foresee a PR that is already open) | `10` |
 | `--apply` | Actually open PRs via tenant-api (default: dry-run, no writes) | - |
 | `--tenant-api-url` | tenant-api base URL (required with `--apply`) | `$TENANT_API_URL` |
 | `--identity-email` | X-Forwarded-Email (PR git author / governance identity) | `threshold-governance@platform.local` |
