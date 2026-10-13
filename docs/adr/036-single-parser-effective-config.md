@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-12
+updated_at: 2026-10-13
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -308,7 +308,7 @@ tenant-api pod
 
 **部署端的 policy 檔掛進產生器容器；policy 檔不可用就拒收寫入。**
 
-- **部署端的 policy 檔**（`--policy`）：檔裡的 `allowed_domains` 限制 webhook 網址的網域。chart 加一個可選值把這份檔掛進產生器容器，判定時一併帶上；tenant-api 容器也唯讀掛載同一份，用來核對 hash（§4）。理由：這是防 SSRF（服務被拿來替攻擊者對內網發請求）的控制，要放在租戶 repo 之外；有寫入權限的人不該能改掉它。`da-tools init` 產生的客戶 CI 模板目前沒帶 `--policy`；模板改為可選擇帶入部署端 policy 檔，讓客戶 CI 與 tenant-api 判的是同一份。
+- **部署端的 policy 檔**（`--policy`）：檔裡的 `allowed_domains` 限制 webhook 網址的網域。chart 加一個可選值把這份檔掛進產生器容器，判定時一併帶上；tenant-api 容器也唯讀掛載同一份，用來核對 hash（§4）。理由：這是防 SSRF（服務被拿來替攻擊者對內網發請求）的控制，要放在租戶 repo 之外；有寫入權限的人不該能改掉它。`da-tools init` 產生的客戶 CI 模板可選擇帶入同一份檔，讓客戶 CI 與 tenant-api 判的是同一份：GitHub 讀 repository 或 organization variable `DA_TOOLS_POLICY`（值是 policy 的 YAML 內容），GitLab 讀同名、File 型的 CI 變數（值是 runner 寫出的檔案路徑）；設了就在 `validate-config` 與 `generate-routes` 帶 `--policy`，沒設只印提示、不失敗。CI 這一側不是安全控制，有 repo 寫入權限的人本來就能改 workflow；它的用處是在 PR 上提早看到 tenant-api 會給的答案。pre-commit hook 不帶，因為它只掛得進 repo 本身。設定方式見 [GitOps CI/CD 整合指南 §2.5](../scenarios/gitops-ci-integration.md#25-帶入部署端-policy-檔da_tools_policy)。
 - **狀態端點**：產生器容器回報部署端 policy 檔是否可用，tenant-api 讀它來產生 `tenant_api_policy_available`。這個 metric 只反映部署端 policy 檔與容器；repo 裡的 policy 檔有錯不會讓它變 0，那種情況寫入以 finding 拒收。這個 metric 有告警在讀，維持原名；目前沒有 label。
   - 讀不到狀態端點（容器不可達）時，metric 為 0，告警照樣會亮。
   - 它的說明文字把「沿用上一份可用內容」算成可用；tenant-api 改問產生器容器後不再沿用舊內容，說明文字屆時要改。

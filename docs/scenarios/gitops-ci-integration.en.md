@@ -303,6 +303,37 @@ For the full exit-code contract, see
 
 Manually triggered (`workflow_dispatch`), requires `production` environment approval. See §3 for deployment-specific steps.
 
+<!-- The CI that da-tools init generates links to this anchor in its notice (_POLICY_DOCS_URL in init_project.py); rename both together. -->
+<a id="deployment-policy"></a>
+
+### 2.5 Bringing in the deployment policy file (`DA_TOOLS_POLICY`)
+
+The deployment policy file's `allowed_domains` limits which domains a webhook URL may point at. It is the SSRF control, and it lives outside the tenant repository on purpose ([ADR-036](../adr/036-single-parser-effective-config.en.md) §5), so the CI that `da-tools init` generates can only get it from a CI variable. Once it is set, Stage 1's `validate-config` and Stage 2's `generate-routes --validate --strict` both pass `--policy`, and your CI judges webhook domains by the same rules tenant-api does. A webhook domain outside the list makes `generate-routes` exit 1 and the PR goes red.
+
+⚠️ The CI side is **not** a security control: anyone with write access to the repository can edit the workflow anyway. What it buys is seeing tenant-api's answer early, on the PR.
+
+**When it is not set**: both steps run as before without `--policy`, webhook domains are not checked, and a one-line note is printed (`::notice::` on GitHub, `NOTICE:` in the GitLab job log). Nothing fails because of it.
+
+**GitHub Actions**: create a repository- or organization-level **variable** (Settings → Secrets and variables → Actions → Variables) named `DA_TOOLS_POLICY`, whose value is the policy file's **YAML content itself** (not a path), for example:
+
+```yaml
+allowed_domains:
+  - hooks.example.com
+  - "*.chat.example.com"
+```
+
+The workflow reads it through the step's `env:` (the value is never expanded into the `run:` script), writes it to `$RUNNER_TEMP/da-tools-policy.yaml` (mode 0644, because the container reads it as a non-root user) and mounts it read-only. A single variable is limited to 48 KB. ⚠️ We have not tested whether pull requests from forks receive `vars`; if they do not, they take the "not set" path: a note, no failure.
+
+**GitLab CI**: under Settings → CI/CD → Variables, create `DA_TOOLS_POLICY` with **Type: File** and paste the policy YAML as its value. The runner writes the content to a temporary file and the variable holds that file's path, which the pipeline passes to `--policy` as is.
+
+- ⛔ **Do not tick Protected**: protected variables are not passed to merge request pipelines from unprotected branches, so those pipelines would fall back to "not set" and only print the note.
+- The policy is not a secret and does not need Masked.
+- If the variable is non-empty but not a file, both the `validate-config` and `blast-radius` jobs fail and say why. The usual cause is Type set to Variable: the value is then the YAML content rather than a path. Recreate it as a File variable.
+
+**The pre-commit hooks do not pass `--policy`**: a `language: docker_image` hook mounts only the repository and cannot reach a file outside it. The webhook-domain gate is CI.
+
+⚠️ Content that is empty, is not a mapping (for example a path string pasted into the GitHub variable by mistake), or has no `allowed_domains` key makes `generate-routes` exit 2 and fails the job. `allowed_domains: []` means "no restriction", not "block everything". Entries are fnmatch patterns, so `*.chat.example.com` works.
+
 ## 3. Deployment Modes
 
 ### 3.1 Kustomize (Recommended for Getting Started)

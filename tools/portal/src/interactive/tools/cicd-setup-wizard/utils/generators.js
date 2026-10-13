@@ -347,6 +347,28 @@ const _CICD_APPLY_BLOCKS = {
   },
 };
 
+// #2900 — the deployment policy (allowed webhook domains), optional. Same bash
+// lines as `_github_policy_prelude` in scripts/tools/ops/init_project.py,
+// substituted into the validate-config AND generate-routes steps. The value
+// arrives through the step's `env:` (never an expression inside `run:`, which
+// would paste it into the script as shell syntax) and holds the policy YAML
+// itself; it is written to $RUNNER_TEMP, chmod 0644 because the container
+// reads it as a non-root user, and mounted read-only.
+const _CICD_POLICY_DOCS_URL = 'https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/#deployment-policy';
+const _CICD_GH_POLICY_PRELUDE = `          # Deployment policy (allowed webhook domains), optional: the DA_TOOLS_POLICY
+          # repository/organization variable holds the policy YAML itself.
+          policy_mount=()
+          policy_args=()
+          if [ -n "\${DA_TOOLS_POLICY:-}" ]; then
+            policy_file="$RUNNER_TEMP/da-tools-policy.yaml"
+            printf '%s\\n' "$DA_TOOLS_POLICY" > "$policy_file"
+            chmod 0644 "$policy_file"
+            policy_mount=(-v "$policy_file:/data/policy.yaml:ro")
+            policy_args=(--policy /data/policy.yaml)
+          else
+            echo "::notice::DA_TOOLS_POLICY is not set, so webhook domains were not checked against a deployment policy. See ${_CICD_POLICY_DOCS_URL}"
+          fi`;
+
 function cicdGenerateGitHubActionsPreview(config) {
   // ⛔ Refuse an unknown deploy method instead of rendering around it. The CLI
   // leg's builders raise for the same input; this is that refusal on this side
@@ -472,6 +494,11 @@ ${pinNote}jobs:
       - uses: actions/checkout@v6
 
       - name: Validate config (schema + routing + policy)
+        env:
+          # Through \`env:\`, never as an expression inside \`run:\` (that
+          # would paste the value into the script as shell syntax). Unset
+          # variables read as an empty string.
+          DA_TOOLS_POLICY: \${{ vars.DA_TOOLS_POLICY }}
         run: |
           # ⛔ The same guard the config-diff step carries, and for the same
           # reason: \`docker -v\` CREATES a missing host path instead of
@@ -485,10 +512,12 @@ ${pinNote}jobs:
             echo "::error::CONFIG_DIR is set to '\${{ env.CONFIG_DIR }}', which does not exist in this commit. Refusing to validate, because mounting a path that is not there yields an empty directory and a PASS that checked nothing."
             exit 1
           fi
+${_CICD_GH_POLICY_PRELUDE}
           docker run --rm \\
             -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
+            "\${policy_mount[@]}" \\
             \${{ env.DA_TOOLS_IMAGE }} \\
-            validate-config --config-dir /data/conf.d
+            validate-config --config-dir /data/conf.d "\${policy_args[@]}"
 
       - name: Lint custom rules (if any)
         run: |
@@ -576,6 +605,9 @@ ${pinNote}jobs:
         # with nothing to say the new run died. Held by
         # \`test_step_timeouts_leave_room_under_the_job_timeout\`.
         timeout-minutes: 5
+        env:
+          # Same binding, and the same reason, as the validate step.
+          DA_TOOLS_POLICY: \${{ vars.DA_TOOLS_POLICY }}
         run: |
           # Read-only, deliberately: this step VALIDATES the routes it
           # would generate; nothing downstream consumes a written file.
@@ -589,10 +621,12 @@ ${pinNote}jobs:
           # quietly. With no writable mount there is nothing for a
           # \`--user\` override to fix; the config-diff step below writes
           # on the HOST via a shell redirect.
+${_CICD_GH_POLICY_PRELUDE}
           docker run --rm \\
             -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
+            "\${policy_mount[@]}" \\
             \${{ env.DA_TOOLS_IMAGE }} \\
-            generate-routes --config-dir /data/conf.d --validate --strict
+            generate-routes --config-dir /data/conf.d --validate --strict "\${policy_args[@]}"
 
       - name: Resolve base config snapshot
         id: snapshot

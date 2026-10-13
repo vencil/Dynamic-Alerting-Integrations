@@ -4217,7 +4217,21 @@ _EXPECTED_GH_GENERATE: list[str] = [
     # and since #1650 the tool exits 2 on that combination, so the old line
     # would have turned every customer's PR red. `mkdir -p .output` stays:
     # the config-diff step below still redirects into it on the host.
-    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate --strict',
+    # #2900: the deployment policy, optional, from the DA_TOOLS_POLICY
+    # variable (bound through the step's `env:`); unset is a notice, not a
+    # failure. Behaviour is executed in tests/ops/test_generated_ci_policy.py.
+    'policy_mount=()',
+    'policy_args=()',
+    'if [ -n "${DA_TOOLS_POLICY:-}" ]; then',
+    'policy_file="$RUNNER_TEMP/da-tools-policy.yaml"',
+    'printf \'%s\\n\' "$DA_TOOLS_POLICY" > "$policy_file"',
+    'chmod 0644 "$policy_file"',
+    'policy_mount=(-v "$policy_file:/data/policy.yaml:ro")',
+    'policy_args=(--policy /data/policy.yaml)',
+    'else',
+    'echo "::notice::DA_TOOLS_POLICY is not set, so webhook domains were not checked against a deployment policy. See https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/#deployment-policy"',
+    'fi',
+    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" "${policy_mount[@]}" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate --strict "${policy_args[@]}"',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4339,7 +4353,18 @@ _EXPECTED_GL_GENERATE: list[str] = [
     'echo "ERROR: $config_dir at $base_sha is a $kind, not a directory, so no baseline can be built from it. A kind of \'commit\' means a submodule is mounted there; \'blob\' means either a file has that name, or the path is a symlink. Reporting any of those as a first import would hide the fault." >&2',
     'exit 1',
     'fi',
-    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict',
+    # #2900: DA_TOOLS_POLICY is a File-type variable; a non-file value is
+    # refused, unset is a notice. Executed in test_generated_ci_policy.py.
+    'if [ -z "${DA_TOOLS_POLICY:-}" ]; then',
+    'echo "NOTICE: DA_TOOLS_POLICY is not set, so webhook domains were not checked against a deployment policy. See https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/#deployment-policy"',
+    'set --',
+    'elif [ -f "$DA_TOOLS_POLICY" ]; then',
+    'set -- --policy "$DA_TOOLS_POLICY"',
+    'else',
+    'echo "ERROR: DA_TOOLS_POLICY is set but is not a path to a file. It must be a CI/CD variable of type File, whose value the runner turns into a file path. The usual cause is a Variable-type variable, whose value is the policy YAML itself: recreate it with type File. See https://vencil.github.io/Dynamic-Alerting-Integrations/scenarios/gitops-ci-integration/#deployment-policy" >&2',
+    'exit 1',
+    'fi',
+    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict "$@"',
     'at="$(git show -s --format=%cI "$CI_MERGE_REQUEST_DIFF_BASE_SHA")" || {',
     'echo "ERROR: cannot read the time of base commit $CI_MERGE_REQUEST_DIFF_BASE_SHA from this clone" >&2',
     'exit 1',
