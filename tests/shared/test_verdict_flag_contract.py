@@ -233,8 +233,8 @@ SAME_NAME_DIFFERENT_MEANING: dict[tuple[str, str], str] = {
         "an INPUT label of the alert --trace simulates (beside --alertname / "
         "--tenant / --label), not a threshold the tool judges against: the "
         "route it takes is Alertmanager's own answer (amtool), and the tool's "
-        "exit code never depends on it. Accepted silently without --trace: "
-        "#2926"),
+        "exit code never depends on it (test_explain_route_severity_never_"
+        "changes_the_exit_code). Refused without --trace since #2926"),
 }
 
 # A recipe whose flag was observed to change nothing: a real bug in that
@@ -971,10 +971,12 @@ def test_same_name_entries_carry_a_reason():
 
 
 def test_explain_route_severity_stays_a_trace_input():
-    """Keeps the explain_route --severity entry honest: every read of
-    args.severity is an argument of a trace_alert_routing(...) call, and the
-    tool never exits with EXIT_VIOLATION. If either stops being true, the
-    flag may have become a verdict input and needs a recipe."""
+    """Early warning for the explain_route --severity entry: every read of
+    args.severity is an argument of a trace_alert_routing(...) call.
+
+    Not sound on its own: the value also leaves through the trace dict, and
+    getattr / vars / an argparse Action reach it without an `args.severity`
+    node (#2958). The guarantees are the two tests below."""
     path = OPS_DIR / "explain_route.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     reads = [n for n in ast.walk(tree)
@@ -987,10 +989,108 @@ def test_explain_route_severity_stays_a_trace_input():
     assert reads, "explain_route no longer reads args.severity"
     stray = [n.lineno for n in reads if id(n) not in trace_args]
     assert not stray, f"args.severity read outside trace_alert_routing(...): lines {stray}"
-    names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
-    assert "EXIT_VIOLATION" not in names, (
-        "explain_route now uses EXIT_VIOLATION — its --severity may decide a "
-        "verdict; re-check the SAME_NAME_DIFFERENT_MEANING entry")
+
+
+def _own_nodes(fn: ast.FunctionDef):
+    """Nodes of `fn` itself, not of functions or lambdas nested in it."""
+    todo = list(fn.body)
+    while todo:
+        node = todo.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            todo.extend(ast.iter_child_nodes(node))
+
+
+_ALLOWED_EXITS = ("EXIT_OK", "EXIT_CALLER_ERROR")
+
+
+def _is_allowed_exit(node) -> bool:
+    """EXIT_OK / EXIT_CALLER_ERROR by name or as `<module>.<name>`, or a
+    conditional expression whose both arms are."""
+    if isinstance(node, ast.IfExp):
+        return _is_allowed_exit(node.body) and _is_allowed_exit(node.orelse)
+    if isinstance(node, ast.Name):
+        return node.id in _ALLOWED_EXITS
+    return isinstance(node, ast.Attribute) and node.attr in _ALLOWED_EXITS
+
+
+def test_explain_route_has_no_violation_exit():
+    """#2958: explain_route has no EXIT_VIOLATION path at all, so no flag can
+    turn into a verdict.
+
+    * every `return` of main() is EXIT_OK / EXIT_CALLER_ERROR;
+    * the only way out is `sys.exit(main())`: no other sys.exit / os._exit,
+      no builtin exit() / quit(), no exit function imported by name, and no
+      SystemExit named anywhere (bare or as `builtins.SystemExit`).
+
+    A refactor that trips this (main() returning a helper's result,
+    `raise SystemExit(main())`, parser.exit) is fine if the new shape still
+    cannot return 1: update the shapes allowed here, do not drop the check."""
+    tree = ast.parse((OPS_DIR / "explain_route.py").read_text(encoding="utf-8"))
+    [main] = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main"]
+    bad = [n.lineno for n in _own_nodes(main)
+           if isinstance(n, ast.Return) and not _is_allowed_exit(n.value)]
+    assert not bad, f"main() returns something other than {_ALLOWED_EXITS}: lines {bad}"
+    exits = [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Call) and (
+        (isinstance(n.func, ast.Attribute) and n.func.attr in ("exit", "_exit"))
+        or (isinstance(n.func, ast.Name) and n.func.id in ("exit", "quit")))]
+    assert exits == ["sys.exit(main())"], f"exit calls other than sys.exit(main()): {exits}"
+    imported = [f"{n.module}.{a.name}" for n in ast.walk(tree)
+                if isinstance(n, ast.ImportFrom) and n.module in ("sys", "os", "builtins")
+                for a in n.names if a.name in ("exit", "_exit", "SystemExit")]
+    assert not imported, f"exit function imported by name: {imported}"
+    raised = [n.lineno for n in ast.walk(tree)
+              if (isinstance(n, ast.Name) and n.id == "SystemExit")
+              or (isinstance(n, ast.Attribute) and n.attr == "SystemExit")]
+    assert not raised, f"explain_route names SystemExit: lines {raised}"
+
+
+_SEVERITY_TENANT = "sev-demo"
+
+
+@pytest.fixture
+def severity_conf(tmp_path: Path) -> Path:
+    """A tenant whose critical alerts take a sub-route to a receiver type its
+    domain policy forbids: with amtool (CI) --severity changes the route the
+    trace finds and the policy step's verdict, so an exit code that followed
+    either would show here. Without amtool the route is not resolved."""
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / f"{_SEVERITY_TENANT}.yaml").write_text(
+        f"tenants:\n  {_SEVERITY_TENANT}:\n    _routing:\n      receiver:\n"
+        "        type: webhook\n        url: https://hooks.example.com/a\n"
+        "      routes:\n        - match: {severity: critical}\n          receiver:\n"
+        "            type: slack\n            api_url: https://hooks.slack.com/x\n",
+        encoding="utf-8")
+    (conf / "_domain_policy.yaml").write_text(
+        f"domain_policies:\n  chat-free:\n    tenants: [{_SEVERITY_TENANT}]\n"
+        "    constraints:\n      forbidden_receiver_types: [slack]\n",
+        encoding="utf-8")
+    return conf
+
+
+@pytest.mark.parametrize("extra", [
+    pytest.param([], id="text"),
+    pytest.param(["--json"], id="json"),
+])
+def test_explain_route_severity_never_changes_the_exit_code(severity_conf, extra):
+    """#2958, the behaviour the static checks above only approximate: the same
+    --trace input gives the same exit code whatever --severity is, and no value
+    (an unknown one included) gives EXIT_VIOLATION. Not skipped without amtool:
+    the run still exits through the same code; CI, which has amtool, also
+    walks the severity-dependent route."""
+    rcs = {}
+    for sev in ("warning", "critical", "info", "no-such-severity"):
+        r = subprocess.run(
+            [sys.executable, str(OPS_DIR / "explain_route.py"), "--config-dir",
+             str(severity_conf), "--trace", "--tenant", _SEVERITY_TENANT,
+             "--severity", sev, *extra],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=TIMEOUT_S)
+        rcs[sev] = r.returncode
+        assert r.returncode != 1, f"--severity {sev} gave rc 1: {r.stderr[-400:]}"
+    legal = {rcs[s] for s in ("warning", "critical", "info")}
+    assert len(legal) == 1, f"exit code depends on --severity: {rcs}"
 
 
 def test_known_noop_entries_are_recipes():

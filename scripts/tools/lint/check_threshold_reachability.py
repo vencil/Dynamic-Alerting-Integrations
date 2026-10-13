@@ -3266,6 +3266,10 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
     "scripts/tools/dx/waveform_score.py":
         "a different domain entirely — its `defaults:` is the severity to "
         "tolerance-ceiling matrix, not threshold defaults",
+    "scripts/tools/ops/config_diff.py":
+        "READS `_` files (through `da-guard parse-tree`) and writes no conf.d; "
+        "the census hit is RENDERED_CARRIERS, the table mapping the top-level "
+        "key name `defaults` to the render that reads it (ADR-037 decision 3)",
 }
 
 

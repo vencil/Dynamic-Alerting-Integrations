@@ -1036,6 +1036,42 @@ class TestMaxPrsCli:
         assert "at most 1 PR(s) would be opened" in _summary(captured.out)
 
 
+# ---------------------------------------------------------------------------
+# #2942: --timeout must be above 0
+# ---------------------------------------------------------------------------
+class TestTimeoutCli:
+    def _main(self, monkeypatch, tmp_path, capsys, *extra):
+        import sys
+        ran = []
+
+        def fake_run(args):
+            ran.append(args.timeout)
+            return tg.GovernanceResult([], [], [])
+
+        monkeypatch.setattr(tg, "run", fake_run)
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
+        with pytest.raises(SystemExit) as exc:
+            tg.main()
+        return exc.value.code, ran, capsys.readouterr()
+
+    @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+    def test_not_above_zero_is_caller_error(self, monkeypatch, tmp_path, capsys, value):
+        """0 made every tenant-api call fail at once and a negative value
+        raised inside urlopen; with --apply both looked like a systemic
+        failure (rc 1). Refused at parse time, with or without --apply."""
+        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
+                                         "--timeout", value)
+        assert code == tg.EXIT_CALLER_ERROR
+        assert ran == []
+        assert "--timeout" in captured.err
+
+    def test_fraction_is_accepted(self, monkeypatch, tmp_path, capsys):
+        code, ran, _ = self._main(monkeypatch, tmp_path, capsys, "--timeout", "0.5")
+        assert code == tg.EXIT_OK
+        assert ran == [0.5]
+
+
 @pytest.mark.parametrize("value", ["99", "0", "-1"])
 def test_min_samples_below_100_is_caller_error(monkeypatch, tmp_path, capsys, value):
     """#2941: refused before any work, like threshold_recommend."""

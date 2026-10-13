@@ -12,7 +12,10 @@ turn conf.d into what runs, and compares what they render to:
 
 So a platform change (`_defaults.yaml`, `_profiles.yaml`, a root
 `_platform.yaml`, routing defaults) is reported for the tenants it reaches.
-Nothing here reads the YAML itself; `_render_diff` renders and compares.
+The top-level keys of `_`-prefixed files are also compared one by one, as
+`da-guard parse-tree` reads them, and each changed one is listed with what
+the renders can say about it (ADR-037 decision 3). Nothing here reads the
+YAML itself; `_render_diff` renders and compares.
 
 The time-dependent settings (schedules, silences, maintenance windows) are
 read at one instant, `--at`, the same on both sides and printed on the report.
@@ -34,7 +37,8 @@ import re
 import sys
 import textwrap
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -45,7 +49,8 @@ from _lib_python import (  # noqa: E402
 )
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
-from _lib_confd import iter_config_files, printable_name  # noqa: E402  (#1420)
+from _lib_confd import printable_name  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
@@ -72,37 +77,260 @@ _RFC3339 = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 
 
-def _platform_contents(dir_path):
-    """{relative POSIX path: bytes} for every `_`-prefixed config file of
-    `dir_path`, at any depth — the exporter's walk (`iter_config_files`).
+# ── platform settings: the top-level keys of `_` files (ADR-037 decision 3) ──
+#
+# A "carrier" is one top-level key of a `_`-prefixed file. Both sides are read
+# as `da-guard parse-tree` reads them (ADR-036: Python never parses conf.d
+# YAML itself), and each key whose value differs is listed with what the
+# report can say about it. Values are compared as yaml.v3 reads them (tag and
+# value), so a comment, a re-indent or another quoting of the same string is
+# no change; the report names keys, never values.
+#
+# ⛔ Stage 1 of decision 3 (owner decision on #1516, 2026-10-13): a changed
+# carrier that a render covers but whose renders show no difference exits 1,
+# full coverage or not. Where a key is written decides whether a reader reads
+# it at all (`defaults` outside a defaults carrier, `tenants:` in a nested
+# `_` file, ...), and nothing here knows that per key yet — reading it from
+# Go is #2962. Until then "no difference" cannot be told from "not read
+# there", and "full coverage: a note, exit code unaffected" would hide the
+# second.
 
-    A file that cannot be read raises: it is an IO failure, exit 2 through
-    `main`'s catch-all, not a change."""
-    root = Path(dir_path)
-    if not root.is_dir():
-        return {}
-    return {path.relative_to(root).as_posix(): path.read_bytes()
-            for path in iter_config_files(root) if path.name.startswith("_")}
+VIEW_PLATFORM = "platform"
+# The parse-tree reader behind each render.
+_VIEW_READER = {rd.VIEW_SERVED: "exporter", rd.VIEW_ROUTES: "generator"}
+
+# Carrier -> (views that render it, coverage). Coverage is what the
+# self-test (tests/ops/test_config_diff_carriers.py) holds the renders to;
+# in stage 1 it changes no exit code.
+RENDERED_CARRIERS = {
+    "defaults": ((rd.VIEW_SERVED,), "full"),
+    "optional_overrides": ((rd.VIEW_SERVED,), "partial"),  # the list itself is not served
+    "state_filters": ((rd.VIEW_SERVED,), "partial"),        # `reasons` is read by no renderer
+    "tenants": ((rd.VIEW_SERVED, rd.VIEW_ROUTES), "full"),
+    "profiles": ((rd.VIEW_SERVED,), "full"),
+    "_routing_defaults": ((rd.VIEW_ROUTES,), "partial"),   # its `routes` is dropped
+    "_routing_enforced": ((rd.VIEW_ROUTES,), "full"),
+    "routing_profiles": ((rd.VIEW_ROUTES,), "full"),
+}
+
+# Read by no renderer, deferred with a trigger (ADR-037 decision 3's table).
+DEFERRED_CARRIERS = {
+    "_custom_alerts": "a platform recipe is read by the custom-alert compiler, not by either render",
+    "instance_tenant_mapping": "read by the tenant-mapping generator, not by either render",
+    "max_metrics_per_tenant": "served-values does not serve the cap itself",
+}
 
 
-def compute_uncovered_files(old_dir, new_dir):
-    """Changed `_`-prefixed files (#1420), sorted: they exit 1 whatever the
-    renders show.
+def _is_root_defaults_carrier(rel, doc):
+    return rel == (doc.get("defaults_carriers") or {}).get(".")
 
-    The renders compare what these files do to the exporter's values and to
-    the Alertmanager configuration, but not every setting in them reaches
-    either (a platform `_custom_alerts` recipe, `instance_tenant_mapping`,
-    ...), and which ones do is not yet checked file by file (ADR-037
-    decision 3). Until it is, such a file is listed when its bytes differ,
-    or it exists on one side only — a comment-only edit included: "review
-    this file" is the claim, not "this changed what runs".
-    """
-    old = _platform_contents(old_dir)
-    new = _platform_contents(new_dir)
-    return sorted(
-        rel for rel in set(old) | set(new)
-        if rel not in old or rel not in new or old[rel] != new[rel]
-    )
+
+# Carriers a CI check reads and enforces, not a render: listed, exit code
+# unaffected — but only where that check reads them; written anywhere else
+# they are "not read here" (exit 1), so the report never implies a check
+# enforces a rule nothing reads.
+CHECKED_CARRIERS = {
+    "domain_policies": (
+        "the route generator's `--validate --strict` rejects violations",
+        lambda rel, doc: PurePosixPath(rel).name in ("_domain_policy.yaml", "_domain_policy.yml")),
+    "_policies": (
+        "`validate-config` fails on a violated rule of severity `error` "
+        "(a `warning` rule does not fail it)",
+        _is_root_defaults_carrier),
+}
+
+# Files neither render reads, by name: what config-diff can say for sure is
+# that neither the exporter nor the route generator reads them; the note says
+# who else may, which depends on how tenant-api is deployed.
+OTHER_SERVICE_FILES = {
+    "_tenant_orgs": "tenant-api reads `_tenant_orgs.yaml` from conf.d",
+    "_rbac": "tenant-api reads a _rbac file only when its --rbac path points to it "
+             "(try-local does; the Helm chart reads a ConfigMap)",
+    "_groups": "tenant-api has not read `_groups.yaml` from conf.d since #2856 (a one-time import)",
+    "_views": "tenant-api has not read `_views.yaml` from conf.d since #2856 (a one-time import)",
+    "_federation_policy": ("tenant-api has not read `_federation_policy.yaml` from conf.d "
+                           "since #2856 (a one-time import)"),
+    "_account_registry": ("tenant-api has not read `_account_registry.yaml` from conf.d "
+                          "since #2856 (a one-time import)"),
+}
+
+# Row statuses, and which of them raise the exit code to 1.
+SETTING_RENDERED = "rendered"            # a view that covers it shows changes
+SETTING_NO_RENDER_CHANGE = "no_render_change"
+SETTING_CHECKED = "checked"
+SETTING_NOT_READ_HERE = "not_read_here"
+SETTING_NOT_COMPARED = "not_compared"
+SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
+                                SETTING_NOT_COMPARED})
+
+_EMPTY_TREE = {"files": {}, "unreadable": [], "not_read": [], "selected": {},
+               "defaults_carriers": {}}
+
+
+def _canonical(node, *, by_text=False):
+    """`node` (a parse-tree content node) as one string that is equal for
+    equal values: a scalar by tag and value (its source text only where it
+    has no value, a timestamp), mappings by sorted key. Iterative: content
+    nests thousands deep (aliases expanded).
+
+    `by_text`: a scalar that is not a string by tag and source text. For a
+    key no render reads: yaml.v3 reads `007` and `7` as the same int, but a
+    reader that decodes the field as a string (tenant-api's org lists) or
+    with YAML 1.1 rules does not, and no render shows the difference."""
+    out, stack = [], [node]
+    while stack:
+        v = stack.pop()
+        if isinstance(v, _Token):
+            out.append(v.text)
+        elif _lib_parse_tree.is_scalar(v):
+            plain = "value" in v and (v["tag"] == "!!str" or not by_text)
+            out.append(json.dumps([v["tag"], v["value"] if plain else v["text"]]))
+        elif isinstance(v, list):
+            stack.append(_Token("]"))
+            for item in reversed(v):
+                stack.extend((_Token(","), item))
+            stack.append(_Token("["))
+        else:  # a mapping
+            stack.append(_Token("}"))
+            for k in sorted(v, reverse=True):
+                stack.extend((_Token(","), v[k], _Token(json.dumps(k) + ":")))
+            stack.append(_Token("{"))
+    return "".join(out)
+
+
+class _Token(NamedTuple):
+    text: str
+
+
+def _read_tree(conf_d, timeout):
+    """parse-tree's document for `conf_d`; an empty one for a side with no
+    config (a first import). Raises `_lib_parse_tree.ParseTreeError`."""
+    if not rd.has_config(conf_d):
+        return _EMPTY_TREE
+    return _lib_parse_tree.run(conf_d, None, timeout)
+
+
+def _platform_files(doc):
+    return {rel: content for rel, content in doc["files"].items()
+            if PurePosixPath(rel).name.startswith("_")}
+
+
+def _unreadable_platform_files(doc):
+    return {u["file"]: u["kind"] for u in doc["unreadable"]
+            if PurePosixPath(u["file"]).name.startswith("_")}
+
+
+def _setting_row(rel, key, change, status, note, views=()):
+    return {"file": rel, "key": key, "change": change, "status": status,
+            "note": note, "views": list(views)}
+
+
+def platform_settings(old_doc, new_doc, changed_views, view_status, old_dir, new_dir):
+    """One row per changed carrier, per unreadable `_` file and per changed
+    `_` file no reader reads, sorted.
+
+    `changed_views`: the views whose sections show a change; `view_status`:
+    {view: status} — a carrier whose covering view was not compared cannot
+    be said to be rendered. `old_dir` / `new_dir`: where a file parse-tree
+    lists as read by no reader (`not_read`) is compared, byte for byte —
+    its content is in no document."""
+    rows = _not_read_rows(old_doc, new_doc, old_dir, new_dir)
+    old_files, new_files = _platform_files(old_doc), _platform_files(new_doc)
+    old_bad, new_bad = _unreadable_platform_files(old_doc), _unreadable_platform_files(new_doc)
+    for rel in sorted(set(old_bad) | set(new_bad)):
+        side = "PR" if rel in new_bad else "base"
+        kind = new_bad.get(rel) or old_bad.get(rel)
+        rows.append(_setting_row(rel, None, "unreadable", SETTING_NOT_COMPARED,
+                                 f"cannot be read on the {side} side ({kind})"))
+    for rel in sorted((set(old_files) | set(new_files)) - set(old_bad) - set(new_bad)):
+        old, new = old_files.get(rel, {}), new_files.get(rel, {})
+        stem = PurePosixPath(rel).stem.lower()
+        for key in sorted(set(old) | set(new)):
+            by_text = key not in RENDERED_CARRIERS
+            if key in old and key in new and (_canonical(old[key], by_text=by_text)
+                                              == _canonical(new[key], by_text=by_text)):
+                continue
+            change = "added" if key not in old else "removed" if key not in new else "modified"
+            rows.append(_classify(rel, key, change, stem, new_doc if key in new else old_doc,
+                                  changed_views, view_status))
+    return sorted(rows, key=lambda r: (r["file"], r["key"] or ""))
+
+
+def _not_read_rows(old_doc, new_doc, old_dir, new_dir):
+    """A `_` file parse-tree lists as read by no reader (an unselected
+    defaults carrier: `_defaults.yml` beside `_defaults.yaml`), when its
+    bytes differ between the sides or it is on one side only."""
+    reasons = {}
+    for doc in (old_doc, new_doc):
+        for e in doc.get("not_read") or []:
+            if PurePosixPath(e["file"]).name.startswith("_"):
+                reasons.setdefault(e["file"], e["reason"])
+    rows = []
+    for rel in sorted(reasons):
+        old = _read_bytes(old_dir, rel)
+        new = _read_bytes(new_dir, rel)
+        if old == new:
+            continue
+        change = "added" if old is None else "removed" if new is None else "modified"
+        rows.append(_setting_row(rel, None, change, SETTING_NOT_READ_HERE,
+                                 f"no reader reads this file ({reasons[rel]})"))
+    return rows
+
+
+def _read_bytes(root, rel):
+    """The file's bytes, or None when it is not there. Bytes only: nothing
+    here parses it (ADR-036)."""
+    path = Path(root) / rel
+    return path.read_bytes() if path.is_file() else None
+
+
+def _classify(rel, key, change, stem, doc, changed_views, view_status):
+    if key in CHECKED_CARRIERS:
+        checker, read_here = CHECKED_CARRIERS[key]
+        if read_here(rel, doc):
+            return _setting_row(rel, key, change, SETTING_CHECKED, f"not compared; {checker}")
+        return _setting_row(rel, key, change, SETTING_NOT_READ_HERE,
+                            "the check that reads this key does not read it from this file")
+    if key in DEFERRED_CARRIERS:
+        return _setting_row(rel, key, change, SETTING_NOT_COMPARED, DEFERRED_CARRIERS[key])
+    if key not in RENDERED_CARRIERS:
+        note = "neither the exporter nor the route generator reads this key"
+        if stem in OTHER_SERVICE_FILES:
+            note += "; " + OTHER_SERVICE_FILES[stem]
+        return _setting_row(rel, key, change, SETTING_NOT_COMPARED, note)
+    # A view counts only where its reader reads the file at all (parse-tree's
+    # `selected`); which keys of the file it reads is #2962.
+    readers = (doc.get("selected") or {}).get(rel) or []
+    views = tuple(v for v in RENDERED_CARRIERS[key][0]
+                  if _VIEW_READER[v] in readers)
+    if not views:
+        return _setting_row(rel, key, change, SETTING_NOT_READ_HERE,
+                            "no reader that renders this key reads this file")
+    if any(view_status.get(v) != "computed" for v in views):
+        return _setting_row(rel, key, change, SETTING_NOT_COMPARED,
+                            "a view that renders it was not computed or not compared", views)
+    if any(v in changed_views for v in views):
+        return _setting_row(rel, key, change, SETTING_RENDERED,
+                            "the renders that read it changed; which of those changes "
+                            "come from this key is not told apart", views)
+    return _setting_row(rel, key, change, SETTING_NO_RENDER_CHANGE,
+                        "the renders show no difference: it may have no effect, or a reader "
+                        "may not read it where it is written", views)
+
+
+def _platform_view(old_dir, new_dir, timeout):
+    """(ViewResult, old_doc, new_doc) for the platform settings. A PR side
+    parse-tree cannot read, or a tool failure on either side, is no result
+    (ADR-037 decision 4)."""
+    try:
+        new_doc = _read_tree(new_dir, timeout)
+    except _lib_parse_tree.ParseTreeError as e:
+        return rd.ViewResult("not_computed", f"PR side: {e}"), None, None
+    try:
+        old_doc = _read_tree(old_dir, timeout)
+    except _lib_parse_tree.ParseTreeError as e:
+        return rd.ViewResult("not_computed", f"base side: {e}"), None, None
+    return rd.ViewResult("computed", ""), old_doc, new_doc
 
 
 def classify_change(old_val, new_val):
@@ -577,7 +805,8 @@ def _cap_for_comment(result):
 _SECTIONED_FIELDS = frozenset(rd.SERVED_FIELDS) | {"tenant"}
 
 VIEW_TITLES = {rd.VIEW_SERVED: "Exporter values (da-guard served-values)",
-               rd.VIEW_ROUTES: "Routing (Alertmanager configuration)"}
+               rd.VIEW_ROUTES: "Routing (Alertmanager configuration)",
+               VIEW_PLATFORM: "Platform settings (da-guard parse-tree)"}
 
 
 def served_sections(old_tenants, new_tenants):
@@ -591,8 +820,9 @@ def served_sections(old_tenants, new_tenants):
     }
 
 
-def build_report(diff, old_dir, new_dir):
-    """Everything both output formats print, from a `_render_diff.RenderDiff`."""
+def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
+    """Everything both output formats print, from a `_render_diff.RenderDiff`
+    and the two sides' `_` files as parse-tree reads them."""
     served = diff.served.report or {}
     metric = served.get("metric") or {}
     setting = served.get("setting") or {}
@@ -622,15 +852,32 @@ def build_report(diff, old_dir, new_dir):
     routes = [c for c in diff.routes.changes if isinstance(c, rd.RouteChange)]
     receivers = [c for c in diff.routes.changes if isinstance(c, rd.ReceiverChange)]
     inhibits = [c for c in diff.routes.changes if isinstance(c, rd.InhibitChange)]
-    return {
+    report = {
         "old_dir": str(old_dir), "new_dir": str(new_dir), "at": diff.at,
         "views": {rd.VIEW_SERVED: diff.served, rd.VIEW_ROUTES: diff.routes},
         "metric": metric, "setting": setting, "custom_alert": custom,
         "tenants_added": sorted(tenants_added), "tenants_removed": sorted(tenants_removed),
         "dropped": dropped, "other_served": other,
         "routes": routes, "receivers": receivers, "inhibits": inhibits,
-        "uncovered_files": compute_uncovered_files(old_dir, new_dir),
     }
+    platform, old_doc, new_doc = _platform_view(old_dir, new_dir, timeout)
+    report["views"][VIEW_PLATFORM] = platform
+    rows = []
+    if platform.status == "computed":
+        changed_views = {rd.VIEW_SERVED} if _served_changed(report) else set()
+        if report["routes"] or report["receivers"] or report["inhibits"]:
+            changed_views.add(rd.VIEW_ROUTES)
+        rows = platform_settings(old_doc, new_doc, changed_views,
+                                 {rd.VIEW_SERVED: diff.served.status,
+                                  rd.VIEW_ROUTES: diff.routes.status}, old_dir, new_dir)
+    report["platform_settings"] = rows
+    report["uncovered_files"] = sorted({r["file"] for r in rows if r["status"] in SETTINGS_TO_REVIEW})
+    return report
+
+
+def _served_changed(report):
+    return any(report[k] for k in ("metric", "setting", "custom_alert", "tenants_added",
+                                   "tenants_removed", "dropped", "other_served"))
 
 
 def mask_report(report, secrets):
@@ -657,10 +904,12 @@ def report_has_changes(report):
 
 
 def report_exit_code(diff, report):
-    """`RenderDiff.exit_code`, raised to 1 for a changed `_` file or anything
-    the sections show; never lowered from 2."""
+    """`RenderDiff.exit_code`, raised to 2 when the platform settings were not
+    computed and to 1 for a platform setting to review or anything the
+    sections show; never lowered from 2."""
     code = diff.exit_code
-    if code == 2:
+    platform = report["views"].get(VIEW_PLATFORM)
+    if code == 2 or (platform is not None and platform.status == "not_computed"):
         return EXIT_CALLER_ERROR
     if code == 1 or report["uncovered_files"] or report_has_changes(report):
         return EXIT_VIOLATION
@@ -749,6 +998,7 @@ def report_json(report, exit_code):
             report["inhibits"], lambda c: {"change": c.kind, "rule": c.rule},
             lambda g, c: _add(g, "tenants", [c.tenant])),
         "uncovered_files": report["uncovered_files"],
+        "platform_settings": report["platform_settings"],
     }
 
 
@@ -782,24 +1032,60 @@ def _render_views(report, lines):
     lines.append("")
 
 
-def _render_uncovered(uncovered, lines):
-    # File names come from the PR's tree, so each one goes through
-    # printable_name (terminal escapes) and _code_span (code-span break-out, F5).
-    lines.append("## Changed Platform Files")
+_SETTING_HEADINGS = (
+    (SETTING_NO_RENDER_CHANGE, ":warning: Changed, but the renders show no difference"),
+    (SETTING_NOT_READ_HERE, ":warning: Not read where it is written"),
+    (SETTING_NOT_COMPARED, ":warning: Not compared"),
+    (SETTING_CHECKED, "Checked by CI, not compared"),
+    (SETTING_RENDERED, "Rendered (see the sections below)"),
+)
+
+
+# How much of one file or key name the Markdown prints: a name comes from the
+# PR's tree, and one long name must not fill the comment (the JSON keeps it).
+SETTING_NAME_LIMIT = 200
+
+
+def _shorten(name):
+    return name if len(name) <= SETTING_NAME_LIMIT else name[:SETTING_NAME_LIMIT] + "…"
+
+
+def _render_platform_settings(rows, lines):
+    """The changed top-level keys of `_` files, grouped by what the report can
+    say about them. File and key names come from the PR's tree: each goes
+    through printable_name (terminal escapes) and _code_span (F5)."""
+    lines.append("## Platform Settings")
     lines.append("")
     lines.append(
-        f"> :warning: **{len(uncovered)} `_`-prefixed file(s) changed.** The sections "
-        "below show what the change does to the exporter's values and to the "
-        "Alertmanager configuration. A setting neither of them reads (for example a "
-        "platform `_custom_alerts` recipe or `instance_tenant_mapping`) is not "
-        "compared, so review these files directly."
+        "> Top-level keys of `_`-prefixed files whose value changed (comments and "
+        "formatting are not changes), and `_` files no reader reads whose bytes changed. "
+        "The renders compare what a setting does; a setting they do not show is listed "
+        "here to review directly."
     )
     lines.append("")
-    for rel in uncovered[:UNCOVERED_LIST_LIMIT]:
-        lines.append(f"- {_code_span(printable_name(rel))}")
-    if len(uncovered) > UNCOVERED_LIST_LIMIT:
-        lines.append(f"- ... (+{len(uncovered) - UNCOVERED_LIST_LIMIT} more)")
-    lines.append("")
+    shown = 0
+    for status, heading in _SETTING_HEADINGS:
+        group = [r for r in rows if r["status"] == status]
+        if not group:
+            continue
+        lines.append(f"**{heading}** ({len(group)})")
+        lines.append("")
+        for first, members in _group(group, lambda r: r["note"]):
+            listed = members[:max(0, UNCOVERED_LIST_LIMIT - shown)]
+            if not listed:
+                break
+            for r in listed:
+                what = _code_span(_shorten(printable_name(r["file"])))
+                if r["key"] is not None:
+                    what += " " + _code_span(_shorten(printable_name(r["key"])))
+                what += f" ({r['change']})"
+                lines.append(f"- {what}")
+            shown += len(listed)
+            lines.append(f"  - {printable_name(first['note'])}")
+        lines.append("")
+    if len(rows) > shown:
+        lines.append(f"- ... (+{len(rows) - shown} more; the JSON report lists them all)")
+        lines.append("")
 
 
 def _render_routing(report, lines):
@@ -1046,8 +1332,8 @@ def render_markdown(report):
         lines += [f"Masked by value: {report['masked_by_value']} place(s) outside a credential "
                   f"field held a credential's value; they print as {_code_span(REDACTED)}.", ""]
     _render_views(report, lines)
-    if report["uncovered_files"]:
-        _render_uncovered(report["uncovered_files"], lines)
+    if report["platform_settings"]:
+        _render_platform_settings(report["platform_settings"], lines)
     if report["tenants_added"] or report["tenants_removed"]:
         lines.append("## Tenants Added / Removed")
         lines.append("")
@@ -1076,7 +1362,8 @@ def render_markdown(report):
             lines.append("No change among the views computed; see Not Computed / Not Compared above.")
         elif report["uncovered_files"]:
             lines.append("No change in what the two renders show; "
-                         f"{len(report['uncovered_files'])} changed platform file(s) to review (above).")
+                         f"{len(report['uncovered_files'])} platform file(s) with settings "
+                         "to review (above).")
         else:
             lines.append("No changes detected.")
         return _cap_for_comment("\n".join(lines))
@@ -1100,7 +1387,7 @@ def render_markdown(report):
     if any(c.tenant == rd.PLATFORM for c in report["routes"]):
         summary += " (some platform-wide)"
     if report["uncovered_files"]:
-        summary += f", {len(report['uncovered_files'])} changed platform file(s)"
+        summary += f", {len(report['uncovered_files'])} platform file(s) with settings to review"
     lines.append(summary)
     return _cap_for_comment("\n".join(lines))
 

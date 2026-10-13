@@ -83,7 +83,7 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label, strict_load_exporter_keys  # noqa: E402
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 
 SCHEMA = "da-tools.migration-audit/v1"
@@ -758,17 +758,6 @@ _HELP = {
 }
 
 
-def _timeout(value: str) -> float:
-    """--timeout: seconds, finite and > 0 (`nan`, `inf`, 0 and below refused)."""
-    try:
-        t = float(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a number of seconds: {value!r}") from None
-    if not math.isfinite(t) or t <= 0:
-        raise argparse.ArgumentTypeError(f"must be a finite number of seconds above 0: {value!r}")
-    return t
-
-
 def build_parser() -> argparse.ArgumentParser:
     h = _HELP["zh" if detect_cli_lang() == "zh" else "en"]
     p = argparse.ArgumentParser(prog="da-tools migration-audit", description=h["description"],
@@ -776,7 +765,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config-dir", required=True, help=h["config_dir"])
     p.add_argument("--json", action="store_true", help=h["json"])
     p.add_argument("--da-guard-binary", default=None, help=h["binary"])
-    p.add_argument("--timeout", type=_timeout, default=DEFAULT_TIMEOUT, help=h["timeout"])
+    p.add_argument("--timeout", type=positive_seconds, default=DEFAULT_TIMEOUT, help=h["timeout"])
     return p
 
 

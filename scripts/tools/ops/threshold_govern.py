@@ -83,6 +83,7 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     http_get_json,
     parse_duration_seconds,
+    positive_seconds,
 )
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
 # Aliased: the local format_json_report() below (domain report builder,
@@ -645,7 +646,7 @@ def _auth_headers(args: argparse.Namespace) -> dict[str, str]:
 
 
 def _http_put_yaml(
-    url: str, yaml_body: str, headers: dict[str, str], timeout: int
+    url: str, yaml_body: str, headers: dict[str, str], timeout: float
 ) -> tuple[int, Optional[dict], Optional[str]]:
     """PUT a raw-YAML body. Returns ``(status_code, parsed_json|None, error|None)``.
 
@@ -1211,7 +1212,12 @@ def main() -> None:
     parser.add_argument("--throttle-seconds", type=float, default=DEFAULT_THROTTLE_SECONDS,
                         help="開 PR 之間的間隔秒數（預設 2）" if _LANG == "zh"
                         else "Seconds to pause between opened PRs (default 2)")
-    parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout seconds")
+    parser.add_argument("--timeout", type=positive_seconds, default=30,
+                        help=("tenant-api 的 HTTP 逾時秒數（> 0，可帶小數；預設 30；"
+                              "不影響 Prometheus 查詢）" if _LANG == "zh" else
+                              "HTTP timeout in seconds for tenant-api calls (> 0, "
+                              "fractions allowed; default 30; Prometheus queries "
+                              "are not affected)"))
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON 格式輸出" if _LANG == "zh" else "Output as JSON")
     args = parser.parse_args()

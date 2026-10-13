@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-10
-updated_at: 2026-10-11
+updated_at: 2026-10-13
 ---
 
 # ADR-037: config-diff 改為比較渲染結果
@@ -18,7 +18,7 @@ updated_at: 2026-10-11
 
 ## 狀態
 
-✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。
+✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上目前分兩步的做法、由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。
 
 ## 摘要
 
@@ -97,9 +97,23 @@ updated_at: 2026-10-11
 | 平台層的 `_custom_alerts`（`_` 檔頂層的 recipe） | 由 custom-alert 編譯器讀，不在兩支渲染程式裡 | 編譯器有可比較的輸出，或第一次出現漏報 |
 | `instance_tenant_mapping` | 由 tenant mapping 產生器讀 | 該產生器有穩定的輸出格式 |
 | `max_metrics_per_tenant` | served-values 不輸出上限值本身 | 有人需要時 |
-| `domain_policies` | 路由產生器的 `--validate --strict` 已在 CI 擋下違規 | 需要看「新增了哪些違規」時，讀產生器的 `--findings-json` |
 
-`domain_policies` 有其他檢查把關，所以只列為提示，不影響結束碼。
+**由 CI 檢查負責的載體。** `domain_policies` 由路由產生器的 `--validate --strict` 擋下違規；`_policies` 由 `validate-config` 檢查，`severity: error` 的規則違反時失敗。兩者寫在檢查會讀的位置時（`domain_policies` 在 `_domain_policy.yaml`，`_policies` 在根目錄的預設檔）只列為提示，不影響結束碼；寫在其他位置時列為「這裡不會被讀」，結束碼 1，免得報告暗示一條沒有人讀的規則有被執行。需要看「新增了哪些違規」時，讀產生器的 `--findings-json`。
+
+**兩支渲染程式都不讀的鍵。** 表上沒有的鍵（例如 `_tenant_orgs.yaml` 的 `tenant_orgs`、`_rbac.yaml` 的 `groups`）列為沒有比對，結束碼 1。報告只寫 config-diff 確定的事：exporter 與路由產生器都不讀這個鍵；在 tenant-api 相關的檔裡另附一句誰可能讀它，因為讀不讀取決於 tenant-api 怎麼部署，例如 `_rbac.yaml` 只有在 tenant-api 的 `--rbac` 指到 conf.d 時才從這裡讀。同一個檔裡渲染程式會讀的鍵（例如根目錄任何 `_` 檔裡的 `tenants:`）照常比較。沒有比對的鍵，非字串的值以原文比較：`007` 與 `7` 在 YAML 1.2 是同一個整數，但以字串讀它的程式看到的是兩個值，而這裡沒有渲染結果可以佐證。
+
+**目前的做法：分兩步。** 值以 `da-guard parse-tree` 讀出的結果比較（ADR-036：Python 不自己解析 YAML），純量比型別與值，所以只改註解、縮排、引號或鍵的順序都不算變更。parse-tree 列為沒有讀取端讀的 `_` 檔（例如 `_defaults.yaml` 旁邊另一個沒被選上的 `_defaults.yml`）內容不在它的輸出裡，以位元組比較，有差異就列為「這裡不會被讀」。渲染程式所讀的鍵，若寫在那支程式根本不讀的檔裡（parse-tree 會說每個檔由哪些讀取端讀），也列為「這裡不會被讀」。但目前還分不出「真的沒有效果」與「寫在讀取端不讀的位置」：同一個鍵寫在哪個檔、哪一層，決定讀取端讀不讀它，例如 `defaults` 只在預設檔（`_defaults.yaml`）裡被讀，`tenants:` 寫在子目錄的 `_` 檔不會被讀。所以在讀取端能逐鍵說出它讀哪些位置之前，上面「標為完整涵蓋、渲染結果沒有差異：只印一行、不影響結束碼」這一條暫不啟用：值變了而涵蓋它的渲染結果沒有差異，一律列出並以結束碼 1 結束。
+
+範例：在根目錄的 `_platform.yaml` 加上 `defaults: {cpu: 1}`（這個檔不是預設檔，exporter 不讀它的 `defaults`），報告的「Platform Settings」段列出：
+
+```text
+**:warning: Changed, but the renders show no difference** (1)
+
+- `_platform.yaml` `defaults` (added)
+  - the renders show no difference: it may have no effect, or a reader may not read it where it is written
+```
+
+結束碼 1。
 
 ### 4. 結束碼與報告
 
@@ -177,6 +191,8 @@ db-b 自己把 `container_memory` 設成 90，所以不受影響。
 - **現有報告的內容不得退步**：租戶閾值的 tighter／looser 分類、設定變更、custom alert 的比較，要改在 served-values 的值上重做。
 - **exporter 不送出的鍵**（例如 `_namespaces`）：served-values 把它列在「沒有送出」的清單裡，變更仍比得到，但報告只能說「設定變了」，不能說「告警行為變了」。
 - **matcher 完全相同的兄弟節點**：只能依出現順序對應。順序改變時，可能報成一刪一增。
+- **放寬或刪除規則看不出來**：`domain_policies`、`_policies` 只列為提示，放寬或刪除一條規則不會被 CI 擋，報告也不會以結束碼標出；`severity: warning` 的 `_policies` 規則違反時，CI 也不會失敗。
+- **profile 裡寫的 `_routing`**：exporter 會套用，路由產生器不讀。報告在 exporter 的面向列出設定變更，路由面向沒有變化；這是兩個讀取端不一致（[#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)），不是比較漏掉。
 - **平台的 blast-radius 報告**（`blast_radius.py`）與本決策重疊，之後另行評估是否退役。
 
 ## 考慮過但否決

@@ -2441,7 +2441,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 兩支都需要 da-guard（映像內建；repo 內先 `make da-guard-build`，或設 `DA_GUARD_BINARY`）。
 
-**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及閾值變更表（Threshold Changes）。每個區段裡同一個變更只列一次，後面寫它影響的租戶：一個時寫租戶名，多個時寫租戶數與前 5 個名字，所以一個平台預設改到 1000 個租戶也只占一行。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`；同一個憑證值（字串或數字）出現在其他欄位（YAML anchor／alias 或手抄）時也遮掉，報告頂端註記遮了幾處。比對的是完整的值，8 個字元以上的值出現在較長的字串裡也遮；只抄一部分、或改寫過（大小寫、URL 編碼）的副本遮不到。
+**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Platform Settings、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及閾值變更表（Threshold Changes）。每個區段裡同一個變更只列一次，後面寫它影響的租戶：一個時寫租戶名，多個時寫租戶數與前 5 個名字，所以一個平台預設改到 1000 個租戶也只占一行。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`；同一個憑證值（字串或數字）出現在其他欄位（YAML anchor／alias 或手抄）時也遮掉，報告頂端註記遮了幾處。比對的是完整的值，8 個字元以上的值出現在較長的字串裡也遮；只抄一部分、或改寫過（大小寫、URL 編碼）的副本遮不到。
 
 **變更分類**（閾值表）
 
@@ -2454,11 +2454,11 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 | `toggled` | enable ↔ disable | 開啟或關閉 alert |
 | `modified` | 複雜值變更 | 需人工審閱 |
 
-**改過的 `_` 開頭檔**：兩側內容（逐位元組）不同、或只存在於一側的 `_` 開頭檔（任何深度），在「Changed Platform Files」逐一列出，結束碼至少為 1，只改註解也算。兩支渲染程式讀不到的設定（例如平台層的 `_custom_alerts`、`instance_tenant_mapping`）不會出現在其他區段，所以要直接看這些檔。
+**平台設定（`_` 開頭檔的頂層鍵）**：兩側的 `_` 開頭檔（任何深度）以 `da-guard parse-tree` 讀出的值逐鍵比較，只改註解、縮排、引號或鍵的順序不算變更。值變了的鍵列在「Platform Settings」，依報告能說的分組：渲染結果有差異的列為 Rendered（見下方各區段，不判定哪一筆差異來自這個鍵）；渲染結果沒有差異的、兩支渲染程式都不讀的鍵（平台層的 `_custom_alerts`、`instance_tenant_mapping`、`max_metrics_per_tenant`，以及 tenant-api 相關檔裡的 `tenant_orgs`、`groups` 等，這類鍵的非字串值以原文比較）、讀不了的檔、沒有讀取端讀的 `_` 檔（以位元組比較）、寫在讀取端不讀的檔裡的鍵，以及寫在檢查工具不讀的位置的 `_policies`／`domain_policies`，結束碼至少為 1。`_policies` 寫在根目錄的預設檔、`domain_policies` 寫在 `_domain_policy.yaml` 時只列為提示（由 `validate-config` 與產生器的 `--validate --strict` 檢查），不影響結束碼。parse-tree 本身失敗時結束碼 2。規則見 [ADR-037](adr/037-config-diff-compares-rendered-output.md) 決定 3。
 
 **Custom Alert 區段不判定消音**：讀的是 exporter 送出的 row，`threshold` 是 `<值>:<severity>`，`op`／`window`／`for` 的變更以 `recipe_id` 不同呈現；不再送出的 recipe 列為 removed，並註明分不出是刪除、停用或被 exporter 拒收。
 
-**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`masked_by_value`（憑證值出現在非憑證欄位而被遮的處數）、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
+**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`masked_by_value`（憑證值出現在非憑證欄位而被遮的處數）、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`（有要審的平台設定的檔）、`platform_settings`（每個值變了的鍵一筆；沒有讀取端讀的檔與讀不了的檔整檔一筆，`key` 為 null：`file`、`key`、`change`、`status`、`note`、`views`）。`views` 另有 `platform`（parse-tree 的讀取結果）。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
 
 ⚠️ v2.9.0 映像仍是舊行為：只比對頂層各租戶檔自己寫的值，平台檔只列檔名，沒有 `--at`，JSON 是沒有 `schema` 的舊結構（`metric_diffs`、`profile_diffs` 等）。 <!-- image-caveat: v2.9.0 -->
 
@@ -2475,8 +2475,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | 代碼 | 說明 |
 |------|------|
 | `0` | 無配置變更 |
-| `1` | 偵測到變更；或有改過的 `_` 開頭檔；或 base 側設定壞了、渲染不出來（該面向列為 Not Compared，不擋修好它的 PR） |
-| `2` | 沒有算出結果：PR 側有檔讀不了（stderr 點名該檔與 exporter／產生器自己的原因）、PR 側沒有設定檔、找不到 da-guard 或工具本身失敗，或參數錯誤（例如 `--at` 不是 RFC3339、目錄位置是一個檔）。上述情況中，參數錯誤以外報告仍會輸出並寫明哪個面向沒有計算；改過的 `_` 開頭檔讀不到、或工具未預期的錯誤，則只在 stderr 印一行 `ERROR:`，不輸出報告 |
+| `1` | 偵測到變更；或有要審的平台設定（見上方「平台設定」：值變了而渲染沒有差異的鍵、兩支渲染程式都不讀的鍵、寫在讀取端不讀的位置的鍵、讀不了的 `_` 檔；只改註解或排版，以及寫在檢查會讀的位置的 `_policies`／`domain_policies`，不算）；或 base 側設定壞了、渲染不出來（該面向列為 Not Compared，不擋修好它的 PR） |
+| `2` | 沒有算出結果：PR 側有檔讀不了（stderr 點名該檔與 exporter／產生器自己的原因）、PR 側沒有設定檔、找不到 da-guard 或工具本身失敗，或參數錯誤（例如 `--at` 不是 RFC3339、目錄位置是一個檔）。上述情況中，參數錯誤以外報告仍會輸出並寫明哪個面向沒有計算（`da-guard parse-tree` 失敗時是平台設定面向沒有計算）；工具未預期的錯誤則只在 stderr 印一行 `ERROR:`，不輸出報告 |
 
 > ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
 > 可照抄的消費端寫法（`set +e` / `rc=$?`）在
@@ -3033,6 +3033,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--auth-token` | Bearer token（oauth2-proxy 前置模式；或 `$DA_GOVERN_TOKEN`） | - |
 | `--auth-token-file` | Bearer token 檔路徑（K8s audience-bound projected SA token，呼叫時讀取；或 `$DA_GOVERN_TOKEN_FILE`） | - |
 | `--throttle-seconds` | 開 PR 之間的間隔秒數 | `2` |
+| `--timeout` | 呼叫 tenant-api（GET／PUT）的 HTTP 逾時秒數，只在 `--apply` 時用到；不影響 Prometheus 查詢。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)） | `30` |
 | `--json` | JSON 輸出 | - |
 
 > **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除下界 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
@@ -3064,7 +3065,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | 僅驗證 URL 格式，不實際發送 | - |
 | `--json` | JSON 輸出 | - |
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
-| `--timeout` | 每個 receiver 的連線逾時秒數 | `10` |
+| `--timeout` | 每個 receiver 的連線逾時秒數。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
 | `--rate-limit` | 每次測試之間的等待秒數 | `0.5` |
 
 **支援的 Receiver 類型**
