@@ -24,18 +24,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// FindingSubtreeDefaultReservedKey (warn; #2388): a subtree `_defaults.yaml`
-// in the tenant's defaults chain carries Field, a reserved key, in its
-// defaults, whatever its non-null value and whether or not the exporter
-// applies it.
-// Planned to become an error in the next minor release, when the exporter
-// stops applying such keys.
-const FindingSubtreeDefaultReservedKey FindingKind = "subtree_default_reserved_key"
-
-// checkSubtreeReservedKeys reports one FindingSubtreeDefaultReservedKey per
+// checkSubtreeReservedKeys reports one findingkind.FindingSubtreeDefaultReservedKey per
 // (tenant, key) of input.SubtreeReservedKeys, for the tenants in
 // input.EffectiveConfigs only (the caller's scope).
 func checkSubtreeReservedKeys(input CheckInput) []Finding {
@@ -69,7 +62,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingSubtreeDefaultReservedKey,
+				Kind:     findingkind.FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
 				Message:  subtreeReservedMessage(input, applied, id, k, files),

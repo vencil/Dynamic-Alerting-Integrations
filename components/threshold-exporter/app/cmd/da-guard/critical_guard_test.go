@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -50,7 +51,7 @@ func rootCriticalFields(t *testing.T, dir string) map[string]bool {
 	}
 	out := map[string]bool{}
 	for _, f := range report.Findings {
-		if f.Kind == guard.FindingRootDefaultsCriticalKey {
+		if f.Kind == findingkind.FindingRootDefaultsCriticalKey {
 			if f.Severity != guard.SeverityWarn || f.TenantID != "" {
 				t.Errorf("root_defaults_critical_key finding %+v: want severity warn and no tenant", f)
 			}

@@ -13,6 +13,8 @@ package guard
 import (
 	"fmt"
 	"sort"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // CheckDefaultsImpact runs the guard against a single proposed
@@ -70,7 +72,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 		if fi.Field != fj.Field {
 			return fi.Field < fj.Field
 		}
-		return fi.Kind < fj.Kind
+		return fi.Kind.String() < fj.Kind.String()
 	})
 
 	report := &GuardReport{
@@ -91,7 +93,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 			// A finding with an empty TenantID is a platform file's —
 			// except invalid_tenant_id, whose TenantID IS the id, the
 			// empty one included (#2341).
-			if f.TenantID != "" || f.Kind == FindingInvalidTenantID {
+			if f.TenantID != "" || f.Kind == findingkind.FindingInvalidTenantID {
 				failingTenants[f.TenantID] = struct{}{}
 			}
 		case SeverityWarn:

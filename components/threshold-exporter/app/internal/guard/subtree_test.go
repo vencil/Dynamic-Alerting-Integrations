@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // #1976 r4: the fix sentence depends on the key. optional_overrides: does not
@@ -59,7 +61,7 @@ func TestCheckSubtreeUndeliverable(t *testing.T) {
 	}
 	var got [][3]string
 	for _, f := range report.Findings {
-		if f.Kind != FindingSubtreeDefaultUndeliverable || f.Severity != SeverityWarn {
+		if f.Kind != findingkind.FindingSubtreeDefaultUndeliverable || f.Severity != SeverityWarn {
 			t.Errorf("unexpected finding %+v", f)
 			continue
 		}

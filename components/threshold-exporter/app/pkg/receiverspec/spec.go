@@ -156,7 +156,7 @@ func SupportedTypes() []string {
 }
 
 // Kind classifies a Problem. Callers map it onto their own vocabulary
-// (da-guard FindingKind, tenant-api violations).
+// (da-guard's findingkind.Kind, tenant-api violations).
 type Kind string
 
 const (

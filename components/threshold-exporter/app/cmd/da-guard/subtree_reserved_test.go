@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
@@ -81,18 +82,18 @@ func writeReservedConfD(t *testing.T, files map[string]string) string {
 
 // reservedFindings runs the guard with --format json and returns the exit code
 // and the subtree_default_reserved_key findings.
-func reservedFindings(t *testing.T, args ...string) (int, []guard.Finding) {
+func reservedFindings(t *testing.T, args ...string) (int, []reportedFinding) {
 	t.Helper()
 	code, stdout, stderr := runOnce(t, append([]string{"--format", "json"}, args...)...)
 	var doc struct {
-		Report *guard.GuardReport `json:"report"`
+		Report *reportedReport `json:"report"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("stdout is not JSON (exit %d): %v\nstderr=%s", code, err, stderr)
 	}
-	var out []guard.Finding
+	var out []reportedFinding
 	for _, f := range doc.Report.Findings {
-		if f.Kind == guard.FindingSubtreeDefaultReservedKey {
+		if f.Kind == findingkind.FindingSubtreeDefaultReservedKey.String() {
 			out = append(out, f)
 		}
 	}
@@ -282,14 +283,14 @@ func allFindings(t *testing.T, args ...string) []string {
 	t.Helper()
 	code, stdout, stderr := runOnce(t, append([]string{"--format", "json"}, args...)...)
 	var doc struct {
-		Report *guard.GuardReport `json:"report"`
+		Report *reportedReport `json:"report"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("stdout is not JSON (exit %d): %v\nstderr=%s", code, err, stderr)
 	}
 	var out []string
 	for _, f := range doc.Report.Findings {
-		out = append(out, string(f.Severity)+" "+string(f.Kind)+" "+f.TenantID+" "+f.Field)
+		out = append(out, string(f.Severity)+" "+f.Kind+" "+f.TenantID+" "+f.Field)
 	}
 	return out
 }

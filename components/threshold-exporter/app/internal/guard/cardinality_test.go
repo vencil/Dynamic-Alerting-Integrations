@@ -3,6 +3,8 @@ package guard
 import (
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // fixtureMetrics builds a tenant effective config with `n` non-special
@@ -139,7 +141,7 @@ func TestCheckCardinality_AboveWarnFloorEmitsWarn(t *testing.T) {
 	if got[0].Severity != SeverityWarn {
 		t.Errorf("severity = %q, want warn", got[0].Severity)
 	}
-	if got[0].Kind != FindingCardinalityWarning {
+	if got[0].Kind != findingkind.FindingCardinalityWarning {
 		t.Errorf("kind = %q, want cardinality_warning", got[0].Kind)
 	}
 	if !strings.Contains(got[0].Message, "90") || !strings.Contains(got[0].Message, "100") {
@@ -158,7 +160,7 @@ func TestCheckCardinality_AboveLimitEmitsError(t *testing.T) {
 	if got[0].Severity != SeverityError {
 		t.Errorf("severity = %q, want error", got[0].Severity)
 	}
-	if got[0].Kind != FindingCardinalityExceeded {
+	if got[0].Kind != findingkind.FindingCardinalityExceeded {
 		t.Errorf("kind = %q, want cardinality_exceeded", got[0].Kind)
 	}
 	if !strings.Contains(got[0].Message, "exceeds") {
@@ -298,7 +300,7 @@ func TestCheckCardinality_IntegratesWithCheckDefaultsImpact(t *testing.T) {
 	}
 	// Cardinality error should sort before any warn (errors first
 	// in the global sort).
-	if r.Findings[0].Kind != FindingCardinalityExceeded {
+	if r.Findings[0].Kind != findingkind.FindingCardinalityExceeded {
 		t.Errorf("first finding kind = %q, want cardinality_exceeded", r.Findings[0].Kind)
 	}
 }

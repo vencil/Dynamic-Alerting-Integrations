@@ -143,13 +143,13 @@
     "(null otherwise). go_severity: kind -> the severity da-guard gives it (da-guard's half asserts every such finding carries it); the",
     "Python half asserts every generator finding of an `error` kind is in force under --validate --strict (never looser than da-guard).",
     "routing_profiles_unusable (a routing_profiles block that is not a mapping) is a platform row both halves compare.",
-    "tests/shared/test_routing_policy_parity.py test_no_routing_check_is_go_only computes da-guard's routing kinds from its source (the",
-    "FindingKind constants internal/guard/routing.go emits) and is red while any is pinned by no column of this table.",
+    "tests/shared/test_routing_policy_parity.py test_no_routing_check_is_go_only takes da-guard's routing kinds from Go (every kind is",
+    "registered with its plane in internal/guard/findingkind) and is red while any is pinned by no column of this table.",
     "A route_findings_python_differs row may name the generator's own kind (any kind of _grar_merge.FINDING_KINDS) for what da-guard",
     "reports under one of route_finding_kinds - e.g. invalid_override_entry for an override that is not a mapping, da-guard's",
     "missing_receiver_field; when it replaces a da-guard `error` row it is held to the same floor (in force under --validate --strict).",
-    "test_every_guard_kind_is_classified: every da-guard FindingKind is routing / policy (emitted from routing.go) or in the test's",
-    "THRESHOLD_KINDS; a kind in neither is red until someone decides which."
+    "test_every_guard_kind_is_classified: every da-guard finding kind is registered as routing or threshold in",
+    "internal/guard/findingkind (a kind cannot exist unregistered); the table the Go test writes must name a plane for each."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",

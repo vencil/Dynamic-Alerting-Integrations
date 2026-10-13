@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -158,7 +159,7 @@ func TestSpelling_OneLayer_DuplicateIsRefused(t *testing.T) {
 			}
 			found := false
 			for _, f := range fs {
-				if f.Kind == guard.FindingValueNotServed && f.Field == tc.loser &&
+				if f.Kind == findingkind.FindingValueNotServed.String() && f.Field == tc.loser &&
 					strings.HasPrefix(f.Message, config.NotServedSpellingDuplicate+": ") {
 					found = true
 				}
@@ -195,10 +196,10 @@ func TestSpelling_FindingNamesTheKeyAsWritten(t *testing.T) {
 		"sub/_defaults.yaml": "defaults:\n  'pg_connections{r=\"x\",env=\"prod\"}': 30\n",
 		"sub/tx.yaml":        "tenants:\n  tx:\n    '" + written + "': 30\n    '" + other + "': abc\n",
 	})
-	var got, ofOther *guard.Finding
+	var got, ofOther *reportedFinding
 	for i, f := range fs {
 		switch {
-		case f.Kind == guard.FindingRedundantOverride:
+		case f.Kind == findingkind.FindingRedundantOverride.String():
 			got = &fs[i]
 		case f.Field == other:
 			ofOther = &fs[i]
@@ -230,7 +231,7 @@ func TestSpelling_NotGatherableNamesKeysAsWritten(t *testing.T) {
 		_, fs := guardFindingsOf(t, files)
 		msg := ""
 		for _, f := range fs {
-			if f.Kind == guard.FindingMetricsNotGatherable && strings.Contains(f.Message, want) {
+			if f.Kind == findingkind.FindingMetricsNotGatherable.String() && strings.Contains(f.Message, want) {
 				msg = f.Message
 			}
 		}

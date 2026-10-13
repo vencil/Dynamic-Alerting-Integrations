@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -31,16 +32,16 @@ func TestCheckRootNullUndeclared(t *testing.T) {
 	var got [][3]string
 	msg := map[string]string{}
 	for _, f := range report.Findings {
-		if f.Severity != SeverityWarn || f.Kind != FindingRootDefaultNullUndeclared {
+		if f.Severity != SeverityWarn || f.Kind != findingkind.FindingRootDefaultNullUndeclared {
 			t.Errorf("unexpected finding %+v", f)
 		}
-		got = append(got, [3]string{f.TenantID, f.Field, string(f.Kind)})
+		got = append(got, [3]string{f.TenantID, f.Field, f.Kind.String()})
 		msg[f.Field] = f.Message
 	}
 	want := [][3]string{
-		{"tenant-b", "_myth", string(FindingRootDefaultNullUndeclared)},
-		{"tenant-b", "redis_x", string(FindingRootDefaultNullUndeclared)},
-		{"tenant-b", "redis_y_critical", string(FindingRootDefaultNullUndeclared)},
+		{"tenant-b", "_myth", findingkind.FindingRootDefaultNullUndeclared.String()},
+		{"tenant-b", "redis_x", findingkind.FindingRootDefaultNullUndeclared.String()},
+		{"tenant-b", "redis_y_critical", findingkind.FindingRootDefaultNullUndeclared.String()},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("findings = %v, want %v", got, want)

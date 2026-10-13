@@ -3,6 +3,8 @@ package guard
 import (
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // fixtureRouting returns a routing dict with one webhook receiver
@@ -45,7 +47,7 @@ func TestRouting_UnknownReceiverTypeIsError(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
-	if got[0].Kind != FindingUnknownReceiverType {
+	if got[0].Kind != findingkind.FindingUnknownReceiverType {
 		t.Errorf("kind = %q, want unknown_receiver_type", got[0].Kind)
 	}
 	if got[0].Severity != SeverityError {
@@ -87,7 +89,7 @@ func TestRouting_MissingReceiverFieldsAreErrors(t *testing.T) {
 		t.Fatalf("got %d findings, want 3 (one per missing required field)", len(got))
 	}
 	for _, f := range got {
-		if f.Kind != FindingMissingReceiverField {
+		if f.Kind != findingkind.FindingMissingReceiverField {
 			t.Errorf("kind = %q, want missing_receiver_field", f.Kind)
 		}
 		if f.Severity != SeverityError {
@@ -147,7 +149,7 @@ func TestRouting_EmptyOverrideMatcherIsError(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1", len(got))
 	}
-	if got[0].Kind != FindingEmptyOverrideMatcher {
+	if got[0].Kind != findingkind.FindingEmptyOverrideMatcher {
 		t.Errorf("kind = %q, want empty_override_matcher", got[0].Kind)
 	}
 	if got[0].Severity != SeverityError {
@@ -191,7 +193,7 @@ func TestRouting_DuplicateOverrideMatcherIsWarning(t *testing.T) {
 	got := runWithRouting(t, "t1", r)
 	var dup []Finding
 	for _, f := range got {
-		if f.Kind == FindingDuplicateOverrideMatcher {
+		if f.Kind == findingkind.FindingDuplicateOverrideMatcher {
 			dup = append(dup, f)
 		}
 	}
@@ -234,7 +236,7 @@ func TestRouting_NonMatcherKeysIgnoredInFingerprint(t *testing.T) {
 	}
 	got := runWithRouting(t, "t1", r)
 	for _, f := range got {
-		if f.Kind == FindingDuplicateOverrideMatcher {
+		if f.Kind == findingkind.FindingDuplicateOverrideMatcher {
 			return // success — non-matcher keys correctly ignored
 		}
 	}
@@ -252,7 +254,7 @@ func TestRouting_MatcherContract(t *testing.T) {
 	cases := []struct {
 		name     string
 		override map[string]any
-		wantKind FindingKind
+		wantKind findingkind.Kind
 		wantMsg  string
 	}{
 		{
@@ -262,7 +264,7 @@ func TestRouting_MatcherContract(t *testing.T) {
 				"severity": "critical",
 				"receiver": map[string]any{"type": "pagerduty", "service_key": "abc"},
 			},
-			wantKind: FindingEmptyOverrideMatcher,
+			wantKind: findingkind.FindingEmptyOverrideMatcher,
 			wantMsg:  "no matcher field",
 		},
 		{
@@ -272,7 +274,7 @@ func TestRouting_MatcherContract(t *testing.T) {
 				"metric_group": "cpu",
 				"receiver":     map[string]any{"type": "pagerduty", "service_key": "abc"},
 			},
-			wantKind: FindingConflictingOverrideMatcher,
+			wantKind: findingkind.FindingConflictingOverrideMatcher,
 			wantMsg:  "both alertname and metric_group",
 		},
 		{
@@ -281,7 +283,7 @@ func TestRouting_MatcherContract(t *testing.T) {
 				"alertname": "", // empty string = unset → empty matcher
 				"receiver":  map[string]any{"type": "pagerduty", "service_key": "abc"},
 			},
-			wantKind: FindingEmptyOverrideMatcher,
+			wantKind: findingkind.FindingEmptyOverrideMatcher,
 			wantMsg:  "no matcher field",
 		},
 	}
@@ -329,7 +331,7 @@ func TestRouting_RedundantOverrideReceiverIsWarning(t *testing.T) {
 	got := runWithRouting(t, "t1", r)
 	var redundant []Finding
 	for _, f := range got {
-		if f.Kind == FindingRedundantOverrideReceiver {
+		if f.Kind == findingkind.FindingRedundantOverrideReceiver {
 			redundant = append(redundant, f)
 		}
 	}
@@ -353,7 +355,7 @@ func TestRouting_DifferentOverrideReceiverNotRedundant(t *testing.T) {
 	}
 	got := runWithRouting(t, "t1", r)
 	for _, f := range got {
-		if f.Kind == FindingRedundantOverrideReceiver {
+		if f.Kind == findingkind.FindingRedundantOverrideReceiver {
 			t.Errorf("different override receiver flagged as redundant: %v", f)
 		}
 	}
@@ -428,19 +430,19 @@ func TestRouting_PagerdutyExactlyOneKey(t *testing.T) {
 	cases := []struct {
 		name     string
 		receiver map[string]any
-		wantKind FindingKind // "" = no error finding
+		wantKind findingkind.Kind // zero = no error finding
 	}{
-		{"service_key only", map[string]any{"type": "pagerduty", "service_key": "k"}, ""},
-		{"routing_key only", map[string]any{"type": "pagerduty", "routing_key": "k"}, ""},
-		{"both set", map[string]any{"type": "pagerduty", "service_key": "k", "routing_key": "r"}, FindingConflictingReceiverField},
-		{"neither set", map[string]any{"type": "pagerduty", "severity": "critical"}, FindingMissingReceiverField},
-		{"empty string counts as unset", map[string]any{"type": "pagerduty", "service_key": "", "routing_key": "r"}, ""},
-		{"both empty is neither", map[string]any{"type": "pagerduty", "service_key": "", "routing_key": nil}, FindingMissingReceiverField},
+		{"service_key only", map[string]any{"type": "pagerduty", "service_key": "k"}, findingkind.Kind{}},
+		{"routing_key only", map[string]any{"type": "pagerduty", "routing_key": "k"}, findingkind.Kind{}},
+		{"both set", map[string]any{"type": "pagerduty", "service_key": "k", "routing_key": "r"}, findingkind.FindingConflictingReceiverField},
+		{"neither set", map[string]any{"type": "pagerduty", "severity": "critical"}, findingkind.FindingMissingReceiverField},
+		{"empty string counts as unset", map[string]any{"type": "pagerduty", "service_key": "", "routing_key": "r"}, findingkind.Kind{}},
+		{"both empty is neither", map[string]any{"type": "pagerduty", "service_key": "", "routing_key": nil}, findingkind.FindingMissingReceiverField},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := runWithRouting(t, "t1", map[string]any{"receiver": tc.receiver})
-			if tc.wantKind == "" {
+			if tc.wantKind.IsZero() {
 				for _, f := range got {
 					if f.Severity == SeverityError {
 						t.Fatalf("unexpected error finding: %+v", f)
@@ -457,7 +459,7 @@ func TestRouting_PagerdutyExactlyOneKey(t *testing.T) {
 			if !strings.Contains(got[0].Message, `exactly one of "service_key", "routing_key"`) {
 				t.Errorf("message %q should name the group", got[0].Message)
 			}
-			if tc.wantKind == FindingConflictingReceiverField && !strings.Contains(got[0].Message, "v1") {
+			if tc.wantKind == findingkind.FindingConflictingReceiverField && !strings.Contains(got[0].Message, "v1") {
 				t.Errorf("both-set message %q should say Alertmanager falls back to the v1 API", got[0].Message)
 			}
 		})

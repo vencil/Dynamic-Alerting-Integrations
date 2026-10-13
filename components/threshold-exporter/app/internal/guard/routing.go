@@ -124,6 +124,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
@@ -170,7 +171,7 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 		name := input.UnknownRoutingProfiles[tenantID]
 		out = append(out, Finding{
 			Severity: SeverityWarn,
-			Kind:     FindingUnknownRoutingProfile,
+			Kind:     findingkind.FindingUnknownRoutingProfile,
 			TenantID: tenantID,
 			Field:    "_routing_profile",
 			Message: fmt.Sprintf(
@@ -181,7 +182,7 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 	for _, tenantID := range sortedStringKeys(input.InvalidTenantIDs) {
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingInvalidTenantID,
+			Kind:     findingkind.FindingInvalidTenantID,
 			TenantID: tenantID,
 			Field:    input.InvalidTenantIDs[tenantID] + ":tenants." + tenantID,
 			Message: fmt.Sprintf("%s: tenant id %q is not a valid tenant id (%s) — "+
@@ -192,7 +193,7 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 	for _, tenantID := range sortedAnyKeys(input.RoutingNotMapping) {
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingRoutingNotMapping,
+			Kind:     findingkind.FindingRoutingNotMapping,
 			TenantID: tenantID,
 			Field:    "_routing",
 			Message: fmt.Sprintf("tenant %q: %s — the route generator renders no route for this tenant",
@@ -203,7 +204,7 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 		for _, field := range input.RoutingIgnoredKeys[tenantID] {
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingRoutingKeyIgnored,
+				Kind:     findingkind.FindingRoutingKeyIgnored,
 				TenantID: tenantID,
 				Field:    field,
 				Message: fmt.Sprintf("tenant %q: _routing.%s is not read by the route generator; "+
@@ -215,7 +216,7 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 		for _, key := range input.RoutingUnknownKeys[tenantID] {
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingRoutingKeyIgnored,
+				Kind:     findingkind.FindingRoutingKeyIgnored,
 				TenantID: tenantID,
 				Field:    key,
 				Message: fmt.Sprintf("tenant %q: %s is not a key the route generator reads (%s); it has no effect",
@@ -255,7 +256,7 @@ func checkValuesNotString(tenantID string, routing map[string]any) []Finding {
 	for _, v := range routingpolicy.ValuesNotString(routing) {
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingRoutingValueNotString,
+			Kind:     findingkind.FindingRoutingValueNotString,
 			TenantID: tenantID,
 			Field:    v.Field,
 			Message:  fmt.Sprintf("tenant %q: %s", tenantID, v.Message()),
@@ -272,7 +273,7 @@ func checkGroupByInvalid(tenantID string, routing map[string]any) []Finding {
 	for _, p := range routingpolicy.GroupByInvalid(routing) {
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingRoutingGroupByInvalid,
+			Kind:     findingkind.FindingRoutingGroupByInvalid,
 			TenantID: tenantID,
 			Field:    p.Field,
 			Message:  fmt.Sprintf("tenant %q: %s", tenantID, p.Message()),
@@ -322,7 +323,7 @@ func checkEnforcedGroupBy(enforced *routingpolicy.Enforced, tenants []string) []
 	for _, p := range routingpolicy.EnforcedGroupByInvalid(enforced, tenants) {
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingRoutingGroupByInvalid,
+			Kind:     findingkind.FindingRoutingGroupByInvalid,
 			Field:    p.File + ":" + p.Path(),
 			Message:  fmt.Sprintf("%s: %s", p.File, p.Message()),
 		})
@@ -342,7 +343,7 @@ func checkCriticalEscalation(tenantID string, routing map[string]any, policies [
 		if !f.Verdict.Compliant() {
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingCriticalEscalationMissing,
+				Kind:     findingkind.FindingCriticalEscalationMissing,
 				TenantID: tenantID,
 				Field:    "receiver.type",
 				Message: fmt.Sprintf("tenant %q: domain policy %q requires critical escalation, but severity=critical alerts "+
@@ -367,7 +368,7 @@ func checkCriticalEscalation(tenantID string, routing map[string]any, policies [
 			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingCriticalEscalationLeak,
+				Kind:     findingkind.FindingCriticalEscalationLeak,
 				TenantID: tenantID,
 				Field:    field,
 				Message:  msg,
@@ -406,7 +407,7 @@ func checkDomainPolicies(tenantID string, routing map[string]any, policies []rou
 		}
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingDomainPolicyViolation,
+			Kind:     findingkind.FindingDomainPolicyViolation,
 			TenantID: tenantID,
 			Field:    field,
 			Message: fmt.Sprintf("tenant %q: %s receiver type %q %s; %s comes from %s",
@@ -425,31 +426,43 @@ func checkDomainPolicies(tenantID string, routing map[string]any, policies []rou
 // author meant it to route, and nothing is rendered from it. The #2326
 // routing-tree shapes are errors: the generator refuses the tree on the
 // blocking ones, and an out-of-scope policy entry is not enforced.
+//
+// Every routingpolicy Problem kind has its own case (#2904,
+// TestPlatformProblemFindingsCoverEveryProblemKind). A kind with none keeps
+// the zero findingkind.Kind and severity error: it used to fall into
+// domain_policy_unusable, which reported an unknown problem under a known
+// kind's name. The zero Kind is refused when the report is written as JSON
+// and by the fixture test, so a new Problem kind without a case is red in
+// tests and blocks rather than passing as someone else's finding.
 func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 	var out []Finding
 	for _, p := range problems {
-		f := Finding{Severity: SeverityError, Kind: FindingDomainPolicyUnusable, Message: p.Message}
+		f := Finding{Severity: SeverityError, Message: p.Message}
 		switch p.Kind {
+		case routingpolicy.ProblemDomainPolicyUnusable:
+			f.Kind = findingkind.FindingDomainPolicyUnusable
 		case routingpolicy.ProblemRoutingProfilesUnusable:
-			f.Severity, f.Kind = SeverityWarn, FindingRoutingProfilesUnusable
+			f.Severity, f.Kind = SeverityWarn, findingkind.FindingRoutingProfilesUnusable
 		case routingpolicy.ProblemRoutingDefaultsRoutes:
-			f.Kind = FindingRoutingDefaultsRoutesIgnored
+			f.Kind = findingkind.FindingRoutingDefaultsRoutesIgnored
 		case routingpolicy.ProblemRoutingInUnreadLocation:
-			f.Kind = FindingRoutingInUnreadLocation
+			f.Kind = findingkind.FindingRoutingInUnreadLocation
 		case routingpolicy.ProblemRoutingEnforcedBelowRoot:
-			f.Kind = FindingRoutingEnforcedBelowRoot
+			f.Kind = findingkind.FindingRoutingEnforcedBelowRoot
 		case routingpolicy.ProblemRoutingDefaultsNullBelowRoot:
-			f.Kind = FindingRoutingDefaultsNullBelowRoot
+			f.Kind = findingkind.FindingRoutingDefaultsNullBelowRoot
 		case routingpolicy.ProblemRoutingProfileDuplicate:
-			f.Kind = FindingRoutingProfileDuplicate
+			f.Kind = findingkind.FindingRoutingProfileDuplicate
 		case routingpolicy.ProblemDuplicateTenant:
-			f.Kind = FindingDuplicateTenant
+			f.Kind = findingkind.FindingDuplicateTenant
 		case routingpolicy.ProblemDomainPolicyOutOfScope:
-			f.Kind = FindingDomainPolicyOutOfScope
+			f.Kind = findingkind.FindingDomainPolicyOutOfScope
 		case routingpolicy.ProblemRoutingDefaultsNotMapping:
-			f.Kind = FindingRoutingDefaultsNotMapping
+			f.Kind = findingkind.FindingRoutingDefaultsNotMapping
 		case routingpolicy.ProblemRoutingKeyIgnored:
-			f.Kind = FindingRoutingKeyIgnored
+			f.Kind = findingkind.FindingRoutingKeyIgnored
+		default:
+			// No kind: see above. Left zero on purpose.
 		}
 		switch {
 		case p.File != "" && p.Field != "":
@@ -523,7 +536,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 		if !ok {
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingMissingReceiverField,
+				Kind:     findingkind.FindingMissingReceiverField,
 				TenantID: tenantID,
 				Field:    fieldPath,
 				Message: fmt.Sprintf(
@@ -549,7 +562,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 			// the override entirely, so it silently never fires.
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingConflictingOverrideMatcher,
+				Kind:     findingkind.FindingConflictingOverrideMatcher,
 				TenantID: tenantID,
 				Field:    fieldPath,
 				Message: fmt.Sprintf(
@@ -562,7 +575,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 			// for the tenant (and the generator skips it anyway).
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingEmptyOverrideMatcher,
+				Kind:     findingkind.FindingEmptyOverrideMatcher,
 				TenantID: tenantID,
 				Field:    fieldPath,
 				Message: fmt.Sprintf(
@@ -577,7 +590,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 			if first, dup := seenMatcher[matcherFingerprint]; dup {
 				out = append(out, Finding{
 					Severity: SeverityWarn,
-					Kind:     FindingDuplicateOverrideMatcher,
+					Kind:     findingkind.FindingDuplicateOverrideMatcher,
 					TenantID: tenantID,
 					Field:    fieldPath,
 					Message: fmt.Sprintf(
@@ -597,7 +610,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 		if mainSig != "" && receiverSignature(ovReceiver) == mainSig {
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingRedundantOverrideReceiver,
+				Kind:     findingkind.FindingRedundantOverrideReceiver,
 				TenantID: tenantID,
 				Field:    fieldPath + ".receiver",
 				Message: fmt.Sprintf(
@@ -624,7 +637,7 @@ func checkRoutes(tenantID string, routing map[string]any) []Finding {
 	if !ok {
 		return []Finding{{
 			Severity: SeverityError,
-			Kind:     FindingInvalidRouteEntry,
+			Kind:     findingkind.FindingInvalidRouteEntry,
 			TenantID: tenantID,
 			Field:    "routes",
 			Message: fmt.Sprintf(
@@ -638,7 +651,7 @@ func checkRoutes(tenantID string, routing map[string]any) []Finding {
 		if reason, bad := routingpolicy.RouteEntryProblem(entry); bad {
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingInvalidRouteEntry,
+				Kind:     findingkind.FindingInvalidRouteEntry,
 				TenantID: tenantID,
 				Field:    fieldPath,
 				Message: fmt.Sprintf("tenant %q: %s %s; the route generator skips this entry",
@@ -680,14 +693,17 @@ func checkReceiverShape(tenantID, fieldPath string, receiver any) []Finding {
 }
 
 // receiverFindingKind maps receiverspec problem kinds onto the da-guard
-// finding kinds, which are the JSON contract and predate the package.
-var receiverFindingKind = map[receiverspec.Kind]FindingKind{
-	receiverspec.KindNotObject:   FindingMissingReceiverField,
-	receiverspec.KindMissingType: FindingMissingReceiverField,
-	receiverspec.KindMissing:     FindingMissingReceiverField,
-	receiverspec.KindUnknownType: FindingUnknownReceiverType,
-	receiverspec.KindInvalid:     FindingInvalidReceiverField,
-	receiverspec.KindConflicting: FindingConflictingReceiverField,
+// finding kinds, which are the JSON contract and predate the package. A
+// receiverspec kind missing here maps to the zero findingkind.Kind, which
+// TestReceiverFindingKindCoversEveryReceiverspecKind and the fixture test
+// refuse (#2904).
+var receiverFindingKind = map[receiverspec.Kind]findingkind.Kind{
+	receiverspec.KindNotObject:   findingkind.FindingMissingReceiverField,
+	receiverspec.KindMissingType: findingkind.FindingMissingReceiverField,
+	receiverspec.KindMissing:     findingkind.FindingMissingReceiverField,
+	receiverspec.KindUnknownType: findingkind.FindingUnknownReceiverType,
+	receiverspec.KindInvalid:     findingkind.FindingInvalidReceiverField,
+	receiverspec.KindConflicting: findingkind.FindingConflictingReceiverField,
 }
 
 // matcherValuePresent reports whether an override matcher value

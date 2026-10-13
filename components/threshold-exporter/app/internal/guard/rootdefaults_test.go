@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -57,7 +58,7 @@ func TestDefaultsWrapperMatrix(t *testing.T) {
 				if f.Severity != SeverityError || f.TenantID != "" {
 					t.Errorf("finding %+v: want error with empty tenant", f)
 				}
-				got = append(got, string(f.Kind)+" "+f.Field)
+				got = append(got, f.Kind.String()+" "+f.Field)
 			}
 			want := []string{}
 			for _, e := range tc.Expect {
@@ -209,7 +210,7 @@ func TestDefaultsWrapperSubtreeRefusedKeyFix(t *testing.T) {
 				DefaultsFiles:        []config.DefaultsFile{{Name: tc.file, Data: []byte(tc.body)}},
 				DeclaredStateFilters: map[string]bool{"maintenance": true},
 			})
-			if len(got) != 1 || got[0].Kind != FindingDefaultsTopLevelIgnored {
+			if len(got) != 1 || got[0].Kind != findingkind.FindingDefaultsTopLevelIgnored {
 				t.Fatalf("findings %+v, want one defaults_toplevel_ignored", got)
 			}
 			for _, w := range tc.want {

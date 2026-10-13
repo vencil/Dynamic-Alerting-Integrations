@@ -1,5 +1,7 @@
 package guard
 
+import "github.com/vencil/threshold-exporter/internal/guard/findingkind"
+
 // A tree whose /metrics cannot be gathered (#2031).
 //
 // When two keys of the config give one series — `X: "70:critical"` beside
@@ -13,10 +15,6 @@ package guard
 // --scope says (one such pair fails the scrape for every tenant), handed in
 // as CheckInput.MetricsNotGatherable.
 
-// FindingMetricsNotGatherable (error; #2031): the exporter's /metrics cannot
-// be gathered for the tree.
-const FindingMetricsNotGatherable FindingKind = "metrics_not_gatherable"
-
 // checkMetricsNotGatherable reports one finding, naming no tenant, when
 // input.MetricsNotGatherable is set.
 func checkMetricsNotGatherable(input CheckInput) []Finding {
@@ -25,7 +23,7 @@ func checkMetricsNotGatherable(input CheckInput) []Finding {
 	}
 	return []Finding{{
 		Severity: SeverityError,
-		Kind:     FindingMetricsNotGatherable,
+		Kind:     findingkind.FindingMetricsNotGatherable,
 		Message:  input.MetricsNotGatherable,
 	}}
 }

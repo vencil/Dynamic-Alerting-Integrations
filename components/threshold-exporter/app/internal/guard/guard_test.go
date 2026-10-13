@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // --- path.go tests --------------------------------------------------
@@ -128,7 +130,7 @@ func TestCheckRequiredFields_FlagsMissing(t *testing.T) {
 	if f.Field != "thresholds.cpu" {
 		t.Errorf("field = %q", f.Field)
 	}
-	if f.Kind != FindingMissingRequired {
+	if f.Kind != findingkind.FindingMissingRequired {
 		t.Errorf("kind = %q", f.Kind)
 	}
 }
@@ -173,7 +175,7 @@ func TestCheckRequiredFields_RoutingFieldsReadTheResolvedRouting(t *testing.T) {
 	var rows []string
 	for _, f := range got {
 		rows = append(rows, f.TenantID+" "+f.Field)
-		if f.Kind != FindingMissingRequired || f.Severity != SeverityError {
+		if f.Kind != findingkind.FindingMissingRequired || f.Severity != SeverityError {
 			t.Errorf("finding %+v: want error missing_required", f)
 		}
 		if !strings.Contains(f.Message, "resolved routing") && f.Field != "cpu" {
@@ -247,7 +249,7 @@ func TestCheckRedundantOverrides_FlagsScalarDuplicate(t *testing.T) {
 	if got[0].Severity != SeverityWarn {
 		t.Errorf("severity = %q, want warn", got[0].Severity)
 	}
-	if got[0].Kind != FindingRedundantOverride {
+	if got[0].Kind != findingkind.FindingRedundantOverride {
 		t.Errorf("kind = %q", got[0].Kind)
 	}
 }
@@ -642,7 +644,7 @@ func TestGuardReportMarkdown_EscapesPipeAndNewline(t *testing.T) {
 		Findings: []Finding{
 			{
 				Severity: SeverityError,
-				Kind:     FindingMissingRequired,
+				Kind:     findingkind.FindingMissingRequired,
 				TenantID: "t1",
 				Field:    "x",
 				Message:  "first | line\nsecond line",

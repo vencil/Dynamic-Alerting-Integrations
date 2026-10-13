@@ -48,7 +48,7 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
 # fields below; ``generate_alertmanager_routes --findings-json`` writes them.
 #
 # * ``kind`` — a stable snake_case id from ``FINDING_KINDS`` (da-guard's
-#   ``FindingKind`` spelling where the meaning is the same). ``unclassified``
+#   finding kind spelling where the meaning is the same). ``unclassified``
 #   is a line nobody has given a kind yet: its TEXT is its only contract, and
 #   the producer sites still emitting one are listed in the shrink-only
 #   ``tests/ops/grar_unclassified_findings_baseline.json``.

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -39,7 +40,7 @@ func redundantFields(t *testing.T, dir string) map[string]bool {
 	}
 	out := map[string]bool{}
 	for _, f := range report.Findings {
-		if f.Kind == guard.FindingRedundantOverride && f.TenantID == "tx" {
+		if f.Kind == findingkind.FindingRedundantOverride && f.TenantID == "tx" {
 			out[f.Field] = true
 		}
 	}

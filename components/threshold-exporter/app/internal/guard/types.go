@@ -130,6 +130,7 @@
 package guard
 
 import (
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
@@ -149,138 +150,12 @@ const (
 	SeverityWarn Severity = "warn"
 )
 
-// FindingKind labels what category of check produced the Finding.
-// PR-1 ships two kinds; PR-2/3 will add "routing_cycle",
-// "orphaned_route", "cardinality_exceeded".
-type FindingKind string
-
-const (
-	FindingMissingRequired   FindingKind = "missing_required"
-	FindingRedundantOverride FindingKind = "redundant_override"
-)
-
-// Routing-schema findings (PR-2; see routing.go for rationale on
-// why this is not "routing_cycle"/"orphaned_route").
-const (
-	FindingUnknownReceiverType        FindingKind = "unknown_receiver_type"
-	FindingMissingReceiverField       FindingKind = "missing_receiver_field"
-	FindingConflictingReceiverField   FindingKind = "conflicting_receiver_field"
-	FindingInvalidReceiverField       FindingKind = "invalid_receiver_field"
-	FindingEmptyOverrideMatcher       FindingKind = "empty_override_matcher"
-	FindingConflictingOverrideMatcher FindingKind = "conflicting_override_matcher"
-	FindingDuplicateOverrideMatcher   FindingKind = "duplicate_override_matcher"
-	FindingRedundantOverrideReceiver  FindingKind = "redundant_override_receiver"
-)
-
-// Routing-resolution and domain-policy findings (#2280; see routing.go).
-const (
-	// FindingInvalidRouteEntry: a `routes` value the route generator does
-	// not render — `routes` not a list, or an entry that is not a mapping,
-	// carries an unsupported key, or has a missing / malformed `match`.
-	FindingInvalidRouteEntry FindingKind = "invalid_route_entry"
-	// FindingRoutingValueNotString (error; #2431): a matcher value of the
-	// resolved routing — `routes[i].match.<label>` or `overrides[i].
-	// alertname` / `metric_group` (Field) — that the route generator's
-	// PyYAML does not read as a string (`yes`, `1:30`, `2001-12-15`, `~`, a
-	// `!!int` tag). The generator refuses it under --strict; quote it.
-	FindingRoutingValueNotString FindingKind = "routing_value_not_string"
-	// FindingRoutingGroupByInvalid (error; #2503): a `group_by` element of
-	// the resolved routing (Field `group_by[i]`, `overrides[i].group_by[j]`,
-	// `routes[i].group_by[j]`) that, as the route generator's PyYAML reads
-	// it, is not a string (`8`, `on`), is empty, repeats an earlier label
-	// other than `...`,
-	// or is `...` alongside other labels. Alertmanager refuses the last
-	// three and groups by a label named after the text of the first. The
-	// generator refuses it under --strict; quote or remove it. The same
-	// element of a `_routing_enforced` route the generator renders is this
-	// kind too, with an empty TenantID (it is a platform file's) and Field
-	// `<root file>:_routing_enforced.group_by[i]`, or
-	// `<root file>:_routing_enforced (<tenant>).group_by[i]` for the
-	// `{{tenant}}` shape, judged per tenant after substitution.
-	FindingRoutingGroupByInvalid FindingKind = "routing_group_by_invalid"
-	// FindingDomainPolicyViolation: a receiver type an ADR-007 domain
-	// policy forbids, or leaves out of its allowed list.
-	FindingDomainPolicyViolation FindingKind = "domain_policy_violation"
-	// FindingCriticalEscalationMissing (error; #2325): a domain policy sets
-	// `require_critical_escalation: true` and severity=critical alerts reach
-	// no pagerduty receiver — the main receiver is not one, and no rendered
-	// `routes` entry matching `severity: critical` sends to one.
-	FindingCriticalEscalationMissing FindingKind = "critical_escalation_missing"
-	// FindingCriticalEscalationLeak (warn; #2325): the tenant escalates, but
-	// this non-pagerduty destination (Field `<ref>.receiver.type`) still
-	// receives some severity=critical alerts before any pagerduty receiver
-	// does. Never blocks, as in the route generator.
-	FindingCriticalEscalationLeak FindingKind = "critical_escalation_leak"
-	// FindingUnknownRoutingProfile (warn): `_routing_profile` names a
-	// profile no `_routing_profiles.yaml` defines; nothing is merged.
-	FindingUnknownRoutingProfile FindingKind = "unknown_routing_profile"
-	// FindingDomainPolicyUnusable (TenantID ""): a `_domain_policy.yaml`
-	// structure the policy check cannot use, so it is not enforced.
-	FindingDomainPolicyUnusable FindingKind = "domain_policy_unusable"
-	// FindingRoutingProfilesUnusable (warn, TenantID ""): a
-	// `routing_profiles:` block that cannot be read; no profile is applied.
-	FindingRoutingProfilesUnusable FindingKind = "routing_profiles_unusable"
-	// FindingRoutingDefaultsRoutesIgnored (error, TenantID ""): a
-	// `_routing_defaults` carrying `routes`, which the route generator drops
-	// with a blocking WARN (`--validate` fails) — so it blocks here too.
-	FindingRoutingDefaultsRoutesIgnored FindingKind = "routing_defaults_routes_ignored"
-	// FindingRoutingInUnreadLocation (error, TenantID ""; #2291): a
-	// `_routing` / `_routing_*` key where the route generator never reads
-	// it — a defaults block, the top level of an unwrapped defaults file,
-	// a threshold profile. Field is `<file>:<key path>`.
-	FindingRoutingInUnreadLocation FindingKind = "routing_in_unread_location"
-	// FindingRoutingKeyIgnored (error; #2960): a key in a tenant `_routing`,
-	// a routing profile, `_routing_defaults` or `_routing_enforced` (or in a
-	// receiver / `overrides` entry under them) the route generator does not
-	// read — `continue`, `mute_time_intervals`, a typo. The block renders as
-	// if the key were absent; the generator blocks `--validate` on it. Field
-	// is the path relative to the tenant's `_routing` (TenantID set), else
-	// `<file>:<key path>`.
-	FindingRoutingKeyIgnored FindingKind = "routing_key_ignored"
-	// FindingRoutingNotMapping (error; #2341): the tenant's `_routing`, as
-	// the route generator's PyYAML reads it, is neither a mapping nor a
-	// disabling string (`"slack"`, a list, null, an unquoted `false` / `off`
-	// / `no`, which is a YAML boolean). The generator renders no route for
-	// the tenant and refuses it (`--validate`, `--strict`). Field `_routing`.
-	FindingRoutingNotMapping FindingKind = "routing_not_mapping"
-	// FindingRoutingDefaultsNotMapping (error, TenantID ""; #2341): a
-	// `_routing_defaults` (root platform file, or a subdirectory's defaults
-	// carrier) that is neither a mapping nor null; the level contributes
-	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
-	FindingRoutingDefaultsNotMapping FindingKind = "routing_defaults_not_mapping"
-	// FindingInvalidTenantID (error; #2341, ADR-035): a declared tenant id
-	// the tenant-id rule refuses (tenantid.Valid, a DNS-1123
-	// label); the route generator refuses the whole tree. TenantID is the id
-	// (it may be empty, so the finding is told from a platform one by its
-	// kind), Field `<tenant file>:tenants.<id>`.
-	FindingInvalidTenantID FindingKind = "invalid_tenant_id"
-)
-
-// Routing-tree findings (#2326, ADR-017 Decision 9 / ADR-007 "Amendment 2026-09-28"):
-// the routing plane reads the whole conf.d, and these tree shapes are what
-// the route generator refuses (exit 2, every mode) or — the out-of-scope
-// policy entry — does not enforce. All errors, TenantID "", Field
-// `<file>:<key path>`; the kind names equal routingpolicy's Problem kinds.
-const (
-	FindingRoutingEnforcedBelowRoot     FindingKind = "routing_enforced_below_root"
-	FindingRoutingDefaultsNullBelowRoot FindingKind = "routing_defaults_null_below_root"
-	FindingRoutingProfileDuplicate      FindingKind = "routing_profile_duplicate"
-	FindingDuplicateTenant              FindingKind = "duplicate_tenant"
-	FindingDomainPolicyOutOfScope       FindingKind = "domain_policy_out_of_scope"
-)
-
-// Cardinality findings (PR-3; see cardinality.go).
-const (
-	FindingCardinalityExceeded FindingKind = "cardinality_exceeded"
-	FindingCardinalityWarning  FindingKind = "cardinality_warning"
-)
-
 // Finding is one issue the guard surfaced. Stable JSON serialisation
 // — the GitHub Actions wrapper (PR-5) reads these directly to post
 // PR comments + annotations.
 type Finding struct {
-	Severity Severity    `json:"severity"`
-	Kind     FindingKind `json:"kind"`
+	Severity Severity         `json:"severity"`
+	Kind     findingkind.Kind `json:"kind"`
 
 	// TenantID identifies which tenant the finding applies to.
 	// Empty for findings that span the whole defaults change rather

@@ -64,6 +64,8 @@ package guard
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // defaultCardinalityWarnRatio matches the value documented on
@@ -99,7 +101,7 @@ func checkCardinality(input CheckInput) []Finding {
 		case count > input.CardinalityLimit:
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingCardinalityExceeded,
+				Kind:     findingkind.FindingCardinalityExceeded,
 				TenantID: tenantID,
 				Field:    "",
 				Message: fmt.Sprintf(
@@ -109,7 +111,7 @@ func checkCardinality(input CheckInput) []Finding {
 		case count > warnFloor:
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingCardinalityWarning,
+				Kind:     findingkind.FindingCardinalityWarning,
 				TenantID: tenantID,
 				Field:    "",
 				Message: fmt.Sprintf(

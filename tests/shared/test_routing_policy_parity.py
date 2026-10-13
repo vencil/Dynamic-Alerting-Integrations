@@ -58,10 +58,10 @@ What this half measures, per tree written to a tmp dir:
 
 `test_no_routing_check_is_go_only` (#2904, ADR-036 §9) is the gate for
 deleting da-guard's routing checks: the routing / policy finding kinds are
-the ones da-guard's own type-checking test (internal/guard/
-finding_kind_gate_test.go, run by `go_finding_kinds`) computes from its
-sources and puts on the routing plane, and every one must be pinned against
-the generator by this half.
+the ones registered on the routing plane in internal/guard/findingkind (the
+closed set of da-guard's kinds; internal/guard/finding_kind_gate_test.go,
+run by `go_finding_kinds`, writes them out), and every one must be pinned
+against the generator by this half.
 
 A cell's `python_differs` replaces the Go value where the YAML readers
 disagree (see the matrix `_comment`): `targets`, `policy`, `rejected_routes`,
@@ -641,21 +641,20 @@ def severity_floor_errors(doc: dict, stand_ins: set[str] = frozenset()) -> list[
 
 # ── #2904 (ADR-036 §9): which da-guard routing checks only Go has ─────────
 # The da-guard finding kinds and their plane (routing / threshold) come from
-# Go: internal/guard/finding_kind_gate_test.go type-checks the package
-# (go/types, files chosen by go/build), computes every FindingKind constant
-# its non-test sources produce, and holds that set equal to the registry in
-# internal/guard/finding_kind_planes_test.go, where each kind is put on a
-# plane by hand (a kind routing.go refers to must be routing). Run with
-# DA_GUARD_EMIT_KINDS=<path>, it writes {kind: {"plane", "files"}} there;
-# that table is what this half reads.
+# Go. A kind is a findingkind.Kind (internal/guard/findingkind): a struct
+# with one unexported field, whose only constructor registers it with its
+# plane and a reason, so the registry is every kind there can be and no kind
+# exists unclassified. internal/guard/finding_kind_gate_test.go adds the
+# files of the guard package that use each kind (a kind routing.go uses must
+# be routing; a registered kind no file uses is red) and, run with
+# DA_GUARD_EMIT_KINDS=<path>, writes {kind: {"plane", "files"}} there; that
+# table is what this half reads.
 #
-# It replaces reading the Go source here (a regex over
-# `FindingXxx FindingKind = "xxx"`, plus "named in routing.go" for the
-# routing split, plus a hand THRESHOLD_KINDS list): a regex cannot see what
-# the type checker sees (several names in one declaration, an alias type, a
-# conversion, a literal), and an AST rule limiting kinds to that one shape
-# was beaten nine ways. An unclassified kind is now red in Go, where it is
-# declared.
+# Earlier ways of listing the kinds were each beaten: a regex over the Go
+# source here, an AST rule limiting kinds to one written shape, a go/types
+# computation of every constant (a kind made at run time, or in a file
+# go/build skips, was invisible to it), and a check at Run's exit. See the
+# findingkind package comment.
 GO_APP = REPO_ROOT / "components" / "threshold-exporter" / "app"
 GUARD_KINDS_TEST = "TestFindingKindPlanes"
 PLANES = {"routing", "threshold"}
@@ -731,10 +730,10 @@ def go_only_routing_kinds(matrix: dict, kinds: dict[str, dict] | None = None) ->
 
 
 def test_every_guard_kind_is_classified() -> None:
-    """#2904 review N2: every da-guard FindingKind is routing / policy (the
+    """#2904 review N2: every da-guard finding kind is routing / policy (the
     gate below holds it to the generator) or threshold (stays in da-guard).
-    Deciding which is done in Go (finding_kind_planes_test.go), where an
-    unregistered kind is red; here: the table that came back is whole."""
+    Deciding which is done in Go, where a kind is registered with its plane
+    (internal/guard/findingkind); here: the table that came back is whole."""
     kinds = go_finding_kinds()
     left = unclassified_guard_kinds(kinds)
     assert not left, f"da-guard kinds on neither plane: {left}"

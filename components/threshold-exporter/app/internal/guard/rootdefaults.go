@@ -37,20 +37,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
-
-// FindingRootDefaultsUnwrapped (error, TenantID ""; #2386): the conf.d root
-// defaults carrier has no `defaults:` mapping, and its top level holds keys
-// /effective shows but the exporter's root decode does not read. Field is
-// the file's root-relative path.
-const FindingRootDefaultsUnwrapped FindingKind = "root_defaults_unwrapped"
-
-// FindingDefaultsTopLevelIgnored (error, TenantID ""; #2386): a defaults
-// carrier whose `defaults:` is a mapping and whose top level also holds keys
-// the merge would otherwise take (actsWhenMerged). Field is the file's
-// root-relative path.
-const FindingDefaultsTopLevelIgnored FindingKind = "defaults_toplevel_ignored"
 
 // rootDecodedKeys are the top-level keys the exporter's root decode reads
 // (config.RootDecodedKeys: the yaml tags of config.ThresholdConfig, the set
@@ -95,8 +84,7 @@ func decodeDefaultsDoc(data []byte) map[string]any {
 
 // wrappedInMapping reports whether the merge reads only `defaults:` of doc:
 // config.ExtractDefaultsBlock returns a map other than the document itself.
-// (Asked of config rather than by comparing map pointers through reflect:
-// finding_kind_gate_test.go refuses reflect in this package, #2904.)
+// (Asked of config rather than by comparing map pointers through reflect.)
 func wrappedInMapping(doc map[string]any) bool {
 	return config.DefaultsBlockWrapped(doc)
 }
@@ -193,7 +181,7 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 			}
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingDefaultsTopLevelIgnored,
+				Kind:     findingkind.FindingDefaultsTopLevelIgnored,
 				Field:    f.Name,
 				Message: fmt.Sprintf("%s: `defaults:` is a mapping, so the defaults merge reads only the keys under it; "+
 					"the top-level key(s) %s are left out of every tenant's merged config (/effective), "+
@@ -203,7 +191,7 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 		}
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingRootDefaultsUnwrapped,
+			Kind:     findingkind.FindingRootDefaultsUnwrapped,
 			Field:    f.Name,
 			Message: fmt.Sprintf("%s: the conf.d root defaults file has no `defaults:` mapping, so /effective "+
 				"(the defaults-chain merge, which then reads the whole document) shows the top-level key(s) %s, "+
@@ -214,16 +202,7 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 	return out
 }
 
-// FindingRootDefaultsCriticalKey (warn, TenantID ""; #2544): a
-// `<metric>_critical` key (either #1231 spelling) under the conf.d root
-// carrier's `defaults:` mapping. It does not become `<metric>`'s
-// severity=critical row, which only a tenant's override map
-// carries (the tenant's own key, or one a subtree `_defaults.yaml`, a root
-// platform `tenants:` entry or a profile hands it). Field is
-// `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
-const FindingRootDefaultsCriticalKey FindingKind = "root_defaults_critical_key"
-
-// checkRootCriticalKeys reports FindingRootDefaultsCriticalKey for the
+// checkRootCriticalKeys reports findingkind.FindingRootDefaultsCriticalKey for the
 // `_critical` keys under the root carrier's `defaults:` mapping. A root with
 // no `defaults:` mapping is root_defaults_unwrapped's (its keys are not
 // served at all); a file in ParseFailed is skipped like checkDefaultsWrapper
@@ -269,7 +248,7 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingRootDefaultsCriticalKey,
+				Kind:     findingkind.FindingRootDefaultsCriticalKey,
 				Field:    f.Name + ":defaults." + k,
 				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` %s the severity=critical row of `%s`%s",
 					f.Name, k, served, base, rest),

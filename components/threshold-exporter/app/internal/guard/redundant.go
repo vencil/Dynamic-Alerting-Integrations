@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -91,7 +92,7 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingRedundantOverride,
+				Kind:     findingkind.FindingRedundantOverride,
 				TenantID: tenantID,
 				Field:    path,
 				Message: fmt.Sprintf(

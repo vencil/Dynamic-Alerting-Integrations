@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
@@ -33,9 +34,27 @@ func rootNullFiles(root string) map[string]string {
 
 const rootNullDefaults = "defaults:\n  mysql_connections: null\n  mysql_slow_queries: 5\n"
 
+// reportedFinding is one finding of a da-guard JSON report as any reader of
+// the report decodes it: the kind is a string. findingkind.Kind has no
+// decoder on purpose (#2904: no string becomes a Kind), so a test that reads
+// the report compares f.Kind with findingkind.FindingXxx.String().
+type reportedFinding struct {
+	Severity guard.Severity `json:"severity"`
+	Kind     string         `json:"kind"`
+	TenantID string         `json:"tenant_id,omitempty"`
+	Field    string         `json:"field,omitempty"`
+	Message  string         `json:"message"`
+}
+
+// reportedReport is the `report` object of a da-guard JSON report.
+type reportedReport struct {
+	Findings []reportedFinding  `json:"findings"`
+	Summary  guard.GuardSummary `json:"summary"`
+}
+
 // guardFindingsOf runs the guard (--format json) over files and returns the
 // exit code and every finding.
-func guardFindingsOf(t *testing.T, files map[string]string, args ...string) (int, []guard.Finding) {
+func guardFindingsOf(t *testing.T, files map[string]string, args ...string) (int, []reportedFinding) {
 	t.Helper()
 	tmp := t.TempDir()
 	tree := map[string]string{}
@@ -46,7 +65,7 @@ func guardFindingsOf(t *testing.T, files map[string]string, args ...string) (int
 	argv := append([]string{"--format", "json", "--config-dir", filepath.Join(tmp, "conf.d")}, args...)
 	code, stdout, stderr := runOnce(t, argv...)
 	var doc struct {
-		Report *guard.GuardReport `json:"report"`
+		Report *reportedReport `json:"report"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("stdout is not JSON (exit %d): %v\nstderr=%s", code, err, stderr)
@@ -64,7 +83,7 @@ func TestGuard_RootNullTenantValueIsNamed(t *testing.T) {
 		t.Fatalf("findings = %+v, want exactly one", got)
 	}
 	f := got[0]
-	if f.Kind != guard.FindingRootDefaultNullUndeclared || f.Severity != guard.SeverityWarn ||
+	if f.Kind != findingkind.FindingRootDefaultNullUndeclared.String() || f.Severity != guard.SeverityWarn ||
 		f.TenantID != "tx" || f.Field != "mysql_connections" {
 		t.Errorf("finding = %+v, want warn root_default_null_undeclared / tx / mysql_connections", f)
 	}
@@ -121,7 +140,7 @@ func TestGuard_RootNullOneFindingPerCause(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		files  map[string]string
-		kind   guard.FindingKind // "" = no finding
+		kind   findingkind.Kind // zero = no finding
 		field  string
 		tenant string
 	}{
@@ -129,36 +148,36 @@ func TestGuard_RootNullOneFindingPerCause(t *testing.T) {
 			"_defaults.yaml":     rootNullDefaults,
 			"sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
 			"sub/tx.yaml":        "tenants:\n  tx: {}\n",
-		}, guard.FindingSubtreeDefaultUndeliverable, "mysql_connections", "tx"},
+		}, findingkind.FindingSubtreeDefaultUndeliverable, "mysql_connections", "tx"},
 		{"tenant value over a subtree value", map[string]string{
 			"_defaults.yaml":     rootNullDefaults,
 			"sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
 			"sub/tx.yaml":        "tenants:\n  tx:\n    mysql_connections: 50\n",
-		}, guard.FindingRootDefaultNullUndeclared, "mysql_connections", "tx"},
+		}, findingkind.FindingRootDefaultNullUndeclared, "mysql_connections", "tx"},
 		{"platform entry value", map[string]string{
 			"_defaults.yaml": rootNullDefaults,
 			"_platform.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
-		}, guard.FindingRootDefaultNullUndeclared, "mysql_connections", "tx"},
+		}, findingkind.FindingRootDefaultNullUndeclared, "mysql_connections", "tx"},
 		{"tenant switches it off", map[string]string{
 			"_defaults.yaml": rootNullDefaults,
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections: disable\n",
-		}, "", "", ""},
+		}, findingkind.Kind{}, "", ""},
 		{"root legacy null, tenant canonical", map[string]string{
 			"_defaults.yaml": "defaults:\n  " + aliasLegacy + ": null\n  mysql_slow_queries: 5\n",
 			"tx.yaml":        "tenants:\n  tx:\n    " + aliasCanon + ": 50\n",
-		}, guard.FindingRootDefaultNullUndeclared, aliasCanon, "tx"},
+		}, findingkind.FindingRootDefaultNullUndeclared, aliasCanon, "tx"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, got := guardFindingsOf(t, tc.files)
-			if tc.kind == "" {
+			if tc.kind.IsZero() {
 				if len(got) != 0 {
 					t.Errorf("findings = %+v, want none", got)
 				}
 				return
 			}
-			if len(got) != 1 || got[0].Kind != tc.kind || got[0].Field != tc.field || got[0].TenantID != tc.tenant {
+			if len(got) != 1 || got[0].Kind != tc.kind.String() || got[0].Field != tc.field || got[0].TenantID != tc.tenant {
 				t.Errorf("findings = %+v, want exactly one %s / %s / %s", got, tc.kind, tc.tenant, tc.field)
 			}
 		})
@@ -220,9 +239,9 @@ func TestGuard_RootNullCriticalRow(t *testing.T) {
 						t.Errorf("critical row served %v, want none", got)
 					}
 					_, findings := guardFindingsOf(t, files)
-					var named []guard.Finding
+					var named []reportedFinding
 					for _, f := range findings {
-						if f.Kind == guard.FindingRootDefaultNullUndeclared {
+						if f.Kind == findingkind.FindingRootDefaultNullUndeclared.String() {
 							named = append(named, f)
 						}
 					}
@@ -254,7 +273,7 @@ func TestGuard_RootNullCriticalFixServesTheRow(t *testing.T) {
 		"sub/tx.yaml":    "tenants:\n  tx:\n    mysql_connections_critical: 90\n",
 	}
 	_, got := guardFindingsOf(t, rnc)
-	if len(got) != 1 || got[0].Kind != guard.FindingRootDefaultNullUndeclared || got[0].Field != "mysql_connections_critical" {
+	if len(got) != 1 || got[0].Kind != findingkind.FindingRootDefaultNullUndeclared.String() || got[0].Field != "mysql_connections_critical" {
 		t.Fatalf("findings = %+v, want one root_default_null_undeclared for mysql_connections_critical", got)
 	}
 	if !strings.Contains(got[0].Message, "Write a number for `mysql_connections`") {
@@ -299,7 +318,7 @@ func TestGuard_RootNullMessageNamesTheRootSpelling(t *testing.T) {
 				"_defaults.yaml": "defaults:\n  mysql_slow_queries: 5\n" + tc.root,
 				"sub/tx.yaml":    "tenants:\n  tx:\n" + tc.tenant,
 			})
-			if len(got) != 1 || got[0].Kind != guard.FindingRootDefaultNullUndeclared || got[0].Field != tc.field {
+			if len(got) != 1 || got[0].Kind != findingkind.FindingRootDefaultNullUndeclared.String() || got[0].Field != tc.field {
 				t.Fatalf("findings = %+v, want one root_default_null_undeclared for %s", got, tc.field)
 			}
 			if m := got[0].Message; !strings.Contains(m, tc.want) || strings.Contains(m, tc.deny) {
@@ -328,7 +347,7 @@ func TestGuard_RootNullUnderscoreKeyNotDeclaredByOptionalOverrides(t *testing.T)
 	listed := files("defaults:\n  _myth: null\n  mysql_slow_queries: 5\noptional_overrides: [_myth]\n")
 
 	_, got := guardFindingsOf(t, listed)
-	if len(got) != 1 || got[0].Kind != guard.FindingRootDefaultNullUndeclared ||
+	if len(got) != 1 || got[0].Kind != findingkind.FindingRootDefaultNullUndeclared.String() ||
 		got[0].TenantID != "tx" || got[0].Field != "_myth" {
 		t.Errorf("findings = %+v, want one root_default_null_undeclared for tx / _myth", got)
 	}

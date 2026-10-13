@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // A `_custom_alerts` entry the exporter drops because an earlier entry
@@ -38,7 +39,7 @@ func TestGuard_CustomAlertDuplicateSeries(t *testing.T) {
 			})
 			var got []string
 			for _, f := range fs {
-				if f.Kind == guard.FindingCustomAlertDuplicateSeries && f.Severity == guard.SeverityError && f.TenantID == "tx" {
+				if f.Kind == findingkind.FindingCustomAlertDuplicateSeries.String() && f.Severity == guard.SeverityError && f.TenantID == "tx" {
 					got = append(got, f.Field)
 				}
 			}

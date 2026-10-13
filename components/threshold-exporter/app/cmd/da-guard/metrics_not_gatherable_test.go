@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -44,11 +45,11 @@ func TestGuard_MetricsNotGatherable(t *testing.T) {
 			code3, fs3 := guardFindingsOf(t, files, "--scope", "empty")
 			for _, run := range []struct {
 				code int
-				fs   []guard.Finding
+				fs   []reportedFinding
 			}{{code, fs}, {code2, fs2}, {code3, fs3}} {
-				var got []guard.Finding
+				var got []reportedFinding
 				for _, f := range run.fs {
-					if f.Kind == guard.FindingMetricsNotGatherable {
+					if f.Kind == findingkind.FindingMetricsNotGatherable.String() {
 						got = append(got, f)
 					}
 				}
