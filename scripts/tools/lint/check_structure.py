@@ -53,6 +53,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_tenant_uniqueness.py",  # #1794: one answer to "does this artifact declare a tenant twice" (two producers)
     "_lib_tenant_values.py",  # #2115/#2564: per-tenant values from Go (runs da-guard served-values / effective)
     "_lib_redact.py",  # #1516: receiver credential fields (mirror of tenant-api credmask) and how reports print them
+    "_lib_parse_tree.py",  # #1516: runs `da-guard parse-tree` and reads its document (ADR-036 §2)
     "_lib_tenant_state.py",  # #2883: reads a tenant-api state store copy (groups, views, federation subsets)
     "metric-dictionary.yaml",
     "validate_all.py",

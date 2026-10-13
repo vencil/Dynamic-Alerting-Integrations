@@ -70,6 +70,9 @@ BUILD_EXEMPT = frozenset({
     # #1516 — credential-field redaction shared by config_diff and
     # _render_diff (list mirrors tenant-api credmask). Library, not CLI.
     "_lib_redact.py",
+    # #1516 — runs `da-guard parse-tree` and reads its document; imported by
+    # migration_audit (config_diff next). Library, not CLI.
+    "_lib_parse_tree.py",
     # #1516 (ADR-037) — renders both conf.d trees and compares the renders.
     # Library imported by config_diff.py, not a CLI command.
     "_render_diff.py",

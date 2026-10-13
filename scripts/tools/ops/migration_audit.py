@@ -62,7 +62,6 @@ import datetime as _dt
 import json
 import math
 import os
-import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Optional
@@ -85,11 +84,11 @@ from _lib_confd import (  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label, strict_load_exporter_keys  # noqa: E402
 from _lib_python import detect_cli_lang  # noqa: E402
-import guard_dispatch  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 
 SCHEMA = "da-tools.migration-audit/v1"
-PARSE_TREE_SUBCOMMAND = "parse-tree"
-PARSE_TREE_SCHEMA = "da-guard.parse-tree/v1"
+PARSE_TREE_SUBCOMMAND = _lib_parse_tree.SUBCOMMAND
+PARSE_TREE_SCHEMA = _lib_parse_tree.SCHEMA
 DEFAULT_TIMEOUT = 600
 
 # The lists whose entries are differences (exit 1); `still_unreadable` is not.
@@ -172,96 +171,23 @@ def read_tree_today(root: Path) -> tuple[dict[str, Any], dict[str, str]]:
 # ── after: da-guard parse-tree ───────────────────────────────────────────
 
 def run_parse_tree(root: Path, binary: Optional[str], timeout: float) -> dict:
-    """`da-guard parse-tree --config-dir <root>`'s document. Raises
-    AuditError when there is no binary, it fails, or its output is not a
+    """`da-guard parse-tree --config-dir <root>`'s document (`_lib_parse_tree`).
+    Raises AuditError when there is no binary, it fails, or its output is not a
     parse-tree document this reader reads — never a partial reading."""
-    dispatcher = guard_dispatch.DISPATCHER
-    exe = dispatcher.resolve_binary(binary)
-    if exe is None:
-        msg = dispatcher.binary_missing_message(binary).strip()
-        for prefix in ("Error: ", "錯誤: "):
-            msg = msg.removeprefix(prefix)
+    try:
+        return _lib_parse_tree.run(root, binary, timeout)
+    except _lib_parse_tree.BinaryMissing as e:
         raise AuditError(
-            msg + "\nThis audit reads yaml.v3's reading from `da-guard parse-tree` only; it does "
+            str(e) + "\nThis audit reads yaml.v3's reading from `da-guard parse-tree` only; it does "
             "not parse the YAML another way (the da-tools image ships da-guard; in a checkout, "
-            "`make da-guard-build` builds .build/da-guard).")
-    cmd = [exe, PARSE_TREE_SUBCOMMAND, "--config-dir", str(root)]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise AuditError(f"da-guard {PARSE_TREE_SUBCOMMAND} did not finish within {timeout}s") from e
-    except OSError as e:
-        raise AuditError(f"da-guard could not be run ({exe}): {e}") from e
-    stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
-    if proc.returncode != 0:
-        older = ""
-        if proc.returncode == 2 and not _accepts(cmd, timeout):
-            older = (f" — this da-guard does not know `{PARSE_TREE_SUBCOMMAND}`: it is older "
-                     "than this tool; upgrade or rebuild it")
-        raise AuditError(f"da-guard {PARSE_TREE_SUBCOMMAND} exited {proc.returncode}{older}"
-                         + (f": {' '.join(stderr.split())}" if stderr else ""))
-    try:
-        doc = json.loads(proc.stdout.decode("utf-8"))
-        if not isinstance(doc, dict) or doc.get("schema") != PARSE_TREE_SCHEMA:
-            got = doc.get("schema") if isinstance(doc, dict) else None
-            raise ValueError(f"schema {got!r}, this reader reads {PARSE_TREE_SCHEMA!r}")
-        _check_shape(doc)
-    except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
-        # ADR-036 §2: a document a reader cannot decode is unusable whole.
-        raise AuditError(f"da-guard {PARSE_TREE_SUBCOMMAND} wrote no document this tool can "
-                         f"read ({e}); nothing of it is used") from e
-    return doc
-
-
-def _check_shape(doc: dict) -> None:
-    """Raise ValueError unless `doc` has the parse-tree shape this tool reads,
-    every element of it: a document that is wrong anywhere is unusable whole."""
-    for field, kind in (("selected", dict), ("files", dict), ("unreadable", list),
-                        ("not_read", list)):
-        if not isinstance(doc.get(field), kind):
-            raise ValueError(f"field {field!r} missing or not a {kind.__name__}")
-    for f, readers in doc["selected"].items():
-        if not (isinstance(readers, list) and all(isinstance(r, str) for r in readers)):
-            raise ValueError(f"selected[{f!r}] is not a list of reader names")
-    for name, fields in (("unreadable", ("file", "kind", "message")), ("not_read", ("file", "reason"))):
-        for i, e in enumerate(doc[name]):
-            if not (isinstance(e, dict) and all(isinstance(e.get(k), str) for k in fields)):
-                raise ValueError(f"{name}[{i}] is not an object with string {', '.join(fields)}")
-    for f, content in doc["files"].items():
-        if not isinstance(content, dict) or _is_v3_scalar(content):
-            raise ValueError(f"files[{f!r}] is not a mapping")
-        stack: list[Any] = [content]
-        while stack:
-            v = stack.pop()
-            if isinstance(v, list):
-                stack.extend(v)
-            elif _is_v3_scalar(v):
-                if not (isinstance(v["tag"], str) and isinstance(v.get("value"), (str, bool, type(None)))):
-                    raise ValueError(f"files[{f!r}] holds a scalar of the wrong shape: {v!r:.80}")
-            elif isinstance(v, dict) and not isinstance(v.get("text"), str):  # a mapping
-                stack.extend(v.values())
-            else:
-                raise ValueError(f"files[{f!r}] holds a value of the wrong shape: {v!r:.80}")
-    # parse-tree's own invariant: "selected" is "files" plus "unreadable".
-    unreadable = {u["file"] for u in doc["unreadable"]}
-    if set(doc["selected"]) != set(doc["files"]) | unreadable or unreadable & set(doc["files"]):
-        raise ValueError("\"selected\" is not \"files\" plus \"unreadable\"")
-
-
-def _accepts(cmd: list[str], timeout: float) -> bool:
-    """Whether the binary knows the subcommand and its flags (`-h` exits 0)."""
-    try:
-        proc = subprocess.run([*cmd, "-h"], capture_output=True, check=False, timeout=timeout)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
+            "`make da-guard-build` builds .build/da-guard).") from e
+    except _lib_parse_tree.ParseTreeError as e:
+        raise AuditError(str(e)) from e
 
 
 # ── comparing one file ───────────────────────────────────────────────────
 
-def _is_v3_scalar(v: Any) -> bool:
-    # parse-tree: a scalar is the only object whose "text" is a JSON string.
-    return isinstance(v, dict) and isinstance(v.get("text"), str) and "tag" in v
+_is_v3_scalar = _lib_parse_tree.is_scalar
 
 
 def _py_kind(v: Any) -> str:
