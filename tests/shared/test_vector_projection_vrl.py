@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _helm_gate import helm_required
 
 
 # ── Fixtures / gating ────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ _needs_vector = pytest.mark.skipif(
 # Set to "1" by the CI job that installs these (ci.yml python-tests-run ``env:``).
 # When set, a missing binary is a FAILURE, not a skip — see the two guards below.
 _REQUIRE_VECTOR = os.environ.get("VIBE_REQUIRE_VECTOR") == "1"
-_REQUIRE_HELM = os.environ.get("VIBE_REQUIRE_HELM") == "1"
+_REQUIRE_HELM = helm_required()  # tests/_helm_gate.py: CI or a remote session
 
 
 def test_vector_present_when_required() -> None:
@@ -80,9 +81,10 @@ def test_helm_present_when_required() -> None:
     a broken ``azure/setup-helm`` step would fail OPEN across all of them."""
     if _REQUIRE_HELM:
         assert _HAS_HELM, (
-            "VIBE_REQUIRE_HELM=1 but `helm` is not on PATH — the CI 'Set up Helm' "
-            "step (ci.yml python-tests-run job) is missing or broke; every "
-            "helm-gated render assertion would silently skip. Restore the step."
+            f"{_REQUIRE_HELM}: but `helm` is not on PATH — in CI the 'Set up Helm' "
+            "step (ci.yml python-tests-run job) is missing or broke; in a remote "
+            "session the session-start hook did not install it. Every helm-gated "
+            "render assertion would silently skip."
         )
 
 # Fixture projection: two tenants, ids in the registry's reserved-floor range
