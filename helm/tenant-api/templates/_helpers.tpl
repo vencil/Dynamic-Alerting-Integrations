@@ -144,7 +144,8 @@ Helm decodes a whole number from a values file as float64, and `quote` prints a
 float64 of 1e6 or more in exponent form ("1.048576e+06"); the binary's integer
 parse rejects that, warns once and falls back to its default, so the configured
 value is silently ignored. Numbers go through int64 first; a fractional number
-fails the render. A string is passed through unchanged, so a malformed string
+fails the render, as does one outside the int64 range (#2927; int64 would wrap
+it to an unrelated integer the binary accepts). A string is passed through unchanged, so a malformed string
 still reaches the binary's own warn-and-default path rather than becoming 0
 here (for TA_WRITE_QUEUE_DEPTH, 0 means shed every queued write).
 Call with (list "<values path for the error>" <value>).
@@ -155,6 +156,9 @@ Call with (list "<values path for the error>" <value>).
 {{- if or (kindIs "float64" $v) (kindIs "int" $v) (kindIs "int64" $v) -}}
 {{- if ne (float64 $v) (floor (float64 $v)) -}}
 {{- fail (printf "%s must be a whole number, got %v" $path $v) -}}
+{{- end -}}
+{{- if ne (float64 (int64 $v)) (float64 $v) -}}
+{{- fail (printf "%s is out of range for an integer, got %v" $path $v) -}}
 {{- end -}}
 {{- int64 $v | toString | quote -}}
 {{- else -}}
