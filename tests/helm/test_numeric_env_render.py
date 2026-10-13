@@ -8,7 +8,8 @@ ignored. Pins, for every numeric env key the chart writes:
 
   * a value >= 1e6 from a values FILE (the float64 path) and from `--set`
     (the int64 path) renders as a decimal integer string;
-  * a fractional number fails the render instead of reaching the binary;
+  * a fractional number, or one outside the int64 range (#2927), fails the
+    render instead of reaching the binary;
   * a string is passed through unchanged, so a malformed one still reaches the
     binary's own warn-and-default path (never coerced to 0 by the chart —
     for TA_WRITE_QUEUE_DEPTH, 0 means shed every queued write).
@@ -90,6 +91,16 @@ def test_large_value_renders_as_decimal_integer(tmp_path: Path, path: str, env: 
 def test_fractional_value_fails_the_render(tmp_path: Path, path: str):
     res = _render("-f", str(_values_file(tmp_path, path, 1.5)))
     assert res.returncode != 0
+    assert path in res.stderr
+
+
+@_needs_helm
+@pytest.mark.parametrize("path", sorted(_NUMERIC_ENV))
+def test_out_of_range_value_fails_the_render(tmp_path: Path, path: str):
+    # int64 wraps 1e19 to an integer unrelated to the input, which the binary
+    # accepts without a warning (#2927).
+    res = _render("-f", str(_values_file(tmp_path, path, 1e19)))
+    assert res.returncode != 0, _env(res.stdout)
     assert path in res.stderr
 
 
