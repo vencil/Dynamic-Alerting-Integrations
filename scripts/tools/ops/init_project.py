@@ -979,9 +979,10 @@ def _gen_helm_values(
     nothing here proves the chart accepts this file. What IS asserted is the
     property a render would have caught — every key set here exists in
     `helm/threshold-exporter/values.yaml` — and even that reads the chart in
-    THIS repo while the customer's apply pulls `oci://ghcr.io/vencil/charts/
-    threshold-exporter` with no `--version`, i.e. whatever `latest` is. The
-    two can diverge and nothing here would see it.
+    THIS repo while the customer's apply pulls the published chart at
+    THRESHOLD_EXPORTER_CHART_VERSION (issue 2932). The two agree only while
+    this repo's chart is the one that version was cut from; nothing here
+    checks the published artifact itself.
     """
     # Derived, never a second list: the same call `conf.d/<tenant>.yaml` is
     # written from, so the keys named below cannot drift away from the keys
