@@ -16,25 +16,33 @@ type fakeHighWater struct {
 	mark     Mark
 	raises   int
 	raiseErr error
+	afterGet func(f *fakeHighWater) // runs once, after the first Get, under the lock
 }
 
 func (f *fakeHighWater) Get(context.Context) (Mark, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.mark, nil
+	m := f.mark
+	if f.afterGet != nil {
+		hook := f.afterGet
+		f.afterGet = nil
+		hook(f)
+	}
+	return m, nil
 }
 
-func (f *fakeHighWater) Raise(_ context.Context, m Mark) (Mark, error) {
+func (f *fakeHighWater) Raise(_ context.Context, m Mark) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.raiseErr != nil {
-		return f.mark, f.raiseErr
+		return false, f.raiseErr
 	}
 	if m.Max > f.mark.Max {
 		f.mark = m
 		f.raises++
+		return true, nil
 	}
-	return f.mark, nil
+	return false, nil
 }
 
 func (f *fakeHighWater) get() uint32 {
@@ -355,6 +363,55 @@ func TestAllocator_RetryOfTheSameCall_SkipsNothing(t *testing.T) {
 	}
 	if r := parsed(t, fw.data); r.NextAccountID != 1003 {
 		t.Fatalf("next_account_id = %d, want 1003", r.NextAccountID)
+	}
+}
+
+// Another replica reserves the same id between this call's read of the mark
+// and its own Raise, commits, and then the registry is put back. The retry
+// must not take the identical mark for its own reservation and hand the id
+// out again.
+func TestAllocator_SomeoneElsesIdenticalMarkIsNotOurs(t *testing.T) {
+	t.Parallel()
+	reg := regBytes(t, 1005, map[string]uint32{"t-a": 1000, "t-b": 1001, "t-c": 1002, "t-d": 1003, "t-e": 1004})
+	hw := &fakeHighWater{mark: at(1004), afterGet: func(f *fakeHighWater) { f.mark = at(1005) }}
+	fw := &fakeWriter{data: reg, rerunOnce: append([]byte(nil), reg...)}
+
+	id, err := NewAllocator(fw, nil).WithHighWater(hw).EnsureAccountID(context.Background(), "t-new", "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == 1005 {
+		t.Fatal("handed out 1005, which another replica reserved and may have issued")
+	}
+	if id != 1006 {
+		t.Fatalf("id = %d, want 1006", id)
+	}
+}
+
+// A failed batch, then a failed single allocation, then a third: the third
+// succeeds. The second reservation keeps the registry's own counter as its
+// base, so two failures in a row are still read as "never reached the
+// registry", not as a rollback.
+func TestAllocator_TwoFailedWritesInARow_ThirdSucceeds(t *testing.T) {
+	t.Parallel()
+	hw := &fakeHighWater{}
+	fw := &failingWriter{fakeWriter: &fakeWriter{data: regBytes(t, 1000, nil)}, fail: errors.New("update: etcdserver timeout")}
+	a := NewAllocator(fw, nil).WithHighWater(hw)
+	ctx := context.Background()
+
+	if _, err := a.Backfill(ctx, []string{"t-a", "t-b", "t-c"}, "op"); err == nil {
+		t.Fatal("backfill succeeded")
+	}
+	if _, err := a.EnsureAccountID(ctx, "t-d", "op"); err == nil {
+		t.Fatal("allocation succeeded")
+	}
+	fw.fail = nil
+	id, err := a.EnsureAccountID(ctx, "t-e", "op")
+	if err != nil {
+		t.Fatalf("third allocation after two failed writes: %v", err)
+	}
+	if id != 1004 {
+		t.Fatalf("id = %d, want 1004 (1000..1003 were reserved by the failed writes)", id)
 	}
 }
 

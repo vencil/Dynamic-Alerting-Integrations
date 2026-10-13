@@ -25,7 +25,11 @@ package account
 //     its write failed, or exactly that write was rolled
 //     back. Skipping past the mark is safe either way:
 //     nothing is re-issued. A Backfill batch is one
-//     reservation, so a failed batch is skipped whole;
+//     reservation, so a failed batch is skipped whole.
+//     After a skip the next reservation keeps the
+//     registry's own counter as its base, so a rollback of
+//     that next write also lands here (skipped, no
+//     re-issue) rather than being refused;
 //     next <  base         the registry went back past a state it had
 //     already reached — refuse until `tenant-api state
 //     restore` merges it.
@@ -58,9 +62,9 @@ type HighWater interface {
 	// Get returns the recorded mark, or the zero Mark when none is recorded.
 	Get(ctx context.Context) (Mark, error)
 	// Raise records m when m.Max is above the current Max, Base included, and
-	// returns the mark now recorded. It never lowers the mark, so concurrent
-	// raises cannot undo each other.
-	Raise(ctx context.Context, m Mark) (Mark, error)
+	// reports whether it did. It never lowers the mark, so concurrent raises
+	// cannot undo each other.
+	Raise(ctx context.Context, m Mark) (bool, error)
 }
 
 // ErrRegistryBehindHighWater refuses an allocation against a registry whose
@@ -131,15 +135,23 @@ func guardAgainstHighWater(ctx context.Context, hw HighWater, reg *Registry, our
 // reserveHighWater records, before the registry write, every id up to
 // next-1 as reserved from base — the registry's next_account_id as read.
 // It returns the reservation for the caller's retry (see
-// guardAgainstHighWater). A registry that has allocated nothing records
-// nothing.
+// guardAgainstHighWater) only when this call wrote it: an identical mark
+// already present was written by someone else, and a retry must not mistake
+// it for its own. A registry that has allocated nothing records nothing.
 func reserveHighWater(ctx context.Context, hw HighWater, base, next uint32) (Mark, error) {
 	if hw == nil || next <= FirstTenantAccountID {
 		return Mark{}, nil
 	}
 	m := Mark{Max: next - 1, Base: base}
-	if _, err := hw.Raise(ctx, m); err != nil {
-		return Mark{}, fmt.Errorf("account: record the AccountID high-water mark: %w", err)
+	wrote, err := hw.Raise(ctx, m)
+	if err != nil {
+		// %v, not %w: Raise has already retried its own conflicts, and a
+		// wrapped conflict would make the registry store re-run the whole
+		// transform on top.
+		return Mark{}, fmt.Errorf("account: record the AccountID high-water mark: %v", err)
+	}
+	if !wrote {
+		return Mark{}, nil
 	}
 	return m, nil
 }

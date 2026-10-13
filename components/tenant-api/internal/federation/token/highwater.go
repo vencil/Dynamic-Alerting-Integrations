@@ -61,10 +61,10 @@ func (h *HighWater) Get(ctx context.Context) (account.Mark, error) {
 	return h.parse(cm)
 }
 
-// Raise records m when m.Max is above the current Max and returns the mark
-// now recorded. It never lowers the mark.
-func (h *HighWater) Raise(ctx context.Context, m account.Mark) (account.Mark, error) {
-	var result account.Mark
+// Raise records m when m.Max is above the current Max and reports whether it
+// did. It never lowers the mark.
+func (h *HighWater) Raise(ctx context.Context, m account.Mark) (bool, error) {
+	wrote := false
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cctx, cancel := context.WithTimeout(ctx, k8sCallTimeout)
 		defer cancel()
@@ -76,8 +76,8 @@ func (h *HighWater) Raise(ctx context.Context, m account.Mark) (account.Mark, er
 		if err != nil {
 			return err
 		}
+		wrote = false // re-derived on every attempt
 		if m.Max <= cur.Max {
-			result = cur
 			return nil
 		}
 		if cm.Annotations == nil {
@@ -88,10 +88,10 @@ func (h *HighWater) Raise(ctx context.Context, m account.Mark) (account.Mark, er
 		if _, err := h.client.CoreV1().ConfigMaps(h.namespace).Update(cctx, cm, metav1.UpdateOptions{}); err != nil {
 			return err
 		}
-		result = m
+		wrote = true
 		return nil
 	})
-	return result, err
+	return wrote, err
 }
 
 // parse reads the annotations. A value that is not a uint32 fails closed:

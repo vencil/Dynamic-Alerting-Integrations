@@ -20,11 +20,14 @@ func TestHighWater_AbsentReadsZero_RaiseNeverLowers(t *testing.T) {
 		t.Fatalf("Get on a fresh store = %+v, %v; want the zero Mark", got, err)
 	}
 	want := account.Mark{Max: 1004, Base: 1000}
-	if got, err := hw.Raise(ctx, want); err != nil || got != want {
-		t.Fatalf("Raise(%+v) = %+v, %v", want, got, err)
+	if wrote, err := hw.Raise(ctx, want); err != nil || !wrote {
+		t.Fatalf("Raise(%+v) = %v, %v; want a write", want, wrote, err)
 	}
-	if got, err := hw.Raise(ctx, account.Mark{Max: 1001, Base: 1001}); err != nil || got != want {
-		t.Fatalf("Raise(1001) after 1004 = %+v, %v; want %+v (never lowers, base kept)", got, err, want)
+	if wrote, err := hw.Raise(ctx, want); err != nil || wrote {
+		t.Fatalf("Raise of the recorded mark again = %v, %v; want no write (someone else's identical mark is not ours)", wrote, err)
+	}
+	if wrote, err := hw.Raise(ctx, account.Mark{Max: 1001, Base: 1001}); err != nil || wrote {
+		t.Fatalf("Raise(1001) after 1004 = %v, %v; want no write (never lowers)", wrote, err)
 	}
 	if got, _ := hw.Get(ctx); got != want {
 		t.Fatalf("Get = %+v, want %+v", got, want)
