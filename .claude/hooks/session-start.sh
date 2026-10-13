@@ -110,6 +110,8 @@ at_pin() {
   case "$1" in
     helm) out="$(helm version --short 2>/dev/null)" || return 1
           case "$out" in "v$2" | "v$2+"*) return 0 ;; esac ;;
+    # Reads "golangci-lint has version X built with ...". If upstream rewords
+    # that line this fails closed (RESULT=failed every start), never open.
     golangci-lint) out="$(golangci-lint version 2>/dev/null)" || return 1
           case "$out" in *" version $2 "*) return 0 ;; esac ;;
   esac
@@ -127,7 +129,8 @@ install_pinned() {
     *) why="no pinned checksum for $(uname -s)-$(uname -m)"; return 1 ;;
   esac
   tmp="$(mktemp -d)" || { why="mktemp"; return 1; }
-  if ! curl -fsSL --retry 3 -o "$tmp/pkg.tgz" "$3"; then
+  # Bounded: a stalled server must not hang session start.
+  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$tmp/pkg.tgz" "$3"; then
     why="download"
   elif ! printf '%s  %s\n' "$4" "$tmp/pkg.tgz" | sha256sum -c - >/dev/null 2>&1; then
     why="sha256 mismatch"
