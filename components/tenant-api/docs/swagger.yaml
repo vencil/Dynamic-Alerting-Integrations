@@ -2580,7 +2580,7 @@ paths:
             holds an entry that cannot be read and that no operation replaces; every
             operation not refused for another reason carries it, and the message names
             the entries only for a caller with write permission on all tenants (otherwise
-            their number).'
+            their number); an async task''s stored results never name them.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "500":

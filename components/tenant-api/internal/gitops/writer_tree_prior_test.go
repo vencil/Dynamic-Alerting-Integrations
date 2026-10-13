@@ -489,9 +489,11 @@ func TestTreePriorBatch_DuplicateResolvedMidBatch(t *testing.T) {
 	}
 }
 
-// An op whose file is a symlink writes through it, into a file the walker
-// also reads under its own name: the next op must see both declarations.
-func TestTreePriorBatch_WriteThroughSymlinkIsSeen(t *testing.T) {
+// An op whose file is a symlink to a file the walker also reads under its
+// own name replaces the link (writeFileAtomic, #2939) — it does not write
+// through it — so the file it pointed to keeps its content, the next op
+// merges onto the first op's regular file, and no id is declared twice.
+func TestTreePriorBatch_SymlinkTenantFileIsReplacedNotWrittenThrough(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"team/sl-shell.yaml": "tenants: {}\n"})
 	if err := os.Symlink(filepath.Join("team", "sl-shell.yaml"), filepath.Join(dir, "sl-a.yaml")); err != nil {
 		t.Skipf("symlink unsupported: %v", err)
@@ -500,12 +502,18 @@ func TestTreePriorBatch_WriteThroughSymlinkIsSeen(t *testing.T) {
 	gitRun(t, dir, "commit", "-q", "-m", "link")
 	gitRun(t, dir, "push", "-q", "origin", "main")
 	w := NewWriter(dir, dir)
-	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
+	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		batchOp("sl-a", tenantBody("sl-a")),
 		batchOp("sl-a", "tenants:\n  sl-a:\n    _silent_mode: \"critical\"\n"),
 	}, "op@example.com")
-	var dup *cfg.DuplicateTenantError
-	if !errors.Is(err, ErrTenantDeclaredElsewhere) || !errors.As(err, &dup) {
-		t.Fatalf("err = %v, want the duplicate the first op's write-through created", err)
+	if err != nil {
+		t.Fatalf("WritePRBatch: %v", err)
+	}
+	remote := gitOut(t, dir, "remote", "get-url", "origin")
+	if ls := gitOut(t, remote, "ls-tree", res.BranchName, "sl-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+		t.Errorf("sl-a.yaml on the branch = %q, want a regular file", ls)
+	}
+	if got := gitOut(t, remote, "show", res.BranchName+":team/sl-shell.yaml"); got != "tenants: {}" {
+		t.Errorf("team/sl-shell.yaml on the branch = %q, want it untouched", got)
 	}
 }

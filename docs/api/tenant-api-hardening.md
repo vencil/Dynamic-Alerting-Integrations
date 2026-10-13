@@ -221,13 +221,13 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 |---|---|
 | `PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts` | 409 `TENANT_TREE_UNREADABLE` |
 | `POST /tenants/{id}/diff` | 409 `TENANT_TREE_UNREADABLE`（與它預覽的 PUT 相同） |
-| `POST /tenants/{id}/validate` | 200、`valid: false`，`warnings` 是 PUT 會回的同一段文字 |
+| `POST /tenants/{id}/validate` | 200、`valid: false`，`warnings` 是 PUT 會回的同一段文字。**PR 模式例外**：PR 模式的 validate 只做 body 檢查、不讀樹（#1718：本機的樹可能落後 base），所以不會預告這個拒收，要到切分支時才判 |
 | `POST /tenants/batch`、`POST /groups/{id}/batch`（直寫與 PR 模式） | 422，整批不寫；每一筆沒有其他拒收原因的 op 結果都是 `status: error`、`code: TENANT_TREE_UNREADABLE` |
 
-- **寫入自己要取代的檔不算**：要寫的租戶檔本身是懸空的 symlink 時，寫入會把它換成一般檔，照常放行，這是 ADR-036 §4 的修復路徑；批次扣掉的是整批所有 op 的租戶檔。要寫的租戶檔本身是 FIFO、socket 或裝置檔時，tenant-api 不取代它，維持 409 `TENANT_CONFIG_NOT_LOADABLE`（批次該筆同 code）。要寫的租戶檔讀取失敗（`read_error`）時，整棵樹的判定同樣不算它，但寫入仍被既有的 eol 檢查拒收（讀不了現有檔就不放行，見 #2405）。
+- **寫入自己要取代的檔不算**：要寫的租戶檔本身是懸空的 symlink 時，寫入會把它換成一般檔（直寫與 PR 模式都是以 rename 取代目錄項目本身，不會順著 symlink 寫到它指向的地方），照常放行，這是 ADR-036 §4 的修復路徑；批次扣掉的是整批所有 op 的租戶檔。要寫的租戶檔本身是 FIFO、socket 或裝置檔時，tenant-api 不取代它，維持 409 `TENANT_CONFIG_NOT_LOADABLE`（批次該筆同 code）。要寫的租戶檔讀取失敗（`read_error`）時，整棵樹的判定同樣不算它，但寫入仍被既有的 eol 檢查拒收（讀不了現有檔就不放行，見 #2405）。
 - **以前的回應**：別處有 FIFO 時，單筆寫入卡住約 5 秒（掃描時限）後回 500，批次在複製 conf.d 時回 500；懸空的 symlink 等其他項目不擋寫入。現在一律是上表的 409／422。
 - **PR 模式**判的是切出分支的最新 base，也就是 git 裡的樹：沒 commit 的項目（例如服務中目錄裡的 FIFO）不在那裡。單筆 PR 寫入走服務中的工作目錄，看得到它們；PR 批次看不到。
-- **誰看得到檔名**：讀不了的項目可能是任何租戶的檔，所以只有對**所有租戶**有寫入權限的呼叫者（RBAC 規則 `tenants: ["*"]`、帶 `write`，且沒有 org-scope、environments、domains；與 #2405 取代無法解析的檔用同一個條件）才會在回應中看到項目名稱與 `reason`：單筆 409 的 `error` 文字列出它們，另有 `unreadable: [{path, reason}]`；批次寫在該筆的 `message`。其他呼叫者只拿到固定文字與項目數（`unreadable_count`，批次 `message` 裡的 `(unreadable entries: N)`）。不論呼叫者是誰，完整名稱一律寫進 server log。
+- **誰看得到檔名**：讀不了的項目可能是任何租戶的檔，所以只有對**所有租戶**有寫入權限的呼叫者（RBAC 規則 `tenants: ["*"]`、帶 `write`，且沒有 org-scope、environments、domains；與 #2405 取代無法解析的檔用同一個條件）才會在回應中看到項目名稱與 `reason`：單筆 409 的 `error` 文字列出它們，另有 `unreadable: [{path, reason}]`；批次寫在該筆的 `message`。其他呼叫者只拿到固定文字與項目數（`unreadable_count`，批次 `message` 裡的 `(unreadable entries: N)`）。給數量與 §3.6「不給數字」不衝突：§3.6 防的是透露看不到的群組成員有幾個，這裡的數量只是壞掉的項目有幾個，不透露任何租戶。非同步批次的結果存在 task 裡、由任何輪詢者讀取，所以一律不含名稱，送出者有全域權限也一樣。不論呼叫者是誰，完整名稱一律寫進 server log。
 - **怎麼修**：在 git 修好或移除那些項目（FIFO 等非一般檔、懸空的 symlink 要在 git 或掛載來源處理）。修好前，經 tenant-api 的寫入都會被拒。
 
 ---

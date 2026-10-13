@@ -8,10 +8,12 @@ package gitops
 //
 // Fault injection follows writer_hardening_test.go's fixture style: real
 // local git repos (initRepoOnMain / seedTenantRepo / addBareRemote) with the
-// failure induced structurally — a tenant file committed as a dangling symlink
-// (os.WriteFile fails), an empty commit ident (the in-repo `git commit` itself fails after
-// write + add succeeded), or a MergeFunc that succeeds at pre-flight and
-// fails under the lock.
+// failure induced structurally — an empty commit ident (the in-repo `git
+// commit` itself fails after write + add succeeded), or a MergeFunc that
+// succeeds at pre-flight and fails under the lock. (A tenant file committed
+// as a dangling symlink used to make the in-place write fail; since #2939
+// the write replaces the link by rename, which is the repair path, so the
+// tests below pin that instead: success, and a clean base afterwards.)
 
 import (
 	"context"
@@ -41,14 +43,9 @@ func assertCleanOnBase(t *testing.T, dir, base, branchPrefix string) {
 
 // commitDanglingTenantLink commits `<id>.yaml` on main as a symlink into a
 // directory that does not exist: the resolver names it as the tenant's
-// (existing) file, reading it is ENOENT (a new tenant as far as the merge and
-// validators can tell), and os.WriteFile through it fails — a write-file
-// failure AFTER the feature branch was cut, on a clean committed tree.
-//
-// It replaced a missing configDir as the injection (#2078): the
-// declared-elsewhere guard walks configDir before creating a new tenant file
-// and fails closed when the walk cannot run, so a missing configDir is now
-// refused by the guard and no longer reaches os.WriteFile.
+// (existing) file, and reading it is ENOENT (a new tenant as far as the
+// merge and validators can tell). The write replaces the link with a regular
+// file (writeFileAtomic, #2939) instead of writing through it.
 func commitDanglingTenantLink(t *testing.T, repo, tenantID string) {
 	t.Helper()
 	link := filepath.Join(repo, tenantID+".yaml")
@@ -59,22 +56,29 @@ func commitDanglingTenantLink(t *testing.T, repo, tenantID string) {
 	gitRun(t, repo, "commit", "-m", "dangling tenant link")
 }
 
-// TestWritePR_WriteFileFailureRollsBack: os.WriteFile fails (the tenant file
-// is a dangling symlink) AFTER the feature branch was created → WritePR must
-// delete the branch and re-anchor on a clean base.
-func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
+// TestWritePR_DanglingTenantLinkIsReplacedAndBaseStaysClean: the tenant file
+// is a committed dangling symlink → WritePR replaces it on the feature branch
+// (#2939's repair path, not a write through the link) and still returns the
+// tree to a clean base. (No origin: the push fails and the branch is kept,
+// as #641 does on a failed push, so only the tree is checked here.)
+func TestWritePR_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	repo := initRepoOnMain(t)
 	commitDanglingTenantLink(t, repo, "db-a")
 	w := NewWriter(repo, repo)
 
-	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
-	if err == nil {
-		t.Fatal("expected WritePR to fail writing through a dangling tenant symlink, got nil")
+	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
+	if err != nil {
+		t.Fatalf("WritePR over a dangling tenant symlink: %v, want the repair accepted", err)
 	}
-	if !strings.Contains(err.Error(), "write file") {
-		t.Errorf("error = %q, want it to carry the 'write file' failure semantics", err.Error())
+	if ls := gitOut(t, repo, "ls-tree", res.BranchName, "db-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+		t.Errorf("db-a.yaml on %s = %q, want a regular file", res.BranchName, ls)
 	}
-	assertCleanOnBase(t, repo, "main", "tenant-api/")
+	if cur := gitOut(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
+		t.Errorf("HEAD on %q, want main", cur)
+	}
+	if st := gitOut(t, repo, "status", "--porcelain"); st != "" {
+		t.Errorf("working tree dirty after the write:\n%s", st)
+	}
 }
 
 // TestWritePR_CommitFailureRollsBack: the IN-REPO commit-failure arm — the
@@ -171,10 +175,10 @@ func TestWritePRBatch_SecondOpMergeFailureRollsBack(t *testing.T) {
 	}
 }
 
-// TestWritePRBatch_WriteFileFailureRollsBack: the os.WriteFile per-op failure
-// arm (dangling tenant symlink) — branch dropped, base clean, error names the
-// tenant.
-func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
+// TestWritePRBatch_DanglingTenantLinkIsReplacedAndBaseStaysClean: the batch
+// form — the op replaces the committed dangling link on the batch branch
+// (#2939), and the serving tree stays clean on base.
+func TestWritePRBatch_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	repo := initRepoOnMain(t)
 	commitDanglingTenantLink(t, repo, "db-a")
 	w := NewWriter(repo, repo)
@@ -182,15 +186,20 @@ func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 	merge := func(existing []byte) (string, error) {
 		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
 	}
-	_, err := w.WritePRBatch(context.Background(),
+	res, err := w.WritePRBatch(context.Background(),
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
-	if err == nil {
-		t.Fatal("expected WritePRBatch to fail writing through a dangling tenant symlink, got nil")
+	if err != nil {
+		t.Fatalf("WritePRBatch over a dangling tenant symlink: %v, want the repair accepted", err)
 	}
-	if !strings.Contains(err.Error(), "write file for db-a") {
-		t.Errorf("error = %q, want 'write file for db-a'", err.Error())
+	if ls := gitOut(t, repo, "ls-tree", res.BranchName, "db-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+		t.Errorf("db-a.yaml on %s = %q, want a regular file", res.BranchName, ls)
 	}
-	assertCleanOnBase(t, repo, "main", "tenant-api/batch/")
+	if cur := gitOut(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
+		t.Errorf("HEAD on %q, want main", cur)
+	}
+	if st := gitOut(t, repo, "status", "--porcelain"); st != "" {
+		t.Errorf("working tree dirty after the batch:\n%s", st)
+	}
 }
 
 // TestWritePRBatch_DeletesLocalBranchAfterConfirmedPush mirrors the #641

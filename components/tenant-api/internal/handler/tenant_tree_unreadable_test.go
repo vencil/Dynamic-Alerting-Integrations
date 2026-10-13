@@ -18,7 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -240,6 +242,43 @@ func TestTreeUnreadable_PreviewsGivePutsVerdict(t *testing.T) {
 					t.Errorf("diff = %d %s, want PUT's 409 %s %q", dw.Code, dw.Body.String(), CodeTenantTreeUnreadable, pe.Error)
 				}
 			})
+		}
+	}
+}
+
+// D3a for an async batch: the task's results are stored and served to every
+// poller, who is not the submitter — so they never name the entries, even
+// when the submitter could see them; the poller sees the code and the count.
+func TestTreeUnreadable_AsyncBatchStoresNoEntryNames(t *testing.T) {
+	t.Parallel()
+	f := newTreeFixture(t)
+	if err := os.Symlink("missing-target.yaml", filepath.Join(f.dir, "secret-other-team-file.yaml")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	tasks := async.NewManager(1)
+	defer tasks.Close()
+	f.d.Tasks = tasks
+	w := f.do(t, BatchTenants(f.d), rbac.PermRead, "platform", "POST", "/api/v1/tenants/batch?async=true", "",
+		`{"operations":[{"tenant_id":"tu-a","patch":{"_silent_mode":"critical"}}]}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("async submit = %d, want 202: %s", w.Code, w.Body.String())
+	}
+	var sub map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &sub); err != nil {
+		t.Fatal(err)
+	}
+	taskID, _ := sub["task_id"].(string)
+	if final := pollUntilTerminal(t, tasks, taskID, 10*time.Second); final.Status != async.TaskFailed {
+		t.Fatalf("task = %+v, want failed (rejected)", final)
+	}
+	for _, poller := range []string{"platform", "team,readers"} {
+		got := f.do(t, GetTask(f.d), rbac.PermRead, poller, "GET", "/api/v1/tasks/"+taskID, taskID, "")
+		if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), CodeTenantTreeUnreadable) ||
+			!strings.Contains(got.Body.String(), "(unreadable entries: 1)") {
+			t.Fatalf("%s polls: %d %s, want 200 with %s and the count", poller, got.Code, got.Body.String(), CodeTenantTreeUnreadable)
+		}
+		if strings.Contains(got.Body.String(), "secret-other-team-file") {
+			t.Errorf("%s polls: the stored result names the entry: %s", poller, got.Body.String())
 		}
 	}
 }

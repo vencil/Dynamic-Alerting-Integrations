@@ -222,7 +222,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		// Synchronous mode (default). #2900: all or nothing, as
 		// POST /tenants/batch.
-		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
+		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy, batchResultsAnswer)
 		if run.Err != nil {
 			writeBatchFailure(w, r, d, run.Err)
 			return

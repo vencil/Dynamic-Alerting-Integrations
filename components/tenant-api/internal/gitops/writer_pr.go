@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -260,8 +259,11 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
-	// its spelling, never a second file beside it.
-	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
+	// its spelling, never a second file beside it. Replaced by rename, as a
+	// direct write (writeFileAtomic): a tenant file that is a symlink —
+	// dangling, or pointing outside conf.d — becomes a regular file, and
+	// nothing is written where it pointed (#2939, ADR-036 §4's repair path).
+	if err := writeFileAtomic(filePath, []byte(yamlContent), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.
 		w.abortFeatureBranch(base, branchName)
@@ -444,7 +446,6 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	if err != nil {
 		return nil, err
 	}
-	st.inPlace = true
 	pushed := false
 	defer func() {
 		w.closeStaging(st)

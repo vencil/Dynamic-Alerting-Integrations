@@ -172,7 +172,6 @@ type stagingTree struct {
 	// branchUnneeded (PR mode): the staging branch may be deleted with the
 	// worktree — it carries nothing worth keeping.
 	branchUnneeded bool
-	inPlace        bool // PR mode: write files in place (see applyBatchOp)
 }
 
 // stagingBatchMtime is the modification time a fresh staging checkout gets:
@@ -417,9 +416,11 @@ func (w *Writer) stagingScan(st *stagingTree) func() (*cfg.TreeScan, error) {
 // and, when it passes and changes the file, writes it there so the next op
 // sees it. Caller holds w.mu.
 //
-// The file is written as each mode always wrote it: replaced by rename in
-// direct mode (writeFileAtomic, as every direct write), in place in PR mode
-// (os.WriteFile, as WritePR — through a symlink, into its target).
+// The file is replaced by rename (writeFileAtomic) in both modes, as every
+// tenant write: the directory entry itself is replaced, so a tenant file
+// that is a symlink — dangling, or pointing outside conf.d — becomes a
+// regular file and nothing is written where it pointed (#2939: ADR-036 §4's
+// repair path). PR mode used to write in place, through the link.
 func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
 	if err := guardTenantID(op.TenantID); err != nil {
 		return BatchOpOutcome{Err: err}
@@ -447,13 +448,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
 	if existing != nil && string(existing) == content {
 		return BatchOpOutcome{NoOp: true, Notices: notices}
 	}
-	var werr error
-	if st.inPlace {
-		werr = os.WriteFile(filePath, []byte(content), 0644)
-	} else {
-		werr = writeFileAtomic(filePath, []byte(content), 0644)
-	}
-	if werr != nil {
+	if werr := writeFileAtomic(filePath, []byte(content), 0644); werr != nil {
 		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}
 	}
 	rel, err := filepath.Rel(st.root, filePath)

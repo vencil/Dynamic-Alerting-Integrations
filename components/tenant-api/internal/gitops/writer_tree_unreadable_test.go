@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -99,28 +100,70 @@ func TestTreeUnreadable_DanglingSymlinkElsewhereRefusesEveryPath(t *testing.T) {
 }
 
 // (a) ADR-036 §4's repair path: the write's OWN tenant file being a dangling
-// symlink does not refuse it — the write replaces it, and the tree after it
-// is readable. Every direct path and preview agrees.
+// symlink does not refuse it — the write replaces the directory entry, and
+// the tree after it is readable. Every write path and preview agrees, the PR
+// modes included. The link points OUTSIDE conf.d, so a write that followed
+// it (os.WriteFile) would create a file there instead of repairing conf.d.
 func TestTreeUnreadable_DanglingTargetIsTheRepairPath(t *testing.T) {
-	for _, mode := range directTreeModes {
+	for _, mode := range append(append([]string{}, directTreeModes...), "WritePR", "WritePRBatch") {
 		t.Run(mode, func(t *testing.T) {
 			dir := seedTreeRepo(t, map[string]string{"other-t.yaml": tenantBody("other-t")})
+			outside := filepath.Join(t.TempDir(), "gone.yaml")
 			target := filepath.Join(dir, "fix-t.yaml")
-			if err := os.Symlink("missing-target.yaml", target); err != nil {
+			if err := os.Symlink(outside, target); err != nil {
 				t.Skipf("symlink: %v", err)
 			}
+			pr := mode == "WritePR" || mode == "WritePRBatch"
+			if pr { // the PR modes cut from the base git holds
+				gitRun(t, dir, "add", "-A")
+				gitRun(t, dir, "commit", "-m", "dangling tenant file")
+			}
 			w := NewWriter(dir, dir)
-			if err := treeVerdictVia(t, mode, w, "fix-t"); err != nil {
-				t.Fatalf("%s: err = %v, want the write (or its preview) accepted", mode, err)
+			var branch string
+			ctx := context.Background()
+			body := tenantBody("fix-t")
+			switch mode {
+			case "WritePR":
+				res, err := w.WritePR(ctx, "fix-t", "op@example.com", body)
+				if err != nil {
+					t.Fatalf("WritePR: %v, want accepted", err)
+				}
+				branch = res.BranchName
+			case "WritePRBatch":
+				res, err := w.WritePRBatch(ctx, []PRBatchOp{{TenantID: "fix-t",
+					Merge: func([]byte) (string, error) { return body, nil }}}, "op@example.com")
+				if err != nil {
+					t.Fatalf("WritePRBatch: %v, want accepted", err)
+				}
+				branch = res.BranchName
+			default:
+				if err := treeVerdictVia(t, mode, w, "fix-t"); err != nil {
+					t.Fatalf("%s: err = %v, want the write (or its preview) accepted", mode, err)
+				}
+			}
+			if _, err := os.Lstat(outside); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%s wrote through the link, outside conf.d: Lstat(%s) = %v", mode, outside, err)
 			}
 			if mode == "DryRunValidate" || mode == "Diff" {
+				return
+			}
+			if pr {
+				// The branch carries the repair: a regular file (mode 100644,
+				// not a 120000 symlink) holding the body.
+				remote := gitOut(t, dir, "remote", "get-url", "origin")
+				if ls := gitOut(t, remote, "ls-tree", branch, "fix-t.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+					t.Fatalf("%s: fix-t.yaml on %s = %q, want a regular file", mode, branch, ls)
+				}
+				if got := gitOut(t, remote, "show", branch+":fix-t.yaml"); got+"\n" != body {
+					t.Errorf("%s: fix-t.yaml on %s = %q, want the body", mode, branch, got)
+				}
 				return
 			}
 			fi, err := os.Lstat(target)
 			if err != nil || !fi.Mode().IsRegular() {
 				t.Fatalf("fix-t.yaml after the write: %v, %v; want a regular file", fi, err)
 			}
-			if got, _ := os.ReadFile(target); string(got) != tenantBody("fix-t") {
+			if got, _ := os.ReadFile(target); string(got) != body {
 				t.Errorf("fix-t.yaml = %q, want the body", got)
 			}
 			scan, err := cfg.ScanDirTree(dir, nil, nil, discardScanLogger)
