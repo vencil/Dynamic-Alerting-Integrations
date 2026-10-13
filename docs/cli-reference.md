@@ -3031,6 +3031,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--auth-token` | Bearer token（oauth2-proxy 前置模式；或 `$DA_GOVERN_TOKEN`） | - |
 | `--auth-token-file` | Bearer token 檔路徑（K8s audience-bound projected SA token，呼叫時讀取；或 `$DA_GOVERN_TOKEN_FILE`） | - |
 | `--throttle-seconds` | 開 PR 之間的間隔秒數 | `2` |
+| `--timeout` | 呼叫 tenant-api（GET／PUT）的 HTTP 逾時秒數，只在 `--apply` 時用到；不影響 Prometheus 查詢。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)） | `30` |
 | `--json` | JSON 輸出 | - |
 
 > **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除下界 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
@@ -3062,7 +3063,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | 僅驗證 URL 格式，不實際發送 | - |
 | `--json` | JSON 輸出 | - |
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
-| `--timeout` | 每個 receiver 的連線逾時秒數 | `10` |
+| `--timeout` | 每個 receiver 的連線逾時秒數。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
 | `--rate-limit` | 每次測試之間的等待秒數 | `0.5` |
 
 **支援的 Receiver 類型**
