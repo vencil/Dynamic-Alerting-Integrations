@@ -28,7 +28,8 @@ package config
 //   - WHICH KEYS: profileFill, the one decision ApplyProfiles also makes —
 //     canonical spelling (canonicalView), not a key the tenant's layer
 //     already sets under any spelling (hasAliasEquivalent), not a key the
-//     root carrier declares in `optional_overrides` (except `_critical`).
+//     root carrier declares in `optional_overrides` (except `_critical`),
+//     not a routing-layer key (IsRoutingLayerKey, #2914).
 //   - PRECEDENCE: tenant file > root platform `tenants:` entry > profile >
 //     defaults chain (root and subtree alike: applySubtreeDefaults does not
 //     touch a key the profile filled). A filled key is merged over the chain
@@ -286,9 +287,21 @@ func withProfileText(body map[string]any, texts map[string]string, tenantID stri
 // for a tenant whose own layer is `own`. onDeclared is called for a key
 // skipped only because it is declared without a platform value — never for
 // one the tenant sets itself (that would report a non-event).
+//
+// ⛔ A ROUTING-LAYER KEY IS NEVER FILLED IN (#2914). `_severity_dedup` and
+// the `_routing*` keys (IsRoutingLayerKey) are read by the route generator,
+// and it reads them from the tenant's own entry only — never from a
+// threshold profile. Filling them in made the exporter's answer (its
+// /effective, `user_severity_dedup`, `da-guard served-values`) differ from
+// the routes and inhibit rules Alertmanager actually gets. Such a key in a
+// profile is an error: ProfileRoutingKeys names it, the exporter logs it,
+// and da-guard reports routing_in_unread_location (routingpolicy.UnreadRouting).
 func profileFill[V, O any](canonProfile map[string]V, own map[string]O, canonDeclared map[string]struct{}, onDeclared func(key string)) map[string]V {
 	var fill map[string]V
 	for key, profileValue := range canonProfile {
+		if IsRoutingLayerKey(key) {
+			continue
+		}
 		// ⛔ The declared check must look at the BASE, not the whole key.
 		// resolveDimensionalRows emits unconditionally — it never consults
 		// defaults — so a profile entry spelled `oracle_wait_time_rate{db="x"}`
@@ -557,4 +570,71 @@ func ProfileKeysSetBy(own map[string]any, keys []string) bool {
 		}
 	}
 	return true
+}
+
+// ProfileRoutingKey is one routing-layer key (IsRoutingLayerKey) a threshold
+// profile writes (#2914): the file, the profile and the key. The profile
+// expansion ignores it (profileFill); it belongs in the tenant's own entry
+// (`_routing`, `_severity_dedup`) or in a routing profile
+// (`_routing_profiles.yaml`, elected by the tenant's `_routing_profile`).
+type ProfileRoutingKey struct {
+	File    string `json:"file"`
+	Profile string `json:"profile"`
+	Key     string `json:"key"`
+}
+
+// ProfileRoutingKeys lists, sorted by file, profile and key, every
+// routing-layer key the `profiles:` of fileConfigs write — fileConfigs being
+// the per-file partials the flat plane merges (FlatBuild.FileConfigs,
+// package main's flatScanState.configs), keyed by scan key. Those are exactly
+// the profile sources the exporter reads: the root platform files its decode
+// accepts (a tenant file's `profiles:` is stripped by applyBoundaryRules, a
+// nested `_` file and an unselected root carrier are not in the map). nil
+// when there is none.
+//
+// Whatever the value — a null too — and whether or not any tenant elects
+// the profile: the key does not belong in a profile in any of these cases.
+func ProfileRoutingKeys(fileConfigs map[string]ThresholdConfig) []ProfileRoutingKey {
+	var out []ProfileRoutingKey
+	for file, fc := range fileConfigs {
+		out = append(out, profileRoutingKeysOf(file, fc.Profiles)...)
+	}
+	sortProfileRoutingKeys(out)
+	return out
+}
+
+// ProfileRoutingKeysOfConfig is ProfileRoutingKeys for one decoded config
+// file (single-file mode), named file.
+func ProfileRoutingKeysOfConfig(file string, cfg *ThresholdConfig) []ProfileRoutingKey {
+	if cfg == nil {
+		return nil
+	}
+	out := profileRoutingKeysOf(file, cfg.Profiles)
+	sortProfileRoutingKeys(out)
+	return out
+}
+
+func profileRoutingKeysOf(file string, profiles map[string]map[string]ScheduledValue) []ProfileRoutingKey {
+	var out []ProfileRoutingKey
+	for name, body := range profiles {
+		for k := range body {
+			if IsRoutingLayerKey(k) {
+				out = append(out, ProfileRoutingKey{File: file, Profile: name, Key: k})
+			}
+		}
+	}
+	return out
+}
+
+func sortProfileRoutingKeys(keys []ProfileRoutingKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		if a.Profile != b.Profile {
+			return a.Profile < b.Profile
+		}
+		return a.Key < b.Key
+	})
 }

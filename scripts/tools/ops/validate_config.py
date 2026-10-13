@@ -196,6 +196,7 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ParseFailedError,
     load_effective_tree,
+    load_guard_findings,
     print_load_error,
     value_not_served_as_written,
 )
@@ -1245,6 +1246,30 @@ def _effective_tree(config_dir: str):
     return tree
 
 
+# #2914: the profiles row's FAIL for a routing-layer key in a threshold profile.
+_PROFILE_ROUTING_KEY_HINT = (
+    "A threshold profile (`profiles:`) may not carry `_severity_dedup` or any "
+    "`_routing*` key. Move `_routing` to a routing profile in "
+    "`_routing_profiles.yaml` and set `_routing_profile` in each tenant's own "
+    "entry (or write `_routing` there), write `_severity_dedup` in each tenant's "
+    "own entry, then delete the keys from the profile. "
+    "`da-guard --config-dir <dir>` reports each as routing_in_unread_location.")
+
+
+def _profile_routing_findings(config_dir: str) -> list[tuple[str, str, str, str]]:
+    """(file, profile, key, message) of each da-guard `routing_in_unread_location`
+    finding inside a threshold profile (field `<file>:profiles.<profile>.<key>`;
+    a key never holds a dot). #2914: the verdict is da-guard's, not this row's."""
+    out = []
+    for f in load_guard_findings(config_dir):
+        if f.kind != "routing_in_unread_location" or ":profiles." not in f.field:
+            continue
+        file, path = f.field.split(":profiles.", 1)
+        profile, _, key = path.rpartition(".")
+        out.append((file, profile, key, f.message))
+    return out
+
+
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
@@ -1252,7 +1277,17 @@ def check_profiles(config_dir: str) -> dict[str, object]:
       - Each tenant's `_profile` binds the profile it names (#2115 0-B: the
         exporter's answer, `da-guard effective`'s `profile`, not a Python
         reading of the files)
-      - Profile keys in `_profiles.yaml` don't use reserved prefixes (_, _routing, _state_)
+      - No threshold profile carries a routing-layer key — `_severity_dedup`
+        or a key starting with `_routing` (#2914): FAIL. The route generator
+        never reads them from a threshold profile and the exporter does not
+        apply them. The verdict is da-guard's own `routing_in_unread_location`
+        finding inside a profile (a second da-guard run, the check itself), so
+        it covers every root `_` file's `profiles:`, not only
+        `_profiles.yaml`, and profiles no tenant elects. ⚠️ A tree with no
+        tenant at all gets an empty da-guard report, so nothing is named then.
+      - Other reserved keys in `_profiles.yaml` (`_silent_mode`, `_state_*`,
+        …) are a WARN; `_metadata` is not — a profile's `_metadata` is filled
+        into its tenants (docs/design/config-driven.md, #2830)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
 
@@ -1316,6 +1351,19 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     warnings = []
     profile_ref_count = 0
 
+    # ── #2914: routing-layer keys in a threshold profile (FAIL) ──
+    # da-guard's own `routing_in_unread_location` findings inside a profile:
+    # every root platform file's `profiles:`, bound or not.
+    try:
+        in_profiles = _profile_routing_findings(config_dir)
+    except (DaGuardNotFoundError, DaGuardError) as exc:
+        return _tenant_load_failure_row(
+            "profiles", exc, config_dir,
+            (_PROFILES_TREE_UNREADABLE_HINT, _PROFILES_NO_CONFIG_FILE_HINT,
+             _PROFILES_NO_DA_GUARD_HINT))
+    errors = [msg for _f, _p, _k, msg in in_profiles]
+    routing_in_profiles_yaml = {(p, k) for f, p, k, _m in in_profiles if f == "_profiles.yaml"}
+
     # ── Profile structure validation ──
     for p_name, p_data in profiles.items():
         if not isinstance(p_data, dict):
@@ -1329,6 +1377,10 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         for key in p_data:
             # Reserved keys should not be in profiles (they belong in tenant config)
             if key.startswith("_"):
+                if (p_name, key) in routing_in_profiles_yaml:
+                    continue  # a FAIL above (#2914)
+                if key == "_metadata":
+                    continue  # filled into the tenants, a documented use (#2830)
                 if _is_reserved_key(key):
                     warnings.append(
                         f"profile={p_name}: contains reserved key \"{key}\" "
@@ -1359,6 +1411,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                 f"tenant={t_name}: _profile references unknown profile "
                 f"\"{name}\"")
 
+    if errors:
+        return _make_result("profiles", FAIL, errors + warnings + skipped_lines,
+                            hint=_PROFILE_ROUTING_KEY_HINT)
     if warnings:
         return _make_result("profiles", WARN, warnings + skipped_lines)
     details = [f"{len(effective)} tenants scanned, {profile_ref_count} profile refs, "

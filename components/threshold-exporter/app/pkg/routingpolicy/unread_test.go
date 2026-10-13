@@ -154,6 +154,15 @@ func TestUnreadRouting(t *testing.T) {
 		{"non-string-key-in-profiles", map[string]string{
 			"_profiles.yaml": "profiles:\n  1: {cpu: 1, _routing: {}}\n  a: {2: 3, _routing: {}}\n",
 		}, "", []string{"_profiles.yaml:profiles.1._routing", "_profiles.yaml:profiles.a._routing"}},
+		// #2914: in a threshold profile every routing-layer key is named —
+		// `_severity_dedup` and anything under the `_routing` prefix — the
+		// exporter's own predicate (config.IsRoutingLayerKey). `_metadata`
+		// and `_silent_mode` are not; a profile no tenant elects is named too.
+		{"routing-layer-keys-in-profiles", map[string]string{
+			"_profiles.yaml": "profiles:\n  a: {_severity_dedup: disable, _routingx: 1, _metadata: {o: x}, _silent_mode: warning}\n" +
+				"  unused: {_severity_dedup: ~}\n",
+		}, "", []string{"_profiles.yaml:profiles.a._routingx", "_profiles.yaml:profiles.a._severity_dedup",
+			"_profiles.yaml:profiles.unused._severity_dedup"}},
 		{"routing-lookalike-keys-are-not-routing", map[string]string{
 			"_defaults.yaml": "defaults:\n  _routingx: 1\n  routing: 2\n  _severity_dedup: disable\n",
 		}, "", []string{}},
@@ -210,6 +219,28 @@ func TestUnreadRouting(t *testing.T) {
 			probs := UnreadRouting(dir, scoped.DefaultsFiles, skip)
 			if got := unreadFields(probs); !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("unread = %q\nwant %q", got, tc.want)
+			}
+			// #2914: the profile half names exactly the keys the exporter's
+			// profile expansion ignores (config.ProfileRoutingKeys over its own
+			// build), for the files the exporter reads (skip = none here).
+			// ⚠️ Except a `_domain_policy.yaml` the generator's PyYAML refuses:
+			// it is read as a policy file and dropped whole, so no finding names
+			// its profiles, while the exporter (which reads it as config) still
+			// ignores the key and its ERROR names it.
+			if tc.skip == "" && tc.name != "policy-file-refused-by-pyyaml-is-not-reported" {
+				fromGuard, fromExporter := []string{}, []string{}
+				for _, f := range unreadFields(probs) {
+					if strings.Contains(f, ":profiles.") {
+						fromGuard = append(fromGuard, f)
+					}
+				}
+				for _, k := range scoped.ProfileRoutingKeys() {
+					fromExporter = append(fromExporter, k.File+":profiles."+k.Profile+"."+k.Key)
+				}
+				sort.Strings(fromExporter)
+				if !reflect.DeepEqual(fromGuard, fromExporter) {
+					t.Errorf("profile keys: finding %q, exporter ignores %q", fromGuard, fromExporter)
+				}
 			}
 			for _, p := range probs {
 				if !strings.HasPrefix(p.Message, p.File+": ") || !strings.Contains(p.Message, "move") &&

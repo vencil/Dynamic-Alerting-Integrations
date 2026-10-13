@@ -139,9 +139,6 @@ CASES = [
                       "        type: webhook\n        url: \"https://hooks.example.com/a\"\n")),
     ("profiles.threshold", "profiles", {SERVED}, _bind_profile,
      lambda d: _sub(d / "_profiles.yaml", "container_memory: 50", "container_memory: 51")),
-    ("profiles._routing", "profiles", {SERVED}, _bind_profile,
-     lambda d: _append(d / "_profiles.yaml", "    _routing:\n      receiver:\n        type: webhook\n"
-                       "        url: \"https://hooks.example.com/p\"\n")),
 ]
 
 
@@ -176,3 +173,30 @@ def test_each_carrier_rings_in_the_views_the_table_claims(tmp_path, case_id, car
         f"but only {sorted(changed)} changed")
     rows = [r for r in report["platform_settings"] if r["key"] == carrier]
     assert rows and {r["status"] for r in rows} == {cd.SETTING_RENDERED}, report["platform_settings"]
+
+
+@pytest.mark.parametrize("edit", [
+    "    _routing:\n      receiver:\n        type: webhook\n        url: \"https://hooks.example.com/p\"\n",
+    "    _severity_dedup: \"disable\"\n",
+], ids=["_routing", "_severity_dedup"])
+def test_routing_layer_key_in_a_profile_has_no_effect(tmp_path, edit) -> None:
+    """#2914: neither render reads a routing-layer key from a threshold
+    profile (the exporter does not fill it in, the route generator never
+    reads profiles), so adding one to a profile a tenant elects changes no
+    view, and the `profiles` row says so (no_effect) instead of claiming a
+    Tenant Setting Change. Pinned for `_severity_dedup` too: the key the
+    exporter used to fill in as the tenant's dedup setting."""
+    old, new = tmp_path / "old", tmp_path / "new"
+    shutil.copytree(SAMPLE, old)
+    shutil.copytree(SAMPLE, new)
+    _bind_profile(old)
+    _bind_profile(new)
+    _append(new / "_profiles.yaml", edit)
+    diff = rd.compare(old, new, AT, served_report=cd.served_sections)
+    report = cd.build_report(diff, old, new)
+    statuses = {name: v.status for name, v in report["views"].items()}
+    assert set(statuses.values()) == {"computed"}, statuses
+    assert not cd._served_changed(report), report
+    assert not (report["routes"] or report["receivers"] or report["inhibits"]), report
+    rows = [r for r in report["platform_settings"] if r["key"] == "profiles"]
+    assert rows and {r["status"] for r in rows} == {cd.SETTING_NO_EFFECT}, report["platform_settings"]

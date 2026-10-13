@@ -703,8 +703,7 @@ const criticalKeySuffix = "_critical"
 func reservedShapeWins(key string) bool {
 	return strings.HasPrefix(key, "_state_") ||
 		strings.HasPrefix(key, "_silent_") ||
-		key == "_severity_dedup" ||
-		strings.HasPrefix(key, "_routing")
+		IsRoutingLayerKey(key)
 }
 
 // declaredAnywhere reports whether the platform recognises this exact key on
