@@ -44,12 +44,21 @@ var ErrRegistryReset = errors.New("account: AccountID registry is blank or missi
 type Allocator struct {
 	s     RegistryStore
 	fleet FleetSize
+	hw    HighWater
 }
 
 // NewAllocator builds an Allocator over the state store. fleet may be nil
 // (no runtime reset check — tests of the pure allocation logic).
 func NewAllocator(s RegistryStore, fleet FleetSize) *Allocator {
 	return &Allocator{s: s, fleet: fleet}
+}
+
+// WithHighWater makes every allocation check the registry against hw first
+// and record the new id in hw before the registry write (#2928; see
+// highwater.go). Without it the allocator trusts the registry alone.
+func (a *Allocator) WithHighWater(hw HighWater) *Allocator {
+	a.hw = hw
+	return a
 }
 
 // parseGuarded parses the current record, refusing a blank one while the
@@ -83,14 +92,25 @@ func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail s
 		if err != nil {
 			return nil, err
 		}
-		id, changed, err := reg.ensure(tenantID)
+		if id, ok := reg.Lookup(tenantID); ok {
+			allocated = id
+			// Idempotent: no registry write. A lagging mark is still
+			// brought up to what the registry accounts for.
+			return nil, raiseHighWater(ctx, a.hw, reg.NextAccountID)
+		}
+		if err := guardAgainstHighWater(ctx, a.hw, reg); err != nil {
+			return nil, err
+		}
+		id, _, err := reg.ensure(tenantID)
 		if err != nil {
 			return nil, err
 		}
-		allocated = id
-		if !changed {
-			return nil, nil // idempotent: already allocated → no write
+		// The mark first: a failure after this leaves it ahead of the
+		// registry, which the next allocation skips past.
+		if err := raiseHighWater(ctx, a.hw, reg.NextAccountID); err != nil {
+			return nil, err
 		}
+		allocated = id
 		return reg.Marshal()
 	}
 	if _, err := a.s.Mutate(ctx, RegistryFileName, statestore.Meta{Entity: commitEntity, Author: authorEmail}, transform); err != nil {
@@ -133,6 +153,9 @@ func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmai
 		if err != nil {
 			return nil, err
 		}
+		if err := guardAgainstHighWater(ctx, a.hw, reg); err != nil {
+			return nil, err
+		}
 		anyChange := false
 		for _, t := range ids {
 			if t == "" {
@@ -149,7 +172,12 @@ func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmai
 			anyChange = true
 		}
 		if !anyChange {
-			return nil, nil // nobody needed an id → no write
+			// nobody needed an id → no write; bring a lagging mark up
+			return nil, raiseHighWater(ctx, a.hw, reg.NextAccountID)
+		}
+		// The mark first, at the last id of the batch.
+		if err := raiseHighWater(ctx, a.hw, reg.NextAccountID); err != nil {
+			return nil, err
 		}
 		return reg.Marshal()
 	}

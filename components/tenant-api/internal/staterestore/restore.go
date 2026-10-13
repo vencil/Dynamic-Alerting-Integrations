@@ -151,6 +151,9 @@ type Options struct {
 	Keys []string
 	// Tokens are the ids live logs tokens carry (token.LiveLogsAccounts).
 	Tokens []account.TokenAllocation
+	// Limits bound the merged registry's counter from below (the AccountID
+	// high-water mark, #2928).
+	Limits account.RestoreLimits
 	DryRun bool
 	// Author is recorded in each write's audit event.
 	Author string
@@ -183,7 +186,7 @@ func Run(ctx context.Context, s statestore.Store, bak Backup, o Options, out io.
 	if err != nil {
 		return err
 	}
-	_, rep, err := account.MergeForRestore(cur, bak[statestore.KeyAccountRegistry], o.Tokens)
+	_, rep, err := account.MergeForRestore(cur, bak[statestore.KeyAccountRegistry], o.Tokens, o.Limits)
 	if err != nil {
 		return err
 	}
@@ -192,7 +195,7 @@ func Run(ctx context.Context, s statestore.Store, bak Backup, o Options, out io.
 		if _, err := s.Mutate(ctx, statestore.KeyAccountRegistry,
 			statestore.Meta{Entity: registryEntity, Author: o.Author, Notes: []string{"state restore (merge)"}},
 			func(cur []byte) ([]byte, error) {
-				reg, _, err := account.MergeForRestore(cur, bak[statestore.KeyAccountRegistry], o.Tokens)
+				reg, _, err := account.MergeForRestore(cur, bak[statestore.KeyAccountRegistry], o.Tokens, o.Limits)
 				if err != nil {
 					return nil, err
 				}

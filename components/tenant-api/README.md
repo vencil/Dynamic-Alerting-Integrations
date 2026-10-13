@@ -472,7 +472,7 @@ kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state-
 cp -a /state ./tenant-api-state-backup
 ```
 
-⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。還原後的帳本格式完全正常，所以只有在仍有有效 logs token 時，開機檢查（見下）才看得出來；運行中的 pod 不會察覺，會照常從倒退的計數器配發。
+⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。還原後的帳本格式完全正常；擋住它的是 AccountID 高水位（見下）：倒退超過一筆時，運行中的 pod 拒絕配發、重啟的 pod 拒絕啟動，直到用 `state restore` 合併回去。
 
 還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點）：
 
@@ -484,11 +484,12 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 ```
 
 - `--from`：`kubectl get configmap ... -o yaml` 或 `-o json` 的輸出檔、dir 模式的目錄，或 `-` 讀標準輸入。備份至少要有一筆紀錄、且每個 key 都是 tenant-api 的 state 紀錄；其他 ConfigMap（例如 `threshold-config`、federation token store）或 conf.d 目錄會被拒絕（rc 1），不會被當成空備份「還原成功」。
-- **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份、聯集中最大 id + 1 三者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
+- **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份、聯集中最大 id + 1、AccountID 高水位 + 1 四者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
 - **其他紀錄只有列在 `--keys` 才整筆覆蓋**；沒列的會印在「not restored」一行。
-- 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id`；讀不到就拒絕還原。
+- 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id` 與 AccountID 高水位；讀不到就拒絕還原。
 - dir 模式下伺服器與子命令以檔案鎖（flock）序列化寫入，伺服器運行中也可以還原。
 - 結束碼：0 完成（或 dry run 完成）、1 拒絕或失敗、2 用法錯誤。
+- **AccountID 高水位**（[#2928](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2928)）：配發過的最大 AccountID 另記在 federation token store ConfigMap 的 annotation `tenant-api.vibe/account-id-high-water`，不在 `tenant-api-state` 裡，所以蓋回舊備份不會讓它倒退。每次配發先寫高水位再寫帳本，配發前比對：帳本的 `next_account_id` 落後高水位超過一筆就拒絕配發（HTTP 500）、開機時拒絕啟動；剛好落後一筆（上次高水位寫成、帳本寫入失敗）就跳過那個號，記一筆 `account_id_high_water_skip` WARN；高水位落後（升級後第一次啟動）就補齊。⚠️ 升級後第一次啟動以當下帳本為基準。能改 token store ConfigMap 的人也能改小高水位，這部分交給叢集 RBAC。
 - 啟用 federation 時，tenant-api 開機會比對有效 logs token 與帳本：token 的 `account_id` ≥ `next_account_id`、或與帳本對該租戶的配發不一致，就拒絕啟動並列出不一致的 token。帳本被舊備份蓋回時就是這個形狀；用 `state restore` 以同一份備份重做還原即可把這些 id 併回。此時 pod 起不來（CrashLoopBackOff），`kubectl exec` 進不去；改用 `kubectl debug` 複製一個 pod 並把主程式換成子命令（沿用同一個 ServiceAccount、`TA_*` 環境變數與掛載）：
 
   ```bash
@@ -498,7 +499,7 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
   kubectl -n tenant-api delete pod tenant-api-restore   # 用完刪掉
   ```
 
-⚠️ 已知限制：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
+⚠️ 已知限制：token 紀錄只保留到過期為止，而高水位與 token 紀錄同在 federation token store ConfigMap；這份 ConfigMap 也一起被還原成舊版（預設兩者在同一個 namespace，整個 namespace 從備份還原時就是如此）、帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
 
 ## 開發
 

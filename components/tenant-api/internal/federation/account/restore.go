@@ -61,18 +61,28 @@ func (r RestoreReport) Changed() bool {
 	return len(r.Added) > 0 || r.NextAfter != r.NextBefore
 }
 
+// RestoreLimits are the bounds a merged registry's counter must clear
+// besides the three sources' own ids.
+type RestoreLimits struct {
+	// HighWater is the AccountID high-water mark (#2928): every id up to it
+	// has been allocated at some point, recorded or not, so the merged
+	// counter goes above it. 0 when there is no mark.
+	HighWater uint32
+}
+
 // MergeForRestore merges the backup registry and the ids live logs tokens
 // carry into the current registry:
 //
 //   - allocations are the union of the three; a tenant held at two
 //     different ids, or an id held by two tenants, is a conflict and the
 //     whole merge is refused (RestoreConflictError);
-//   - next_account_id is the largest of the current one, the backup's, and
-//     one above the largest id in the union — it never decreases.
+//   - next_account_id is the largest of the current one, the backup's, one
+//     above the largest id in the union, and one above lim.HighWater — it
+//     never decreases.
 //
 // current may be blank (a lost registry), as may backup. Both must
 // otherwise pass Parse. The result passes Parse.
-func MergeForRestore(current, backup []byte, tokens []TokenAllocation) (*Registry, RestoreReport, error) {
+func MergeForRestore(current, backup []byte, tokens []TokenAllocation, lim RestoreLimits) (*Registry, RestoreReport, error) {
 	cur, err := Parse(current)
 	if err != nil {
 		return nil, RestoreReport{}, fmt.Errorf("current registry: %w", err)
@@ -156,6 +166,12 @@ func MergeForRestore(current, backup []byte, tokens []TokenAllocation) (*Registr
 			}
 			next = id + 1
 		}
+	}
+	if lim.HighWater >= next {
+		if lim.HighWater == ^uint32(0) {
+			return nil, RestoreReport{}, fmt.Errorf("account: id space exhausted at %d", lim.HighWater)
+		}
+		next = lim.HighWater + 1
 	}
 	merged.NextAccountID = next
 

@@ -41,6 +41,7 @@ that "helpfully" moved with the Role would grant nothing at all.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -201,3 +202,26 @@ def test_role_moves_rather_than_being_duplicated() -> None:
             if d.get("kind") == kind and d["metadata"]["name"].endswith("-federation")
         ]
         assert found == [_CONSUMER_NS], f"{kind} rendered {found}, expected exactly [{_CONSUMER_NS!r}]"
+
+
+def test_data_move_guard_also_counts_the_account_id_high_water_mark() -> None:
+    """#2928: the store ConfigMap also carries the AccountID high-water mark as
+    an annotation. A store with no live tokens can still hold it, so the guard
+    must count it as data — and look for it under the exact name tenant-api
+    writes, or the check is inert while reading as present.
+
+    Like the guard above, its firing needs a real cluster (``lookup``); what is
+    pinned here is the name agreeing across the Go constant and the template.
+    """
+    go_src = (_REPO_ROOT / "components/tenant-api/internal/federation/token/highwater.go").read_text(encoding="utf-8")
+    m = re.search(r'^const HighWaterAnnotation = "([^"]+)"$', go_src, re.MULTILINE)
+    assert m, "token.HighWaterAnnotation is gone or no longer a plain string constant"
+    name = m.group(1)
+    tmpl = (_CHART / "templates/configmap-federation-store.yaml").read_text(encoding="utf-8")
+    assert f'$old.metadata.annotations | default dict) "{name}"' in tmpl, (
+        f"the data-move guard does not read the {name!r} annotation off the old "
+        "store — moving the namespace would strand the AccountID high-water mark"
+    )
+    assert "(or $stranded $highWater)" in tmpl, (
+        "the guard reads the high-water mark but no longer refuses on it"
+    )
