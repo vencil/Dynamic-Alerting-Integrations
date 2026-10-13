@@ -3114,13 +3114,13 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--tenant` | 只顯示指定 tenant（可多次指定） | (全部) |
 | `--show-profile-expansion` | 顯示所有路由設定檔的展開與引用關係 | `false` |
 | `--trace` | 追蹤模式：由 Alertmanager（`amtool`）判定一則 alert 的路由路徑（需搭配 `--tenant`；需 PATH 上有 `amtool`） | `false` |
-| `--alertname` | 追蹤的 alert 名稱（搭配 `--trace`） | `GenericAlert` |
-| `--severity` | 追蹤的 alert 嚴重度（搭配 `--trace`） | `warning` |
+| `--alertname` | 追蹤的 alert 名稱（只在 `--trace` 下讀取） | `GenericAlert` |
+| `--severity` | 追蹤的 alert 嚴重度（只在 `--trace` 下讀取） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
 | `--base-config` | 追蹤用的 base Alertmanager YAML：`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
-`--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group`，以及 `routes` 裡 `alertname`／`severity`／`tenant` 以外的 `match` key，只能經 `--label` 帶入，否則追蹤不會命中那條子路由。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
+`--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group`，以及 `routes` 裡 `alertname`／`severity`／`tenant` 以外的 `match` key，只能經 `--label` 帶入，否則追蹤不會命中那條子路由。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。沒有 `--trace` 卻給 `--alertname`／`--severity`（即使給的就是預設值）同樣以結束碼 `2` 拒絕（[#2926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2926)）。
 
 `--trace` 的 step 4 列出生效的 inhibit rules（組好的設定裡的原文，含 `--base-config` 自帶的規則），不評估告警是否會被抑制——那取決於執行時同時 firing 的告警。
 
