@@ -3128,13 +3128,13 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--tenant` | Show only specified tenant(s) (repeatable) | (all) |
 | `--show-profile-expansion` | Show all routing profile expansions and references | `false` |
 | `--trace` | Trace mode: one alert's routing path as Alertmanager (`amtool`) decides it (requires `--tenant`; needs `amtool` on PATH) | `false` |
-| `--alertname` | Alert name to trace (with `--trace`) | `GenericAlert` |
-| `--severity` | Alert severity to trace (with `--trace`) | `warning` |
+| `--alertname` | Alert name to trace (read only with `--trace`) | `GenericAlert` |
+| `--severity` | Alert severity to trace (read only with `--trace`) | `warning` |
 | `--label` | Extra alert label for the trace, as `KEY=VALUE` (repeatable; read only with `--trace`) | (none) |
 | `--base-config` | Base Alertmanager YAML for the trace: `route.routes` is replaced by the generated routes (read only with `--trace`) | built-in base (same as `generate_alertmanager_routes --validate`) |
 | `--json` | Output in JSON format | `false` |
 
-The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group`, or a `routes` `match` key other than `alertname` / `severity` / `tenant`, can only be supplied through `--label`, otherwise the trace does not reach that sub-route. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)).
+The `--trace` alert labels are built from `--alertname`, `--severity`, `--tenant` and `--label`; an `overrides` `metric_group`, or a `routes` `match` key other than `alertname` / `severity` / `tenant`, can only be supplied through `--label`, otherwise the trace does not reach that sub-route. `--label` splits on the first `=` (the value may contain `=` and may be empty); a missing `=`, a key that is not a valid label name, a key of `alertname` / `severity` / `tenant` (use the matching flag instead), a repeated key, or `--label` without `--trace` are all rejected with exit code `2` ([#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)). `--alertname` / `--severity` without `--trace` are rejected with exit code `2` as well, even when the value given is the default ([#2926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2926)).
 
 Step 4 of `--trace` lists the effective inhibit rules (verbatim from the assembled config, including the `--base-config`'s own rules) and does not evaluate whether the alert would be inhibited — that depends on which alerts are firing at the same time.
 

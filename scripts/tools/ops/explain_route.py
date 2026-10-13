@@ -1210,12 +1210,14 @@ _HELP = {
               "decides it (requires --tenant; needs amtool on PATH)",
     },
     "alertname": {
-        "zh": "追蹤的 alert 名稱（搭配 --trace）",
-        "en": "Alert name to trace (use with --trace)",
+        "zh": "追蹤的 alert 名稱（只在 --trace 下讀取；預設 GenericAlert）",
+        "en": "Alert name to trace (read only with --trace; "
+              "default: GenericAlert)",
     },
     "severity": {
-        "zh": "Alert 嚴重度（預設 warning）",
-        "en": "Alert severity (default: warning)",
+        "zh": "追蹤的 alert 嚴重度（只在 --trace 下讀取；預設 warning）",
+        "en": "Alert severity to trace (read only with --trace; "
+              "default: warning)",
     },
     "base_config": {
         "zh": "追蹤用的 base Alertmanager YAML（route.routes 會被產生的路由整份"
@@ -1235,6 +1237,19 @@ _HELP = {
 }
 
 
+class _StoreTraceInput(argparse.Action):
+    """Store the value and record that the flag was given (#2926).
+
+    --alertname / --severity keep their defaults, so the value alone cannot
+    tell "given" from "defaulted"; main() refuses a given one without --trace.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        given = getattr(namespace, "given_trace_inputs", [])
+        namespace.given_trace_inputs = [*given, self.option_strings[0]]
+
+
 def main(argv: list[str] | None = None) -> int:
     lang = detect_cli_lang()
 
@@ -1251,9 +1266,9 @@ def main(argv: list[str] | None = None) -> int:
                         help=_h("show_profile_expansion"))
     parser.add_argument("--trace", action="store_true", help=_h("trace"))
     parser.add_argument("--alertname", default="GenericAlert",
-                        help=_h("alertname"))
+                        action=_StoreTraceInput, help=_h("alertname"))
     parser.add_argument("--severity", default="warning",
-                        help=_h("severity"))
+                        action=_StoreTraceInput, help=_h("severity"))
     parser.add_argument("--label", action="append", dest="labels",
                         metavar="KEY=VALUE", help=_h("label"))
     parser.add_argument("--base-config", default=None, metavar="PATH",
@@ -1268,6 +1283,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--label is read only with --trace")
     if args.base_config is not None and not args.trace:
         parser.error("--base-config is read only with --trace")
+    # #2926: same for --alertname / --severity, which have defaults.
+    given = getattr(args, "given_trace_inputs", [])
+    if given and not args.trace:
+        parser.error(f"{given[0]} is read only with --trace")
     try:
         extra_labels = parse_label_args(args.labels)
     except ValueError as exc:

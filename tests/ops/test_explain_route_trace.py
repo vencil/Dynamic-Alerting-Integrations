@@ -292,6 +292,35 @@ class TestTraceLabelCli:
         assert exc.value.code == 2
         assert "only with --trace" in capsys.readouterr().err
 
+    @pytest.mark.parametrize("flag, value", [
+        ("--alertname", "A"), ("--severity", "critical"),
+        # The default value, given explicitly, is still ignored without --trace.
+        ("--severity", "warning"),
+    ])
+    def test_trace_input_without_trace_is_caller_error(
+            self, capsys, label_conf, flag, value):
+        """#2926: these have defaults, so they used to be dropped silently."""
+        with pytest.raises(SystemExit) as exc:
+            er.main(["--config-dir", str(label_conf), flag, value])
+        assert exc.value.code == 2
+        captured = capsys.readouterr()
+        assert f"{flag} is read only with --trace" in captured.err
+        assert captured.out == ""
+
+    @pytest.mark.parametrize("flag, value, key", [
+        ("--alertname", "A", "alertname"), ("--severity", "critical", "severity"),
+    ])
+    def test_trace_input_with_trace_reaches_the_trace(
+            self, capsys, label_conf, flag, value, key):
+        """Control for the test above: same flag, now under --trace."""
+        trace = _run_trace(capsys, label_conf, flag, value)
+        assert trace["labels"][key] == value
+
+    def test_trace_inputs_default_when_not_given(self, capsys, label_conf):
+        trace = _run_trace(capsys, label_conf)
+        assert trace["labels"]["alertname"] == "GenericAlert"
+        assert trace["labels"]["severity"] == "warning"
+
     def test_control_chars_in_bad_label_are_escaped(self, capsys, label_conf):
         with pytest.raises(SystemExit):
             er.main(["--config-dir", str(label_conf), "--tenant", _DEMO,
