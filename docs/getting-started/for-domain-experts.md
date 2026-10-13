@@ -268,18 +268,17 @@ lint 的對象是 Prometheus 規則檔，不是租戶配置（租戶配置用上
 ```yaml
 _policies:
   - name: require-routing
-    target: "*"
-    check: required
-    path: "_routing"
+    target: "_routing"
+    operator: required
     severity: error
   - name: max-connections-cap
     target: "mysql_connections"
-    check: lte
+    operator: lte
     value: 500
     severity: warning
 ```
 
-執行：`da-tools evaluate-policy --config-dir conf.d/ --ci`。支援 10 種運算子、`when` 條件式、萬用字元目標。
+執行：`da-tools evaluate-policy --config-dir conf.d/ --ci`。運算子寫在 `operator:`，沒寫時預設 `required`；可用的運算子、`when` 條件式與萬用字元目標見 [CLI 參考 evaluate-policy](../cli-reference.md#evaluate-policy)。`severity: warning` 的違規只報告，`--ci` 不會因此失敗。
 
 ### Cross-Domain Routing Profiles & Domain Policies (v2.1.0 ADR-007)
 
