@@ -190,6 +190,10 @@ func Run(ctx context.Context, s statestore.Store, bak Backup, o Options, out io.
 	if err != nil {
 		return err
 	}
+	if o.Limits.Margin > 0 && len(bytes.TrimSpace(bak[statestore.KeyAccountRegistry])) > 0 {
+		fmt.Fprintf(out, "%s: next_account_id at least %d above the backup's (#2928: ids allocated after the backup may be recorded nowhere)\n",
+			statestore.KeyAccountRegistry, o.Limits.Margin)
+	}
 	reportRegistry(out, rep)
 	if !o.DryRun && rep.Changed() {
 		if _, err := s.Mutate(ctx, statestore.KeyAccountRegistry,
