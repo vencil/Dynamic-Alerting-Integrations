@@ -1,0 +1,258 @@
+# config-diff-advisory.yml — config-diff on rendered output, advisory run
+# (ADR-037 decision 6, step 1).
+#
+# Runs `config_diff.py` from THIS checkout (not a published image) against
+# the platform's own conf.d tree: the PR side is the checkout, the base side
+# is the merge-base checked out into a second worktree, and both are rendered
+# by a da-guard built from the same checkout. It posts one sticky comment and
+# uploads the Markdown and JSON reports as an artifact.
+#
+# ⛔ ADVISORY: this never blocks a merge.
+#   * config-diff exit 0 (no change) and 1 (a change, or something not
+#     compared) are both normal results;
+#   * exit 2 (no result: the PR side or a tool failed) is a `::warning::`
+#     and the comment says so — the job stays green;
+#   * the job is NOT a required status check, and must not be made one until
+#     the exit criteria below are met (that is ADR-037 decision 6, step 2).
+#   Only this workflow's own plumbing failing (git, the da-guard build) turns
+#   the job red: that is a bug in the workflow, not a verdict on the PR.
+#   `tests/ops/test_config_diff_advisory_workflow.py` runs the steps' shell
+#   to hold both directions.
+#
+# Owner: @vencil. Start date: the day the PR adding this file merged; it is
+# recorded on #1516.
+#
+# Exit criteria (to become a required check), all of them:
+#   * at least 20 triggering PRs or 6 weeks from the start date, whichever is
+#     LATER; a triggering PR is one that changes the conf.d tree below (a PR
+#     that only changes the tool runs this too, but does not count);
+#   * 0 false reports and 0 missed changes found afterwards in that period;
+#   * a 1000-tenant tree compared within 5 minutes.
+#
+# Recording a false report or a missed change: one comment on #1516 per case,
+# first line `config-diff advisory: false report` or
+# `config-diff advisory: missed change`, then the PR number, the commit the
+# sticky comment was stamped with, what the report said (or did not say),
+# and what the config change actually did.
+#
+# What triggers it: the platform's conf.d tree, config-diff and the modules
+# that decide what it compares (the renderers, the masking, which files count
+# as config files), and this file. ⚠️ Not everything the result depends on is
+# in the list — the da-guard Go sources and the other shared `_lib_*` modules
+# are not — so a change there alone does not run this; the next conf.d PR
+# does.
+#
+# A PR from a fork gets a read-only token: the comment step then fails and
+# the job is red although the report was computed (it is in the artifact).
+# The sibling report workflows behave the same way.
+
+name: Config Diff (rendered, advisory)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "components/threshold-exporter/config/conf.d/**"
+      - "scripts/tools/ops/config_diff.py"
+      - "scripts/tools/ops/_render_diff.py"
+      - "scripts/tools/ops/generate_alertmanager_routes.py"
+      - "scripts/tools/ops/_grar_*.py"
+      - "scripts/tools/_lib_redact.py"
+      - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/_threshold_alerts.py"
+      - "scripts/tools/_lib_tenant_values.py"
+      - ".github/workflows/config-diff-advisory.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# ⛔ One run per pull request (#1518). Why the PR number and not the ref, and
+# why other events never cancel: see the block of the same shape in
+# blast-radius.yml. `tests/ops/test_pr_report_workflow_concurrency.py`
+# evaluates both expressions per event.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  config-diff:
+    name: Config Diff Advisory (rendered)
+    runs-on: ubuntu-24.04
+    env:
+      CONF_D: components/threshold-exporter/config/conf.d
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # the merge-base and its commit time
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-guard
+        run: |
+          cd components/threshold-exporter/app
+          go build -buildvcs=false \
+              -ldflags "-X main.Version=ci-$GITHUB_SHA" \
+              -o "$RUNNER_TEMP/da-guard" \
+              ./cmd/da-guard
+          "$RUNNER_TEMP/da-guard" --version
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      # The base side is the merge-base, checked out whole into a second
+      # worktree, so config-diff reads it as a directory like the PR side.
+      # `--at` is that commit's time: the time-dependent settings (schedules,
+      # silences, maintenance windows) are read at one instant on both sides,
+      # and a re-run of this job gives the same answer. Without `--at` the
+      # tool would read them at the time of the run.
+      # ⛔ Every failure here is fatal. A base side that is silently missing
+      # or empty makes every tenant read as added (see
+      # tests/ops/test_ci_baseline_substitution.py for why that is worse
+      # than no report).
+      - name: Check out the base side
+        id: base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if ! git rev-parse --verify --quiet "origin/${BASE_REF}^{commit}" >/dev/null; then
+            echo "::error::base ref origin/${BASE_REF} does not resolve — the checkout step must keep fetch-depth: 0"
+            exit 1
+          fi
+          if ! mb=$(git merge-base "origin/${BASE_REF}" HEAD); then
+            echo "::error::origin/${BASE_REF} and HEAD have no merge base (or git failed) — there is no base side to compare against"
+            exit 1
+          fi
+          if ! git worktree add --detach "$RUNNER_TEMP/base" "$mb"; then
+            echo "::error::could not check out the merge-base $mb into $RUNNER_TEMP/base — refusing to compare against a missing base side"
+            exit 1
+          fi
+          # config-diff takes a missing --old-dir as a first import (every
+          # tenant added), so a base without this tree must stop here.
+          if [ ! -d "$RUNNER_TEMP/base/$CONF_D" ]; then
+            echo "::error::the merge-base $mb has no $CONF_D — did the tree move? Update CONF_D rather than compare against nothing"
+            exit 1
+          fi
+          if ! at=$(git show -s --format=%cI "$mb") || [ -z "$at" ]; then
+            echo "::error::cannot read the commit time of the merge-base $mb"
+            exit 1
+          fi
+          echo "Base side: $mb ($at)"
+          {
+            echo "sha=$mb"
+            echo "at=$at"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run config-diff
+        id: diff
+        env:
+          AT: ${{ steps.base.outputs.at }}
+          BASE_TREE: ${{ runner.temp }}/base
+          DA_GUARD_BINARY: ${{ runner.temp }}/da-guard
+        # ⛔ `set +e`: the runner's default shell is `bash -e`, so without it
+        # config-diff's exit 1 ("a change") would end the step right there.
+        run: |
+          set +e -uo pipefail
+          out="$RUNNER_TEMP/config-diff"
+          mkdir -p "$out"
+          if [ -z "${AT:-}" ]; then
+            echo "::error::the base step wrote no commit time — refusing to run without --at, which would read the time-dependent settings at the time of the run"
+            exit 1
+          fi
+          python3 scripts/tools/ops/config_diff.py \
+            --old-dir "$BASE_TREE/$CONF_D" --new-dir "$CONF_D" \
+            --at "$AT" --format markdown > "$out/report.md"
+          rc=$?
+          python3 scripts/tools/ops/config_diff.py \
+            --old-dir "$BASE_TREE/$CONF_D" --new-dir "$CONF_D" \
+            --at "$AT" --format json > "$out/report.json"
+          json_rc=$?
+          case "$rc" in
+            0|1) ;;
+            2) echo "::warning::config-diff exited 2: no result (the PR side or a tool failed). Advisory: this does not block the merge." ;;
+            *) echo "::warning::config-diff exited $rc, which is outside its contract (0, 1, 2). Advisory: this does not block the merge." ;;
+          esac
+          if [ "$json_rc" != "$rc" ]; then
+            echo "::warning::the Markdown run exited $rc and the JSON run exited $json_rc on the same inputs"
+          fi
+          if [ ! -s "$out/report.md" ]; then
+            echo "::warning::config-diff exited $rc and wrote no Markdown report"
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post sticky PR comment
+        uses: actions/github-script@v9
+        env:
+          DIFF_EXIT: ${{ steps.diff.outputs.rc }}
+          REPORT_PATH: ${{ runner.temp }}/config-diff/report.md
+        with:
+          script: |
+            const fs = require('fs');
+            const rc = process.env.DIFF_EXIT || 'unknown';
+            const reportPath = process.env.REPORT_PATH;
+            const report = fs.existsSync(reportPath) ? fs.readFileSync(reportPath, 'utf8') : '';
+            // An empty report is said out loud: a sticky comment that keeps
+            // the previous text would look like this run's result.
+            const body0 = report.trim()
+              ? report
+              : `_config-diff exited ${rc} and wrote no report; see the run log._\n`;
+            // ⛔ Provenance — see the equivalent block in blast-radius.yml.
+            const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);
+            const runUrl = context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId;
+            const stamp = '\n<sub>commit `' + sha + '` • [run log](' + runUrl + ')</sub>\n';
+            const marker = '<!-- config-diff-advisory -->';
+            const head = '## 🧪 Config Diff — rendered (advisory)\n\n'
+              + '> Advisory run of config-diff on rendered output (ADR-037). It does not block the merge. '
+              + 'A wrong line or a missed change: comment on #1516 as the header of '
+              + '`.github/workflows/config-diff-advisory.yml` describes.\n\n';
+            const footer = `\n\n---\n*Generated by [config-diff](../blob/main/scripts/tools/ops/config_diff.py) from this checkout • exit code: \`${rc}\`*\n${stamp}`;
+            const body = `${marker}\n${head}${body0}${footer}`;
+            // paginate, not one listComments call: that returns only the first
+            // 30 comments, and a marker past them means a NEW comment every run (#2485).
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # Kept for the length of the advisory period, so a report can be
+      # re-read when a missed change surfaces weeks later.
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: config-diff-advisory
+          path: |
+            ${{ runner.temp }}/config-diff/report.md
+            ${{ runner.temp }}/config-diff/report.json
+          retention-days: 90
+          if-no-files-found: warn
