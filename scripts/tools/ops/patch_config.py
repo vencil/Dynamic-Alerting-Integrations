@@ -54,7 +54,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
-from _lib_python import format_json_report  # noqa: E402
+from _lib_python import format_json_report, positive_seconds  # noqa: E402
 from _lib_io import (  # noqa: E402
     find_duplicate_key,         # #2123 shared check
     strict_load_for_rewrite,    # #2216 / #2237 / #2220: text keys, plain values as written
@@ -1491,28 +1491,18 @@ def build_parser():
         help=f"Container port name or number of their HTTP listener "
              f"(default: {EXPORTER_PORT})")
     parser.add_argument(
-        "--reload-timeout", type=_positive_seconds, default=RELOAD_TIMEOUT_S,
+        "--reload-timeout", type=positive_seconds, default=RELOAD_TIMEOUT_S,
         metavar="SECONDS",
         help=f"Deadline that ends apply's wait for every pod to serve the "
              f"written bytes, checked between polling passes "
              f"(default: {RELOAD_TIMEOUT_S:g})")
     parser.add_argument(
-        "--poll-interval", type=_positive_seconds, default=POLL_INTERVAL_S,
+        "--poll-interval", type=positive_seconds, default=POLL_INTERVAL_S,
         metavar="SECONDS",
         help=f"How often it reads each pod's /api/v1/config/identity (an "
              f"older exporter's `Last reload`) meanwhile "
              f"(default: {POLL_INTERVAL_S:g})")
     return parser
-
-
-def _positive_seconds(text):
-    try:
-        seconds = float(text)
-    except ValueError:
-        seconds = float("nan")
-    if not seconds > 0 or seconds == float("inf"):
-        raise argparse.ArgumentTypeError(f"not a positive number of seconds: {text!r}")
-    return seconds
 
 
 def _envelope(status, reason):

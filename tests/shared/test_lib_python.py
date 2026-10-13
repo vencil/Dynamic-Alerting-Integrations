@@ -165,6 +165,28 @@ class TestParseDurationSeconds:
 
 
 # ============================================================
+# positive_seconds (#2942)
+# ============================================================
+
+class TestPositiveSeconds:
+    @pytest.mark.parametrize("text, expected", [
+        ("30", 30.0), ("0.5", 0.5), ("1e-3", 0.001), (" 2 ", 2.0),
+        ("9223372036", 9223372036.0),          # threading.TIMEOUT_MAX
+    ])
+    def test_accepts_finite_above_zero(self, text, expected):
+        assert lib.positive_seconds(text) == expected
+
+    @pytest.mark.parametrize("text", [
+        "0", "0.0", "-0", "-1", "-0.5", "nan", "inf", "-inf", "abc", "",
+        "9223372037", "1e10", "1e308",        # past TIMEOUT_MAX: OverflowError later
+    ])
+    def test_refuses_the_rest(self, text):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError):
+            lib.positive_seconds(text)
+
+
+# ============================================================
 # format_duration
 # ============================================================
 

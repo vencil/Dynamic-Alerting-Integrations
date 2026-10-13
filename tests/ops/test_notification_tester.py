@@ -684,6 +684,42 @@ class TestCLI:
                 except SystemExit as e:
                     assert e.code == 0 or e.code is None
 
+    @pytest.mark.parametrize("value", ["0", "-1", "nan"])
+    def test_timeout_must_be_above_zero(self, tmp_path, capsys, value):
+        """#2957: 0 reported a healthy receiver as CONNECTION_REFUSED and a
+        negative value crashed; both are refused before any request."""
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", routing={"receiver": {"type": "webhook",
+                                          "url": "https://hooks.example.com"}}))
+        with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
+                                 "--timeout", value]):
+            with patch("notification_tester.urllib.request.urlopen") as mock_urlopen:
+                with pytest.raises(SystemExit) as exc_info:
+                    nt.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert "--timeout" in capsys.readouterr().err
+        mock_urlopen.assert_not_called()
+
+    def test_fractional_timeout_reaches_urlopen(self, tmp_path):
+        """Control for the test above: a value above 0 is accepted as is."""
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", routing={"receiver": {"type": "webhook",
+                                          "url": "https://hooks.example.com"}}))
+        resp = MagicMock()
+        resp.read.return_value = b'{}'
+        resp.status = 200
+        resp.__enter__ = lambda s: s
+        resp.__exit__ = MagicMock(return_value=False)
+        with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
+                                 "--rate-limit", "0", "--timeout", "0.5"]):
+            with patch("notification_tester.urllib.request.urlopen",
+                       return_value=resp) as mock_urlopen:
+                try:
+                    nt.main()
+                except SystemExit as e:
+                    assert e.code in (0, None)
+        assert mock_urlopen.call_args.kwargs["timeout"] == 0.5
+
     def test_dry_run_cli(self, tmp_path):
         """CLI --dry-run 應正常完成。"""
         yaml_content = make_tenant_yaml(

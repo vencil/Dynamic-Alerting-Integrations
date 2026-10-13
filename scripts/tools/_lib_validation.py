@@ -5,9 +5,12 @@ Import via _lib_python.py facade for backward compatibility.
 """
 from __future__ import annotations
 
+import argparse
 import json
+import math
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -56,6 +59,27 @@ def parse_duration_seconds(value: Union[str, int, float, None]) -> Optional[int]
     if not m:
         return None
     return int(float(m.group(1)) * _DURATION_MULTIPLIERS[m.group(2)])
+
+
+def positive_seconds(value: str) -> float:
+    """argparse ``type=`` for a timeout or interval in seconds (#2942).
+
+    A finite number above 0 and at most ``threading.TIMEOUT_MAX`` (about 292
+    years), fractions allowed; anything else is refused, so argparse exits 2
+    (CALLER_ERROR) before any work. A ``urllib`` timeout of 0 makes the socket
+    non-blocking (every call fails at once), a negative one raises ValueError,
+    and one past TIMEOUT_MAX raises OverflowError in ``socket.settimeout`` /
+    ``time.sleep``: none is a usable value.
+    """
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {value!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0 or seconds > threading.TIMEOUT_MAX:
+        raise argparse.ArgumentTypeError(
+            f"must be a number of seconds above 0 and at most "
+            f"{threading.TIMEOUT_MAX:.0f}: {value!r}")
+    return seconds
 
 
 def format_duration(seconds: int) -> str:

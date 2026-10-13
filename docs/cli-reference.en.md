@@ -3045,6 +3045,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--auth-token` | Bearer token (oauth2-proxy mode; or `$DA_GOVERN_TOKEN`) | - |
 | `--auth-token-file` | Path to a Bearer token file (K8s audience-bound projected SA token, read at call time; or `$DA_GOVERN_TOKEN_FILE`) | - |
 | `--throttle-seconds` | Seconds to pause between opened PRs | `2` |
+| `--timeout` | HTTP timeout in seconds for the tenant-api calls (GET / PUT), used only with `--apply`; Prometheus queries are not affected. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)) | `30` |
 | `--json` | JSON output | - |
 
 > **Gate**: only recommendations with \|delta\| >= `--min-delta-pct` AND confidence ∈ {HIGH, MEDIUM} (never act on a thin sample — anti-broken-window), and **lower-bound `force_manual` is excluded** (a floor recommendation that would relax / is out-of-domain / rests on a thin sample never auto-opens a PR). **Dedup**: the tenant-api returns 409 when a PR for that tenant is already open → treated as already-in-flight and skipped, so re-runs don't spam duplicates. **Channel isolation**: the PUT carries `X-DA-Write-Source: threshold-governance` → the PR gets its own label / title / source instead of masquerading as a tenant-manager UI edit, and never touches the alert plane. The read-modify-write surgically replaces only the recommended value lines (comments preserved → clean PR diff). Recommendation logic / data source are reused verbatim from `threshold-recommend` (Day-N observed recording rule, #719).
@@ -3076,7 +3077,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | Validate URL format only, do not send | - |
 | `--json` | JSON output | - |
 | `--ci` | CI mode: exit 1 if any receiver fails | - |
-| `--timeout` | Connection timeout per receiver in seconds | `10` |
+| `--timeout` | Connection timeout per receiver in seconds. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
 | `--rate-limit` | Seconds to wait between each test | `0.5` |
 
 **Supported Receiver Types**

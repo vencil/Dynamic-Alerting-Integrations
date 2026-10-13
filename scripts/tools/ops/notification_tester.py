@@ -66,6 +66,7 @@ from _lib_python import (  # noqa: E402
     receiver_field_state,
     FIELD_SET,
     exit_on_yaml_file_error,
+    positive_seconds,
 )
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
@@ -102,8 +103,8 @@ _HELP = {
         'en': 'CI mode: exit 1 if any receiver fails',
     },
     'timeout': {
-        'zh': '每個 receiver 的連線逾時秒數（預設 10）',
-        'en': 'Connection timeout per receiver in seconds (default: 10)',
+        'zh': '每個 receiver 的連線逾時秒數（> 0，可帶小數；預設 10）',
+        'en': 'Connection timeout per receiver in seconds (> 0, fractions allowed; default: 10)',
     },
     'rate_limit': {
         'zh': '每次測試之間的等待秒數（預設 0.5）',
@@ -380,7 +381,7 @@ def _build_pagerduty_payload(service_key: str) -> bytes:
 def test_receiver(
     receiver: dict[str, Any],
     *,
-    timeout: int = 10,
+    timeout: float = 10,
     dry_run: bool = False,
 ) -> ReceiverTestResult:
     """Test connectivity to a single receiver.
@@ -509,7 +510,7 @@ def _send_test_request(
     rtype: str,
     target_url: str,
     payload: bytes,
-    timeout: int,
+    timeout: float,
 ) -> ReceiverTestResult:
     """Send HTTP POST and return test result.
 
@@ -603,7 +604,7 @@ def test_tenant_receivers(
     tenant_name: str,
     tenant_config: dict[str, Any],
     *,
-    timeout: int = 10,
+    timeout: float = 10,
     dry_run: bool = False,
     rate_limit: float = 0.5,
 ) -> TenantTestReport:
@@ -682,7 +683,7 @@ def run_all_tests(
     config_dir: str,
     *,
     tenant_filter: Optional[str] = None,
-    timeout: int = 10,
+    timeout: float = 10,
     dry_run: bool = False,
     rate_limit: float = 0.5,
 ) -> list[TenantTestReport]:
@@ -850,7 +851,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--timeout",
-        type=int,
+        type=positive_seconds,
         default=10,
         help=_HELP['timeout'][_LANG],
     )
