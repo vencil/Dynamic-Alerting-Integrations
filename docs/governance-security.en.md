@@ -71,7 +71,7 @@ tenant-api enforces API-level read/write permissions via `_rbac.yaml`. RBAC Mana
 | Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config` (content from the `rbac._rbacYaml` value) |
 | try-local / QUICKSTART | `/conf.d/_rbac.yaml` | the `conf.d` directory itself |
 
-**Empty config fails closed — it is not open-read**: whenever a `--rbac` path is set (all three postures above), a missing file or an empty group set **denies everything, reads included**. Only two situations enter open-read mode (all authenticated users can read, no one can write): an empty `--rbac` path (not given, `--rbac=`, or an empty `TA_RBAC_PATH`), or an explicit `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true` — which no shipped asset sets.
+**Empty config fails closed — it is not open-read**: whenever a `--rbac` path is set (all three postures above), a missing file or an empty group set **denies everything, reads included**. Only two situations enter open-read mode (all authenticated users can read, no one can write): no RBAC path configured at all (neither `--rbac` nor `TA_RBAC_PATH`), or an explicit `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true` — which no shipped asset sets. `--rbac=` or an empty `TA_RBAC_PATH` does **not** enter open-read; it refuses to start, so a template that rendered no value cannot silently open every tenant to reads ([#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)).
 
 ### RBAC Rescue SOP (Break-Glass Procedure)
 
