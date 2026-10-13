@@ -4169,7 +4169,9 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
     ],
     "helm": [
         "helm upgrade --install threshold-exporter "
+        # #2932: pinned to the chart version of the generating release.
         "oci://ghcr.io/vencil/charts/threshold-exporter "
+        f"--version {ip.THRESHOLD_EXPORTER_CHART_VERSION} "
         '-f "environments/prod/values.yaml" -n ${{ env.MONITORING_NS }} '
         "--wait --timeout 5m",
     ],
@@ -4185,7 +4187,9 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     ],
     "helm": [
         "helm upgrade --install threshold-exporter "
+        # #2932: pinned to the chart version of the generating release.
         "oci://ghcr.io/vencil/charts/threshold-exporter "
+        f"--version {ip.THRESHOLD_EXPORTER_CHART_VERSION} "
         '-f "environments/prod/values.yaml" -n $MONITORING_NS '
         "--wait --timeout 5m",
     ],
@@ -6575,10 +6579,10 @@ def test_the_trigger_tree_pins_cover_every_deploy_method() -> None:
 #
 # ⛔ NOT a render: no `helm` in this environment, so nothing here proves the
 # chart accepts the file. The closest available property is asserted instead —
-# every key it sets exists in the chart's own `values.yaml` — and even that
-# reads the chart in THIS repo while the customer's apply pulls
-# `oci://ghcr.io/vencil/charts/threshold-exporter` with no `--version`. The two
-# can diverge and nothing here would see it.
+# every key it sets exists in the chart's own `values.yaml`. Since #2932 the
+# customer's apply pulls `oci://ghcr.io/vencil/charts/threshold-exporter
+# --version <Chart.yaml version>`, i.e. the chart in THIS repo at generation
+# time; a customer who later moves `--version` is outside what this sees.
 
 _HELM_VALUES = Path("environments") / "prod" / "values.yaml"
 _CHART_VALUES = _REPO_ROOT / "helm" / "threshold-exporter" / "values.yaml"
@@ -6695,10 +6699,10 @@ def test_every_key_the_helm_values_file_sets_exists_in_the_chart(generated) -> N
     watch do nothing. Graded against the chart's own `values.yaml` rather than
     a list written here.
 
-    ⚠️ Boundary, stated: this reads the chart IN THIS REPO, while the generated
-    apply step pulls `oci://ghcr.io/vencil/charts/threshold-exporter` with no
-    `--version`. A published chart whose schema has moved on would not be seen
-    from here.
+    ⚠️ Boundary, stated: this reads the chart IN THIS REPO. The generated
+    apply step pins `--version` to that chart's Chart.yaml version (#2932), so
+    the two agree at generation time; a customer who later edits `--version`
+    to a chart whose schema has moved on is not seen from here.
     """
     doc = yaml.safe_load(
         (generated[("both", "helm")] / _HELM_VALUES).read_text(encoding="utf-8"))

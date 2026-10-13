@@ -503,6 +503,35 @@ def _build_exporter_rules():
             "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
             "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
         },
+        # #2932: the chart version `da-tools init --deploy helm` pins in the
+        # generated workflow / pipeline, and the portal CI/CD wizard's twin of
+        # it. Neither file can read Chart.yaml where it runs (the da-tools
+        # image ships no helm/, the portal is a browser bundle), so both are
+        # literals this line moves together with Chart.yaml.
+        {
+            "file": "scripts/tools/ops/init_project.py",
+            "desc": "chart version da-tools init pins in the helm apply stage",
+            "pattern": r"^THRESHOLD_EXPORTER_CHART_VERSION = '" + _SEMVER + "'",
+            "replacement": lambda v: f"THRESHOLD_EXPORTER_CHART_VERSION = '{v}'",
+        },
+        {
+            "file": "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/generators.js",
+            "desc": "chart version the portal CI/CD wizard preview pins",
+            "pattern": r"^const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '" + _SEMVER + "';",
+            "replacement": lambda v: f"const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '{v}';",
+        },
+        {
+            "file": "docs/scenarios/gitops-ci-integration.md",
+            "desc": "OCI chart --version in GitOps CI scenario (zh)",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
+        {
+            "file": "docs/scenarios/gitops-ci-integration.en.md",
+            "desc": "OCI chart --version in GitOps CI scenario (en)",
+            "pattern": r"oci://ghcr\.io/vencil/charts/threshold-exporter --version " + _SEMVER,
+            "replacement": lambda v: f"oci://ghcr.io/vencil/charts/threshold-exporter --version {v}",
+        },
         {
             "file": "components/threshold-exporter/README.md",
             "desc": "OCI chart --version in exporter README",

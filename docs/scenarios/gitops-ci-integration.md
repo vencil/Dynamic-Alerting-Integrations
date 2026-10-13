@@ -333,10 +333,12 @@ thresholdConfig:
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
   -f environments/prod/values.yaml \
   -n monitoring --wait
 ```
+
+**chart 版本是固定的**：`--deploy helm` 產生的 GitHub workflow 與 GitLab pipeline 裡，`helm upgrade --install` 一律帶 `--version`，值是**執行 `init` 那一版**對應的 threshold-exporter chart 版本（chart 自己的 `exporter/v*` 版號線，以 `helm/threshold-exporter/Chart.yaml` 的 `version` 為準，與 da-tools 映像的版號是兩回事）。少了 `--version`，helm 會在 job 執行當下抓 registry 上最新的 chart，你的部署會在你沒改任何東西的情況下換版。要升 chart，直接改產生物裡那一行的 `--version`（與升 `DA_TOOLS_IMAGE` 同一個做法）。⚠️ v2.9.0 映像的 `init` 產生的 helm 指令仍沒有 `--version`，下一版映像起才固定；用它產生的專案請自行在那一行補上 `--version`。 <!-- image-caveat: v2.9.0 -->
 
 ### 3.3 ArgoCD（你自己的 Application，不是 `--deploy` 的一個值）
 

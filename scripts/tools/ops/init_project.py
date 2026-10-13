@@ -331,6 +331,36 @@ _DA_TOOLS_VERSION = read_shipped_da_tools_version(
 DA_TOOLS_IMAGE: Optional[str] = (
     f'{_DA_TOOLS_REPOSITORY}:v{_DA_TOOLS_VERSION}' if _DA_TOOLS_VERSION else None)
 
+# The threshold-exporter chart the `--deploy helm` apply stage installs, and the
+# chart version it is pinned to (issue 2932). Without `--version`, `helm upgrade
+# --install oci://…` resolves to whatever the registry holds as newest at the
+# moment the job runs — the chart-shaped twin of the `:latest` image #2900
+# retired: the customer's deploy changes under them with no edit on their side.
+#
+# ⛔ The version is the threshold-exporter chart's OWN version line
+# (`exporter/v*`), NOT the da-tools VERSION read above (`tools/v*`). The six
+# release lines are independent; the chart's SSOT is `version:` in
+# helm/threshold-exporter/Chart.yaml, which release.yaml's `Verify Chart.yaml
+# version matches tag` gate holds equal to the `exporter/v*` tag that publishes
+# the chart (github-release-playbook.md §Step 3 ⛔ box).
+#
+# ⛔ A LITERAL here, unlike DA_TOOLS_IMAGE, because this module cannot read the
+# SSOT where it actually runs: the da-tools image ships `scripts/tools` and
+# VERSION, not `helm/`. So the value is rewritten at release by
+# `bump_docs.py --exporter` together with Chart.yaml (its rule on this exact
+# line), and `bump_docs.py --check` plus the init-project suite fail on a
+# literal that disagrees with Chart.yaml. Net effect is the same contract as
+# DA_TOOLS_IMAGE: a project is pinned to the chart that was current in the
+# release that generated it.
+#
+# ⚠️ No `--chart-version` flag, deliberately: upgrading the chart is editing the
+# one `--version` on the helm line of the generated workflow / pipeline, the
+# same path as moving DA_TOOLS_IMAGE; a flag the portal wizard would have to
+# pass to an already-published `init` that rejects unknown flags is a cost with
+# no matching need yet.
+THRESHOLD_EXPORTER_CHART = 'oci://ghcr.io/vencil/charts/threshold-exporter'
+THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0'
+
 # deploy method -> (GitLab CI variable name, pinned ref). Single source for
 # BOTH the `variables:` block and the apply stage's `image:` line, so the two
 # cannot drift apart.
@@ -949,9 +979,10 @@ def _gen_helm_values(
     nothing here proves the chart accepts this file. What IS asserted is the
     property a render would have caught — every key set here exists in
     `helm/threshold-exporter/values.yaml` — and even that reads the chart in
-    THIS repo while the customer's apply pulls `oci://ghcr.io/vencil/charts/
-    threshold-exporter` with no `--version`, i.e. whatever `latest` is. The
-    two can diverge and nothing here would see it.
+    THIS repo while the customer's apply pulls the published chart at
+    THRESHOLD_EXPORTER_CHART_VERSION (issue 2932). The two agree only while
+    this repo's chart is the one that version was cut from; nothing here
+    checks the published artifact itself.
     """
     # Derived, never a second list: the same call `conf.d/<tenant>.yaml` is
     # written from, so the keys named below cannot drift away from the keys
@@ -1268,11 +1299,13 @@ def _build_github_apply_stage(
           - name: Helm upgrade threshold-exporter
             run: |
               helm upgrade --install threshold-exporter \\
-                oci://ghcr.io/vencil/charts/threshold-exporter \\
+                {chart} --version {chart_version} \\
                 -f "{helm_values}" \\
                 -n ${{{{ env.MONITORING_NS }}}} \\
                 --wait --timeout 5m
     """).format(namespace=namespace,
+                chart=THRESHOLD_EXPORTER_CHART,
+                chart_version=THRESHOLD_EXPORTER_CHART_VERSION,
                 helm_values=_offset_path(offset, _HELM_VALUES_REL.as_posix()))
 
     else:
@@ -1935,12 +1968,14 @@ def _build_gitlab_apply_stage(
       script:
         - |
           helm upgrade --install threshold-exporter \\
-            oci://ghcr.io/vencil/charts/threshold-exporter \\
+            {chart} --version {chart_version} \\
             -f "{helm_values}" \\
             -n $MONITORING_NS \\
             --wait --timeout 5m
     """).format(namespace=namespace, image_var=image_var,
                   stage_no=stage_no,
+                  chart=THRESHOLD_EXPORTER_CHART,
+                  chart_version=THRESHOLD_EXPORTER_CHART_VERSION,
                   helm_values=_offset_path(
                       offset, _HELM_VALUES_REL.as_posix()))
 

@@ -365,10 +365,12 @@ thresholdConfig:
 
 ```bash
 helm upgrade --install threshold-exporter \
-  oci://ghcr.io/vencil/charts/threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
   -f environments/prod/values.yaml \
   -n monitoring --wait
 ```
+
+**The chart version is pinned**: in the GitHub workflow and GitLab pipeline that `--deploy helm` generates, `helm upgrade --install` always carries `--version`, set to the threshold-exporter chart version that belongs to **the release that ran `init`** (the chart's own `exporter/v*` release line, whose source of truth is `version` in `helm/threshold-exporter/Chart.yaml` — a different number from the da-tools image tag). Without `--version`, helm pulls whatever chart is newest in the registry when the job runs, so your deployment changes version without any change on your side. To upgrade the chart, edit the `--version` on that one line of the generated files (the same path as moving `DA_TOOLS_IMAGE`). ⚠️ The v2.9.0 image's `init` still writes the helm command without `--version`; the pin starts with the next image. For a project generated with it, add `--version` to that line yourself. <!-- image-caveat: v2.9.0 -->
 
 ### 3.3 ArgoCD (your own Application, not a `--deploy` value)
 
