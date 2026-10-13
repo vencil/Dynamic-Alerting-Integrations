@@ -143,13 +143,15 @@ CHECKED_CARRIERS = {
 # that neither the exporter nor the route generator reads them; the note says
 # who else may, which depends on how tenant-api is deployed.
 OTHER_SERVICE_FILES = {
-    "_tenant_orgs": "tenant-api reads this file from conf.d",
-    "_rbac": "tenant-api reads it only when its --rbac path points into conf.d "
+    "_tenant_orgs": "tenant-api reads `_tenant_orgs.yaml` from conf.d",
+    "_rbac": "tenant-api reads a _rbac file only when its --rbac path points to it "
              "(try-local does; the Helm chart reads a ConfigMap)",
-    "_groups": "tenant-api has not read this from conf.d since #2856 (a one-time import)",
-    "_views": "tenant-api has not read this from conf.d since #2856 (a one-time import)",
-    "_federation_policy": "tenant-api has not read this from conf.d since #2856 (a one-time import)",
-    "_account_registry": "tenant-api has not read this from conf.d since #2856 (a one-time import)",
+    "_groups": "tenant-api has not read `_groups.yaml` from conf.d since #2856 (a one-time import)",
+    "_views": "tenant-api has not read `_views.yaml` from conf.d since #2856 (a one-time import)",
+    "_federation_policy": ("tenant-api has not read `_federation_policy.yaml` from conf.d "
+                           "since #2856 (a one-time import)"),
+    "_account_registry": ("tenant-api has not read `_account_registry.yaml` from conf.d "
+                          "since #2856 (a one-time import)"),
 }
 
 # Row statuses, and which of them raise the exit code to 1.
@@ -1058,8 +1060,9 @@ def _render_platform_settings(rows, lines):
     lines.append("")
     lines.append(
         "> Top-level keys of `_`-prefixed files whose value changed (comments and "
-        "formatting are not changes). The renders compare what a setting does; a setting "
-        "they do not show is listed here to review directly."
+        "formatting are not changes), and `_` files no reader reads whose bytes changed. "
+        "The renders compare what a setting does; a setting they do not show is listed "
+        "here to review directly."
     )
     lines.append("")
     shown = 0

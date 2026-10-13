@@ -2458,7 +2458,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 **Custom Alert 區段不判定消音**：讀的是 exporter 送出的 row，`threshold` 是 `<值>:<severity>`，`op`／`window`／`for` 的變更以 `recipe_id` 不同呈現；不再送出的 recipe 列為 removed，並註明分不出是刪除、停用或被 exporter 拒收。
 
-**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`masked_by_value`（憑證值出現在非憑證欄位而被遮的處數）、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`（有要審的平台設定的檔）、`platform_settings`（每個值變了的鍵一筆：`file`、`key`、`change`、`status`、`note`、`views`）。`views` 另有 `platform`（parse-tree 的讀取結果）。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
+**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`masked_by_value`（憑證值出現在非憑證欄位而被遮的處數）、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`（有要審的平台設定的檔）、`platform_settings`（每個值變了的鍵一筆；沒有讀取端讀的檔與讀不了的檔整檔一筆，`key` 為 null：`file`、`key`、`change`、`status`、`note`、`views`）。`views` 另有 `platform`（parse-tree 的讀取結果）。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
 
 ⚠️ v2.9.0 映像仍是舊行為：只比對頂層各租戶檔自己寫的值，平台檔只列檔名，沒有 `--at`，JSON 是沒有 `schema` 的舊結構（`metric_diffs`、`profile_diffs` 等）。 <!-- image-caveat: v2.9.0 -->
 
