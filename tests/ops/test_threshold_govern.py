@@ -959,3 +959,78 @@ class TestPrometheusEnvFallback:
         url = self._run_main_capture_url(
             monkeypatch, tmp_path, extra=("--prometheus", "http://cli:9099"))
         assert url == "http://cli:9099"
+
+
+# ---------------------------------------------------------------------------
+# #2929: --max-prs in the dry-run Summary, and its range
+# ---------------------------------------------------------------------------
+_THREE = ("db-a", "db-b", "db-c")
+
+
+def _summary(text):
+    [line] = [ln for ln in text.splitlines() if ln.startswith("Summary:")]
+    return line
+
+
+def test_dry_run_summary_names_the_cap_below_actionable():
+    plans = [_plan(t) for t in _THREE]
+    line = _summary(tg.format_text_report(plans, [], applied=False, max_prs=1))
+    assert line.startswith("Summary: 3 tenant(s) / 3 change(s) actionable; "
+                           "with --max-prs 1, at most 1 PR(s) would be opened.")
+    assert "would get a PR" not in line
+
+
+@pytest.mark.parametrize("max_prs", [3, 10, None])
+def test_dry_run_summary_unchanged_when_cap_covers_all(max_prs):
+    """Control for the test above: same plans, a cap that does not bite."""
+    plans = [_plan(t) for t in _THREE]
+    line = _summary(tg.format_text_report(plans, [], applied=False, max_prs=max_prs))
+    assert line.startswith("Summary: 3 tenant(s) / 3 change(s) would get a PR. "
+                           "Re-run with --apply")
+    assert "--max-prs" not in line
+
+
+def test_dry_run_summary_cap_ignores_nested_tenants():
+    """A tenant whose file is in a sub-directory gets no PR and does not use
+    up the cap (run() records it as skipped_nested), so 2 PR-able tenants and
+    one nested one under --max-prs 2 is not capped."""
+    nested = _plan("db-c")
+    nested.source_file = "sub/db-c.yaml"
+    plans = [_plan("db-a"), _plan("db-b"), nested]
+    line = _summary(tg.format_text_report(plans, [], applied=False, max_prs=2))
+    assert line.startswith("Summary: 2 tenant(s) / 2 change(s) would get a PR. ")
+    assert "--max-prs" not in line
+
+
+class TestMaxPrsCli:
+    def _main(self, monkeypatch, tmp_path, capsys, *extra):
+        import sys
+        ran = []
+
+        def fake_run(args):
+            ran.append(args.max_prs)
+            return tg.GovernanceResult([_plan(t) for t in _THREE], [], [])
+
+        monkeypatch.setattr(tg, "run", fake_run)
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
+        with pytest.raises(SystemExit) as exc:
+            tg.main()
+        captured = capsys.readouterr()
+        return exc.value.code, ran, captured
+
+    @pytest.mark.parametrize("value", ["0", "-1"])
+    def test_below_one_is_caller_error(self, monkeypatch, tmp_path, capsys, value):
+        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
+                                         "--max-prs", value)
+        assert code == tg.EXIT_CALLER_ERROR
+        assert ran == []                       # refused before any work
+        assert "--max-prs" in captured.err
+
+    def test_one_is_accepted_and_reaches_the_summary(self, monkeypatch, tmp_path,
+                                                     capsys):
+        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
+                                         "--max-prs", "1")
+        assert code == tg.EXIT_OK
+        assert ran == [1]
+        assert "at most 1 PR(s) would be opened" in _summary(captured.out)
