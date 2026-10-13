@@ -883,6 +883,11 @@ def _recommend_key(
                     key=key, current_value=current_value,
                     reason=f"query error: {err[:60]}", promql=promql,
                 )
+            # #2956: NaN / Inf (a ratio rule over a zero denominator) are not
+            # data. compute_percentiles drops them, so the confidence count
+            # must too — else 999 NaN + 1 point grades HIGH, and all-NaN
+            # grades HIGH with every percentile 0.
+            values = [v for v in values if math.isfinite(v)]
             if not values:
                 return KeyRecommendation(
                     key=key, current_value=current_value,

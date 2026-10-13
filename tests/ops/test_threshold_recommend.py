@@ -982,6 +982,43 @@ class TestAnalyzeTenantLowerBound:
         assert "lower-bound" not in rec.reason
 
 
+class TestAnalyzeTenantUpperBoundFiniteSamples:
+    """#2956: the upper-bound path counts only finite samples."""
+
+    _UPPER_MAP = {"connections": {"scope": "tenant", "direction": ">",
+                                  "observed_series": "tenant:x:max"}}
+
+    def _upper(self, values):
+        with patch("threshold_recommend.query_prometheus_range",
+                   return_value=(values, None)):
+            report = tr.analyze_tenant("db-x", {"connections": "2000"},
+                                       prometheus_url="http://p:9090",
+                                       observed_map=self._UPPER_MAP)
+        return report.keys[0]
+
+    def test_upper_bound_counts_only_finite_samples(self):
+        """#2956: NaN / Inf are dropped from the percentiles, so they must not
+        count towards confidence either: 999 NaN + 1 point is one sample."""
+        nan, inf = float("nan"), float("inf")
+        rec = self._upper([nan] * 600 + [inf] * 200 + [-inf] * 199 + [55.0])
+        assert rec.sample_count == 1
+        assert rec.confidence == tr.CONFIDENCE_LOW
+
+    def test_upper_bound_all_nan_is_no_data(self):
+        """#2956: all-NaN used to grade HIGH and recommend 0 (-100%)."""
+        rec = self._upper([float("nan")] * 1500)
+        assert rec.sample_count == 0
+        assert rec.recommended is None
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert rec.reason == "no data points found"
+
+    def test_upper_bound_finite_samples_unchanged(self):
+        """Control: the same count of finite points still grades HIGH."""
+        rec = self._upper([50.0 + (i % 10) for i in range(1000)])
+        assert rec.sample_count == 1000
+        assert rec.confidence == tr.CONFIDENCE_HIGH
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # --prometheus env-var fallback (W1: add_prometheus_arg / README §6.1)
 # ═══════════════════════════════════════════════════════════════════════
