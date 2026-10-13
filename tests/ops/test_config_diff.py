@@ -1048,7 +1048,7 @@ class TestPlatformSettings:
             return {"files": files, "unreadable": [], "defaults_carriers": {}}
         x = {"text": "1", "tag": "!!int", "value": "1"}
         old = doc({"_z.yaml": {"k": x}, "a/_q.yaml": {"k": x}, "_a.yaml": {"k": x}, "b/t.yaml": {"k": x}})
-        rows = cd.platform_settings(old, doc({}), set(), {})
+        rows = cd.platform_settings(old, doc({}), set(), {}, "old", "new")
         assert [(r["file"], r["key"], r["change"]) for r in rows] == [
             ("_a.yaml", "k", "removed"), ("_z.yaml", "k", "removed"), ("a/_q.yaml", "k", "removed")]
 
@@ -1081,6 +1081,48 @@ class TestPlatformSettings:
         out, err = capsys.readouterr()
         assert f"{cd.VIEW_TITLES[cd.VIEW_PLATFORM]}: not computed: PR side: da-guard parse-tree exited 3" in err
         assert "No changes detected." not in out
+
+    def test_an_unread_file_with_the_same_bytes_is_not_listed(self, tmp_path):
+        """沒有讀取端讀的檔兩側位元組相同：不是變更（對照 test_an_unselected_defaults_carrier_is_listed）。"""
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                 "_defaults.yml": "defaults:\n  cpu: 1\n"}
+        old, new = _pair(tmp_path, files, files)
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert _json(p)["platform_settings"] == []
+
+    def test_a_rendered_key_whose_view_was_not_computed_is_not_compared(self):
+        """渲染讀的鍵，但那個面向沒有結果：不能說成 rendered 或「沒有差異」。"""
+        x = {"text": "1", "tag": "!!int", "value": "1"}
+        doc = {"files": {"_defaults.yaml": {"defaults": x}}, "unreadable": [], "not_read": [],
+               "selected": {"_defaults.yaml": ["exporter", "generator"]}, "defaults_carriers": {}}
+        rows = cd.platform_settings({**doc, "files": {"_defaults.yaml": {}}}, doc, set(),
+                                    {rd.VIEW_SERVED: "not_computed", rd.VIEW_ROUTES: "computed"},
+                                    "old", "new")
+        assert [(r["key"], r["status"]) for r in rows] == [("defaults", cd.SETTING_NOT_COMPARED)]
+
+    def test_a_base_side_parse_tree_failure_is_no_result(self, tmp_path, monkeypatch):
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, files, files)
+        real = cd._lib_parse_tree.run
+
+        def fail_on_base(root, *a, **k):
+            if Path(root) == old:
+                raise cd._lib_parse_tree.ParseTreeError("da-guard parse-tree exited 3")
+            return real(root, *a, **k)
+
+        monkeypatch.setattr(cd._lib_parse_tree, "run", fail_on_base)
+        view, *_ = cd._platform_view(str(old), str(new), 60)
+        assert (view.status, view.reason) == ("not_computed", "base side: da-guard parse-tree exited 3")
+
+    def test_the_list_stops_at_the_limit_across_groups(self):
+        """上限跨分組累計：第一組已滿時，後面的組只印標題，不再列項目。"""
+        n = cd.UNCOVERED_LIST_LIMIT
+        rows = ([_row(f"_a{i:03d}.yaml", "k", note="first") for i in range(n)]
+                + [_row("_b.yaml", "k", note="second")])
+        md = cd.render_markdown(_report(platform_settings=rows,
+                                        uncovered_files=[r["file"] for r in rows]))
+        assert "- `_b.yaml`" not in md and "- ... (+1 more; the JSON report lists them all)" in md
 
     def test_canonical_form_does_not_recurse(self):
         deep = {"text": "x", "tag": "!!str", "value": "x"}

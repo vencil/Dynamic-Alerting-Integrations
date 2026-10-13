@@ -225,7 +225,7 @@ def _setting_row(rel, key, change, status, note, views=()):
             "note": note, "views": list(views)}
 
 
-def platform_settings(old_doc, new_doc, changed_views, view_status, old_dir=None, new_dir=None):
+def platform_settings(old_doc, new_doc, changed_views, view_status, old_dir, new_dir):
     """One row per changed carrier, per unreadable `_` file and per changed
     `_` file no reader reads, sorted.
 
@@ -280,8 +280,6 @@ def _not_read_rows(old_doc, new_doc, old_dir, new_dir):
 def _read_bytes(root, rel):
     """The file's bytes, or None when it is not there. Bytes only: nothing
     here parses it (ADR-036)."""
-    if root is None:
-        return None
     path = Path(root) / rel
     return path.read_bytes() if path.is_file() else None
 
