@@ -15,8 +15,8 @@ Node shapes in ``files[<rel>]``: a mapping is a JSON object, a sequence is a
 JSON array, and a scalar is ``{"text": <source text>, "tag": <resolved tag>,
 "value": <str | bool | null>}`` — `is_scalar` tells a scalar from a mapping.
 
-Used by `ops/migration_audit`; `ops/config_diff`'s carrier table (#1516 P3,
-ADR-037 decision 3) is its next reader.
+Used by `ops/migration_audit` and by `ops/config_diff`'s platform-settings
+comparison (ADR-037 decision 3).
 """
 from __future__ import annotations
 

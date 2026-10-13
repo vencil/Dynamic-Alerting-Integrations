@@ -83,13 +83,19 @@ def _edit(conf_d, old, new, rel="_defaults.yaml"):
 _OK = rd.ViewResult("computed", "")
 
 
+def _row(file, key, status=None, note="not a setting either render reads", change="modified"):
+    """A platform-settings row as `platform_settings` returns it."""
+    return {"file": file, "key": key, "change": change,
+            "status": status or cd.SETTING_NOT_COMPARED, "note": note, "views": []}
+
+
 def _report(**kw):
     """A report as `build_report` returns it, every section empty unless given."""
     r = {"old_dir": "old", "new_dir": "new", "at": AT,
-         "views": {rd.VIEW_SERVED: _OK, rd.VIEW_ROUTES: _OK},
+         "views": {rd.VIEW_SERVED: _OK, rd.VIEW_ROUTES: _OK, cd.VIEW_PLATFORM: _OK},
          "metric": {}, "setting": {}, "custom_alert": {}, "tenants_added": [],
          "tenants_removed": [], "dropped": {}, "other_served": {}, "routes": [],
-         "receivers": [], "inhibits": [], "uncovered_files": []}
+         "receivers": [], "inhibits": [], "uncovered_files": [], "platform_settings": []}
     r.update(kw)
     return r
 
@@ -401,25 +407,31 @@ class TestRenderMarkdown:
         assert "`PR side: x.yaml does not decode`" in md
         assert "No changes detected." not in md
 
-    def test_uncovered_file_name_cannot_break_out_of_its_code_span(self):
-        """檔名來自 PR 的樹：反引號不得關掉 code span，控制字元不得原樣印出。"""
-        md = cd.render_markdown(_report(uncovered_files=["_x`y\x1b[2J.yaml"]))
+    def test_setting_names_cannot_break_out_of_their_code_spans(self):
+        """檔名與鍵名來自 PR 的樹：反引號不得關掉 code span，控制字元不得原樣印出。"""
+        rows = [_row("_x`y\x1b[2J.yaml", "k`\x1b[1m")]
+        md = cd.render_markdown(_report(platform_settings=rows, uncovered_files=[rows[0]["file"]]))
         assert "\x1b" not in md
-        assert "- `_x'y\\x1b[2J.yaml`" in md
+        assert "- `_x'y\\x1b[2J.yaml` `k'\\x1b[1m` (modified)" in md
 
-    def test_long_uncovered_list_is_capped_in_markdown(self):
+    def test_long_settings_list_is_capped_in_markdown(self):
         n = cd.UNCOVERED_LIST_LIMIT + 3
-        files = [f"_f{i:03d}.yaml" for i in range(n)]
-        md = cd.render_markdown(_report(uncovered_files=files))
-        assert "- ... (+3 more)" in md
+        rows = [_row(f"_f{i:03d}.yaml", "defaults") for i in range(n)]
+        md = cd.render_markdown(_report(platform_settings=rows,
+                                        uncovered_files=[r["file"] for r in rows]))
+        assert "- ... (+3 more; the JSON report lists them all)" in md
         assert sum(line.startswith("- `_f") for line in md.splitlines()) == cd.UNCOVERED_LIST_LIMIT
-        assert f"**{n} `_`-prefixed file(s) changed.**" in md
+        assert f"**:warning: Not compared** ({n})" in md
 
-    def test_uncovered_only_report_is_capped_for_a_comment(self):
-        names = [f"{i:02d}/_" + "c" * 2000 + ".yaml" for i in range(cd.UNCOVERED_LIST_LIMIT)]
-        md = cd.render_markdown(_report(uncovered_files=names))
+    def test_long_names_are_shortened_so_the_list_fits_a_comment(self):
+        """名稱來自 PR 的樹：一個 7 萬字元的鍵不得把整則留言擠掉（JSON 保留全名）。"""
+        rows = [_row(f"{i:02d}/_" + "c" * 2000 + ".yaml", "k" * 70_000)
+                for i in range(cd.UNCOVERED_LIST_LIMIT)]
+        md = cd.render_markdown(_report(platform_settings=rows,
+                                        uncovered_files=[r["file"] for r in rows]))
         assert len(md) <= cd.COMMENT_SAFETY_LIMIT
-        assert "truncated to fit GitHub's comment limit" in md
+        assert "truncated to fit GitHub's comment limit" not in md
+        assert "k" * (cd.SETTING_NAME_LIMIT + 1) not in md and "k" * cd.SETTING_NAME_LIMIT + "…" in md
 
 
 class TestBuildReport:
@@ -689,7 +701,9 @@ class TestAcceptance:
         assert doc["route_changes"] == [{
             "change": "changed", "fields": {"group_wait": {"old": "30s", "new": "99s"}},
             "tenants": ["db-a", "es-prod"], "paths": [['tenant="db-a"'], ['tenant="es-prod"']]}]
-        assert doc["threshold_changes"] == [] and doc["uncovered_files"] == ["_defaults.yaml"]
+        assert doc["threshold_changes"] == [] and doc["uncovered_files"] == []
+        assert [(r["file"], r["key"], r["status"]) for r in doc["platform_settings"]] == [
+            ("_defaults.yaml", "_routing_defaults", cd.SETTING_RENDERED)]
 
     def test_adr_example_container_memory(self, tmp_path):
         old, new = _sample_pair(tmp_path)
@@ -725,7 +739,9 @@ class TestAcceptance:
         doc = _json(p)
         assert doc["threshold_changes"] == [{"key": "mysql_connections", "old": 70, "new": 40,
                                              "change": "tighter", "tenants": ["tx"]}]
-        assert doc["uncovered_files"] == ["_platform.yaml"]
+        assert doc["uncovered_files"] == []
+        assert [(r["file"], r["key"], r["status"]) for r in doc["platform_settings"]] == [
+            ("_platform.yaml", "tenants", cd.SETTING_RENDERED)]
 
 
 # ── 6. 設定與憑證（經 CLI） ──────────────────────────────────────────
@@ -864,32 +880,146 @@ class TestCredentialsAreNotPrinted:
             looks_secret - not_credentials - set(cd._CREDENTIAL_KEYS)
 
 
-# ── 7. 改過的 `_` 檔（#1420，P3 的載體表接手前保留） ─────────────────
+# ── 7. 平台設定：`_` 檔的頂層鍵（ADR-037 決定 3，第一階段） ─────────────
 
 
-class TestChangedPlatformFiles:
-    """改過的 `_` 開頭檔一律具名列出、rc=1：渲染比較看不到的載體（平台 recipe、
-    instance_tenant_mapping…）在 P3 的載體表接手前，只能靠這份清單提醒 reviewer。"""
+def _settings(doc):
+    return [(r["file"], r["key"], r["status"]) for r in doc["platform_settings"]]
+
+
+class TestPlatformSettings:
+    """`_` 開頭檔的每個頂層鍵（載體）以 parse-tree 讀出的值比較（#1516 P3b）。
+
+    第一階段（owner 2026-10-13 拍板）：值變了而涵蓋它的渲染沒有差異，一律 rc 1——
+    鍵寫在讀取端不讀的位置與真的沒效果分不開，要等 #2962。註解、排版、同值換引號
+    不是變更（取代逐位元組比對，#1420）。"""
 
     TENANT = "tenants:\n  db-a:\n    mysql_connections: '70'\n"
+    DEFAULTS = ("defaults:\n  cpu: 80\n  mem: 90\n"
+                "state_filters:\n  crash:\n    reasons: []\n    severity: \"critical\"\n")
 
-    def test_a_platform_change_no_render_shows_still_exits_1(self, tmp_path):
-        """只改 `_defaults.yaml` 裡沒人讀的東西（這裡是註解）：渲染沒有差異，仍要 rc 1 並列出檔名。"""
-        old, new = _pair(tmp_path,
-                         {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n"},
-                         {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n# note\n"})
+    @pytest.mark.parametrize("edited", [
+        DEFAULTS + "# note\n",                                                      # 註解
+        "defaults: {cpu: 80, mem: 90}\n"
+        "state_filters: {crash: {reasons: [], severity: 'critical'}}\n",            # 排版＋換引號
+        "state_filters:\n    crash:\n        severity: critical\n        reasons: []\n"
+        "defaults:\n    mem: 90\n    cpu: 0x50\n",                                 # 縮排、順序、同值的另一種寫法
+    ], ids=["comment", "flow-and-quotes", "reorder-and-hex"])
+    def test_same_values_written_differently_are_no_change(self, tmp_path, edited):
+        old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": edited})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert _json(p)["platform_settings"] == []
+
+    def test_a_value_change_is_listed(self, tmp_path):
+        """對照組：同一個檔真的改值要列出來。"""
+        old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},
+                         {"db-a.yaml": self.TENANT,
+                          "_defaults.yaml": self.DEFAULTS.replace("mem: 90", "mem: 91")})
+        doc = _json(_run_cli(old, new, "--format", "json"))
+        assert [(f, k) for f, k, _ in _settings(doc)] == [("_defaults.yaml", "defaults")]
+
+    def test_no_render_difference_still_exits_1(self, tmp_path):
+        """`defaults` 寫在非預設載體的 `_platform.yaml`：exporter 不讀，渲染沒有差異。
+        第一階段不能把它當成「完整涵蓋、沒效果」放過。"""
+        old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                          "_platform.yaml": "defaults:\n  cpu: 1\n"})
         p = _run_cli(old, new)
         assert p.returncode == 1, p.stdout + p.stderr
-        assert "## Changed Platform Files" in p.stdout and "- `_defaults.yaml`" in p.stdout
+        assert "**:warning: Changed, but the renders show no difference** (1)" in p.stdout
+        assert "- `_platform.yaml` `defaults` (added)" in p.stdout
         assert p.stdout.rstrip().splitlines()[-1].startswith("No change in what the two renders show")
 
-    def test_identical_trees_exit_0(self, tmp_path):
-        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n",
-                 "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n"}
-        old, new = _pair(tmp_path, files, files)
-        p = _run_cli(old, new)
+    @pytest.mark.parametrize("rel,text,status", [
+        ("_defaults.yaml", "defaults:\n  cpu: 80\n_custom_alerts: []\n", cd.SETTING_NOT_COMPARED),
+        ("_defaults.yaml", "defaults:\n  cpu: 80\nmax_metrics_per_tenant: 5\n", cd.SETTING_NOT_COMPARED),
+        ("_defaults.yaml", "defaults:\n  cpu: 80\nnobody_reads_this: 1\n", cd.SETTING_NOT_COMPARED),
+        ("_tenant_orgs.yaml", "tenant_orgs:\n  db-a: 1\n", cd.SETTING_NOT_COMPARED),
+        ("_rbac.yaml", "groups: {}\n", cd.SETTING_NOT_COMPARED),
+        ("team/_defaults.yaml", "_policies: []\n", cd.SETTING_NOT_READ_HERE),
+        ("_platform.yaml", "domain_policies: {}\n", cd.SETTING_NOT_READ_HERE),
+    ], ids=["deferred-recipe", "deferred-cap", "unknown-key", "tenant-orgs", "rbac",
+            "policies-nested", "domain-policies-misplaced"])
+    def test_settings_no_render_reads_exit_1(self, tmp_path, rel, text, status):
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n"}
+        old, new = _pair(tmp_path, base, {**base, rel: text})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        doc = _json(p)
+        rows = [r for r in doc["platform_settings"] if r["file"] == rel]
+        assert [r["status"] for r in rows] == [status], doc["platform_settings"]
+        assert rel in doc["uncovered_files"]
+
+    def test_other_service_note_says_only_what_config_diff_knows(self, tmp_path):
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, base, {**base, "_rbac.yaml": "groups: {}\n"})
+        (row,) = _json(_run_cli(old, new, "--format", "json"))["platform_settings"]
+        assert row["note"].startswith("neither the exporter nor the route generator reads this key")
+        assert "--rbac" in row["note"]
+
+    def test_a_key_a_render_reads_in_a_tenant_api_file_is_rendered(self, tmp_path):
+        """根目錄的 `_rbac.yaml` exporter 也會讀（它讀每個根目錄 `_` 檔的 `tenants:`）：
+        不得說「渲染程式都不讀這個檔」。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS, "_rbac.yaml": "groups: {}\n"}
+        old, new = _pair(tmp_path, base, {**base, "_rbac.yaml": "groups: {}\ntenants:\n"
+                                          "  db-a:\n    _silent_mode: \"warning\"\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert _settings(_json(p)) == [("_rbac.yaml", "tenants", cd.SETTING_RENDERED)]
+
+    def test_an_unselected_defaults_carrier_is_listed(self, tmp_path):
+        """`_defaults.yml` 放在 `_defaults.yaml` 旁邊：parse-tree 列為沒有讀取端讀
+        （not_read），內容不在文件裡；仍要列出、rc 1，不能消失。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, base, {**base, "_defaults.yml": "defaults:\n  cpu: 1\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        rows = _json(p)["platform_settings"]
+        assert [(r["file"], r["change"], r["status"]) for r in rows] == [
+            ("_defaults.yml", "added", cd.SETTING_NOT_READ_HERE)]
+        assert "unselected_defaults_carrier" in rows[0]["note"]
+
+    def test_a_key_no_render_reads_is_compared_by_source_text(self, tmp_path):
+        """yaml.v3 把 `007` 與 `7` 讀成同一個 int，但 tenant-api 以字串讀 org 清單，是兩個 org。
+        渲染讀不到的鍵沒有渲染可以作證，所以非字串純量比原文。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, {**base, "_tenant_orgs.yaml": "tenant_orgs:\n  db-a: [007]\n"},
+                         {**base, "_tenant_orgs.yaml": "tenant_orgs:\n  db-a: [7]\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert _settings(_json(p)) == [("_tenant_orgs.yaml", "tenant_orgs", cd.SETTING_NOT_COMPARED)]
+
+    def test_a_rendered_key_in_a_file_its_reader_does_not_read_is_not_read_here(self, tmp_path):
+        """`defaults` 寫在子目錄的非預設載體 `_` 檔：exporter 不讀那個檔（parse-tree 的
+        selected 只有 generator）。同一個 PR 另有真的閾值變更時，也不能被算成 rendered。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n"}
+        old, new = _pair(tmp_path, base,
+                         {**base, "_defaults.yaml": self.DEFAULTS.replace("cpu: 80", "cpu: 81"),
+                          "team/_x.yaml": "defaults:\n  cpu: 5\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        doc = _json(p)
+        assert dict(((f, k), st) for f, k, st in _settings(doc)) == {
+            ("_defaults.yaml", "defaults"): cd.SETTING_RENDERED,
+            ("team/_x.yaml", "defaults"): cd.SETTING_NOT_READ_HERE}
+        assert doc["uncovered_files"] == ["team/_x.yaml"]
+
+    @pytest.mark.parametrize("rel,text", [
+        ("_defaults.yaml", "defaults:\n  cpu: 80\n_policies: []\n"),
+        ("_domain_policy.yaml", "domain_policies: {}\n"),
+    ], ids=["policies-root-carrier", "domain-policy-file"])
+    def test_checked_settings_where_the_check_reads_them_do_not_raise_the_exit_code(
+            self, tmp_path, rel, text):
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n"}
+        old, new = _pair(tmp_path, base, {**base, rel: text})
+        p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 0, p.stdout + p.stderr
-        assert "Changed Platform Files" not in p.stdout
+        doc = _json(p)
+        assert [r["status"] for r in doc["platform_settings"]] == [cd.SETTING_CHECKED]
+        assert doc["uncovered_files"] == []
 
     @pytest.mark.parametrize("rel", ["_platform.yaml", "team-x/_defaults.yaml", "_profiles.yaml"])
     def test_added_platform_file_is_named(self, tmp_path, rel):
@@ -897,10 +1027,12 @@ class TestChangedPlatformFiles:
                          {"db-a.yaml": self.TENANT, rel: "tenants: {}\n"})
         p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 1, p.stdout + p.stderr
-        assert _json(p)["uncovered_files"] == [rel]
+        doc = _json(p)
+        assert _settings(doc) == [(rel, "tenants", cd.SETTING_NO_RENDER_CHANGE)]
+        assert doc["uncovered_files"] == [rel]
 
     def test_tenant_files_are_compared_not_listed(self, tmp_path):
-        """租戶檔（子目錄裡的也是）由渲染比較報出，不列為改過的平台檔；`.` 開頭的檔 exporter 不讀。"""
+        """租戶檔（子目錄裡的也是）由渲染比較報出，不列在平台設定；`.` 開頭的檔 exporter 不讀。"""
         old, new = _pair(
             tmp_path,
             {"db-a.yaml": self.TENANT, "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n",
@@ -908,33 +1040,95 @@ class TestChangedPlatformFiles:
             {"db-a.yaml": self.TENANT.replace("70", "90"),
              "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '2'\n", ".scratch.yaml": "a: 2\n"})
         doc = _json(_run_cli(old, new, "--format", "json"))
-        assert doc["uncovered_files"] == []
+        assert doc["platform_settings"] == [] and doc["uncovered_files"] == []
         assert {t for c in doc["threshold_changes"] for t in c["tenants"]} == {"db-a", "db-b"}
 
-    def test_removed_file_and_sorted_listing(self, tmp_path):
-        rels = ["_z.yaml", "a/_defaults.yaml", "_a.yaml", "b/t.yaml"]
-        old, new = _pair(tmp_path, {r: "a: 1\n" for r in rels}, {})
-        assert cd.compute_uncovered_files(str(old), str(new)) == ["_a.yaml", "_z.yaml", "a/_defaults.yaml"]
+    def test_rows_are_sorted_and_cover_both_sides(self):
+        def doc(files):
+            return {"files": files, "unreadable": [], "defaults_carriers": {}}
+        x = {"text": "1", "tag": "!!int", "value": "1"}
+        old = doc({"_z.yaml": {"k": x}, "a/_q.yaml": {"k": x}, "_a.yaml": {"k": x}, "b/t.yaml": {"k": x}})
+        rows = cd.platform_settings(old, doc({}), set(), {}, "old", "new")
+        assert [(r["file"], r["key"], r["change"]) for r in rows] == [
+            ("_a.yaml", "k", "removed"), ("_z.yaml", "k", "removed"), ("a/_q.yaml", "k", "removed")]
 
-    def test_unreadable_platform_file_is_a_caller_error_not_a_change(self, tmp_path, monkeypatch, capsys):
-        """讀不到的檔是 IO failure（exit 2），不是「有變」（exit 1）。"""
-        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"}
+    def test_an_unreadable_base_file_is_listed_not_compared(self, tmp_path):
+        """base 側的 `_` 檔讀不了：列出、rc 1（不擋修好它的 PR，ADR-037 決定 4）。"""
+        old, new = _pair(tmp_path,
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: [\n"},
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        rows = _json(p)["platform_settings"]
+        assert [(r["file"], r["change"], r["status"]) for r in rows] == [
+            ("_defaults.yaml", "unreadable", cd.SETTING_NOT_COMPARED)]
+        assert "base side" in rows[0]["note"]
+
+    def test_a_parse_tree_failure_is_no_result(self, tmp_path, monkeypatch, capsys):
+        """parse-tree 本身失敗是工具失敗：rc 2，不是「沒有變更」。"""
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
         old, new = _pair(tmp_path, files, files)
-        real = Path.read_bytes
 
-        def read_bytes(path):
-            if path.name == "_defaults.yaml":
-                raise PermissionError(13, "denied", str(path))
-            return real(path)
+        def fail(*_a, **_k):
+            raise cd._lib_parse_tree.ParseTreeError("da-guard parse-tree exited 3")
 
-        monkeypatch.setattr(Path, "read_bytes", read_bytes)
+        monkeypatch.setattr(cd._lib_parse_tree, "run", fail)
         monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(old),
                                           "--new-dir", str(new), "--at", AT])
         with pytest.raises(SystemExit) as exc:
             cd.main()
         assert exc.value.code == cd.EXIT_CALLER_ERROR
-        err = capsys.readouterr().err
-        assert "ERROR:" in err and "_defaults.yaml" in err, err
+        out, err = capsys.readouterr()
+        assert f"{cd.VIEW_TITLES[cd.VIEW_PLATFORM]}: not computed: PR side: da-guard parse-tree exited 3" in err
+        assert "No changes detected." not in out
+
+    def test_an_unread_file_with_the_same_bytes_is_not_listed(self, tmp_path):
+        """沒有讀取端讀的檔兩側位元組相同：不是變更（對照 test_an_unselected_defaults_carrier_is_listed）。"""
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                 "_defaults.yml": "defaults:\n  cpu: 1\n"}
+        old, new = _pair(tmp_path, files, files)
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert _json(p)["platform_settings"] == []
+
+    def test_a_rendered_key_whose_view_was_not_computed_is_not_compared(self):
+        """渲染讀的鍵，但那個面向沒有結果：不能說成 rendered 或「沒有差異」。"""
+        x = {"text": "1", "tag": "!!int", "value": "1"}
+        doc = {"files": {"_defaults.yaml": {"defaults": x}}, "unreadable": [], "not_read": [],
+               "selected": {"_defaults.yaml": ["exporter", "generator"]}, "defaults_carriers": {}}
+        rows = cd.platform_settings({**doc, "files": {"_defaults.yaml": {}}}, doc, set(),
+                                    {rd.VIEW_SERVED: "not_computed", rd.VIEW_ROUTES: "computed"},
+                                    "old", "new")
+        assert [(r["key"], r["status"]) for r in rows] == [("defaults", cd.SETTING_NOT_COMPARED)]
+
+    def test_a_base_side_parse_tree_failure_is_no_result(self, tmp_path, monkeypatch):
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, files, files)
+        real = cd._lib_parse_tree.run
+
+        def fail_on_base(root, *a, **k):
+            if Path(root) == old:
+                raise cd._lib_parse_tree.ParseTreeError("da-guard parse-tree exited 3")
+            return real(root, *a, **k)
+
+        monkeypatch.setattr(cd._lib_parse_tree, "run", fail_on_base)
+        view, *_ = cd._platform_view(str(old), str(new), 60)
+        assert (view.status, view.reason) == ("not_computed", "base side: da-guard parse-tree exited 3")
+
+    def test_the_list_stops_at_the_limit_across_groups(self):
+        """上限跨分組累計：第一組已滿時，後面的組只印標題，不再列項目。"""
+        n = cd.UNCOVERED_LIST_LIMIT
+        rows = ([_row(f"_a{i:03d}.yaml", "k", note="first") for i in range(n)]
+                + [_row("_b.yaml", "k", note="second")])
+        md = cd.render_markdown(_report(platform_settings=rows,
+                                        uncovered_files=[r["file"] for r in rows]))
+        assert "- `_b.yaml`" not in md and "- ... (+1 more; the JSON report lists them all)" in md
+
+    def test_canonical_form_does_not_recurse(self):
+        deep = {"text": "x", "tag": "!!str", "value": "x"}
+        for _ in range(5000):
+            deep = [deep]
+        assert cd._canonical(deep).count("[") == 5001
 
 
 def test_a_platform_default_reaches_many_tenants_as_one_entry(tmp_path):

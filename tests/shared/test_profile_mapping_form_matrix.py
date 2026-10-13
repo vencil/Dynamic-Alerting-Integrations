@@ -181,7 +181,11 @@ def test_config_diff_blast_radius_is_the_tenants_go_binds(tmp_path, name, profil
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     assert p.returncode == 1, (name, where, p.stderr[-1000:])
     doc = json.loads(p.stdout)
-    assert doc["uncovered_files"] == ["_profiles.yaml"], doc         # 必響：010 確實改了
+    # 必響：010 確實改了（#1516 P3b 起以 parse-tree 讀出的值比較，列在 platform_settings）。
+    # 只斷言「包含」：`!!binary` 寫在 `_defaults.yaml` 的那格，parse-tree 讀不了該檔，
+    # 它另以 unreadable 列出（沒有比對，rc 1）。
+    assert ("_profiles.yaml", "profiles", "modified") in [
+        (r["file"], r["key"], r["change"]) for r in doc["platform_settings"]], doc
     reached = [t for c in doc["threshold_changes"] if c["key"] == "mysql_connections"
                for t in c["tenants"]]
     assert reached == (["t1"] if served == 10 else []), (name, where, doc["threshold_changes"])
