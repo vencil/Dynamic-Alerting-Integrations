@@ -2,12 +2,17 @@
 
 Each test runs the real script in a throwaway repo, with the marker redirected
 through `VIBE_SESSION_START_MARKER`. `pip`, `npm` and `pre-commit` on PATH are
-stand-ins that only record their arguments, so nothing is installed.
+stand-ins that only record their arguments, so nothing is installed. `helm` and
+`golangci-lint` are stand-ins that report a version (the pinned one unless a
+test says otherwise), `curl` is one that fails or serves bytes that are not the
+pinned tarball, and `VIBE_SESSION_START_BIN` points into the test's tmp dir —
+so no run downloads anything or writes outside it.
 """
 from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +29,17 @@ _OPS = (
     "_prepush_refs.sh", "protect_main_push.sh", "require_preflight_pass.sh",
     "pre_push_mkdocs_strict.sh", "prepush_dispatch.sh", "install_prepush_hook.sh",
 )
+_SCRIPT_TEXT = (_REPO_ROOT / ".claude" / "hooks" / "session-start.sh").read_text(encoding="utf-8")
+
+
+def _pin(name: str) -> str:
+    found = re.findall(rf"^{name}_VERSION=(\S+)$", _SCRIPT_TEXT, re.MULTILINE)
+    assert len(found) == 1, f"{name}_VERSION in session-start.sh: {found}"
+    return found[0]
+
+
+_HELM = _pin("HELM")
+_GOLANGCI = _pin("GOLANGCI_LINT")
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="cloud-only script (bash)")
 
@@ -64,11 +80,15 @@ _INSTALL_SAID = "stand-in pre-commit install ran"
 
 
 def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0,
-         pre_commit: bool = True, real_pre_commit: bool = False):
+         pre_commit: bool = True, real_pre_commit: bool = False,
+         helm: str = _HELM, golangci: str = _GOLANGCI, curl: str = "fail"):
     """Run the script; return (completed, marker text, {tool: [argument lines]}).
     `pre_commit=False` leaves no pre-commit anywhere on PATH; `real_pre_commit`
     puts the installed one there (still recorded). The stand-in's `install`
-    prints `_INSTALL_SAID` to stdout, as the real one reports there."""
+    prints `_INSTALL_SAID` to stdout, as the real one reports there. `helm` and
+    `golangci` are the versions their stand-ins report; `curl` is "fail" (exit
+    22, as `curl -f` does on an HTTP error) or "garbage" (writes bytes that are
+    not the pinned tarball to its `-o` file)."""
     marker = root / "marker"
     if marker_text is not None:
         marker.write_text(marker_text, encoding="utf-8")
@@ -83,8 +103,21 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
         stub.write_text(f'#!/bin/sh\necho "$*" >> "{root / tool}.calls"\n{rc}exit 0\n',
                         encoding="utf-8")
         stub.chmod(0o755)
+    reports = {"helm": f"v{helm}+gstub",
+               "golangci-lint": f"golangci-lint has version {golangci} built with stub"}
+    for tool, line in reports.items():
+        stub = bindir / tool
+        stub.write_text(f'#!/bin/sh\necho "{line}"\n', encoding="utf-8")
+        stub.chmod(0o755)
+    body = ('exit 22\n' if curl == "fail" else
+            'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo garbage > "$2"; shift; done\n')
+    stub = bindir / "curl"
+    stub.write_text(f'#!/bin/sh\necho "$*" >> "{root / "curl"}.calls"\n{body}', encoding="utf-8")
+    stub.chmod(0o755)
+    tool_bin = root / "tool-bin"
+    tool_bin.mkdir(exist_ok=True)
     env = {**os.environ, "CLAUDE_CODE_REMOTE": "true", "CLAUDE_PROJECT_DIR": str(repo),
-           "VIBE_SESSION_START_MARKER": str(marker),
+           "VIBE_SESSION_START_MARKER": str(marker), "VIBE_SESSION_START_BIN": str(tool_bin),
            "PATH": os.pathsep.join([str(bindir)] + [
                d for d in os.environ["PATH"].split(os.pathsep)
                if pre_commit or not (Path(d) / "pre-commit").exists()])}
@@ -93,7 +126,7 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     calls = {}
-    for tool in ("pip", "npm", "pre-commit"):
+    for tool in ("pip", "npm", "pre-commit", "curl"):
         f = root / f"{tool}.calls"
         calls[tool] = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
     text = marker.read_text(encoding="utf-8") if marker.exists() else ""
@@ -192,11 +225,12 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
 
 
 @pytest.mark.parametrize("state", [
-    "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone"])
+    "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone", "helm-off-pin",
+    "golangci-lint-off-pin"])
 def test_a_no_op_needs_every_condition(tmp_path, state):
     """The no-op path is taken only after a RESULT=ok run, with pre-commit on
-    PATH and the e2e deps still in place; otherwise the whole script runs
-    again."""
+    PATH, the e2e deps still in place and helm / golangci-lint at their pins;
+    otherwise the whole script runs again."""
     repo = _repo(tmp_path)
     hooks = repo / ".git" / "hooks"
     (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -206,7 +240,9 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
     marker_text = ("RESULT=failed (not importable: mkdocs)\n" if state == "last-run-failed"
                    else "RESULT=ok\n")
 
-    r, _, calls = _run(tmp_path, repo, marker_text, pre_commit=state != "no-pre-commit-on-PATH")
+    r, _, calls = _run(tmp_path, repo, marker_text, pre_commit=state != "no-pre-commit-on-PATH",
+                       helm="3.0.0" if state == "helm-off-pin" else _HELM,
+                       golangci="2.5.0" if state == "golangci-lint-off-pin" else _GOLANGCI)
 
     assert "already bootstrapped" not in r.stdout
     assert calls["pip"]
@@ -313,3 +349,41 @@ def test_an_earlier_stop_still_names_the_installer_failure(tmp_path):
     assert _result(marker) == [
         "RESULT=failed (install_prepush_hook; constraints file sets a package index)"]
     assert calls["pip"] == []
+
+
+def test_tools_already_at_their_pins_are_not_downloaded(tmp_path):
+    """#2955: a container that has both binaries at their pins downloads
+    nothing, records the versions and puts neither tool in RESULT.
+    ⛔ Not `RESULT=ok`: the import check runs against the REAL interpreter
+    (pip is a stand-in), so a runner without mkdocs ends `failed` for a reason
+    that is not this test's."""
+    repo = _repo(tmp_path)
+
+    r, marker, calls = _run(tmp_path, repo, None)
+
+    assert calls["curl"] == []
+    assert f"helm={_HELM}" in marker.splitlines()
+    assert f"golangci-lint={_GOLANGCI}" in marker.splitlines()
+    results = _result(marker)
+    assert len(results) == 1 and "helm" not in results[0] \
+        and "golangci-lint" not in results[0], r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("curl,why", [("fail", "download"), ("garbage", "sha256 mismatch")])
+def test_a_tool_that_cannot_be_installed_fails_the_run(tmp_path, curl, why):
+    """#2955: helm off its pin and no way to get the pinned one is RESULT=failed,
+    with the reason — not a session that silently skips tests/helm. Bytes that
+    are not the pinned tarball are never installed."""
+    repo = _repo(tmp_path)
+
+    r, marker, calls = _run(tmp_path, repo, None, helm="3.0.0", curl=curl)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    # Ends with, not equals: a runner without mkdocs adds its own reason first.
+    results = _result(marker)
+    assert len(results) == 1 and results[0].startswith("RESULT=failed (") \
+        and results[0].endswith(f"helm: {why})"), marker
+    assert f"helm=FAILED ({why})" in marker.splitlines()
+    assert any(f"helm-v{_HELM}-linux-amd64.tar.gz" in c for c in calls["curl"]), calls["curl"]
+    assert not (tmp_path / "tool-bin" / "helm").exists()
+    assert calls["pip"], "a tool failure skipped the Python deps"

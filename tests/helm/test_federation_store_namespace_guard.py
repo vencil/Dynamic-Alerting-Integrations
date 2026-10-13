@@ -40,7 +40,6 @@ that "helpfully" moved with the Role would grant nothing at all.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -48,6 +47,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _helm_gate import helm_required
 from _render_baseline import baseline_args
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,14 +66,14 @@ _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
 # Set to "1" by the CI job that installs helm (ci.yml python-tests-run ``env:``).
 # When set, a missing binary is a FAILURE, not a skip — a broken setup-helm step
 # would otherwise turn every assertion here into a green no-op (#1300 precedent).
-_REQUIRE_HELM = os.environ.get("VIBE_REQUIRE_HELM") == "1"
+_REQUIRE_HELM = helm_required()  # tests/_helm_gate.py: CI or a remote session
 
 
 def test_helm_present_when_required() -> None:
     """Fail-closed guard against silent disarmament."""
     if _REQUIRE_HELM:
         assert _HAS_HELM, (
-            "VIBE_REQUIRE_HELM=1 but no `helm` on PATH — the render assertions in "
+            f"{_REQUIRE_HELM}: but no `helm` on PATH — the render assertions in "
             "this file would have skipped silently"
         )
 

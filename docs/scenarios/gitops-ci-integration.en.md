@@ -185,9 +185,10 @@ config-diff compares what each side renders to (the values the exporter
 serves and the Alertmanager configuration,
 [ADR-037](../adr/037-config-diff-compares-rendered-output.en.md)), so a change
 to a platform file such as `conf.d/_defaults.yaml` is reported for the tenants
-it reaches. A changed `_`-prefixed file is also named under "Changed Platform
-Files" with exit code 1: a setting neither render reads can only be reviewed
-from that list. The GitHub artifact behaves the same way. ⚠️ The v2.9.0 image
+it reaches. Each key of a `_`-prefixed file whose value changed is also listed
+under "Platform Settings"; one neither render reads, or whose renders show no
+difference, exits 1 and is reviewed by hand. The GitHub artifact behaves the
+same way. ⚠️ The v2.9.0 image
 still compares top-level tenant files only: it names platform files without
 the tenants they reach. <!-- image-caveat: v2.9.0 -->
 
