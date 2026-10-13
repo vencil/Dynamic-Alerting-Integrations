@@ -278,7 +278,7 @@ _policies:
     severity: warning
 ```
 
-Run: `da-tools evaluate-policy --config-dir conf.d/ --ci`. The operator goes in `operator:` and defaults to `required` when omitted; the available operators, `when` conditionals and wildcard targets are in the [CLI reference: evaluate-policy](../cli-reference.en.md#evaluate-policy). A `severity: warning` violation is only reported; it does not fail `--ci`.
+Run: `da-tools evaluate-policy --config-dir conf.d/ --ci`. The operator goes in `operator:` and defaults to `required` when omitted; the available operators, `when` conditionals and wildcard targets are in the [CLI reference: evaluate-policy](../cli-reference.en.md#evaluate-policy). A `severity: warning` violation is only reported; it does not fail `--ci`. `_routing` is the route generator's resolved result (including `_routing_defaults`), so `require-routing` only catches a tenant left with no route at all.
 
 ### Cross-Domain Routing Profiles & Domain Policies (v2.1.0 ADR-007)
 
