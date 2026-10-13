@@ -527,7 +527,7 @@ func main() {
 	// records live in a Kubernetes ConfigMap so tenant-api stays
 	// stateless and can run multi-replica.
 	ff.TTL = *federationTTL
-	federationMgr, federationNS, err := wireFederation(*ff)
+	federationMgr, accountHighWater, federationNS, err := wireFederation(*ff)
 	if err != nil {
 		log.Fatalf("FATAL: federation init: %v", err)
 	}
@@ -541,7 +541,7 @@ func main() {
 		accountAllocator = account.NewAllocator(stateStore, func() (int, error) {
 			ids, err := account.ListTenantIDs(*configDir)
 			return len(ids), err
-		})
+		}).WithHighWater(accountHighWater)
 		// #609 (Gemini #2) fail-loud startup guard: if the AccountID registry is
 		// blank/missing BUT conf.d already holds tenants, the ledger was lost
 		// (truncated mount / interrupted write) and booting would silently
@@ -558,6 +558,11 @@ func main() {
 			log.Fatalf("FATAL: read live logs tokens for the AccountID registry check: %v", err)
 		}
 		if err := account.VerifyLiveTokensAgainstRegistry(context.Background(), stateStore, toTokenAllocations(liveLogs)); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
+		// #2928: a registry counter below the AccountID high-water mark means
+		// an older registry was put back, whether or not any live token shows it.
+		if err := account.VerifyRegistryAgainstHighWater(context.Background(), stateStore, accountHighWater); err != nil {
 			log.Fatalf("FATAL: %v", err)
 		}
 		slog.Info("federation token endpoint enabled",

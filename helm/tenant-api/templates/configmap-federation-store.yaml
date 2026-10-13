@@ -10,9 +10,16 @@ un-revoke, caused by the upgrade itself.
 A comment in values.yaml is not a control: the operator who most needs it is the
 one running `helm upgrade --set …` without reading it. So refuse the render.
 
+The same object also carries the AccountID high-water mark (#2928) as an
+annotation. A store with no live tokens can still hold it, and leaving it behind
+silently drops the protection against re-issuing AccountIDs (a fresh store's
+mark starts at whatever the registry says), so it counts as data too.
+
 Deliberately narrow, so it never fires on an install that has nothing to lose:
   * only when the target namespace differs from this release's, AND
-  * only when the OLD object actually still holds a `store.json` payload.
+  * only when the OLD object actually still holds a `store.json` payload or
+    the high-water annotation (name pinned to token.HighWaterAnnotation by
+    tests/helm/test_federation_store_namespace_guard.py).
 `lookup` returns empty under `helm template` (no cluster), so CI renders and the
 chart tests are unaffected — this fires on a real `helm upgrade`, which is
 exactly where the data is at risk.
@@ -21,10 +28,14 @@ exactly where the data is at risk.
 {{- if ne $targetNS .Release.Namespace }}
 {{- $old := lookup "v1" "ConfigMap" .Release.Namespace .Values.federation.store.configMapName }}
 {{- $stranded := "" }}
-{{- if $old }}{{- $stranded = index ($old.data | default dict) "store.json" | default "" }}{{- end }}
-{{- if and $stranded (not .Values.federation.store.acknowledgeDataMove) }}
-{{- fail (printf "\n\nfederation.store.namespace moves the token store to %q, but %s/%s still holds a store.json (%d bytes).\n\nHelm would create an EMPTY ConfigMap there; the old one is kept but read by nobody, and tenant-api starts cleanly against the empty store — every existing revocation stops being enforced and already-revoked tokens are accepted again until their TTL (ADR-028 un-revoke, caused by this upgrade).\n\nMove the data first, then re-run:\n  1. kubectl -n %s get configmap %s -o json > store-backup.json\n  2. Recreate it in %q with Helm's ownership metadata so this upgrade ADOPTS it:\n       annotations: meta.helm.sh/release-name=%s, meta.helm.sh/release-namespace=%s\n       label:       app.kubernetes.io/managed-by=Helm\n  3. Re-run this upgrade (Helm adopts the object and templates only its own sentinel key — never store.json / revoked.txt — so the copy survives)\n  4. Verify the enforcement plane sees it — exec a gateway pod and read /etc/revoked/revoked.txt\n  5. Only then delete the ConfigMap in %s\n\nIf the old store is genuinely disposable (e.g. a namespace set wrongly once on a fresh install), bypass with:\n  --set federation.store.acknowledgeDataMove=true\n"
-  $targetNS .Release.Namespace .Values.federation.store.configMapName (len $stranded)
+{{- $highWater := "" }}
+{{- if $old }}
+{{- $stranded = index ($old.data | default dict) "store.json" | default "" }}
+{{- $highWater = index ($old.metadata.annotations | default dict) "tenant-api.vibe/account-id-high-water" | default "" }}
+{{- end }}
+{{- if and (or $stranded $highWater) (not .Values.federation.store.acknowledgeDataMove) }}
+{{- fail (printf "\n\nfederation.store.namespace moves the token store to %q, but %s/%s still holds data (store.json: %d bytes; AccountID high-water mark: %q).\n\nHelm would create an EMPTY ConfigMap there; the old one is kept but read by nobody, and tenant-api starts cleanly against the empty store — every existing revocation stops being enforced and already-revoked tokens are accepted again until their TTL (ADR-028 un-revoke, caused by this upgrade), and the AccountID high-water mark that stops an older registry from re-issuing ids is left behind.\n\nMove the data first, then re-run:\n  1. kubectl -n %s get configmap %s -o json > store-backup.json\n  2. Recreate it in %q, keeping its annotations (the AccountID high-water mark is one), with Helm's ownership metadata so this upgrade ADOPTS it:\n       annotations: meta.helm.sh/release-name=%s, meta.helm.sh/release-namespace=%s\n       label:       app.kubernetes.io/managed-by=Helm\n  3. Re-run this upgrade (Helm adopts the object and templates only its own sentinel key — never store.json / revoked.txt — so the copy survives)\n  4. Verify the enforcement plane sees it — exec a gateway pod and read /etc/revoked/revoked.txt\n  5. Only then delete the ConfigMap in %s\n\nIf the old store is genuinely disposable (e.g. a namespace set wrongly once on a fresh install), bypass with:\n  --set federation.store.acknowledgeDataMove=true\n"
+  $targetNS .Release.Namespace .Values.federation.store.configMapName (len $stranded) $highWater
   .Release.Namespace .Values.federation.store.configMapName $targetNS
   .Release.Name .Release.Namespace .Release.Namespace) }}
 {{- end }}

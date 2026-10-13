@@ -197,30 +197,33 @@ type federationFlags struct {
 // it (sub-issue IV-2m) so tenant-api's RBAC can be get+update on one
 // resourceName with no namespace-wide create. NewConfigMapStore fails
 // loud on NotFound.
-func wireFederation(f federationFlags) (*token.Manager, string, error) {
+//
+// The AccountID high-water mark (#2928) lives on the same ConfigMap and is
+// returned alongside, nil when federation is off.
+func wireFederation(f federationFlags) (*token.Manager, *token.HighWater, string, error) {
 	if f.KeyPath == "" {
-		return nil, "", nil
+		return nil, nil, "", nil
 	}
 	client, err := buildInClusterClientset()
 	if err != nil {
-		return nil, "", fmt.Errorf("federation: %w", err)
+		return nil, nil, "", fmt.Errorf("federation: %w", err)
 	}
 	ns := f.Namespace
 	if ns == "" {
 		ns, err = inClusterNamespace()
 		if err != nil {
-			return nil, "", fmt.Errorf("federation: resolve namespace: %w", err)
+			return nil, nil, "", fmt.Errorf("federation: resolve namespace: %w", err)
 		}
 	}
 	store, err := token.NewConfigMapStore(client, ns, f.ConfigMapName)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	mgr, err := token.NewManager(f.KeyPath, store, f.TTL)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
-	return mgr, ns, nil
+	return mgr, token.NewHighWater(client, ns, f.ConfigMapName), ns, nil
 }
 
 // inClusterNamespace reads the pod's own namespace from the

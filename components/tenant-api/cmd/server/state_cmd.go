@@ -70,9 +70,9 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "state restore: %v\n", err)
 		return 1
 	}
-	tokens, err := liveLogsTokens(*ff)
+	tokens, mark, err := federationRestoreInputs(*ff)
 	if err != nil {
-		fmt.Fprintf(stderr, "state restore: read live logs tokens (refusing to merge the registry without them): %v\n", err)
+		fmt.Fprintf(stderr, "state restore: read live logs tokens and the AccountID high-water mark (refusing to merge the registry without them): %v\n", err)
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -80,6 +80,7 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	err = staterestore.Run(ctx, s, bak, staterestore.Options{
 		Keys:   strings.Split(*keys, ","),
 		Tokens: tokens,
+		Limits: account.RestoreLimits{HighWater: mark.Max},
 		DryRun: *dryRun,
 		Author: *author,
 	}, stdout)
@@ -95,27 +96,38 @@ func runStateCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 }
 
-// liveLogsTokens reads the ids live logs tokens carry from the federation
-// token store, or none when federation is off.
-func liveLogsTokens(f federationFlags) ([]account.TokenAllocation, error) {
+// federationRestoreInputs reads, from the federation token store, the ids
+// live logs tokens carry and the AccountID high-water mark (#2928) — or
+// neither when federation is off.
+func federationRestoreInputs(f federationFlags) ([]account.TokenAllocation, account.Mark, error) {
 	if f.KeyPath == "" {
-		return nil, nil
+		return nil, account.Mark{}, nil
 	}
 	client, err := buildInClusterClientset()
 	if err != nil {
-		return nil, err
+		return nil, account.Mark{}, err
 	}
 	ns := f.Namespace
 	if ns == "" {
 		if ns, err = inClusterNamespace(); err != nil {
-			return nil, err
+			return nil, account.Mark{}, err
 		}
 	}
 	rs, err := token.NewConfigMapStore(client, ns, f.ConfigMapName)
 	if err != nil {
-		return nil, err
+		return nil, account.Mark{}, err
 	}
-	return tokenAllocations(rs)
+	tokens, err := tokenAllocations(rs)
+	if err != nil {
+		return nil, account.Mark{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	mark, err := token.NewHighWater(client, ns, f.ConfigMapName).Get(ctx)
+	if err != nil {
+		return nil, account.Mark{}, err
+	}
+	return tokens, mark, nil
 }
 
 // tokenAllocations converts the live logs records of rs.

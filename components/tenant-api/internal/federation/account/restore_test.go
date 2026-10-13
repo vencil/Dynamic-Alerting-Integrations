@@ -24,7 +24,7 @@ func reg(next uint32, allocs map[string]uint32) *Registry {
 func TestMergeForRestore_OlderBackupKeepsCounter(t *testing.T) {
 	cur := mustMarshal(t, reg(1002, map[string]uint32{"t-a": 1000, "t-b": 1001}))
 	bak := mustMarshal(t, reg(1001, map[string]uint32{"t-a": 1000}))
-	m, rep, err := MergeForRestore(cur, bak, nil)
+	m, rep, err := MergeForRestore(cur, bak, nil, RestoreLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestMergeForRestore_OlderBackupKeepsCounter(t *testing.T) {
 // know, and the counter clears the token's id.
 func TestMergeForRestore_LostRegistryUsesTokens(t *testing.T) {
 	bak := mustMarshal(t, reg(1001, map[string]uint32{"t-a": 1000}))
-	m, rep, err := MergeForRestore(nil, bak, []TokenAllocation{{TenantID: "t-b", AccountID: 1004, TokenID: "fed_1"}})
+	m, rep, err := MergeForRestore(nil, bak, []TokenAllocation{{TenantID: "t-b", AccountID: 1004, TokenID: "fed_1"}}, RestoreLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestMergeForRestore_Conflicts(t *testing.T) {
 		"id held twice":     {mustMarshal(t, reg(1002, map[string]uint32{"t-x": 1001})), nil, "account_id 1001"},
 		"token disagrees":   {nil, []TokenAllocation{{TenantID: "t-b", AccountID: 1005, TokenID: "fed_9"}}, "token fed_9: 1005"},
 	} {
-		_, _, err := MergeForRestore(cur, c.bak, c.tokens)
+		_, _, err := MergeForRestore(cur, c.bak, c.tokens, RestoreLimits{})
 		var ce *RestoreConflictError
 		if !errors.As(err, &ce) || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want a conflict naming %q", name, err, c.want)
@@ -76,10 +76,10 @@ func TestMergeForRestore_Conflicts(t *testing.T) {
 }
 
 func TestMergeForRestore_RefusesBadInput(t *testing.T) {
-	if _, _, err := MergeForRestore(nil, []byte("schema_version: v9\n"), nil); err == nil {
+	if _, _, err := MergeForRestore(nil, []byte("schema_version: v9\n"), nil, RestoreLimits{}); err == nil {
 		t.Error("a backup of an unknown schema was merged")
 	}
-	if _, _, err := MergeForRestore(nil, nil, []TokenAllocation{{TenantID: "t", AccountID: 5, TokenID: "fed_r"}}); err == nil {
+	if _, _, err := MergeForRestore(nil, nil, []TokenAllocation{{TenantID: "t", AccountID: 5, TokenID: "fed_r"}}, RestoreLimits{}); err == nil {
 		t.Error("a token in the reserved range was merged")
 	}
 }

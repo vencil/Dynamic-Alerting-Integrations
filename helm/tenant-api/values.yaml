@@ -413,7 +413,10 @@ federation:
     #   1. Copy the ConfigMap into the target namespace, carrying Helm's
     #      ownership metadata so the upgrade adopts it rather than colliding:
     #      annotations meta.helm.sh/release-name + meta.helm.sh/release-namespace
-    #      and label app.kubernetes.io/managed-by=Helm.
+    #      and label app.kubernetes.io/managed-by=Helm. Keep its other
+    #      annotations: `tenant-api.vibe/account-id-high-water` is the AccountID
+    #      high-water mark (#2928), and a copy without it loses the check that
+    #      stops an older registry from re-issuing AccountIDs.
     #   2. `helm upgrade` with the new value. Helm adopts the object and patches
     #      only the keys its manifest carries — the mount sentinel, never
     #      store.json / revoked.txt — so the copy survives.
