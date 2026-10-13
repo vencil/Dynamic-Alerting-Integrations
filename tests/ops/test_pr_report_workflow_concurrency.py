@@ -1,7 +1,8 @@
-"""The three sticky-comment report workflows: one run per PR, stamped comments.
+"""The sticky-comment report workflows: one run per PR, stamped comments.
 
 #1518. `blast-radius.yml`, `config-diff.yaml` and `guard-defaults-impact.yml`
-each edit ONE sticky PR comment in place. Two facts make that dangerous:
+each edit ONE sticky PR comment in place (`config-diff-advisory.yml`, the
+ADR-037 advisory run, joined them later). Two facts make that dangerous:
 
   1. Without a concurrency group, two pushes in quick succession race, and the
      comment ends up describing whichever run finished LAST — possibly the
@@ -14,7 +15,7 @@ What this module holds, and how:
   * Each workflow declares a TOP-LEVEL `concurrency`. Its `group` and
     `cancel-in-progress` are EVALUATED — not string-matched — against synthetic
     `github` contexts, one per event: two pushes to one PR share a group and
-    cancel; two PRs do not share; the three workflows never share (two of them
+    cancel; two PRs do not share; the workflows never share (two of them
     fire on the same paths, and a shared group would let one cancel the other);
     and every non-`pull_request` event neither cancels nor shares a group with
     anything, including another run of the same event on the same ref (a group
@@ -57,6 +58,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = (
     ".github/workflows/blast-radius.yml",
     ".github/workflows/config-diff.yaml",
+    ".github/workflows/config-diff-advisory.yml",
     ".github/workflows/guard-defaults-impact.yml",
 )
 
@@ -347,7 +349,7 @@ def test_non_pr_events_never_cancel_or_share(rel, event) -> None:
         f"group, so a PR push would cancel it (or it would cancel the PR's).")
 
 
-def test_the_three_workflows_never_share_a_group() -> None:
+def test_the_workflows_never_share_a_group() -> None:
     groups = {}
     for rel in WORKFLOWS:
         conc, name = _concurrency(rel)
