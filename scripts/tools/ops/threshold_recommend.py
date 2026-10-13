@@ -110,8 +110,10 @@ _HELP = {
         'en': 'Lookback period (default: 7d; use 14d for lower-bound/percentile-lower keys — needs ≥5 full UTC days, 7d is marginal)',
     },
     'min_samples': {
-        'zh': '最低樣本數門檻（預設 100）',
-        'en': 'Minimum sample count threshold (default: 100)',
+        'zh': '最低樣本數門檻：MEDIUM 與 HIGH 都至少要這麼多樣本（預設 100，不得小於 100；'
+              'HIGH 另需 ≥ 1000）',
+        'en': 'Minimum sample count: both MEDIUM and HIGH need at least this many '
+              'samples (default: 100, may not be below 100; HIGH also needs >= 1000)',
     },
     'dry_run': {
         'zh': '僅顯示 PromQL 查詢，不實際執行',
@@ -148,6 +150,11 @@ PERCENTILES = {
 # Sample count thresholds for confidence grading
 SAMPLE_THRESHOLD_HIGH = 1000
 SAMPLE_THRESHOLD_MEDIUM = 100
+# #2941: an upper-bound key with samples in fewer distinct UTC hours than this
+# is graded LOW whatever its sample count (1000 points of a 15s rule are ~4h of
+# data). Hours covered, not first-to-last span: one stray early sample, or two
+# short series far apart, must not make a few hours of data look like a day.
+MIN_UPPER_COVERAGE_HOURS = 24
 
 # ---------------------------------------------------------------------------
 # #916 Item A — lower-bound (percentile-lower) engine tunables
@@ -287,11 +294,27 @@ def grade_confidence(sample_count: int, min_samples: int) -> str:
     Returns:
         CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, or CONFIDENCE_LOW.
     """
-    if sample_count >= SAMPLE_THRESHOLD_HIGH:
+    # #2941: --min-samples raises every level, HIGH included; it cannot lower
+    # them (the CLI refuses a value below SAMPLE_THRESHOLD_MEDIUM).
+    if sample_count >= max(min_samples, SAMPLE_THRESHOLD_HIGH):
         return CONFIDENCE_HIGH
     if sample_count >= max(min_samples, SAMPLE_THRESHOLD_MEDIUM):
         return CONFIDENCE_MEDIUM
     return CONFIDENCE_LOW
+
+
+def min_samples_arg(value: str) -> int:
+    """argparse ``type=`` for --min-samples (#2941): an integer of at least
+    SAMPLE_THRESHOLD_MEDIUM. The confidence floors cannot be lowered, so a
+    smaller value used to be accepted and silently change nothing."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
+    if n < SAMPLE_THRESHOLD_MEDIUM:
+        raise argparse.ArgumentTypeError(
+            f"must be at least {SAMPLE_THRESHOLD_MEDIUM} (the MEDIUM floor): {value!r}")
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -682,8 +705,9 @@ def query_prometheus_range_ts(
     """Like ``query_prometheus_range`` but keeps the sample timestamps.
 
     The lower-bound engine (#916) buckets samples by UTC day to compute a
-    daily-P5, so it needs ``(ts, value)`` pairs; the upper-bound path discards
-    the timestamp and is left unchanged. Returns ``(pairs, error_or_none)``.
+    daily-P5, and the upper-bound path counts the UTC hours its samples cover
+    (#2941), so both need ``(ts, value)`` pairs. Returns
+    ``(pairs, error_or_none)``.
 
     NaN/Inf are filtered (parity with ``compute_percentiles``): a hit-ratio
     recording rule can emit ``NaN`` while idle (0/0), and an unfiltered NaN would
@@ -876,18 +900,16 @@ def _recommend_key(
                 key, current_value, pairs, min_samples
             )
         else:
-            # Upper-bound path (unchanged).
-            values, err = query_prometheus_range(prometheus_url, promql)
+            # Upper-bound path. Timestamped and finite-only (#2956: NaN / Inf
+            # are not data, and counted they let 999 NaN + 1 point grade HIGH).
+            # The timestamps give the hours covered the #2941 floor needs.
+            pairs, err = query_prometheus_range_ts(prometheus_url, promql)
             if err:
                 return KeyRecommendation(
                     key=key, current_value=current_value,
                     reason=f"query error: {err[:60]}", promql=promql,
                 )
-            # #2956: NaN / Inf (a ratio rule over a zero denominator) are not
-            # data. compute_percentiles drops them, so the confidence count
-            # must too — else 999 NaN + 1 point grades HIGH, and all-NaN
-            # grades HIGH with every percentile 0.
-            values = [v for v in values if math.isfinite(v)]
+            values = [v for _, v in pairs]
             if not values:
                 return KeyRecommendation(
                     key=key, current_value=current_value,
@@ -899,6 +921,13 @@ def _recommend_key(
                 key=key, current_value=current_value, pcts=pcts,
                 sample_count=len(values), min_samples=min_samples,
             )
+            hours = len({int(ts // 3600) for ts, _ in pairs})
+            if hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW:
+                # #2941: too little history for any recommendation to be
+                # trusted; LOW keeps threshold_govern from opening a PR.
+                rec.confidence = CONFIDENCE_LOW
+                rec.reason = (f"{rec.reason}; data in {hours} distinct hour(s) "
+                              f"< {MIN_UPPER_COVERAGE_HOURS} → LOW")
     except Exception as exc:  # noqa: BLE001 — one bad value must not sink the run
         # Reason phrasing follows the key's own direction (an upper-bound key
         # blowing up must not be mislabelled "lower-bound floor").
@@ -1358,7 +1387,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--min-samples",
-        type=int,
+        type=min_samples_arg,
         default=100,
         help=_HELP['min_samples'][_LANG],
     )

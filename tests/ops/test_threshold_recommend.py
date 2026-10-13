@@ -31,6 +31,24 @@ import threshold_recommend as tr  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from factories import write_yaml, make_tenant_yaml  # noqa: E402
 
+
+def _ts_pairs(values, step=100.0, start=1_700_000_000.0):
+    """(ts, value) pairs as query_prometheus_range_ts returns them; the
+    upper-bound path reads timestamps too since #2941. The default step makes
+    1000 points span ~27.7h, above the 24h floor."""
+    return [(start + i * step, float(v)) for i, v in enumerate(values)]
+
+
+def _range_result(values, step=100.0, start=1_700_000_000.0):
+    """A raw Prometheus range result, values as the API spells them."""
+    def spell(v):
+        if v != v:
+            return "NaN"
+        if v in (float("inf"), float("-inf")):
+            return "+Inf" if v > 0 else "-Inf"
+        return str(v)
+    return [{"values": [[start + i * step, spell(v)] for i, v in enumerate(values)]}]
+
 # #2116: run_analysis reads the tree through da-guard (effective + served-values);
 # the in-process calls find this repo's build via `$DA_GUARD_BINARY`.
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -117,8 +135,25 @@ class TestConfidence:
         """自訂 min_samples 影響 MEDIUM 門檻。"""
         # With min_samples=500, count=200 should be LOW
         assert tr.grade_confidence(200, min_samples=500) == tr.CONFIDENCE_LOW
-        # With min_samples=50, count=200 should be MEDIUM
-        assert tr.grade_confidence(200, min_samples=50) == tr.CONFIDENCE_MEDIUM
+        # The MEDIUM floor of 100 cannot be lowered (#2941; the CLI refuses
+        # such a value): 60 samples stay LOW under min_samples=50.
+        assert tr.grade_confidence(60, min_samples=50) == tr.CONFIDENCE_LOW
+
+    def test_min_samples_raises_high_too(self):
+        """#2941: --min-samples above 1000 used to leave HIGH at 1000."""
+        assert tr.grade_confidence(1500, min_samples=5000) == tr.CONFIDENCE_LOW
+        assert tr.grade_confidence(5000, min_samples=5000) == tr.CONFIDENCE_HIGH
+        assert tr.grade_confidence(1500, min_samples=1000) == tr.CONFIDENCE_HIGH
+
+    @pytest.mark.parametrize("text", ["99", "0", "-1", "abc", "1.5"])
+    def test_min_samples_arg_refuses(self, text):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError):
+            tr.min_samples_arg(text)
+
+    @pytest.mark.parametrize("text, expected", [("100", 100), ("5000", 5000)])
+    def test_min_samples_arg_accepts(self, text, expected):
+        assert tr.min_samples_arg(text) == expected
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -356,10 +391,10 @@ class TestAnalyzeTenant:
         assert "connections" in keys
         assert "_silent_mode" not in keys
 
-    @patch("threshold_recommend.query_prometheus_range")
+    @patch("threshold_recommend.query_prometheus_range_ts")
     def test_with_prometheus_data(self, mock_query):
         """mapped key 有 Prometheus 資料時應產生推薦。"""
-        mock_query.return_value = ([80, 82, 78, 85, 90, 88, 79, 83, 81, 86] * 50, None)
+        mock_query.return_value = (_ts_pairs([80, 82, 78, 85, 90, 88, 79, 83, 81, 86] * 50), None)
         config = {"connections": 70}
         report = tr.analyze_tenant(
             "db-a", config, prometheus_url="http://prom:9090", observed_map=self.HERMETIC_MAP
@@ -370,7 +405,7 @@ class TestAnalyzeTenant:
         # confirm it queried the observed series, not user_threshold
         assert "tenant:mysql_threads_connected:max" in report.keys[0].promql
 
-    @patch("threshold_recommend.query_prometheus_range")
+    @patch("threshold_recommend.query_prometheus_range_ts")
     def test_no_data_points(self, mock_query):
         """mapped key 無資料點應返回 LOW confidence。"""
         mock_query.return_value = ([], None)
@@ -967,7 +1002,7 @@ class TestAnalyzeTenantLowerBound:
         rec = report.keys[0]
         assert rec.force_manual is True and rec.recommended is None
 
-    @patch("threshold_recommend.query_prometheus_range")
+    @patch("threshold_recommend.query_prometheus_range_ts")
     def test_upper_bound_exception_reason_not_lower_labelled(self, mock_q):
         # item 4: an UPPER-bound key blowing up in the per-key try/except must NOT
         # be mislabelled "lower-bound floor" — the reason follows direction.
@@ -988,9 +1023,11 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
     _UPPER_MAP = {"connections": {"scope": "tenant", "direction": ">",
                                   "observed_series": "tenant:x:max"}}
 
-    def _upper(self, values):
-        with patch("threshold_recommend.query_prometheus_range",
-                   return_value=(values, None)):
+    def _upper(self, values, step=100.0):
+        """Through the raw Prometheus response, so the finite filter that
+        query_prometheus_range_ts applies is the one under test."""
+        with patch("threshold_recommend.query_prometheus_instant",
+                   return_value=(_range_result(values, step), None)):
             report = tr.analyze_tenant("db-x", {"connections": "2000"},
                                        prometheus_url="http://p:9090",
                                        observed_map=self._UPPER_MAP)
@@ -1017,6 +1054,67 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
         rec = self._upper([50.0 + (i % 10) for i in range(1000)])
         assert rec.sample_count == 1000
         assert rec.confidence == tr.CONFIDENCE_HIGH
+
+    # ── #2941: the 24-distinct-hour coverage floor ─────────────────────
+    _BIG_DELTA = [50.0 + (i % 10) for i in range(1000)]   # current 2000 → ~-97%
+    _T0 = 1_700_000_000.0 - (1_700_000_000.0 % 3600)      # on an hour boundary
+
+    def _upper_pairs(self, pairs):
+        with patch("threshold_recommend.query_prometheus_range_ts",
+                   return_value=(pairs, None)):
+            report = tr.analyze_tenant("db-x", {"connections": "2000"},
+                                       prometheus_url="http://p:9090",
+                                       observed_map=self._UPPER_MAP)
+        return report.keys[0]
+
+    def test_short_history_is_low_and_not_governed(self):
+        """1000 points of a 15s rule are ~4.2h of data: HIGH by count, LOW
+        by coverage, so threshold_govern opens no PR for it."""
+        import threshold_govern as tg
+        rec = self._upper(self._BIG_DELTA, step=15.0)
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert "distinct hour(s) < 24" in rec.reason
+        assert rec.recommended is not None          # still shown, only not trusted
+        assert tg.is_governance_actionable(rec, 25.0) is False
+
+    def test_short_history_downgrades_medium_too(self):
+        """A 1m rule's 16h is ~960 points: MEDIUM by count, still too short."""
+        rec = self._upper_pairs(_ts_pairs(self._BIG_DELTA[:960], step=60.0,
+                                          start=self._T0))
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert "distinct hour(s) < 24" in rec.reason
+
+    def test_a_stray_early_sample_does_not_stretch_the_history(self):
+        """A first-to-last span would read 6 days here; 5 hours are covered."""
+        pairs = ([(self._T0 - 6 * 86400, 55.0)]
+                 + _ts_pairs(self._BIG_DELTA, step=15.0, start=self._T0))
+        rec = self._upper_pairs(pairs)
+        assert rec.confidence == tr.CONFIDENCE_LOW
+
+    def test_two_short_series_far_apart_are_still_short(self):
+        pairs = (_ts_pairs(self._BIG_DELTA[:240], step=15.0, start=self._T0)
+                 + _ts_pairs(self._BIG_DELTA[:240], step=15.0,
+                             start=self._T0 + 30 * 3600))
+        rec = self._upper_pairs(pairs)
+        assert rec.confidence == tr.CONFIDENCE_LOW
+
+    def test_24_distinct_hours_are_enough(self):
+        """Boundary: one sample in each of 24 consecutive hours, many samples
+        in total, is not short; 23 hours are."""
+        def hours(n):
+            return [(self._T0 + h * 3600 + k * 60, 50.0 + (k % 10))
+                    for h in range(n) for k in range(60)]
+        import threshold_govern as tg
+        rec = self._upper_pairs(hours(24))
+        assert rec.confidence == tr.CONFIDENCE_HIGH
+        assert "distinct hour" not in rec.reason
+        assert tg.is_governance_actionable(rec, 25.0) is True
+        assert self._upper_pairs(hours(23)).confidence == tr.CONFIDENCE_LOW
+
+    def test_short_history_does_not_touch_an_already_low_grade(self):
+        rec = self._upper([50.0] * 10, step=15.0)
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert "distinct hour" not in rec.reason
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1045,6 +1143,19 @@ class TestPrometheusEnvFallback:
             "threshold_recommend.py", "--config-dir", str(tmp_path), *extra])
         tr.main()
         return captured["url"]
+
+    @pytest.mark.parametrize("value", ["99", "0", "-1"])
+    def test_min_samples_below_100_is_caller_error(self, monkeypatch, tmp_path,
+                                                    capsys, value):
+        """#2941: used to be accepted and change nothing."""
+        monkeypatch.setattr(tr, "run_analysis", lambda *a, **k: pytest.fail("ran"))
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_recommend.py", "--config-dir", str(tmp_path),
+            "--min-samples", value])
+        with pytest.raises(SystemExit) as exc:
+            tr.main()
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert "--min-samples" in capsys.readouterr().err
 
     def test_uses_env_when_flag_absent(self, monkeypatch, tmp_path):
         """--prometheus 省略 + $PROMETHEUS_URL 有值 → 用 env 值。"""
