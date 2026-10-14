@@ -1,0 +1,18 @@
+# Bare-rules promtool target for the GeneratorJudgementMemoryNearLimit alert.
+# promtool can't consume the deployed ConfigMap directly (it needs a top-level
+# `groups:` document, not `data: platform-alert.yml: |`), so this is an
+# EXTRACTED COPY of the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — the expr/for/labels/summary here must match
+# byte-for-byte. tests/rulepacks/test_platform_rules_extract_sync.py enforces it.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: GeneratorJudgementMemoryNearLimit
+        expr: da_generator_judgement_peak_rss_bytes / da_generator_judgement_memory_limit_bytes > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "generator container: a write judgement used over 80% of its memory limit"

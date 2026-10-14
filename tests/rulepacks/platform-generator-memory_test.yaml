@@ -1,0 +1,99 @@
+# promtool behavioural test for GeneratorJudgementMemoryNearLimit (#2901):
+#   1) FIRES when the latest judgement's peak stays above 80% of the limit.
+#   2) does NOT fire at 50% of the limit.
+#   3) the boundary: just under 80% does not fire, just over does.
+#   4) does NOT fire on one scrape above 80% (shorter than the 5m hold-down).
+#   5) the ratio, not bytes: the same peak against a larger limit does not fire.
+# Run: promtool test rules tests/rulepacks/platform-generator-memory_test.yaml
+# 192Mi = 201326592 bytes; 170Mi = 178257920; 96Mi = 100663296;
+# 153.6Mi (80%) = 161061273.6 → 161061273 is just under, 161061274 just over.
+rule_files:
+  - platform-generator-memory.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: near-limit-fires
+    input_series:
+      - series: 'da_generator_judgement_peak_rss_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '178257920x30'
+      - series: 'da_generator_judgement_memory_limit_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '201326592x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GeneratorJudgementMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "generator container: a write judgement used over 80% of its memory limit"
+
+  - interval: 1m
+    name: half-the-limit-no-fire
+    input_series:
+      - series: 'da_generator_judgement_peak_rss_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '100663296x30'
+      - series: 'da_generator_judgement_memory_limit_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '201326592x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GeneratorJudgementMemoryNearLimit
+        exp_alerts: []
+
+  # ⚠️ The boundary: one byte under 80% does not fire, one byte over does.
+  - interval: 1m
+    name: threshold-is-strict
+    input_series:
+      - series: 'da_generator_judgement_peak_rss_bytes{job="tenant-api", instance="a"}'
+        values: '161061273x30'
+      - series: 'da_generator_judgement_memory_limit_bytes{job="tenant-api", instance="a"}'
+        values: '201326592x30'
+      - series: 'da_generator_judgement_peak_rss_bytes{job="tenant-api", instance="b"}'
+        values: '161061274x30'
+      - series: 'da_generator_judgement_memory_limit_bytes{job="tenant-api", instance="b"}'
+        values: '201326592x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GeneratorJudgementMemoryNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: tenant-api
+              instance: b
+            exp_annotations:
+              summary: "generator container: a write judgement used over 80% of its memory limit"
+
+  # ⚠️ The eval at 6m is the DISCRIMINATOR for `for: 5m`: the ratio IS above
+  # 0.8 there, so a rule without the hold-down would already fire.
+  - interval: 1m
+    name: one-scrape-spike-no-fire
+    input_series:
+      - series: 'da_generator_judgement_peak_rss_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '100663296x5 178257920 100663296x24'
+      - series: 'da_generator_judgement_memory_limit_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '201326592x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: GeneratorJudgementMemoryNearLimit
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GeneratorJudgementMemoryNearLimit
+        exp_alerts: []
+
+  # The same 170Mi peak against a 512Mi limit is 33%: no alert.
+  - interval: 1m
+    name: ratio-not-bytes
+    input_series:
+      - series: 'da_generator_judgement_peak_rss_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '178257920x30'
+      - series: 'da_generator_judgement_memory_limit_bytes{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '536870912x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GeneratorJudgementMemoryNearLimit
+        exp_alerts: []
