@@ -2017,6 +2017,74 @@ def routing_values_not_string(routing_config: object) -> list[tuple[str, object]
     return out
 
 
+def _canonical(value: object) -> str | None:
+    """A stable text for comparing two YAML values structurally (sorted keys),
+    or None when it has none (a mapping keyed by mixed types)."""
+    try:
+        return json.dumps(value, sort_keys=True, default=repr)
+    except (TypeError, ValueError):
+        return None
+
+
+def override_redundancies(routing_config: object) -> list[tuple[str, str, str]]:
+    """``(kind, field, text)`` per override that changes nothing (#2904).
+
+    Two shapes, both warnings that never block (da-guard's
+    ``duplicate_override_matcher`` / ``redundant_override_receiver``, warn
+    there too — ADR-036 moves them here before the Go copy goes):
+
+    * ``duplicate_override_matcher`` (field ``overrides[i]``): the override
+      carries the same matcher as an earlier one, so the earlier one catches
+      every alert first and this one never takes effect. Only overrides the
+      generator renders count — exactly one of ``alertname`` /
+      ``metric_group`` set, by the truthiness ``_validate_override_matcher``
+      uses — and the matcher is that one key with its value.
+    * ``redundant_override_receiver`` (field ``overrides[i].receiver``): the
+      override's receiver is structurally the main receiver (same keys, same
+      values), so the alerts it catches reach the same destination anyway.
+      Judged for every mapping override whatever its matcher, as da-guard
+      judges it.
+
+    Order: list order, the duplicate line of an override before its receiver
+    line. A non-list ``overrides`` or a non-mapping entry is judged elsewhere
+    (``invalid_override_entry``).
+    """
+    out: list[tuple[str, str, str]] = []
+    if not isinstance(routing_config, dict):
+        return out
+    overrides = routing_config.get("overrides")
+    if not isinstance(overrides, list):
+        return out
+    main = routing_config.get("receiver")
+    main_sig = _canonical(main) if isinstance(main, dict) else None
+    first_by_matcher: dict[str, int] = {}
+    for idx, override in enumerate(overrides):
+        if not isinstance(override, dict):
+            continue
+        present = [k for k in OVERRIDE_MATCHER_KEYS if k in override and override[k]]
+        if len(present) == 1:
+            sig = _canonical([present[0], override[present[0]]])
+            if sig is not None and sig in first_by_matcher:
+                first = first_by_matcher[sig]
+                out.append((
+                    "duplicate_override_matcher", f"overrides[{idx}]",
+                    f"override[{idx}] has the same matcher as override[{first}] "
+                    f"({present[0]}={override[present[0]]!r}); override[{first}] "
+                    f"catches those alerts first, so this one never takes "
+                    f"effect — remove it or change its matcher"))
+            elif sig is not None:
+                first_by_matcher[sig] = idx
+        receiver = override.get("receiver")
+        if (main_sig is not None and isinstance(receiver, dict)
+                and _canonical(receiver) == main_sig):
+            out.append((
+                "redundant_override_receiver", f"overrides[{idx}].receiver",
+                f"override[{idx}].receiver is identical to the main receiver; "
+                f"the alerts it catches reach the same destination without "
+                f"it — remove the override or point it at another receiver"))
+    return out
+
+
 def value_not_string_message(tenant: str, field: str, value: object) -> str:
     """The ``--strict`` refusal for one ``routing_values_not_string`` entry."""
     key = field.rsplit(".", 1)[-1]

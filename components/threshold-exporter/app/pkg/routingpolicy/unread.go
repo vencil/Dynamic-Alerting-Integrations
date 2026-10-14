@@ -82,7 +82,16 @@ func topMap(name string, data []byte) map[string]any {
 	if top.Decode(&v) != nil {
 		return nil
 	}
-	m, _ := asStringMap(v)
+	// #2904: keys as the exporter reads them (config.ExtractDefaultsBlock
+	// runs over NormalizeYAMLToJSON, which re-spells a non-string key instead
+	// of refusing the map; a threshold profile is decoded string-keyed the
+	// same way) — and as the route generator's loader does (raw key text).
+	// Without it asStringMap called `defaults: {1: 5}` no mapping, so a
+	// top-level `_routing` beside it was reported although the exporter takes
+	// the `defaults:` block and merges nothing else; and one non-string key
+	// in a top level, a profiles block or a profile hid the `_routing` the
+	// exporter does merge. After this every mapping below is string-keyed.
+	m, _ := asStringMap(config.NormalizeYAMLToJSON(v))
 	return m
 }
 
@@ -91,8 +100,9 @@ func unreadInDefaults(name string, data []byte) []Problem {
 	if doc == nil {
 		return nil
 	}
-	// The exporter's own rule (config.ExtractDefaultsBlock): a `defaults:`
-	// mapping is the block, anything else makes the document the block.
+	// The exporter's own rule (config.ExtractDefaultsBlock over
+	// NormalizeYAMLToJSON): a `defaults:` mapping — any keys — is the block,
+	// anything else makes the document the block.
 	if block, wrapped := asStringMap(doc["defaults"]); wrapped {
 		var out []Problem
 		for _, k := range sortedRoutingKeys(block) {

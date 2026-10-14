@@ -69,6 +69,7 @@ from _grar_validate import (  # noqa: E402
     ignored_routing_keys,
     invalid_tenant_id_text,
     unknown_routing_keys,
+    override_redundancies,
     routing_defaults_not_mapping_text,
     routing_group_by_invalid,
     routing_not_mapping_text,
@@ -463,6 +464,90 @@ def _enforced_in_unread_file(path: Path, fname: str, result: dict) -> None:
         _refuse_nested_enforced(fname, result)
 
 
+# #2904: the routing keys this reader reads at the top level of a defaults
+# CARRIER (the root's, and since #2326 a subdirectory's `_routing_defaults`;
+# `_routing_enforced` below the root is refused by `_refuse_nested_enforced`).
+_CARRIER_TOP_LEVEL_ROUTING_KEYS = frozenset({"_routing_defaults", "_routing_enforced"})
+
+
+def _is_routing_key(key: object) -> bool:
+    """``_routing`` or ``_routing_<…>`` — the keys this reader reads by name
+    (Go: ``config.IsRoutingKey``). Narrower than the reserved ``_routing``
+    prefix: ``_routingProfile`` is no routing key."""
+    return isinstance(key, str) and (key == "_routing" or key.startswith("_routing_"))
+
+
+def _unread_routing_fix(key: str) -> str:
+    """Where *key* belongs instead (the remedy of one unread-location line)."""
+    if key == "_routing":
+        return ("move it to `_routing_defaults` at the top level of a conf.d root "
+                "platform file (every tenant), a routing profile in "
+                "`_routing_profiles.yaml` referenced by `_routing_profile` (a group), "
+                "or the tenant's own file (one tenant)")
+    if key == "_routing_profile":
+        return ("set `_routing_profile` in the tenant's own file (or its root "
+                "platform `tenants:` entry)")
+    if key == "_routing_enforced":
+        return ("move `_routing_enforced` to the top level of a conf.d ROOT platform "
+                "file (not under `defaults:`, not below the root)")
+    if key in _CARRIER_TOP_LEVEL_ROUTING_KEYS:
+        return f"move `{key}` to the top level of this defaults file (not under `defaults:`)"
+    return ("this reader reads no such key here; move the routing to "
+            "`_routing_defaults`, `_routing_profiles.yaml`, or the tenant's own `_routing`")
+
+
+def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
+                    is_root_platform: bool, result: dict) -> None:
+    """#2904 (#2291): routing keys written where this reader never reads them.
+
+    The exporter merges such a key into every tenant's effective config, so a
+    reader of the effective config sees routing no route is rendered from.
+    Two places, as da-guard's ``routing_in_unread_location`` (an error
+    there; ADR-036 §9 moves it here):
+
+    1. inside the ``defaults:`` mapping of the directory's selected defaults
+       carrier (root or below) — field ``defaults.<key>``;
+    2. inside a threshold profile of a root platform file's ``profiles:``
+       mapping (``_profile``; routing profiles are ``routing_profiles:``) —
+       field ``profiles.<name>.<key>``.
+
+    Each is a ``WARN … skipping`` line (blocking under ``--validate``, as the
+    #2326 F3 shape of this kind is) and a routing-tree record for the parity
+    matrix. Keys in name order, profiles in name order.
+    """
+    # A `_routing*` key at the TOP level of a `_` file — a carrier with no
+    # `defaults:` mapping included — is routing_key_ignored instead (#2983,
+    # _record_unknown_routing_keys), as da-guard reports it: named once.
+    found: list[tuple[str, str, str]] = []   # (field, key, why)
+    if is_carrier:
+        block = data.get("defaults")
+        if isinstance(block, dict):
+            found.extend(
+                (f"defaults.{k}", k,
+                 "a defaults block is merged into every tenant's effective "
+                 "config, but the route generator never reads routing from it")
+                for k in sorted(k for k in block if _is_routing_key(k)))
+    profiles = data.get("profiles") if is_root_platform else None
+    if isinstance(profiles, dict):
+        for name in sorted((n for n in profiles if isinstance(n, str))):
+            body = profiles[name]
+            if not isinstance(body, dict):
+                continue
+            found.extend(
+                (f"profiles.{name}.{k}", k,
+                 f"a threshold profile fills its keys into the tenants on "
+                 f"`_profile: {name}`, but the route generator never reads "
+                 f"routing from it")
+                for k in sorted(k for k in body if _is_routing_key(k)))
+    for fld, key, why in found:
+        text = f"{fname}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
+        result.setdefault("routing_defaults_errors", []).append(
+            skipped_entry_warning(f"  WARN: {text}, skipping",
+                                  kind="routing_in_unread_location", file=fname,
+                                  field=fld))
+        _tree_problem(result, "routing_in_unread_location", fname, fld, text)
+
+
 def _parse_nested_config(data: dict, fname: str, level: str,
                          is_level_carrier: bool, result: dict) -> None:
     """The routing-plane keys of one file BELOW the conf.d root (#2326).
@@ -580,8 +665,20 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 result.setdefault("_nested_profile_defs", []).append(
                     (fname, level, profiles))
             else:
-                print(f"  WARN: routing_profiles in {_f} must be a dict, ignoring",
-                      file=sys.stderr)
+                # #2904: a finding, not a bare stderr print — da-guard's
+                # routing_profiles_unusable (warn), moved here (ADR-036 §9).
+                # Never blocking, as there.
+                result.setdefault("routing_profiles_errors", []).append(Finding(
+                    f"  WARN: routing_profiles in {fname} must be a mapping of "
+                    f"profile name to routing, got {type(profiles).__name__} — "
+                    f"no routing profile in this file is applied, ignoring",
+                    kind="routing_profiles_unusable", blocks="never",
+                    file=fname, field="routing_profiles"))
+                _tree_problem(
+                    result, "routing_profiles_unusable", fname,
+                    "routing_profiles",
+                    f"{fname}: routing_profiles must be a mapping, got "
+                    f"{type(profiles).__name__}; no profile in it is applied")
         else:
             print(f"  WARN: routing_profiles in {_f} ignored "
                   "(only allowed in _routing_profiles.yaml)", file=sys.stderr)
@@ -1102,6 +1199,14 @@ def _parse_config_files(config_dir: str) -> dict:
         if not data:
             continue
 
+        # #2904: routing where nothing reads it. `chosen` is this directory's
+        # selected carrier (an unselected spelling never got here).
+        _unread_routing(
+            data, fname,
+            is_carrier=chosen is not None and path_p.name == chosen.name,
+            is_root_platform=level == ROOT_LEVEL and is_reserved_name(path_p.name),
+            result=result)
+
         if level == ROOT_LEVEL:
             _parse_platform_config(data, fname, result)
         else:
@@ -1493,9 +1598,24 @@ def load_tenant_tree(
     # schema row) fail on it; render mode prints it and renders without NOC.
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
+    # #2904: routing written where nothing reads it (routing_in_unread_location)
+    # rides the same list, so it blocks `--validate` the same way.
     schema_warnings.extend(parsed.get("routing_defaults_errors", []))
     # #2960: keys a routing block carries that the generator does not read.
     schema_warnings.extend(parsed.get("ignored_routing_keys", []))
+    # #2904: a `routing_profiles:` block that is not a mapping — no profile in
+    # it is applied. A warning that never blocks, as da-guard's
+    # routing_profiles_unusable (warn); the tenants that reference one of its
+    # profiles get the unknown-profile line besides.
+    schema_warnings.extend(parsed.get("routing_profiles_errors", []))
+    # #2904: overrides that change nothing (da-guard's duplicate_override_matcher
+    # / redundant_override_receiver, warn there): a warning in every mode,
+    # never blocking, judged on the RESOLVED routing as da-guard judges it.
+    for tenant, rc in sorted(routing_configs.items()):
+        for kind, fld, text in override_redundancies(rc):
+            schema_warnings.append(Finding(
+                f"  WARN: {tenant}: {text}", kind=kind, blocks="never",
+                tenant=tenant, field=fld))
     # #2341 R5: a tenant `_routing` that is neither a mapping nor a disabling
     # string — the tenant renders no route; blocking like the lines above.
     refused = parsed.get("routing_refused", {})

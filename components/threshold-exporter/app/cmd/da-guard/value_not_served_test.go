@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -41,7 +42,7 @@ func TestGuard_ValueNotServedIsRefused(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, f := range fs {
-		if f.Kind != guard.FindingValueNotServed {
+		if f.Kind != findingkind.FindingValueNotServed.String() {
 			t.Errorf("unexpected finding %+v", f)
 			continue
 		}
@@ -94,7 +95,7 @@ func TestGuard_ValueNotServedMatchesEffective(t *testing.T) {
 	_, fs := guardFindingsOf(t, files)
 	var got []string
 	for _, f := range fs {
-		if f.Kind == guard.FindingValueNotServed {
+		if f.Kind == findingkind.FindingValueNotServed.String() {
 			got = append(got, f.TenantID+"/"+f.Field+"/"+strings.SplitN(f.Message, ":", 2)[0])
 		}
 	}

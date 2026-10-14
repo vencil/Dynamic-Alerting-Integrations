@@ -80,11 +80,19 @@ type parityTree struct {
 	// EnforcedGroupBy (#2503): [file, field, kind] per bad group_by element
 	// of the rendered `_routing_enforced` route(s).
 	EnforcedGroupBy [][3]string `json:"enforced_group_by_invalid"`
+	// RouteFindings (#2904): da-guard's receiver / override findings — the
+	// da-guard half asserts them; parsed only here.
+	RouteFindings              json.RawMessage `json:"route_findings"`
+	RouteFindingsPythonDiffers json.RawMessage `json:"route_findings_python_differs"`
 }
 
 type parityMatrix struct {
 	Comment       []string `json:"_comment"`
 	BlockingKinds []string `json:"blocking_kinds"`
+	// RouteFindingKinds / GoSeverity (#2904): read by the da-guard half and
+	// the Python half; parsed only here.
+	RouteFindingKinds json.RawMessage `json:"route_finding_kinds"`
+	GoSeverity        json.RawMessage `json:"go_severity"`
 	// TenantIDs (#2341 R8, ADR-035): the ids tenantid.Valid accepts and
 	// refuses. SchemaSearchAccepts: ids the schema's propertyNames check lets
 	// through (a JSON Schema pattern is a search) that every decoded-key

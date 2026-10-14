@@ -137,6 +137,23 @@ func TestUnreadRouting(t *testing.T) {
 			"_routing_profiles.yaml": "routing_profiles:\n  x: {receiver: {type: slack}}\n",
 		}, "", []string{"_platform.yaml:profiles.c._routing", "_profiles.yaml:profiles.a._routing_profile",
 			"_profiles.yaml:profiles.b._routing"}},
+		// #2904: a mapping is any mapping, as the exporter judges it
+		// (ExtractDefaultsBlock over NormalizeYAMLToJSON). A `defaults:`
+		// block with a non-string key is still the block — the top-level
+		// `_routing` beside it is merged nowhere (da-guard used to report
+		// it); a non-string key at the top level or in a profile hides
+		// nothing the exporter merges.
+		{"non-string-key-in-defaults-block-is-still-wrapped", map[string]string{
+			"_defaults.yaml":      "defaults: {1: 5}\n_routing: {}\n",
+			"team/_defaults.yaml": "defaults: {~: 1, 2.5: 2}\n_routing: {}\n",
+		}, "", []string{}},
+		{"non-string-key-at-top-level-is-unwrapped", map[string]string{
+			"_defaults.yaml":      "1: 5\n_routing: {}\n",
+			"team/_defaults.yaml": "~: 1\n_routing_profile: p\n",
+		}, "", []string{}}, // #2983: the top level of any `_` file is LoadRoot / LoadTree's (unknown_keys_test.go)
+		{"non-string-key-in-profiles", map[string]string{
+			"_profiles.yaml": "profiles:\n  1: {cpu: 1, _routing: {}}\n  a: {2: 3, _routing: {}}\n",
+		}, "", []string{"_profiles.yaml:profiles.1._routing", "_profiles.yaml:profiles.a._routing"}},
 		{"routing-lookalike-keys-are-not-routing", map[string]string{
 			"_defaults.yaml": "defaults:\n  _routingx: 1\n  routing: 2\n  _severity_dedup: disable\n",
 		}, "", []string{}},

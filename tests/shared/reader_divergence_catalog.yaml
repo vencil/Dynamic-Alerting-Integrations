@@ -677,6 +677,24 @@ entries:
     expire_at: 2027-01-10
     count: 12
 
+  - id: tenant-api-put-ignores-invalid-override-entry
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [override-not-a-mapping-2904, t1, tenant_api]
+    mechanism: >-
+      租戶 _routing 的 overrides 有一項不是 mapping（例如 `- 5`）。產生器以
+      --validate 報 invalid_override_entry（主體是該租戶，blocks=validate）而
+      失敗；da-guard 也回報，但 tenant-api 對這筆 PUT 照常寫入。與
+      tenant-api-put-ignores-invalid-route-entry 是同一個缺口在 overrides 的形狀，
+      第一階段寫入改向產生器取判定（ADR-036 實作順序第 4 步）後一起消失。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
+    expire_at: 2027-01-10
+    count: 1
+
   - id: tenant-api-put-ignores-missing-receiver-field
     reader: tenant-api
     layer: routing

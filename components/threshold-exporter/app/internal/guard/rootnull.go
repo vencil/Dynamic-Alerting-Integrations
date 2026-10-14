@@ -27,17 +27,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// FindingRootDefaultNullUndeclared (warn; #2518): the tenant's config sets
-// Field, which the conf.d root `_defaults.yaml` writes as null — not
-// declared — so the exporter serves no series for it. Field may also be a
-// `<base>_critical` key whose base the root writes as null: the critical row
-// needs the base in the root defaults.
-const FindingRootDefaultNullUndeclared FindingKind = "root_default_null_undeclared"
-
-// checkRootNullUndeclared reports one FindingRootDefaultNullUndeclared per
+// checkRootNullUndeclared reports one findingkind.FindingRootDefaultNullUndeclared per
 // (tenant, key) of input.RootNullUndeclared, for the tenants in
 // input.EffectiveConfigs only (the caller's scope).
 func checkRootNullUndeclared(input CheckInput) []Finding {
@@ -58,7 +52,7 @@ func checkRootNullUndeclared(input CheckInput) []Finding {
 		for _, rk := range keys {
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingRootDefaultNullUndeclared,
+				Kind:     findingkind.FindingRootDefaultNullUndeclared,
 				TenantID: id,
 				Field:    rk.Key,
 				Message:  rootNullMessage(rk),

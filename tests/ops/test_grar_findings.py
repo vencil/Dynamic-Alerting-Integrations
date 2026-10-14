@@ -651,3 +651,59 @@ def test_unclassified_keeps_an_existing_finding():
 def test_exactly_one_kind_walks_every_group(receiver, kind):
     spec = {"exactly_one_of": [["a", "b"], ["c", "d"]]}
     assert gm._exactly_one_kind(spec, receiver) == kind
+
+
+# #2904: the field an exactly-one finding names is da-guard's
+# (receiverspec.exactlyOneProblem): the first non-string field of the group,
+# the group's first field when none is set, the LAST set field otherwise.
+@pytest.mark.parametrize("receiver,field", [
+    ({"a": "x"}, "c"),                       # group 2: none set
+    ({"a": "x", "c": "y", "d": "z"}, "d"),   # group 2: both set, the last
+    ({"a": 5, "b": "x"}, "a"),               # non-string first
+    ({"a": "x", "b": "y"}, "b"),             # group 1 conflicting
+    ({"a": "x", "c": "y"}, None),            # every group satisfied
+])
+def test_exactly_one_field_is_da_guards(receiver, field):
+    spec = {"exactly_one_of": [["a", "b"], ["c", "d"]]}
+    assert gm._exactly_one_field(spec, receiver) == field
+
+
+_MAIN = {"type": "webhook", "url": "https://m.example/h"}
+
+
+@pytest.mark.parametrize("routing,want", [
+    # duplicate: the second of two equal matchers, the first one named
+    ({"receiver": _MAIN, "overrides": [
+        {"alertname": "A", "receiver": {"type": "webhook", "url": "https://a.example/h"}},
+        {"alertname": "A", "receiver": {"type": "webhook", "url": "https://b.example/h"}}]},
+     [("duplicate_override_matcher", "overrides[1]")]),
+    # alertname and metric_group of equal text are different matchers
+    ({"receiver": _MAIN, "overrides": [{"alertname": "A"}, {"metric_group": "A"}]}, []),
+    # an override the generator does not render (both / neither set) takes no part
+    ({"receiver": _MAIN, "overrides": [{"alertname": "A", "metric_group": "m"},
+                                       {"alertname": "A"}, {"alertname": ""}, {"alertname": "A"}]},
+     [("duplicate_override_matcher", "overrides[3]")]),
+    # 1 and True are different values (no Python == between them)
+    ({"receiver": _MAIN, "overrides": [{"alertname": 1}, {"alertname": True}]}, []),
+    # redundant receiver: structural equality with the main one, key order free,
+    # judged whatever the matcher
+    ({"receiver": _MAIN, "overrides": [
+        {"metric_group": "m", "receiver": {"url": "https://m.example/h", "type": "webhook"}},
+        {"alertname": "A", "metric_group": "m", "receiver": dict(_MAIN)}]},
+     [("redundant_override_receiver", "overrides[0].receiver"),
+      ("redundant_override_receiver", "overrides[1].receiver")]),
+    # no main receiver mapping, a non-list overrides, a non-mapping entry: nothing
+    ({"overrides": [{"alertname": "A", "receiver": _MAIN}]}, []),
+    ({"receiver": _MAIN, "overrides": "x"}, []),
+    ({"receiver": _MAIN, "overrides": ["x", None]}, []),
+    ("not a mapping", []),
+    # a mapping keyed by mixed types (PyYAML reads `1:` as an int) has no
+    # stable text: equal receivers or matchers of that shape are not compared
+    ({"receiver": {1: "x", "type": "webhook"}, "overrides": [
+        {"alertname": {1: "a", "b": "c"}, "receiver": {1: "x", "type": "webhook"}},
+        {"alertname": {1: "a", "b": "c"}}]}, []),
+])
+def test_override_redundancies(routing, want):
+    got = gv.override_redundancies(routing)
+    assert [(k, f) for k, f, _text in got] == want
+    assert all(text for _k, _f, text in got)

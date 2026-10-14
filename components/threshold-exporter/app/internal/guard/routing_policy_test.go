@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
 )
@@ -28,7 +29,7 @@ func routingFrom(t *testing.T, src string) map[string]any {
 func kindsByField(fs []Finding) []string {
 	out := make([]string, 0, len(fs))
 	for _, f := range fs {
-		out = append(out, f.Field+"="+string(f.Kind))
+		out = append(out, f.Field+"="+f.Kind.String())
 	}
 	sort.Strings(out)
 	return out
@@ -140,7 +141,7 @@ func TestRoutingGuardrails_PlatformProblemsAndUnknownProfile(t *testing.T) {
 	}
 	var got []string
 	for _, f := range r.Findings {
-		got = append(got, string(f.Severity)+"/"+string(f.Kind)+"/"+f.TenantID+"/"+f.Field)
+		got = append(got, string(f.Severity)+"/"+f.Kind.String()+"/"+f.TenantID+"/"+f.Field)
 	}
 	want := []string{
 		"error/routing_defaults_routes_ignored//_defaults.yaml:_routing_defaults.routes",
@@ -172,7 +173,7 @@ func TestRoutingValueNotString(t *testing.T) {
 	}
 	var got []string
 	for _, f := range checkRoutingGuardrails(CheckInput{RoutingByTenant: map[string]map[string]any{"t1": routing}}) {
-		if f.Kind == FindingRoutingValueNotString {
+		if f.Kind == findingkind.FindingRoutingValueNotString {
 			if f.Severity != SeverityError || !strings.Contains(f.Message, "quote it in YAML") {
 				t.Errorf("finding = %+v", f)
 			}
@@ -200,7 +201,7 @@ func TestRoutingGroupByInvalid(t *testing.T) {
 	}
 	var got []string
 	for _, f := range checkRoutingGuardrails(CheckInput{RoutingByTenant: map[string]map[string]any{"t1": routing}}) {
-		if f.Kind == FindingRoutingGroupByInvalid {
+		if f.Kind == findingkind.FindingRoutingGroupByInvalid {
 			if f.Severity != SeverityError || !strings.HasPrefix(f.Message, `tenant "t1": `+f.Field+" ") {
 				t.Errorf("finding = %+v", f)
 			}
@@ -235,7 +236,7 @@ func TestRouting_EnforcedGroupByJudgedForUnroutedTenants(t *testing.T) {
 	}
 	var got []string
 	for _, f := range r.Findings {
-		if f.Kind == FindingRoutingGroupByInvalid {
+		if f.Kind == findingkind.FindingRoutingGroupByInvalid {
 			got = append(got, f.Field)
 		}
 	}
@@ -267,7 +268,7 @@ func TestRouting_EnforcedGroupBySkipsUnloadedTenants(t *testing.T) {
 	}
 	var got []string
 	for _, f := range r.Findings {
-		if f.Kind == FindingRoutingGroupByInvalid {
+		if f.Kind == findingkind.FindingRoutingGroupByInvalid {
 			got = append(got, f.Field)
 		}
 	}

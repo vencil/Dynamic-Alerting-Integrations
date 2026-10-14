@@ -24,15 +24,11 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// FindingValueNotServed (error; #2065): the tenant's effective config shows
-// Field with a value /metrics does not serve as written. The message starts
-// with the not_served reason.
-const FindingValueNotServed FindingKind = "value_not_served"
-
-// checkValuesNotServed reports one FindingValueNotServed per (tenant, key) of
+// checkValuesNotServed reports one findingkind.FindingValueNotServed per (tenant, key) of
 // input.ValuesNotServed that config.ValueNotServedAsWritten selects (the
 // written-value reasons, on a threshold key), for the tenants in
 // input.EffectiveConfigs only.
@@ -55,7 +51,7 @@ func checkValuesNotServed(input CheckInput) []Finding {
 			}
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingValueNotServed,
+				Kind:     findingkind.FindingValueNotServed,
 				TenantID: id,
 				Field:    k,
 				Message:  valueNotServedMessage(k, ns),

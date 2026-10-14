@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
 
@@ -48,18 +49,18 @@ func writeUndeliverableConfD(t *testing.T, rootDeclares bool) string {
 
 // undeliverableFindings runs the guard with --format json and returns the exit code and
 // the subtree_default_undeliverable findings.
-func undeliverableFindings(t *testing.T, args ...string) (int, []guard.Finding) {
+func undeliverableFindings(t *testing.T, args ...string) (int, []reportedFinding) {
 	t.Helper()
 	code, stdout, stderr := runOnce(t, append([]string{"--format", "json"}, args...)...)
 	var doc struct {
-		Report *guard.GuardReport `json:"report"`
+		Report *reportedReport `json:"report"`
 	}
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("stdout is not JSON (exit %d): %v\nstderr=%s", code, err, stderr)
 	}
-	var out []guard.Finding
+	var out []reportedFinding
 	for _, f := range doc.Report.Findings {
-		if f.Kind == guard.FindingSubtreeDefaultUndeliverable {
+		if f.Kind == findingkind.FindingSubtreeDefaultUndeliverable.String() {
 			out = append(out, f)
 		}
 	}

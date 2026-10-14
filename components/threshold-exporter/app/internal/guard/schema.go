@@ -34,6 +34,8 @@ package guard
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // checkRequiredFields runs the schema validation pass.
@@ -64,7 +66,7 @@ func checkRequiredFields(input CheckInput) []Finding {
 			if !found {
 				out = append(out, Finding{
 					Severity: SeverityError,
-					Kind:     FindingMissingRequired,
+					Kind:     findingkind.FindingMissingRequired,
 					TenantID: tenantID,
 					Field:    field,
 					Message: fmt.Sprintf(
@@ -76,7 +78,7 @@ func checkRequiredFields(input CheckInput) []Finding {
 			if value == nil {
 				out = append(out, Finding{
 					Severity: SeverityError,
-					Kind:     FindingMissingRequired,
+					Kind:     findingkind.FindingMissingRequired,
 					TenantID: tenantID,
 					Field:    field,
 					Message: fmt.Sprintf(
@@ -115,7 +117,7 @@ func checkRequiredRoutingField(tenantID, field string, routing map[string]map[st
 	case !routed && disabled:
 		return []Finding{{
 			Severity: SeverityError,
-			Kind:     FindingMissingRequired,
+			Kind:     findingkind.FindingMissingRequired,
 			TenantID: tenantID,
 			Field:    field,
 			Message: fmt.Sprintf(
@@ -125,7 +127,7 @@ func checkRequiredRoutingField(tenantID, field string, routing map[string]map[st
 	case !found:
 		return []Finding{{
 			Severity: SeverityError,
-			Kind:     FindingMissingRequired,
+			Kind:     findingkind.FindingMissingRequired,
 			TenantID: tenantID,
 			Field:    field,
 			Message: fmt.Sprintf(
@@ -135,7 +137,7 @@ func checkRequiredRoutingField(tenantID, field string, routing map[string]map[st
 	case value == nil:
 		return []Finding{{
 			Severity: SeverityError,
-			Kind:     FindingMissingRequired,
+			Kind:     findingkind.FindingMissingRequired,
 			TenantID: tenantID,
 			Field:    field,
 			Message: fmt.Sprintf(

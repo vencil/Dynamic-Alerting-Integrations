@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -37,7 +38,7 @@ func TestCheckValuesNotServed(t *testing.T) {
 	}
 	var got [][2]string
 	for _, f := range report.Findings {
-		if f.Kind != FindingValueNotServed || f.Severity != SeverityError {
+		if f.Kind != findingkind.FindingValueNotServed || f.Severity != SeverityError {
 			t.Errorf("unexpected finding %+v", f)
 			continue
 		}

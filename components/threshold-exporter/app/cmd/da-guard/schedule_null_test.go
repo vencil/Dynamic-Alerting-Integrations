@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -125,10 +126,10 @@ func walkerValue(t *testing.T, files map[string]string) (any, config.KeySource) 
 	return tx.EffectiveConfig["mysql_connections"], tx.KeySources["mysql_connections"]
 }
 
-func scheduleNullFindings(fs []guard.Finding) []guard.Finding {
-	var out []guard.Finding
+func scheduleNullFindings(fs []reportedFinding) []reportedFinding {
+	var out []reportedFinding
 	for _, f := range fs {
-		if f.Kind == guard.FindingScheduleNullValue {
+		if f.Kind == findingkind.FindingScheduleNullValue.String() {
 			out = append(out, f)
 		}
 	}

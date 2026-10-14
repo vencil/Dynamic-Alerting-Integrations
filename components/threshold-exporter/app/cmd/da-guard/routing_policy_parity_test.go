@@ -11,8 +11,11 @@ package main
 // (#2503) and one with an empty TenantID and Field <file>:<field> per
 // `enforced_group_by_invalid` row (#2503), critical_escalation_missing
 // exactly when `escalation` says violation and one critical_escalation_leak
-// Field per leak ref (#2325), and exactly the tree's `platform` rows as
-// TenantID "" findings. The Python half reads only the same table.
+// Field per leak ref (#2325), exactly the tree's `platform` rows as
+// TenantID "" findings, and exactly the tree's `route_findings` rows
+// [tenant, kind, field] among its findings of a `route_finding_kinds` kind
+// (#2904), every finding of a `go_severity` kind carrying that severity. The
+// Python half reads only the same table.
 
 import (
 	"bytes"
@@ -52,9 +55,29 @@ type daGuardParityTree struct {
 	// of the rendered `_routing_enforced` route(s) — a TenantID ""
 	// routing_group_by_invalid finding with Field <file>:<field> each.
 	EnforcedGroupBy [][3]string `json:"enforced_group_by_invalid"`
+	// RouteFindings (#2904): [tenant, kind, field] per da-guard finding of a
+	// route_finding_kinds kind (receiver contract, override matcher, dead
+	// overrides), sorted. The Python half holds the generator to it, or to
+	// RouteFindingsPythonDiffers where the two differ (parsed only here).
+	RouteFindings              [][3]string     `json:"route_findings"`
+	RouteFindingsPythonDiffers json.RawMessage `json:"route_findings_python_differs"`
+}
+
+type daGuardParityMatrix struct {
+	Trees []daGuardParityTree
+	// RouteFindingKinds (#2904): the kinds RouteFindings lists.
+	RouteFindingKinds map[string]bool
+	// GoSeverity (#2904): kind → the severity da-guard gives it; the Python
+	// half holds the generator to at least that.
+	GoSeverity map[string]string
 }
 
 func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
+	t.Helper()
+	return loadRoutingPolicyMatrixFull(t).Trees
+}
+
+func loadRoutingPolicyMatrixFull(t *testing.T) daGuardParityMatrix {
 	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
 	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "..",
@@ -66,7 +89,10 @@ func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
 	var m struct {
 		Comment       []string        `json:"_comment"`
 		BlockingKinds json.RawMessage `json:"blocking_kinds"`
-		TenantIDs     json.RawMessage `json:"tenant_ids"` // pinned by pkg/routingpolicy
+		// #2904
+		RouteFindingKinds []string          `json:"route_finding_kinds"`
+		GoSeverity        map[string]string `json:"go_severity"`
+		TenantIDs         json.RawMessage   `json:"tenant_ids"` // pinned by pkg/routingpolicy
 		// Why a tenant_api cell is null: the Python half asserts it.
 		TenantAPIUnmeasured json.RawMessage     `json:"tenant_api_unmeasured"`
 		Trees               []daGuardParityTree `json:"trees"`
@@ -79,7 +105,14 @@ func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
 	if len(m.Trees) == 0 {
 		t.Fatal("matrix has no trees — a vacuous table passes nothing")
 	}
-	return m.Trees
+	if len(m.RouteFindingKinds) == 0 || len(m.GoSeverity) == 0 {
+		t.Fatal("route_finding_kinds / go_severity empty — the #2904 rows would pin nothing")
+	}
+	out := daGuardParityMatrix{Trees: m.Trees, RouteFindingKinds: map[string]bool{}, GoSeverity: m.GoSeverity}
+	for _, k := range m.RouteFindingKinds {
+		out.RouteFindingKinds[k] = true
+	}
+	return out
 }
 
 type jsonFinding struct {
@@ -137,7 +170,8 @@ func fieldsOf(fs []jsonFinding, tenantID, kind string) []string {
 
 func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 	t.Parallel()
-	for _, tree := range loadRoutingPolicyMatrix(t) {
+	matrix := loadRoutingPolicyMatrixFull(t)
+	for _, tree := range matrix.Trees {
 		t.Run(tree.Name, func(t *testing.T) {
 			t.Parallel()
 			if len(tree.Expect) == 0 {
@@ -180,6 +214,25 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			sort.Strings(wantPlatform)
 			if !equalStrings(gotPlatform, wantPlatform) {
 				t.Errorf("platform findings %v, table says %v", gotPlatform, wantPlatform)
+			}
+			// #2904: the receiver / override findings, and the severity of
+			// every kind the generator is held to.
+			gotRoute, wantRoute := []string{}, []string{}
+			for _, f := range findings {
+				if matrix.RouteFindingKinds[f.Kind] {
+					gotRoute = append(gotRoute, f.TenantID+" "+f.Kind+" "+f.Field)
+				}
+				if want, ok := matrix.GoSeverity[f.Kind]; ok && f.Severity != want {
+					t.Errorf("%s %s %s: severity %s, go_severity says %s", f.TenantID, f.Kind, f.Field, f.Severity, want)
+				}
+			}
+			for _, row := range tree.RouteFindings {
+				wantRoute = append(wantRoute, row[0]+" "+row[1]+" "+row[2])
+			}
+			sort.Strings(gotRoute)
+			sort.Strings(wantRoute)
+			if !equalStrings(gotRoute, wantRoute) {
+				t.Errorf("route findings %v, table says %v", gotRoute, wantRoute)
 			}
 			// #2503: the enforced route(s)' group_by (the kind is pinned by
 			// pkg/routingpolicy's half; the finding carries file and field).

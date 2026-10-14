@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -152,9 +153,9 @@ func nullMatrixObserve(t *testing.T, files map[string]string, tenantKey string) 
 			continue
 		}
 		switch {
-		case f.Kind == guard.FindingRedundantOverride && f.Field == tenantKey && tenantKey != "":
+		case f.Kind == findingkind.FindingRedundantOverride && f.Field == tenantKey && tenantKey != "":
 			o.redundant = true
-		case (f.Kind == guard.FindingSubtreeDefaultUndeliverable || f.Kind == guard.FindingRootDefaultNullUndeclared) &&
+		case (f.Kind == findingkind.FindingSubtreeDefaultUndeliverable || f.Kind == findingkind.FindingRootDefaultNullUndeclared) &&
 			(f.Field == aliasCanon || f.Field == aliasLegacy):
 			o.named = true
 			o.findings++

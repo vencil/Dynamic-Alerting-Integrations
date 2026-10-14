@@ -34,6 +34,7 @@ The cross-language half of the same semantics is the ``hier-*`` trees of
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -673,3 +674,71 @@ def test_routes_in_a_nested_level_are_stripped_and_block_validate(tmp_path):
     res = _gar("--config-dir", str(d), "--validate", "--strict")
     assert res.returncode == EXIT_VIOLATION, res.stderr
     assert msg in res.stderr
+
+
+def test_unread_routing_names_where_each_key_belongs(tmp_path):
+    """#2904: an unread routing key's line ends with where that key belongs —
+    `_routing_enforced` in a root platform file, a carrier key at the top level
+    of its own defaults file, any other `_routing_*` key in one of the routing
+    homes. A threshold profile that is not a mapping holds no key: skipped."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "_profiles.yaml": "profiles:\n  p-scalar: 5\n  p-map:\n    _routing_x: 1\n",
+        "team/_defaults.yaml": ("defaults:\n  mysql_connections: 60\n"
+                                "  _routing_enforced: {enabled: true}\n"
+                                "  _routing_defaults: {group_wait: 30s}\n"),
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    tree = load_tenant_tree(str(d))
+    got = {(fname, fld): msg for kind, fname, fld, msg in tree.routing_tree_problems
+           if kind == "routing_in_unread_location"}
+    assert sorted(got) == [
+        ("_profiles.yaml", "profiles.p-map._routing_x"),
+        ("team/_defaults.yaml", "defaults._routing_defaults"),
+        ("team/_defaults.yaml", "defaults._routing_enforced"),
+    ], got
+    assert got[("team/_defaults.yaml", "defaults._routing_enforced")].endswith(
+        "move `_routing_enforced` to the top level of a conf.d ROOT platform "
+        "file (not under `defaults:`, not below the root)")
+    assert got[("team/_defaults.yaml", "defaults._routing_defaults")].endswith(
+        "move `_routing_defaults` to the top level of this defaults file (not under `defaults:`)")
+    assert got[("_profiles.yaml", "profiles.p-map._routing_x")].endswith(
+        "this reader reads no such key here; move the routing to `_routing_defaults`, "
+        "`_routing_profiles.yaml`, or the tenant's own `_routing`")
+
+
+@pytest.mark.parametrize("files, field", [
+    ({"team/_defaults.yaml": "defaults:\n  mysql_connections: 60\n  _routing:\n"
+                             "    receiver: {type: webhook, url: https://a.example/h}\n"},
+     "defaults._routing"),
+    ({"_profiles.yaml": "profiles:\n  p1:\n    _routing_profile: p-x\n"},
+     "profiles.p1._routing_profile"),
+])
+def test_unread_routing_is_one_finding_printed_as_every_blocking_line(tmp_path, files, field):
+    """#2904 review N5a: a `routing_in_unread_location` is ONE finding. Its
+    line is printed once where it is found and, under --validate, once more
+    in the `FAIL: N error(s) found:` list — the shape of every blocking line
+    (a non-mapping override is the control) — never twice in that list,
+    although _unread_routing records it twice (the WARN line and the
+    routing-tree record the parity matrix reads)."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "team/t-team.yaml": _tenant("t-team"),
+        "t-ctl.yaml": _tenant("t-ctl", "    _routing:\n      overrides: [5]\n"),
+        **files,
+    })
+    out = tmp_path / "findings.json"
+    res = _gar("--config-dir", str(d), "--validate", "--findings-json", str(out))
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    found = [f for f in json.loads(out.read_text(encoding="utf-8"))["findings"]
+             if f["kind"] in ("routing_in_unread_location", "invalid_override_entry")]
+    assert sorted((f["kind"], f["field"]) for f in found) == [
+        ("invalid_override_entry", "overrides[0]"), ("routing_in_unread_location", field)]
+    stream, _, summary = res.stderr.partition("error(s) found:\n")
+    assert summary, res.stderr
+    for f in found:
+        line = f["message"]
+        assert (stream.count(line), summary.count(line)) == (1, 1), (line, res.stderr)
+    render = _gar("--config-dir", str(d), "-o", str(tmp_path / "out.yaml"))
+    unread = next(f["message"] for f in found if f["kind"] == "routing_in_unread_location")
+    assert render.stderr.count(unread) == 1, render.stderr

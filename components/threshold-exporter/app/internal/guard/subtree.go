@@ -26,15 +26,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
-// FindingSubtreeDefaultUndeliverable (warn; #1976): the tenant inherits Field,
-// a threshold key (see undeliverableThresholds) a subtree `_defaults.yaml` names and the conf.d root `_defaults.yaml`
-// and `optional_overrides:` do not declare. The exporter serves no series for
-// it. Planned to become an error in the next minor release.
-const FindingSubtreeDefaultUndeliverable FindingKind = "subtree_default_undeliverable"
-
-// checkSubtreeUndeliverable reports one FindingSubtreeDefaultUndeliverable per
+// checkSubtreeUndeliverable reports one findingkind.FindingSubtreeDefaultUndeliverable per
 // (tenant, key) of input.UndeliverableInherited, for the tenants in
 // input.EffectiveConfigs only (the caller's scope).
 func checkSubtreeUndeliverable(input CheckInput) []Finding {
@@ -55,7 +51,7 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 		for _, k := range keys {
 			out = append(out, Finding{
 				Severity: SeverityWarn,
-				Kind:     FindingSubtreeDefaultUndeliverable,
+				Kind:     findingkind.FindingSubtreeDefaultUndeliverable,
 				TenantID: id,
 				Field:    k,
 				Message: fmt.Sprintf("Threshold `%s` is inherited from a subtree `_defaults.yaml`, but neither the conf.d root "+

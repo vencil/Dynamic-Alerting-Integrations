@@ -13,15 +13,11 @@ package guard
 import (
 	"fmt"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
-// FindingScheduleNullValue (error; #2708): a threshold is written as a
-// schedule with override windows and a null in it. Field is
-// `<file>:<section>.[<owner>.]<key>`; TenantID is the tenant for a
-// `tenants:` entry, empty for a defaults block or a profile.
-const FindingScheduleNullValue FindingKind = "schedule_null_value"
-
-// checkScheduleNullValues reports one FindingScheduleNullValue per entry of
+// checkScheduleNullValues reports one findingkind.FindingScheduleNullValue per entry of
 // input.ScheduleNulls (already limited to the caller's scope).
 func checkScheduleNullValues(input CheckInput) []Finding {
 	var out []Finding
@@ -37,7 +33,7 @@ func checkScheduleNullValues(input CheckInput) []Finding {
 		}
 		out = append(out, Finding{
 			Severity: SeverityError,
-			Kind:     FindingScheduleNullValue,
+			Kind:     findingkind.FindingScheduleNullValue,
 			TenantID: tenant,
 			Field:    sn.File + ":" + where,
 			Message: fmt.Sprintf("%s: `%s` is a schedule with override windows and a null in it: %s. A null inside "+

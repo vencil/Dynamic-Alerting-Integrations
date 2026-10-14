@@ -13,6 +13,8 @@ package guard
 import (
 	"fmt"
 	"sort"
+
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
 // CheckDefaultsImpact runs the guard against a single proposed
@@ -53,6 +55,29 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkCustomAlertDuplicates(input)...)
 	findings = append(findings, checkMetricsNotGatherable(input)...)
 
+	return newGuardReport(findings, len(input.EffectiveConfigs)), nil
+}
+
+// NewGuardReport builds a report from findings over totalTenants tenants
+// the way CheckDefaultsImpact does: sealed (seal.go), sorted and summarised.
+// findings is not modified.
+func NewGuardReport(findings []Finding, totalTenants int) *GuardReport {
+	return newGuardReport(append([]Finding(nil), findings...), totalTenants)
+}
+
+// newGuardReport is NewGuardReport on a slice it may reorder and change.
+// It seals first, so the summary — and the exit code callers derive from
+// it — counts the findings as they are written.
+func newGuardReport(findings []Finding, totalTenants int) *GuardReport {
+	unregistered := 0
+	for i := range findings {
+		if needsSeal(findings[i]) {
+			findings[i].Kind = findingkind.Unregistered()
+			findings[i].Severity = SeverityError
+			unregistered++
+		}
+	}
+
 	// Stable sort: errors before warnings, then by tenant id, then
 	// by field path. Within the same (severity, tenant, field) we
 	// don't expect duplicates from PR-1 checks but the final tie-
@@ -70,14 +95,15 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 		if fi.Field != fj.Field {
 			return fi.Field < fj.Field
 		}
-		return fi.Kind < fj.Kind
+		return fi.Kind.String() < fj.Kind.String()
 	})
 
 	report := &GuardReport{
 		Findings: findings,
 		Summary: GuardSummary{
-			TotalTenants: len(input.EffectiveConfigs),
+			TotalTenants: totalTenants,
 		},
+		unregistered: unregistered,
 	}
 
 	// Roll-up counts. PassedTenantCount needs the per-tenant view
@@ -91,15 +117,15 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 			// A finding with an empty TenantID is a platform file's —
 			// except invalid_tenant_id, whose TenantID IS the id, the
 			// empty one included (#2341).
-			if f.TenantID != "" || f.Kind == FindingInvalidTenantID {
+			if f.TenantID != "" || f.Kind == findingkind.FindingInvalidTenantID {
 				failingTenants[f.TenantID] = struct{}{}
 			}
 		case SeverityWarn:
 			report.Summary.Warnings++
 		}
 	}
-	report.Summary.PassedTenantCount = len(input.EffectiveConfigs) - len(failingTenants)
-	return report, nil
+	report.Summary.PassedTenantCount = totalTenants - len(failingTenants)
+	return report
 }
 
 // sortedTenantIDs returns the keys of m sorted alphabetically.

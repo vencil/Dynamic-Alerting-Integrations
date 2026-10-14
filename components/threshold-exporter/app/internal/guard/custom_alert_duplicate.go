@@ -18,11 +18,9 @@ package guard
 import (
 	"fmt"
 	"sort"
-)
 
-// FindingCustomAlertDuplicateSeries (error; #2031): a `_custom_alerts` entry
-// the exporter drops because an earlier entry already serves its series.
-const FindingCustomAlertDuplicateSeries FindingKind = "custom_alert_duplicate_series"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
+)
 
 // checkCustomAlertDuplicates reports one finding per entry of
 // input.CustomAlertDuplicates, for the tenants in input.EffectiveConfigs.
@@ -39,7 +37,7 @@ func checkCustomAlertDuplicates(input CheckInput) []Finding {
 		for _, d := range input.CustomAlertDuplicates[id] {
 			out = append(out, Finding{
 				Severity: SeverityError,
-				Kind:     FindingCustomAlertDuplicateSeries,
+				Kind:     findingkind.FindingCustomAlertDuplicateSeries,
 				TenantID: id,
 				Field:    fmt.Sprintf("_custom_alerts[%d]", d.Index),
 				Message: fmt.Sprintf("_custom_alerts[%d] (%q) puts on /metrics the series %s that _custom_alerts[%d] (%q) "+

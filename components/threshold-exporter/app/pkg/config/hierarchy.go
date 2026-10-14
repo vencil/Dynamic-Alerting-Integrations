@@ -1298,10 +1298,17 @@ func extractDefaultsBlock(doc any) map[string]any {
 	if !ok {
 		return nil
 	}
-	if inner, ok := m["defaults"].(map[string]any); ok {
+	if inner, ok := defaultsWrapper(m); ok {
 		return inner
 	}
 	return m
+}
+
+// defaultsWrapper is the one predicate for "the merge reads only `defaults:`
+// of this document": its `defaults` value is a mapping.
+func defaultsWrapper(m map[string]any) (map[string]any, bool) {
+	inner, ok := m["defaults"].(map[string]any)
+	return inner, ok
 }
 
 func extractTenantRaw(doc any, tenantID string) (map[string]any, error) {
@@ -1457,6 +1464,17 @@ func NormalizeYAMLToJSON(v any) any { return normalizeYAMLToJSON(v) }
 // ExtractDefaultsBlock returns the `defaults:` sub-tree from a parsed
 // `_defaults.yaml`-shaped doc; nil for empty / unexpected shape.
 func ExtractDefaultsBlock(doc any) map[string]any { return extractDefaultsBlock(doc) }
+
+// DefaultsBlockWrapped reports whether ExtractDefaultsBlock(doc) returns
+// doc's `defaults:` mapping rather than doc itself.
+func DefaultsBlockWrapped(doc any) bool {
+	m, ok := doc.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, wrapped := defaultsWrapper(m)
+	return wrapped
+}
 
 // ExtractTenantRaw returns `doc.tenants[tenantID]` from a parsed
 // `<tenant>.yaml`-shaped doc, or an error if the document doesn't
