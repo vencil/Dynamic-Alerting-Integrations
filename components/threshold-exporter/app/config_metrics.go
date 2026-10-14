@@ -260,15 +260,16 @@ var unreadableFileReasons = []string{
 	config.UnreadableStatError,
 	config.UnreadableReadError,
 	config.UnreadableWalkError,
+	config.UnreadableSpecialFile,
 }
 
 // da_config_defaults_unusable{reason} label values (#2592). A CLOSED SET:
 //   - parse_failure: a `_defaults` file the flat build rejected
 //     (flatScanState.parseFailed), so its whole block is dropped (ADR-017).
-//   - unreadable: a `_defaults` file the walk dropped with stat_error or
-//     read_error (TreeScan.Unreadable). A defaults file inside a directory
-//     the walk could not list is unknown to it; that directory is
-//     da_config_unreadable_files{reason="walk_error"}.
+//   - unreadable: a `_defaults` file the walk dropped with stat_error,
+//     read_error or special_file (TreeScan.Unreadable). A defaults file
+//     inside a directory the walk could not list is unknown to it; that
+//     directory is da_config_unreadable_files{reason="walk_error"}.
 const (
 	DefaultsUnusableReasonParseFailure = "parse_failure"
 	DefaultsUnusableReasonUnreadable   = "unreadable"
@@ -630,8 +631,9 @@ func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
 // SetUnreadableFiles publishes one walk's TreeScan.Unreadable (#2592) as
 // da_config_unreadable_files{reason} AND as the `unreadable` half of
 // da_config_defaults_unusable (the `_defaults` files among those entries,
-// stat_error / read_error only). Every series is re-Set, the absent ones to
-// 0, so both follow the tree back down once the files are readable again.
+// stat_error / read_error / special_file only). Every series is re-Set, the
+// absent ones to 0, so both follow the tree back down once the files are
+// readable again.
 //
 // ⛔ The defaults half is set HERE, per walk, not at commit. A dropped entry
 // is in no TreeScan map, so it is not a change-detection input (hierarchical
@@ -651,13 +653,15 @@ func (cm *configMetrics) SetUnreadableFiles(us []config.UnreadableFile) {
 	if cm == nil {
 		return
 	}
-	var stat, read, walk, defaults int
+	var stat, read, walk, special, defaults int
 	for _, u := range us {
 		switch u.Reason {
 		case config.UnreadableStatError:
 			stat++
 		case config.UnreadableReadError:
 			read++
+		case config.UnreadableSpecialFile:
+			special++
 		case config.UnreadableWalkError:
 			walk++
 			continue // a directory, never a defaults file
@@ -669,6 +673,7 @@ func (cm *configMetrics) SetUnreadableFiles(us []config.UnreadableFile) {
 	cm.unreadableFiles[config.UnreadableStatError].Set(float64(stat))
 	cm.unreadableFiles[config.UnreadableReadError].Set(float64(read))
 	cm.unreadableFiles[config.UnreadableWalkError].Set(float64(walk))
+	cm.unreadableFiles[config.UnreadableSpecialFile].Set(float64(special))
 	cm.defaultsUnusable[DefaultsUnusableReasonUnreadable].Set(float64(defaults))
 }
 

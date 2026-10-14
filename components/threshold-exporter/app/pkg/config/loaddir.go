@@ -318,7 +318,7 @@ func scanDefaultsSource(scan *TreeScan) DefaultsSource {
 		b, ok := data[absPath]
 		if !ok {
 			var err error
-			if b, err = os.ReadFile(absPath); err != nil {
+			if b, err = ReadConfFile(absPath); err != nil {
 				return nil, ChainDefaults{}, err
 			}
 		}

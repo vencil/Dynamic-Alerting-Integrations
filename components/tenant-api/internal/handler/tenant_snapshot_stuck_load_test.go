@@ -1,39 +1,30 @@
-//go:build unix
-
 package handler
 
-// Split from tenant_snapshot_writer_test.go: syscall.Mkfifo exists only on
-// unix, as in confd/enumerate_fifo_test.go.
-
 import (
-	"os"
-	"path/filepath"
-	"syscall"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
 )
 
-// S4: a load that never returns (a FIFO named *.yaml: the exporter's walker
-// blocks reading it) holds the tree lock only until the deadline. The list
-// answers unknown promptly, and a write goes through.
+// S4: a load that never returns (a hung mount) holds the tree lock only
+// until the deadline. The list answers unknown promptly, and the lock is
+// free. The load is held open through the cache's afterLoad seam, which runs
+// inside the bounded load; it used to be held by a FIFO named *.yaml, which
+// the exporter's walker no longer opens (#2939).
 func TestTenantSnapshots_BlockedLoadReleasesTheTreeLock(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	fifo := filepath.Join(work, "t-fifo.yaml")
-	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
-		t.Skipf("mkfifo: %v", err)
-	}
-	t.Cleanup(func() { // unblock the leaked reader: open for write, then close
-		if f, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = f.Close()
-		}
-	})
 	w := gitops.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false)
 	const deadline = time.Second
 	cache.loadDeadline = deadline
+	gate := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(release)
+	cache.afterLoad = func() { <-gate }
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 
 	answered := make(chan *SearchResponse, 1)
@@ -61,14 +52,8 @@ func TestTenantSnapshots_BlockedLoadReleasesTheTreeLock(t *testing.T) {
 	if took := time.Since(start); took >= deadline/2 {
 		t.Errorf("second request took %v: it started another load behind the stuck one", took)
 	}
-	// The probe is a write that takes the tree lock WITHOUT walking conf.d.
-	// A tenant write can no longer serve: since #2078 it walks the tree to
-	// check where the id is declared, and in this tree that walk hits the same
-	// FIFO — it fails closed (ErrTenantTreeScan, bounded; pinned in gitops'
-	// TestTenantWrite_BlockedTreeScanFailsClosedAndRecovers), which says
-	// nothing about the lock this test is about.
-	// TryWithTreeLock is that probe (#2856 removed the special-file writes
-	// that used to serve): it reports false when anything holds the lock.
+	// TryWithTreeLock is the probe: a write that takes the tree lock without
+	// walking conf.d (#2856). It reports false when anything holds the lock.
 	if !w.TryWithTreeLock(func() {}) {
 		t.Fatal("the writer lock is held behind a stuck reader load")
 	}

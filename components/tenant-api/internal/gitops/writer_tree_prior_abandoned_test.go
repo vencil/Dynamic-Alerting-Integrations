@@ -1,16 +1,13 @@
-//go:build unix
-
 package gitops
 
 // #2153: a walk abandoned at treeScanTimeout keeps running in its goroutine.
 // When it finally returns, its result must not become the prior — the caller
 // already failed closed on it, and only a walk handed back to a caller
-// qualifies.
+// qualifies. The walk is held past the bound through the onTreeScan seam
+// (it used to be held by a FIFO, which the walker no longer opens, #2939).
 
 import (
-	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -21,28 +18,12 @@ func TestTreePrior_AbandonedWalkNeverBecomesPrior(t *testing.T) {
 	w := &Writer{configDir: dir, treeScanTimeout: 200 * time.Millisecond}
 	good := mustScan(t, w)
 
-	fifo := filepath.Join(dir, "ab-stuck.yaml")
-	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
-		t.Skipf("mkfifo: %v", err)
-	}
-	unblock := func() {
-		if f, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = f.Close()
-		}
-	}
-	t.Cleanup(unblock)
-
+	_, _, release := holdFirstWalk(t, w)
 	if _, err := w.scanTree(); err == nil {
-		t.Fatalf("walk over a blocked FIFO returned in time")
+		t.Fatalf("a walk held past the bound returned in time")
 	}
-	unblock()
-	deadline := time.Now().Add(5 * time.Second)
-	for w.stuckTreeScans.Load() != 0 {
-		if time.Now().After(deadline) {
-			t.Fatalf("stuck walk never drained")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	release()
+	waitDrained(t, &w.stuckTreeScans)
 	if w.treePrior.Load() != good {
 		t.Errorf("the abandoned walk installed its result as the prior")
 	}

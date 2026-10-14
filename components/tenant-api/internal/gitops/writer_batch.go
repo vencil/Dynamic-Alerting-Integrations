@@ -254,9 +254,11 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 // gitignored `team/x.yaml` declaring a tenant is a declaration). Nothing of
 // it is committed except the batch's own paths, and the copy is thrown away.
 // Directories and symlinks are recreated as such; `.git` is skipped. A
-// special file the conf.d walker would read (a FIFO named *.yaml) cannot be
-// copied without reading it, and a single write's walk would block on it and
-// fail closed — so the batch fails closed too, with ErrTenantTreeScan.
+// special file named like a config file (a FIFO named *.yaml) cannot be
+// copied without reading it, so the batch fails closed with
+// ErrTenantTreeScan. (A single write's walk used to block on one and fail
+// closed the same way; since #2939 the walker does not open it and records
+// it as unreadable instead, so a single write goes through.)
 func (w *Writer) mirrorServingConf(st *stagingTree) error {
 	src, err := filepath.Abs(w.configDir)
 	if err != nil {
@@ -302,13 +304,15 @@ func (w *Writer) mirrorServingConf(st *stagingTree) error {
 			if err != nil {
 				return err
 			}
-			raw, err := os.ReadFile(p)
+			// cfg.ReadConfFile, not os.ReadFile: an entry swapped for a FIFO
+			// since the listing fails the copy instead of blocking it (#2939).
+			raw, err := cfg.ReadConfFile(p)
 			if err != nil {
 				return err
 			}
 			_ = os.Remove(dst)
 			return os.WriteFile(dst, raw, fi.Mode().Perm())
-		case cfg.IsScannedPath(filepath.ToSlash(rel)):
+		case cfg.IsSpecialFile(t) && cfg.IsScannedPath(filepath.ToSlash(rel)):
 			return fmt.Errorf("%w: conf.d holds a special file %s", ErrTenantTreeScan, filepath.ToSlash(rel))
 		}
 		return nil

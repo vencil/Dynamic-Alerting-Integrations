@@ -22,7 +22,6 @@ package config
 import (
 	"fmt"
 	"log"
-	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -207,7 +206,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 			// Unchanged-but-uncached, or a prior the walker did not have:
 			// read from disk and take the ordinary path below.
 			var rerr error
-			data, rerr = os.ReadFile(fullPath)
+			data, rerr = ReadConfFile(fullPath)
 			if rerr != nil {
 				logger.Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
 				continue

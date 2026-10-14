@@ -232,8 +232,8 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 
 	// ScanDirTreeFiles, not ScanDirTree: the exporter's walk without its
 	// tenant decode (yaml.v3 panics on some files parse-tree must name as
-	// unreadable, e.g. a collection key beside a merge) and without reading
-	// a FIFO, which would block forever.
+	// unreadable, e.g. a collection key beside a merge). Like every mode of
+	// the walk it never opens a special file (#2939).
 	scan, err := config.ScanDirTreeFiles(f.configDir, log.New(io.Discard, "", 0))
 	if err != nil {
 		return fail("%v", err)
@@ -308,7 +308,7 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 			// the walk could read (the generator's readable_carriers too).
 			readers = readersFor(u.RelKey, true)
 		}
-		unreadable(u.RelKey, readers, parsetree.KindReadFailure, unreadableMessage(u.Reason))
+		unreadable(u.RelKey, readers, unreadableKind(u.Reason), unreadableMessage(u.Reason))
 	}
 	if scan.RootWalkErr != nil {
 		unreadable(".", []string{readerExporter, readerGenerator}, parsetree.KindReadFailure, unreadableMessage(config.UnreadableWalkError))
@@ -399,10 +399,6 @@ func notFileEntry(rel, reason string) ([]string, string) {
 	switch reason {
 	case config.NotFileDirLink:
 		return []string{readerGenerator}, "a symlink to a directory the walk does not follow"
-	case config.NotFileSpecial:
-		// The exporter's walk reads it (and blocks on a FIFO); the generator
-		// books it as unusable (`Path.is_file()`).
-		return readersFor(rel, true), "not a regular file (a FIFO, a socket or a device, or a symlink to one); not read"
 	}
 	return []string{readerGenerator}, "a directory with a config file name"
 }
@@ -433,18 +429,25 @@ func fileOnDisk(root, rel string) *diskIssue {
 		case ti.IsDir():
 			r, m := notFileEntry(rel, config.NotFileDirLink)
 			return &diskIssue{r, parsetree.KindNotRegularFile, m}
-		case !ti.Mode().IsRegular():
-			r, m := notFileEntry(rel, config.NotFileSpecial)
-			return &diskIssue{r, parsetree.KindNotRegularFile, m}
+		case config.IsSpecialFile(ti.Mode()):
+			return specialFileIssue(rel)
 		}
 	case fi.IsDir():
 		r, m := notFileEntry(rel, config.NotFileDirectory)
 		return &diskIssue{r, parsetree.KindNotRegularFile, m}
-	case !fi.Mode().IsRegular():
-		r, m := notFileEntry(rel, config.NotFileSpecial)
-		return &diskIssue{r, parsetree.KindNotRegularFile, m}
+	case config.IsSpecialFile(fi.Mode()):
+		return specialFileIssue(rel)
 	}
 	return nil
+}
+
+// specialFileIssue is the entry tree mode gives a special file at rel
+// (config.UnreadableSpecialFile): the exporter and the generator would both
+// read it by name, and neither can (the generator books it as unusable,
+// `Path.is_file()`).
+func specialFileIssue(rel string) *diskIssue {
+	r := config.UnreadableSpecialFile
+	return &diskIssue{readersFor(rel, true), unreadableKind(r), unreadableMessage(r)}
 }
 
 // parentsOnDisk is notReadParentNotWalked when a directory on the way to rel
@@ -503,8 +506,19 @@ func unreadableMessage(reason string) string {
 		return "the file cannot be read (read_error)"
 	case config.UnreadableWalkError:
 		return "the directory cannot be listed; nothing under it is read (walk_error)"
+	case config.UnreadableSpecialFile:
+		return "not a regular file (a FIFO, a socket or a device, or a symlink to one); not read"
 	}
 	return reason
+}
+
+// unreadableKind is the parse-tree kind of a config.UnreadableFile reason: a
+// special file is not_regular_file, every other reason read_failure.
+func unreadableKind(reason string) parsetree.Kind {
+	if reason == config.UnreadableSpecialFile {
+		return parsetree.KindNotRegularFile
+	}
+	return parsetree.KindReadFailure
 }
 
 // cleanRelPath accepts a path relative to --config-dir that stays inside it

@@ -18,7 +18,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
-	"os"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -27,7 +26,7 @@ import (
 func loadFile(path string) (ThresholdConfig, string, error) {
 	var cfg ThresholdConfig
 
-	data, err := os.ReadFile(path)
+	data, err := config.ReadConfFile(path)
 	if err != nil {
 		return cfg, "", fmt.Errorf("read config %s: %w", path, err)
 	}

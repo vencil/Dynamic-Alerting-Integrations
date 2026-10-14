@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -170,7 +169,7 @@ func scanBytes(f *TreeFile) ([]byte, error) {
 	if f.Data != nil {
 		return f.Data, nil
 	}
-	b, err := os.ReadFile(f.AbsPath)
+	b, err := ReadConfFile(f.AbsPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read %s: %w", ErrScanStale, f.RelKey, err)
 	}

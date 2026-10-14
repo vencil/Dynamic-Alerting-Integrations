@@ -168,7 +168,7 @@ type Deps struct {
 
 	// RootReadGuard bounds GET /tenants/{id}'s read of the conf.d root
 	// platform files (#2208; see loadMergedConfig): a root `_*.yaml` whose
-	// read never returns (a FIFO, a hung mount) fails the GET instead of
+	// read never returns (a hung mount) fails the GET instead of
 	// hanging it. nil — tests that build Deps literally, and the server,
 	// which has no reason to tune it — uses one process-wide guard with
 	// boundedcall.DefaultTimeout. A test that stalls a read must pass its

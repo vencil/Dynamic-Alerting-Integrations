@@ -247,7 +247,7 @@ type ConfigManager struct {
 	// reloadMergeRead is a test seam, nil in production (#2100): the file
 	// read a reload tick's merged_hash recompute makes — the tenant file and
 	// every defaults-chain file (classifyAndCount → tenantFilesOnce.read).
-	// nil means os.ReadFile. It exists so a test can fail exactly the
+	// nil means config.ReadConfFile. It exists so a test can fail exactly the
 	// recompute's read while the tree scan (which carries an unmoved file by
 	// its mtime, unread) succeeds — the shape of a transient read failure.
 	// Per-manager, set before the tick, read on the reloading goroutine —
@@ -839,7 +839,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		if !ok {
 			// Fallback: file not in cache (shouldn't happen, but be safe)
 			var rerr error
-			data, rerr = os.ReadFile(fullPath)
+			data, rerr = config.ReadConfFile(fullPath)
 			if rerr != nil {
 				m.getLogger().Printf("WARN: skip unreadable file %s: %v", fullPath, rerr)
 				delete(newConfigs, name)
@@ -1649,7 +1649,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 //
 // The inputs are THIS scan's bytes, not a second read of the tree (#1978):
 // coldMergeInputs hands out TreeFile.Data (every file of a prior-less scan;
-// a file a warm scan carried unread falls back to os.ReadFile, as before),
+// a file a warm scan carried unread falls back to config.ReadConfFile, as before),
 // and parses each defaults file ONCE for every tenant whose chain holds it
 // and for the parsedDefaults cache. Measured before the change on the
 // 1000-tenant four-level bench fixture: each `_defaults.yaml` was read
@@ -1801,7 +1801,7 @@ func (in *coldMergeInputs) bytesOf(absPath string) ([]byte, error) {
 	if in.onDiskRead != nil {
 		in.onDiskRead(absPath)
 	}
-	return os.ReadFile(absPath)
+	return config.ReadConfFile(absPath)
 }
 
 func (in *coldMergeInputs) defaultsEntry(absPath string) *coldDefaultsEntry {
@@ -2157,7 +2157,7 @@ func (m *ConfigManager) detectConfigSource() (configSource, gitCommit string) {
 		searchDir = filepath.Dir(m.path)
 	}
 	revFile := filepath.Join(searchDir, ".git-revision")
-	if data, err := os.ReadFile(revFile); err == nil {
+	if data, err := config.ReadConfFile(revFile); err == nil {
 		commit := strings.TrimSpace(string(data))
 		if commit != "" {
 			gitCommit = commit

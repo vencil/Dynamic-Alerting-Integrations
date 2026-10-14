@@ -466,9 +466,9 @@ const defaultLoadDeadline = 5 * time.Second
 //     config_derived, raw values dropped, load_error saying why. A snapshot
 //     that is not stale is served as known even while a write runs;
 //   - one load holds the tree lock for at most loadDeadline. It runs in a
-//     goroutine: a read that never returns (a FIFO named *.yaml, a stuck
-//     network mount — the exporter's walker blocks on those, and must stay
-//     as it is) would otherwise keep the tree lock, and every write, forever.
+//     goroutine: a read that never returns (a stuck network mount — the
+//     exporter's walker blocks on one; a FIFO named *.yaml it no longer
+//     opens, #2939) would otherwise keep the tree lock, and every write, forever.
 //     Past the deadline the reload releases the lock and answers unknown;
 //     the load's eventual result is discarded, and no other load starts
 //     until it returns — at most one such goroutine exists at a time. A
