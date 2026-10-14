@@ -248,7 +248,11 @@ func TestPutTenant_NestedRoutingPolicyCompliant_Commits(t *testing.T) {
 // --- batch execution path (executeBatchOps policy-violation branch) ---
 
 func TestBatchTenants_PolicyViolationPerTenant(t *testing.T) {
-	configDir := setupConfigDir(t, nil)
+	// #2983: the violation comes from a routing profile with a slack
+	// receiver; the flat `_routing_receiver_type` this test used is refused
+	// as a body violation now, before the policy is read.
+	configDir := setupConfigDir(t, map[string]string{"_routing_profiles.yaml": "routing_profiles:\n  chat:\n" +
+		"    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n"})
 	initGitRepo(t, configDir)
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, policyTestRBACYAML)
@@ -263,9 +267,7 @@ func TestBatchTenants_PolicyViolationPerTenant(t *testing.T) {
 	})
 	reqBody, _ := json.Marshal(BatchRequest{
 		Operations: []BatchOperation{
-			// Flat batch form of the routing key — the second format
-			// policy.CheckWrite matches (`_routing_receiver_type`).
-			{TenantID: finTenant, Patch: map[string]string{"_routing_receiver_type": "slack"}},
+			{TenantID: finTenant, Patch: map[string]string{"_routing_profile": "chat"}},
 			// Compliant sibling op for a tenant outside the domain policy.
 			{TenantID: "gen-db", Patch: map[string]string{"_silent_mode": "warning"}},
 		},

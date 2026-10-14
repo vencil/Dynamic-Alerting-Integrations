@@ -8,7 +8,7 @@ tenant-b 是對照組：永遠在根目錄自己的檔寫 `mysql_connections: "6
 歸屬以 `da-guard effective` 的 key_sources 為準（layer == tenant 才是租戶自有）：測試的
 期望值同時由 oracle 推出、也寫死，避免兩邊一起錯。
 
-Prometheus 與 tenant-api 以 stub 取代：每條觀測序列回 2000 個 20.0；GET 只讀
+Prometheus 與 tenant-api 以 stub 取代：每條觀測序列回 2000 個 40.0（現值 60 → 建議 40，#2964）；GET 只讀
 `<conf.d>/<tenant>.yaml`（tenant-api 解析租戶檔只看根目錄），否則 404；PUT 回
 200 pending_review。跑的是真的 `threshold_govern.run()` 迴圈。
 
@@ -109,7 +109,7 @@ def stubs(monkeypatch):
     # 2000 points a minute apart: ~33 distinct hours, above the #2941 floor of 24.
     monkeypatch.setattr(tr, "query_prometheus_range_ts",
                         lambda url, promql, *a, **k: (
-                            [(1_700_000_000.0 + 60 * i, 20.0) for i in range(2000)], None))
+                            [(1_700_000_000.0 + 60 * i, 40.0) for i in range(2000)], None))
     monkeypatch.setattr(tg.time, "sleep", lambda s: None)
 
     def install(conf_d: Path) -> _StubAPI:
@@ -254,11 +254,11 @@ def _patch_of(conf_d: Path) -> tuple[str, dict]:
 def test_an_inherited_comment_cannot_become_a_value_line(files, tmp_path, stubs):
     conf_d = _tree(tmp_path, files)
     patch, doc = _patch_of(conf_d)
-    # only the tenant's own key, with its recommended value (control: 20)
-    assert doc["tenants"]["t"] == {"mysql_connections": "20"}, patch
+    # only the tenant's own key, with its recommended value (control: 40)
+    assert doc["tenants"]["t"] == {"mysql_connections": "40"}, patch
     values = [ln for ln in patch.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     assert len(values) == 3 and values[:2] == ["tenants:", "  t:"], patch
-    assert values[2].lstrip().startswith('mysql_connections: "20"'), patch
+    assert values[2].lstrip().startswith('mysql_connections: "40"'), patch
 
 
 def test_inherited_reserved_keys_are_not_listed(tmp_path, stubs):
@@ -352,7 +352,7 @@ def _q(name: str) -> str:
 def test_no_name_or_key_breaks_out_of_the_patch(where, odd, tmp_path, stubs):
     """A tenant name or tenant-own key that is not a plain YAML name never
     reaches a value line: the patch says so in a comment, still parses, and
-    keeps the control tenant `z`'s recommendation (20) — read back both by
+    keeps the control tenant `z`'s recommendation (40) — read back both by
     PyYAML and, as a tenant file, by the exporter's own load (da-guard)."""
     name = _ODD[odd]
     files = {"_defaults.yaml": _BASE,
@@ -368,13 +368,13 @@ def test_no_name_or_key_breaks_out_of_the_patch(where, odd, tmp_path, stubs):
     assert tenants == ({"z"} if where == "own-skipped-key" else {"z", name})  # premise
     patch = tr.format_export_patch(tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub"))
 
-    assert yaml.safe_load(patch) == {"tenants": {"z": {"mysql_connections": "20"}}}, patch
+    assert yaml.safe_load(patch) == {"tenants": {"z": {"mysql_connections": "40"}}}, patch
     values = [ln for ln in patch.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     assert values[:2] == ["tenants:", "  z:"] and len(values) == 3, patch
-    assert values[2].startswith('    mysql_connections: "20"'), patch
+    assert values[2].startswith('    mysql_connections: "40"'), patch
     if where == "tenant-name-block":
         said = [ln for ln in patch.splitlines() if "(not written) mysql_connections" in ln]
-        assert len(said) == 1 and said[0].startswith("# [") and "recommended 20" in said[0], patch
+        assert len(said) == 1 and said[0].startswith("# [") and "recommended 40" in said[0], patch
         assert "the tenant name is not a plain YAML name" in said[0], patch
     elif where == "tenant-name-comment":
         said = [ln for ln in patch.splitlines() if "(skipped) foo_unmapped_key" in ln]
@@ -387,7 +387,7 @@ def test_no_name_or_key_breaks_out_of_the_patch(where, odd, tmp_path, stubs):
     back = _tree(tmp_path / "back", {"_defaults.yaml": _BASE, "z.yaml": patch})
     eff = tv.load_effective(back)
     assert set(eff) == {"z"}, patch
-    assert eff["z"].effective_config["mysql_connections"] == "20", eff["z"]
+    assert eff["z"].effective_config["mysql_connections"] == "40", eff["z"]
 
 
 def test_a_key_that_is_not_a_plain_name_is_not_written():
@@ -429,7 +429,7 @@ def test_a_numeric_or_boolean_looking_tenant_id_keeps_its_value_line(tid, tmp_pa
     patch = tr.format_export_patch(tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub"))
     values = [ln for ln in patch.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     assert values[:2] == ["tenants:", f"  {tid}:"], patch
-    assert values[2].startswith('    mysql_connections: "20"'), patch
+    assert values[2].startswith('    mysql_connections: "40"'), patch
     back = tv.load_effective(_tree(tmp_path / "back", {"_defaults.yaml": _BASE, "a.yaml": patch}))
     assert set(back) == {tid}, patch
-    assert back[tid].effective_config["mysql_connections"] == "20", patch
+    assert back[tid].effective_config["mysql_connections"] == "40", patch

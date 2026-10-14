@@ -69,6 +69,9 @@ modules:
       duration_rule: "#2490 schema reader (definitions.duration pattern + minLength + description, cached, fail-closed); pinned against Go model.ParseDuration by tests/shared/test_am_duration_parity.py"
       am_duration_seconds: "#2490 Alertmanager duration parser; its law is Go model.ParseDuration, so it is table-pinned row by row against tests/shared/am_duration_matrix.json (written by Go) in tests/shared/test_am_duration_parity.py rather than re-derived by a generator"
       positive_seconds: "#2942 argparse type: accepts a value iff float() parses it to a finite number above 0; boundary table in tests/shared/test_lib_python.py::TestPositiveSeconds"
+      non_negative_seconds: "#2966 argparse type: accepts a value iff float() parses it to a finite number from 0 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestNonNegativeSeconds"
+      positive_int: "#2966 argparse type: accepts a value iff int() parses it to a number >= 1; boundary and message table in tests/shared/test_lib_python.py::TestPositiveInt"
+      positive_int_seconds: "#2966 argparse type: accepts a value iff int() parses it to a number from 1 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestPositiveIntSeconds"
       is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned against the Go copy by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
 
   scripts/tools/_lib_io.py:
@@ -285,6 +288,8 @@ modules:
       ignored_routing_keys: "#2960 closed walk (block / receiver / overrides[i] / routes[i] receiver) against fixed key sets; every block and position example-pinned by the shared table routing_ignored_keys_cases.json, which the Go copy routingpolicy.IgnoredKeys reads too"
       receiver_keys: "#2960 set union over RECEIVER_TYPES (pinned to the schema by test_receiver_spec_parity.py); example-pinned per type by test_routing_ignored_keys.py"
       _ignored_hint: "#2960 message wording only (AM field / did-you-mean / read set); example-pinned by test_routing_ignored_keys.py"
+      unknown_routing_keys: "#2983 closed filter (string key, `_routing` prefix, not in the layer's fixed set) over one mapping; every layer example-pinned by the shared table routing_unknown_keys_cases.json, which the Go copy routingpolicy.UnknownRoutingKeys reads too"
+      _unknown_routing_hint: "#2983 message wording only (cross-layer / flat receiver type / did-you-mean / read set); example-pinned by test_routing_unknown_keys.py"
       is_null_schedule: "#2708 closed shape predicate (a mapping whose only keys are a null `default`, an empty/null `overrides`, `expires`, `reason`), Go copy pkg/config nullSchedule; closed case list example-pinned by test_validate_config.py::TestScheduleNull::test_is_null_schedule_shapes (calls it directly) and cross-language by the n5-n13 rows of platform_tenant_overlay_matrix.json via describe_tenant"
       writes_nothing: "#2708 one-line disjunction (reserved key excluded; null or is_null_schedule), Go copy pkg/config nullThreshold; example-pinned by test_validate_config.py::TestScheduleNull::test_is_null_schedule_shapes"
       schedule_null_problems: "#2708 message list for a null inside a schedule with windows, Go copy pkg/config scheduleNullProblems; exact strings pinned by test_validate_config.py::TestScheduleNull::test_schedule_null_problems_messages (calls it directly; the Go side asserts the same list) and through check_schedule_null by test_a_null_beside_windows_fails_and_is_named"

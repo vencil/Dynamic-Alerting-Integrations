@@ -429,6 +429,10 @@ type CheckInput struct {
 	// routingpolicy.IgnoredKeys). Profiles and `_routing_defaults` are named
 	// through PlatformProblems instead.
 	RoutingIgnoredKeys map[string][]string `json:"-"`
+	// RoutingUnknownKeys maps tenant ID → the `_routing`-prefixed keys of its
+	// own config the route generator does not read (#2983,
+	// routingpolicy.UnknownRoutingKeys) — reported as FindingRoutingKeyIgnored.
+	RoutingUnknownKeys map[string][]string `json:"-"`
 
 	// InvalidTenantIDs maps each declared tenant id tenantid.Valid
 	// refuses to the tenant file that declares it (#2341). Such tenants are

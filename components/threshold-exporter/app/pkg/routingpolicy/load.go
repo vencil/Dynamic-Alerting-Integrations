@@ -35,6 +35,11 @@ type Layers struct {
 	// TenantBlock lays a tenant's own keys over it.
 	Overlay map[string]map[string]any
 
+	// OverlayUnknownKeys is, per tenant id, the `_routing`-prefixed keys of
+	// those same entries the generator does not read (#2983,
+	// UnknownRoutingKeys) — Overlay keeps only the two it reads. nil = none.
+	OverlayUnknownKeys map[string]map[string]bool
+
 	// PlatformBodies is the set of tenant ids a root platform file's
 	// `tenants:` entry gives a body PyYAML reads as a mapping (any keys, none
 	// included). The route generator loads such a tenant whatever its own
@@ -1423,6 +1428,7 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		if top == nil {
 			continue
 		}
+		probs = append(probs, unknownPlatformKeyProblems(f.Name, top)...) // #2983
 		if e := enforcedFrom(f.Name, top); e != nil {
 			enforced = e
 		}
@@ -1521,6 +1527,15 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 			body["_routing"] = withPyYAMLRoutingFrom(r, routingNode(e.value))
 		}
 		tid := e.key
+		for _, k := range UnknownRoutingKeys(body, LayerTenant) {
+			if layers.OverlayUnknownKeys == nil {
+				layers.OverlayUnknownKeys = map[string]map[string]bool{}
+			}
+			if layers.OverlayUnknownKeys[tid] == nil {
+				layers.OverlayUnknownKeys[tid] = map[string]bool{}
+			}
+			layers.OverlayUnknownKeys[tid][k] = true
+		}
 		for _, k := range routingBlockKeys {
 			v, present := body[k]
 			if !present {

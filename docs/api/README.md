@@ -407,7 +407,7 @@ kubectl logs <pod-name> -n monitoring | tail -50
 
 ## 相關文件
 
-- [OpenAPI 3.0 Spec](./threshold-exporter-openapi.yaml) - 完整 API 規範
+- [OpenAPI 3.0 Spec](./threshold-exporter-openapi.yaml) - 給機器讀：各 GET 端點的 path、status code、media type 與 `/api/v1/config/identity` 的 JSON schema（有測試比對 handler：`openapi_spec_parity_test.go`）。說明與指標清單在本頁與上面連結的 README
 - [Threshold Exporter 架構](../architecture-and-design.md#2-核心設計config-driven-架構) - 詳細設計文件
 - [Tenant 快速入門](../getting-started/for-tenants.md) - 租戶設定指南
 - [Platform Engineers 快速入門](../getting-started/for-platform-engineers.md) - 部署和運維指南

@@ -1072,6 +1072,46 @@ class TestTimeoutCli:
         assert ran == [0.5]
 
 
+# ---------------------------------------------------------------------------
+# #2966: --throttle-seconds must be 0 or above (0 = do not wait)
+# ---------------------------------------------------------------------------
+class TestThrottleCli:
+    def _main(self, monkeypatch, tmp_path, capsys, *extra):
+        import sys
+        ran = []
+
+        def fake_run(args):
+            ran.append(args.throttle_seconds)
+            return tg.GovernanceResult([], [], [])
+
+        monkeypatch.setattr(tg, "run", fake_run)
+        monkeypatch.setattr(sys, "argv", [
+            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
+        with pytest.raises(SystemExit) as exc:
+            tg.main()
+        return exc.value.code, ran, capsys.readouterr()
+
+    @pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+    def test_below_zero_or_not_finite_is_caller_error(self, monkeypatch, tmp_path,
+                                                      capsys, value):
+        """A negative pause was skipped silently; ``inf`` raised OverflowError
+        in time.sleep AFTER the first PR had been opened, with no JSON report.
+        Refused at parse time, before any PR."""
+        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
+                                         "--throttle-seconds", value)
+        assert code == tg.EXIT_CALLER_ERROR
+        assert ran == []
+        assert "--throttle-seconds" in captured.err
+
+    @pytest.mark.parametrize("value, expected", [("0", 0.0), ("0.5", 0.5)])
+    def test_zero_and_fraction_are_accepted(self, monkeypatch, tmp_path, capsys,
+                                            value, expected):
+        code, ran, _ = self._main(monkeypatch, tmp_path, capsys,
+                                  "--throttle-seconds", value)
+        assert code == tg.EXIT_OK
+        assert ran == [expected]
+
+
 @pytest.mark.parametrize("value", ["99", "0", "-1"])
 def test_min_samples_below_100_is_caller_error(monkeypatch, tmp_path, capsys, value):
     """#2941: refused before any work, like threshold_recommend."""

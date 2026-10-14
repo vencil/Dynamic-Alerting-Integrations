@@ -164,9 +164,17 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	if yaml.Unmarshal([]byte(yamlContent), &doc) != nil || pyyamlcompat.FindDuplicateKeyIn([]byte(yamlContent)) != nil {
 		return nil // validateBodyOnly owns every decode error, a repeated key included
 	}
+	// #2983: a `_routing`-prefixed key the route generator does not read
+	// in a tenant's config (`_routing_profle`, `_routing_receiver_type`) —
+	// the generator's --validate refuses the tenant over it.
+	var unknown []ReceiverViolation
+	for _, k := range routingpolicy.UnknownRoutingKeys(cfg.NormalizeYAMLToJSON(doc.Tenants[tenantID]), routingpolicy.LayerTenant) {
+		unknown = append(unknown, ReceiverViolation{Field: fmt.Sprintf("tenants.%s.%s", tenantID, k),
+			Reason: "not a key the route generator reads (" + routingpolicy.UnknownRoutingKeyHint(k, routingpolicy.LayerTenant) + "); it has no effect"})
+	}
 	raw, written := doc.Tenants[tenantID]["_routing"]
 	if !written {
-		return nil
+		return unknown
 	}
 	// #2295 / #2431: the receivers and matcher values as the route
 	// generator's PyYAML reads them — plain `on` a boolean, quoted "on" a
@@ -180,17 +188,17 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	// (as PyYAML reads it: an unquoted `off` is a boolean) renders no route
 	// at all; nothing below applies to it.
 	if v := routingpolicy.WithPyYAMLRouting(raw, py); routingpolicy.RoutingNotMapping(v) {
-		return []ReceiverViolation{{Field: base, Reason: routingpolicy.RoutingNotMappingMessage(v)}}
+		return append(unknown, ReceiverViolation{Field: base, Reason: routingpolicy.RoutingNotMappingMessage(v)})
 	}
 	// Keys made strings as the exporter's merge does, so a `1:` or `~:` key
 	// beside the receiver leaves `_routing` a mapping (da-guard reads it so).
 	routing, ok := cfg.NormalizeYAMLToJSON(raw).(map[string]any)
 	if !ok {
-		return nil
+		return unknown
 	}
 	asWritten := routing // #2960: keys as written, before the PyYAML swap below
 	routing, _ = routingpolicy.WithPyYAMLRouting(routing, py).(map[string]any)
-	var out []ReceiverViolation
+	out := unknown
 	check := func(path string, holder map[string]any) {
 		recv, present := holder["receiver"]
 		if !present || recv == nil {

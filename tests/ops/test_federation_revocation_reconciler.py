@@ -804,3 +804,40 @@ class TestProjectionGraceWiring:
         seen = self._captured(tmp_path, monkeypatch, settle_s=60, grace_s=0)
         for q in seen:
             assert "now-60s" in q
+
+
+class TestIntervalFlag:
+    """#2966. ``--interval 0`` made the daemon re-query VictoriaLogs in a busy
+    loop and a negative value crashed it after the first pass (CrashLoop); the
+    chart forwards ``reconcile.intervalSeconds`` verbatim with no schema, so
+    the flag itself is the only gate. Refused before the server starts."""
+
+    def _main(self, monkeypatch, *argv):
+        started: list = []
+        monkeypatch.setattr(rec, "_serve_forever",
+                            lambda cfg, metrics: started.append(cfg))
+        code = rec.main(list(argv))
+        return code, started
+
+    @pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf", "abc", "1e10"])
+    def test_a_cadence_that_cannot_be_slept_is_refused(self, monkeypatch, capsys, bad):
+        with pytest.raises(SystemExit) as exc:
+            self._main(monkeypatch, "--interval", bad)
+        assert exc.value.code == 2
+        assert "--interval" in capsys.readouterr().err
+
+    def test_refusal_happens_before_the_daemon_starts(self, monkeypatch):
+        started: list = []
+        monkeypatch.setattr(rec, "_serve_forever",
+                            lambda cfg, metrics: started.append(cfg))
+        with pytest.raises(SystemExit):
+            rec.main(["--interval", "0"])
+        assert started == []
+
+    @pytest.mark.parametrize("value, expected", [("300", 300.0), ("0.5", 0.5)])
+    def test_the_chart_default_and_fractions_reach_the_loop(self, monkeypatch,
+                                                            value, expected):
+        """Must-fire control: the chart passes ``"300"`` (quoted)."""
+        code, started = self._main(monkeypatch, "--interval", value)
+        assert code == 0
+        assert [c.interval_s for c in started] == [expected]

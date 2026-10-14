@@ -288,7 +288,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
+已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -308,7 +308,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
-| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`（stderr 一行說明，沒有 JSON）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，沒有 JSON，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -332,7 +332,7 @@ da-tools batch-diagnose [options]
 |------|------|--------|
 | `--tenants <LIST>` | 逗號分隔租戶列表（若不指定則自動探索） | （自動） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
-| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)） | `60` |
+| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)）。期限也傳到檢查裡的每次呼叫：`kubectl` 在期限前稍早（`min(0.5 秒, --timeout/4)`）被終止，不會在整批結束後留下行程（`--timeout` 很短（低於約 0.5 秒）或機器負載高時不保證）；期限已過就不再啟動 `kubectl` 或送出 Prometheus 查詢（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)） | `60` |
 | `--output <FILE>` | 輸出至檔案（JSON 格式） | stdout |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | K8s namespace（auto-discover 用） | `monitoring` |
@@ -354,7 +354,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|------|
 | `0` | 所有租戶都是 `healthy` 或 `unchecked`（含 `--dry-run`） |
 | `1` | 一個或多個租戶檢查失敗（看輸出裡各租戶的 `status` 與 `issues`） |
-| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl`，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl` 或 `kubectl` 在時限內沒回應，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：租戶檢查失敗與 Prometheus 查詢失敗都回 `0`。用 v2.9.0 時請讀輸出裡各租戶的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -382,8 +382,8 @@ da-tools baseline --tenant <name> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--duration <SEC>` | 觀測時長（秒） | `600` |
-| `--interval <SEC>` | 採樣間隔（秒） | `15` |
+| `--duration <SEC>` | 觀測時長（正整數秒；`0`、負數、小數回 `2`） | `600` |
+| `--interval <SEC>` | 採樣間隔（正整數秒；`0`、負數、小數回 `2`） | `15` |
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
 | `-o, --output-dir <DIR>` | 輸出目錄；兩個 CSV 都寫在這裡（見下方「輸出」），目錄不存在會建立 | `baseline_output` |
 | `--dry-run` | 僅顯示要觀測的指標，不實際採樣 | false |
@@ -415,7 +415,7 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功。⚠️ Prometheus 連線或查詢失敗**不是**錯誤——失敗的採樣記為空值、報告與 CSV 照出，仍是這一格 |
-| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--interval 0`（`duration // interval` 的 `ZeroDivisionError`）是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口。⛔ `--interval 0`（原本是 `duration // interval` 的 `ZeroDivisionError`）自 #2966 起在解析時就回 `2`；輸出路徑寫不進去自 #1789 起是 `2`，兩者都不再落在這裡 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
 
 ---
@@ -458,7 +458,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--watch` | 持續監控模式（每 N 秒比對一次） | false |
-| `--interval <SEC>` | 監控間隔（秒） | `60` |
+| `--interval <SEC>` | 監控間隔（秒，≥ 0，可帶小數；`0` = 輪與輪之間不等待，由 `--rounds` 封頂；負數、`nan`、`inf` 回 `2`） | `60` |
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
 | `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1%。必須是 ≥ 0 的有限數，`inf`、`nan`、負值回 2 | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
@@ -689,6 +689,8 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 **輸出**
 
 對比報告，顯示各項 threshold 變更在歷史數據上的影響（可能增加/減少的 alert）。
+
+觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。`+Inf`／`-Inf` 是真實樣本，照常比較。
 
 **範例**
 
@@ -1821,7 +1823,7 @@ da-tools generate-routes --config-dir <path> [options]
 
 **租戶 id（[ADR-035](adr/035-tenant-id-single-source.md)）**：租戶 id 必須是 DNS-1123 label——1–63 個小寫英數與 `-`，首尾為英數（規則只寫在 `tenant-config.schema.json` 的 `definitions.tenantId`）。conf.d 只要宣告一個不合法 id（空字串、含大寫、`_`、`.`、空白，或超過 63 字元），**所有模式**（render、`--dry-run`、`--output-configmap`、`--apply`、`--validate`，不分 `--strict`）都回 1、什麼都不寫出也不套用，訊息開頭 `FAIL: N invalid tenant id(s)`，逐一點名並引用規則說明。不是只略過那個租戶：略過會部署出少了它的設定，它的告警落到 root receiver，而出貨的 `default` 是空 receiver。修法是改名；全數字的 id 要加引號。⚠️ v2.9.0 映像不檢查租戶 id，照樣產出 <!-- image-caveat: v2.9.0 -->
 
-**產生器不讀的鍵（[#2960](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2960)）**：租戶 `_routing`、routing profile、`_routing_defaults`（根目錄與子目錄載體）、`_routing_enforced`，以及其下的 receiver、`overrides` 條目、`routes` 條目的 receiver，只讀固定的鍵（`receiver`、`group_by`、`group_wait`／`group_interval`／`repeat_interval`、`overrides`、`routes`；override 另讀 `alertname`／`metric_group`；`_routing_enforced` 讀 `enabled`、`match`，不讀 `overrides`／`routes`；receiver 讀其型別的欄位）。寫了其他鍵——`continue`、`mute_time_intervals`、`active_time_intervals`、`matchers` 這類 Alertmanager 欄位，或拼錯的 `recevier`、`enabeld`——產出的設定與沒寫時相同，所以逐鍵印 `WARN: <位置>: '<鍵>' is not read by the route generator (…)`，附上是哪類欄位或「你是不是要寫」的建議；`--validate` 與 `validate-config` 對這行回 1，render、`--dry-run`、`--output-configmap`、`--apply` 照常產出、結束碼不變。鍵一律照原文讀（`1:`、`on:` 也算），null 鍵不算；`http_config` 底下不看，它原樣交給 Alertmanager。鍵的清單以產生器實際讀的為準，JSON schema 與 da-guard、tenant-api 的判定都釘在同一份上（da-guard 報 `routing_key_ignored`，tenant-api 的 PUT 回 400）。`routes` 條目自己的鍵照舊由該條目的檢查處理（整條略過）。⚠️ v2.9.0 映像不報這些鍵，`--validate` 回 0 <!-- image-caveat: v2.9.0 -->
+**產生器不讀的鍵（[#2960](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2960)）**：租戶 `_routing`、routing profile、`_routing_defaults`（根目錄與子目錄載體）、`_routing_enforced`，以及其下的 receiver、`overrides` 條目、`routes` 條目的 receiver，只讀固定的鍵（`receiver`、`group_by`、`group_wait`／`group_interval`／`repeat_interval`、`overrides`、`routes`；override 另讀 `alertname`／`metric_group`；`_routing_enforced` 讀 `enabled`、`match`，不讀 `overrides`／`routes`；receiver 讀其型別的欄位）。寫了其他鍵——`continue`、`mute_time_intervals`、`active_time_intervals`、`matchers` 這類 Alertmanager 欄位，或拼錯的 `recevier`、`enabeld`——產出的設定與沒寫時相同，所以逐鍵印 `WARN: <位置>: '<鍵>' is not read by the route generator (…)`，附上是哪類欄位或「你是不是要寫」的建議；`--validate` 與 `validate-config` 對這行回 1，render、`--dry-run`、`--output-configmap`、`--apply` 照常產出、結束碼不變。鍵一律照原文讀（`1:`、`on:` 也算），null 鍵不算；`http_config` 底下不看，它原樣交給 Alertmanager。鍵的清單以產生器實際讀的為準，JSON schema 與 da-guard、tenant-api 的判定都釘在同一份上（da-guard 報 `routing_key_ignored`，tenant-api 的 PUT 回 400）。`routes` 條目自己的鍵照舊由該條目的檢查處理（整條略過）。`_routing` 開頭的鍵也照確切名稱判定（[#2983](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2983)）：租戶設定只讀 `_routing` 與 `_routing_profile`，`_` 檔的最上層只讀 `_routing_defaults` 與 `_routing_enforced`；其他 `_routing*` 鍵——拼錯的 `_routing_profle`、`_routing_defualts`，寫錯地方的 `_routing_defaults`（寫在租戶裡），或已不讀的扁平鍵 `_routing_receiver_type`——印 `WARN: <租戶或 top level in <檔案>>: '<鍵>' is not a key the route generator reads (…)`，判定與上面相同。不以 `_routing` 開頭的拼法（`_routng`）照舊只有 `unknown reserved key` 一行 WARN、不擋。⚠️ v2.9.0 映像不報這些鍵，`--validate` 回 0 <!-- image-caveat: v2.9.0 -->
 
 **時長寫法（[#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)）**：`group_wait`／`group_interval`／`repeat_interval`（租戶 `_routing`、overrides、`routes` 條目、`_routing_defaults`、`_routing_enforced`、routing profile）照 Alertmanager 的讀法判定——整數加單位、由大到小、每個單位最多一次（`y`、`w`、`d`、`h`、`m`、`s`、`ms`），或單獨一個 `0`；規則只寫在 `tenant-config.schema.json` 的 `definitions.duration`。`1h30m`、`90m`、`1d` 照用（再套上下界護欄）；小數（`1.5h`）、單位倒序（`30m1h`）或重複（`1h1h`）、`ns`／`us`、正負號、前後空白、超過約 292 年的值，Alertmanager 會拒收整份設定，所以產生器把它換成平台預設值並印 `WARN: … invalid <參數> '<值>' …`，`--validate` 與 `validate-config` 對這行回 1；render、`--dry-run` 照常產出（換成預設值的那份）、結束碼不變。⚠️ v2.9.0 映像把 `1h30m` 換成平台預設、把 `1.5h` 原樣交給 Alertmanager，`--validate` 都回 0 <!-- image-caveat: v2.9.0 -->
 
@@ -1855,7 +1857,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——`--output-configmap`／`--validate` 印 `FAIL:`（#2260），`--apply` 時叢集上現有的設定違反不變式也印 `FAIL:`、不 apply（#2506）；**或同一個租戶 id 由兩個租戶檔宣告**（所有模式，見上方「階層式 conf.d」）；**或 conf.d 宣告了不合法的租戶 id**（所有模式，不分 `--strict`，見上方「租戶 id」；ADR-035）；**或 `--validate` 遇到 Alertmanager 不接受的時長**（見上方「時長寫法」；#2490）；**或產生器不讀的路由鍵**（見上方「產生器不讀的鍵」；#2960） |
+| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——`--output-configmap`／`--validate` 印 `FAIL:`（#2260），`--apply` 時叢集上現有的設定違反不變式也印 `FAIL:`、不 apply（#2506）；**或同一個租戶 id 由兩個租戶檔宣告**（所有模式，見上方「階層式 conf.d」）；**或 conf.d 宣告了不合法的租戶 id**（所有模式，不分 `--strict`，見上方「租戶 id」；ADR-035）；**或 `--validate` 遇到 Alertmanager 不接受的時長**（見上方「時長寫法」；#2490）；**或產生器不讀的路由鍵**（見上方「產生器不讀的鍵」；#2960、#2983） |
 | `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列回 2 的三種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）；平台告警探針集降級，而你提供的 inhibit 規則（base config 或叢集設定）裡有租戶觸發的規則驗證不了——不寫檔、不 apply（見上方「平台告警探針集降級時」；#1533）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
@@ -2080,7 +2082,7 @@ da-tools validate-config --config-dir <path> [options]
 - **字串欄位的引號**（`yaml_quoting`）：JSON Schema 標為字串（含 enum）的欄位，值未加引號、而 PyYAML 把它讀成布林、數字或 null 時 FAIL——`channel: yes` 在 PyYAML 是 `True`，在 exporter 與 Alertmanager 是字串 `"yes"`，同一份檔各工具讀到不同的值。每筆列出檔案、行號與欄位路徑；解法是加引號（`channel: "yes"`）。租戶閾值也是字串欄位，所以 `mysql_connections: 70` 會被列出——寫成 `"70"`。租戶檔對照 `tenant-config.schema.json`，`_defaults*` 對照 `platform-defaults.schema.json`（其中 `_routing_defaults`／`_routing_enforced` 沿用租戶 schema 的 routing 定義）；其餘 `_*` 檔不讀。哪些字會被讀成非字串由 PyYAML 自己的 resolver 判定（所以 PyYAML 讀成字串的 `y`／`n` 不會被列出），哪些欄位是字串由 schema 決定（#2164）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - **JSON Schema**（`json_schema`，[#2695](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2695)）：租戶檔對照 `tenant-config.schema.json`、`_defaults*` 對照 `platform-defaults.schema.json`、`_routing_profiles.yaml` 對照 `routing-profiles.schema.json`，判定就是呼叫 `scripts/tools/lint/check_confd_schema.py` 的那一支，不另寫一份。違規時 FAIL、結束碼 `1`，每筆列出檔案、原因與 `@` 後的欄位路徑——例如 `_routing.group_by: alertname`（要的是 list）或 `_routing_defaults` 底下打錯的 key。已在 `yaml_quoting` 列出的未加引號值，這一列當成已加引號來判定，不重報型別錯誤，所以 `mysql_connections: 70` 只出現在 `yaml_quoting`；加了引號仍不合 schema 的值照報，例如 `group_wait: 30`（`"30"` 沒有單位）或 `_silent_mode: yes`（`"yes"` 不在允許值內）。環境沒有 Python 套件 `jsonschema`，或旁邊沒有 `check_confd_schema.py`（**da-tools 映像兩者都沒有**）時，這一列是 **WARN**（結束碼不變），明細寫 `Not checked against the JSON Schema: …`：這一列沒有給出結論。找不到 schema 檔是 FAIL、`caller_error: true`、結束碼 `2`，與 `yaml_quoting` 相同。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - **產生器 key 檢查**（`schema`）：route generator 讀設定時的 key 檢查——租戶 key 對照平台宣告的 defaults 與保留鍵，另含 domain policy。⚠️ 列名是歷史名稱（`--json` 消費端依賴它，所以不改名），**這一列不做 JSON Schema 驗證**，那是上一項 `json_schema`。`_routing_enforced.enabled` 不是 YAML 布林（`n`、`'yes'`、`~` 等）時 FAIL：平台強制（NOC）路由**不會**啟用，`generate-routes --validate` 也對同一行回 1（#2164）。⚠️ v2.9.0 映像遇到非空字串會**啟用** NOC 路由 <!-- image-caveat: v2.9.0 -->
-  - 路由區塊裡 route generator 不讀的鍵（`continue`、`mute_time_intervals`、拼錯的鍵等，見 `generate-routes` 的「產生器不讀的鍵」）讓這一列 FAIL、結束碼 1（#2960）；這一列不靠 jsonschema，在 da-tools 映像裡同樣生效。⚠️ v2.9.0 映像不報這些鍵 <!-- image-caveat: v2.9.0 -->
+  - 路由區塊裡 route generator 不讀的鍵（`continue`、`mute_time_intervals`、拼錯的鍵等，見 `generate-routes` 的「產生器不讀的鍵」；`_routing_profle` 這類產生器不讀的 `_routing*` 鍵亦同，#2983）讓這一列 FAIL、結束碼 1（#2960）；這一列不靠 jsonschema，在 da-tools 映像裡同樣生效。⚠️ v2.9.0 映像不報這些鍵 <!-- image-caveat: v2.9.0 -->
 - 路由規則驗證（group_wait/group_interval/repeat_interval 在允許範圍）。時長寫成 Alertmanager 不接受的寫法（`1.5h`、`30m1h`、`1ns` 等，見 `generate-routes` 的「時長寫法」）時 FAIL、結束碼 1（#2490）。兩個來源產生同名 receiver 時 FAIL，與 `generate-routes --validate` 用同一個判定（#2279）。⚠️ v2.9.0 映像對同名 receiver 回報 PASS <!-- image-caveat: v2.9.0 -->
   `routes` 列與 `generate-routes --validate` 呼叫**同一支判定**，不是各寫一份（#2311）：略過的項目、同名 receiver、產生出來的 inhibit rule 會壓掉 Watchdog 或讓租戶靜音平台告警、在內建 base 上組裝時被平台不變式拒絕、以及 Alertmanager 自己的 parser（`amtool check-config`）拒收——任一項 FAIL、結束碼 `1`，和 `--validate` 同一個結論。⚠️ 例外：租戶存在、卻**沒有產生任何 route／inhibit rule** 的樹（例如只寫了 `_severity_dedup: disable`），`--validate` 印 `No valid routes or inhibit rules generated.`、結束碼 `1`，這一列則是 WARN、結束碼 `0`。PATH 上找不到 `amtool` 時這一列是 **WARN**（結束碼不變），明細多一行 `Not validated by Alertmanager: amtool not found on PATH …`：其餘檢查都過了，但只有 Alertmanager 會拒收的值（例如 webhook URL `http://[1]/`）這一列看不到。`amtool` 在 PATH 上卻跑不出結論（跑不起來、逾時、崩潰）時是 FAIL、`caller_error: true`、結束碼 `2`，與 `--validate` 相同。⚠️ amtool 驗的是組裝在**內建預設 base** 上的設定，不是你自己的 `--base-config`。⚠️ v2.9.0 映像的這一列只做略過項目與同名 receiver 兩項 <!-- image-caveat: v2.9.0 -->
 - Policy 檢查（webhook 域名）——**只在給了 `--policy` 時才會出現這一列**
@@ -2646,7 +2648,7 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 | `domain_policy_unusable` | error | `_domain_policy.yaml` 的結構無法使用（例如 `tenants` 不是 list）；tenant 欄空白，只略過依賴它的檢查 |
 | `routing_profiles_unusable` | warn | `routing_profiles:` 不是 mapping；tenant 欄空白 |
 | `routing_defaults_routes_ignored` | error | `_routing_defaults` 帶了 `routes`（應放在 profile 或租戶）；兩端都在合併前丟掉，generator 的 `--validate` 同樣擋 |
-| `routing_key_ignored` | error | 租戶 `_routing`、routing profile、`_routing_defaults`、`_routing_enforced`（含其下 receiver、`overrides` 條目、`routes` 條目的 receiver）裡 route generator 不讀的鍵，例如 `continue`、`mute_time_intervals`、拼錯的鍵；產出與沒寫時相同，generator 的 `--validate` 同樣擋（#2960）。租戶的 `_routing`：tenant 欄為該租戶、Field 為相對於 `_routing` 的路徑（例如 `overrides[0].matchers`）；其他：tenant 欄空白、Field 為 `<檔案>:<鍵路徑>`（例如 `_routing_profiles.yaml:routing_profiles.p1.continue`）。鍵照原文判定（`1:` 也算），null 鍵與 `http_config` 底下不看；⚠️ 布林、數字、日期這類鍵，da-guard 照自己的讀法印出（例如 `True:` 印成 `true`、`1.0:` 印成 `1`），判定不變 |
+| `routing_key_ignored` | error | 租戶 `_routing`、routing profile、`_routing_defaults`、`_routing_enforced`（含其下 receiver、`overrides` 條目、`routes` 條目的 receiver）裡 route generator 不讀的鍵，例如 `continue`、`mute_time_intervals`、拼錯的鍵；產出與沒寫時相同，generator 的 `--validate` 同樣擋（#2960）。租戶的 `_routing`：tenant 欄為該租戶、Field 為相對於 `_routing` 的路徑（例如 `overrides[0].matchers`）；其他：tenant 欄空白、Field 為 `<檔案>:<鍵路徑>`（例如 `_routing_profiles.yaml:routing_profiles.p1.continue`）。鍵照原文判定（`1:` 也算），null 鍵與 `http_config` 底下不看；⚠️ 布林、數字、日期這類鍵，da-guard 照自己的讀法印出（例如 `True:` 印成 `true`、`1.0:` 印成 `1`），判定不變。另報產生器不讀的 `_routing*` 鍵（#2983）：租戶設定裡 `_routing`／`_routing_profile` 以外的（tenant 欄為該租戶、Field 為該鍵，例如 `_routing_profle`；租戶檔與根目錄平台檔的 `tenants.<id>` 項目都看），`_` 檔最上層 `_routing_defaults`／`_routing_enforced` 以外的（Field 為 `<檔案>:<鍵>`，例如 `_defaults.yaml:_routing_defualts`；沒有 `defaults:` 的 defaults 檔最上層的 `_routing` 也改由這裡報，不再是 `routing_in_unread_location`） |
 | `routing_not_mapping` | error | 租戶的 `_routing`（租戶檔蓋在根目錄平台檔 `tenants.<id>` 之上）照 route generator 的 PyYAML 讀法既不是 mapping、也不是停用字串（`disable`／`disabled`／`off`／`false`，須為 YAML 字串）：例如 `"slack"`、list、null、未加引號的 `false`／`off`／`no`（YAML 布林）。generator 對這個租戶不產出任何 route（不改走 `_routing_defaults`），`--validate` 與 `--strict` 都擋（#2341）。Field 為 `_routing`。要停用請加引號：`_routing: 'off'` 或 `disable` |
 | `invalid_tenant_id` | error | 宣告的租戶 id 不是 DNS-1123 label（1–63 個小寫英數與 `-`，首尾為英數；[ADR-035](adr/035-tenant-id-single-source.md)）：空字串、含大寫、`_`、`.`、空白，或超過 63 字元；generator 在所有模式拒收整棵樹（回 1，#2341、ADR-035）。訊息引用 schema 的規則說明。空 id 先前會產生 `tenant=""` 的 matcher，把沒有 tenant label 的平台告警導走。tenant 欄為該 id（空 id 時空白），Field 為 `<租戶檔>:tenants.<id>` |
 | `routing_defaults_not_mapping` | error | `_routing_defaults`（根目錄 `_` 檔，或子目錄的 defaults 載體）既不是 mapping 也不是 null；這一層不貢獻任何值，generator 的 `--validate` 與 `--strict` 都擋（#2341）。tenant 欄空白，Field 為 `<檔案>:_routing_defaults` |
@@ -2958,7 +2960,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--dry-run` | 僅顯示 PromQL 查詢，不實際執行 | - |
 | `--json` | JSON 輸出 | - |
 | `--markdown` | Markdown 表格輸出 | - |
-| `--export-patch` | 輸出可套用的 conf.d override 片段（#720 STAGE-1）；只含 \|delta\|≥5% 且有對映的 key | - |
+| `--export-patch` | 輸出可套用的 conf.d override 片段（#720 STAGE-1）；只含 \|delta\|≥5%、信心等級 HIGH／MEDIUM 且有對映的 key | - |
 | `--generate-observed-map` | 從 rule-packs 重新產生 observed-map（#719）；不需 `--config-dir` | - |
 
 > **#720 STAGE-1（`--export-patch`）**：輸出一段 `tenants:`-rooted 的 conf.d override（只含有實際建議的 key，within-margin / 略過的 key 以註解列出）。operator review 後 merge 進對應 `conf.d/<tenant>.yaml` 並自開 PR → 既有 `backtest.yaml` CI 自動貼 old-vs-new 觸發次數風險報告（STAGE-1 價值基石）。本工具**不就地改檔**（in-place ruamel round-trip 為 defer，見 #721）。
@@ -2966,6 +2968,14 @@ da-tools threshold-recommend --generate-observed-map
 > **#2116 值的來源**：租戶、目前值與每個 key 屬於哪個檔取自 `da-guard effective`（與 tenant-api `/effective` 同一套解析，含 `_defaults.yaml`、平台檔 `tenants:`、profile 與子目錄的租戶）。租戶檔自己寫的 key 是一般推薦；繼承自 defaults／平台／profile 的 key 另列「Inherited, reference only」，只列目前值與來源檔，不查 Prometheus、不產生推薦值。`--export-patch` 每行標出目前值的來源檔（`# was 60 (from tenant-a.yaml)`），繼承的 key 只以註解列出目前值與擁有它的檔——寫進租戶檔會把租戶釘在那個值。租戶名或 key 不是一般名稱（`[A-Za-z0-9][A-Za-z0-9._-]*` 以外，或 exporter 讀成空 key 的 `null`；`010`、`true`、`2024` 這類 exporter 照原文讀的 id 照常產生值行）時不產生值行，改以 `(not written)` 註解列出推薦值與目前值，請手動改該租戶檔。租戶檔用舊拼法（如 `mysql_cpu`）時以 exporter 的別名表查 observed-map，輸出保留檔案裡的拼法。需要 da-guard（da-tools image 內附；或以 `$DA_GUARD_BINARY` 指定），失敗時回 2 並轉出 da-guard 的 stderr。別名表取自 `da-guard served-values`，所以 served-values 拒收的樹（例如根 `defaults:` 與租戶同時寫 `X_critical`）上本工具與 `threshold-govern` 都會回 2。沒有任何設定檔的 `--config-dir`（空目錄）同樣回 2（da-guard 拒收）；排程跑 `threshold-govern` 的 Job 遇到時會判為失敗。
 >
 > **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關。重新產生時採 **merge-preserve**（#916）：仍有效的人工 resolved `observed_series` 會跨 rule-pack 變更保留（pick 失效則降回 needs_review、已移除的 key 則 drop），摘要列出 preserved/demoted/dropped 計數、細節走 stderr WARN。
+>
+> **上界 (`>`) 推薦值怎麼算（[#2964](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2964)）**：以未捨入的 P95 判斷方向（報表顯示的 P50/P95/P99 捨入到兩位小數）。
+> - **P95 ≤ 0**：不給建議（`recommended` 為空，不寫進 `--export-patch`、`threshold-govern` 不開 PR），reason 為 `P95 is non-positive (max in window X) — no recommendation`。P95 = 0 不一定是閒置，現行告警可能響過，請看窗內最大值判斷。
+> - **P95 低於現值（收緊）**：建議值為 `max(P95, 現值一半向上取整, 窗內不超過現值的最大點向上取整)`，上限是現值。一輪最多收緊 50%；不會讓任何在現值下沒響的點開始響（窗內一個高於現值的尖峰不會擋住收緊），因此 backtest 對它判 LOW。被這個下限夾住時，reason 以 `tighten floored at …` 開頭並寫明是哪一項。取整依現值的寫法：整數現值（含 `1e3` 這種科學記號）取整數，其餘取現值本身的小數位數、至少兩位（`0.8` → 兩位，`0.001`、`1e-3` → 三位）；所以已經是該精度最小一格的現值（如 `0.001`）收不下去，會判為無變更。大幅收緊要分幾輪（例如 94% 為 0 的指標 30 → 15 → 8 → 4 → 2）。
+> - **P95 高於現值（放寬）**：改取 P99，依上述精度**向上**取整（放寬到 P95 仍約有 5% 的點超標；向上取整保證建議值不會落在現值以下）。這時 5% 的變動門檻量的是 P99 與現值的差距。
+> - 現值為 0 的 key 照舊（取 P95）；變動小於 5% 仍視為無變更。
+>
+> ⚠️ `threshold-govern --min-delta-pct` 設在 50 以上時，被「一半」夾住的 -50% 建議會被 govern 濾掉（不開 PR），但 `--export-patch` 仍會列出它。
 >
 > **#916 下界 (`<`) 三態**：下界閾值（hit-ratio / 可用度**下限**，腐敗＝下修 floor）不再一律 skip，而由 code-level allowlist 分三態：
 > - **`percentile-lower`**（可推薦）：opt-in 的下限 key（如 `db2_bufferpool_hit_ratio`）走專屬 **P5 floor 引擎**——完整 UTC 日分桶取 daily-P5，`min(daily-median, pooled)` 抗污染；4dp `ROUND_FLOOR`（floor 防捨入偷放鬆）；以 **miss-rate（互補空間 `1-value`）** 度量腐敗。護欄依序：**放鬆（下修 floor）一律 `force_manual` 交人（無幅度豁免）** → clamp（不把容忍 miss-rate 收到現值的 25% 以下）→ 收緊 within-10%-miss-margin 視為無變更。樣本不足 / current 或 candidate 超出 (0,1) 亦 `force_manual`。
@@ -2984,7 +2994,7 @@ da-tools threshold-recommend --generate-observed-map
 | MEDIUM | ≥ `--min-samples`（預設與下限都是 100） |
 | LOW | 其餘 |
 
-樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，也仍會寫進 `--export-patch`（行尾註明 LOW），套用前請看信心等級。
+樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，但不算進 `recommended_changes`，也不會寫成 `--export-patch` 的值行：它改以整行註解 `# [租戶] (low confidence) key: recommended X, was Y, -Z% — <reason>` 列出，需要時請自行判斷、手動抄寫（[#2969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2969)）。文字報表的標題會寫成 `0/1 changes recommended, 1 low-confidence`，`--json` 的 summary 與每個租戶多一個 `low_confidence_changes` 欄位。整份 patch 只有 LOW 時，固定標頭後的第一行會說明下方列了幾筆 low-confidence 建議、沒有可套用的值行，不會寫成 `no actionable recommendations`。與 `threshold-govern` 用的是同一道信心門檻。
 
 **範例**
 
@@ -3036,7 +3046,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--identity-groups` | X-Forwarded-Groups（須具 write 權限的 RBAC 群組；直連 `--apply` 必填） | `$DA_GOVERN_GROUPS` |
 | `--auth-token` | Bearer token（oauth2-proxy 前置模式；或 `$DA_GOVERN_TOKEN`） | - |
 | `--auth-token-file` | Bearer token 檔路徑（K8s audience-bound projected SA token，呼叫時讀取；或 `$DA_GOVERN_TOKEN_FILE`） | - |
-| `--throttle-seconds` | 開 PR 之間的間隔秒數 | `2` |
+| `--throttle-seconds` | 開 PR 之間的間隔秒數（≥ 0，可帶小數；`0` = 不等待；負數、`nan`、`inf` 在開出任何 PR 前回 `2`） | `2` |
 | `--timeout` | 呼叫 tenant-api（GET／PUT）的 HTTP 逾時秒數，只在 `--apply` 時用到；不影響 Prometheus 查詢。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)） | `30` |
 | `--json` | JSON 輸出 | - |
 
@@ -3069,8 +3079,8 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | 僅驗證 URL 格式，不實際發送 | - |
 | `--json` | JSON 輸出 | - |
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
-| `--timeout` | 每個 receiver 的連線逾時秒數。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
-| `--rate-limit` | 每次測試之間的等待秒數 | `0.5` |
+| `--timeout` | 每個 receiver 的逾時秒數，連線與等待回應兩個階段都適用，任一階段逾時皆回報 `TIMEOUT`（[#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)）。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
+| `--rate-limit` | 每次測試之間的等待秒數（≥ 0，可帶小數；`0` = 不等待；負數、`nan`、`inf` 回 `2`） | `0.5` |
 
 **支援的 Receiver 類型**
 

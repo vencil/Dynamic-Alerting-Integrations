@@ -687,3 +687,54 @@ def test_unreadable_default_says_so_instead_of_judging(monkeypatch):
         "container_memory 的平台預設讀不到，無法對照", False, None)
     monkeypatch.undo()
     assert baseline_discovery.platform_default("no_such_key") is None
+
+
+# ── #2966：--interval / --duration 須為正整數秒 ──────────────────────
+
+
+class TestIntervalAndDurationRange:
+    """`--interval 0` 曾在 `duration // interval` 丟 ZeroDivisionError（rc 1）；
+    負數則靜默 rc 0、印出「Samples: ~-120」並寫出空 CSV。兩個旗標都在解析時
+    拒絕（rc 2），且型別仍是 int：改成 float 會讓 `600 // 15.0` 得到 40.0，
+    `range(40.0)` 丟 TypeError。"""
+
+    @pytest.mark.parametrize("flag", ["--interval", "--duration"])
+    @pytest.mark.parametrize("bad", ["0", "-5", "1.5", "nan", "inf", "abc",
+                                     "9223372037"])
+    def test_refused_before_any_query(self, capsys, monkeypatch, tmp_path,
+                                      cli_argv, flag, bad):
+        cli_argv("baseline_discovery", "--tenant", "db-a",
+                 "--prometheus", "http://mock:9090", "--metrics", "cpu",
+                 "-o", str(tmp_path / "out"), flag, bad)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            lambda *a: pytest.fail("queried Prometheus"))
+        monkeypatch.setattr(baseline_discovery.time, "sleep",
+                            lambda s: pytest.fail("slept"))
+        with pytest.raises(SystemExit) as exc:
+            baseline_discovery.main()
+        assert exc.value.code == 2
+        assert flag in capsys.readouterr().err
+        assert not (tmp_path / "out").exists()
+
+    @pytest.mark.parametrize("flag", ["--interval", "--duration"])
+    @pytest.mark.parametrize("bad", ["0", "-5"])
+    def test_dry_run_is_refused_too(self, capsys, cli_argv, flag, bad):
+        """dry-run 也做 `duration // interval`：0 撞 ZeroDivisionError、負數印出負的採樣數。"""
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--dry-run", flag, bad)
+        with pytest.raises(SystemExit) as exc:
+            baseline_discovery.main()
+        assert exc.value.code == 2
+
+    def test_whole_seconds_still_drive_an_int_sample_count(self, capsys, monkeypatch,
+                                                           tmp_path, cli_argv):
+        """Must-fire 對照：合法值照常採樣，sleep 收到的是 int。"""
+        cli_argv("baseline_discovery", "--tenant", "db-a",
+                 "--prometheus", "http://mock:9090", "--metrics", "cpu",
+                 "-o", str(tmp_path / "out"), "--duration", "45", "--interval", "15")
+        monkeypatch.setattr(baseline_discovery, "query_prometheus",
+                            lambda url, expr: ([{"metric": {}, "value": [0, "1"]}], None))
+        slept = []
+        monkeypatch.setattr(baseline_discovery.time, "sleep", slept.append)
+        baseline_discovery.main()
+        assert "共 3 個採樣點" in capsys.readouterr().out
+        assert slept == [15, 15] and all(type(s) is int for s in slept)

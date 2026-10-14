@@ -359,6 +359,86 @@ class TestBacktestChange:
         assert result["new_breach_count"] > 0
 
 
+class TestBacktestChangeNaN:
+    """#2963：全 NaN 不得報成 analyzed／LOW；分母仍含 NaN（owner 裁定的方案 P）。"""
+
+    def _run(self, monkeypatch, vals, old, new):
+        values = [(i, v) for i, v in enumerate(vals)]
+        monkeypatch.setattr(bt, "query_range",
+                            lambda *a, **kw: [{"values": values}])
+        change = {"tenant": "t-x", "metric": "cpu", "old_value": old, "new_value": new}
+        return bt.backtest_change("http://prom", change, 86400)
+
+    @pytest.mark.parametrize("old,new", [
+        ("70", "65"),          # 一般變更（main 上是 analyzed / LOW）
+        ("disable", "70"),     # 新啟用（main 上是 analyzed / LOW）
+        ("70", "disable"),     # 停用（main 上是 analyzed / MEDIUM）
+    ])
+    def test_all_nan_is_no_data(self, monkeypatch, old, new):
+        result = self._run(monkeypatch, ["NaN"] * 50, old, new)
+        assert result["status"] == "no_data"
+        assert result["risk"] == "UNKNOWN"
+        assert result["message"] == "Only NaN samples in lookback window"
+        assert "data_points" not in result
+
+    def test_truly_empty_keeps_not_found_message(self, monkeypatch):
+        monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [])
+        change = {"tenant": "t-x", "metric": "cpu", "old_value": "70", "new_value": "50"}
+        result = bt.backtest_change("http://prom", change, 86400)
+        assert result["message"] == "No historical data found in Prometheus"
+
+    def test_nan_counts_in_denominator_for_new_enable(self, monkeypatch):
+        """900 NaN + 100 會觸發：分母 1000 → 10% → MEDIUM（不是 HIGH）。
+
+        釘住 owner 的語意選擇：pct = 佔整段回看時間的比例；NaN 那段告警不會響。
+        """
+        result = self._run(monkeypatch, ["NaN"] * 900 + ["95"] * 100,
+                           "disable", "70")
+        assert result["status"] == "analyzed"
+        assert result["risk"] == "MEDIUM"
+        assert result["data_points"] == 1000
+        assert result["new_breach_count"] == 100
+
+    def test_only_hot_points_new_enable_is_high(self, monkeypatch):
+        result = self._run(monkeypatch, ["95"] * 100, "disable", "70")
+        assert result["risk"] == "HIGH"
+        assert result["data_points"] == 100
+
+    @pytest.mark.parametrize("inf", ["+Inf", "-Inf"])
+    def test_inf_is_not_missing_data(self, monkeypatch, inf):
+        """±Inf 不是 NaN：全 ±Inf 仍是 analyzed，不得走 no_data。"""
+        result = self._run(monkeypatch, [inf] * 10, "70", "65")
+        assert result["status"] == "analyzed"
+        assert result["data_points"] == 10
+
+    def test_inf_mixed_with_nan_counts(self, monkeypatch):
+        """NaN 混 +Inf 的新啟用：+Inf 算觸發、也留在分母。"""
+        result = self._run(monkeypatch, ["NaN"] * 9 + ["+Inf"], "disable", "70")
+        assert result["status"] == "analyzed"
+        assert result["data_points"] == 10
+        assert result["new_breach_count"] == 1
+        assert result["risk"] == "MEDIUM"
+
+    def test_unparseable_values_are_not_nan(self, monkeypatch):
+        """讀不懂的值不算 NaN：不得報成「Only NaN」（交給 count_threshold_breaches 跳過）。"""
+        result = self._run(monkeypatch, ["oops", "n/a"], "70", "65")
+        assert result.get("message") != "Only NaN samples in lookback window"
+        assert result["status"] == "analyzed"
+
+    def test_all_finite_unchanged(self, monkeypatch):
+        result = self._run(monkeypatch, ["60", "80", "90"], "85", "70")
+        assert result["status"] == "analyzed"
+        assert result["data_points"] == 3
+        assert (result["old_breach_count"], result["new_breach_count"]) == (1, 2)
+        assert result["risk"] == "HIGH"
+
+    def test_nan_mixed_normal_change(self, monkeypatch):
+        result = self._run(monkeypatch, ["NaN", "80", "NaN", "90"], "85", "70")
+        assert result["status"] == "analyzed"
+        assert result["data_points"] == 4
+        assert (result["old_breach_count"], result["new_breach_count"]) == (1, 2)
+
+
 # ── query_range（mock http_get_json）──────────────────────────────
 # W1: query_range 的 fetch core 收斂進 _lib_prometheus.query_prometheus_range，
 # 故 HTTP seam 改 patch _lib_prometheus.http_get_json（工具模組層的
@@ -432,6 +512,18 @@ class TestPrintTextReport:
         bt.print_text_report(report)
         out = capsys.readouterr().out
         assert "No data: 1" in out
+
+    def test_no_data_wording_is_neutral(self, capsys):
+        """#2963：no_data 也涵蓋全 NaN，摘要行不得宣稱 metric 不存在。"""
+        results = [
+            {"status": "no_data", "risk": "UNKNOWN", "tenant": "a",
+             "metric": "m", "old_value": "70", "new_value": "50",
+             "message": "Only NaN samples in lookback window"},
+        ]
+        bt.print_text_report(bt.generate_report(results, "7d"))
+        out = capsys.readouterr().out
+        assert "No data: 1 (no usable data in Prometheus)" in out
+        assert "metric not found" not in out
 
 
 # ── extract_changes_from_git_diff（mock subprocess）───────────────

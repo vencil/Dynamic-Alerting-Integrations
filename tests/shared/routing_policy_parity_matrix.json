@@ -1538,7 +1538,7 @@
       },
       "platform": [
         [
-          "routing_in_unread_location",
+          "routing_key_ignored",
           "_defaults.yaml",
           "_routing"
         ]
@@ -6475,6 +6475,72 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-unknown-keys-2983",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/d\n_routing_defualts:\n  group_wait: 10s\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '50'\n    _routing_profle: p1\n",
+        "t2.yaml": "tenants:\n  t2:\n    cpu_usage_percent: '50'\n    _routing_profile: p1\n",
+        "team/_defaults.yaml": "defaults:\n  cpu_usage_percent: 70\n_routing_enforce:\n  enabled: true\n",
+        "team/_defaults.yml": "_routing_defaults_x:\n  group_wait: 10s\n"
+      },
+      "platform": [
+        [
+          "routing_key_ignored",
+          "_defaults.yaml",
+          "_routing_defualts"
+        ],
+        [
+          "routing_key_ignored",
+          "team/_defaults.yaml",
+          "_routing_enforce"
+        ]
+      ],
+      "expect": {
+        "t1": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t2": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null

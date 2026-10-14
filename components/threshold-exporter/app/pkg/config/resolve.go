@@ -1565,6 +1565,15 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// shares, so "which metric does this key belong to" has one answer.
 			shape, baseKey := overrideKeyShape(canonKey)
 			if shape == shapeReserved {
+				// #2983: reserved by the `_routing` prefix, read by no one —
+				// `_routing_profle`, or the flat `_routing_receiver_type` the
+				// route generator never read. tenant-api's write gate refuses
+				// on this line, as the generator's `--validate` does.
+				if IsUnknownRoutingKey(canonKey, false) {
+					v.Errors = append(v.Errors, fmt.Sprintf(
+						"WARN: tenant=%s: unknown routing key %q — not a key the route generator reads (%s); "+
+							"remove it", tenant, canonKey, UnknownRoutingKeyHint(canonKey, false)))
+				}
 				continue
 			}
 

@@ -82,6 +82,7 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     exit_on_yaml_file_error,
     http_get_json,
+    non_negative_seconds,
     parse_duration_seconds,
     positive_seconds,
 )
@@ -253,7 +254,10 @@ def is_governance_actionable(
     only when the threshold has drifted meaningfully (``|delta| >= min_delta_pct``)
     AND the recommendation rests on enough samples (HIGH/MEDIUM confidence). The
     confidence floor is the anti-noise guard — we never nag an operator to retune
-    a threshold off a thin sample (防破窗).
+    a threshold off a thin sample (防破窗). Since #2969 ``_exportable`` applies the
+    same confidence floor — both call ``recommend.confidence_actionable`` — so at
+    an equal margin the two agree; only the margin (5% vs ``min_delta_pct``)
+    differs.
 
     Keys the engine skipped (unmapped / lower-bound ``<`` N/A / unsupported scope
     / no data → ``recommended is None``) are excluded for free, as are lower-bound
@@ -265,7 +269,7 @@ def is_governance_actionable(
         and not getattr(rec, "force_manual", False)
         and rec.delta_pct is not None
         and abs(rec.delta_pct) >= min_delta_pct
-        and rec.confidence in (recommend.CONFIDENCE_HIGH, recommend.CONFIDENCE_MEDIUM)
+        and recommend.confidence_actionable(rec.confidence)
     )
 
 
@@ -1209,9 +1213,10 @@ def main() -> None:
                               if _LANG == "zh" else
                               "Path to a Bearer token file (K8s audience-bound projected SA "
                               "token, read at call time; or env DA_GOVERN_TOKEN_FILE)"))
-    parser.add_argument("--throttle-seconds", type=float, default=DEFAULT_THROTTLE_SECONDS,
-                        help="開 PR 之間的間隔秒數（預設 2）" if _LANG == "zh"
-                        else "Seconds to pause between opened PRs (default 2)")
+    parser.add_argument("--throttle-seconds", type=non_negative_seconds, default=DEFAULT_THROTTLE_SECONDS,
+                        help="開 PR 之間的間隔秒數（≥ 0，0 = 不等待，可帶小數；預設 2）" if _LANG == "zh"
+                        else "Seconds to pause between opened PRs (>= 0, 0 = no wait, "
+                        "fractions allowed; default 2)")
     parser.add_argument("--timeout", type=positive_seconds, default=30,
                         help=("tenant-api 的 HTTP 逾時秒數（> 0，可帶小數；預設 30；"
                               "不影響 Prometheus 查詢）" if _LANG == "zh" else

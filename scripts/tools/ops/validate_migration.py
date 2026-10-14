@@ -64,7 +64,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import http_get_json, ensure_dir_or_die, write_text_or_die, write_json_or_die, query_prometheus_instant, add_prometheus_arg  # noqa: E402
+from _lib_python import http_get_json, ensure_dir_or_die, write_text_or_die, write_json_or_die, query_prometheus_instant, add_prometheus_arg, non_negative_seconds  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 # Alias for backward-compat within this module
@@ -457,8 +457,8 @@ def main():
                         help="數值誤差容忍度 (預設: 0.001 = 0.1%%)")
     parser.add_argument("--watch", action="store_true",
                         help="持續監控模式")
-    parser.add_argument("--interval", type=int, default=60,
-                        help="監控間隔秒數 (預設: 60)")
+    parser.add_argument("--interval", type=non_negative_seconds, default=60,
+                        help="監控間隔秒數（≥ 0，0 = 輪與輪之間不等待，可帶小數；預設: 60）")
     parser.add_argument("--rounds", type=int, default=10,
                         help="監控輪數 (預設: 10)")
     parser.add_argument("--auto-detect-convergence", action="store_true",

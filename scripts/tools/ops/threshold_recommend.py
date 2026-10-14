@@ -53,7 +53,7 @@ import re
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from decimal import ROUND_FLOOR, Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, Optional
 
@@ -139,6 +139,18 @@ CONFIDENCE_LOW = "LOW"
 # An inherited key (#2116): not queried, so no confidence at all — not LOW,
 # which would read as "too few samples".
 CONFIDENCE_NOT_QUERIED = "n/a"
+# The confidences a recommendation may act on: an --export-patch value line
+# (`_exportable`) and a governance PR (threshold_govern) both read this (#2969).
+ACTIONABLE_CONFIDENCES = (CONFIDENCE_HIGH, CONFIDENCE_MEDIUM)
+
+
+def confidence_actionable(confidence: Any) -> bool:
+    """True iff a recommendation of this confidence may be applied (HIGH /
+    MEDIUM). A LOW one rests on too thin a sample; any other value (an
+    inherited key's `n/a`, empty, None) was never graded. `_exportable` and
+    `threshold_govern.is_governance_actionable` share it so the two floors
+    cannot drift apart (#2969)."""
+    return confidence in ACTIONABLE_CONFIDENCES
 
 # Percentile queries via Prometheus quantile_over_time
 PERCENTILES = {
@@ -226,7 +238,12 @@ class TenantRecommendation:
     defaults / platform / profile file — listed for reference only, never
     exported as a tenant patch or governed (#2116). `total_keys` /
     `recommended_changes` count `keys` only. `source_file` is the tenant's
-    own file, relative to --config-dir."""
+    own file, relative to --config-dir.
+
+    #2969: `recommended_changes` counts only the changes that may be applied
+    (`_exportable`: HIGH / MEDIUM confidence, past the margin);
+    `low_confidence_changes` counts the ones past the margin but graded LOW,
+    which are listed and never exported."""
 
     tenant: str
     keys: list[KeyRecommendation] = field(default_factory=list)
@@ -234,6 +251,7 @@ class TenantRecommendation:
     recommended_changes: int = 0
     source_file: str = ""
     inherited: list[KeyRecommendation] = field(default_factory=list)
+    low_confidence_changes: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +355,33 @@ def is_reserved_key(key: str) -> bool:
     return False
 
 
+def _decimals(current_value: Any) -> int:
+    """Decimal places a recommendation keeps, following how current is
+    written. 0 for an ``int`` or for a string with no '.' whose value is a
+    whole number (``"80"``, ``"1e3"``). Anything else keeps the places its
+    text is written to, at least 2: ``"0.8"`` → 2, ``"0.001"`` and ``"1e-3"``
+    → 3, ``"1.5e2"`` → 2 (a '.' means the author wrote a decimal), and a
+    non-string such as the float ``80.0`` or ``Decimal("1E+3")`` → 2.
+    Judged on the value, not on a '.' alone: ``"1e-3"`` has none and is not
+    a whole number. Callers pass a finite value ``float()`` accepted, which
+    ``Decimal`` accepts too."""
+    if isinstance(current_value, int):
+        return 0
+    text = str(current_value).strip()
+    if isinstance(current_value, str) and '.' not in text and float(text).is_integer():
+        return 0
+    exp = Decimal(text).as_tuple().exponent
+    return max(2, -exp) if isinstance(exp, int) else 2
+
+
+def _ceil_to(x: Any, places: int) -> Any:
+    """Round ``x`` UP to ``places`` decimals (an int at 0), in decimal (a
+    float ``2.2 * 0.5 * 100`` is 110.00000000000001 and would ceil to 1.11)."""
+    d = (x if isinstance(x, Decimal) else Decimal(str(x))).quantize(
+        Decimal(1).scaleb(-places), rounding=ROUND_CEILING)
+    return int(d) if places == 0 else float(d)
+
+
 def recommend_threshold(
     key: str,
     current_value: Any,
@@ -344,22 +389,36 @@ def recommend_threshold(
     sample_count: int,
     min_samples: int,
     noise_grade: Optional[str] = None,
+    values: Optional[list[float]] = None,
 ) -> KeyRecommendation:
-    """Generate a threshold recommendation for one metric key.
+    """Generate a threshold recommendation for one upper-bound (``>``) key.
 
-    Strategy:
-      - Default: recommend P95 (covers 95% of observed values)
-      - If noise_grade == BAD (too noisy): recommend P99 (relax threshold)
-      - If noise_grade == GOOD and stale: recommend P95 (tighten threshold)
-      - Delta < 5%: no change recommended (within noise margin)
+    Strategy (#2964):
+      - P95 <= 0 (judged unrounded): no recommendation. P95 = 0 need not mean
+        idle — the reason carries the window max so the operator can tell.
+      - P95 below current → tighten, but to no less than the floor
+        ``max(P95, ceil(half of current), ceil(highest point <= current))``,
+        capped at current: one round tightens at most 50%, and it starts no
+        alert on any point the current value did not already fire on (one
+        spike above current does not hold it up).
+      - P95 above current → relax to P99, rounded UP (P95 would leave ~5% of
+        points over; rounding to the nearest could land at or under current).
+      - Rounding keeps current's style: an int for a whole number (``"1e3"``
+        too), else current's own decimal places, at least 2 (``_decimals``).
+      - noise_grade == BAD: P99 instead of P95 (relax a noisy alert).
+      - current == 0: unchanged (P95, delta 100% / 0%).
+      - Delta < 5%: no change recommended (within noise margin).
 
     Args:
         key: Metric key name.
         current_value: Current threshold from config.
-        pcts: Dict with p50, p95, p99 values.
+        pcts: Dict with p50, p95, p99 values (2-dp, as shown).
         sample_count: Number of data points.
         min_samples: Minimum sample threshold for confidence.
         noise_grade: Optional noise grade from alert_quality.
+        values: The raw points ``pcts`` came from. Gives the unrounded
+            P95 / P99 and the window max; without them the 2-dp ``pcts`` are
+            used and the tighten floor is half of current alone.
 
     Returns:
         KeyRecommendation with recommended value and rationale.
@@ -380,22 +439,95 @@ def recommend_threshold(
             sample_count=sample_count,
             reason="non-numeric current value, manual review needed",
         )
+    # YAML .inf / .nan parse, but no arithmetic below can work with them.
+    if not math.isfinite(current_float):
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            p50=pcts.get("p50"),
+            p95=pcts.get("p95"),
+            p99=pcts.get("p99"),
+            confidence=confidence,
+            sample_count=sample_count,
+            reason="non-finite current value — manual review needed",
+        )
 
-    # Select target percentile based on noise grade
-    if noise_grade == "BAD":
-        target = pcts.get("p99", pcts.get("p95", current_float))
-        reason_prefix = "noisy alert (BAD noise grade) → relaxed to P99"
+    clean = sorted(v for v in values if math.isfinite(v)) if values else []
+    if clean:
+        p95 = percentile(clean, PERCENTILES["p95"])
+        p99 = percentile(clean, PERCENTILES["p99"])
     else:
-        target = pcts.get("p95", current_float)
-        reason_prefix = "recommended at P95"
+        p95 = pcts.get("p95", current_float)
+        p99 = pcts.get("p99", p95)
 
-    # Round to same precision as current value
-    if current_float != 0:
-        # Detect integer vs float precision
-        if isinstance(current_value, int) or (isinstance(current_value, str) and '.' not in str(current_value)):
-            target = round(target)
-        else:
-            target = round(target, 2)
+    if p95 <= 0:
+        seen = (f" (max in window {_format_threshold_value(clean[-1])})"
+                if clean else "")
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            p50=pcts.get("p50"),
+            p95=pcts.get("p95"),
+            p99=pcts.get("p99"),
+            confidence=confidence,
+            sample_count=sample_count,
+            reason=f"P95 is non-positive{seen} — no recommendation",
+        )
+
+    places = _decimals(current_value)
+
+    def _round(x: float) -> Any:
+        return round(x) if places == 0 else round(x, places)
+
+    noisy = noise_grade == "BAD"
+    base = p99 if noisy else p95
+    floored = ""
+    if current_float == 0:
+        # Not in #2964's scope: kept as it was (the shown 2-dp percentile).
+        target = pcts.get("p99" if noisy else "p95", base)
+        reason_prefix = ("noisy alert (BAD noise grade) → relaxed to P99" if noisy
+                         else "recommended at P95")
+    elif base > current_float:
+        # Up, never to the nearest: rounding P99 to current's precision could
+        # land at or under current (0.001 → 0.0 was a "-100% relax").
+        target = _ceil_to(p99, places)
+        reason_prefix = ("noisy alert (BAD noise grade) → relaxed to P99" if noisy
+                         else "relaxed to P99")
+        if target <= current_float:
+            # Defence only (ceil keeps target >= P99 > current): a relax
+            # must never come out as a decrease.
+            target = current_float
+    else:
+        target = _round(base)
+        reason_prefix = ("noisy alert (BAD noise grade) → recommended at P99"
+                         if noisy else "recommended at P95")
+        if base < current_float:
+            half = _ceil_to(Decimal(str(current_float)) * Decimal("0.5"), places)
+            holds = {("one round tightens at most 50% (half of current, rounded up, "
+                      f"is {_format_threshold_value(half)})"): half}
+            below = [v for v in clean if v <= current_float]
+            if below:
+                top = _ceil_to(below[-1], places)
+                holds[f"highest in-window value at or below current is "
+                      f"{_format_threshold_value(below[-1])} — no new firing"] = top
+            floor = max(holds.values())
+            if floor > target:
+                cap = (int(current_float) if places == 0 and current_float.is_integer()
+                       else current_float)
+                target = min(floor, cap)
+                reason_prefix = (f"tighten floored at {_format_threshold_value(target)} above "
+                                 f"P{99 if noisy else 95} {base:.6g}")
+                floored = ": " + "; ".join(w for w, v in holds.items() if v == floor)
+
+    if current_float != 0 and target <= 0:
+        # Defence only: every branch above keeps target > 0 once P95 > 0.
+        return KeyRecommendation(
+            key=key, current_value=current_value, p50=pcts.get("p50"),
+            p95=pcts.get("p95"), p99=pcts.get("p99"), confidence=confidence,
+            sample_count=sample_count,
+            reason=(f"recommended value {_format_threshold_value(target)} "
+                    "is non-positive — no recommendation"),
+        )
 
     # Calculate delta
     if current_float != 0:
@@ -407,10 +539,10 @@ def recommend_threshold(
     if abs(delta_pct) < 5.0:
         reason = "within 5% margin, no change needed"
     elif confidence == CONFIDENCE_LOW:
-        reason = f"{reason_prefix} (low confidence — insufficient samples)"
+        reason = f"{reason_prefix} (low confidence — insufficient samples){floored}"
     else:
         direction = "increase" if delta_pct > 0 else "decrease"
-        reason = f"{reason_prefix} ({direction} {abs(delta_pct):.1f}%)"
+        reason = f"{reason_prefix} ({direction} {abs(delta_pct):.1f}%){floored}"
 
     return KeyRecommendation(
         key=key,
@@ -826,8 +958,11 @@ def analyze_tenant(
         # An actionable recommendation (upper or lower) counts as a change; a
         # within-margin / force_manual / skipped key does not (_exportable is the
         # single source of truth — a lower within-margin has recommended=None).
+        # #2969: a LOW one past the margin is counted apart, never as a change.
         if _exportable(rec):
             report.recommended_changes += 1
+        elif _low_confidence_change(rec):
+            report.low_confidence_changes += 1
         report.keys.append(rec)
 
     report.total_keys = len(report.keys)
@@ -920,6 +1055,7 @@ def _recommend_key(
             rec = recommend_threshold(
                 key=key, current_value=current_value, pcts=pcts,
                 sample_count=len(values), min_samples=min_samples,
+                values=values,
             )
             hours = len({int(ts // 3600) for ts, _ in pairs})
             if hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW:
@@ -1046,8 +1182,11 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
 
     lines: list[str] = []
     for report in reports:
+        low = (f", {report.low_confidence_changes} low-confidence"
+               if report.low_confidence_changes else "")
         lines.append(f"\nTenant: {safe_label(report.tenant)} "
-                     f"({report.recommended_changes}/{report.total_keys} changes recommended)")
+                     f"({report.recommended_changes}/{report.total_keys} changes recommended"
+                     f"{low})")
         lines.append(f"{'─' * 90}")
         header = f"  {'Key':<22s} {'Current':>8s} {'P95':>8s} {'Recommend':>10s} {'Delta':>8s} {'Confidence':<10s}"
         lines.append(header)
@@ -1064,8 +1203,10 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
     total_changes = sum(r.recommended_changes for r in reports)
     total_keys = sum(r.total_keys for r in reports)
     total_inherited = sum(len(r.inherited) for r in reports)
+    total_low = sum(r.low_confidence_changes for r in reports)
     lines.append(f"\n{'=' * 90}")
     lines.append(f"  Total: {total_changes}/{total_keys} keys with recommended changes"
+                 + (f"; {total_low} low-confidence (listed, not counted)" if total_low else "")
                  + (f"; {total_inherited} inherited key(s) listed for reference"
                     if total_inherited else ""))
     lines.append(f"{'=' * 90}")
@@ -1082,6 +1223,7 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
             "total_tenants": len(reports),
             "total_keys": sum(r.total_keys for r in reports),
             "recommended_changes": sum(r.recommended_changes for r in reports),
+            "low_confidence_changes": sum(r.low_confidence_changes for r in reports),
             "inherited_keys": sum(len(r.inherited) for r in reports),
         },
     }
@@ -1118,11 +1260,14 @@ def _format_threshold_value(value: float) -> str:
 
     conf.d values are quoted strings (e.g. ``"70"``). Whole numbers render
     without a decimal point so the patch matches the prevailing integer style;
-    fractional values keep up to 2 dp (recommend_threshold already rounded).
+    fractional values are written in full, never in exponent form: the
+    recommendation was rounded UP to current's own precision so that it starts
+    no new firing (#2964), and a 6-significant-digit ``:g`` would round it
+    back below that floor (0.098765433 → 0.0987654, 150000.37 → 150000).
     """
     if value == int(value):
         return str(int(value))
-    return f"{value:g}"
+    return format(Decimal(repr(float(value))).normalize(), "f")
 
 
 def _delta_str(r: KeyRecommendation) -> str:
@@ -1147,10 +1292,23 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     A ``force_manual`` key (a lower-bound guardrail tripped — relaxation / thin
     sample / out-of-domain) is labelled ``manual`` and carries its
     ``guardrail_reason`` so a floor rotting toward relaxation is never invisible;
-    every other non-exportable key stays ``skipped``.
+    every other non-exportable key stays ``skipped``. #2969: a key past the
+    margin but graded LOW is labelled ``low confidence`` and carries the value
+    it would have written, the current one and its delta, so it can still be
+    read — only never applied.
     """
+    low = _low_confidence_change(r)
     if r.force_manual:
         detail = r.guardrail_reason or r.reason or "manual review required"
+    elif low:
+        # current_value was float-parsed (recommended is not None), so it is
+        # one line already; _one_line guards it anyway. The reason goes
+        # through _one_line here, as on a value line, so a control character
+        # in it reads as `?` rather than vanishing into the space collapse.
+        cur = r.current_value if r.current_value is not None else "?"
+        detail = (f"recommended {_format_threshold_value(r.recommended)}, was "
+                  f"{_one_line(cur)}{_from(r)}, {_delta_str(r)} — "
+                  f"{_one_line(r.reason or 'no reason given')}")
     else:
         detail = r.reason or "no recommendation"
     # Collapse embedded newlines/whitespace before this goes into a `#`-prefixed
@@ -1158,7 +1316,8 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     # exception messages span lines — a raw \n would break out of the comment and
     # corrupt the exported --export-patch YAML fragment when an operator applies it.
     detail = " ".join(detail.split())
-    return ("manual" if r.force_manual else "skipped"), detail
+    label = "manual" if r.force_manual else "low confidence" if low else "skipped"
+    return label, detail
 
 
 def _exportable(r: KeyRecommendation) -> bool:
@@ -1170,13 +1329,28 @@ def _exportable(r: KeyRecommendation) -> bool:
     scope / no data — ``recommended is None``), within-margin (no change needed),
     or routed to manual review by a lower-bound guardrail (#916 ``force_manual``)
     are intentionally NOT patched, mirroring the analyze_tenant skip.
+
+    #2969: nor is one graded LOW (or never graded): the same confidence floor
+    threshold_govern applies (`confidence_actionable`). It is listed as a
+    ``(low confidence)`` comment instead (`_low_confidence_change`).
     """
+    return _past_margin(r) and confidence_actionable(r.confidence)
+
+
+def _past_margin(r: KeyRecommendation) -> bool:
+    """A numeric recommendation past the 5% margin, whatever its confidence."""
     return (
         r.recommended is not None
         and not r.force_manual
         and r.delta_pct is not None
         and abs(r.delta_pct) >= 5.0
     )
+
+
+def _low_confidence_change(r: KeyRecommendation) -> bool:
+    """#2969: past the margin but graded LOW — listed as a comment and counted
+    in `low_confidence_changes`, never exported or counted as a change."""
+    return _past_margin(r) and r.confidence == CONFIDENCE_LOW
 
 
 def _one_line(text: Any) -> str:
@@ -1248,6 +1422,9 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
     ``backtest.yaml`` CI posts the old-vs-new firing-count risk report (the
     STAGE-1 value basis). Skipped / within-margin keys are listed as comments
     so the output is self-explaining without re-running in another mode.
+    #2969: a recommendation graded LOW is never a value line either: it is a
+    ``(low confidence)`` comment carrying the value, the current one and the
+    delta, and when it leaves no value line the first comment says so.
 
     #2116: every value line names the file its current value comes from, and
     every name, key, value and reason that goes into a `#` comment is made one
@@ -1282,8 +1459,9 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         "# threshold-recommend --export-patch (#720 STAGE-1)",
         "# Review, then merge each tenant block into the tenant's file (each line names it)",
         "# and open a PR — backtest.yaml CI will post the old-vs-new firing-count risk report.",
-        "# Only keys with an actionable recommendation (|delta| >= 5%, mapped, upper-bound",
-        "# or an opted-in percentile-lower floor) appear; lower-bound deltas are miss-rate.",
+        "# Only keys with an actionable recommendation (|delta| >= 5%, HIGH/MEDIUM confidence,",
+        "# mapped, upper-bound or an opted-in percentile-lower floor) appear; a LOW one is",
+        "# listed as a (low confidence) comment only; lower-bound deltas are miss-rate.",
         "# A value the tenant inherits appears only as a comment naming the file that owns it.",
     ]
 
@@ -1301,8 +1479,18 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             lines.append(f"{tag} (inherited) {_inherited_line(r)}")
 
     if not any(written for _rep, written, *_rest in plan):
-        lines.append("# (no actionable recommendations)" if total == 0 else
-                     "# (no value line: every actionable key is listed as (not written))")
+        # #2969: when the only recommendations are LOW ones, say so — "no
+        # actionable recommendations" would read as "nothing to look at".
+        low = sum(1 for rep in reports for r in rep.keys if _low_confidence_change(r))
+        low_note = (f"{low} low-confidence recommendation(s) listed below as comments "
+                    "only; a value line needs HIGH/MEDIUM confidence")
+        if total:
+            lines.append("# (no value line: every actionable key is listed as (not written)"
+                         + (f"; {low_note})" if low else ")"))
+        elif low:
+            lines.append(f"# (no value line: {low_note})")
+        else:
+            lines.append("# (no actionable recommendations)")
         # Still surface why every key was skipped — the transparency this mode
         # documents must not vanish just because nothing is actionable. These
         # are top-level comments (no `tenants:` block, so the output stays an
@@ -1476,6 +1664,7 @@ def main() -> None:
                     "total_tenants": 0,
                     "total_keys": 0,
                     "recommended_changes": 0,
+                    "low_confidence_changes": 0,
                 },
             }, indent=2, ensure_ascii=False, default=str))
         return
