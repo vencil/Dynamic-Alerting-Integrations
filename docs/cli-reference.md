@@ -288,7 +288,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
+已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -308,7 +308,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
-| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`（stderr 一行說明，沒有 JSON）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，沒有 JSON，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -332,7 +332,7 @@ da-tools batch-diagnose [options]
 |------|------|--------|
 | `--tenants <LIST>` | 逗號分隔租戶列表（若不指定則自動探索） | （自動） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
-| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)） | `60` |
+| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)）。期限也傳到檢查裡的每次呼叫：`kubectl` 在期限前稍早（`min(0.5 秒, --timeout/4)`）被終止，不會在整批結束後留下行程（`--timeout` 很短（低於約 0.5 秒）或機器負載高時不保證）；期限已過就不再啟動 `kubectl` 或送出 Prometheus 查詢（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)） | `60` |
 | `--output <FILE>` | 輸出至檔案（JSON 格式） | stdout |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | K8s namespace（auto-discover 用） | `monitoring` |
@@ -354,7 +354,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|------|
 | `0` | 所有租戶都是 `healthy` 或 `unchecked`（含 `--dry-run`） |
 | `1` | 一個或多個租戶檢查失敗（看輸出裡各租戶的 `status` 與 `issues`） |
-| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl`，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl` 或 `kubectl` 在時限內沒回應，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：租戶檢查失敗與 Prometheus 查詢失敗都回 `0`。用 v2.9.0 時請讀輸出裡各租戶的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -689,6 +689,8 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 **輸出**
 
 對比報告，顯示各項 threshold 變更在歷史數據上的影響（可能增加/減少的 alert）。
+
+觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。`+Inf`／`-Inf` 是真實樣本，照常比較。
 
 **範例**
 
@@ -2958,7 +2960,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--dry-run` | 僅顯示 PromQL 查詢，不實際執行 | - |
 | `--json` | JSON 輸出 | - |
 | `--markdown` | Markdown 表格輸出 | - |
-| `--export-patch` | 輸出可套用的 conf.d override 片段（#720 STAGE-1）；只含 \|delta\|≥5% 且有對映的 key | - |
+| `--export-patch` | 輸出可套用的 conf.d override 片段（#720 STAGE-1）；只含 \|delta\|≥5%、信心等級 HIGH／MEDIUM 且有對映的 key | - |
 | `--generate-observed-map` | 從 rule-packs 重新產生 observed-map（#719）；不需 `--config-dir` | - |
 
 > **#720 STAGE-1（`--export-patch`）**：輸出一段 `tenants:`-rooted 的 conf.d override（只含有實際建議的 key，within-margin / 略過的 key 以註解列出）。operator review 後 merge 進對應 `conf.d/<tenant>.yaml` 並自開 PR → 既有 `backtest.yaml` CI 自動貼 old-vs-new 觸發次數風險報告（STAGE-1 價值基石）。本工具**不就地改檔**（in-place ruamel round-trip 為 defer，見 #721）。
@@ -2992,7 +2994,7 @@ da-tools threshold-recommend --generate-observed-map
 | MEDIUM | ≥ `--min-samples`（預設與下限都是 100） |
 | LOW | 其餘 |
 
-樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，也仍會寫進 `--export-patch`（行尾註明 LOW），套用前請看信心等級。
+樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，但不算進 `recommended_changes`，也不會寫成 `--export-patch` 的值行：它改以整行註解 `# [租戶] (low confidence) key: recommended X, was Y, -Z% — <reason>` 列出，需要時請自行判斷、手動抄寫（[#2969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2969)）。文字報表的標題會寫成 `0/1 changes recommended, 1 low-confidence`，`--json` 的 summary 與每個租戶多一個 `low_confidence_changes` 欄位。整份 patch 只有 LOW 時，固定標頭後的第一行會說明下方列了幾筆 low-confidence 建議、沒有可套用的值行，不會寫成 `no actionable recommendations`。與 `threshold-govern` 用的是同一道信心門檻。
 
 **範例**
 
@@ -3077,7 +3079,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | 僅驗證 URL 格式，不實際發送 | - |
 | `--json` | JSON 輸出 | - |
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
-| `--timeout` | 每個 receiver 的連線逾時秒數。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
+| `--timeout` | 每個 receiver 的逾時秒數，連線與等待回應兩個階段都適用，任一階段逾時皆回報 `TIMEOUT`（[#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)）。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
 | `--rate-limit` | 每次測試之間的等待秒數 | `0.5` |
 
 **支援的 Receiver 類型**

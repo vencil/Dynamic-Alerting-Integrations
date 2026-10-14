@@ -139,6 +139,18 @@ CONFIDENCE_LOW = "LOW"
 # An inherited key (#2116): not queried, so no confidence at all — not LOW,
 # which would read as "too few samples".
 CONFIDENCE_NOT_QUERIED = "n/a"
+# The confidences a recommendation may act on: an --export-patch value line
+# (`_exportable`) and a governance PR (threshold_govern) both read this (#2969).
+ACTIONABLE_CONFIDENCES = (CONFIDENCE_HIGH, CONFIDENCE_MEDIUM)
+
+
+def confidence_actionable(confidence: Any) -> bool:
+    """True iff a recommendation of this confidence may be applied (HIGH /
+    MEDIUM). A LOW one rests on too thin a sample; any other value (an
+    inherited key's `n/a`, empty, None) was never graded. `_exportable` and
+    `threshold_govern.is_governance_actionable` share it so the two floors
+    cannot drift apart (#2969)."""
+    return confidence in ACTIONABLE_CONFIDENCES
 
 # Percentile queries via Prometheus quantile_over_time
 PERCENTILES = {
@@ -226,7 +238,12 @@ class TenantRecommendation:
     defaults / platform / profile file — listed for reference only, never
     exported as a tenant patch or governed (#2116). `total_keys` /
     `recommended_changes` count `keys` only. `source_file` is the tenant's
-    own file, relative to --config-dir."""
+    own file, relative to --config-dir.
+
+    #2969: `recommended_changes` counts only the changes that may be applied
+    (`_exportable`: HIGH / MEDIUM confidence, past the margin);
+    `low_confidence_changes` counts the ones past the margin but graded LOW,
+    which are listed and never exported."""
 
     tenant: str
     keys: list[KeyRecommendation] = field(default_factory=list)
@@ -234,6 +251,7 @@ class TenantRecommendation:
     recommended_changes: int = 0
     source_file: str = ""
     inherited: list[KeyRecommendation] = field(default_factory=list)
+    low_confidence_changes: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -940,8 +958,11 @@ def analyze_tenant(
         # An actionable recommendation (upper or lower) counts as a change; a
         # within-margin / force_manual / skipped key does not (_exportable is the
         # single source of truth — a lower within-margin has recommended=None).
+        # #2969: a LOW one past the margin is counted apart, never as a change.
         if _exportable(rec):
             report.recommended_changes += 1
+        elif _low_confidence_change(rec):
+            report.low_confidence_changes += 1
         report.keys.append(rec)
 
     report.total_keys = len(report.keys)
@@ -1161,8 +1182,11 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
 
     lines: list[str] = []
     for report in reports:
+        low = (f", {report.low_confidence_changes} low-confidence"
+               if report.low_confidence_changes else "")
         lines.append(f"\nTenant: {safe_label(report.tenant)} "
-                     f"({report.recommended_changes}/{report.total_keys} changes recommended)")
+                     f"({report.recommended_changes}/{report.total_keys} changes recommended"
+                     f"{low})")
         lines.append(f"{'─' * 90}")
         header = f"  {'Key':<22s} {'Current':>8s} {'P95':>8s} {'Recommend':>10s} {'Delta':>8s} {'Confidence':<10s}"
         lines.append(header)
@@ -1179,8 +1203,10 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
     total_changes = sum(r.recommended_changes for r in reports)
     total_keys = sum(r.total_keys for r in reports)
     total_inherited = sum(len(r.inherited) for r in reports)
+    total_low = sum(r.low_confidence_changes for r in reports)
     lines.append(f"\n{'=' * 90}")
     lines.append(f"  Total: {total_changes}/{total_keys} keys with recommended changes"
+                 + (f"; {total_low} low-confidence (listed, not counted)" if total_low else "")
                  + (f"; {total_inherited} inherited key(s) listed for reference"
                     if total_inherited else ""))
     lines.append(f"{'=' * 90}")
@@ -1197,6 +1223,7 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
             "total_tenants": len(reports),
             "total_keys": sum(r.total_keys for r in reports),
             "recommended_changes": sum(r.recommended_changes for r in reports),
+            "low_confidence_changes": sum(r.low_confidence_changes for r in reports),
             "inherited_keys": sum(len(r.inherited) for r in reports),
         },
     }
@@ -1265,10 +1292,23 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     A ``force_manual`` key (a lower-bound guardrail tripped — relaxation / thin
     sample / out-of-domain) is labelled ``manual`` and carries its
     ``guardrail_reason`` so a floor rotting toward relaxation is never invisible;
-    every other non-exportable key stays ``skipped``.
+    every other non-exportable key stays ``skipped``. #2969: a key past the
+    margin but graded LOW is labelled ``low confidence`` and carries the value
+    it would have written, the current one and its delta, so it can still be
+    read — only never applied.
     """
+    low = _low_confidence_change(r)
     if r.force_manual:
         detail = r.guardrail_reason or r.reason or "manual review required"
+    elif low:
+        # current_value was float-parsed (recommended is not None), so it is
+        # one line already; _one_line guards it anyway. The reason goes
+        # through _one_line here, as on a value line, so a control character
+        # in it reads as `?` rather than vanishing into the space collapse.
+        cur = r.current_value if r.current_value is not None else "?"
+        detail = (f"recommended {_format_threshold_value(r.recommended)}, was "
+                  f"{_one_line(cur)}{_from(r)}, {_delta_str(r)} — "
+                  f"{_one_line(r.reason or 'no reason given')}")
     else:
         detail = r.reason or "no recommendation"
     # Collapse embedded newlines/whitespace before this goes into a `#`-prefixed
@@ -1276,7 +1316,8 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     # exception messages span lines — a raw \n would break out of the comment and
     # corrupt the exported --export-patch YAML fragment when an operator applies it.
     detail = " ".join(detail.split())
-    return ("manual" if r.force_manual else "skipped"), detail
+    label = "manual" if r.force_manual else "low confidence" if low else "skipped"
+    return label, detail
 
 
 def _exportable(r: KeyRecommendation) -> bool:
@@ -1288,13 +1329,28 @@ def _exportable(r: KeyRecommendation) -> bool:
     scope / no data — ``recommended is None``), within-margin (no change needed),
     or routed to manual review by a lower-bound guardrail (#916 ``force_manual``)
     are intentionally NOT patched, mirroring the analyze_tenant skip.
+
+    #2969: nor is one graded LOW (or never graded): the same confidence floor
+    threshold_govern applies (`confidence_actionable`). It is listed as a
+    ``(low confidence)`` comment instead (`_low_confidence_change`).
     """
+    return _past_margin(r) and confidence_actionable(r.confidence)
+
+
+def _past_margin(r: KeyRecommendation) -> bool:
+    """A numeric recommendation past the 5% margin, whatever its confidence."""
     return (
         r.recommended is not None
         and not r.force_manual
         and r.delta_pct is not None
         and abs(r.delta_pct) >= 5.0
     )
+
+
+def _low_confidence_change(r: KeyRecommendation) -> bool:
+    """#2969: past the margin but graded LOW — listed as a comment and counted
+    in `low_confidence_changes`, never exported or counted as a change."""
+    return _past_margin(r) and r.confidence == CONFIDENCE_LOW
 
 
 def _one_line(text: Any) -> str:
@@ -1366,6 +1422,9 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
     ``backtest.yaml`` CI posts the old-vs-new firing-count risk report (the
     STAGE-1 value basis). Skipped / within-margin keys are listed as comments
     so the output is self-explaining without re-running in another mode.
+    #2969: a recommendation graded LOW is never a value line either: it is a
+    ``(low confidence)`` comment carrying the value, the current one and the
+    delta, and when it leaves no value line the first comment says so.
 
     #2116: every value line names the file its current value comes from, and
     every name, key, value and reason that goes into a `#` comment is made one
@@ -1400,8 +1459,9 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         "# threshold-recommend --export-patch (#720 STAGE-1)",
         "# Review, then merge each tenant block into the tenant's file (each line names it)",
         "# and open a PR — backtest.yaml CI will post the old-vs-new firing-count risk report.",
-        "# Only keys with an actionable recommendation (|delta| >= 5%, mapped, upper-bound",
-        "# or an opted-in percentile-lower floor) appear; lower-bound deltas are miss-rate.",
+        "# Only keys with an actionable recommendation (|delta| >= 5%, HIGH/MEDIUM confidence,",
+        "# mapped, upper-bound or an opted-in percentile-lower floor) appear; a LOW one is",
+        "# listed as a (low confidence) comment only; lower-bound deltas are miss-rate.",
         "# A value the tenant inherits appears only as a comment naming the file that owns it.",
     ]
 
@@ -1419,8 +1479,18 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             lines.append(f"{tag} (inherited) {_inherited_line(r)}")
 
     if not any(written for _rep, written, *_rest in plan):
-        lines.append("# (no actionable recommendations)" if total == 0 else
-                     "# (no value line: every actionable key is listed as (not written))")
+        # #2969: when the only recommendations are LOW ones, say so — "no
+        # actionable recommendations" would read as "nothing to look at".
+        low = sum(1 for rep in reports for r in rep.keys if _low_confidence_change(r))
+        low_note = (f"{low} low-confidence recommendation(s) listed below as comments "
+                    "only; a value line needs HIGH/MEDIUM confidence")
+        if total:
+            lines.append("# (no value line: every actionable key is listed as (not written)"
+                         + (f"; {low_note})" if low else ")"))
+        elif low:
+            lines.append(f"# (no value line: {low_note})")
+        else:
+            lines.append("# (no actionable recommendations)")
         # Still surface why every key was skipped — the transparency this mode
         # documents must not vanish just because nothing is actionable. These
         # are top-level comments (no `tenants:` block, so the output stays an
@@ -1594,6 +1664,7 @@ def main() -> None:
                     "total_tenants": 0,
                     "total_keys": 0,
                     "recommended_changes": 0,
+                    "low_confidence_changes": 0,
                 },
             }, indent=2, ensure_ascii=False, default=str))
         return

@@ -287,7 +287,7 @@ When something is wrong it lists `issues` and recent error logs:
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
+When an issue was found but the `kubectl logs` call that fetches the logs does not answer in time, `recent_logs` is empty and an extra `recent_logs_error` says why; the exit code follows the issue itself ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)). A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -307,7 +307,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|-------------|
 | `0` | `status: healthy`, or `status: unchecked` (the Pod and exporter checks were skipped and nothing else was wrong) |
 | `1` | `status: error`: the Pod is missing or not Running, or `mysql_up` is not 1 |
-| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment (one line on stderr, no JSON); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr, no JSON) |
+| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment, or `kubectl` does not answer in time (120s limit per call; either way one line on stderr, no JSON, [#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr, no JSON) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: it returns `0` whether `status` is `healthy` or `error`, and ends with a Python traceback (rc=1) when `kubectl` is missing. On v2.9.0, read the output's `status`. <!-- image-caveat: v2.9.0 -->
 
@@ -335,7 +335,7 @@ None (auto-discover tenants).
 |--------|-------------|---------|
 | `--tenants <LIST>` | Comma-separated tenant list (if omitted, auto-discover) | (auto) |
 | `--workers <N>` | Number of parallel diagnosis threads | `5` |
-| `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)) | `60` |
+| `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)). The deadline reaches every call inside the check: `kubectl` is stopped slightly before it (`min(0.5s, --timeout/4)`), so no process is left behind after the batch ends (not guaranteed with a very short `--timeout`, below about 0.5s, or on a heavily loaded machine), and past the deadline no `kubectl` is started and no Prometheus query is sent ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)) | `60` |
 | `--output <FILE>` | Output to file (JSON format) | stdout |
 | `--dry-run` | Only list tenants, don't run checks | false |
 | `--namespace <NS>` | K8s namespace (for auto-discover) | `monitoring` |
@@ -357,7 +357,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|-------------|
 | `0` | Every tenant is `healthy` or `unchecked` (including `--dry-run`) |
 | `1` | One or more tenant checks failed (see each tenant's `status` and `issues` in the output) |
-| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl` or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl`, a `kubectl` that does not answer in time, or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: a failed tenant check and a failed Prometheus query both return `0`. On v2.9.0, read each tenant's `status` in the output. <!-- image-caveat: v2.9.0 -->
 
@@ -692,6 +692,8 @@ Choose one mode:
 **Output**
 
 Comparison report showing impact of threshold changes on historical data (potential alerts increased/decreased).
+
+The firing percentage is over every sample in the lookback, NaN included: the alert is silent at a NaN step, so the percentage is the share of the whole lookback. A change with no data at all, or with only NaN samples, is `no_data` (risk `UNKNOWN`, no effect on the exit code); the message is `No historical data found in Prometheus` for the former and `Only NaN samples in lookback window` for the latter ([#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963); all-NaN used to be reported as analyzed). `+Inf` / `-Inf` are real samples and compare as usual.
 
 **Examples**
 
@@ -2972,7 +2974,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--dry-run` | Show PromQL queries without executing | - |
 | `--json` | JSON output | - |
 | `--markdown` | Markdown table output | - |
-| `--export-patch` | Output an applyable conf.d override fragment (#720 STAGE-1); only keys with \|delta\|≥5% and a mapping | - |
+| `--export-patch` | Output an applyable conf.d override fragment (#720 STAGE-1); only keys with \|delta\|≥5%, HIGH/MEDIUM confidence and a mapping | - |
 | `--generate-observed-map` | Regenerate the observed-map from rule-packs (#719); does not need `--config-dir` | - |
 
 > **#720 STAGE-1 (`--export-patch`)**: emits a `tenants:`-rooted conf.d override (only keys with an actionable recommendation; within-margin / skipped keys are listed as comments). The operator reviews it, merges it into the matching `conf.d/<tenant>.yaml`, and opens a PR → the existing `backtest.yaml` CI posts the old-vs-new firing-count risk report (the STAGE-1 value basis). The tool does **not** edit conf.d in place (the heavier in-place ruamel round-trip is deferred — #721).
@@ -3006,7 +3008,7 @@ da-tools threshold-recommend --generate-observed-map
 | MEDIUM | ≥ `--min-samples` (default and floor: 100) |
 | LOW | otherwise |
 
-Only finite samples count; NaN / Inf are dropped ([#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)). Upper-bound keys also have a coverage floor: when their samples fall in fewer than 24 distinct UTC hours the key is LOW whatever its count (the reason says `data in N distinct hour(s) < 24`), and `threshold-govern` opens no PR for it ([#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)). It counts hours covered, not the first-to-last span, so one stray early sample or two short stretches far apart do not pass for a day. Lower-bound keys are gated by "at least 5 full UTC days" instead. A LOW recommendation is still listed in the report and still written by `--export-patch` (its line says LOW): check the confidence before applying it.
+Only finite samples count; NaN / Inf are dropped ([#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)). Upper-bound keys also have a coverage floor: when their samples fall in fewer than 24 distinct UTC hours the key is LOW whatever its count (the reason says `data in N distinct hour(s) < 24`), and `threshold-govern` opens no PR for it ([#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)). It counts hours covered, not the first-to-last span, so one stray early sample or two short stretches far apart do not pass for a day. Lower-bound keys are gated by "at least 5 full UTC days" instead. A LOW recommendation is still listed in the report, but it is not counted in `recommended_changes` and is never a `--export-patch` value line: it is written as a whole-line comment `# [tenant] (low confidence) key: recommended X, was Y, -Z% — <reason>`, to be judged and copied by hand if wanted ([#2969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2969)). The text report's heading reads `0/1 changes recommended, 1 low-confidence`, and `--json` gains a `low_confidence_changes` field in the summary and in each tenant. When a patch holds only LOW recommendations, the first line after its fixed header says how many low-confidence recommendations are listed below and that there is no value line to apply, instead of `no actionable recommendations`. This is the same confidence floor `threshold-govern` applies.
 
 **Examples**
 
@@ -3091,7 +3093,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | Validate URL format only, do not send | - |
 | `--json` | JSON output | - |
 | `--ci` | CI mode: exit 1 if any receiver fails | - |
-| `--timeout` | Connection timeout per receiver in seconds. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
+| `--timeout` | Timeout per receiver in seconds, applied to both connecting and waiting for the response; a timeout in either phase is reported as `TIMEOUT` ([#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)). Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
 | `--rate-limit` | Seconds to wait between each test | `0.5` |
 
 **Supported Receiver Types**

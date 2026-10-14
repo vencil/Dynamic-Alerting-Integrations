@@ -743,6 +743,7 @@ class TestCLI:
         assert doc["observed_map"]["total"] == 3
         assert doc["tenants"] == []
         assert doc["summary"]["recommended_changes"] == 0
+        assert doc["summary"]["low_confidence_changes"] == 0   # #2969: same shape
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1118,6 +1119,212 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
         rec = self._upper([50.0] * 10, step=15.0)
         assert rec.confidence == tr.CONFIDENCE_LOW
         assert "distinct hour" not in rec.reason
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #2969 — a LOW recommendation is listed, never exported or counted
+# ═══════════════════════════════════════════════════════════════════════
+_HEADER_LINES = 7   # format_export_patch's fixed `#` header
+
+
+def _low_rec(key="k", reason="thin sample", **kw):
+    base = dict(current_value="100", recommended=50.0, delta_pct=-50.0,
+                confidence=tr.CONFIDENCE_LOW, reason=reason)
+    base.update(kw)
+    return tr.KeyRecommendation(key=key, **base)
+
+
+class TestLowConfidenceNotExported:
+    _UPPER_MAP = TestAnalyzeTenantUpperBoundFiniteSamples._UPPER_MAP
+    _LOWER_MAP = TestAnalyzeTenantLowerBound.LOWER_MAP
+    _BIG_DELTA = TestAnalyzeTenantUpperBoundFiniteSamples._BIG_DELTA
+
+    def _analyze(self, pairs, *, current="70", source_file="", **kw):
+        # current 70 over 50-59 data: P95 59, and 59 is also the largest
+        # in-window value <= current and above ceil(70/2) — the same 59 /
+        # -15.7% whether or not the upper engine clamps a tightening (#2964).
+        # current 40: a loosening to 59 (P95 and P99 alike), +47.5%.
+        with patch("threshold_recommend.query_prometheus_range_ts",
+                   return_value=(pairs, None)):
+            return tr.analyze_tenant("db-x", {"connections": current},
+                                     prometheus_url="http://p:9090",
+                                     observed_map=self._UPPER_MAP,
+                                     source_file=source_file, **kw)
+
+    # ── _exportable and threshold_govern agree at the same margin ──────
+    @pytest.mark.parametrize("conf", [tr.CONFIDENCE_HIGH, tr.CONFIDENCE_MEDIUM,
+                                      tr.CONFIDENCE_LOW, tr.CONFIDENCE_NOT_QUERIED,
+                                      "", None])
+    @pytest.mark.parametrize("delta", [None, 0.0, 4.99, -4.99, 5.0, -5.0, 25.0, -25.0])
+    @pytest.mark.parametrize("force_manual", [True, False])
+    @pytest.mark.parametrize("recommended", [None, 50.0, 0.0])
+    def test_exportable_matches_govern_at_the_same_margin(
+            self, recommended, force_manual, delta, conf):
+        import threshold_govern as tg
+        rec = tr.KeyRecommendation(key="k", current_value="100",
+                                   recommended=recommended, delta_pct=delta,
+                                   confidence=conf, force_manual=force_manual)
+        assert tr._exportable(rec) is tg.is_governance_actionable(rec, 5.0)
+
+    @pytest.mark.parametrize("conf,expected", [
+        (tr.CONFIDENCE_HIGH, True), (tr.CONFIDENCE_MEDIUM, True),
+        (tr.CONFIDENCE_LOW, False), (tr.CONFIDENCE_NOT_QUERIED, False),
+        ("", False), (None, False)])
+    def test_exportable_confidence_floor(self, conf, expected):
+        """Pins the direction on its own: the grid above passes as long as
+        the two sides agree, even if both changed."""
+        assert tr._exportable(_low_rec(confidence=conf)) is expected
+
+    # ── analyze_tenant: counted apart, never as a change ───────────────
+    def test_upper_low_is_counted_apart_and_only_a_comment(self):
+        yaml = pytest.importorskip("yaml")
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=15.0))
+        rec = rep.keys[0]
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert "distinct hour(s) < 24" in rec.reason
+        assert (rep.recommended_changes, rep.low_confidence_changes) == (0, 1)
+        out = tr.format_export_patch([rep])
+        assert yaml.safe_load(out) is None
+        assert (f"# [db-x] (low confidence) connections: recommended 59, was 70, "
+                f"-15.7% — {rec.reason}") in out.splitlines()
+
+    def test_upward_low_is_counted_apart_and_only_a_comment(self):
+        """A LOW loosening (positive delta) is held back just like a LOW
+        tightening."""
+        yaml = pytest.importorskip("yaml")
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=15.0), current="40")
+        rec = rep.keys[0]
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert rec.delta_pct > 0
+        assert (rep.recommended_changes, rep.low_confidence_changes) == (0, 1)
+        out = tr.format_export_patch([rep])
+        assert yaml.safe_load(out) is None
+        assert (f"# [db-x] (low confidence) connections: recommended 59, was 40, "
+                f"+47.5% — {rec.reason}") in out.splitlines()
+
+    def test_low_comment_names_the_source_file(self):
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=15.0),
+                            source_file="tenants/db-x.yaml")
+        rec = rep.keys[0]
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert (f"# [db-x] (low confidence) connections: recommended 59, was 70 "
+                f"(from tenants/db-x.yaml), -15.7% — {rec.reason}"
+                ) in tr.format_export_patch([rep]).splitlines()
+
+    def test_high_is_still_counted_and_exported(self):
+        yaml = pytest.importorskip("yaml")
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=100.0))
+        assert rep.keys[0].confidence == tr.CONFIDENCE_HIGH
+        assert (rep.recommended_changes, rep.low_confidence_changes) == (1, 0)
+        doc = yaml.safe_load(tr.format_export_patch([rep]))
+        assert doc == {"tenants": {"db-x": {"connections": "59"}}}
+
+    def test_lower_bound_low_under_raised_min_samples_is_excluded(self):
+        """560 points with --min-samples 1000: a percentile-lower floor is LOW."""
+        yaml = pytest.importorskip("yaml")
+        with patch("threshold_recommend.query_prometheus_range_ts",
+                   return_value=(_floor_samples(0.97, days=8, pts_per_day=70), None)):
+            rep = tr.analyze_tenant("db-x", {"db2_bufferpool_hit_ratio": "0.95"},
+                                    prometheus_url="http://p:9090",
+                                    observed_map=self._LOWER_MAP, min_samples=1000)
+        rec = rep.keys[0]
+        assert rec.sample_count == 560
+        assert rec.confidence == tr.CONFIDENCE_LOW
+        assert rec.recommended == pytest.approx(0.97, abs=1e-9)
+        assert not tr._exportable(rec)
+        assert (rep.recommended_changes, rep.low_confidence_changes) == (0, 1)
+        out = tr.format_export_patch([rep])
+        assert yaml.safe_load(out) is None
+        assert (f"# [db-x] (low confidence) db2_bufferpool_hit_ratio: recommended 0.97, "
+                f"was 0.95, {tr._delta_str(rec)} — {rec.reason}") in out.splitlines()
+        assert tr._delta_str(rec).endswith("% miss")
+
+    # ── format_export_patch ────────────────────────────────────────────
+    def test_all_low_first_line_says_so(self):
+        yaml = pytest.importorskip("yaml")
+        rep = tr.TenantRecommendation(tenant="t", total_keys=2, keys=[
+            _low_rec("a"), _low_rec("b")], low_confidence_changes=2)
+        out = tr.format_export_patch([rep])
+        lines = out.splitlines()
+        assert lines[_HEADER_LINES] == (
+            "# (no value line: 2 low-confidence recommendation(s) listed below as "
+            "comments only; a value line needs HIGH/MEDIUM confidence)")
+        assert "no actionable" not in out
+        assert yaml.safe_load(out) is None
+
+    def test_all_low_across_tenants_counts_every_tenant(self):
+        reps = [tr.TenantRecommendation(tenant="t1", keys=[_low_rec("a")]),
+                tr.TenantRecommendation(tenant="t2", keys=[_low_rec("b"), _low_rec("c")])]
+        lines = tr.format_export_patch(reps).splitlines()
+        assert lines[_HEADER_LINES] == (
+            "# (no value line: 3 low-confidence recommendation(s) listed below as "
+            "comments only; a value line needs HIGH/MEDIUM confidence)")
+        assert sum("(low confidence)" in l for l in lines[_HEADER_LINES + 1:]) == 3
+
+    def test_all_blocked_plus_low_names_both(self):
+        """No value line because the one exportable key's name is not plain,
+        and a LOW one beside it: the first line names both."""
+        rep = tr.TenantRecommendation(tenant="t", keys=[
+            _low_rec("a"), _low_rec("bad key", confidence=tr.CONFIDENCE_HIGH)])
+        lines = tr.format_export_patch([rep]).splitlines()
+        assert lines[_HEADER_LINES] == (
+            "# (no value line: every actionable key is listed as (not written); "
+            "1 low-confidence recommendation(s) listed below as comments only; "
+            "a value line needs HIGH/MEDIUM confidence)")
+
+    def test_no_low_keeps_the_no_actionable_line(self):
+        rep = tr.TenantRecommendation(tenant="t", total_keys=1, keys=[
+            tr.KeyRecommendation("x", "1", recommended=None, reason="skipped: unmapped")])
+        lines = tr.format_export_patch([rep]).splitlines()
+        assert lines[_HEADER_LINES] == "# (no actionable recommendations)"
+
+    def test_low_beside_high_is_an_in_block_comment(self):
+        yaml = pytest.importorskip("yaml")
+        rep = tr.TenantRecommendation(tenant="t", total_keys=2, keys=[
+            _low_rec("a", reason="few hours"),
+            _low_rec("b", confidence=tr.CONFIDENCE_HIGH, reason="P95")])
+        out = tr.format_export_patch([rep])
+        assert yaml.safe_load(out) == {"tenants": {"t": {"b": "50"}}}
+        assert ("    # (low confidence) a: recommended 50, was 100, -50.0% — few hours"
+                in out.splitlines())
+
+    @pytest.mark.parametrize("with_value_line", [False, True])
+    def test_hostile_reason_stays_one_comment_line(self, with_value_line):
+        yaml = pytest.importorskip("yaml")
+        keys = [_low_rec("a", reason="boom\nevil: x\r'q\"\x85y: z")]
+        if with_value_line:
+            keys.append(_low_rec("b", confidence=tr.CONFIDENCE_HIGH, reason="P95"))
+        out = tr.format_export_patch([tr.TenantRecommendation(tenant="t", keys=keys)])
+        expected = ({"tenants": {"t": {"b": "50"}}} if with_value_line else None)
+        assert yaml.safe_load(out) == expected
+        low = [l for l in out.splitlines() if "(low confidence) a:" in l]
+        assert len(low) == 1
+        assert low[0].lstrip() == ("# " if with_value_line else "# [t] ") + (
+            "(low confidence) a: recommended 50, was 100, -50.0% — "
+            "boom?evil: x?'q\"?y: z")
+        assert all(l.lstrip().startswith("#") or l.startswith(("tenants:", "  t:", "    b:"))
+                   for l in out.splitlines() if l.strip())
+
+    # ── text / JSON reports ────────────────────────────────────────────
+    def test_text_report_counts_low_apart(self):
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=15.0))
+        text = tr.format_text_report([rep])
+        assert "Tenant: db-x (0/1 changes recommended, 1 low-confidence)" in text
+        assert "Total: 0/1 keys with recommended changes; 1 low-confidence" in text
+
+    def test_text_report_unchanged_without_low(self):
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=100.0))
+        text = tr.format_text_report([rep])
+        assert "Tenant: db-x (1/1 changes recommended)" in text
+        assert "low-confidence" not in text
+
+    def test_json_report_carries_low_confidence_changes(self):
+        rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=15.0))
+        doc = json.loads(tr.format_json_report([rep]))
+        assert doc["summary"]["recommended_changes"] == 0
+        assert doc["summary"]["low_confidence_changes"] == 1
+        assert doc["tenants"][0]["low_confidence_changes"] == 1
+        assert doc["tenants"][0]["recommended_changes"] == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════
