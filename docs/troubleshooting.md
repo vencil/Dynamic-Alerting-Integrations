@@ -212,12 +212,13 @@ da-tools validate-config --config-dir ./conf.d/
 
 > 👤 **適用：** Platform Engineer / 呼叫 tenant-api 的工具維護者
 
-**經 tenant-api 的寫入全部被拒，回 409 `TENANT_TREE_UNREADABLE` 或 500 `TENANT_STORE_FAULT`**：寫入判的是寫入後的整棵 conf.d，route generator 的 `--validate --strict` 會拒收有讀不了項目的樹，所以 tenant-api 一併拒收（[#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)，ADR-036 §4）。兩種回應的差別在「能不能用 git 修」：
+**症狀**：經 tenant-api 的寫入都被拒，回應碼是下列其中之一（[#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)）：
 
-- **409 `TENANT_TREE_UNREADABLE`**：樹上有**無法解析的 symlink**（懸空、迴圈、路徑中段不是目錄；不是這次要寫的租戶檔）。它沒有內容、git 記得它，在 git 修好或移除即可；要寫的租戶檔本身就是這種 symlink 時，直接經 tenant-api 寫入它，會換成一般檔（修復路徑）。批次回 422、該筆 `code: TENANT_TREE_UNREADABLE`。
-- **500 `TENANT_STORE_FAULT`**：tenant-api **自己那份** conf.d 有伺服器讀不了、git 也記錄不了的項目——設定檔名的 FIFO／socket／裝置檔、讀取失敗的檔、列不出的子目錄。這是伺服器或 volume 的儲存問題，不是設定內容，經 tenant-api 修不了：從 tenant-api 的 server log（`conf.d holds unreadable entries`）找出項目，在 pod／volume 上移除或修好，或把那份 conf.d 從 git 重設。批次整批回 500。兩種同時存在時回這一種。平台告警 `TenantApiStoreUnreadable` 會提醒；量不到時另有 `TenantApiStoreScanStale`（兩者見 [tenant-api README 的 metrics 表](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics)）。
+- 409 `TENANT_TREE_UNREADABLE`（批次 422、逐筆 `code: TENANT_TREE_UNREADABLE`）
+- 500 `TENANT_STORE_FAULT`（批次整批 500）；tenant-api 的 log 有 `conf.d holds unreadable entries`，平台告警 `TenantApiStoreUnreadable` 或 `TenantApiStoreScanStale`
+- 409 `TENANT_CONFIG_NOT_LOADABLE`，`config_error` 為 `unreadable` 或 `not_regular_file`
 
-回應只對所有租戶都有寫入權限的呼叫者列出項目名稱，其他人只看到數量。另外，**要寫的租戶檔本身**讀取失敗或是 FIFO 時，回 409 `TENANT_CONFIG_NOT_LOADABLE`（任何角色都一樣，因為整檔替換會抹掉讀不到的內容）。與 exporter 的 `ConfigFilesUnreadable`（見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)）不同，這裡說的是 tenant-api 掛的那份 conf.d。細節見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md)。
+原因與修法見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md#38-confd-有讀不了的項目時寫入整個拒收2939)。
 
 ## 相關資源
 

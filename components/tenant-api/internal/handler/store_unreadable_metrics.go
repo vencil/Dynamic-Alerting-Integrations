@@ -9,8 +9,8 @@ package handler
 //
 //   - tenant_api_store_unreadable_entries{reason} — the store faults of
 //     conf.d by the walker's reason (special_file, read_error, walk_error,
-//     stat_error), walked at scrape time — classification only, at most
-//     once per 30s (gitops.Writer.StoreUnreadable). Alert
+//     stat_error), walked at scrape time — classification only, with a
+//     minimum interval (gitops.Writer.StoreUnreadable). Alert
 //     TenantApiStoreUnreadable on > 0.
 //   - tenant_api_store_scan_last_success_timestamp_seconds — when that walk
 //     last succeeded. Alert TenantApiStoreScanStale when it is old or absent
@@ -64,7 +64,7 @@ func writeStoreUnreadableMetricsFrom(w io.Writer, src storeUnreadableSource) {
 	if !scan.OK {
 		return
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_unreadable_entries Entries of tenant-api's own conf.d copy the server cannot read and git cannot hold (a FIFO/socket/device named like a config file, a failed read, an unlistable directory, a failed stat that is not an unresolvable link), by reason, from the last successful scrape-time walk (at most every 30s; absent until one succeeds). While > 0 every write answers 500 TENANT_STORE_FAULT. Alert on > 0.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_unreadable_entries Entries of tenant-api's own conf.d copy the server cannot read and git cannot hold (a FIFO/socket/device named like a config file, a failed read, an unlistable directory, a failed stat that is not an unresolvable link), by reason, from the last successful scrape-time walk (with a minimum interval; absent until one succeeds). While > 0 every write answers 500 TENANT_STORE_FAULT. Alert on > 0.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_store_unreadable_entries gauge\n")
 	for _, reason := range storeUnreadableReasons {
 		_, _ = fmt.Fprintf(w, "tenant_api_store_unreadable_entries{reason=%q} %d\n", reason, scan.Counts[reason])

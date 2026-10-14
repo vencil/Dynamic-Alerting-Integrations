@@ -1079,8 +1079,8 @@ data:
           # read, an unlistable directory, a failed stat that is not an
           # unresolvable link — refuses EVERY write with 500 TENANT_STORE_FAULT, and nothing a
           # client sends clears it. tenant-api computes the gauge at scrape time by
-          # walking conf.d itself (classification only, at most every 30s, never
-          # blocking on a FIFO), so it fires with no write at all and clears by
+          # walking conf.d itself (classification only, with a minimum interval,
+          # never blocking on a FIFO), so it fires with no write at all and clears by
           # itself after the repair. Unresolvable symlinks (dangling, looping,
           # ENOTDIR) are NOT counted: they are content git holds, answered 409
           # TENANT_TREE_UNREADABLE, fixed in git.
@@ -1109,8 +1109,8 @@ data:
                 configuration: find the entries in the tenant-api log ("conf.d
                 holds unreadable entries" names them), then remove or repair them
                 on the pod's volume, or reset the copy from git. tenant-api
-                re-walks conf.d for the gauge at scrape time (at most every
-                30s), so the alert clears by itself after the repair.
+                re-walks conf.d for the gauge at scrape time, so the alert
+                clears by itself after the repair.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
 
           # --- tenant-api store scan cannot measure (#2939 R5-N2) ---
@@ -1122,11 +1122,10 @@ data:
           #   - never succeeded: tenant-api is up (tenant_api_up) and the
           #     timestamp is absent. `unless` on tenant_api_up, not absent():
           #     a cluster that does not run tenant-api must stay quiet;
-          #   - stale: the last success is older than 300s. A healthy walk runs
-          #     at most every 30s and only when scraped, so its age stays below
-          #     the 30s minimum interval plus one scrape interval (≤ 90s at a
-          #     60s scrape); 300s leaves room for a few missed scrapes. A walk
-          #     that fails (a hung mount trips its time limit) never moves it.
+          #   - stale: the last success is older than the threshold in the expr,
+          #     which must exceed the minimum walk interval plus one scrape
+          #     interval and tolerate a few missed scrapes. A walk that fails
+          #     (a hung mount trips its time limit) never moves it.
           # `for: 10m`, as TenantApiStoreUnreadable: a pod start or a short
           # mount hiccup must not page.
           - alert: TenantApiStoreScanStale
@@ -1142,8 +1141,8 @@ data:
               summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
               description: |
                 tenant-api's scrape-time walk of its own conf.d copy has not
-                succeeded in the last 5 minutes, or never has since the pod
-                started, so tenant_api_store_unreadable_entries is missing or
+                succeeded within the rule's threshold, or never has since the
+                pod started, so tenant_api_store_unreadable_entries is missing or
                 stale and TenantApiStoreUnreadable cannot fire. Writes are judged
                 on their own walks and are not affected by this alert itself.
                 Check the tenant-api log for walk errors and the conf.d volume

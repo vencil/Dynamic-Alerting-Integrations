@@ -210,12 +210,13 @@ da-tools validate-config --config-dir ./conf.d/
 
 > 👤 **For:** Platform Engineer / maintainers of tools that call tenant-api
 
-**Every write through tenant-api is refused with 409 `TENANT_TREE_UNREADABLE` or 500 `TENANT_STORE_FAULT`**: a write is judged on the whole conf.d tree after the write, and the route generator's `--validate --strict` refuses a tree holding an entry it cannot read, so tenant-api refuses the write as well ([#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939), ADR-036 §4). The two answers differ in whether git can fix the entry:
+**Symptom**: every write through tenant-api is refused with one of these ([#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)):
 
-- **409 `TENANT_TREE_UNREADABLE`**: the tree holds an **unresolvable symlink** — dangling, looping, or with a non-directory in its path (other than the tenant file being written). It has no content and git holds it: repair or remove it in git. When the tenant file being written is itself one, writing it through tenant-api replaces it with a regular file (the repair path). A batch answers 422 with `code: TENANT_TREE_UNREADABLE` on its ops.
-- **500 `TENANT_STORE_FAULT`**: tenant-api's **own copy** of conf.d holds an entry the server cannot read and git cannot hold — a FIFO / socket / device named like a config file, a file whose read fails, a directory that cannot be listed. This is the storage of the server or its volume, not the configuration, and no write through tenant-api can fix it: find the entries in tenant-api's server log (`conf.d holds unreadable entries`), then remove or repair them on the pod / volume, or reset that copy of conf.d from git. A batch fails whole with 500. When both kinds are present this is the answer. The platform alert `TenantApiStoreUnreadable` flags it, and `TenantApiStoreScanStale` flags when it cannot be measured (both in [the tenant-api README's metrics table](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics)).
+- 409 `TENANT_TREE_UNREADABLE` (a batch: 422, `code: TENANT_TREE_UNREADABLE` per op)
+- 500 `TENANT_STORE_FAULT` (a batch: 500 whole); the tenant-api log shows `conf.d holds unreadable entries`, and the platform alert `TenantApiStoreUnreadable` or `TenantApiStoreScanStale` fires
+- 409 `TENANT_CONFIG_NOT_LOADABLE` with `config_error` `unreadable` or `not_regular_file`
 
-The response names the entries only to a caller with write permission on all tenants; others see how many there are. Separately, when **the tenant file being written** cannot be read or is a FIFO, the answer is 409 `TENANT_CONFIG_NOT_LOADABLE` (for every role, since replacing the file would erase content nobody can read). Unlike the exporter's `ConfigFilesUnreadable` (see [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay)), this is about the copy of conf.d tenant-api mounts. Details in [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md).
+Causes and fixes: [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md#38-a-write-is-refused-while-confd-holds-an-entry-that-cannot-be-read-2939).
 
 ---
 
