@@ -30,6 +30,7 @@ Usage:
   - git available (for --git-diff mode)
 """
 import argparse
+import math
 import os
 import re
 import subprocess
@@ -148,6 +149,19 @@ def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
     if err:
         return []
     return result
+
+
+def _is_nan_sample(val_str):
+    """Whether a Prometheus sample value is NaN (#2963).
+
+    Only NaN: ``+Inf`` / ``-Inf`` are real samples (an alert on them does
+    compare and can fire), so they are NOT missing data. An unparseable value
+    is left to :func:`count_threshold_breaches`, which already skips it.
+    """
+    try:
+        return math.isnan(float(val_str))
+    except (ValueError, TypeError):
+        return False
 
 
 def count_threshold_breaches(values, threshold, direction="above"):
@@ -1092,6 +1106,28 @@ def backtest_change(prom_url, change, lookback_seconds):
             "message": "No historical data found in Prometheus",
         }
 
+    # #2963: a series that returned only NaN samples is not "analyzed" — every
+    # comparison against it is false, so it would read as analyzed/LOW (or
+    # MEDIUM for a disable) on no evidence at all. Same `no_data` verdict as an
+    # empty result, with its own message so the two stay distinguishable.
+    if all(_is_nan_sample(v) for _, v in values):
+        return {
+            "tenant": tenant,
+            "metric": metric,
+            "old_value": old_value,
+            "new_value": new_value,
+            "status": "no_data",
+            "risk": "UNKNOWN",
+            "message": "Only NaN samples in lookback window",
+        }
+
+    # The denominator deliberately KEEPS NaN samples (owner ruling on #2963,
+    # option P): the percentages below mean "share of the whole lookback the
+    # alert would fire", and at a NaN step `NaN > t` is false in PromQL, so the
+    # alert really is silent there. Dropping NaN here would turn it into
+    # "share of the time with data" and raise newly-enabled risk levels (and
+    # with HIGH, the exit code) — a different metric, not a bug fix.
+    # ±Inf stays too: it is a real sample that does fire.
     total_points = len(values)
 
     # Handle disable transitions
@@ -1239,7 +1275,7 @@ def print_text_report(report):
     print(f"  Changes analyzed: {report['analyzed']}/{report['total_changes']}")
     print(f"  Risk: {rs['HIGH']} HIGH, {rs['MEDIUM']} MEDIUM, {rs['LOW']} LOW")
     if report["no_data"] > 0:
-        print(f"  No data: {report['no_data']} (metric not found in Prometheus)")
+        print(f"  No data: {report['no_data']} (no usable data in Prometheus)")
     skipped = _not_backtested_counts(report["changes"])
     if skipped:
         print(f"  Not backtested: {skipped}")

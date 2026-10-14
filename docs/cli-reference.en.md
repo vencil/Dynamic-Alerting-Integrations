@@ -693,6 +693,8 @@ Choose one mode:
 
 Comparison report showing impact of threshold changes on historical data (potential alerts increased/decreased).
 
+The firing percentage is over every sample in the lookback, NaN included: the alert is silent at a NaN step, so the percentage is the share of the whole lookback. A change with no data at all, or with only NaN samples, is `no_data` (risk `UNKNOWN`, no effect on the exit code); the message is `No historical data found in Prometheus` for the former and `Only NaN samples in lookback window` for the latter ([#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963); all-NaN used to be reported as analyzed). `+Inf` / `-Inf` are real samples and compare as usual.
+
 **Examples**
 
 ```bash
