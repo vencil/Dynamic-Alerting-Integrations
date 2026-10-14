@@ -1,0 +1,603 @@
+"""#2901（ADR-036 §3、§5、§6）：產生器容器的服務程式，真的起服務、走 Unix
+socket 打請求。
+
+- 判定：寫入後的整棵樹以服務判出的 rc 與 findings，與 CLI
+  ``generate-routes --validate --strict`` 對同一棵樹跑出的相同（每個 findings
+  fixture 各一筆，含會擋下的）。
+- 拒收該筆（HTTP 200、``result: rejected``）：期限（判定中到期時子孫程序一併
+  結束）、排隊中到期、佇列滿、記憶體上限、沒有完整結果、git 讀兩次都失敗。
+- 容器不可用（503）：找不到 amtool、產生器比 policy 要求的舊、部署端 policy
+  檔不可用；每次判定都重查。
+- git 讀取失敗重試一次；symlink 與 gitlink 依 tree entry mode 實體化。
+- 快取：同一棵樹只改一個檔時，只解析那個檔。
+- fork 時常駐程序只有一個執行緒；socket 權限 0600；HTTP 大小與格式錯誤。
+
+Tenant ids are fixture names (CLAUDE.md #9).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _grar_findings_cases as cases  # noqa: E402
+import _gsvc_harness as h  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
+
+import _gsvc_child  # noqa: E402
+import _gsvc_proto  # noqa: E402
+import _lib_parse_cache as pc  # noqa: E402
+
+pytestmark = pytest.mark.skipif(sys.platform != "linux",
+                                reason="fork + pidfd + /proc: Linux only")
+
+FIXTURES = sorted(cases.FIXTURES)
+EXTRA = cases._tenant("zz-extra")
+
+
+def _split(fixture: str) -> tuple[dict, str]:
+    """(base files, the file sent as a write) for *fixture*."""
+    files = dict(cases.FIXTURES[fixture])
+    last = sorted(files)[-1]
+    del files[last]
+    return files, last
+
+
+@pytest.fixture(scope="module")
+def world(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("gsvc")
+    bin_dir = tmp / "bin"
+    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
+    repo = h.init_repo(tmp / "repo")
+    commits = {}
+    for fx in FIXTURES:
+        base, _write = _split(fx)
+        commits[fx] = h.commit_tree(repo, base)
+        commits[fx + "+extra"] = h.commit_tree(
+            repo, {**cases.FIXTURES[fx], "zz-extra.yaml": EXTRA})
+    fork_log = tmp / "forks.log"
+    prelude = (
+        "import threading\n"
+        "_real_fork = os.fork\n"
+        "def _logged_fork():\n"
+        f"    with open({str(fork_log)!r}, 'a', encoding='utf-8') as fh:\n"
+        "        fh.write(f'{threading.active_count()}\\n')\n"
+        "    return _real_fork()\n"
+        "os.fork = _logged_fork\n")
+    svc = h.Service(tmp / "svc", repo, bin_dir=bin_dir, prelude=prelude)
+    yield {"tmp": tmp, "bin": bin_dir, "repo": repo, "commits": commits,
+           "svc": svc, "fork_log": fork_log}
+    svc.stop()
+
+
+def _norm(doc: dict, *dirs: Path) -> tuple:
+    text = json.dumps(doc["findings"], sort_keys=True)
+    for d in dirs:
+        text = text.replace(str(d), "<DIR>")
+    return doc["exit_code"], text
+
+
+# ── verdicts equal the CLI's ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("fixture", FIXTURES)
+def test_verdict_equals_the_cli_on_the_written_tree(world, tmp_path, fixture):
+    svc = world["svc"]
+    _base, write = _split(fixture)
+    status, doc = svc.validate(world["commits"][fixture], [
+        {"path": write, "content_b64": h.b64(cases.FIXTURES[fixture][write])}])
+    assert status == 200, doc
+    tree = h.write_tree(tmp_path / "conf.d", cases.FIXTURES[fixture])
+    rc, cli = h.run_cli(tree, world["bin"], tmp_path / "f.json")
+    assert doc["rc"] == rc
+    assert doc["result"] == ("pass" if rc == 0 else "findings")
+    assert _norm(doc["findings"], Path(doc["findings"]["config_dir"])) \
+        == _norm(cli, tree)
+    assert doc["validated"] == {
+        "base_commit": world["commits"][fixture], "policy_sha256": None,
+        "files": [{"path": write, "sha256": hashlib.sha256(
+            cases.FIXTURES[fixture][write].encode()).hexdigest()}]}
+
+
+def test_the_fixtures_include_both_verdicts(world, tmp_path):
+    rcs = set()
+    for fixture in FIXTURES:
+        tree = h.write_tree(tmp_path / fixture, cases.FIXTURES[fixture])
+        rcs.add(h.run_cli(tree, world["bin"], tmp_path / f"{fixture}.json")[0] == 0)
+    assert rcs == {True, False}
+
+
+@pytest.mark.parametrize("fixture", ["clean", "policy", "duplicate"])
+def test_a_delete_is_applied(world, tmp_path, fixture):
+    svc = world["svc"]
+    status, doc = svc.validate(world["commits"][fixture + "+extra"],
+                               [{"path": "zz-extra.yaml", "delete": True}])
+    assert status == 200
+    tree = h.write_tree(tmp_path / "conf.d", cases.FIXTURES[fixture])
+    rc, cli = h.run_cli(tree, world["bin"], tmp_path / "f.json")
+    assert (doc["rc"], _norm(doc["findings"], Path(doc["findings"]["config_dir"]))) \
+        == (rc, _norm(cli, tree))
+    assert doc["validated"]["files"] == [{"path": "zz-extra.yaml", "deleted": True}]
+
+
+def test_a_write_cannot_go_through_a_symlink_or_file(world, tmp_path):
+    repo = h.init_repo(tmp_path / "r")
+    (repo / "conf.d").mkdir()
+    (repo / "conf.d" / "alpha.yaml").write_text(cases._tenant("alpha"), encoding="utf-8")
+    symlink_or_skip("/tmp", repo / "conf.d" / "out")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        name = f"gsvc-escape-{uuid.uuid4().hex}"
+        for path in (f"out/{name}", f"alpha.yaml/{name}"):
+            status, doc = svc.validate(commit, [{"path": path, "content_b64": h.b64("x")}])
+            assert status == 400 and "not a directory" in doc["message"], doc
+        assert not os.path.exists(f"/tmp/{name}")
+
+
+# ── the parse cache ──────────────────────────────────────────────────────
+
+def test_changing_one_file_parses_only_that_file(world, tmp_path, monkeypatch):
+    svc = world["svc"]
+    commit = world["commits"]["clean+extra"]
+    svc.validate(commit)  # base tree cached (and pinned)
+    body = EXTRA + f"# {uuid.uuid4().hex}\n"  # content nothing has parsed yet
+    status, doc = svc.validate(commit, [{"path": "zz-extra.yaml",
+                                         "content_b64": h.b64(body)}])
+    assert status == 200 and doc["result"] == "pass", doc
+    # how many modes read that file: count it in-process on the same tree
+    tree = h.write_tree(tmp_path / "conf.d",
+                        {**cases.FIXTURES["clean"], "zz-extra.yaml": body})
+    monkeypatch.setenv("PATH", os.devnull)
+    cache = pc.ParseCache()
+    pc.install(cache)
+    try:
+        with pytest.raises(SystemExit):
+            _gsvc_child.gar.main(["--config-dir", str(tree), "--validate",
+                                  "--strict", "--findings-json",
+                                  str(tmp_path / "f.json")])
+    finally:
+        pc.install(None)
+    blob = pc.git_blob_id(body.encode())
+    modes = {m for (b, m) in cache.new if b == blob}
+    assert len(modes) >= 2
+    assert doc["cache"]["parses"] == len(modes)
+    assert doc["cache"]["stored"] == len(modes)
+
+
+def test_cache_metrics_and_pinning(world):
+    svc = world["svc"]
+    svc.validate(world["commits"]["clean+extra"])
+    m = svc.metrics()
+    assert m['da_generator_cache_bytes{pinned="true"}'] > 0
+    assert m["da_generator_cache_entries"] > 0
+    assert m["da_generator_judgement_peak_rss_bytes"] > 0
+    assert m["da_generator_judgement_memory_limit_bytes"] == 192 * 1024 * 1024
+
+
+# ── one thread at fork, cleanup ──────────────────────────────────────────
+
+def test_the_service_forks_with_one_thread(world):
+    world["svc"].validate(world["commits"]["clean"])
+    counts = world["fork_log"].read_text(encoding="utf-8").split()
+    assert counts and set(counts) == {"1"}
+
+
+def test_job_directories_are_removed(world):
+    world["svc"].validate(world["commits"]["clean"])
+    left = list((world["svc"].work / "jobs").iterdir())
+    assert left == [], left
+
+
+def test_socket_is_0600(world):
+    mode = os.stat(world["svc"].socket).st_mode
+    assert stat.S_ISSOCK(mode) and stat.S_IMODE(mode) == 0o600
+
+
+# ── HTTP ─────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("request_bytes,status", [
+    # Content-Length present too: refused for the Transfer-Encoding itself
+    (b"POST /v1/validate HTTP/1.1\r\nTransfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n0\r\n\r\n", 411),
+    (b"POST /v1/validate HTTP/1.1\r\nHost: g\r\n\r\n", 411),
+    (b"POST /v1/validate HTTP/1.1\r\nContent-Length: abc\r\n\r\n", 400),
+    (b"POST /v1/validate HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 1\r\n\r\nx", 400),
+    (b"POST /v1/validate HTTP/1.1\r\nContent-Length: 999999999\r\n\r\n", 413),
+    (b"POST /v1/validate HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc", 400),
+    (b"GET /v1/validate HTTP/1.1\r\n\r\n", 405),
+    (b"POST /metrics HTTP/1.1\r\nContent-Length: 0\r\n\r\n", 405),
+    (b"GET /nope HTTP/1.1\r\n\r\n", 404),
+    (b"GET /v1/status?x=1 HTTP/1.1\r\n\r\n", 404),
+    (b"BROKEN\r\n\r\n", 400),
+    (b"GET /v1/status HTTP/1.1\r\nX-Big: " + b"a" * 20000 + b"\r\n\r\n", 431),
+])
+def test_http_errors(world, request_bytes, status):
+    got, headers, _body = world["svc"].raw(request_bytes)
+    assert got == status
+    assert headers["connection"] == "close"
+
+
+def test_bad_request_body_is_400(world):
+    status, doc = world["svc"].validate("main")
+    assert status == 400 and doc["error"] == "BAD_REQUEST"
+
+
+# ── deadline ─────────────────────────────────────────────────────────────
+
+# PATH holds only the stub directory: sleep is called by its full path.
+SLEEP = shutil.which("sleep") or "/bin/sleep"
+_SLOW_AMTOOL = f"""#!/bin/sh
+echo $$ > "$GSVC_PID_DIR/amtool.pid"
+{SLEEP} 60 &
+echo $! > "$GSVC_PID_DIR/grandchild.pid"
+wait
+"""
+
+
+def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", _SLOW_AMTOOL)
+    pid_dir = tmp_path / "pids"
+    pid_dir.mkdir()
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+                   env={"GSVC_PID_DIR": str(pid_dir)}) as svc:
+        t0 = time.monotonic()
+        status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=7000)
+        took = time.monotonic() - t0
+        assert status == 200
+        assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
+        assert 1.5 <= took < 10
+        pids = [int((pid_dir / n).read_text().strip())
+                for n in ("amtool.pid", "grandchild.pid")]
+        end = time.monotonic() + 5
+        while any(h.alive(p) for p in pids) and time.monotonic() < end:
+            time.sleep(0.05)
+        assert not any(h.alive(p) for p in pids), pids
+        assert list((svc.work / "jobs").iterdir()) == []
+        assert svc.metrics()['da_generator_rejections_total{reason="deadline"}'] == 1
+
+
+def test_queue_expiry_and_busy(tmp_path, world):
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 3\n")
+    commit = world["commits"]["clean+extra"]
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+                   args=("--max-queue", "1")) as svc, \
+            ThreadPoolExecutor(4) as pool:
+        first = pool.submit(svc.validate, commit)
+        time.sleep(1.0)  # running
+        t0 = time.monotonic()
+        expiring = pool.submit(svc.validate, commit, None, 6500)  # 1.5 s
+        time.sleep(0.2)
+        status, busy = svc.validate(commit)  # queue (1) is full
+        assert status == 200 and (busy["result"], busy["reason"]) == ("rejected", "busy")
+        status, exp = expiring.result()
+        assert (exp["result"], exp["reason"]) == ("rejected", "deadline")
+        assert time.monotonic() - t0 < 2.5  # did not wait for the first
+        assert first.result()[1]["result"] == "pass"
+        # the next one is judged as usual
+        assert svc.validate(commit)[1]["result"] == "pass"
+
+
+# ── memory, incomplete ───────────────────────────────────────────────────
+
+def test_memory_limit_rejects_that_write_only(tmp_path, world):
+    big = "tenants:\n  big:\n    x: [" + ",".join(["0"] * 400000) + "]\n"
+    commit = world["commits"]["clean+extra"]
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--memory-limit-bytes", str(64 * 1024 * 1024))) as svc:
+        status, doc = svc.validate(commit, [{"path": "big.yaml",
+                                             "content_b64": h.b64(big)}])
+        assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "memory"), doc
+        assert svc.validate(commit)[1]["result"] == "pass"
+        m = svc.metrics()
+        assert m['da_generator_rejections_total{reason="memory"}'] == 1
+        assert m["da_generator_judgement_memory_limit_bytes"] == 64 * 1024 * 1024
+
+
+_KILL = "os.kill(os.getpid(), __import__('signal').SIGKILL)"
+
+
+@pytest.mark.parametrize("stage,action", [
+    ("before_result", "os._exit(0)"),  # exit 0, nothing sent
+    ("before_result", _KILL),          # killed by a signal, nothing sent
+    ("after_result", "os._exit(0)"),   # exit 0, the result but no end frame
+    ("after_end", _KILL),              # every frame sent, then killed
+])
+def test_no_complete_result_is_incomplete(tmp_path, world, stage, action):
+    prelude = ("import _gsvc_child\n"
+               f"_gsvc_child.TEST_HOOK = lambda s: {action} if s == {stage!r} else None\n")
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   prelude=prelude) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "incomplete")
+
+
+_FAKE_GENERATOR = """
+import json, _gsvc_child
+def _fake(argv):
+    path = argv[argv.index("--findings-json") + 1]
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({{"exit_code": {doc_rc}, "findings": []}}, fh)
+    raise SystemExit({rc})
+_gsvc_child.gar.main = _fake
+"""
+
+
+@pytest.mark.parametrize("doc_rc,rc,want", [
+    (0, 1, "incomplete"),   # the document does not belong to this exit
+    (1, 1, "findings"),     # control
+])
+def test_a_findings_document_that_disagrees_with_the_exit_is_incomplete(
+        tmp_path, world, doc_rc, rc, want):
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   prelude=_FAKE_GENERATOR.format(doc_rc=doc_rc, rc=rc)) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        got = doc["reason"] if doc["result"] == "rejected" else doc["result"]
+        assert status == 200 and got == want, doc
+
+
+# ── git ──────────────────────────────────────────────────────────────────
+
+_FLAKY_GIT = """#!/bin/sh
+if [ "$3" = "ls-tree" ]; then
+  if [ "$GSVC_GIT_MODE" = always ] || [ ! -e "$GSVC_GIT_STATE" ]; then
+    : > "$GSVC_GIT_STATE"
+    echo "fatal: injected failure" >&2
+    exit 128
+  fi
+fi
+exec {git} "$@"
+"""
+
+
+@pytest.mark.parametrize("mode,want", [("once", "pass"), ("always", "git_read")])
+def test_git_read_is_retried_once(tmp_path, world, mode, want):
+    git = h.stub(tmp_path / "gitbin", "git", _FLAKY_GIT.format(git=h.GIT))
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--git", str(git)),
+                   env={"GSVC_GIT_MODE": mode,
+                        "GSVC_GIT_STATE": str(tmp_path / "failed-once")}) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 200
+        got = doc["result"] if doc["result"] != "rejected" else doc["reason"]
+        assert got == want, doc
+        assert "git read attempt 1 failed" in doc["stderr_tail"]
+        if mode == "always":
+            assert "git read attempt 2 failed" in doc["stderr_tail"]
+
+
+def test_tree_entries_are_written_by_mode(tmp_path):
+    """100644 / 100755 files, a 120000 symlink with its target text as
+    stored, a 160000 gitlink as an empty directory."""
+    repo = h.init_repo(tmp_path / "r")
+    d = repo / "conf.d"
+    (d / "sub").mkdir(parents=True)
+    (d / "alpha.yaml").write_text(cases._tenant("alpha"), encoding="utf-8")
+    (d / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (d / "run.sh").chmod(0o755)
+    symlink_or_skip("alpha.yaml", d / "link.yml")
+    symlink_or_skip("../../nowhere", d / "sub" / "dangling.yaml")
+    h.run_git(repo, "add", "-A")
+    other = h.run_git(repo, "hash-object", "-t", "commit", "--stdin", "-w",
+                      stdin=b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
+                            b"author a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nx\n")
+    h.run_git(repo, "update-index", "--add", "--cacheinfo", f"160000,{other},conf.d/vendor")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    job = _gsvc_child.ChildJob(
+        request=_gsvc_proto.ValidateRequest(commit, (), 25000),
+        job_dir=str(job_dir), repo=str(repo), config_subdir="conf.d", git=h.GIT,
+        object_format="sha1", memory_limit=0, policy_copy=None,
+        policy_sha256=None, store_entries={}, max_transfer=0)
+    tree = _gsvc_child.read_tree(job)
+    modes = {rel: mode for mode, _o, rel, _c in tree}
+    assert modes == {"alpha.yaml": "100644", "run.sh": "100755",
+                     "link.yml": "120000", "sub/dangling.yaml": "120000",
+                     "vendor": "160000"}
+    root = job_dir / "conf.d"
+    _gsvc_child.materialise(str(root), tree)
+    assert (root / "alpha.yaml").read_text(encoding="utf-8") == cases._tenant("alpha")
+    assert (root / "run.sh").read_text(encoding="utf-8") == "#!/bin/sh\n"
+    assert os.readlink(root / "link.yml") == "alpha.yaml"
+    assert os.readlink(root / "sub" / "dangling.yaml") == "../../nowhere"
+    assert (root / "vendor").is_dir() and not os.listdir(root / "vendor")
+    # the blob ids reported for pinning are git's own
+    listed = [line.split()[:3] for line in
+              h.run_git(repo, "ls-tree", "-r", commit, "--", "conf.d").splitlines()]
+    assert {o for m, o, _r, _c in tree if m != "160000"} == {
+        oid for _mode, kind, oid in listed if kind == "blob"}
+
+
+def test_a_symlink_and_gitlink_tree_judges_like_the_cli(tmp_path, world):
+    repo = h.init_repo(tmp_path / "r")
+    files = dict(cases.FIXTURES["clean"])
+    commit_files = h.write_tree(repo / "conf.d", files)
+    symlink_or_skip("_defaults.yaml", commit_files / "_defaults.yml")  # 2 carriers
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "update-index", "--add", "--cacheinfo",
+              f"160000,{'1' * 40},conf.d/vendor")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+    tree = h.write_tree(tmp_path / "cli" / "conf.d", files)
+    symlink_or_skip("_defaults.yaml", tree / "_defaults.yml")
+    (tree / "vendor").mkdir()
+    rc, cli = h.run_cli(tree, world["bin"], tmp_path / "f.json")
+    assert status == 200
+    assert (doc["rc"], _norm(doc["findings"], Path(doc["findings"]["config_dir"]))) \
+        == (rc, _norm(cli, tree))
+
+
+def test_sha256_repository(tmp_path, world):
+    repo = h.init_repo(tmp_path / "r", fmt="sha256")
+    commit = h.commit_tree(repo, cases.FIXTURES["clean"])
+    assert len(commit) == 64
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+        assert status == 200 and doc["result"] == "pass", doc
+        status, doc = svc.validate(commit[:40])
+        assert status == 400
+
+
+# ── 503: container / policy unavailable ──────────────────────────────────
+
+def test_amtool_missing_is_503(tmp_path, world):
+    empty = tmp_path / "empty-bin"
+    empty.mkdir()
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=empty) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 503
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "amtool_missing")
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["amtool_available"] is False and st["ready"] is False
+
+
+def test_policy_is_read_for_every_judgement(tmp_path, world):
+    policy = tmp_path / "policy.yaml"
+    policy.write_text("allowed_domains: []\n", encoding="utf-8")
+    commit = world["commits"]["clean"]
+    own = cases.REPO.joinpath("components/da-tools/app/VERSION").read_text(
+        encoding="utf-8").strip()
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--policy", str(policy))) as svc:
+        def check(status_want, error=None, reason=None):
+            status, doc = svc.validate(commit)
+            assert status == status_want, doc
+            if error:
+                assert (doc["error"], doc["reason"]) == (error, reason), doc
+            return doc
+
+        doc = check(200)
+        assert doc["validated"]["policy_sha256"] == hashlib.sha256(
+            policy.read_bytes()).hexdigest()
+
+        policy.write_text("allowed_domains: 5\n", encoding="utf-8")
+        doc = check(503, "POLICY_UNAVAILABLE", "policy_unusable")
+        assert str(policy) in doc["message"]
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["policy"]["available"] is False and st["ready"] is False
+
+        major = int(own.split(".")[0])
+        policy.write_text(f'allowed_domains: []\nmin_generator_version: "{major + 1}.0.0"\n',
+                          encoding="utf-8")
+        doc = check(503, "VALIDATOR_UNAVAILABLE", "generator_too_old")
+        assert "image tag" in doc["message"]
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["policy"]["available"] is True and st["ready"] is False
+        assert st["policy"]["min_generator_version"] == f"{major + 1}.0.0"
+
+        policy.write_text("allowed_domains: []\nmin_generator_version: 3\n",
+                          encoding="utf-8")
+        check(503, "POLICY_UNAVAILABLE", "policy_unusable")
+
+        policy.unlink()
+        check(503, "POLICY_UNAVAILABLE", "policy_unusable")
+
+        policy.write_text(f'allowed_domains: []\nmin_generator_version: "{own}"\n',
+                          encoding="utf-8")
+        doc = check(200)
+        assert doc["result"] == "pass"
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["ready"] is True and st["generator_version"] == own
+        assert st["policy"]["sha256"] == hashlib.sha256(policy.read_bytes()).hexdigest()
+        m = svc.metrics()
+        assert m['da_generator_unavailable_total{reason="policy_unusable"}'] == 3
+        assert m['da_generator_unavailable_total{reason="generator_too_old"}'] == 1
+
+
+# ── socket path ──────────────────────────────────────────────────────────
+
+def test_an_old_socket_is_replaced_and_a_file_is_refused(tmp_path, world):
+    sdir = h.short_dir()
+    try:
+        old = sdir / "old.sock"
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(str(old))
+        s.close()  # leaves the socket file behind, as a crash would
+        (tmp_path / "a").mkdir()
+        with h.Service(tmp_path / "a", world["repo"], bin_dir=world["bin"],
+                       socket_path=old) as svc:
+            assert svc.call("GET", "/v1/status")[0] == 200
+        plain = sdir / "plain"
+        plain.write_text("keep me", encoding="utf-8")
+        (tmp_path / "b").mkdir()
+        svc = h.Service(tmp_path / "b", world["repo"], bin_dir=world["bin"],
+                        socket_path=plain, wait=False)
+        assert svc.proc.wait(60) == 2
+        assert plain.read_text(encoding="utf-8") == "keep me"
+        assert "not a socket" in svc.log.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(sdir, ignore_errors=True)
+
+
+def test_status_reports_versions(world):
+    status, st = world["svc"].call("GET", "/v1/status")
+    assert status == 200
+    assert set(st) == {"policy", "generator_version", "generator_too_old",
+                       "da_guard_version", "amtool_available", "ready"}
+    assert st["policy"] == {"configured": False, "available": True, "sha256": None,
+                            "error": None, "min_generator_version": None}
+    assert st["ready"] is True
+    m = world["svc"].metrics()
+    info = [k for k in m if k.startswith("da_generator_build_info")]
+    assert info and f'generator_version="{st["generator_version"]}"' in info[0]
+
+
+def test_help_names_every_default(tmp_path):
+    out = subprocess.run([sys.executable, str(h.OPS / "generator_service.py"), "--help"],
+                         capture_output=True, text=True, encoding="utf-8",
+                         check=True, timeout=120).stdout
+    for flag in ("--max-judgement-seconds", "--deadline-reserve-seconds",
+                 "--memory-limit-bytes", "--cache-max-bytes", "--max-queue",
+                 "--max-body-bytes"):
+        assert flag in out
+    assert out.count("(default:") >= 6
+
+
+# ── the limits are honoured (each flag changes the answer) ───────────────
+
+def test_judgement_seconds_and_body_limits(tmp_path, world):
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 3\n")
+    commit = world["commits"]["clean+extra"]
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+                   args=("--max-judgement-seconds", "1",
+                         "--max-body-bytes", "300")) as svc:
+        t0 = time.monotonic()
+        status, doc = svc.validate(commit)  # deadline_ms 25000: 1 s, not 20
+        assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
+        assert time.monotonic() - t0 < 2.5
+        status, doc = svc.validate(commit, [{"path": "x.yaml",
+                                             "content_b64": h.b64("a" * 300)}])
+        assert status == 413
+
+
+def test_result_and_transfer_limits(tmp_path, world):
+    commit = world["commits"]["clean+extra"]
+    with h.Service(tmp_path / "a", world["repo"], bin_dir=world["bin"],
+                   args=("--max-cache-transfer-bytes", "0")) as svc:
+        status, doc = svc.validate(commit)
+        assert doc["result"] == "pass" and doc["cache"]["stored"] > 0
+        assert svc.metrics()["da_generator_cache_entries"] == 0  # all dropped
+        status, doc = svc.validate(commit)
+        assert doc["cache"]["hits"] == 0  # nothing came back to reuse
+    with h.Service(tmp_path / "b", world["repo"], bin_dir=world["bin"],
+                   args=("--max-result-bytes", "50")) as svc:
+        status, doc = svc.validate(commit)
+        assert (doc["result"], doc["reason"]) == ("rejected", "incomplete")

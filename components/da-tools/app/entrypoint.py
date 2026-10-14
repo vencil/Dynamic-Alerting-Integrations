@@ -70,6 +70,7 @@ def _build_help_text(lang):
     rule-pack-diff    Rule Pack 兩版本機械比對 (added / removed / breaking label schema)
     silencer-drift-check  AM silence 對 v2 rule pack 漂移偵測 (offline，吃 amtool silence query -o json)
     migration-audit   遷移稽核：同一棵 conf.d 以 PyYAML 與 da-guard parse-tree 各讀一次，列出讀法差異 (ADR-036 §8)
+    generator-service 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 generate-routes --validate --strict (ADR-036 §3)
 
 命令 (Operator-Native — CRD 產生與驗證):
     operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -159,6 +160,7 @@ Commands (File System — offline):
     rule-pack-diff    Mechanical diff between two Rule Pack versions (added / removed / breaking label schema)
     silencer-drift-check  AM silence drift audit against v2 rule pack (offline, eats amtool silence query -o json)
     migration-audit   Read a conf.d with PyYAML and with da-guard parse-tree; list where they differ (ADR-036 §8)
+    generator-service Generator container service: judge a conf.d plus writes with generate-routes --validate --strict over a Unix socket (ADR-036 §3)
 
 Commands (Operator-Native — CRD generation & validation):
     operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
@@ -380,6 +382,9 @@ COMMAND_MAP = {
     # #2898 — ADR-036 §8 one-off migration audit: the conf.d read by today's
     # PyYAML reader and by `da-guard parse-tree`, differences listed.
     "migration-audit": "migration_audit.py",
+    # #2901 — ADR-036 §3 generator container: a long-running service that
+    # judges conf.d writes for tenant-api over a Unix socket.
+    "generator-service": "generator_service.py",
     # Group D: Operator-native (CRD generation + validation)
     "operator-generate": "operator_generate.py",
     "operator-check": "operator_check.py",

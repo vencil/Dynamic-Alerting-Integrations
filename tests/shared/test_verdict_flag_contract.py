@@ -229,6 +229,25 @@ PENDING: dict[tuple[str, str], str] = {}
 # Name matches the pattern, but the flag decides no verdict. Each entry
 # says why. Empty when this gate landed.
 SAME_NAME_DIFFERENT_MEANING: dict[tuple[str, str], str] = {
+    # #2901: generator_service is a long-running server, not a run with a
+    # verdict exit code; these bound each REQUEST's answer, and each one is
+    # gated by a request that it flips in tests/ops/test_generator_service.py.
+    ("generator_service", "--max-judgement-seconds"): (
+        "server limit: a request past it is answered rejected/deadline "
+        "(test_judgement_seconds_and_body_limits); the process exit code never "
+        "depends on it"),
+    ("generator_service", "--max-body-bytes"): (
+        "server limit: a larger body is answered 413 "
+        "(test_judgement_seconds_and_body_limits)"),
+    ("generator_service", "--max-queue"): (
+        "server limit: past it a request is answered rejected/busy "
+        "(test_queue_expiry_and_busy)"),
+    ("generator_service", "--max-result-bytes"): (
+        "server limit: a larger judgement result is answered rejected/incomplete "
+        "(test_result_and_transfer_limits)"),
+    ("generator_service", "--max-cache-transfer-bytes"): (
+        "server limit on parse-cache entries handed back; never changes an answer, "
+        "only what is cached (test_result_and_transfer_limits)"),
     ("explain_route", "--severity"): (
         "an INPUT label of the alert --trace simulates (beside --alertname / "
         "--tenant / --label), not a threshold the tool judges against: the "

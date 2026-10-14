@@ -37,6 +37,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `evaluate-policy` | Policy-as-Code evaluation: declarative DSL policy checks | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools evaluate-policy --help` |
 | `generate-routes` | Generate Alertmanager route + receiver + inhibit from tenant YAML | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
 | `patch-config` | ConfigMap partial update with preview (--diff) | --diff, --json, --exporter-namespace <NS> | `da-tools patch-config --help` |
+| `generator-service` | Generator container service: judge conf.d writes over a Unix socket (ADR-036 §3) | --socket <PATH>, --repo <DIR>, --config-subdir <PATH>, --work-dir <DIR>, --policy <FILE> | `da-tools generator-service --help` |
 | `scaffold` | Generate new tenant config (interactive or non-interactive) | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
 | `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
@@ -86,6 +87,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 - **Config Generation Tools**
   - `generate-routes` — Tenant YAML → Alertmanager fragment
   - `patch-config` — ConfigMap partial update
+  - `generator-service` — Generator container service (judges tenant-api writes)
 
 - **Filesystem Tools** (offline capable)
   - `scaffold` — Generate tenant config

@@ -144,6 +144,11 @@ TOOL_FILES=(
     ops/silencer_drift_check.py
     # #2898 — ADR-036 §8 migration audit (PyYAML vs `da-guard parse-tree`)
     ops/migration_audit.py
+    # #2901 — ADR-036 §3 generator container service and its two helpers
+    # (the judgement process; request checks / result frames / cache store).
+    ops/generator_service.py
+    ops/_gsvc_child.py
+    ops/_gsvc_proto.py
     # v2.3.0 Operator-native tools
     ops/operator_generate.py
     ops/operator_check.py

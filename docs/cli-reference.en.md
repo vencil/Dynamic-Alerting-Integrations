@@ -158,6 +158,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 |---------|---------|-------------------|
 | `generate-routes` | Tenant YAML → Alertmanager route + receiver + inhibit fragment | `--config-dir <dir>` |
 | `patch-config` | ConfigMap partial update with `--diff` preview | `<tenant> <metric> <value>` or `--diff` |
+| `generator-service` | Generator container service: judges whether conf.d with writes applied passes `generate-routes --validate --strict`, over a Unix socket (ADR-036 §3) | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
 
 ### Filesystem Tools (Offline Available)
 
@@ -1935,6 +1936,42 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 | `5` | The rollback itself failed: the ConfigMap may still hold the new bytes; fix it by hand |
 | `6` | Ctrl-C / SIGTERM or an unexpected error after the write; rolled back (interrupted before the write, it ends as it normally would, nothing written) |
 | `7` | What the ConfigMap now holds cannot be told (not readable, or neither version), or another writer changed the patched key after this write (not rolled back); check it by hand |
+
+#### generator-service
+
+The generator container's service ([ADR-036](adr/036-single-parser-effective-config.en.md) §3, §5, §6, [#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)). It runs continuously, and tenant-api asks it before every write whether the whole conf.d, with those writes applied to that base commit, passes `generate-routes --validate --strict`. HTTP/1.1 over a Unix socket only, no network port. Deployment (the chart) and tenant-api's calls come in later releases.
+
+```bash
+da-tools generator-service --socket <path> --repo <git repo> --config-subdir conf.d --work-dir <dir> [--policy <FILE>]
+```
+
+**Main parameters**
+
+| Parameter | Purpose |
+|------|------|
+| `--socket <path>` | Unix socket to listen on (created with mode 0600). An old socket file at the path is replaced; any other kind of file refuses the start (exit 2) |
+| `--repo <dir>` | The git repository (a read-only mount is enough). Files always come from git objects (`git ls-tree` plus `git cat-file`), never from the working tree and never through `git archive` |
+| `--config-subdir <path>` | conf.d's path inside the repository |
+| `--work-dir <dir>` | Scratch directory for the tree of each judgement; removed when the judgement ends (also when it is killed) |
+| `--policy <FILE>` | Deployment policy file (`allowed_domains`, `min_generator_version`), read again for every judgement |
+| Others | The judgement time limit, the time left to the caller, the judgement process's `RLIMIT_DATA`, the cache limit, the queue length, request sizes: defaults in `--help` |
+
+**Endpoints**
+
+| Endpoint | Response |
+|------|------|
+| `POST /v1/validate` | Body: `base_commit` (a full hex commit id), `writes` (`{path, content_b64}` or `{path, delete: true}`, paths relative to conf.d), `deadline_ms` (the caller's remaining time). Always 200 when there is a verdict: `result` is `pass` (generator exit 0), `findings` (non-zero) or `rejected` (this request only; `reason` is `deadline`, `memory`, `incomplete`, `git_read` or `busy`), with `rc`, `findings` (the generator's `--findings-json` document), `stderr_tail` and `validated` (`base_commit`, the sha256 of each written file, the sha256 of the deployment policy file). A malformed request is 400. When the container cannot judge at all, 503: `VALIDATOR_UNAVAILABLE` (`reason`: `amtool_missing`, `generator_too_old`, `internal_error`) or `POLICY_UNAVAILABLE` (the deployment policy file is unusable) |
+| `GET /v1/status` | Whether the deployment policy file is usable (with its sha256, error and `min_generator_version`), the generator and da-guard versions, whether amtool is present, `ready` |
+| `GET /metrics` | Prometheus text format: cache size (`pinned` marks files in the latest base tree), the latest judgement's peak memory and the judgement process's memory limit, counts by result and by rejection reason, queue depth, versions |
+
+Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` set, the whole group ended when the deadline passes), one at a time; the others queue, and queue time counts against the deadline. Parse results of conf.d files are cached across requests by (git blob id, parse mode), so when one file of a tree changes only that file is parsed again.
+
+**Exit codes**
+
+| Code | Meaning |
+|------|------|
+| 0 | Stopped normally after SIGTERM / SIGINT |
+| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created |
 
 ---
 
