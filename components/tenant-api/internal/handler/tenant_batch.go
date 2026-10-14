@@ -30,10 +30,12 @@ type BatchOperation struct {
 	// key → value to set (e.g., "_silent_mode": "warning"); at most 1000 entries.
 	// May be omitted; an operation with neither patch nor unset changes nothing.
 	Patch map[string]string `json:"patch" validate:"max=1000"`
-	// keys to remove from the tenant's config block; at most 1000 entries. Only "_routing" is
-	// accepted: removing it resets the tenant to `_routing_defaults` and its routing profile,
-	// which turns routing back on for a tenant a disabling `_routing` turned off (the change is
-	// judged by domain policy like a `_routing` patch). A key the tenant does not carry, or a
+	// keys to remove from the tenant's config block; at most 1000 entries. Only "_routing" and
+	// "_routing_receiver_type" are accepted: removing `_routing` resets the tenant to
+	// `_routing_defaults` and its routing profile, which turns routing back on for a tenant a
+	// disabling `_routing` turned off (the change is judged by domain policy like a `_routing`
+	// patch); removing `_routing_receiver_type` drops the flat key tenant-api used to write,
+	// which nothing renders (#2983). A key the tenant does not carry, or a
 	// tenant that does not exist, makes it a no-op: with no patch nothing is written and no
 	// tenant is created. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`

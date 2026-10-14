@@ -18,10 +18,12 @@ type GroupBatchRequest struct {
 	// key → value to set on every member (e.g., "_silent_mode": "warning");
 	// at most 1000 entries. May be empty only when unset names a key (else 400).
 	Patch map[string]string `json:"patch" validate:"max=1000"`
-	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" is
-	// accepted: removing it resets the member to `_routing_defaults` and its routing profile,
-	// which turns routing back on for a member a disabling `_routing` turned off (the change is
-	// judged by domain policy like a `_routing` patch). A key the member does not carry makes it
+	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" and
+	// "_routing_receiver_type" are accepted: removing `_routing` resets the member to
+	// `_routing_defaults` and its routing profile, which turns routing back on for a member a
+	// disabling `_routing` turned off (the change is judged by domain policy like a `_routing`
+	// patch); removing `_routing_receiver_type` drops the flat key tenant-api used to write,
+	// which nothing renders (#2983). A key the member does not carry makes it
 	// a no-op. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }

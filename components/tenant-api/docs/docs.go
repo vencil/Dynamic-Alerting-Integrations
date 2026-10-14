@@ -2457,7 +2457,7 @@ const docTemplate = `{
                     "minLength": 1
                 },
                 "unset": {
-                    "description": "keys to remove from the tenant's config block; at most 1000 entries. Only \"_routing\" is\naccepted: removing it resets the tenant to ` + "`" + `_routing_defaults` + "`" + ` and its routing profile,\nwhich turns routing back on for a tenant a disabling ` + "`" + `_routing` + "`" + ` turned off (the change is\njudged by domain policy like a ` + "`" + `_routing` + "`" + ` patch). A key the tenant does not carry, or a\ntenant that does not exist, makes it a no-op: with no patch nothing is written and no\ntenant is created. A key must not appear twice, nor in both patch and unset.",
+                    "description": "keys to remove from the tenant's config block; at most 1000 entries. Only \"_routing\" and\n\"_routing_receiver_type\" are accepted: removing ` + "`" + `_routing` + "`" + ` resets the tenant to\n` + "`" + `_routing_defaults` + "`" + ` and its routing profile, which turns routing back on for a tenant a\ndisabling ` + "`" + `_routing` + "`" + ` turned off (the change is judged by domain policy like a ` + "`" + `_routing` + "`" + `\npatch); removing ` + "`" + `_routing_receiver_type` + "`" + ` drops the flat key tenant-api used to write,\nwhich nothing renders (#2983). A key the tenant does not carry, or a\ntenant that does not exist, makes it a no-op: with no patch nothing is written and no\ntenant is created. A key must not appear twice, nor in both patch and unset.",
                     "type": "array",
                     "maxItems": 1000,
                     "items": {
@@ -2807,7 +2807,7 @@ const docTemplate = `{
                     }
                 },
                 "unset": {
-                    "description": "keys to remove from every member's config block; at most 1000 entries. Only \"_routing\" is\naccepted: removing it resets the member to ` + "`" + `_routing_defaults` + "`" + ` and its routing profile,\nwhich turns routing back on for a member a disabling ` + "`" + `_routing` + "`" + ` turned off (the change is\njudged by domain policy like a ` + "`" + `_routing` + "`" + ` patch). A key the member does not carry makes it\na no-op. A key must not appear twice, nor in both patch and unset.",
+                    "description": "keys to remove from every member's config block; at most 1000 entries. Only \"_routing\" and\n\"_routing_receiver_type\" are accepted: removing ` + "`" + `_routing` + "`" + ` resets the member to\n` + "`" + `_routing_defaults` + "`" + ` and its routing profile, which turns routing back on for a member a\ndisabling ` + "`" + `_routing` + "`" + ` turned off (the change is judged by domain policy like a ` + "`" + `_routing` + "`" + `\npatch); removing ` + "`" + `_routing_receiver_type` + "`" + ` drops the flat key tenant-api used to write,\nwhich nothing renders (#2983). A key the member does not carry makes it\na no-op. A key must not appear twice, nor in both patch and unset.",
                     "type": "array",
                     "maxItems": 1000,
                     "items": {
