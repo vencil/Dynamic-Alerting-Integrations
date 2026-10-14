@@ -278,14 +278,16 @@ def _alert_quality_matrix(now: float) -> list[dict]:
 
 # threshold_govern: every tenant writes GOVERN_KEY at GOVERN_CURRENT, and the
 # observed series it maps to (metric_observed_map.yaml) samples GOVERN_OBSERVED
-# GOVERN_SAMPLES times: P95 80 vs 50 is +60 % (past the 25 % gate) at MEDIUM
-# confidence (>= 100 samples), so each tenant plans exactly one change.
+# GOVERN_SAMPLES times, GOVERN_STEP_S apart: P95 80 vs 50 is +60 % (past the
+# 25 % gate) at MEDIUM confidence (>= 100 samples in more than the 24 distinct
+# hours #2941 asks for), so each tenant plans exactly one change.
 GOVERN_TENANTS = ("tenant-one", "tenant-two", "tenant-three")
 GOVERN_KEY = "mysql_connections"
 GOVERN_SERIES = "tenant:mysql_threads_connected:max"
 GOVERN_CURRENT = 50
 GOVERN_OBSERVED = 80.0
 GOVERN_SAMPLES = 120
+GOVERN_STEP_S = 900          # 119 steps of 15 min ≈ 29.75h
 # tenant-api paths, optionally under a per-run prefix /ta/<run>/ so the stub
 # can count each run's PUTs (and play a per-run personality, see below).
 _TENANT_PATH = re.compile(r"(?:/ta/([^/]+))?/api/v1/tenants/([^/]+)")
@@ -335,7 +337,7 @@ class _StubHandler(BaseHTTPRequestHandler):
                 self._send({"status": "success", "data": {
                     "resultType": "matrix",
                     "result": [{"metric": {"tenant": tenant},
-                                "values": [[now - 60 * i, str(GOVERN_OBSERVED)]
+                                "values": [[now - GOVERN_STEP_S * i, str(GOVERN_OBSERVED)]
                                            for i in range(GOVERN_SAMPLES)]}]}})
                 return
             value = INSTANT_VALUES.get(query)

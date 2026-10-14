@@ -106,8 +106,10 @@ class _StubAPI:
 
 @pytest.fixture
 def stubs(monkeypatch):
-    monkeypatch.setattr(tr, "query_prometheus_range",
-                        lambda url, promql, *a, **k: ([20.0] * 2000, None))
+    # 2000 points a minute apart: ~33 distinct hours, above the #2941 floor of 24.
+    monkeypatch.setattr(tr, "query_prometheus_range_ts",
+                        lambda url, promql, *a, **k: (
+                            [(1_700_000_000.0 + 60 * i, 20.0) for i in range(2000)], None))
     monkeypatch.setattr(tg.time, "sleep", lambda s: None)
 
     def install(conf_d: Path) -> _StubAPI:

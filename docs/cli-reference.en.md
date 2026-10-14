@@ -2964,7 +2964,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` or `http://localhost:9090` |
 | `--tenant` | Analyze only this tenant (omit for all) | all |
 | `--lookback` | Historical data lookback period | `7d` |
-| `--min-samples` | Minimum sample count threshold (below = LOW confidence) | `100` |
+| `--min-samples` | Minimum sample count: both MEDIUM and HIGH need at least this many samples (see Confidence Levels below). May not be below `100`, else exit code `2` ([#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)) | `100` |
 | `--dry-run` | Show PromQL queries without executing | - |
 | `--json` | JSON output | - |
 | `--markdown` | Markdown table output | - |
@@ -2990,9 +2990,11 @@ da-tools threshold-recommend --generate-observed-map
 
 | Level | Sample Count |
 |-------|-------------|
-| HIGH | ≥ 1000 |
-| MEDIUM | ≥ 100 (or `--min-samples`) |
-| LOW | < 100 |
+| HIGH | ≥ 1000 and ≥ `--min-samples` |
+| MEDIUM | ≥ `--min-samples` (default and floor: 100) |
+| LOW | otherwise |
+
+Only finite samples count; NaN / Inf are dropped ([#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)). Upper-bound keys also have a coverage floor: when their samples fall in fewer than 24 distinct UTC hours the key is LOW whatever its count (the reason says `data in N distinct hour(s) < 24`), and `threshold-govern` opens no PR for it ([#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)). It counts hours covered, not the first-to-last span, so one stray early sample or two short stretches far apart do not pass for a day. Lower-bound keys are gated by "at least 5 full UTC days" instead. A LOW recommendation is still listed in the report and still written by `--export-patch` (its line says LOW): check the confidence before applying it.
 
 **Examples**
 
@@ -3035,7 +3037,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` or `http://localhost:9090` |
 | `--tenant` | Analyze only this tenant | all |
 | `--lookback` | Historical lookback period | `7d` |
-| `--min-samples` | Minimum sample count | `100` |
+| `--min-samples` | Minimum sample count, as for `threshold-recommend`. May not be below `100`, else exit code `2` | `100` |
 | `--min-delta-pct` | Governance gate: only open a PR when \|delta%\| >= this | `25` |
 | `--max-prs` | Max PRs opened per run (anti-flood / alert-fatigue budget). Must be at least 1; below that the exit code is `2` ([#2929](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2929)). When the cap is below the number of actionable tenants, the dry-run Summary says how many PRs at most would be opened ("at most": a dry run does not ask tenant-api, so it cannot foresee a PR that is already open) | `10` |
 | `--apply` | Actually open PRs via tenant-api (default: dry-run, no writes) | - |
