@@ -1090,3 +1090,67 @@ class TestToComparable:
         """Duration 轉換為正確秒數。"""
         assert pe._to_comparable("5m") == 300.0
         assert pe._to_comparable("1h") == 3600.0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TestDocsPolicyExample (#2961)
+# ═══════════════════════════════════════════════════════════════════
+
+_DOCS_POLICY_EXAMPLES = [
+    os.path.join(os.path.dirname(__file__), "..", "..", "docs", "getting-started", name)
+    for name in ("for-domain-experts.md", "for-domain-experts.en.md")
+]
+
+
+def _docs_policy_block(path):
+    """The one fenced ```yaml block in `path` that starts with `_policies:`."""
+    import re
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    blocks = [b for b in re.findall(r"```yaml\n(.*?)```", text, re.S)
+              if b.lstrip().startswith("_policies:")]
+    assert len(blocks) == 1, f"{path}: expected one `_policies:` example, found {len(blocks)}"
+    return blocks[0]
+
+
+@pytest.mark.parametrize("path", _DOCS_POLICY_EXAMPLES, ids=["zh", "en"])
+class TestDocsPolicyExample:
+    """for-domain-experts 的 `_policies` 範例照抄就要真的生效（#2961）。
+
+    範例曾寫 `check:`／`path:`：engine 不讀這兩個欄位、`operator` 缺省為
+    `required`，於是範例的上限規則默默變成「欄位必須存在」，必違反的值也
+    回 0。
+    """
+
+    def test_rules_use_only_fields_the_engine_reads(self, path):
+        import dataclasses
+        import yaml
+        raw = yaml.safe_load(_docs_policy_block(path))["_policies"]
+        known = {f.name for f in dataclasses.fields(pe.PolicyRule)}
+        for rule in raw:
+            assert set(rule) <= known, f"{rule.get('name')}: {sorted(set(rule) - known)}"
+            # The default `required` must never stand in for a forgotten operator.
+            assert "operator" in rule, rule.get("name")
+            # `when` reads the same way one level down (default `required` too).
+            when = rule.get("when")
+            if when is not None:
+                assert set(when) <= {"target", "operator", "value"}, rule.get("name")
+                assert "operator" in when, rule.get("name")
+
+    @pytest.mark.usefixtures("da_guard_env")
+    def test_example_fails_ci_on_a_tree_that_breaks_it(self, path, tmp_path, capsys):
+        """一個租戶沒有路由、一個超過上限：兩條規則都要響，error 那條讓 `--ci` 回 1。"""
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n" + _docs_policy_block(path), encoding="utf-8")
+        (tmp_path / "t-routed.yaml").write_text(
+            "tenants:\n  t-routed:\n    mysql_connections: '900'\n    _routing:\n"
+            "      receiver:\n        type: webhook\n        url: https://example.invalid/h\n",
+            encoding="utf-8")
+        (tmp_path / "t-bare.yaml").write_text(
+            "tenants:\n  t-bare:\n    mysql_connections: '100'\n", encoding="utf-8")
+        exit_code = pe.main(["--config-dir", str(tmp_path), "--ci", "--json"])
+        doc = json.loads(capsys.readouterr().out)
+        fired = sorted((v["tenant"], v["rule_name"], v["severity"]) for v in doc["violations"])
+        assert fired == [("t-bare", "require-routing", "error"),
+                         ("t-routed", "max-connections-cap", "warning")]
+        assert exit_code == 1

@@ -268,18 +268,17 @@ Declare `_policies` DSL in `_defaults.yaml` to automatically validate all tenant
 ```yaml
 _policies:
   - name: require-routing
-    target: "*"
-    check: required
-    path: "_routing"
+    target: "_routing"
+    operator: required
     severity: error
   - name: max-connections-cap
     target: "mysql_connections"
-    check: lte
+    operator: lte
     value: 500
     severity: warning
 ```
 
-Run: `da-tools evaluate-policy --config-dir conf.d/ --ci`. Supports 10 operators, `when` conditionals, and wildcard targets.
+Run: `da-tools evaluate-policy --config-dir conf.d/ --ci`. The operator goes in `operator:` and defaults to `required` when omitted; the available operators, `when` conditionals and wildcard targets are in the [CLI reference: evaluate-policy](../cli-reference.en.md#evaluate-policy). A `severity: warning` violation is only reported; it does not fail `--ci`. `_routing` is the route generator's resolved result (including `_routing_defaults`), so `require-routing` only catches a tenant left with no route at all.
 
 ### Cross-Domain Routing Profiles & Domain Policies (v2.1.0 ADR-007)
 
