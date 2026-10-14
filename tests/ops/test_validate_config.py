@@ -504,14 +504,71 @@ class TestPolicyDSL:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
             dsl = os.path.join(d, "policies.yaml")
             with open(dsl, "w", encoding="utf-8") as f:
+                # #2961: a rule the engine reads (it was `rule:`, a key the
+                # engine never read, so this passed on a rule that did nothing).
                 yaml.dump({"policies": [
-                    {"name": "p1",
-                     "rule": "thresholds.mysql_connections.warning < 1",
-                     "severity": "error"}]}, f)
+                    {"name": "p1", "target": "mysql_connections",
+                     "operator": "lte", "value": 1, "severity": "error"}]}, f)
             result = vc.check_policy_dsl(d, dsl)
             assert result["details"], (
                 "a real DSL file produced no detail lines at all, so nothing "
                 "here shows the file was actually read")
+            assert not result.get("caller_error"), result
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestPolicyDSLInvalidRules:
+    """#2961: a rule the engine cannot read as written is no longer skipped.
+    From `_defaults.yaml` (the customer's tree) the row FAILs, exit 1; from
+    `--policy-dsl` (the operator's argv) it is a caller error, exit 2."""
+
+    _TREE = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n{P}",
+             "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"}
+    _BAD = "  - name: cap\n    target: mysql_connections\n    check: lte\n    value: 1\n"
+
+    def _run(self, tmp_path, capsys, cli_argv, policies="", dsl=None):
+        for rel, text in self._TREE.items():
+            (tmp_path / rel).write_text(text.replace("{P}", policies), encoding="utf-8")
+        argv = ["validate_config", "--config-dir", str(tmp_path), "--json"]
+        if dsl is not None:
+            f = tmp_path.parent / f"{tmp_path.name}-dsl.yaml"
+            f.write_text(dsl, encoding="utf-8")
+            argv += ["--policy-dsl", str(f)]
+        cli_argv(*argv)
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
+        return exc.value.code, rows["policy_dsl"]
+
+    def test_defaults_rule_fails_the_row(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv, policies="_policies:\n" + self._BAD)
+        assert (rc, row["status"], row["caller_error"]) == (1, "fail", False), row
+        assert any("_defaults.yaml: rule #0 ('cap'): unknown key(s) ['check']" in d
+                   for d in row["details"]), row
+
+    def test_policy_dsl_rule_is_caller_error(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv, dsl="policies:\n" + self._BAD)
+        assert (rc, row["status"], row["caller_error"]) == (2, "fail", True), row
+        assert any("unknown key(s) ['check']" in d for d in row["details"]), row
+
+    def test_policy_dsl_rule_names_each_problem_with_the_rule_hint(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv,
+                            dsl="policies:\n" + self._BAD + "  - name: x\n    operator: required\n")
+        assert rc == 2
+        assert sum("rule #" in d for d in row["details"]) == 2, row
+        assert vc._POLICY_DSL_INVALID_RULE_HINT in json.dumps(row, ensure_ascii=False), row
+
+    def test_policy_dsl_both_keys(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv,
+                            dsl="policies:\n_policies:\n" + self._BAD)
+        assert (rc, row["caller_error"]) == (2, True), row
+        assert any("both `policies:` and `_policies:`" in d for d in row["details"]), row
+
+    def test_policy_dsl_unknown_top_level_key(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv,
+                            dsl="polices:\n  - name: cap\n    target: x\n")
+        assert (rc, row["caller_error"]) == (2, True), row
+        assert any("unknown top-level key(s) ['polices']" in d for d in row["details"]), row
 
 
 class TestProfilesExtended:

@@ -519,8 +519,8 @@ policies:
         rules = pe.load_policies(str(f))
         assert rules == []
 
-    def test_load_invalid_rule_skipped(self, tmp_path):
-        """無效規則被跳過，有效規則正常載入。"""
+    def test_load_invalid_rule_refused(self, tmp_path):
+        """#2961: 無效規則不再跳過（跳過的規則等於通過），整份拒收並點名。"""
         f = tmp_path / "mixed.yaml"
         f.write_text("""
 policies:
@@ -533,9 +533,10 @@ policies:
     target: x
     operator: INVALID_OP
 """, encoding="utf-8")
-        rules = pe.load_policies(str(f))
-        assert len(rules) == 1
-        assert rules[0].name == "valid-rule"
+        with pytest.raises(pe.InvalidPolicyRules) as exc:
+            pe.load_policies(str(f))
+        assert len(exc.value.problems) == 1
+        assert "rule #1" in exc.value.problems[0] and "INVALID_OP" in exc.value.problems[0]
 
     def test_load_with_when_clause(self, tmp_path):
         """載入含 when 子句的規則。"""
@@ -925,10 +926,11 @@ class TestCLI:
         assert "specify --policy" in err or "指定 --policy" in err
 
     def test_main_policy_file_without_rules_names_it(self, tmp_path, capsys):
-        """control：--policy 存在但沒有 policies: → 仍 0（#1649），但訊息不再叫人「指定 --policy」。"""
+        """control：--policy 存在但沒有規則（`policies: []`）→ 仍 0（#1649），但訊息不再叫人「指定 --policy」。
+        #2961: 不認得的頂層鍵（`polices:`）不再算「沒有規則」，見 TestInvalidRules。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         pol = tmp_path / "empty-policy.yaml"
-        pol.write_text("something_else: 1\n", encoding="utf-8")
+        pol.write_text("policies: []\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(pol)])
         assert exit_code == 0
         err = capsys.readouterr().err
@@ -1093,6 +1095,88 @@ class TestToComparable:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# TestInvalidRules (#2961)
+# ═══════════════════════════════════════════════════════════════════
+
+_RULE_OK = "  - name: cap\n    target: mysql_threads_running\n    operator: lte\n    value: 50\n"
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestInvalidRules:
+    """A rule the engine cannot read as written stops the run (rc 2) instead
+    of being skipped or coerced — every shape below used to evaluate as
+    passing (owner decision on #1516, 2026-10-14)."""
+
+    @pytest.mark.parametrize("rule,needle", [
+        ("  - name: cap\n    target: x\n    check: lte\n    value: 1\n",
+         "the operator goes in `operator:`"),
+        ("  - name: cap\n    target: x\n    operator: GTE\n    value: 1\n", "unknown operator 'GTE'"),
+        ("  - name: cap\n    target: x\n    severity: fatal\n", "unknown severity 'fatal'"),
+        ("  - name: cap\n    operator: required\n", "`target` must be a non-empty string"),
+        ("  - name: cap\n    target: x\n    exclude_tenants: tenant-a\n",
+         "`exclude_tenants` must be a list"),
+        ("  - name: cap\n    target: x\n    when: x\n", "`when` must be a mapping"),
+        ("  - name: cap\n    target: x\n    when: {targt: y}\n", "`when` has unknown key(s) ['targt']"),
+        ("  - name: cap\n    target: x\n    when: {operator: required}\n", "`when.target`"),
+        ("  - name: cap\n    target: x\n    when: {target: y, operator: nope}\n", "`when.operator` 'nope'"),
+        ("  - just-a-string\n", "rule #1 is str, expected a mapping"),
+    ], ids=["check-key", "operator", "severity", "no-target", "exclude-scalar", "when-scalar",
+            "when-key", "when-no-target", "when-operator", "rule-not-mapping"])
+    @pytest.mark.parametrize("source", ["defaults", "policy-file"])
+    def test_invalid_rule_is_caller_error(self, rule, needle, source, tmp_path, capsys):
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        argv = ["--config-dir", str(tmp_path), "--ci", "--json"]
+        if source == "defaults":
+            (tmp_path / "_defaults.yaml").write_text("_policies:\n" + _RULE_OK + rule, encoding="utf-8")
+        else:
+            pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
+            pol.write_text("policies:\n" + _RULE_OK + rule, encoding="utf-8")
+            argv += ["--policy", str(pol)]
+        assert pe.main(argv) == 2
+        out = capsys.readouterr()
+        doc = json.loads(out.out)
+        assert (doc["status"], doc["reason"], doc["passed"]) == ("caller_error", "policy_rule_invalid", False)
+        assert needle in out.err
+        assert "rule #1" in out.err   # the good rule #0 is not named
+
+    def test_policies_not_a_list(self, tmp_path, capsys):
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        (tmp_path / "_defaults.yaml").write_text("_policies:\n  cap: {target: x}\n", encoding="utf-8")
+        assert pe.main(["--config-dir", str(tmp_path), "--ci"]) == 2
+        assert "`_policies` is dict, expected a list of rules" in capsys.readouterr().err
+
+    def test_empty_policies_is_still_no_rules(self, tmp_path, capsys):
+        """`_policies:` with no value is no rules, rc 0 (#1649 content axis)."""
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        (tmp_path / "_defaults.yaml").write_text("_policies:\n", encoding="utf-8")
+        assert pe.main(["--config-dir", str(tmp_path), "--ci"]) == 0
+
+    def test_policy_file_unknown_top_level_key(self, tmp_path, capsys):
+        """`polices:` used to read as "no rules" at rc 0."""
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
+        pol.write_text("polices:\n" + _RULE_OK, encoding="utf-8")
+        assert pe.main(["--config-dir", str(tmp_path), "--ci", "--json", "--policy", str(pol)]) == 2
+        out = capsys.readouterr()
+        assert json.loads(out.out)["reason"] == "policy_file_invalid"
+        assert "unknown top-level key(s) ['polices']" in out.err
+
+    @pytest.mark.parametrize("body", ["policies:\n" + _RULE_OK + "_policies:\n" + _RULE_OK,
+                                      "policies:\n_policies:\n" + _RULE_OK],
+                             ids=["both-lists", "null-hides-list"])
+    def test_policy_file_with_both_keys(self, body, tmp_path, capsys):
+        """Only one of the two is read; the other was ignored in silence."""
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
+        pol.write_text(body, encoding="utf-8")
+        assert pe.main(["--config-dir", str(tmp_path), "--ci", "--policy", str(pol)]) == 2
+        assert "both `policies:` and `_policies:`" in capsys.readouterr().err
+
+    def test_valid_rules_still_evaluate(self, tmp_path, capsys):
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 30\n_policies:\n" + _RULE_OK, encoding="utf-8")
+        assert pe.main(["--config-dir", str(tmp_path), "--ci"]) == 1   # tenant-a serves 80 > 50
 # TestDocsPolicyExample (#2961)
 # ═══════════════════════════════════════════════════════════════════
 
