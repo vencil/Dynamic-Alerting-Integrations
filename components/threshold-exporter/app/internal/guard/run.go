@@ -58,11 +58,26 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	return newGuardReport(findings, len(input.EffectiveConfigs)), nil
 }
 
-// newGuardReport sorts findings into the report's order and computes the
-// summary over totalTenants tenants. CheckDefaultsImpact builds its report
-// with it, and SealUnregisteredKinds rebuilds one after changing a
-// finding's severity.
+// NewGuardReport builds a report from findings over totalTenants tenants
+// the way CheckDefaultsImpact does: sealed (seal.go), sorted and summarised.
+// findings is not modified.
+func NewGuardReport(findings []Finding, totalTenants int) *GuardReport {
+	return newGuardReport(append([]Finding(nil), findings...), totalTenants)
+}
+
+// newGuardReport is NewGuardReport on a slice it may reorder and change.
+// It seals first, so the summary — and the exit code callers derive from
+// it — counts the findings as they are written.
 func newGuardReport(findings []Finding, totalTenants int) *GuardReport {
+	unregistered := 0
+	for i := range findings {
+		if needsSeal(findings[i]) {
+			findings[i].Kind = findingkind.Unregistered()
+			findings[i].Severity = SeverityError
+			unregistered++
+		}
+	}
+
 	// Stable sort: errors before warnings, then by tenant id, then
 	// by field path. Within the same (severity, tenant, field) we
 	// don't expect duplicates from PR-1 checks but the final tie-
@@ -88,6 +103,7 @@ func newGuardReport(findings []Finding, totalTenants int) *GuardReport {
 		Summary: GuardSummary{
 			TotalTenants: totalTenants,
 		},
+		unregistered: unregistered,
 	}
 
 	// Roll-up counts. PassedTenantCount needs the per-tenant view

@@ -36,15 +36,24 @@ func TestForgedKind_RegisteredNameIsThatKind(t *testing.T) {
 	}
 }
 
-// forgedReport has one registered finding and two whose kinds are not
-// registered (a forged name and the zero Kind), both warnings, with the
-// summary a check would have computed.
-func forgedReport() *GuardReport {
-	return newGuardReport([]Finding{
+// forgedFindings has one registered finding and two whose kinds are not
+// registered (a forged name and the zero Kind), both warnings.
+func forgedFindings() []Finding {
+	return []Finding{
 		{Severity: SeverityError, Kind: findingkind.FindingMissingRequired, TenantID: "b", Field: "cpu", Message: "real"},
 		{Severity: SeverityWarn, Kind: forgeKind("not_a_registered_kind"), TenantID: "a", Field: "cpu", Message: "forged"},
 		{Severity: SeverityWarn, TenantID: "a", Field: "mem", Message: "no kind"},
-	}, 2)
+	}
+}
+
+// forgedReport is forgedFindings as a literal report, not built by
+// newGuardReport, with the summary counted as given: what the output's own
+// seal is for.
+func forgedReport() *GuardReport {
+	return &GuardReport{
+		Findings: forgedFindings(),
+		Summary:  GuardSummary{TotalTenants: 2, Errors: 1, Warnings: 2, PassedTenantCount: 1},
+	}
 }
 
 const sentinelName = "unregistered_finding_kind"
@@ -114,14 +123,18 @@ func TestReportOutput_WritesUnregisteredKindsAsSentinel(t *testing.T) {
 		}
 	})
 
-	t.Run("in place", func(t *testing.T) {
+	t.Run("built", func(t *testing.T) {
 		t.Parallel()
-		r := forgedReport()
-		if n := r.SealUnregisteredKinds(); n != 2 || r.Summary != wantSummary {
-			t.Errorf("SealUnregisteredKinds: %d changed, summary %+v", n, r.Summary)
+		in := forgedFindings()
+		r := NewGuardReport(in, 2)
+		if r.UnregisteredKinds() != 2 || r.Summary != wantSummary {
+			t.Errorf("NewGuardReport: %d sealed, summary %+v", r.UnregisteredKinds(), r.Summary)
 		}
-		if n := r.SealUnregisteredKinds(); n != 0 {
-			t.Errorf("second SealUnregisteredKinds changed %d", n)
+		if in[1].Kind.IsRegistered() || in[1].Severity != SeverityWarn {
+			t.Error("NewGuardReport changed the findings it was given")
+		}
+		if again := NewGuardReport(r.Findings, 2); again.UnregisteredKinds() != 0 || again.Summary != wantSummary {
+			t.Errorf("rebuilding a sealed report sealed %d, summary %+v", again.UnregisteredKinds(), again.Summary)
 		}
 	})
 }

@@ -178,12 +178,19 @@ type Finding struct {
 // run. Apply tooling (CI / pre-commit / CLI) decides go/no-go from
 // Summary.Errors > 0; the rendered Markdown body comes from
 // (*GuardReport).Markdown().
+//
+// Do not embed GuardReport anonymously; use a named field, since its
+// MarshalJSON would replace the outer struct's encoding.
 type GuardReport struct {
 	// Findings are sorted: errors before warnings, then by
 	// (TenantID, Field) within each severity bucket. Stable across
 	// runs given the same input.
 	Findings []Finding    `json:"findings"`
 	Summary  GuardSummary `json:"summary"`
+
+	// unregistered counts the findings sealed when the report was built
+	// (seal.go); UnregisteredKinds reads it.
+	unregistered int
 }
 
 // GuardSummary is a cheap-to-display roll-up. Apply tooling shows

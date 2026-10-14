@@ -5,9 +5,9 @@ package main
 //
 // No real check produces one (TestDaGuard_FixtureFindingsHaveRegisteredKinds),
 // so the check is wrapped to add two: one with the zero Kind, one forged
-// with reflect as review round 6 did. The report's output seals them
-// (internal/guard/seal.go); this test holds the CLI's half — the whole report
-// written, stderr naming them, exit 1.
+// with reflect as review round 6 did, and rebuilt with guard.NewGuardReport
+// as CheckDefaultsImpact builds its own (internal/guard/seal.go). This test
+// holds the CLI's half: the whole report written, stderr naming them, exit 1.
 
 import (
 	"bytes"
@@ -41,14 +41,70 @@ func withUnregisteredFindings(in guard.CheckInput) (*guard.GuardReport, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.Findings = append(r.Findings,
+	return guard.NewGuardReport(append(r.Findings,
 		guard.Finding{Severity: guard.SeverityWarn, TenantID: "tenant-a", Field: "cpu",
 			Message: "a finding whose check chose no kind"},
 		guard.Finding{Severity: guard.SeverityWarn, Kind: forgeKind("not_a_registered_kind"), TenantID: "tenant-a",
 			Field: "mem", Message: "a finding with a forged kind"},
-	)
-	r.Summary.Warnings += 2
-	return r, nil
+	), r.Summary.TotalTenants), nil
+}
+
+// withOneForgedWarning runs the real check and adds one warning with a
+// forged kind: on a tree with no real finding, it is the only thing that can
+// make the run exit 1.
+func withOneForgedWarning(in guard.CheckInput) (*guard.GuardReport, error) {
+	r, err := guard.CheckDefaultsImpact(in)
+	if err != nil {
+		return nil, err
+	}
+	return guard.NewGuardReport(append(r.Findings,
+		guard.Finding{Severity: guard.SeverityWarn, Kind: forgeKind("not_a_registered_kind"), TenantID: "tenant-a",
+			Message: "a finding with a forged kind"},
+	), r.Summary.TotalTenants), nil
+}
+
+// R7-B1: with no real error, the exit code still counts the sealed finding.
+// A run whose exit code came from the summary before sealing exits 0 here.
+func TestRun_OnlyForgedWarning_ExitsOne(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{"json", "md"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			testutil.WriteTree(t, tmp, map[string]string{
+				"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
+				"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+			})
+			var stdout, stderr bytes.Buffer
+			code := runWith([]string{"--config-dir", filepath.Join(tmp, "conf.d"), "--format", format},
+				&stdout, &stderr, withOneForgedWarning)
+			if code != exitFindings {
+				t.Errorf("exit %d, want %d; stderr=%q", code, exitFindings, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), `1 finding(s) carried no registered kind; reported as "`+unregisteredKindName+`"`) {
+				t.Errorf("stderr does not name the swap: %q", stderr.String())
+			}
+			switch format {
+			case "json":
+				var doc struct {
+					Report struct {
+						Summary guard.GuardSummary `json:"summary"`
+					} `json:"report"`
+				}
+				if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+					t.Fatalf("report is not JSON: %v\n%s", err, stdout.String())
+				}
+				if doc.Report.Summary.Errors != 1 || doc.Report.Summary.Warnings != 0 {
+					t.Errorf("summary %+v, want errors=1 warnings=0", doc.Report.Summary)
+				}
+			case "md":
+				if !strings.Contains(stdout.String(), "- Errors: **1**") ||
+					!strings.Contains(stdout.String(), "| tenant-a | — | "+unregisteredKindName+" |") {
+					t.Errorf("Markdown does not show the sealed finding as the one error:\n%s", stdout.String())
+				}
+			}
+		})
+	}
 }
 
 func TestRun_UnregisteredKinds_AreReportedAsSentinel(t *testing.T) {

@@ -368,10 +368,9 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		return exitCallerErr
 	}
 	spellFindingsAsWritten(report, scoped)
-	// #2904: the report's output writes any unregistered kind as
-	// unregistered_finding_kind, an error, by itself; sealing here as well
-	// lets stderr name them and the exit code count them.
-	if n := report.SealUnregisteredKinds(); n > 0 {
+	// #2904: the report comes sealed (internal/guard/seal.go); its summary,
+	// and so the exit code below, already counts these as errors.
+	if n := report.UnregisteredKinds(); n > 0 {
 		fmt.Fprintf(errOut, "%s: %d finding(s) carried no registered kind; reported as %q with severity error (a da-guard bug: please report it)\n",
 			programName, n, findingkind.Unregistered())
 	}
