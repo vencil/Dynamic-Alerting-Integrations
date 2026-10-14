@@ -1,10 +1,10 @@
 package confd
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -134,32 +134,17 @@ const (
 // so a caller cannot reach outside dir through it.
 func ReadTenantFile(dir, name string) (data []byte, problem FileProblem) {
 	path := filepath.Join(dir, filepath.Base(name))
-	// Open FIRST, then fstat the opened fd, then read from that same fd.
-	// A stat(path)-then-ReadFile(path) pair has a window in which the entry
-	// can be swapped for a FIFO, and a read (or a blocking open) of a FIFO
-	// with no writer never returns — while /search holds its snapshot-cache
-	// mutex around this load. openNoBlock keeps the open itself from
-	// blocking; fstat on the fd classifies exactly the object that will be
-	// read.
-	f, err := openNoBlock(path)
+	// cfg.ReadConfFile opens without blocking on a FIFO and judges the
+	// opened fd (fstat) before any read — a stat(path)-then-ReadFile(path)
+	// pair would leave a window in which the entry can be swapped for a
+	// FIFO, and /search holds its snapshot-cache mutex around this load. A
+	// special file whose open itself fails (a unix socket, #2477) is
+	// classified there too. The one rule, see regular.go.
+	data, err := cfg.ReadConfFile(path)
 	if err != nil {
-		// #2477: some special files fail at open (a unix socket answers
-		// ENXIO); name them as openRegular does, not as unreadable.
-		if notRegularAfterOpenFailure(path) != nil {
+		if notRegular(err) {
 			return nil, ProblemNotRegularFile
 		}
-		return nil, ProblemUnreadable
-	}
-	defer func() { _ = f.Close() }() // read-only fd: a close error cannot lose data
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, ProblemUnreadable
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, ProblemNotRegularFile
-	}
-	data, err = io.ReadAll(f)
-	if err != nil {
 		return nil, ProblemUnreadable
 	}
 	if p := YAMLProblem(data); p != ProblemNone {

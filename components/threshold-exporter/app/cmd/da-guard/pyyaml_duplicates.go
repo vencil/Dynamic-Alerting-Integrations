@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -64,7 +63,7 @@ func withGeneratorDuplicates(configDir string, scoped *config.ScopedTenants, err
 	for _, name := range scoped.SourceFiles {
 		// Unreadable now: the walker read it a moment ago; whatever reads it
 		// next reports the error (pyRouting leaves it nil: fail-closed).
-		if data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name))); err == nil {
+		if data, err := config.ReadConfFile(filepath.Join(root, filepath.FromSlash(name))); err == nil {
 			check(name, data)
 		}
 	}

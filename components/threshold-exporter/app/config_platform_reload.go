@@ -12,7 +12,6 @@ package main
 // reload, and an edit to ty's entry leaves tx's cached hash alone.
 
 import (
-	"os"
 	"reflect"
 	"slices"
 	"sort"
@@ -27,7 +26,7 @@ func readTreeFile(f *config.TreeFile) ([]byte, error) {
 	if f.Data != nil {
 		return f.Data, nil
 	}
-	return os.ReadFile(f.AbsPath)
+	return config.ReadConfFile(f.AbsPath)
 }
 
 // platformFilesMoved reports whether the root platform files of two ticks
@@ -118,7 +117,7 @@ func platformBlocksOf(files []config.PlatformTenants, tid string, abs map[string
 // unreadable or undecodable file answers nil: its merge fails and is
 // reported by recomputeMergedHash on the tick that touches it.
 func profileDeltaFor(tid, srcPath string, prior reloadPriorState, scan reloadScanState) (paths, keys []string) {
-	b, err := os.ReadFile(srcPath)
+	b, err := config.ReadConfFile(srcPath)
 	if err != nil {
 		return nil, nil
 	}

@@ -53,7 +53,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -299,7 +298,7 @@ func (r *effectiveResolver) chain(leafDir string) []string {
 
 // bytesOf returns the bytes the scan read for absPath. A prior-less scan
 // caches every file it kept, so this is the snapshot the walk hashed — no
-// second os.ReadFile, and the tenant file and its defaults come from one
+// second ReadConfFile, and the tenant file and its defaults come from one
 // read of the tree.
 func (r *effectiveResolver) bytesOf(absPath string) ([]byte, error) {
 	rel, err := filepath.Rel(r.scan.AbsRoot, absPath)
@@ -308,7 +307,7 @@ func (r *effectiveResolver) bytesOf(absPath string) ([]byte, error) {
 	}
 	f, ok := r.scan.Files[filepath.ToSlash(rel)]
 	if ok && f.Data == nil && r.readUncached {
-		b, err := os.ReadFile(absPath)
+		b, err := ReadConfFile(absPath)
 		if err != nil {
 			return nil, err
 		}

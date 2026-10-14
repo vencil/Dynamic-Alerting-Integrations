@@ -14,7 +14,6 @@ package config
 import (
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strings"
 
@@ -168,7 +167,7 @@ func KeyRefs(dir string, metrics []string, logger *log.Logger) (KeyRefsReport, e
 		f := scan.Files[k]
 		data := f.Data
 		if data == nil {
-			if data, err = os.ReadFile(f.AbsPath); err != nil {
+			if data, err = ReadConfFile(f.AbsPath); err != nil {
 				out.unscanned(k, fmt.Sprintf("cannot re-read: %v", err))
 				continue
 			}

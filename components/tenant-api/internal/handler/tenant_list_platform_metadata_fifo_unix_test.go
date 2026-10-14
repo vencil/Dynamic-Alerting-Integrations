@@ -18,8 +18,7 @@ import (
 
 // listedRowsByID runs the list's load (loadAllTenants) and returns its rows
 // by id. The load, not the handler: without a snapshot cache the handler also
-// derives config state through the exporter's own loader, which reads the
-// FIFO below with no bound of its own (the cache bounds it in production).
+// derives config state through the exporter's own loader.
 func listedRowsByID(t *testing.T, dir string) map[string]TenantSummary {
 	t.Helper()
 	rows, err := loadAllTenants(dir)
@@ -33,10 +32,15 @@ func listedRowsByID(t *testing.T, dir string) map[string]TenantSummary {
 	return out
 }
 
-// platform read blocked (a FIFO named `_*.yaml`): the list answers from the
-// tenant files while the read is blocked, and once the blocked read returns
-// the next list reads the platform files again.
-func TestListTenants_BlockedPlatformReadFallsBackThenRecovers(t *testing.T) {
+// A FIFO named `_*.yaml` at the root (#2939): the platform read used to block
+// on it until the bound gave up, and the list fell back while it stayed
+// stuck. The exporter's walker no longer opens a special file, so the read
+// returns at once — unusable, as any root file it cannot read — and the list
+// answers from the tenant files without a stuck read. Once the FIFO is
+// replaced by a readable platform file, the next list reads it. (A read that
+// does not return — a hung mount — is bounded by boundedcall.Do, whose
+// failure takes the same fallback: platformMetadataOrNone.)
+func TestListTenants_PlatformFIFOFallsBackThenRecovers(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
@@ -45,36 +49,33 @@ func TestListTenants_BlockedPlatformReadFallsBackThenRecovers(t *testing.T) {
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
 		t.Skipf("mkfifo: %v", err)
 	}
-	unblock := func() { // open for write, then close: the blocked reader sees EOF
+	t.Cleanup(func() { // a reader a failing run left on it sees EOF
 		if f, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
 			_ = f.Close()
 		}
-	}
-	t.Cleanup(unblock)
-	guard := &boundedcall.Guard{Timeout: 200 * time.Millisecond}
+	})
+	guard := &boundedcall.Guard{Timeout: 5 * time.Second}
 	metadataRootReadGuards.Store(dir, guard)
 	t.Cleanup(func() { metadataRootReadGuards.Delete(dir) })
 
 	tenantOnly := listedMetadata{DBType: "mariadb"}
-	for i := 0; i < 2; i++ { // the read that times out, then one refused at once
-		rows := listedRowsByID(t, dir)
+	for i := 0; i < 2; i++ {
+		done := make(chan map[string]TenantSummary, 1)
+		go func() { done <- listedRowsByID(t, dir) }()
+		var rows map[string]TenantSummary
+		select {
+		case rows = <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("LIST blocked on the FIFO")
+		}
 		if got := metadataOf(rows["tx"]); !reflect.DeepEqual(got, tenantOnly) {
 			t.Errorf("LIST #%d tx metadata = %+v, want %+v", i+1, got, tenantOnly)
 		}
 	}
-	if guard.Stuck() == 0 {
-		t.Fatal("premise: the platform read never blocked, so this run proves nothing")
+	if s := guard.Stuck(); s != 0 {
+		t.Fatalf("stuck platform reads = %d, want 0", s)
 	}
 
-	// End the blocked read, replace the FIFO with a readable platform file.
-	deadline := time.Now().Add(5 * time.Second)
-	for guard.Stuck() > 0 && time.Now().Before(deadline) {
-		unblock()
-		time.Sleep(10 * time.Millisecond)
-	}
-	if guard.Stuck() > 0 {
-		t.Fatal("the blocked read did not return after the FIFO was opened for writing")
-	}
 	if err := os.Remove(fifo); err != nil {
 		t.Fatal(err)
 	}

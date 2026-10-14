@@ -396,8 +396,8 @@ type RootPlatform struct {
 // walk, scanRootPlatform). A root that cannot be walked yields an empty
 // surface — the historical "no platform defaults" answer.
 //
-// ⚠️ It reads files and takes no deadline: a read can block (a FIFO, a hung
-// mount). The tenant-api GET path bounds it; the write paths walk the whole
+// ⚠️ It reads files and takes no deadline: a read can block (a hung mount;
+// a FIFO is never opened, #2939). The tenant-api GET path bounds it; the write paths walk the whole
 // tree, bounded, before they get here.
 func LoadRootPlatform(configDir string) RootPlatform {
 	return RootPlatform{r: loadRootPlatform(configDir)}

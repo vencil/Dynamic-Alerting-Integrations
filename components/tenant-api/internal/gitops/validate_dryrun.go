@@ -34,7 +34,7 @@ import (
 // ⛔ A *Writer METHOD, NOT A FREE FUNCTION OF configDir: previewTenantFilePath
 // walks through scanTreeForRead, whose in-flight walk and stuck-walk breaker
 // live on the Writer. Sharing the production Writer lets concurrent dry-runs
-// and diffs share one walk, and a walk blocked on a FIFO fail every later
+// and diffs share one walk, and a walk blocked on a hung mount fail every later
 // dry-run fast instead of each one leaking another blocked goroutine. That
 // breaker is the read path's own (#2153): a blocked dry-run walk never fails
 // a write, whose walks run under w.mu with a breaker of their own.

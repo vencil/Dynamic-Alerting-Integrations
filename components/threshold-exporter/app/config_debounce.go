@@ -44,7 +44,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -448,7 +447,7 @@ func (m *ConfigManager) rebuildParsedDefaults(prior reloadPriorState, scan reloa
 				continue
 			}
 		}
-		b, rerr := os.ReadFile(dp)
+		b, rerr := config.ReadConfFile(dp)
 		if rerr != nil {
 			m.getLogger().Printf("WARN: parsedDefaults: read %q: %v", dp, rerr)
 			continue
@@ -603,7 +602,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 			// entry already supplies reads as cosmetic — same two effects,
 			// no new label.
 			res.noOp++
-			tenantBytes, terr := os.ReadFile(srcPath)
+			tenantBytes, terr := config.ReadConfFile(srcPath)
 			effect := "cosmetic"
 			if terr == nil {
 				effect = classifyDefaultsNoOpEffect(
@@ -1029,19 +1028,19 @@ type tenantFilesOnce struct {
 	readErr error
 	// onParse is a test seam, nil in production: called once per parse.
 	onParse func(absPath string)
-	// read is a test seam, nil in production (= os.ReadFile): the read
+	// read is a test seam, nil in production (= config.ReadConfFile): the read
 	// recomputeMergedHashWith makes for the tenant file AND for each
 	// defaults-chain file of the same merge (#2100). Set from
 	// ConfigManager.reloadMergeRead.
 	read func(string) ([]byte, error)
 }
 
-// reader is t.read, or os.ReadFile when no seam is set.
+// reader is t.read, or config.ReadConfFile when no seam is set.
 func (t *tenantFilesOnce) reader() func(string) ([]byte, error) {
 	if t.read != nil {
 		return t.read
 	}
-	return os.ReadFile
+	return config.ReadConfFile
 }
 
 // get is absPath's parsed document, reading it with read unless it is the

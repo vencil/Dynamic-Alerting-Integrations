@@ -941,8 +941,9 @@ func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeSc
 var discardScanLogger = log.New(io.Discard, "", 0)
 
 // defaultTreeScanTimeout bounds one #2078 conf.d walk. The walker reads every
-// file, and a file whose read never returns (a FIFO named *.yaml, a hung
-// network mount) would otherwise hang the write — inside WriteMerged / the PR
+// file, and a file whose read never returns (a hung network mount; a FIFO
+// named *.yaml did until #2939, the walker no longer opens one) would
+// otherwise hang the write — inside WriteMerged / the PR
 // paths, while holding the single-writer lock, i.e. every later write too.
 // Measured on a 1000-file tree a walk takes ~20 ms.
 const defaultTreeScanTimeout = 5 * time.Second
