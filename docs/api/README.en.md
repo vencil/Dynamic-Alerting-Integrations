@@ -407,7 +407,7 @@ kubectl logs <pod-name> -n monitoring | tail -50
 
 ## Related Documentation
 
-- [OpenAPI 3.0 Spec](./threshold-exporter-openapi.yaml) - Complete API specification
+- [OpenAPI 3.0 Spec](./threshold-exporter-openapi.yaml) - For machines: path, status codes and media types of each GET endpoint, plus the JSON schema of `/api/v1/config/identity` (checked against the handlers by `openapi_spec_parity_test.go`). Explanations and the metric list are on this page and in the README linked above
 - [Threshold Exporter Architecture](../architecture-and-design.en.md#2-core-design-config-driven-architecture) - Detailed design document
 - [Tenant Quick Start](../getting-started/for-tenants.md) - Tenant configuration guide
 - [Platform Engineers Quick Start](../getting-started/for-platform-engineers.md) - Deployment and operations guide
