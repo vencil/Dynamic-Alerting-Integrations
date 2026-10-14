@@ -697,6 +697,11 @@ _MAIN = {"type": "webhook", "url": "https://m.example/h"}
     ({"receiver": _MAIN, "overrides": "x"}, []),
     ({"receiver": _MAIN, "overrides": ["x", None]}, []),
     ("not a mapping", []),
+    # a mapping keyed by mixed types (PyYAML reads `1:` as an int) has no
+    # stable text: equal receivers or matchers of that shape are not compared
+    ({"receiver": {1: "x", "type": "webhook"}, "overrides": [
+        {"alertname": {1: "a", "b": "c"}, "receiver": {1: "x", "type": "webhook"}},
+        {"alertname": {1: "a", "b": "c"}}]}, []),
 ])
 def test_override_redundancies(routing, want):
     got = gv.override_redundancies(routing)

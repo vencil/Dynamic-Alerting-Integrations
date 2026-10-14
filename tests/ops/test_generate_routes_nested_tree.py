@@ -676,6 +676,37 @@ def test_routes_in_a_nested_level_are_stripped_and_block_validate(tmp_path):
     assert msg in res.stderr
 
 
+def test_unread_routing_names_where_each_key_belongs(tmp_path):
+    """#2904: an unread routing key's line ends with where that key belongs —
+    `_routing_enforced` in a root platform file, a carrier key at the top level
+    of its own defaults file, any other `_routing_*` key in one of the routing
+    homes. A threshold profile that is not a mapping holds no key: skipped."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "_profiles.yaml": "profiles:\n  p-scalar: 5\n  p-map:\n    _routing_x: 1\n",
+        "team/_defaults.yaml": ("defaults:\n  mysql_connections: 60\n"
+                                "  _routing_enforced: {enabled: true}\n"
+                                "  _routing_defaults: {group_wait: 30s}\n"),
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    tree = load_tenant_tree(str(d))
+    got = {(fname, fld): msg for kind, fname, fld, msg in tree.routing_tree_problems
+           if kind == "routing_in_unread_location"}
+    assert sorted(got) == [
+        ("_profiles.yaml", "profiles.p-map._routing_x"),
+        ("team/_defaults.yaml", "defaults._routing_defaults"),
+        ("team/_defaults.yaml", "defaults._routing_enforced"),
+    ], got
+    assert got[("team/_defaults.yaml", "defaults._routing_enforced")].endswith(
+        "move `_routing_enforced` to the top level of a conf.d ROOT platform "
+        "file (not under `defaults:`, not below the root)")
+    assert got[("team/_defaults.yaml", "defaults._routing_defaults")].endswith(
+        "move `_routing_defaults` to the top level of this defaults file (not under `defaults:`)")
+    assert got[("_profiles.yaml", "profiles.p-map._routing_x")].endswith(
+        "this reader reads no such key here; move the routing to `_routing_defaults`, "
+        "`_routing_profiles.yaml`, or the tenant's own `_routing`")
+
+
 @pytest.mark.parametrize("files, field", [
     ({"team/_defaults.yaml": "defaults:\n  mysql_connections: 60\n  _routing:\n"
                              "    receiver: {type: webhook, url: https://a.example/h}\n"},
