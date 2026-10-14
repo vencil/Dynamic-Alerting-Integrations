@@ -1426,6 +1426,12 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		if e := enforcedFrom(f.Name, top); e != nil {
 			enforced = e
 		}
+		// #2960: named whatever `enabled` says — `enabeld: true` leaves NOC
+		// routing off.
+		if n := lookup(top, "_routing_enforced"); n != nil {
+			probs = append(probs, ignoredKeyProblems(f.Name, "_routing_enforced.", f.Name,
+				pyyamlcompat.Decode(n), BlockRoutingEnforced)...)
+		}
 		if d, present, stripped, bad, err := routingDefaultsFromNode(top); present {
 			if err != nil {
 				d = nil
@@ -1434,6 +1440,7 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 			if bad != nil {
 				probs = append(probs, routingDefaultsNotMapping(f.Name, bad))
 			}
+			probs = append(probs, ignoredKeyProblems(f.Name, "_routing_defaults.", f.Name, d, BlockRoutingDefaults)...)
 			if stripped {
 				probs = append(probs, Problem{Kind: ProblemRoutingDefaultsRoutes, File: f.Name,
 					Field: "_routing_defaults.routes",
@@ -1457,6 +1464,7 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 					}
 					profileOrigin[k] = f.Name
 					layers.Profiles[k] = p[k]
+					probs = append(probs, ignoredKeyProblems(f.Name, "routing_profiles."+k+".", f.Name, p[k], BlockRouting)...)
 				}
 			}
 		}

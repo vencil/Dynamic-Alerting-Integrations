@@ -467,23 +467,6 @@ entries:
     expire_at: 2027-01-10
     count: 2
 
-  - id: tenant-api-2700-put
-    reader: tenant-api
-    layer: routing
-    match:
-      cells:
-        - [tenant-merge-tag-key-2700, t2, tenant_api]
-    mechanism: >-
-      #2700：PUT t2 的租戶檔原文（`!!merge _routing:`），產生器會因 slack 被禁用
-      而擋（403）；tenant-api 讀到的 _routing 沒有 receiver，照常寫入。t1 的
-      `!!merge q:` 剛好因 `q` 不是 defaults 裡的閾值鍵被 400 擋下（與 policy
-      無關），不列入。
-    direction: go_looser
-    disposition: fix-pending
-    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700
-    expire_at: 2027-01-10
-    count: 1
-
   # --- 路由層：被蓋掉的 merge 來源裡有建不出來的值（#2713，擋住第二階段）----
   # 樹 tenant-merge-overridden-unconstructable-2713：t1 寫
   # `<<: {_routing: !!bool y}`，自己又寫了 _routing。

@@ -320,6 +320,12 @@
         "kind": "outside_table",
         "reason": "tenant-api refuses this PUT 400 BAD_REQUEST for a reason unrelated to routing or policy (`q` is no threshold key of defaults: 'unknown key \"q\" not in defaults'); the table's put verdicts do not express it. t2 of the same tree carries the routing difference with a known key"
       }
+    },
+    "routing-ignored-keys-2960": {
+      "t3": {
+        "kind": "nested_tree",
+        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
+      }
     }
   },
   "trees": [
@@ -6250,11 +6256,11 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "400",
             "batch": null
           },
           "python_differs": {
-            "reason": "#2700 with a known key: `!!merge _routing:` merges the inner _routing (a slack receiver) into t2 for PyYAML, and the generator's --strict blocks it; yaml.v3 reads a plain `_routing` key holding a mapping with no receiver, so the Go readers render nothing, da-guard reports nothing and tenant-api accepts the PUT.",
+            "reason": "#2700 with a known key: `!!merge _routing:` merges the inner _routing (a slack receiver) into t2 for PyYAML, and the generator's --strict blocks it; yaml.v3 reads a plain `_routing` key holding a mapping with no receiver, so the Go readers render nothing; da-guard and tenant-api name only that inner `_routing` as a key the generator does not read (#2960), not the forbidden receiver — tenant-api still refuses the PUT (400), so its cell no longer differs.",
             "targets": [
               {
                 "ref": "receiver",
@@ -6272,7 +6278,7 @@
             "group_by_invalid": [],
             "refused": null,
             "tenant_api": {
-              "put": "403",
+              "put": "400",
               "batch": null
             }
           },
@@ -6371,6 +6377,104 @@
             "put": "400",
             "batch": null
           },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-ignored-keys-2960",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/d\n  continue: true\n_routing_enforced:\n  enabeld: true\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/noc\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver:\n      type: webhook\n      url: https://hooks.example.com/p\n      colour: red\n    mute_time_intervals:\n    - weekends\n",
+        "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '50'\n    _routing_profile: p1\n",
+        "t2.yaml": "tenants:\n  t2:\n    cpu_usage_percent: '50'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://hooks.example.com/t2\n      continue: true\n      overrides:\n      - alertname: X\n        matchers: []\n",
+        "team/_defaults.yaml": "defaults:\n  cpu_usage_percent: 70\n_routing_defaults:\n  group_wiat: 30s\n",
+        "team/t3.yaml": "tenants:\n  t3:\n    cpu_usage_percent: '50'\n"
+      },
+      "platform": [
+        [
+          "routing_key_ignored",
+          "_defaults.yaml",
+          "_routing_defaults.continue"
+        ],
+        [
+          "routing_key_ignored",
+          "_defaults.yaml",
+          "_routing_enforced.enabeld"
+        ],
+        [
+          "routing_key_ignored",
+          "_routing_profiles.yaml",
+          "routing_profiles.p1.mute_time_intervals"
+        ],
+        [
+          "routing_key_ignored",
+          "_routing_profiles.yaml",
+          "routing_profiles.p1.receiver.colour"
+        ],
+        [
+          "routing_key_ignored",
+          "team/_defaults.yaml",
+          "_routing_defaults.group_wiat"
+        ]
+      ],
+      "expect": {
+        "t1": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t2": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t3": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null

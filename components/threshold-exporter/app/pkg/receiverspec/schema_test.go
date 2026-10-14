@@ -82,6 +82,59 @@ func TestSpecs_MatchSchema(t *testing.T) {
 	}
 }
 
+// TestFields_MatchSchema pins Fields (#2960) to each receiver definition's
+// properties: a key the schema accepts and Go names as ignored, or the
+// reverse, would make the two disagree on one receiver.
+func TestFields_MatchSchema(t *testing.T) {
+	defs := schemaDefinitions(t)
+	var union struct {
+		OneOf []struct {
+			Ref string `json:"$ref"`
+		} `json:"oneOf"`
+	}
+	if err := json.Unmarshal(defs["receiver"], &union); err != nil || len(union.OneOf) == 0 {
+		t.Fatalf("definitions.receiver.oneOf not readable (err=%v)", err)
+	}
+	seen := map[string]bool{}
+	for _, branch := range union.OneOf {
+		name := strings.TrimPrefix(branch.Ref, "#/definitions/")
+		var def struct {
+			Properties           map[string]map[string]json.RawMessage `json:"properties"`
+			AdditionalProperties *bool                                 `json:"additionalProperties"`
+		}
+		if err := json.Unmarshal(defs[name], &def); err != nil {
+			t.Fatalf("definition %s: %v", name, err)
+		}
+		if def.AdditionalProperties == nil || *def.AdditionalProperties {
+			t.Errorf("definition %s does not set additionalProperties: false", name)
+		}
+		var rtype string
+		if err := json.Unmarshal(def.Properties["type"]["const"], &rtype); err != nil || rtype == "" {
+			t.Fatalf("definition %s has no properties.type.const", name)
+		}
+		seen[rtype] = true
+		var want []string
+		for k := range def.Properties {
+			if k != "type" {
+				want = append(want, k)
+			}
+		}
+		got, ok := Fields(rtype)
+		if !ok {
+			t.Errorf("schema defines receiver type %q; Fields does not", rtype)
+			continue
+		}
+		if !reflect.DeepEqual(sortedCopy(got), sortedCopy(want)) {
+			t.Errorf("receiver type %q: Go fields %v, schema properties %v", rtype, sortedCopy(got), sortedCopy(want))
+		}
+	}
+	for rtype := range fields {
+		if !seen[rtype] {
+			t.Errorf("Fields has type %q; the schema does not", rtype)
+		}
+	}
+}
+
 // TestHTTPConfig_MatchSchema pins the http_config half (#2295) to
 // definitions.httpConfig: every auth key the schema's `not` forbids together
 // is in HTTPConfigAuthFields, and proxy_url carries no pattern (Go's

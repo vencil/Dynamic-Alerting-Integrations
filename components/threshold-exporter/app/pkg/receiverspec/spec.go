@@ -99,6 +99,28 @@ var specs = map[string]Spec{
 	},
 }
 
+// fields are the keys each receiver type is read for besides `type` (#2960):
+// a copy of the receiver definition's `properties` in
+// tenant-config.schema.json (TestFields_MatchSchema) and of Python's
+// RECEIVER_TYPES required + optional + metadata + exactly_one_of. Rocketchat's
+// channel / username / icon_url are accepted and documented as not passed to
+// Alertmanager. routingpolicy.IgnoredKeys names any other key.
+var fields = map[string][]string{
+	"webhook":    {"url", "send_resolved", "http_config"},
+	"email":      {"to", "smarthost", "from", "auth_username", "auth_password", "require_tls", "html", "text", "headers", "send_resolved"},
+	"slack":      {"api_url", "channel", "title", "text", "title_link", "icon_emoji", "send_resolved"},
+	"teams":      {"webhook_url", "title", "text", "send_resolved"},
+	"rocketchat": {"url", "send_resolved", "channel", "username", "icon_url"},
+	"pagerduty":  {"service_key", "routing_key", "severity", "description", "client", "client_url", "send_resolved"},
+}
+
+// Fields returns the keys a receiver of rtype is read for besides `type`, in
+// no particular order; ok is false for an unknown type.
+func Fields(rtype string) ([]string, bool) {
+	f, ok := fields[rtype]
+	return f, ok
+}
+
 // HTTPConfigAuthFields are the http_config keys Alertmanager accepts at most
 // one of: prometheus/common HTTPClientConfig.Validate rejects every pair of
 // them (measured with amtool 0.34.1 and config.Load 0.33.1; rows in

@@ -129,25 +129,32 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 		// receiver (`on:` a boolean, `1:` an integer, `~:` null, an alias to
 		// one) does not make the check fall back to the yaml.v3 reading, where
 		// plain `on` is a string. Quoted, it is taken, as the route generator
-		// takes it beside the same keys.
-		{"plain on beside an on: key", "      on: x\n" + webhookOnPlain, bearerField},
-		{"quoted on beside an on: key", "      on: x\n" + webhookOnQuoted, nil},
-		{"plain on beside a 1: key", "      1: x\n" + webhookOnPlain, bearerField},
-		{"quoted on beside a 1: key", "      1: x\n" + webhookOnQuoted, nil},
+		// takes it beside the same keys. #2960: the `on:` / `1:` key itself is
+		// one the generator does not read, so it is named; `~:` is dropped by
+		// the generator's loader and is not.
+		{"plain on beside an on: key", "      on: x\n" + webhookOnPlain, append(bearerField, "tenants.rs-t._routing.on")},
+		{"quoted on beside an on: key", "      on: x\n" + webhookOnQuoted, []string{"tenants.rs-t._routing.on"}},
+		{"plain on beside a 1: key", "      1: x\n" + webhookOnPlain, append(bearerField, "tenants.rs-t._routing.1")},
+		{"quoted on beside a 1: key", "      1: x\n" + webhookOnQuoted, []string{"tenants.rs-t._routing.1"}},
 		{"plain on beside a ~: key", "      ~: x\n" + webhookOnPlain, bearerField},
 		{"quoted on beside a ~: key", "      ~: x\n" + webhookOnQuoted, nil},
-		{"plain on beside an alias key", "      1: &k on\n      *k : x\n" + webhookOnPlain, bearerField},
-		{"quoted on beside an alias key", "      1: &k on\n      *k : x\n" + webhookOnQuoted, nil},
+		{"plain on beside an alias key", "      1: &k on\n      *k : x\n" + webhookOnPlain, append(bearerField, "tenants.rs-t._routing.1", "tenants.rs-t._routing.on")},
+		{"quoted on beside an alias key", "      1: &k on\n      *k : x\n" + webhookOnQuoted, []string{"tenants.rs-t._routing.1", "tenants.rs-t._routing.on"}},
 		{"override plain on beside a 1: key", webhookOK + "      overrides:\n      - alertname: X\n        1: y\n" +
 			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: on}}\n",
-			[]string{"tenants.rs-t._routing.overrides[0].receiver.http_config.bearer_token"}},
+			[]string{"tenants.rs-t._routing.overrides[0].receiver.http_config.bearer_token", "tenants.rs-t._routing.overrides[0].1"}},
 		{"override quoted on beside a 1: key", webhookOK + "      overrides:\n      - alertname: X\n        1: y\n" +
-			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: \"on\"}}\n", nil},
+			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: \"on\"}}\n",
+			[]string{"tenants.rs-t._routing.overrides[0].1"}},
 		// #2295 review: a key PyYAML reads as a non-string on the receiver
-		// itself or in proxy_connect_header leaves it a mapping (the route
-		// generator and Alertmanager take both); in http_config itself
-		// Alertmanager refuses the unknown key, so that stays refused.
-		{"receiver with a 1: key", webhookOK + "        1: x\n", nil},
+		// itself or in proxy_connect_header leaves it a mapping; in
+		// http_config itself Alertmanager refuses the unknown key, so that
+		// stays refused. #2960: on the receiver, the `1:` is a key the route
+		// generator does not read (it reads keys as text), so it is refused
+		// as the generator's --validate refuses it.
+		{"receiver with a 1: key", webhookOK + "        1: x\n", []string{"tenants.rs-t._routing.receiver.1"}},
+		// #2960 review: named as written, not as its PyYAML value (`true`).
+		{"receiver with an on: key", webhookOK + "        on: x\n", []string{"tenants.rs-t._routing.receiver.on"}},
 		{"proxy_connect_header with an on: key", webhookOK + "        http_config:\n" +
 			"          proxy_url: http://p.example.com:3128\n          proxy_connect_header:\n            on: [x]\n", nil},
 		{"http_config with a 1: key", webhookOK + "        http_config:\n          1: x\n          bearer_token: t\n",

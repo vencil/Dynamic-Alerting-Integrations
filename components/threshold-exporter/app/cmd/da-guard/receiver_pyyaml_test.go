@@ -129,7 +129,17 @@ func TestRun_ReceiverReadBesideNonStringKeys(t *testing.T) {
 			if tc.bad {
 				want = []string{"error invalid_receiver_field tx " + s.field + ".http_config.bearer_token"}
 			}
-			if strings.Join(bad, "|") != strings.Join(want, "|") || tc.bad == (code == 0) {
+			// #2960: a `1:` / `on:` key is a key the generator does not read
+			// (it reads keys as text) — named, and the run fails; a null key's
+			// pair is dropped by the generator's loader, so `~:` is not.
+			ignored := false
+			for _, f := range got {
+				ignored = ignored || strings.HasPrefix(f, "error routing_key_ignored tx ")
+			}
+			wantIgnored := (strings.HasPrefix(s.name, "routing ") && !strings.Contains(s.name, "~")) ||
+				strings.HasPrefix(s.name, "override ")
+			if strings.Join(bad, "|") != strings.Join(want, "|") || (tc.bad || ignored) == (code == 0) ||
+				ignored != wantIgnored {
 				t.Errorf("%s token %s: exit %d, findings %v; want receiver findings %v", s.name, tc.token, code, got, want)
 			}
 		}
@@ -181,12 +191,37 @@ func TestRun_PlatformIntKey(t *testing.T) {
 			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver: " + bad + "\n"}, 1},
 		{"platform 1: in tenant body, bad receiver", map[string]string{"tx.yaml": rsTenant,
 			"_platform.yaml": "tenants:\n  tx:\n    1: x\n    _routing:\n      receiver: " + bad + "\n"}, 1},
+		// #2960: the `1:` itself is a key the generator does not read.
 		{"platform 1: beside _routing, good receiver", map[string]string{"tx.yaml": rsTenant,
-			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver: " + good + "\n"}, 0},
+			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver: " + good + "\n"}, 1},
+		{"platform 1: in tenant body, good receiver", map[string]string{"tx.yaml": rsTenant,
+			"_platform.yaml": "tenants:\n  tx:\n    1: x\n    _routing:\n      receiver: " + good + "\n"}, 0},
 	} {
 		tc.files["_defaults.yaml"] = rsDefaults
 		if code, got := runRoutingTree(t, tc.files, ""); code != tc.want {
 			t.Errorf("%s: exit %d, findings %v; want exit %d", tc.name, code, got, tc.want)
 		}
+	}
+}
+
+// TestRun_IgnoredReceiverKeyNamedAsWritten (#2960 review): a receiver key is
+// named as the file writes it — `on`, not its PyYAML value `true` — because
+// the check reads the block before the receivers are swapped for PyYAML's.
+func TestRun_IgnoredReceiverKeyNamedAsWritten(t *testing.T) {
+	t.Parallel()
+	tenant := rsTenant + "    _routing:\n      receiver:\n        type: webhook\n        url: https://t.example/h\n        on: x\n"
+	code, got := runRoutingTree(t, map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": tenant}, "")
+	want := "error routing_key_ignored tx receiver.on"
+	found := false
+	for _, f := range got {
+		if strings.HasPrefix(f, "error routing_key_ignored ") {
+			if f != want {
+				t.Errorf("finding %q, want %q", f, want)
+			}
+			found = true
+		}
+	}
+	if !found || code == 0 {
+		t.Errorf("exit %d, findings %v; want %q", code, got, want)
 	}
 }

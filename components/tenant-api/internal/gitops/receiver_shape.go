@@ -188,6 +188,7 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	if !ok {
 		return nil
 	}
+	asWritten := routing // #2960: keys as written, before the PyYAML swap below
 	routing, _ = routingpolicy.WithPyYAMLRouting(routing, py).(map[string]any)
 	var out []ReceiverViolation
 	check := func(path string, holder map[string]any) {
@@ -218,6 +219,12 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	// #2503: after `{{tenant}}` substitution, as the generator renders it.
 	for _, p := range routingpolicy.GroupByInvalidForTenant(tenantID, routing) {
 		out = append(out, ReceiverViolation{Field: base + "." + p.Field, Reason: p.Message()})
+	}
+	// #2960: a key the route generator does not read (`continue`, a typo) —
+	// the generator's --validate refuses the tenant over it.
+	for _, f := range routingpolicy.IgnoredKeys(asWritten, routingpolicy.BlockRouting) {
+		out = append(out, ReceiverViolation{Field: base + "." + f,
+			Reason: "not read by the route generator; the rest is rendered as if it were absent"})
 	}
 	return out
 }

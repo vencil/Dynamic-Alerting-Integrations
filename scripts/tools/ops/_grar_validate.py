@@ -36,6 +36,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     parse_duration_seconds,
+    RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
@@ -47,8 +48,10 @@ from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
     Finding,
     unclassified,
+    IgnoredKeyWarning,
     ReplacedValueWarning,
     SkippedEntryWarning,
+    ignored_key_warning,
     level_contains,
     receiver_type,
     replaced_value_warning,
@@ -1480,7 +1483,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
     drifting apart (validate-config showed a WARN row at exit 0 while
     ``--validate`` failed); a new blocking category added to one copy only
-    reopens exactly that. Four categories today:
+    reopens exactly that. Five categories today:
 
     * a config entry was dropped as unusable — a ``SkippedEntryWarning``,
       i.e. a line built by ``skipped_entry_warning`` (#2489). Decided by the
@@ -1495,6 +1498,9 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
       platform default. Its own type, not ``SkippedEntryWarning``, because
       the entry is still rendered (explain-route must not list it as "not in
       effect"); decided by type, with the same caveat;
+    * a key the generator does not read — an ``IgnoredKeyWarning`` (#2960):
+      the block still renders, without the key; its own type for the same
+      reason as ``ReplacedValueWarning``;
     * a duplicate generated receiver name (#2279);
     * a conf.d tree the routing plane refuses (#2326,
       ``ROUTING_TREE_ERROR_PREFIX``).
@@ -1504,7 +1510,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``POLICY_ERROR_PREFIX``.
     """
     return [w for w in warnings
-            if isinstance(w, (SkippedEntryWarning, ReplacedValueWarning))
+            if isinstance(w, (SkippedEntryWarning, ReplacedValueWarning, IgnoredKeyWarning))
             or is_receiver_name_collision(w)
             or is_routing_tree_error(w)]
 
@@ -1726,6 +1732,114 @@ def _timing_bound_violations(
 # of being rendered as something narrower or broader than written.
 ROUTE_ENTRY_KEYS = frozenset({"match", "receiver", "group_by", "group_wait",
                               "group_interval", "repeat_interval"})
+
+# ── #2960: the keys each routing block is read for ──
+# What the generator reads, per block. Anything else in the block is rendered
+# as if it were absent — `continue`, `mute_time_intervals`, a typo — so it is
+# named (`IgnoredKeyWarning`, blocking under `--validate`). These sets are the
+# generator's reads; the JSON schemas are pinned to them
+# (tests/ops/test_routing_ignored_keys.py), not the other way round, and the Go
+# copy is `routingpolicy.IgnoredKeys` (tests/shared/routing_ignored_keys_cases.json).
+# `http_config` is NOT looked into: it is passed to Alertmanager as written, so
+# a key there is Alertmanager's to refuse (amtool under `--validate`).
+_TIMING_KEYS = frozenset({"group_wait", "group_interval", "repeat_interval"})
+ROUTING_BLOCK_KEYS = frozenset({"receiver", "group_by", "overrides", "routes"}) | _TIMING_KEYS
+# `routes` is read here only to be refused with its own line (#2245).
+ROUTING_DEFAULTS_KEYS = ROUTING_BLOCK_KEYS
+OVERRIDE_ENTRY_KEYS = frozenset({"alertname", "metric_group", "receiver", "group_by"}) | _TIMING_KEYS
+ROUTING_ENFORCED_KEYS = frozenset({"enabled", "receiver", "match", "group_by"}) | _TIMING_KEYS
+
+# Alertmanager route fields a reader may expect to pass through.
+_AM_ROUTE_FIELDS = frozenset({"continue", "matchers", "match", "match_re",
+                              "mute_time_intervals", "active_time_intervals"})
+
+
+def receiver_keys(rtype: str) -> frozenset[str] | None:
+    """The keys a receiver of *rtype* is read for; None for an unknown type
+    (`unknown_receiver_type` already names it). Rocketchat's `metadata`
+    fields are accepted and documented as not passed to Alertmanager."""
+    spec = RECEIVER_TYPES.get(rtype)
+    if spec is None:
+        return None
+    keys = {"type", *spec.get("required", ()), *spec.get("optional", ()),
+            *spec.get("metadata", ())}
+    for group in spec.get("exactly_one_of", ()):
+        keys.update(group)
+    return frozenset(keys)
+
+
+def _ignored_hint(key: str, allowed: frozenset[str], in_override: bool) -> str:
+    if in_override and key in ("match", "matchers", "match_re"):
+        return "an override matches by 'alertname' or 'metric_group'"
+    if key in _AM_ROUTE_FIELDS:
+        return "an Alertmanager route field the generator does not render"
+    close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.8)
+    if close:
+        return f"did you mean '{close[0]}'?"
+    return f"read here: {sorted(allowed)}"
+
+
+def ignored_routing_keys(obj: object, *, block: str, where: str,
+                         field_prefix: str = "", tenant: str | None = None,
+                         file: str | None = None) -> list[IgnoredKeyWarning]:
+    """One `IgnoredKeyWarning` per key *block* carries that the generator
+    does not read (#2960), looking into its receiver, `overrides` entries and
+    the receivers of `routes` entries; *obj* is the block as read.
+
+    *where* names the block in the message without its file (`file`, when
+    given, is appended after the path).
+    *block* is ``routing`` (a tenant `_routing`, a routing profile),
+    ``routing_defaults`` or ``routing_enforced``. *where* names the block in
+    the message; *field_prefix* is prepended to each finding's ``field``.
+    The loader reads every key as its source text (so `1:` / `on:` are
+    named) and drops a null key's pair; a non-string key reaching here anyway
+    is passed over, as Go's copy passes over a null one. A value of the wrong
+    shape is other checks' to name.
+    """
+    allowed = {"routing": ROUTING_BLOCK_KEYS, "routing_defaults": ROUTING_DEFAULTS_KEYS,
+               "routing_enforced": ROUTING_ENFORCED_KEYS}[block]
+    out: list[IgnoredKeyWarning] = []
+    # The file goes after the path: `_routing_defaults.overrides[0] in
+    # _defaults.yaml`, never `… in _defaults.yaml.overrides[0]`.
+    in_file = f" in {file}" if file else ""
+
+    def check(obj: dict, keys: frozenset[str], label: str, path: str,
+              in_override: bool = False) -> None:
+        for key in sorted(k for k in obj if isinstance(k, str) and k not in keys):
+            out.append(ignored_key_warning(
+                f"  WARN: {label}{in_file}: '{key}' is not read by the route generator "
+                f"({_ignored_hint(key, keys, in_override)}); the rest is rendered as if "
+                f"it were absent", kind="routing_key_ignored", tenant=tenant, file=file,
+                field=f"{path}{key}"))
+
+    def check_receiver(recv: object, label: str, path: str) -> None:
+        if not isinstance(recv, dict):
+            return
+        keys = receiver_keys(receiver_type(recv))
+        if keys is not None:
+            check(recv, keys, f"{label}.receiver", f"{path}receiver.")
+
+    if not isinstance(obj, dict):
+        return out
+    check(obj, allowed, where, field_prefix)
+    check_receiver(obj.get("receiver"), where, field_prefix)
+    overrides = obj.get("overrides")
+    if block != "routing_enforced" and isinstance(overrides, list):
+        for i, entry in enumerate(overrides):
+            if isinstance(entry, dict):
+                label, path = f"{where}.overrides[{i}]", f"{field_prefix}overrides[{i}]."
+                check(entry, OVERRIDE_ENTRY_KEYS, label, path, in_override=True)
+                check_receiver(entry.get("receiver"), label, path)
+    routes = obj.get("routes")
+    if block == "routing" and isinstance(routes, list):
+        # A `routes` entry with an unsupported key is skipped whole, with its
+        # own line (`route_entry_matchers`); only its receiver is looked into.
+        for i, entry in enumerate(routes):
+            if isinstance(entry, dict):
+                check_receiver(entry.get("receiver"), f"{where}.routes[{i}]",
+                               f"{field_prefix}routes[{i}].")
+    return out
+
 
 # Prometheus / Alertmanager classic label-name grammar — the same pattern as
 # the schema's `routingRoute.match.propertyNames`.

@@ -105,7 +105,10 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
                   "routing_profile_duplicate", "duplicate_tenant",
                   "domain_policy_out_of_scope",
                   # #2341: a `_routing_defaults` that is not a mapping.
-                  "routing_defaults_not_mapping"}
+                  "routing_defaults_not_mapping",
+                  # #2960: a key in a profile / `_routing_defaults` /
+                  # `_routing_enforced` the generator does not read.
+                  "routing_key_ignored"}
 # #2291: routing where the generator never reads it. The Go side reports it;
 # the generator says nothing (it does not read those bytes), so this half
 # leaves the kind out of its platform comparison — the tree's `targets`
@@ -622,6 +625,9 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
          for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m]
         + [["routing_defaults_not_mapping", m["file"], "_routing_defaults"]
            for m in map(_DEFAULTS_NOT_MAPPING.search, got.schema_warnings) if m]
+        # #2960: read off the finding's own fields, never its text.
+        + [["routing_key_ignored", w.file, w.field] for w in got.schema_warnings
+           if getattr(w, "kind", None) == "routing_key_ignored" and w.tenant is None]
         # #2326: the tree findings travel as data on the tree, not as text.
         + [[kind, fname, fld] for kind, fname, fld, _msg in got.routing_tree_problems])
     # domain_policy_unusable (#2325) is compared on kind and field below.
