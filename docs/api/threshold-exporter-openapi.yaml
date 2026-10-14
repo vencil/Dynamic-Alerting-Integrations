@@ -1,234 +1,112 @@
+# Machine contract only: paths, methods, status codes, media types, the ?at=
+# parameter, and the /api/v1/config/identity schema. Every one of those is
+# checked against the running handlers by
+# components/threshold-exporter/app/openapi_spec_parity_test.go, and a field
+# that test does not check (an example, a metric list) fails it — prose lives
+# in README.md next to this file and in components/threshold-exporter/README.md.
 openapi: 3.0.0
 info:
   title: Threshold Exporter API
-  version: 1.13.0
-  description: Multi-tenant dynamic alerting platform - threshold exporter service exposing Prometheus metrics, health probes, and configuration debugging endpoints.
-  contact:
-    name: Vibe K8s Lab Team
-  license:
-    name: MIT
-
-servers:
-  - url: http://localhost:8080
-    description: Default threshold-exporter service (port 8080)
-    variables:
-      protocol:
-        default: http
-        enum:
-          - http
-          - https
-      host:
-        default: localhost
-      port:
-        default: '8080'
+  # The /api/<version>/ prefix the paths below share, not a release number.
+  version: v1
+  description: |
+    Read-only endpoints of threshold-exporter. Metric names, types and labels:
+    components/threshold-exporter/README.md §3.3. POST /api/v1/tenants/simulate
+    is not described here; its contract is in that README's §3.1 endpoint table.
 
 paths:
   /metrics:
     get:
-      summary: Prometheus Metrics Export
-      description: |
-        Exports metrics in Prometheus text format (text/plain; version=0.0.4). OpenMetrics is not enabled, so `Accept: application/openmetrics-text` gets the same.
-        Includes threshold states, silent modes, severity deduplication flags, and tenant metadata.
-        
-        **Metric Types:**
-        - `user_threshold{tenant, alertname, metric_group, dimension_labels}`: Threshold values with multi-dimensional labels
-        - `user_state_filter{tenant, alertname, metric_group}`: Alert suppression state (0=active, 1=suppressed)
-        - `user_silent_mode{tenant, target_severity}`: Emitted only while silent mode is active, one series per muted severity, value always 1 (alerts still fire; notifications are inhibited)
-        - `user_severity_dedup{tenant, alertname}`: Severity deduplication flag
-        - `tenant_metadata_info{tenant, metadata_labels}`: Tenant metadata key-value pairs as labels
-        - `da_config_event{tenant, event, reason, target_severity, metric_key}`: Timed config expiry event, value always 1 (event: silence_expired / maintenance_expired / threshold_expired; target_severity is set only for silence_expired and metric_key only for threshold_expired, empty otherwise)
+      summary: Prometheus scrape target
       operationId: getMetrics
-      tags:
-        - Metrics
+      tags: [Metrics]
       responses:
         '200':
-          description: Metrics exported successfully in Prometheus text format
+          description: Prometheus text format; OpenMetrics is not enabled
           content:
             text/plain; version=0.0.4:
               schema:
                 type: string
-              example: |
-                # HELP user_threshold Threshold values by tenant, alert, and dimensions
-                # TYPE user_threshold gauge
-                user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute"} 80.0
-                user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute",dimension="instance=prod-01"} 85.0
-                user_threshold{tenant="db-b",alertname="HighMemory",metric_group="memory"} 75.0
-                
-                # HELP user_state_filter Alert suppression state
-                # TYPE user_state_filter gauge
-                user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
-                user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
-                
-                # HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
-                # TYPE user_silent_mode gauge
-                user_silent_mode{target_severity="critical",tenant="db-b"} 1
-                user_silent_mode{target_severity="warning",tenant="db-b"} 1
-                
-                # HELP user_severity_dedup Severity deduplication flag
-                # TYPE user_severity_dedup gauge
-                user_severity_dedup{tenant="db-a",alertname="HighCPU"} 1
-                user_severity_dedup{tenant="db-b",alertname="HighMemory"} 0
-                
-                # HELP tenant_metadata_info Tenant metadata information
-                # TYPE tenant_metadata_info gauge
-                tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
-                tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
-                
-                # EOF
-      x-code-samples:
-        - lang: bash
-          label: curl
-          source: |
-            curl -s http://localhost:8080/metrics | head -50
 
   /health:
     get:
-      summary: Liveness Probe
-      description: |
-        Liveness probe endpoint. Returns "ok" if the service is running.
-        Use this for Kubernetes livenessProbe configuration.
+      summary: Liveness probe
       operationId: getHealth
-      tags:
-        - Health
+      tags: [Health]
       responses:
         '200':
-          description: Service is alive
+          description: The process is serving
           content:
             text/plain:
               schema:
                 type: string
-                example: ok
-      x-code-samples:
-        - lang: bash
-          label: curl
-          source: |
-            curl -s http://localhost:8080/health
 
   /ready:
     get:
-      summary: Readiness Probe
-      description: |
-        Readiness probe endpoint. Returns 200 "ready" when config is loaded,
-        or 503 "config not loaded" during initialization or after config reload.
-        Use this for Kubernetes readinessProbe configuration.
+      summary: Readiness probe
       operationId: getReady
-      tags:
-        - Health
+      tags: [Health]
       responses:
         '200':
-          description: Service is ready and config is loaded
+          description: A config is loaded
           content:
             text/plain:
               schema:
                 type: string
-                example: ready
         '503':
-          description: Service is not ready - config not loaded
+          description: No config loaded yet
           content:
             text/plain:
               schema:
                 type: string
-                example: config not loaded
-      x-code-samples:
-        - lang: bash
-          label: curl
-          source: |
-            curl -s http://localhost:8080/ready
 
   /api/v1/config:
     get:
-      summary: Configuration State Debug Endpoint
-      description: |
-        Debug endpoint exposing current configuration state in plain text format.
-        Supports RFC3339 timestamp query parameter for inspecting scheduled value overrides.
-        
-        **Use Cases:**
-        - Verify tenant configuration is loaded correctly
-        - Debug scheduled threshold override state at specific timestamp
+      summary: Human-read dump of the loaded config
       operationId: getConfigDebug
-      tags:
-        - Debug
+      tags: [Debug]
       parameters:
         - name: at
           in: query
-          description: |
-            RFC3339 timestamp (e.g., "2026-03-12T14:30:00Z") to inspect configuration
-            state at a specific point in time. Useful for debugging scheduled overrides.
-            If omitted, returns current state.
+          description: RFC 3339 time to resolve scheduled overrides at; omitted means now
           schema:
             type: string
             format: date-time
-          example: "2026-03-12T03:30:00Z"
       responses:
         '200':
-          description: Configuration state dump
+          description: Plain-text dump (layout is for people, not a contract)
           content:
             text/plain:
               schema:
                 type: string
-              example: |
-                Config loaded: true
-                Last reload:   2026-03-12T10:05:30Z
-                Config mode:   directory
-                Resolve at:    2026-03-12T03:30:00Z (overridden)
-
-                Defaults (2 metrics):
-                  container_cpu: 80
-                  mysql_connections: 80
-
-                Tenants (1):
-                  tenant-a:
-                    container_cpu: 85 (+ 1 time overrides)
-                    mysql_connections: 70
-
-                Resolved thresholds:
-                  tenant=tenant-a metric=cpu value=95 severity=warning component=container
-                  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
-      x-code-samples:
-        - lang: bash
-          label: Current configuration
-          source: |
-            curl -s http://localhost:8080/api/v1/config | head -50
-        - lang: bash
-          label: Configuration at specific time
-          source: |
-            curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
 
   /api/v1/config/identity:
     get:
-      summary: Identity of the Config Being Served (machine contract)
-      description: |
-        Which config bytes this exporter serves right now, and which files of
-        that version were left out because they did not parse. A machine-read
-        contract versioned by `schema` (bumped only when a field changes
-        meaning or goes away). Every field is read in the lock window of the
-        install that wrote it. Used by patch-config's post-write verification
-        (#2069). Also answers HEAD; other methods get 405.
+      summary: Identity of the config being served (machine contract)
       operationId: getConfigIdentity
-      tags:
-        - Debug
+      tags: [Debug]
       responses:
         '200':
-          description: The identity (also before any config is loaded, with loaded=false)
+          description: Also before any config is loaded, with loaded=false
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConfigIdentity'
-              example:
-                schema: 1
-                loaded: true
-                mode: directory
-                last_reload: "2026-09-27T01:02:03.456789Z"
-                config_hash: "cfc01496171b678f3d76cc3c1d5f52b2b30f3ef304bb20370ecda11782884383"
-                parse_failed: ["tenant-b.yaml"]
         '405':
           description: A method other than GET / HEAD
+    head:
+      summary: Same as GET, without a body
+      operationId: headConfigIdentity
+      tags: [Debug]
+      responses:
+        '200':
+          description: Headers of the GET response, no body
 
 components:
   schemas:
     ConfigIdentity:
       type: object
-      description: /api/v1/config/identity, schema 1
+      description: Field meanings are in docs/api/README.md §5
       required: [schema, loaded, mode, last_reload, config_hash, parse_failed]
       properties:
         schema:
@@ -241,52 +119,14 @@ components:
           enum: [directory, single-file]
         last_reload:
           type: string
-          description: Install time, UTC, RFC 3339 with nanoseconds; "" when nothing is loaded
         config_hash:
           type: string
-          description: |
-            Directory mode: SHA-256 over the per-file SHA-256 hex digests of the
-            files the exporter reads (not dot-prefixed, .yaml/.yml in any case),
-            concatenated in sorted relative-path order. Single-file mode: SHA-256
-            of the file's bytes. "" when nothing is loaded.
         parse_failed:
           type: array
-          description: Relative paths (sorted) of the files whose bytes in this version did not parse (those bytes were not taken in, and neither are the tenants the file declared unless another file that parses declares them too, on every load path); always empty in single-file mode
           items:
             type: string
-    PrometheusMetric:
-      type: object
-      description: Prometheus metric in Prometheus text format
-      properties:
-        name:
-          type: string
-          example: user_threshold
-        help:
-          type: string
-          example: Threshold values by tenant, alert, and dimensions
-        type:
-          type: string
-          enum: [gauge, counter, histogram, summary, untyped]
-          example: gauge
-        samples:
-          type: array
-          items:
-            type: object
-            properties:
-              labels:
-                type: object
-                additionalProperties:
-                  type: string
-              value:
-                type: number
-              timestamp:
-                type: integer
-                description: Unix timestamp in milliseconds
 
 tags:
   - name: Metrics
-    description: Prometheus metrics export endpoints
   - name: Health
-    description: Health and readiness probes
   - name: Debug
-    description: Configuration debugging endpoints

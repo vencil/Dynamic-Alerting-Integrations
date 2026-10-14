@@ -23,7 +23,7 @@ package main
 // appends charset and escaping, which the docs may leave out).
 //
 // NOT COVERED: the prose around the table; the LISTEN_ADDR override (README
-// §3.2 has it); the openapi file's other schemas and descriptions.
+// §3.2 has it). The rest of the openapi file: openapi_spec_parity_test.go.
 
 import (
 	"fmt"

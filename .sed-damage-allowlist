@@ -180,3 +180,10 @@ docs/internal/subprocess-encoding-baseline.json
 # ZH/EN structure-sync hook compares their headings.
 docs/adr/017-defaults-yaml-inheritance-dual-hash.md
 docs/adr/017-defaults-yaml-inheritance-dual-hash.en.md
+
+# #2998: threshold-exporter-openapi.yaml cut to the machine contract (~33% of
+# its former size): the metric list, examples and unused schemas had drifted
+# and were removed, not truncated. Damage is caught independently:
+# openapi_spec_parity_test.go decodes it with KnownFields and needs every
+# route buildMux registers, so a truncated file fails to parse or drops paths.
+docs/api/threshold-exporter-openapi.yaml
