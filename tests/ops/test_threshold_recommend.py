@@ -181,13 +181,13 @@ class TestReservedKeys:
 class TestRecommendThreshold:
     """推薦邏輯測試。"""
 
-    def test_normal_recommendation_p95(self):
-        """正常情況推薦 P95。"""
+    def test_normal_recommendation_relaxes_to_p99(self):
+        """P95 高於現值時放寬到 P99（#2964：放寬到 P95 仍有約 5% 的點超標）。"""
         pcts = {"p50": 50.0, "p95": 85.0, "p99": 95.0}
         rec = tr.recommend_threshold("cpu", 80, pcts, 500, 100)
-        assert rec.recommended == 85
+        assert rec.recommended == 95
         assert rec.confidence == tr.CONFIDENCE_MEDIUM
-        assert rec.delta_pct == pytest.approx(6.25, abs=0.1)
+        assert rec.delta_pct == pytest.approx(18.75, abs=0.1)
 
     def test_noisy_alert_recommends_p99(self):
         """BAD noise grade 推薦 P99（放寬）。"""
@@ -198,7 +198,7 @@ class TestRecommendThreshold:
 
     def test_within_margin_no_change(self):
         """Delta < 5% 不建議變更。"""
-        pcts = {"p50": 50.0, "p95": 82.0, "p99": 90.0}
+        pcts = {"p50": 50.0, "p95": 82.0, "p99": 83.0}
         rec = tr.recommend_threshold("cpu", 80, pcts, 500, 100)
         assert "no change" in rec.reason
 
@@ -216,10 +216,13 @@ class TestRecommendThreshold:
         assert "non-numeric" in rec.reason
 
     def test_zero_current_value(self):
-        """Current = 0 的 delta 計算。"""
+        """Current = 0 且資料全 0：P95 非正，不給建議（#2964）。"""
         pcts = {"p50": 0.0, "p95": 0.0, "p99": 0.0}
-        rec = tr.recommend_threshold("idle", 0, pcts, 500, 100)
-        assert rec.delta_pct == 0.0
+        rec = tr.recommend_threshold("idle", 0, pcts, 500, 100,
+                                     values=[0.0] * 500)
+        assert rec.recommended is None
+        assert rec.delta_pct is None
+        assert rec.reason == "P95 is non-positive (max in window 0) — no recommendation"
 
     def test_integer_precision_preserved(self):
         """整數 current value 應推薦整數。"""
@@ -1056,7 +1059,7 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
         assert rec.confidence == tr.CONFIDENCE_HIGH
 
     # ── #2941: the 24-distinct-hour coverage floor ─────────────────────
-    _BIG_DELTA = [50.0 + (i % 10) for i in range(1000)]   # current 2000 → ~-97%
+    _BIG_DELTA = [50.0 + (i % 10) for i in range(1000)]   # current 2000 → -50% (#2964 floor)
     _T0 = 1_700_000_000.0 - (1_700_000_000.0 % 3600)      # on an hour boundary
 
     def _upper_pairs(self, pairs):
@@ -1175,3 +1178,368 @@ class TestPrometheusEnvFallback:
         url = self._run_main_capture_url(
             monkeypatch, tmp_path, extra=("--prometheus", "http://cli:9099"))
         assert url == "http://cli:9099"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #2964: upper-bound floor — non-positive P95, tighten floor, relax to P99
+# ═══════════════════════════════════════════════════════════════════════
+_N_7D = 2016                         # one point per 5 min over 7 days
+
+
+def _gauss(n=_N_7D, mu=100.0, sigma=10.0, seed=42):
+    rnd = __import__("random").Random(seed)
+    return [rnd.gauss(mu, sigma) for _ in range(n)]
+
+
+def _firing(values, threshold):
+    """Points an upper-bound alert fires on (value > threshold)."""
+    return sum(v > float(threshold) for v in values)
+
+
+class TestUpperBoundFloor2964:
+    """#2964: P95 used to be the recommendation as-is. An idle metric was
+    tightened to 0, a P95 the 2-dp rounding turned into 0 likewise, a
+    tighten could start alerts that never fired under the current value, and
+    a relax to P95 still left ~5% of points over the new threshold."""
+
+    _MAP = {"connections": {"scope": "tenant", "direction": ">",
+                            "observed_series": "tenant:x:max"}}
+
+    def _rec(self, current, values):
+        """Through analyze_tenant, so the raw points reach the engine the way
+        the CLI passes them (7 days, so the 24h coverage floor never bites)."""
+        pairs = _ts_pairs(values, step=7 * 86400 / len(values))
+        with patch("threshold_recommend.query_prometheus_range_ts",
+                   return_value=(pairs, None)):
+            report = tr.analyze_tenant("db-x", {"connections": current},
+                                       prometheus_url="http://p:9090",
+                                       observed_map=self._MAP)
+        return report.keys[0]
+
+    # ── ① non-positive P95: no recommendation ─────────────────────────
+    def test_all_zero_gets_no_recommendation(self):
+        import threshold_govern as tg
+        rec = self._rec("30", [0.0] * _N_7D)
+        assert rec.recommended is None
+        assert rec.delta_pct is None
+        assert rec.reason == "P95 is non-positive (max in window 0) — no recommendation"
+        assert "idle" not in rec.reason
+        assert not tr._exportable(rec)
+        assert tg.is_governance_actionable(rec, 25.0) is False
+
+    def test_p95_zero_names_the_window_max(self):
+        """P95 = 0 is not idle: the current alert may have fired. The reason
+        carries the window max so an operator can tell."""
+        rec = self._rec("30", [0.0] * (_N_7D - 50) + [45.0] * 50)
+        assert rec.recommended is None
+        assert "(max in window 45)" in rec.reason
+
+    def test_negative_values_get_no_recommendation(self):
+        rec = self._rec("100", [-5.0] * _N_7D)
+        assert rec.recommended is None
+        assert rec.reason == "P95 is non-positive (max in window -5) — no recommendation"
+
+    def test_unrounded_p95_decides_not_the_2dp_display(self):
+        """compute_percentiles rounds 0.004 to 0.0; that display value used
+        to become the recommendation (0, every point over it)."""
+        values = [0.004] * _N_7D
+        assert tr.compute_percentiles(values)["p95"] == 0.0
+        rec = self._rec("30", values)
+        assert rec.recommended == 15
+        assert _firing(values, rec.recommended) == 0
+
+    def test_direct_call_with_values_uses_unrounded_p95(self):
+        values = [0.004] * 500
+        rec = tr.recommend_threshold("k", 30, tr.compute_percentiles(values),
+                                     500, 100, values=values)
+        assert rec.recommended == 15
+
+    def test_direct_call_without_values_judges_the_given_p95(self):
+        rec = tr.recommend_threshold("k", 30, {"p50": 0.0, "p95": 0.0, "p99": 0.0},
+                                     500, 100)
+        assert rec.recommended is None
+        assert rec.reason == "P95 is non-positive — no recommendation"
+
+    # ── ② tighten floor ────────────────────────────────────────────────
+    def test_tighten_starts_no_new_firing(self):
+        """F4: a steady normal(100, 10) under current 200. P95 (~116) sits
+        below ~5% of the points, so a PR to it would start alerts that never
+        fired; the floor is the highest point at or below current."""
+        values = _gauss()
+        rec = self._rec("200", values)
+        assert rec.recommended == math.ceil(max(values))
+        assert _firing(values, rec.recommended) == _firing(values, 200) == 0
+        assert rec.recommended > rec.p95
+
+    def test_one_spike_above_current_does_not_block_the_tighten(self):
+        values = _gauss() + [9999.0]
+        rec = self._rec("200", values)
+        assert rec.recommended == math.ceil(max(values[:-1]))
+        assert _firing(values, rec.recommended) == _firing(values, 200) == 1
+
+    def test_heavy_tail_tightens_without_new_firing(self):
+        rnd = __import__("random").Random(3)
+        values = [rnd.lognormvariate(3.0, 1.2) for _ in range(_N_7D)]
+        current = 400
+        rec = self._rec(str(current), values)
+        assert 200 <= rec.recommended < current
+        assert _firing(values, rec.recommended) == _firing(values, current)
+
+    def test_one_round_tightens_at_most_half(self):
+        rec = self._rec("30", [0.0] * int(_N_7D * 0.94)
+                        + [2.0] * (_N_7D - int(_N_7D * 0.94)))
+        assert rec.recommended == 15
+        assert rec.delta_pct == -50.0
+
+    def test_half_of_an_odd_integer_rounds_up(self):
+        rec = self._rec("15", [2.0] * _N_7D)
+        assert rec.recommended == 8
+        assert isinstance(rec.recommended, int)
+
+    @pytest.mark.parametrize("current,expected", [
+        ("0.85", 0.43),     # 0.425 → up at 2 dp
+        ("2.2", 1.1),       # 2.2 * 0.5 * 100 is 110.00000000000001 in float
+    ])
+    def test_decimal_current_floors_at_two_dp(self, current, expected):
+        rec = self._rec(current, [0.01] * _N_7D)
+        assert rec.recommended == expected
+        assert isinstance(rec.recommended, float)
+
+    def test_decimal_current_window_max_rounds_up(self):
+        values = _gauss(mu=0.4, sigma=0.05)
+        rec = self._rec("0.8", values)
+        assert rec.recommended == math.ceil(max(values) * 100) / 100
+        assert _firing(values, rec.recommended) == 0
+
+    def test_direct_call_without_values_floors_at_half(self):
+        rec = tr.recommend_threshold("k", 80, {"p50": 5.0, "p95": 10.0, "p99": 12.0},
+                                     500, 100)
+        assert rec.recommended == 40
+        assert rec.delta_pct == -50.0
+
+    def test_floor_keeps_currents_precision(self):
+        """A 3-dp current rounds at 3 dp: at 2 dp the window max 0.054 would
+        round up to 0.06, a +9% relax dressed as a tighten."""
+        rec = self._rec("0.055", [0.054] * _N_7D)
+        assert rec.recommended == 0.054
+        assert rec.recommended <= 0.055
+        assert not tr._exportable(rec)
+
+    def test_points_at_current_count_as_not_firing(self):
+        """A point equal to current does not fire (alert is value > threshold),
+        so it holds the floor: dropping to 15 would start 60 new alerts."""
+        values = [5.0] * 1956 + [30.0] * 60
+        rec = self._rec("30", values)
+        assert rec.recommended == 30
+        assert rec.delta_pct == 0.0
+        assert _firing(values, rec.recommended) == _firing(values, 30) == 0
+
+    def test_p95_equal_to_current_is_not_a_relax(self):
+        values = [10.0] * 1800 + [50.0] * 150 + [100.0] * 66
+        assert tr.percentile(sorted(values), 0.95) == 50.0      # premise
+        assert tr.percentile(sorted(values), 0.99) > 50.0
+        rec = self._rec("50", values)
+        assert rec.recommended == 50
+        assert rec.reason == "within 5% margin, no change needed"
+
+    # ── current written as a small decimal or in scientific notation ──
+    @pytest.mark.parametrize("current", ["0.001", "1e-3"])
+    def test_tiny_current_relax_rounds_up(self, current):
+        """Rounding P99 to the nearest used to give 0.0: a "-100% relax"
+        that govern and export both took."""
+        values = _gauss(mu=0.002, sigma=0.0002)
+        p99 = tr.percentile(sorted(values), 0.99)
+        rec = self._rec(current, values)
+        assert rec.recommended == math.ceil(p99 * 1000) / 1000
+        assert rec.recommended >= p99 > 0.001
+        assert rec.delta_pct > 0
+        assert rec.reason.startswith("relaxed to P99 (increase ")
+
+    @pytest.mark.parametrize("current", ["0.001", "1e-3"])
+    def test_tiny_current_tighten_never_reaches_zero(self, current):
+        """At current's own 3 dp the window max 0.0002 rounds up to 0.001:
+        no change, where 2-dp rounding of P95 used to recommend 0."""
+        rec = self._rec(current, [0.0002] * _N_7D)
+        assert rec.recommended == 0.001
+        assert rec.delta_pct == 0.0
+        assert not tr._exportable(rec)
+
+    def test_small_decimal_tightens_at_its_precision(self):
+        rec = self._rec("0.004", [0.001] * _N_7D)
+        assert rec.recommended == 0.002
+        assert rec.delta_pct == -50.0
+
+    def test_sci_half_is_not_an_integer(self):
+        """"5e-1" has no '.', but it is 0.5, not a whole number."""
+        values = _gauss(mu=1.0, sigma=0.15)
+        p99 = tr.percentile(sorted(values), 0.99)
+        rec = self._rec("5e-1", values)
+        assert rec.recommended == math.ceil(p99 * 100) / 100
+        assert isinstance(rec.recommended, float)
+        assert self._rec("5e-1", [0.1] * _N_7D).recommended == 0.25
+
+    def test_sci_whole_number_stays_integer(self):
+        values = _gauss(mu=2000.0, sigma=100.0)
+        rec = self._rec("1e3", values)
+        assert rec.recommended == math.ceil(tr.percentile(sorted(values), 0.99))
+        assert isinstance(rec.recommended, int)
+        tight = self._rec("1e3", [100.0] * _N_7D)
+        assert tight.recommended == 500 and isinstance(tight.recommended, int)
+
+    # ── the exported value is the recommendation, digit for digit ─────
+    @pytest.mark.parametrize("current,base,top", [
+        ("0.123456789", 0.05, 0.0987654321),    # :g wrote 0.0987654
+        ("200000.55", 100000.0, 150000.366),    # :g wrote 150000
+    ])
+    def test_export_patch_value_starts_no_new_firing(self, current, base, top):
+        import yaml
+        values = [base] * (_N_7D - 10) + [top] * 10
+        pairs = _ts_pairs(values, step=7 * 86400 / len(values))
+        with patch("threshold_recommend.query_prometheus_range_ts",
+                   return_value=(pairs, None)):
+            report = tr.analyze_tenant("db-x", {"connections": current},
+                                       prometheus_url="http://p:9090",
+                                       observed_map=self._MAP)
+        rec = report.keys[0]
+        assert rec.recommended >= top                          # premise: floored
+        written = yaml.safe_load(tr.format_export_patch([report]))
+        value = written["tenants"]["db-x"]["connections"]
+        assert float(value) == rec.recommended
+        assert _firing(values, value) == _firing(values, current) == 0
+        assert f"tighten floored at {value} above" in rec.reason
+
+    @pytest.mark.parametrize("value,text", [
+        (80, "80"), (80.0, "80"), (0.43, "0.43"), (0.098765433, "0.098765433"),
+        (150000.37, "150000.37"), (0.00001, "0.00001"), (1e20, "100000000000000000000")])
+    def test_format_threshold_value_is_lossless(self, value, text):
+        assert tr._format_threshold_value(value) == text
+
+    # ── a non-finite current (YAML .inf / .nan) ────────────────────────
+    @pytest.mark.parametrize("current", [float("inf"), float("-inf"), float("nan"),
+                                         "inf", "nan"])
+    def test_non_finite_current_is_manual_review(self, current):
+        values = _gauss()
+        rec = tr.recommend_threshold("k", current, tr.compute_percentiles(values),
+                                     len(values), 100, values=values)
+        assert rec.recommended is None and rec.delta_pct is None
+        assert rec.reason == "non-finite current value — manual review needed"
+
+    # ── defences: unreachable today, so a broken rounding helper stands in ──
+    def test_defence_relax_never_comes_out_as_a_decrease(self, monkeypatch):
+        monkeypatch.setattr(tr, "_ceil_to", lambda x, places: 0.0)
+        rec = self._rec("80", _gauss())
+        assert rec.recommended == 80 and rec.delta_pct == 0.0
+        assert "decrease" not in rec.reason and "relaxed" not in rec.reason
+
+    def test_defence_non_positive_target_is_no_recommendation(self, monkeypatch):
+        monkeypatch.setattr(tr, "_ceil_to", lambda x, places: -1)
+        rec = self._rec("30", [0.004] * _N_7D)      # P95 > 0, rounds to 0
+        assert rec.recommended is None
+        assert rec.reason == "recommended value 0 is non-positive — no recommendation"
+
+    def test_defence_floor_is_capped_at_current(self, monkeypatch):
+        monkeypatch.setattr(tr, "_ceil_to", lambda x, places: 35)
+        rec = self._rec("30", [2.0] * _N_7D)
+        assert rec.recommended == 30 and rec.delta_pct == 0.0
+
+    @pytest.mark.parametrize("current,places", [
+        (80, 0), ("80", 0), ("1e3", 0), ("0.8", 2), ("0.85", 2), (0.8, 2),
+        ("80.0", 2), ("5e-1", 2), ("0.001", 3), ("1e-3", 3), ("0.0005", 4),
+        ("1.5e2", 2), (__import__("decimal").Decimal("1E+3"), 2)])
+    def test_decimals_follow_how_current_is_written(self, current, places):
+        assert tr._decimals(current) == places
+
+    def test_floor_at_current_is_within_margin(self):
+        rec = self._rec("70", [69.9] * _N_7D)
+        assert rec.delta_pct == 0.0
+        assert not tr._exportable(rec)
+
+    # ── ③ relax to P99 ─────────────────────────────────────────────────
+    def test_relax_uses_p99(self):
+        values = _gauss()
+        rec = self._rec("80", values)
+        assert rec.recommended == math.ceil(tr.percentile(sorted(values), 0.99))
+        assert "P99" in rec.reason and "P95" not in rec.reason
+        # P99 rounded up: at most ~1% over, not P95's ~5%.
+        assert _firing(values, rec.recommended) / len(values) <= 0.01
+
+    def test_direct_call_relax_uses_p99(self):
+        rec = tr.recommend_threshold("k", 80, {"p50": 50.0, "p95": 85.0, "p99": 95.0},
+                                     500, 100)
+        assert rec.recommended == 95
+
+    # ── reason copy ────────────────────────────────────────────────────
+    def test_reason_when_held_by_half(self):
+        rec = self._rec("30", [2.0] * _N_7D)
+        assert rec.reason.startswith("tighten floored at 15 above P95 2 (decrease 50.0%)")
+        assert "half of current" in rec.reason
+        assert "recommended at P95" not in rec.reason
+
+    def test_reason_when_held_by_window_max(self):
+        values = _gauss()
+        rec = self._rec("200", values)
+        top = max(values)
+        assert f"highest in-window value at or below current is {top!r}" in rec.reason
+        assert "half of current" not in rec.reason
+        assert "recommended at P95" not in rec.reason
+
+    def test_reason_at_p95_when_nothing_holds_it(self):
+        rec = self._rec("100", [50.0] * _N_7D)
+        assert rec.recommended == 50
+        assert rec.reason == "recommended at P95 (decrease 50.0%)"
+
+    @pytest.mark.parametrize("current,value", [
+        ("70", 69.9),       # floor reaches current
+        ("100", 96.5),      # P95 rounds to 96, the floor holds it at 97 (-3%)
+    ])
+    def test_reason_within_margin_has_no_tighten_note(self, current, value):
+        rec = self._rec(current, [value] * _N_7D)
+        assert rec.reason == "within 5% margin, no change needed"
+
+    def test_reason_relax(self):
+        rec = self._rec("80", _gauss())
+        assert rec.reason.startswith("relaxed to P99 (increase ")
+
+    # ── current = 0 ────────────────────────────────────────────────────
+    def test_zero_current_with_activity_keeps_old_behaviour(self):
+        values = _gauss()
+        rec = self._rec("0", values)
+        assert rec.recommended == tr.compute_percentiles(values)["p95"]
+        assert rec.delta_pct == 100.0
+
+    # ── multi-round: each recommendation becomes the next current ─────
+    @staticmethod
+    def _rounds(rec_fn, current, values, rounds=30):
+        import threshold_govern as tg
+        path = [current]
+        for _ in range(rounds):
+            rec = rec_fn(current, values)
+            if not tg.is_governance_actionable(rec, 25.0):
+                break
+            current = tr._format_threshold_value(rec.recommended)
+            path.append(current)
+        return path
+
+    def test_rounds_idle_opens_no_pr(self):
+        assert self._rounds(self._rec, "1000", [0.0] * _N_7D) == ["1000"]
+
+    def test_rounds_steady_metric_settles_in_one(self):
+        path = self._rounds(self._rec, "200", _gauss())
+        assert len(path) == 2
+
+    def test_rounds_mostly_zero_steps_down_by_half(self):
+        values = [0.0] * int(_N_7D * 0.94) + [2.0] * (_N_7D - int(_N_7D * 0.94))
+        assert self._rounds(self._rec, "30", values) == ["30", "15", "8", "4", "2"]
+
+    # ── backtest agrees: the tighten starts no firing ──────────────────
+    def test_backtest_rates_the_tighten_low(self, monkeypatch):
+        import backtest_threshold as bt
+        values = _gauss() + [9999.0]
+        rec = self._rec("200", values)
+        monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [
+            {"values": [[i, str(v)] for i, v in enumerate(values)]}])
+        change = {"tenant": "db-x", "metric": "connections", "old_value": "200",
+                  "new_value": tr._format_threshold_value(rec.recommended)}
+        result = bt.backtest_change("http://prom", change, 7 * 86400)
+        assert result["risk"] == "LOW"
+        assert result["new_breach_count"] == result["old_breach_count"] == 1
