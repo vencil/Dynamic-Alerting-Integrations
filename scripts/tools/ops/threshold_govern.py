@@ -1166,9 +1166,12 @@ def main() -> None:
                               "Lookback period (default 7d; use 14d for lower-bound/"
                               "percentile-lower keys — 7d leaves only ~6 full UTC days "
                               "after dropping partial boundaries, fragile to scrape gaps)"))
-    parser.add_argument("--min-samples", type=int, default=100,
-                        help="最低樣本數門檻（預設 100）" if _LANG == "zh"
-                        else "Minimum sample count (default 100)")
+    parser.add_argument("--min-samples", type=recommend.min_samples_arg, default=100,
+                        help=("最低樣本數門檻：MEDIUM 與 HIGH 都至少要這麼多樣本"
+                              "（預設 100，不得小於 100；HIGH 另需 ≥ 1000）" if _LANG == "zh"
+                              else "Minimum sample count: both MEDIUM and HIGH need at "
+                                   "least this many samples (default 100, may not be "
+                                   "below 100; HIGH also needs >= 1000)"))
     parser.add_argument("--min-delta-pct", type=float, default=DEFAULT_MIN_DELTA_PCT,
                         help=("治理介入門檻：|delta%%| 須 ≥ 此值才開 PR（預設 25）。注意"
                               "上界為 value 空間、下界為 miss-rate 空間——同旋鈕敏感度不同"

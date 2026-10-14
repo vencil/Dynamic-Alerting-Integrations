@@ -1070,3 +1070,16 @@ class TestTimeoutCli:
         code, ran, _ = self._main(monkeypatch, tmp_path, capsys, "--timeout", "0.5")
         assert code == tg.EXIT_OK
         assert ran == [0.5]
+
+
+@pytest.mark.parametrize("value", ["99", "0", "-1"])
+def test_min_samples_below_100_is_caller_error(monkeypatch, tmp_path, capsys, value):
+    """#2941: refused before any work, like threshold_recommend."""
+    import sys
+    monkeypatch.setattr(tg, "run", lambda args: pytest.fail("ran"))
+    monkeypatch.setattr(sys, "argv", [
+        "threshold_govern.py", "--config-dir", str(tmp_path), "--min-samples", value])
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    assert exc.value.code == tg.EXIT_CALLER_ERROR
+    assert "--min-samples" in capsys.readouterr().err

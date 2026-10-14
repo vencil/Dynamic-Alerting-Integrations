@@ -2950,7 +2950,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` 或 `http://localhost:9090` |
 | `--tenant` | 只分析指定租戶（省略則分析全部） | 全部 |
 | `--lookback` | 歷史資料回溯期間 | `7d` |
-| `--min-samples` | 最低樣本數門檻（不足時降低信心等級） | `100` |
+| `--min-samples` | 最低樣本數門檻：MEDIUM 與 HIGH 都至少要這麼多樣本（見下方信心等級）。不得小於 `100`，否則結束碼 `2`（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)） | `100` |
 | `--dry-run` | 僅顯示 PromQL 查詢，不實際執行 | - |
 | `--json` | JSON 輸出 | - |
 | `--markdown` | Markdown 表格輸出 | - |
@@ -2976,9 +2976,11 @@ da-tools threshold-recommend --generate-observed-map
 
 | 等級 | 樣本數 |
 |------|--------|
-| HIGH | ≥ 1000 |
-| MEDIUM | ≥ 100（或 `--min-samples`） |
-| LOW | < 100 |
+| HIGH | ≥ 1000 且 ≥ `--min-samples` |
+| MEDIUM | ≥ `--min-samples`（預設與下限都是 100） |
+| LOW | 其餘 |
+
+樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，也仍會寫進 `--export-patch`（行尾註明 LOW），套用前請看信心等級。
 
 **範例**
 
@@ -3021,7 +3023,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--prometheus` | Prometheus Query API URL | `$PROMETHEUS_URL` 或 `http://localhost:9090` |
 | `--tenant` | 只分析指定租戶 | 全部 |
 | `--lookback` | 歷史資料回溯期間 | `7d` |
-| `--min-samples` | 最低樣本數門檻 | `100` |
+| `--min-samples` | 最低樣本數門檻，語意同 `threshold-recommend`。不得小於 `100`，否則結束碼 `2` | `100` |
 | `--min-delta-pct` | 治理介入門檻：\|delta%\| 須 ≥ 此值才開 PR | `25` |
 | `--max-prs` | 每次最多開幾個 PR（防洪 / alert-fatigue budget）。須 ≥ 1，小於 1 時結束碼 `2`（[#2929](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2929)）；dry-run 的 Summary 在上限小於可處理租戶數時寫出「最多開幾個 PR」（dry-run 不查 tenant-api，預知不了已開過的 PR，所以只能寫「最多」） | `10` |
 | `--apply` | 真正經 tenant-api 開 PR（預設僅 dry-run，不寫入） | - |
