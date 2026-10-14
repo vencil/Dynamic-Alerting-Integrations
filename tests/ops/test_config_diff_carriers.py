@@ -9,8 +9,9 @@
 刪掉表中任一列、或渲染程式改版後看不到某個載體或子鍵，這裡會先紅。
 `test_every_rendered_carrier_has_a_case` 守住「表上每一列都有案例」：只加列不加案例也紅。
 
-第一階段（#1516 拍板）完整與部分涵蓋的結束碼相同，差別只在這裡要不要逐一測子鍵；
-「完整涵蓋只附註」要等 #2962 才啟用。
+完整與部分涵蓋也決定結束碼（#2962）：完整涵蓋而渲染沒有差異只附註（no_effect），
+部分涵蓋仍 rc 1；所以完整涵蓋的載體在這裡逐一測子鍵。寫在哪個位置有人讀，由
+tests/shared/test_parse_tree_rendered_by.py 以實際渲染驗證。
 """
 from __future__ import annotations
 

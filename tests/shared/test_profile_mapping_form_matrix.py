@@ -179,16 +179,22 @@ def test_config_diff_blast_radius_is_the_tenants_go_binds(tmp_path, name, profil
     p = subprocess.run([sys.executable, config_diff.__file__, "--old-dir", str(old),
                         "--new-dir", str(new), "--at", "2026-10-10T00:00:00Z", "--format", "json"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
-    assert p.returncode == 1, (name, where, p.stderr[-1000:])
     doc = json.loads(p.stdout)
     # 必響：010 確實改了（#1516 P3b 起以 parse-tree 讀出的值比較，列在 platform_settings）。
     # 只斷言「包含」：`!!binary` 寫在 `_defaults.yaml` 的那格，parse-tree 讀不了該檔，
     # 它另以 unreadable 列出（沒有比對，rc 1）。
-    assert ("_profiles.yaml", "profiles", "modified") in [
-        (r["file"], r["key"], r["change"]) for r in doc["platform_settings"]], doc
+    rows = {(r["file"], r["key"], r["change"]): r["status"] for r in doc["platform_settings"]}
+    assert ("_profiles.yaml", "profiles", "modified") in rows, doc
     reached = [t for c in doc["threshold_changes"] if c["key"] == "mysql_connections"
                for t in c["tenants"]]
     assert reached == (["t1"] if served == 10 else []), (name, where, doc["threshold_changes"])
+    # #2962: a profile no tenant binds is read here but renders nothing new — "no
+    # effect", which does not raise the exit code; a bound one renders (rc 1).
+    status = rows[("_profiles.yaml", "profiles", "modified")]
+    assert status == (config_diff.SETTING_RENDERED if served == 10 else config_diff.SETTING_NO_EFFECT), (
+        name, where, status)
+    assert p.returncode == (1 if served == 10 or doc["uncovered_files"] else 0), (
+        name, where, p.stderr[-1000:])
 
 
 def test_the_comparison_can_ring(tmp_path):
