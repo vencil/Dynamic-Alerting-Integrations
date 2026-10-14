@@ -356,8 +356,8 @@ MUTATIONS: list[Mutation] = [
         test_target="./...",
         label="extractDefaults: return nil instead of root fallback (no `defaults:` key → nil)",
         fn_name="extractDefaultsBlock",
-        old='if inner, ok := m["defaults"].(map[string]any); ok {\n\t\treturn inner\n\t}\n\treturn m',
-        new='if inner, ok := m["defaults"].(map[string]any); ok {\n\t\treturn inner\n\t}\n\treturn nil',
+        old='if inner, ok := defaultsWrapper(m); ok {\n\t\treturn inner\n\t}\n\treturn m',
+        new='if inner, ok := defaultsWrapper(m); ok {\n\t\treturn inner\n\t}\n\treturn nil',
     ),
 
     # ══════════════════════════════════════════════════════════════════════
