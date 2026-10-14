@@ -33,8 +33,9 @@ type TenantSummary struct {
 	// ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file
 	// exists but is not usable, so every other field except ID is empty —
 	// its metadata is UNKNOWN, not unlabeled. Absent on a healthy row.
-	// Values: unreadable (stat/read failed, e.g. a dangling symlink or a
-	// permission error), not_regular_file (e.g. a symlink to a directory),
+	// Values: unreadable (stat/read failed, e.g. an unresolvable symlink —
+	// dangling, looping or through a non-directory — or a permission
+	// error), not_regular_file (e.g. a symlink to a directory),
 	// malformed_yaml (not parseable as YAML), invalid_config (parses as YAML
 	// at the syntax level but cannot be loaded as a tenant config — wrong
 	// shape, errors the YAML library only detects on a typed decode, such

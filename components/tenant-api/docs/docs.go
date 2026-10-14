@@ -1317,7 +1317,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Not found: no tenant file, or the tenant file is a symlink that cannot be resolved (dangling, looping — a self-loop included — or through a non-directory): it has no content to merge recipes into, so there is no tenant here (a whole-file PUT /api/v1/tenants/{id} replaces such a link)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -3251,7 +3251,7 @@ const docTemplate = `{
                     ]
                 },
                 "config_error": {
-                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, errors the YAML library only detects on a typed decode, such\nas duplicate keys, or a declared tenant id that is not valid UTF-8,\nwhich threshold-exporter rejects the whole file for). The first three\ncome from confd.FileProblem; invalid_config is decided by this handler.",
+                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. an unresolvable symlink —\ndangling, looping or through a non-directory — or a permission\nerror), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, errors the YAML library only detects on a typed decode, such\nas duplicate keys, or a declared tenant id that is not valid UTF-8,\nwhich threshold-exporter rejects the whole file for). The first three\ncome from confd.FileProblem; invalid_config is decided by this handler.",
                     "type": "string",
                     "enum": [
                         "unreadable",

@@ -40,8 +40,8 @@ parent: architecture-and-design.md
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
-| Platform | `prometheus-rules-platform` | 0 | 48 |
-| **總計** | | **166** | **167** (= **333** rules) |
+| Platform | `prometheus-rules-platform` | 0 | 49 |
+| **總計** | | **166** | **168** (= **334** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

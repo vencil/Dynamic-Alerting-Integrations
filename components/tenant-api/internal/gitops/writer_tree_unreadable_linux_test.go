@@ -230,8 +230,8 @@ func TestWriter_StoreUnreadableWalksAtScrapeTime(t *testing.T) {
 	clock := time.Unix(1_000_000, 0)
 	w.storeScan.now = func() time.Time { return clock }
 	w.storeScan.minInterval = 30 * time.Second
-	if got, ok := w.StoreUnreadable(); !ok || len(got) != 0 {
-		t.Fatalf("clean tree: %v, %v; want no store fault", got, ok)
+	if sc := w.StoreUnreadable(); !sc.OK || len(sc.Counts) != 0 {
+		t.Fatalf("clean tree: %+v; want no store fault", sc)
 	}
 	fifo := filepath.Join(dir, "stuck.yaml")
 	mkfifoReleased(t, fifo)
@@ -246,11 +246,11 @@ func TestWriter_StoreUnreadableWalksAtScrapeTime(t *testing.T) {
 	}
 	testutil.UnlistableDeepDir(t, dir, 100)
 	clock = clock.Add(10 * time.Second)
-	if got, _ := w.StoreUnreadable(); len(got) != 0 {
+	if got := w.StoreUnreadable().Counts; len(got) != 0 {
 		t.Errorf("within the minimum interval: %v, want the cached clean walk", got)
 	}
 	clock = clock.Add(25 * time.Second)
-	got, _ := w.StoreUnreadable()
+	got := w.StoreUnreadable().Counts
 	want := map[string]int{cfg.UnreadableSpecialFile: 1, cfg.UnreadableReadError: 1, cfg.UnreadableWalkError: 1}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("after the interval, no write: %v, want %v (the unresolvable links not counted)", got, want)
@@ -259,7 +259,7 @@ func TestWriter_StoreUnreadableWalksAtScrapeTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock = clock.Add(31 * time.Second)
-	got, _ = w.StoreUnreadable()
+	got = w.StoreUnreadable().Counts
 	if got[cfg.UnreadableSpecialFile] != 0 || got[cfg.UnreadableReadError] != 1 {
 		t.Errorf("after removing the FIFO: %v, want special_file 0 (read_error still 1)", got)
 	}
@@ -293,5 +293,41 @@ func TestWriteMerged_TargetFIFODoesNotBlock(t *testing.T) {
 	}
 	if got := gitRevParse(t, dir, "HEAD"); got != head {
 		t.Errorf("HEAD moved %s → %s", head, got)
+	}
+}
+
+// R5-N2: unknown is not zero. While every walk fails the Writer reports
+// nothing (OK false); the first success reports counts and its time; a later
+// failure keeps both — the time does not move, so its age measures how long
+// the gauge has been blind.
+func TestWriter_StoreUnreadableUnknownUntilAWalkSucceeds(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"sk-t.yaml": tenantBody("sk-t")})
+	w := NewWriter(dir, dir)
+	clock := time.Unix(2_000_000, 0)
+	w.storeScan.now = func() time.Time { return clock }
+	w.storeScan.minInterval = 30 * time.Second
+	fail := true
+	w.storeScan.scan = func() (map[string]int, error) {
+		if fail {
+			return nil, errors.New("injected: walk failed")
+		}
+		return map[string]int{cfg.UnreadableSpecialFile: 2}, nil
+	}
+	for i := 0; i < 3; i++ {
+		if sc := w.StoreUnreadable(); sc.OK || sc.Counts != nil || !sc.LastSuccess.IsZero() {
+			t.Fatalf("walk %d failed, yet StoreUnreadable = %+v; want nothing known", i, sc)
+		}
+		clock = clock.Add(time.Minute)
+	}
+	fail = false
+	first := w.StoreUnreadable()
+	if !first.OK || first.Counts[cfg.UnreadableSpecialFile] != 2 || !first.LastSuccess.Equal(clock) {
+		t.Fatalf("first success = %+v, want special_file 2 at %v", first, clock)
+	}
+	fail = true
+	clock = clock.Add(5 * time.Minute)
+	later := w.StoreUnreadable()
+	if !later.OK || later.Counts[cfg.UnreadableSpecialFile] != 2 || !later.LastSuccess.Equal(first.LastSuccess) {
+		t.Errorf("after a failed walk = %+v, want the last counts and the timestamp unchanged (%v)", later, first.LastSuccess)
 	}
 }

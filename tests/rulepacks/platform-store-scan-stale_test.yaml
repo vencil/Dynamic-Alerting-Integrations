@@ -1,0 +1,85 @@
+# promtool behavioural test for TenantApiStoreScanStale (#2939 R5-N2):
+#   1) never succeeded: tenant-api up, no timestamp series → FIRES after 10m.
+#   2) stale: the timestamp stops at 5m → FIRES once it is > 300s old for 10m.
+#   3) healthy: the timestamp keeps up with time → never fires.
+#   4) no tenant-api at all (no tenant_api_up, no timestamp) → silent.
+# Run: promtool test rules tests/rulepacks/platform-store-scan-stale_test.yaml
+rule_files:
+  - platform-store-scan-stale.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ⚠️ 8m is the DISCRIMINATOR for `for: 10m` (the condition holds from 0m).
+  - interval: 1m
+    name: never-succeeded-fires
+    input_series:
+      - series: 'tenant_api_up{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: TenantApiStoreScanStale
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: TenantApiStoreScanStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
+
+  # The last success is at 300s (5m) and never moves again: the age passes
+  # 300s after 10m, so with `for: 10m` the alert fires from ~21m.
+  # ⚠️ The pair pins the 300s threshold: at 18m it must still be silent (a
+  # 60s threshold, true from ~6m, would already fire), and at 25m it must
+  # fire (an 1800s threshold would still be silent).
+  - interval: 1m
+    name: stale-fires
+    input_series:
+      - series: 'tenant_api_up{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x40'
+      - series: 'tenant_api_store_scan_last_success_timestamp_seconds{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0+60x5 300x35'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: TenantApiStoreScanStale
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantApiStoreScanStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
+
+  # Healthy: the timestamp is refreshed every scrape (it equals the sample
+  # time), so the age stays 0 — never fires.
+  - interval: 1m
+    name: healthy-silent
+    input_series:
+      - series: 'tenant_api_up{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x40'
+      - series: 'tenant_api_store_scan_last_success_timestamp_seconds{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TenantApiStoreScanStale
+        exp_alerts: []
+
+  # No tenant-api in the cluster: neither series exists — silent (why the
+  # never-succeeded branch is `unless` on tenant_api_up, not absent()).
+  - interval: 1m
+    name: no-tenant-api-silent
+    input_series:
+      - series: 'some_other_metric{job="other"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TenantApiStoreScanStale
+        exp_alerts: []

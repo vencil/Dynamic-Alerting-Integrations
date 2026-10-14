@@ -238,7 +238,7 @@ When both kinds are present the answer is `TENANT_STORE_FAULT`: the server's cop
 - **How to fix it**:
   - `TENANT_TREE_UNREADABLE`: repair or remove the unresolvable symlinks in git; when the tenant file being written is itself one, writing it through tenant-api is enough.
   - `TENANT_STORE_FAULT`: find the entries in the server log (`conf.d holds unreadable entries`) and remove or repair them on tenant-api's pod / volume, or reset that copy of conf.d from git. Until then every write through tenant-api is refused.
-- **Monitoring**: when `tenant_api_store_unreadable_entries{reason}` (a gauge tenant-api computes at scrape time by walking conf.d itself — classification only, no parsing, at most once per 30 seconds, never blocking on a FIFO) stays above 0 for 10 minutes, the platform alert `TenantApiStoreUnreadable` (warning) fires. It fires with no write at all; after the repair the next scrape (at most 30 seconds later) returns it to 0 and the alert clears by itself. Unresolvable symlinks are not counted.
+- **Monitoring**: the gauges `tenant_api_store_unreadable_entries` and `tenant_api_store_scan_last_success_timestamp_seconds` and the alerts `TenantApiStoreUnreadable` and `TenantApiStoreScanStale` are described in [the tenant-api README's metrics table](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics).
 
 ---
 

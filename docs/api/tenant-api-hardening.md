@@ -238,7 +238,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 - **怎麼修**：
   - `TENANT_TREE_UNREADABLE`：在 git 修好或移除那些無法解析的 symlink；若要寫的租戶檔本身就是這種 symlink，直接經 tenant-api 寫入它即可。
   - `TENANT_STORE_FAULT`：從 server log（`conf.d holds unreadable entries`）找出項目，在 tenant-api 的 pod／volume 上移除或修好，或把那份 conf.d 從 git 重設。修好前，經 tenant-api 的寫入都會被拒。
-- **監控**：`tenant_api_store_unreadable_entries{reason}`（gauge，scrape 時由 tenant-api 自己掃 conf.d，只分類、不解析內容，兩次掃描至少相隔 30 秒；不會卡在 FIFO 上）非 0 超過 10 分鐘時，平台告警 `TenantApiStoreUnreadable`（warning）觸發。沒有任何寫入時也會觸發；修好後下一次 scrape（最多晚 30 秒）歸 0、告警自行解除。無法解析的 symlink 不計入。
+- **監控**：gauge `tenant_api_store_unreadable_entries`、`tenant_api_store_scan_last_success_timestamp_seconds` 與告警 `TenantApiStoreUnreadable`、`TenantApiStoreScanStale`，見 [tenant-api README 的 metrics 表](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics)。
 
 ---
 

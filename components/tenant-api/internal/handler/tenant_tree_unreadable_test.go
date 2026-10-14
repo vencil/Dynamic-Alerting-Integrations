@@ -9,6 +9,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/vencil/tenant-api/internal/gitops"
 	"io"
 	"log"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -402,4 +404,56 @@ func TestTreeUnreadable_EACCESLinkElsewhereIsStoreFault(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertTreeRefusalAs(t, f.put(t, "platform", "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 1, "denied.yaml", true)
+}
+
+// R5-N2 on /metrics: while the store walk fails (here: conf.d does not
+// exist, so the real walk errors — no seam) neither the store gauge nor its
+// timestamp is exported, so "not measured" never reads as "no fault"; once a
+// walk succeeds both appear, the timestamp being that walk's time.
+func TestStoreUnreadableMetrics_AbsentUntilAWalkSucceeds(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "conf.d")
+	w := gitops.NewWriter(dir, dir)
+	for i := 0; i < 2; i++ {
+		var out strings.Builder
+		writeStoreUnreadableMetricsFrom(&out, w)
+		if strings.Contains(out.String(), "tenant_api_store_unreadable_entries") ||
+			strings.Contains(out.String(), "tenant_api_store_scan_last_success_timestamp_seconds") {
+			t.Fatalf("scrape %d with every walk failing exported:\n%s", i, out.String())
+		}
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Unix()
+	var out strings.Builder
+	writeStoreUnreadableMetricsFrom(&out, w)
+	if !strings.Contains(out.String(), `tenant_api_store_unreadable_entries{reason="special_file"} 0`) {
+		t.Errorf("after the first success, the gauge is missing:\n%s", out.String())
+	}
+	var ts int64
+	for _, line := range strings.Split(out.String(), "\n") {
+		if v, ok := strings.CutPrefix(line, "tenant_api_store_scan_last_success_timestamp_seconds "); ok {
+			ts, _ = strconv.ParseInt(v, 10, 64)
+		}
+	}
+	if ts < before || ts > time.Now().Unix() {
+		t.Errorf("timestamp = %d, want the walk's time (≥ %d):\n%s", ts, before, out.String())
+	}
+}
+
+// R5-N1: PUT …/custom-alerts on a tenant whose file is a self-loop answers
+// 404 — on purpose: the link has no content, so there is no tenant to merge
+// recipes into (the whole-file PUT is the one that replaces it).
+func TestTreeUnreadable_CustomAlertsOnSelfLoopTargetIs404(t *testing.T) {
+	t.Parallel()
+	f := newTreeFixture(t)
+	if err := os.Symlink("tu-l.yaml", filepath.Join(f.dir, "tu-l.yaml")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	w := f.do(t, PutTenantCustomAlerts(f.d), rbac.PermWrite, "platform", "PUT", "/api/v1/tenants/tu-l/custom-alerts", "tu-l",
+		`{"custom_alerts":[],"base_hash":"0000000000000000"}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("custom-alerts on a self-loop tenant file = %d, want 404: %s", w.Code, w.Body.String())
+	}
 }

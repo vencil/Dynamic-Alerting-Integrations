@@ -1005,7 +1005,7 @@ data:
 
           # --- tenant-api domain policy UNAVAILABLE (hub #2486 Q7-2) ---
           # A _domain_policy.yaml / .yml that is present but unusable (a
-          # directory, a dangling symlink, unreadable, or refused by the parse)
+          # directory, an unresolvable symlink, unreadable, or refused by the parse)
           # and has no last good version of its own makes tenant-api refuse, in
           # direct write mode, every write the domain policy judges (503
           # POLICY_UNAVAILABLE) instead of judging it on no policy. /ready stays
@@ -1112,6 +1112,45 @@ data:
                 re-walks conf.d for the gauge at scrape time (at most every
                 30s), so the alert clears by itself after the repair.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
+
+          # --- tenant-api store scan cannot measure (#2939 R5-N2) ---
+          # tenant_api_store_unreadable_entries is NOT exported until a store
+          # walk has succeeded, and keeps its last value while later walks fail
+          # — so on its own "not measured" would read as "no fault", and
+          # TenantApiStoreUnreadable would stay silent. This alert watches the
+          # measurement itself through the walk's last-success timestamp:
+          #   - never succeeded: tenant-api is up (tenant_api_up) and the
+          #     timestamp is absent. `unless` on tenant_api_up, not absent():
+          #     a cluster that does not run tenant-api must stay quiet;
+          #   - stale: the last success is older than 300s. A healthy walk runs
+          #     at most every 30s and only when scraped, so its age stays below
+          #     the 30s minimum interval plus one scrape interval (≤ 90s at a
+          #     60s scrape); 300s leaves room for a few missed scrapes. A walk
+          #     that fails (a hung mount trips its time limit) never moves it.
+          # `for: 10m`, as TenantApiStoreUnreadable: a pod start or a short
+          # mount hiccup must not page.
+          - alert: TenantApiStoreScanStale
+            expr: |
+              (time() - tenant_api_store_scan_last_success_timestamp_seconds{job="tenant-api"} > 300)
+              or
+              (tenant_api_up{job="tenant-api"} unless on (job, instance) tenant_api_store_scan_last_success_timestamp_seconds{job="tenant-api"})
+            for: 10m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
+              description: |
+                tenant-api's scrape-time walk of its own conf.d copy has not
+                succeeded in the last 5 minutes, or never has since the pod
+                started, so tenant_api_store_unreadable_entries is missing or
+                stale and TenantApiStoreUnreadable cannot fire. Writes are judged
+                on their own walks and are not affected by this alert itself.
+                Check the tenant-api log for walk errors and the conf.d volume
+                (a missing directory, a hung mount: the walk has a time limit and
+                then fails fast until the stuck walk returns — restart the pod to
+                clear it). The alert clears once a walk succeeds.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
 
           # --- Prometheus reload failure (#1246) ---
           # The config-reloader sidecar added in #1246 automates what used to be a

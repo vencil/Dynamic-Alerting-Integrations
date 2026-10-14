@@ -10,9 +10,16 @@ package handler
 //   - tenant_api_store_unreadable_entries{reason} — the store faults of
 //     conf.d by the walker's reason (special_file, read_error, walk_error,
 //     stat_error), walked at scrape time — classification only, at most
-//     once per 30s (gitops.Writer.StoreUnreadable) — so it is true while
-//     nobody writes and clears by itself after a repair. 0 for every reason
-//     when no walk completed. Alert TenantApiStoreUnreadable on > 0.
+//     once per 30s (gitops.Writer.StoreUnreadable). Alert
+//     TenantApiStoreUnreadable on > 0.
+//   - tenant_api_store_scan_last_success_timestamp_seconds — when that walk
+//     last succeeded. Alert TenantApiStoreScanStale when it is old or absent
+//     while tenant-api is up.
+//
+// ⛔ UNKNOWN IS NOT ZERO. Until a walk has succeeded neither family is
+// exported (Prometheus convention: no sample when the value is not known),
+// so "not measured" can never read as "no fault"; a walk that fails later
+// keeps the last counts and does NOT move the timestamp.
 
 import (
 	"fmt"
@@ -28,9 +35,9 @@ var storeUnreadableReasons = []string{
 	cfg.UnreadableSpecialFile, cfg.UnreadableReadError, cfg.UnreadableWalkError, cfg.UnreadableStatError,
 }
 
-// storeUnreadableSource is what the gauge reads: *gitops.Writer.
+// storeUnreadableSource is what the gauges read: *gitops.Writer.
 type storeUnreadableSource interface {
-	StoreUnreadable() (map[string]int, bool)
+	StoreUnreadable() gitops.StoreScan
 }
 
 var activeStoreUnreadable atomic.Pointer[gitops.Writer]
@@ -47,16 +54,22 @@ func writeStoreUnreadableMetrics(w io.Writer) {
 	writeStoreUnreadableMetricsFrom(w, src)
 }
 
-// writeStoreUnreadableMetricsFrom renders the family from src (nil: no
-// Writer installed, every reason 0).
+// writeStoreUnreadableMetricsFrom renders both families from src — nothing
+// at all when src is nil (no Writer installed) or no walk has succeeded.
 func writeStoreUnreadableMetricsFrom(w io.Writer, src storeUnreadableSource) {
-	var counts map[string]int
-	if src != nil {
-		counts, _ = src.StoreUnreadable()
+	if src == nil {
+		return
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_unreadable_entries Entries of tenant-api's own conf.d copy the server cannot read and git cannot hold (a FIFO/socket/device named like a config file, a failed read, an unlistable directory, a failed stat that is not an unresolvable link), by reason, walked at scrape time (at most every 30s). While > 0 every write answers 500 TENANT_STORE_FAULT; repair the volume or reset the copy from git. Alert on > 0.\n")
+	scan := src.StoreUnreadable()
+	if !scan.OK {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_unreadable_entries Entries of tenant-api's own conf.d copy the server cannot read and git cannot hold (a FIFO/socket/device named like a config file, a failed read, an unlistable directory, a failed stat that is not an unresolvable link), by reason, from the last successful scrape-time walk (at most every 30s; absent until one succeeds). While > 0 every write answers 500 TENANT_STORE_FAULT. Alert on > 0.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_store_unreadable_entries gauge\n")
 	for _, reason := range storeUnreadableReasons {
-		_, _ = fmt.Fprintf(w, "tenant_api_store_unreadable_entries{reason=%q} %d\n", reason, counts[reason])
+		_, _ = fmt.Fprintf(w, "tenant_api_store_unreadable_entries{reason=%q} %d\n", reason, scan.Counts[reason])
 	}
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_scan_last_success_timestamp_seconds Unix time of the last successful walk behind tenant_api_store_unreadable_entries (absent until one succeeds; a failed walk does not move it). Alert when old or absent while tenant-api is up.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_store_scan_last_success_timestamp_seconds gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_store_scan_last_success_timestamp_seconds %d\n", scan.LastSuccess.Unix())
 }
