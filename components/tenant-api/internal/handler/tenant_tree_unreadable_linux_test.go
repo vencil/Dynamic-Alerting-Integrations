@@ -15,8 +15,10 @@ import (
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -188,25 +190,17 @@ func TestTreeUnreadable_AsyncStoreFaultStoresNoEntryNames(t *testing.T) {
 	}
 }
 
-// tenant_api_store_unreadable_entries renders the Writer's last walk: after a
-// refused write on a tree with a FIFO and a dangling link, special_file is 1
-// and nothing counts the dangling link.
-func TestStoreUnreadableMetrics_RenderTheLastWalk(t *testing.T) {
+// tenant_api_store_unreadable_entries renders the Writer's scrape-time
+// walk: with no write, a FIFO counts as special_file 1, and nothing counts
+// the dangling link.
+func TestStoreUnreadableMetrics_RenderTheScrapeWalk(t *testing.T) {
 	t.Parallel()
 	f := newTreeFixture(t)
-	var before strings.Builder
-	writeStoreUnreadableMetricsFrom(&before, f.d.Writer)
-	if !strings.Contains(before.String(), `tenant_api_store_unreadable_entries{reason="special_file"} 0`) {
-		t.Fatalf("before any walk:\n%s", before.String())
-	}
 	if err := syscall.Mkfifo(filepath.Join(f.dir, "stuck.yaml"), 0o644); err != nil {
 		t.Skipf("mkfifo: %v", err)
 	}
 	if err := os.Symlink("missing-target.yaml", filepath.Join(f.dir, "gone.yaml")); err != nil {
 		t.Fatal(err)
-	}
-	if w := f.put(t, "platform", "tu-a"); w.Code != http.StatusInternalServerError {
-		t.Fatalf("PUT = %d, want 500", w.Code)
 	}
 	var out strings.Builder
 	writeStoreUnreadableMetricsFrom(&out, f.d.Writer)
@@ -218,6 +212,45 @@ func TestStoreUnreadableMetrics_RenderTheLastWalk(t *testing.T) {
 	} {
 		if !strings.Contains(out.String(), line) {
 			t.Errorf("missing %q in:\n%s", line, out.String())
+		}
+	}
+}
+
+// R4-N1 + R4-N3: the written file is a read_error AND a FIFO sits elsewhere.
+// The store fault wins over the file's own unreadability, and PUT, /diff and
+// PUT …/custom-alerts answer the one tree identically: 500
+// TENANT_STORE_FAULT with the same text and fields.
+func TestTreeUnreadable_StoreFaultWinsOverUnreadableTarget_AllEndpoints(t *testing.T) {
+	t.Parallel()
+	mem, ok := testutil.ProcSelfMem()
+	if !ok {
+		t.Skip("no /proc/self/mem that fails to read")
+	}
+	f := newTreeFixture(t)
+	if err := os.Symlink(mem, filepath.Join(f.dir, "tu-x.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(f.dir, "stuck.yaml"), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	body := "tenants:\n  tu-x:\n    _silent_mode: \"critical\"\n"
+	responses := map[string]*httptest.ResponseRecorder{
+		"PUT":           f.put(t, "platform", "tu-x"),
+		"diff":          f.do(t, DiffTenant(f.d), rbac.PermRead, "platform", "POST", "/api/v1/tenants/tu-x/diff", "tu-x", body),
+		"custom-alerts": f.do(t, PutTenantCustomAlerts(f.d), rbac.PermWrite, "platform", "PUT", "/api/v1/tenants/tu-x/custom-alerts", "tu-x", `{"custom_alerts":[],"base_hash":"0000000000000000"}`),
+	}
+	var want map[string]any
+	for name, w := range responses {
+		assertTreeRefusalAs(t, w, http.StatusInternalServerError, CodeTenantStoreFault, 1, "stuck.yaml", true)
+		var got map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		delete(got, "request_id")
+		if want == nil {
+			want = got
+		} else if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s answers differently:\n got  %v\n want %v", name, got, want)
 		}
 	}
 }

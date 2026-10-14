@@ -212,15 +212,15 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 | 項目（walker 記錄的 `reason`） | 能不能用 git 修 | 回應 |
 |---|---|---|
-| 懸空的 symlink（`stat_error`，link 在、指向的目標不在） | 能：git 記得它（mode 120000） | 409 `TENANT_TREE_UNREADABLE` |
+| 無法解析的 symlink（`stat_error`：link 在，但跟不下去——指向的目標不在、迴圈（含指向自己）、路徑中段不是目錄） | 能：它沒有內容，git 以 mode 120000 記錄它 | 409 `TENANT_TREE_UNREADABLE` |
 | 設定檔名的 FIFO、socket、裝置檔，或指向它們的 symlink（`special_file`） | 不能：git 記錄不了 | 500 `TENANT_STORE_FAULT` |
 | stat 成功但讀取失敗，例如 I/O 錯誤（`read_error`） | 不能：是伺服器端的儲存狀態 | 500 `TENANT_STORE_FAULT` |
 | 列不出內容的子目錄（`walk_error`） | 不能 | 500 `TENANT_STORE_FAULT` |
-| 其他 stat 失敗，例如權限、symlink 迴圈（`stat_error`，但不是懸空） | 不能 | 500 `TENANT_STORE_FAULT` |
+| 其他 stat 失敗，例如權限不足（`stat_error`，但不是上面那種） | 不能：伺服器的權限，git 修不了 | 500 `TENANT_STORE_FAULT` |
 
 兩種同時存在時回 `TENANT_STORE_FAULT`：伺服器那份 conf.d 得先修好，關於設定內容的回答才有意義；回 409 會把用戶端引去 git 修一個 git 修不了的問題。`TENANT_STORE_FAULT` 是 tenant-api 自己那份 conf.d 的儲存問題，不是設定內容，也不是 [ADR-036 §5](../adr/036-single-parser-effective-config.md) 的 503（產生器容器不可用）。
 
-| 端點 | 懸空 symlink | 伺服器端讀不了 |
+| 端點 | 無法解析的 symlink | 伺服器端讀不了 |
 |---|---|---|
 | `PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts` | 409 `TENANT_TREE_UNREADABLE` | 500 `TENANT_STORE_FAULT` |
 | `POST /tenants/{id}/diff` | 409（與它預覽的 PUT 相同） | 500（同） |
@@ -230,15 +230,15 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 **PR 模式的 `/validate` 例外**：PR 模式的 validate 只做 body 檢查、不讀樹（#1718：本機的樹可能落後 base），所以不會預告這兩種拒收，要到切分支時才判。
 
 - **要寫的租戶檔本身**：
-  - 是懸空的 symlink：寫入把它換成一般檔（直寫與 PR 模式都以 rename 取代目錄項目本身，不會順著 symlink 寫到它指向的地方），照常放行。這是 ADR-036 §4 的修復路徑：它沒有內容，換掉不會損失任何東西。批次扣掉的是整批所有 op 的租戶檔。
+  - 是無法解析的 symlink（懸空、迴圈含自我迴圈、ENOTDIR）：寫入把它換成一般檔（直寫與 PR 模式都以 rename 取代目錄項目本身，不會順著 symlink 寫到它指向的地方），照常放行。這是 ADR-036 §4 的修復路徑：它沒有內容，換掉不會損失任何東西。批次扣掉的是整批所有 op 的租戶檔。
   - 讀取失敗（`read_error`）、是 FIFO 等非一般檔，或其他 stat 失敗：一律回 409 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `unreadable` 或 `not_regular_file`；批次該筆同 code），**不分角色**，對所有租戶都有寫入權限的人也一樣。這個檔有內容只是讀不到，整檔替換等於靜默抹掉內容（#2405 原本就規定讀不了一律拒收）。它要在伺服器或 volume 上修，或從 git 重設。
 - **以前的回應**：別處有 FIFO 時，單筆寫入卡住約 5 秒（掃描時限）後回 500，批次在複製 conf.d 時回 500；懸空的 symlink 等其他項目不擋寫入。
 - **PR 模式**判的是切出分支的最新 base，也就是 git 裡的樹：沒 commit 的項目（例如服務中目錄裡的 FIFO）不在那裡。單筆 PR 寫入走服務中的工作目錄，看得到它們；PR 批次看不到。
 - **誰看得到檔名**：讀不了的項目可能是任何租戶的檔，所以只有對**所有租戶**有寫入權限的呼叫者（RBAC 規則 `tenants: ["*"]`、帶 `write`，且沒有 org-scope、environments、domains；與 #2405 取代無法解析的檔用同一個條件）才會在回應中看到項目名稱與 `reason`：單筆的 `error` 文字列出它們，另有 `unreadable: [{path, reason}]`；批次寫在 `message`。其他呼叫者只拿到固定文字與項目數（`unreadable_count`，`message` 裡的 `(unreadable entries: N)`）。給數量與 §3.6「不給數字」不衝突：§3.6 防的是透露看不到的群組成員有幾個，這裡的數量只是壞掉的項目有幾個，不透露任何租戶。非同步批次的結果存在 task 裡、由任何輪詢者讀取，所以一律不含名稱，送出者有全域權限也一樣。不論呼叫者是誰，完整名稱一律寫進 server log。
 - **怎麼修**：
-  - `TENANT_TREE_UNREADABLE`：在 git 修好或移除那些懸空的 symlink；若要寫的租戶檔本身就是懸空 symlink，直接經 tenant-api 寫入它即可。
+  - `TENANT_TREE_UNREADABLE`：在 git 修好或移除那些無法解析的 symlink；若要寫的租戶檔本身就是這種 symlink，直接經 tenant-api 寫入它即可。
   - `TENANT_STORE_FAULT`：從 server log（`conf.d holds unreadable entries`）找出項目，在 tenant-api 的 pod／volume 上移除或修好，或把那份 conf.d 從 git 重設。修好前，經 tenant-api 的寫入都會被拒。
-- **監控**：`tenant_api_store_unreadable_entries{reason}`（gauge，值取自最近一次完成的 conf.d 掃描；寫入、預覽、`/effective` 都會掃）非 0 超過 10 分鐘時，平台告警 `TenantApiStoreUnreadable`（warning）觸發；修好後下一次掃描歸 0、告警解除。懸空 symlink 不計入。
+- **監控**：`tenant_api_store_unreadable_entries{reason}`（gauge，scrape 時由 tenant-api 自己掃 conf.d，只分類、不解析內容，兩次掃描至少相隔 30 秒；不會卡在 FIFO 上）非 0 超過 10 分鐘時，平台告警 `TenantApiStoreUnreadable`（warning）觸發。沒有任何寫入時也會觸發；修好後下一次 scrape（最多晚 30 秒）歸 0、告警自行解除。無法解析的 symlink 不計入。
 
 ---
 

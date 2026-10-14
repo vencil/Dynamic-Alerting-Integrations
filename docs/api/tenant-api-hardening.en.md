@@ -212,15 +212,15 @@ This is an interim measure: the long-term fix is a reference form for credential
 
 | Entry (the walker's `reason`) | Fixable in git? | Response |
 |---|---|---|
-| A dangling symlink (`stat_error`: the link exists, its target does not) | Yes: git holds it (mode 120000) | 409 `TENANT_TREE_UNREADABLE` |
+| An unresolvable symlink (`stat_error`: the link exists but cannot be followed — its target does not exist, it loops (to itself included), or its path runs through a non-directory) | Yes: it has no content, and git records it as mode 120000 | 409 `TENANT_TREE_UNREADABLE` |
 | A FIFO, socket or device named like a config file, or a symlink to one (`special_file`) | No: git cannot hold it | 500 `TENANT_STORE_FAULT` |
 | A file whose stat succeeds but whose read fails, e.g. an I/O error (`read_error`) | No: it is the server's storage state | 500 `TENANT_STORE_FAULT` |
 | A sub-directory that cannot be listed (`walk_error`) | No | 500 `TENANT_STORE_FAULT` |
-| Another failed stat, e.g. permissions or a symlink loop (`stat_error`, not dangling) | No | 500 `TENANT_STORE_FAULT` |
+| Another failed stat, e.g. a permission error (`stat_error`, not the kind above) | No: a permission on the server, which git cannot fix | 500 `TENANT_STORE_FAULT` |
 
 When both kinds are present the answer is `TENANT_STORE_FAULT`: the server's copy has to be repaired before an answer about the configuration's content means anything, and a 409 would send the client to git to fix something git cannot fix. `TENANT_STORE_FAULT` is a storage problem of tenant-api's own copy of conf.d, not of the configuration, and not [ADR-036 §5](../adr/036-single-parser-effective-config.en.md)'s 503 (the generator container being unavailable).
 
-| Endpoint | Dangling symlink | Unreadable on the server |
+| Endpoint | Unresolvable symlink | Unreadable on the server |
 |---|---|---|
 | `PUT /tenants/{id}`, `PUT /tenants/{id}/custom-alerts` | 409 `TENANT_TREE_UNREADABLE` | 500 `TENANT_STORE_FAULT` |
 | `POST /tenants/{id}/diff` | 409 (the same as the PUT it previews) | 500 (likewise) |
@@ -230,15 +230,15 @@ When both kinds are present the answer is `TENANT_STORE_FAULT`: the server's cop
 **`/validate` in PR mode is the exception**: there validate checks the body only and does not read the tree (#1718: the local tree may lag the base), so it predicts neither refusal; they are decided when the branch is cut.
 
 - **The tenant file the write replaces**:
-  - A dangling symlink: the write replaces it with a regular file (in direct and PR mode alike, by renaming over the directory entry itself — never writing through the link to where it points) and goes through. This is ADR-036 §4's repair path: the link has no content, so nothing is lost. A batch leaves out the tenant files of all its ops.
+  - An unresolvable symlink (dangling, a loop including a self-loop, ENOTDIR): the write replaces it with a regular file (in direct and PR mode alike, by renaming over the directory entry itself — never writing through the link to where it points) and goes through. This is ADR-036 §4's repair path: the link has no content, so nothing is lost. A batch leaves out the tenant files of all its ops.
   - A failed read (`read_error`), a FIFO or another non-regular file, or another failed stat: always 409 `TENANT_CONFIG_NOT_LOADABLE` (`config_error` `unreadable` or `not_regular_file`; the same code on that op of a batch), **for every caller**, the one with write permission on all tenants included. The file has content that cannot be read, and replacing it would silently erase that content (#2405 already refuses a file that cannot be read). It is fixed on the server or volume, or by resetting from git.
 - **What these requests got before**: with a FIFO elsewhere in conf.d, a single write hung for about 5 seconds (the walk's time limit) and then answered 500, and a batch answered 500 while copying conf.d; a dangling symlink and the other entries did not stop a write.
 - **PR mode** judges the latest base the branch is cut from, i.e. the tree as git holds it: an entry that is not committed (a FIFO in the serving directory, for example) is not there. A single PR-mode write walks the serving worktree and does see it; a PR-mode batch does not.
 - **Who sees the entry names**: an unreadable entry can be any tenant's file, so only a caller with write permission on **all** tenants (an RBAC rule with `tenants: ["*"]` and `write`, and no org-scope, environments or domains — the same bar #2405 sets for replacing a file that cannot be parsed) is told which entries and their `reason`: in a single write's `error` text, and in `unreadable: [{path, reason}]`; in a batch, in `message`. Every other caller gets the fixed text and the number of entries (`unreadable_count`; `(unreadable entries: N)` in `message`). Giving the number does not conflict with §3.6's "no number": §3.6 keeps hidden group members from being counted, while this is only how many entries are broken, and it reveals no tenant. An async batch's results are stored in its task and served to whoever polls it, so they never carry the names, even when the submitter may see them. The full names always go to the server log, whoever the caller is.
 - **How to fix it**:
-  - `TENANT_TREE_UNREADABLE`: repair or remove the dangling symlinks in git; when the tenant file being written is itself one, writing it through tenant-api is enough.
+  - `TENANT_TREE_UNREADABLE`: repair or remove the unresolvable symlinks in git; when the tenant file being written is itself one, writing it through tenant-api is enough.
   - `TENANT_STORE_FAULT`: find the entries in the server log (`conf.d holds unreadable entries`) and remove or repair them on tenant-api's pod / volume, or reset that copy of conf.d from git. Until then every write through tenant-api is refused.
-- **Monitoring**: when `tenant_api_store_unreadable_entries{reason}` (a gauge taken from the last completed conf.d walk; writes, previews and `/effective` walk it) stays above 0 for 10 minutes, the platform alert `TenantApiStoreUnreadable` (warning) fires; after the repair the next walk returns it to 0 and the alert clears. Dangling symlinks are not counted.
+- **Monitoring**: when `tenant_api_store_unreadable_entries{reason}` (a gauge tenant-api computes at scrape time by walking conf.d itself — classification only, no parsing, at most once per 30 seconds, never blocking on a FIFO) stays above 0 for 10 minutes, the platform alert `TenantApiStoreUnreadable` (warning) fires. It fires with no write at all; after the repair the next scrape (at most 30 seconds later) returns it to 0 and the alert clears by itself. Unresolvable symlinks are not counted.
 
 ---
 

@@ -261,3 +261,84 @@ func TestTreeUnreadableError_NamesEveryEntry(t *testing.T) {
 		t.Errorf("perTarget[t.yaml] = %v, want the target's own refusal", perTarget["t.yaml"])
 	}
 }
+
+// R4-N2: a loop or a path through a non-directory makes a symlink as
+// unresolvable as a dangling target — no content, recorded by git (120000)
+// — so elsewhere it refuses every path as git-fixable (not a store fault),
+// committed so the PR modes see it too.
+func TestTreeUnreadable_UnresolvableLinksElsewhereAreGitFixable(t *testing.T) {
+	for _, c := range []struct{ name, link, target string }{
+		{"loop", "loop.yaml", "loop.yaml"},
+		{"enotdir", "notdir.yaml", "un-t.yaml/below.yaml"},
+	} {
+		for _, mode := range treeVerdictModes {
+			t.Run(c.name+"/"+mode, func(t *testing.T) {
+				dir := seedTreeRepo(t, map[string]string{"un-t.yaml": tenantBody("un-t")})
+				if err := os.Symlink(c.target, filepath.Join(dir, c.link)); err != nil {
+					t.Skipf("symlink: %v", err)
+				}
+				gitRun(t, dir, "add", "-A")
+				gitRun(t, dir, "commit", "-m", "unresolvable link")
+				err := treeVerdictVia(t, mode, NewWriter(dir, dir), "un-t")
+				assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: c.link, Reason: cfg.UnreadableStatError}}, false)
+			})
+		}
+	}
+}
+
+// R4-N2: the written tenant file being a self-loop is the repair path in
+// every mode: the write replaces the link with a regular file holding the
+// body (on the branch, in the PR modes) and nothing reads through it.
+func TestTreeUnreadable_SelfLoopTargetIsTheRepairPath(t *testing.T) {
+	for _, mode := range append(append([]string{}, directTreeModes...), "WritePR", "WritePRBatch") {
+		t.Run(mode, func(t *testing.T) {
+			dir := seedTreeRepo(t, map[string]string{"other-t.yaml": tenantBody("other-t")})
+			target := filepath.Join(dir, "loop-t.yaml")
+			if err := os.Symlink("loop-t.yaml", target); err != nil {
+				t.Skipf("symlink: %v", err)
+			}
+			pr := mode == "WritePR" || mode == "WritePRBatch"
+			if pr {
+				gitRun(t, dir, "add", "-A")
+				gitRun(t, dir, "commit", "-m", "self-loop tenant file")
+			}
+			w := NewWriter(dir, dir)
+			body := tenantBody("loop-t")
+			var branch string
+			switch mode {
+			case "WritePR":
+				res, err := w.WritePR(context.Background(), "loop-t", "op@example.com", body)
+				if err != nil {
+					t.Fatalf("WritePR: %v", err)
+				}
+				branch = res.BranchName
+			case "WritePRBatch":
+				res, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "loop-t",
+					Merge: func([]byte) (string, error) { return body, nil }}}, "op@example.com")
+				if err != nil {
+					t.Fatalf("WritePRBatch: %v", err)
+				}
+				branch = res.BranchName
+			default:
+				if err := treeVerdictVia(t, mode, w, "loop-t"); err != nil {
+					t.Fatalf("%s: err = %v, want accepted", mode, err)
+				}
+			}
+			switch {
+			case mode == "DryRunValidate" || mode == "Diff":
+			case pr:
+				remote := gitOut(t, dir, "remote", "get-url", "origin")
+				if ls := gitOut(t, remote, "ls-tree", branch, "loop-t.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+					t.Errorf("%s: loop-t.yaml on %s = %q, want a regular file", mode, branch, ls)
+				}
+			default:
+				if fi, err := os.Lstat(target); err != nil || !fi.Mode().IsRegular() {
+					t.Fatalf("loop-t.yaml after the write: %v, %v; want a regular file", fi, err)
+				}
+				if got, _ := os.ReadFile(target); string(got) != body {
+					t.Errorf("loop-t.yaml = %q, want the body", got)
+				}
+			}
+		})
+	}
+}

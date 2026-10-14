@@ -411,10 +411,9 @@ type Writer struct {
 	// (scanTreeForRead).
 	treePrior atomic.Pointer[cfg.TreeScan]
 
-	// storeUnreadable is StoreFaultCounts of the last serving conf.d walk
-	// that completed (the walks that become treePrior), nil before the
-	// first. Read by StoreUnreadable for tenant_api_store_unreadable_entries.
-	storeUnreadable atomic.Pointer[map[string]int]
+	// storeScan is the tenant_api_store_unreadable_entries gauge's own
+	// conf.d walk, cached (StoreUnreadable, store_health.go).
+	storeScan storeScanCache
 
 	// onTreeScan is a TEST-ONLY seam (#2153): walkTree calls it, when
 	// non-nil, once per walk it starts, on the walking goroutine inside the
@@ -830,7 +829,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	if baseHash != "" {
 		// confd.ReadRegularFile (cfg.ReadConfFile): a tenant file that is a
 		// FIFO is refused without blocking under the writer lock (#2939).
-		existing, rerr := confd.ReadRegularFile(filePath)
+		existing, rerr := readTenantFile(filePath)
 		if rerr != nil && !os.IsNotExist(rerr) {
 			return nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 		}
@@ -943,12 +942,29 @@ func (w *Writer) previewTenantFilePath(tenantID string) (string, error) {
 	return w.resolveTenantFilePath(tenantID, w.scanTreeForRead)
 }
 
+// JudgeWrite is the verdict a write of tenantID would get from the tree
+// before any byte of its body is looked at — the same resolution and the
+// same judgement (resolveTenantFilePath: placement, judgeTree) Write and the
+// previews give, on the shared read walk, without a lock. A handler that
+// must read the tenant file before it can call the Writer (PUT
+// …/custom-alerts merges into it) asks this first, so that it answers the
+// same tree with the same verdict as PUT and /diff: a store fault before the
+// file's own unreadability (#2939 R4-N3). The write itself is judged again,
+// under the lock.
+func (w *Writer) JudgeWrite(tenantID string) error {
+	if err := guardTenantID(tenantID); err != nil {
+		return err
+	}
+	_, err := w.previewTenantFilePath(tenantID)
+	return err
+}
+
 // resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath;
 // walk is the conf.d walk the #2078 guard judges. The same walk then decides
 // #2939's whole-tree verdict (refuseUnreadableTree): an unreadable conf.d
 // entry refuses the write — and, the preview resolving here too, the
 // preview — with *TreeUnreadableError (git-fixable, or a store fault), or,
-// for path itself when it is not a dangling symlink, *TargetUnreadableError.
+// for path itself when it is not an unresolvable symlink, *TargetUnreadableError.
 func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeScan, error)) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
@@ -964,6 +980,10 @@ func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeSc
 		return "", err
 	}
 	if err := refuseUnreadableTree(scan, confRelKey(w.configDir, path), tenantID); err != nil {
+		var te *TargetUnreadableError
+		if errors.As(err, &te) {
+			return "", err // its text already names the tenant
+		}
 		return "", fmt.Errorf("tenant %s: %w", tenantID, err)
 	}
 	return path, nil
@@ -1121,27 +1141,7 @@ func (w *Writer) walkTreeFrom(stuck *atomic.Int32, withPrior bool) (*cfg.TreeSca
 	if withPrior {
 		prior = w.treePrior.Load()
 	}
-	return w.walkDir(w.configDir, stuck, prior, func(s *cfg.TreeScan) {
-		w.treePrior.Store(s)
-		counts := StoreFaultCounts(s)
-		w.storeUnreadable.Store(&counts)
-	})
-}
-
-// StoreUnreadable returns the store faults (#2939, see judgeTree) of the
-// last serving conf.d walk that completed, by the walker's reason — a write,
-// a preview or a read of /effective walks it — and ok false before any walk
-// completed. The map is the caller's.
-func (w *Writer) StoreUnreadable() (counts map[string]int, ok bool) {
-	p := w.storeUnreadable.Load()
-	if p == nil {
-		return nil, false
-	}
-	counts = make(map[string]int, len(*p))
-	for k, v := range *p {
-		counts[k] = v
-	}
-	return counts, true
+	return w.walkDir(w.configDir, stuck, prior, func(s *cfg.TreeScan) { w.treePrior.Store(s) })
 }
 
 // walkDir is the bounded conf.d walk of root with prior as the walker's prior;
@@ -1236,14 +1236,15 @@ func (w *Writer) ensureNotDeclaredElsewhereIn(walk func() (*cfg.TreeScan, error)
 // and the authoritative pass can run the SAME read+merge under DIFFERENT
 // validators (#1718) without a second copy of either step.
 //
-// The read is confd.ReadRegularFile — cfg.ReadConfFile with the refusal
+// The read is readTenantFile: confd.ReadRegularFile — cfg.ReadConfFile with the refusal
 // mapped to confd.ErrNotRegularFile: a tenant file that is a FIFO (or a
 // socket, a device) fails at once instead of blocking under the writer lock
 // (#2939); the handlers refuse such a file before calling, but the Writer
-// does not rely on that. A missing file (a dangling symlink included) is
-// os.IsNotExist, as before.
+// does not rely on that. A missing file — and an unresolvable symlink (a
+// dangling, looping or ENOTDIR link: no content, replaced by the write) —
+// is os.IsNotExist.
 func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, err error) {
-	existing, rerr := confd.ReadRegularFile(filePath)
+	existing, rerr := readTenantFile(filePath)
 	if rerr != nil && !os.IsNotExist(rerr) {
 		return "", nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
 	}
@@ -1403,7 +1404,7 @@ func (w *Writer) PreviewCurrent(tenantID string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	existing, err := confd.ReadRegularFile(filePath) // never blocks on a FIFO (#2939)
+	existing, err := readTenantFile(filePath) // never blocks on a FIFO (#2939)
 	if os.IsNotExist(err) {
 		return nil, false, nil
 	}
@@ -1797,7 +1798,7 @@ func CheckTenantDocSize(yamlContent string) []string {
 // STATIC" (#1718). Three of validate's checks read the tree and are therefore
 // only meaningful against the tree the write lands on:
 //
-//   - addedTenantKeys      ← confd.ReadRegularFile(tenantFilePath)
+//   - addedTenantKeys      ← readTenantFile(tenantFilePath)
 //   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>'s root defaults
 //     carrier (the one the exporter's chain selects, #1674) and the root
 //     platform files' per-tenant `tenants:` entries (#2208)
@@ -2000,7 +2001,7 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 	var baseRaw []byte
 	var baseErr error
 	if configDir != "" {
-		baseRaw, baseErr = confd.ReadRegularFile(tenantFilePath) // never blocks on a FIFO (#2939)
+		baseRaw, baseErr = readTenantFile(tenantFilePath) // never blocks on a FIFO (#2939)
 	}
 	// DELTA, not absolute: a flat conf.d file may legitimately declare several
 	// tenants and the exporter serves them, so sections already in the file

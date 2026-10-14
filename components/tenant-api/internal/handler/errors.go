@@ -134,14 +134,16 @@ const (
 	// and names the reason instead of waiting on the file.
 	CodeTenantConfigNotLoadable = "TENANT_CONFIG_NOT_LOADABLE"
 	// CodeTenantTreeUnreadable marks a write refused because conf.d holds a
-	// dangling symlink (a stat_error whose target does not exist) other than
+	// symlink that cannot be resolved — a dangling target, a loop, a path
+	// through a non-directory (a stat_error of ENOENT / ELOOP / ENOTDIR) —
+	// other than
 	// the file(s) the write itself replaces (#2939, ADR-036 §4: the tree
 	// after the write is judged, and the route generator refuses such a tree
 	// whole). The link is content git holds, so the client repairs it in
 	// git. 409 on a single write (PUT /tenants/{id}, PUT …/custom-alerts, and
 	// the POST …/diff preview); carried per op on a rejected (422) tenant or
 	// group batch (BatchResult.Code), in both write modes. Nothing was
-	// written. A tenant file that is itself a dangling symlink does not
+	// written. A tenant file that is itself an unresolvable symlink does not
 	// count: the write replaces it (the repair path). The entries are named
 	// only to a caller with write permission on all tenants
 	// (rbac.PlatformUnrestricted); every other caller gets their number
@@ -152,8 +154,8 @@ const (
 	// tenant-api's own copy of conf.d holds an entry the server cannot read
 	// and git cannot hold — a FIFO, socket or device named like a config
 	// file (special_file), a failed read (read_error), a sub-directory that
-	// cannot be listed (walk_error), a failed stat that is not a dangling
-	// link — other than the written tenant file (#2939 D3c). It is a fault of
+	// cannot be listed (walk_error), a failed stat that is not an
+	// unresolvable link (e.g. EACCES) — other than the written tenant file (#2939 D3c). It is a fault of
 	// the server's storage, not of the configuration, so it is repaired on
 	// the server or its volume (or the copy is reset from git), never through
 	// a write. Wins over TENANT_TREE_UNREADABLE when both are present. A
@@ -240,8 +242,9 @@ const msgTenantTreeScan = "cannot verify where the tenant is declared in conf.d;
 
 // msgTenantTreeUnreadable is the fixed head of every TENANT_TREE_UNREADABLE
 // text (treeUnreadableText).
-const msgTenantTreeUnreadable = "conf.d holds dangling symlinks, and the route generator refuses " +
-	"a tree with any of them; nothing was written — repair or remove them in git"
+const msgTenantTreeUnreadable = "conf.d holds symlinks that cannot be resolved (dangling, looping, or " +
+	"with a non-directory in their path), and the route generator refuses a tree with any of them; " +
+	"nothing was written — repair or remove them in git"
 
 // msgTenantStoreFault is the fixed head of every TENANT_STORE_FAULT text
 // (treeUnreadableText).
@@ -287,7 +290,7 @@ func treeRefusal(te *gitops.TreeUnreadableError) (head, code string, status int)
 }
 
 // targetUnreadableText is the client text of a write refused because its own
-// tenant file is unreadable and not a dangling symlink
+// tenant file is unreadable and not an unresolvable symlink
 // (gitops.TargetUnreadableError, #2939 D3c). It names only that file.
 func targetUnreadableText(e *gitops.TargetUnreadableError) string {
 	if e.ConfigError() == confd.ProblemNotRegularFile {

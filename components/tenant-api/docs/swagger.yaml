@@ -2064,15 +2064,17 @@ paths:
             file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE;
             nothing written), the tenant''s conf.d file is not a regular file (code
             TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written),
-            or code TENANT_TREE_UNREADABLE when conf.d holds a dangling symlink other
-            than the file this write replaces (#2939, ADR-036 §4: the tree after the
-            write is judged; repair it in git; nothing written; unreadable_count always,
+            or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink
+            (dangling, looping, or with a non-directory in its path) other than the
+            file this write replaces (#2939, ADR-036 §4: the tree after the write
+            is judged; repair it in git; nothing written; unreadable_count always,
             the entries'' names and reasons in the text and in unreadable only for
             a caller with write permission on all tenants). The tenant''s own file
             being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
             (config_error unreadable or not_regular_file) for every caller: it is
-            never replaced. A tenant file that is itself a dangling symlink does not
-            count: the write replaces it'
+            never replaced. A tenant file that is itself an unresolvable symlink (dangling,
+            looping, or with a non-directory in its path) does not count: the write
+            replaces it'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2086,10 +2088,10 @@ paths:
             own copy of conf.d holds an entry the server cannot read and git cannot
             hold — a FIFO, socket or device named like a config file, a file whose
             read fails, a sub-directory that cannot be listed, a failed stat that
-            is not a dangling link — other than the written tenant file; it is fixed
-            on the server or its volume (or by resetting the copy from git), not by
-            a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names
-            disclosed as for TENANT_TREE_UNREADABLE'
+            is not an unresolvable link — other than the written tenant file; it is
+            fixed on the server or its volume (or by resetting the copy from git),
+            not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry
+            names disclosed as for TENANT_TREE_UNREADABLE'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "501":
@@ -2158,7 +2160,7 @@ paths:
         repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
         not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
         whole-file PUT refuses it too, so replace it with a regular file in git.
-        409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds a dangling symlink other
+        409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other
         than the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot
         read (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's
         own file cannot be read.
@@ -2197,12 +2199,13 @@ paths:
           description: 'Conflict: base_hash drift (CONFLICT), the tenant file cannot
             be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant
             is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code
-            TENANT_TREE_UNREADABLE when conf.d holds a dangling symlink other than
-            the file this write replaces (#2939, ADR-036 §4: the tree after the write
-            is judged; repair it in git; nothing written; unreadable_count always,
-            the entries'' names and reasons in the text and in unreadable only for
-            a caller with write permission on all tenants). The tenant''s own file
-            being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
+            TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling,
+            looping, or with a non-directory in its path) other than the file this
+            write replaces (#2939, ADR-036 §4: the tree after the write is judged;
+            repair it in git; nothing written; unreadable_count always, the entries''
+            names and reasons in the text and in unreadable only for a caller with
+            write permission on all tenants). The tenant''s own file being unreadable
+            in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
             (config_error unreadable or not_regular_file) for every caller: it is
             never replaced'
           schema:
@@ -2216,10 +2219,10 @@ paths:
             own copy of conf.d holds an entry the server cannot read and git cannot
             hold — a FIFO, socket or device named like a config file, a file whose
             read fails, a sub-directory that cannot be listed, a failed stat that
-            is not a dangling link — other than the written tenant file; it is fixed
-            on the server or its volume (or by resetting the copy from git), not by
-            a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names
-            disclosed as for TENANT_TREE_UNREADABLE'
+            is not an unresolvable link — other than the written tenant file; it is
+            fixed on the server or its volume (or by resetting the copy from git),
+            not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry
+            names disclosed as for TENANT_TREE_UNREADABLE'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "501":
@@ -2271,13 +2274,14 @@ paths:
         "409":
           description: 'Conflict: the PUT this previews would be refused — ambiguous
             tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE
-            when conf.d holds a dangling symlink other than the file this write replaces
-            (#2939, ADR-036 §4: the tree after the write is judged; repair it in git;
-            nothing written; unreadable_count always, the entries'' names and reasons
-            in the text and in unreadable only for a caller with write permission
-            on all tenants). The tenant''s own file being unreadable in any other
-            way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error
-            unreadable or not_regular_file) for every caller: it is never replaced'
+            when conf.d holds an unresolvable symlink (dangling, looping, or with
+            a non-directory in its path) other than the file this write replaces (#2939,
+            ADR-036 §4: the tree after the write is judged; repair it in git; nothing
+            written; unreadable_count always, the entries'' names and reasons in the
+            text and in unreadable only for a caller with write permission on all
+            tenants). The tenant''s own file being unreadable in any other way (a
+            failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
+            or not_regular_file) for every caller: it is never replaced'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2293,10 +2297,10 @@ paths:
             own copy of conf.d holds an entry the server cannot read and git cannot
             hold — a FIFO, socket or device named like a config file, a file whose
             read fails, a sub-directory that cannot be listed, a failed stat that
-            is not a dangling link — other than the written tenant file; it is fixed
-            on the server or its volume (or by resetting the copy from git), not by
-            a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names
-            disclosed as for TENANT_TREE_UNREADABLE (the 500 the PUT this previews
+            is not an unresolvable link — other than the written tenant file; it is
+            fixed on the server or its volume (or by resetting the copy from git),
+            not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry
+            names disclosed as for TENANT_TREE_UNREADABLE (the 500 the PUT this previews
             would get)'
           schema:
             $ref: '#/definitions/ErrorResponse'
@@ -2509,7 +2513,7 @@ paths:
         Dry-run validation of a tenant YAML without writing to disk.
         When conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is
         valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
-        dangling symlink) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
+        symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
         when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
       parameters:
       - description: Tenant ID
@@ -2610,12 +2614,13 @@ paths:
             TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE,
             CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied
             for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch
-            holds a dangling symlink that no operation replaces; every operation not
-            refused for another reason carries it; an operation whose own tenant file
-            cannot be read (and is not a dangling symlink) is TENANT_CONFIG_NOT_LOADABLE,
-            and the message names the entries only for a caller with write permission
-            on all tenants (otherwise their number); an async task''s stored results
-            never name them.'
+            holds an unresolvable symlink (dangling, looping, or with a non-directory
+            in its path) that no operation replaces; every operation not refused for
+            another reason carries it; an operation whose own tenant file cannot be
+            read (and is not an unresolvable symlink (dangling, looping, or with a
+            non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message
+            names the entries only for a caller with write permission on all tenants
+            (otherwise their number); an async task''s stored results never name them.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "500":

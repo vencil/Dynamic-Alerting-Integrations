@@ -36,7 +36,7 @@ type ValidateResponse struct {
 // @Description Dry-run validation of a tenant YAML without writing to disk.
 // @Description When conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is
 // @Description valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
-// @Description dangling symlink) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
+// @Description symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
 // @Description when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
 // @Tags        tenants
 // @Accept      application/yaml

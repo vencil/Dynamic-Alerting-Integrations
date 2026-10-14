@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -177,6 +178,9 @@ func TestTreeUnreadable_UnreadableTargetIsRefusedForEveryCaller(t *testing.T) {
 				if errors.Is(err, ErrTenantTreeUnreadable) || errors.Is(err, ErrTenantStoreFault) {
 					t.Errorf("%s: err = %v: the target was also counted against the tree", mode, err)
 				}
+				if n := strings.Count(err.Error(), "tenant un-t:"); n != 1 {
+					t.Errorf("%s: err = %q names the tenant %d times, want once", mode, err, n)
+				}
 			})
 		}
 	}
@@ -211,34 +215,53 @@ func TestTreeUnreadable_StoreFaultWinsOverDanglingLink(t *testing.T) {
 	}
 }
 
-// The tenant_api_store_unreadable_entries source: after a serving walk the
-// Writer reports that walk's store faults by reason — a dangling link is not
-// one — and nothing before its first walk.
-func TestWriter_StoreUnreadableCountsTheLastWalk(t *testing.T) {
+// The tenant_api_store_unreadable_entries source walks conf.d itself, at
+// scrape time (R4-N4): with no write at all, a FIFO, a read_error and an
+// unlistable directory each count once — an unresolvable link does not —
+// and the count clears by itself once the entry is gone, after the minimum
+// interval (a fake clock, no sleep).
+func TestWriter_StoreUnreadableWalksAtScrapeTime(t *testing.T) {
 	mem, ok := testutil.ProcSelfMem()
 	if !ok {
 		t.Skip("no /proc/self/mem that fails to read")
 	}
 	dir := seedTreeRepo(t, map[string]string{"cnt-t.yaml": tenantBody("cnt-t")})
 	w := NewWriter(dir, dir)
-	if _, ok := w.StoreUnreadable(); ok {
-		t.Fatal("StoreUnreadable reported counts before any walk")
+	clock := time.Unix(1_000_000, 0)
+	w.storeScan.now = func() time.Time { return clock }
+	w.storeScan.minInterval = 30 * time.Second
+	if got, ok := w.StoreUnreadable(); !ok || len(got) != 0 {
+		t.Fatalf("clean tree: %v, %v; want no store fault", got, ok)
 	}
-	mkfifoReleased(t, filepath.Join(dir, "stuck.yaml"))
+	fifo := filepath.Join(dir, "stuck.yaml")
+	mkfifoReleased(t, fifo)
 	if err := os.Symlink(mem, filepath.Join(dir, "eio.yaml")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink("missing-target.yaml", filepath.Join(dir, "gone.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	testutil.UnlistableDeepDir(t, dir, 100)
-	if _, _, err := w.DryRunValidate(context.Background(), "cnt-t", tenantBody("cnt-t")); !errors.Is(err, ErrTenantStoreFault) {
-		t.Fatalf("DryRunValidate: %v, want the store fault", err)
+	if err := os.Symlink("loop.yaml", filepath.Join(dir, "loop.yaml")); err != nil {
+		t.Fatal(err)
 	}
-	got, ok := w.StoreUnreadable()
+	testutil.UnlistableDeepDir(t, dir, 100)
+	clock = clock.Add(10 * time.Second)
+	if got, _ := w.StoreUnreadable(); len(got) != 0 {
+		t.Errorf("within the minimum interval: %v, want the cached clean walk", got)
+	}
+	clock = clock.Add(25 * time.Second)
+	got, _ := w.StoreUnreadable()
 	want := map[string]int{cfg.UnreadableSpecialFile: 1, cfg.UnreadableReadError: 1, cfg.UnreadableWalkError: 1}
-	if !ok || !reflect.DeepEqual(got, want) {
-		t.Errorf("StoreUnreadable = %v, %v; want %v (the dangling link not counted)", got, ok, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the interval, no write: %v, want %v (the unresolvable links not counted)", got, want)
+	}
+	if err := os.Remove(fifo); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(31 * time.Second)
+	got, _ = w.StoreUnreadable()
+	if got[cfg.UnreadableSpecialFile] != 0 || got[cfg.UnreadableReadError] != 1 {
+		t.Errorf("after removing the FIFO: %v, want special_file 0 (read_error still 1)", got)
 	}
 }
 

@@ -3,15 +3,16 @@ package handler
 // tenant-api's own copy of conf.d (#2939 D3c). An entry the server cannot
 // read and git cannot hold — a FIFO, socket or device named like a config
 // file, a failed read, a sub-directory that cannot be listed, a failed stat
-// that is not a dangling link — refuses every write with 500
+// that is not an unresolvable link — refuses every write with 500
 // TENANT_STORE_FAULT (gitops.ErrTenantStoreFault). Nothing a client sends
 // can clear it, so it is exposed here for the operator:
 //
-//   - tenant_api_store_unreadable_entries{reason} — the store faults of the
-//     last conf.d walk tenant-api completed (a write, a preview, a read of
-//     /effective walks it), by the walker's reason: special_file,
-//     read_error, walk_error, stat_error. 0 for every reason before the
-//     first walk. Alert TenantApiStoreUnreadable on > 0.
+//   - tenant_api_store_unreadable_entries{reason} — the store faults of
+//     conf.d by the walker's reason (special_file, read_error, walk_error,
+//     stat_error), walked at scrape time — classification only, at most
+//     once per 30s (gitops.Writer.StoreUnreadable) — so it is true while
+//     nobody writes and clears by itself after a repair. 0 for every reason
+//     when no walk completed. Alert TenantApiStoreUnreadable on > 0.
 
 import (
 	"fmt"
@@ -53,7 +54,7 @@ func writeStoreUnreadableMetricsFrom(w io.Writer, src storeUnreadableSource) {
 	if src != nil {
 		counts, _ = src.StoreUnreadable()
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_unreadable_entries Entries of tenant-api's own conf.d copy the server cannot read and git cannot hold (a FIFO/socket/device named like a config file, a failed read, an unlistable directory, a failed stat that is not a dangling link), by reason, as of the last conf.d walk (a write, a preview or /effective). While > 0 every write answers 500 TENANT_STORE_FAULT; repair the volume or reset the copy from git. Alert on > 0.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_store_unreadable_entries Entries of tenant-api's own conf.d copy the server cannot read and git cannot hold (a FIFO/socket/device named like a config file, a failed read, an unlistable directory, a failed stat that is not an unresolvable link), by reason, walked at scrape time (at most every 30s). While > 0 every write answers 500 TENANT_STORE_FAULT; repair the volume or reset the copy from git. Alert on > 0.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_store_unreadable_entries gauge\n")
 	for _, reason := range storeUnreadableReasons {
 		_, _ = fmt.Fprintf(w, "tenant_api_store_unreadable_entries{reason=%q} %d\n", reason, counts[reason])

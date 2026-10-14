@@ -23,6 +23,7 @@ import (
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/testutil"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -330,4 +331,75 @@ func TestTreeUnreadable_AsyncGroupBatchStoresNoEntryNames(t *testing.T) {
 			t.Errorf("%s polls: the stored result names the entry: %s", poller, got.Body.String())
 		}
 	}
+}
+
+// R4-N2: an unresolvable symlink — no content, recorded by git as 120000 —
+// elsewhere is git-fixable whatever makes it unresolvable: a loop or a path
+// through a non-directory answers like a dangling link, 409 on PUT and
+// /diff and 422 per op on a batch.
+func TestTreeUnreadable_UnresolvableLinksElsewhereAre409(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, link, target string }{
+		{"loop", "loop.yaml", "loop.yaml"},
+		{"enotdir", "notdir.yaml", "tu-a.yaml/below.yaml"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newTreeFixture(t)
+			if err := os.Symlink(c.target, filepath.Join(f.dir, c.link)); err != nil {
+				t.Skipf("symlink: %v", err)
+			}
+			assertTreeRefusal(t, f.put(t, "platform", "tu-a"), c.link, true)
+			assertTreeRefusal(t, f.do(t, DiffTenant(f.d), rbac.PermRead, "platform", "POST", "/api/v1/tenants/tu-a/diff", "tu-a",
+				"tenants:\n  tu-a:\n    _silent_mode: \"critical\"\n"), c.link, true)
+			assertBatchTreeRefusal(t, f.batch(t, "platform", "tu-a"), c.link, true)
+		})
+	}
+}
+
+// R4-N2: the written tenant file being a self-loop (`tu-l.yaml -> tu-l.yaml`)
+// is the repair path, as a dangling one: PUT goes through, for a scoped
+// caller too, and leaves a regular file and a readable tree.
+func TestTreeUnreadable_PutOverSelfLoopTargetRepairsTheTree(t *testing.T) {
+	t.Parallel()
+	f := newTreeFixture(t)
+	target := filepath.Join(f.dir, "tu-l.yaml")
+	if err := os.Symlink("tu-l.yaml", target); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if w := f.put(t, "team,readers", "tu-l"); w.Code != http.StatusOK {
+		t.Fatalf("PUT over the self-loop tenant file = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if fi, err := os.Lstat(target); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("tu-l.yaml after PUT: %v, %v; want a regular file", fi, err)
+	}
+	scan, err := cfg.ScanDirTree(f.dir, nil, nil, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scan.Unreadable) != 0 {
+		t.Errorf("tree after the repair still has unreadable entries: %v", scan.Unreadable)
+	}
+}
+
+// R4-N2: a symlink whose stat fails with EACCES is not unresolvable — git
+// cannot fix a permission on the server — so it is a store fault (500).
+// Under euid 0 the permission bits never refuse the stat, so the shape
+// cannot be built there: skipped, saying so.
+func TestTreeUnreadable_EACCESLinkElsewhereIsStoreFault(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("euid 0: a mode-000 directory does not refuse root's stat, so no EACCES symlink can be built")
+	}
+	f := newTreeFixture(t)
+	locked := t.TempDir()
+	testutil.WriteYAML(t, locked, "x.yaml", "tenants: {}\n")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if err := os.Symlink(filepath.Join(locked, "x.yaml"), filepath.Join(f.dir, "denied.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	assertTreeRefusalAs(t, f.put(t, "platform", "tu-a"), http.StatusInternalServerError, CodeTenantStoreFault, 1, "denied.yaml", true)
 }

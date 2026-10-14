@@ -479,7 +479,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) (out BatchOpOutcome, 
 //     to get past it — the same shape as a batch that cannot be copied,
 //     committed or admitted (TREE_NOT_ON_BASE, WRITE_OVERLOADED). It wins
 //     over every per-op refusal, as on a single write.
-//   - An op whose own tenant file is unreadable and not a dangling symlink
+//   - An op whose own tenant file is unreadable and not an unresolvable symlink
 //     gets that *TargetUnreadableError as its refusal (it replaces any
 //     error its merge hit reading the file, which says less).
 //   - Dangling symlinks no op replaces (ErrTenantTreeUnreadable): every op
