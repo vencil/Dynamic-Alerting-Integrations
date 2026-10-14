@@ -44,6 +44,8 @@ from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
 from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
 from diagnose import CommandNotFoundError  # noqa: E402  (#2493)
+from diagnose import CommandTimeoutError, DEADLINE_GRACE_S  # noqa: E402  (#2968)
+from diagnose import deadline as diagnose_deadline  # noqa: E402  (#2968)
 from _lib_python import (  # noqa: E402
     add_prometheus_arg, format_json_report, positive_int, positive_seconds,
     write_json_or_die,
@@ -166,9 +168,11 @@ def _check_tenant(tenant, prom_url):
             result = json.loads(output)
         else:
             result = {"status": "error", "tenant": tenant, "issues": ["empty output"]}
-    except CommandNotFoundError as exc:
-        # `da-tools diagnose` alone exits 2 on this (the environment lacks
-        # kubectl), not 1; keep the same class here (#2493).
+    except (CommandNotFoundError, CommandTimeoutError) as exc:
+        # `da-tools diagnose` alone exits 2 on these (the environment lacks
+        # kubectl, or it did not answer in time), not 1; keep the same class
+        # here (#2493, #2968). Before the generic OSError branch below, which
+        # CommandTimeoutError would otherwise fall into.
         result = {"status": "error", "tenant": tenant, "issues": [str(exc)],
                   "_environment_error": True}
     except (OSError, json.JSONDecodeError, ValueError) as exc:
@@ -186,16 +190,31 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
     #2954: the check runs in a daemon thread joined with `timeout_sec`; a
     check still running then is reported as an environment error (it could
     not be completed, like a missing kubectl), and the thread is left behind —
-    Python cannot stop it, but the batch no longer waits for it. A kubectl it
-    started is not killed either: it outlives the batch until its own 120s
-    subprocess timeout would have fired, or longer (#2968).
+    Python cannot stop it, but the batch no longer waits for it.
+
+    #2968: the thread runs under diagnose.deadline(start + timeout_sec), so
+    each kubectl it starts gets the time left minus a grace and is killed by
+    subprocess before the join below gives up (an environment error, rc 2,
+    like the join's own timeout); past the deadline none is started, and a
+    Prometheus query gets at most the time left. The grace is
+    min(DEADLINE_GRACE_S, timeout_sec / 4): a --timeout at or below the fixed
+    0.5s would otherwise leave kubectl no time at all and report "the
+    deadline has passed" before anything ran. That shrunken grace is
+    best-effort: with a --timeout under about 0.5s, or a heavily loaded
+    machine, a kubectl can still outlive the batch (see
+    diagnose.DEADLINE_GRACE_S). Only kubectl itself is killed, not a
+    credential plugin it started (see diagnose._DEADLINE).
     """
     start = time.monotonic()
     box = {}
+    grace = min(DEADLINE_GRACE_S, timeout_sec / 4)
 
     def _work():
         try:
-            box["result"] = _check_tenant(tenant, prom_url)
+            # ⚠️ Set here, in the tenant's own thread: a new thread does not
+            # inherit the context of the thread that started it.
+            with diagnose_deadline(start + timeout_sec, grace=grace):
+                box["result"] = _check_tenant(tenant, prom_url)
         except BaseException as exc:  # noqa: BLE001 — re-raised in the caller below
             box["exc"] = exc
 

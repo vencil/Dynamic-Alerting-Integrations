@@ -25,10 +25,14 @@ Returns JSON: {"status": "healthy"|"error", "tenant", ...}
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
+import inspect
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TextIO
 
@@ -95,6 +99,73 @@ class CommandNotFoundError(FileNotFoundError):
     """
 
 
+class CommandTimeoutError(OSError):
+    """The external command (kubectl) did not finish within its time budget.
+
+    An environment failure like CommandNotFoundError (rc 2), not a finding
+    about the tenant (#2968): the CLI prints one line, batch_diagnose marks
+    the tenant `_environment_error`. Deliberately NOT a FileNotFoundError
+    subclass, so batch_diagnose has to name it rather than let it fall into
+    its generic OSError branch (rc 1).
+    """
+
+
+# #2968: the time budget a caller (batch_diagnose) puts on everything check()
+# runs: `(at, grace)`, `at` a time.monotonic() value. None — the default, and
+# what a lone `da-tools diagnose` runs with — leaves each call at its own cap.
+#
+# ⚠️ A ContextVar rather than a parameter, so check()'s signature and every
+# test double of it stay as they are. The price is that it is implicit:
+#   - A new thread does NOT inherit it (each thread starts from an empty
+#     context on the Pythons this supports), which is why batch_diagnose sets
+#     it INSIDE the tenant's own thread. Should check() ever start a thread of
+#     its own, run that thread's target under contextvars.copy_context(), or
+#     the deadline silently stops applying there.
+#   - Only the direct child is killed when its budget runs out
+#     (subprocess's own timeout). A process kubectl itself starts — an exec
+#     credential plugin such as `aws eks get-token`, gke-gcloud-auth-plugin,
+#     kubelogin — is not, and may outlive the run. Killing the whole process
+#     group (start_new_session + killpg) is deferred until a plugin orphan is
+#     actually reported: detaching the child from the foreground group makes
+#     Ctrl-C leave it running instead.
+_DEADLINE: contextvars.ContextVar[tuple[float, float] | None] = contextvars.ContextVar(
+    "diagnose_deadline", default=None)
+# How long before the caller's deadline a subprocess is made to give up, so
+# subprocess kills and reaps it while the caller is still waiting on the
+# thread. A conservative margin, not a measured threshold: 0 left no orphan
+# kubectl in 35 stressed runs either. batch_diagnose shrinks it for a
+# --timeout too short to leave the subprocess any time (min(this, timeout/4)).
+# ⚠️ No guarantee below that: with a --timeout under about 0.5s, or a heavily
+# loaded machine, the shrunken grace can be too short for fork/exec plus the
+# kill, and a kubectl may still outlive the run (measured under 8 busy loops
+# on 4 cores: --timeout 0.05 left 10 of 80, 0.3 left 3 of 80, 0.5+ none).
+DEADLINE_GRACE_S = 0.5
+KUBECTL_TIMEOUT_S = 120
+PROMETHEUS_TIMEOUT_S = inspect.signature(
+    query_prometheus_instant).parameters["timeout"].default
+
+
+@contextlib.contextmanager
+def deadline(at: float, *, grace: float = DEADLINE_GRACE_S):
+    """Bound every run_cmd / query_prometheus in this context (this thread
+    only — see _DEADLINE) by `at`, a time.monotonic() value; a subprocess is
+    given up to `grace` seconds less."""
+    token = _DEADLINE.set((at, grace))
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+def _time_left(with_grace: bool) -> float | None:
+    """Seconds before the deadline (minus its grace when asked), or None."""
+    bound = _DEADLINE.get()
+    if bound is None:
+        return None
+    at, grace = bound
+    return at - time.monotonic() - (grace if with_grace else 0.0)
+
+
 def run_cmd(cmd: list[str]) -> str | None:
     """Execute a command safely using list arguments only (no shell=True).
 
@@ -104,12 +175,20 @@ def run_cmd(cmd: list[str]) -> str | None:
     """
     if not isinstance(cmd, list):
         raise TypeError(f"run_cmd() requires list argument, got {type(cmd).__name__}")
+    left = _time_left(with_grace=True)
+    if left is not None and left <= 0:
+        # Never start a process the caller has already stopped waiting for.
+        raise CommandTimeoutError(f"{cmd[0]} not run: the deadline has passed")
+    budget = KUBECTL_TIMEOUT_S if left is None else min(KUBECTL_TIMEOUT_S, left)
     try:
-        return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL, timeout=120).strip()
+        return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL, timeout=budget).strip()
     except subprocess.CalledProcessError:
         return None
     except FileNotFoundError as exc:
         raise CommandNotFoundError(f"{cmd[0]} not found on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        # check_output has already killed and reaped the child (#2968).
+        raise CommandTimeoutError(f"{cmd[0]} timed out after {budget:.3g}s") from exc
 
 
 # The Pod and exporter checks below are written for MariaDB (`app=mariadb`,
@@ -147,8 +226,18 @@ def exit_code(result: dict) -> int:
     return EXIT_VIOLATION
 
 
-# Alias for backward-compat within this module
-query_prometheus = query_prometheus_instant
+def query_prometheus(prom_url: str, promql: str):
+    """query_prometheus_instant, its timeout bounded by the caller's deadline
+    (#2968; see _DEADLINE). No grace: an abandoned query leaves no process
+    behind. Past the deadline nothing is sent, and the result is a failed
+    query."""
+    left = _time_left(with_grace=False)
+    if left is None:
+        return query_prometheus_instant(prom_url, promql)
+    if left <= 0:
+        return None, "not queried: the deadline has passed"
+    return query_prometheus_instant(prom_url, promql,
+                                    timeout=min(PROMETHEUS_TIMEOUT_S, left))
 
 
 # #2526 / #2547 (step 0): the tenant's resolution — which tenants exist, the
@@ -462,8 +551,15 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
         print(json.dumps(result), file=stream)
     else:
         # 只有異常時，嘗試抓取最近的 error log（MariaDB 的 deploy 名稱）
-        logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb",
-                        "--tail=20"]) if is_mariadb else None
+        # #2968: an extra the findings above do not depend on — its timeout is
+        # recorded beside them, never raised over them (that turned a finding,
+        # rc 1, into an environment error, rc 2).
+        logs_error = None
+        try:
+            logs = run_cmd(["kubectl", "logs", "-n", tenant, "deploy/mariadb", "-c", "mariadb",
+                            "--tail=20"]) if is_mariadb else None
+        except CommandTimeoutError as exc:
+            logs, logs_error = None, str(exc)
         error_logs = [line for line in (logs or "").split('\n') if 'ERROR' in line]
 
         result = {
@@ -472,6 +568,10 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
             "issues": errors,
             "recent_logs": error_logs[:3],  # 只回傳最後 3 行錯誤
         }
+        if logs_error:
+            # Empty recent_logs because they could not be fetched, not
+            # because there were none.
+            result["recent_logs_error"] = logs_error
         if operational_mode != "normal":
             result["operational_mode"] = operational_mode
         if profile_name:
@@ -527,6 +627,12 @@ def main() -> None:
         # and a cluster context; the da-tools image ships neither.
         print(f"ERROR: {exc}; the MariaDB Pod check needs kubectl and cluster "
               "access", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    except CommandTimeoutError as exc:
+        # #2968: a kubectl that does not answer is the environment, like a
+        # missing one: rc 2 and one line, not a traceback at rc 1.
+        print(f"ERROR: {exc}; the MariaDB Pod check needs kubectl and a cluster "
+              "that answers", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     # issue 1513: `status: error` used to exit 0, so `da-tools diagnose t && …`
     # passed on an unhealthy tenant.

@@ -11,11 +11,19 @@
   - Edge cases（空 config、未知 receiver type、缺少必填欄位）
 """
 
+import contextlib
+import http.server
 import json
 import os
+import shutil
+import socket
+import ssl
+import subprocess
 import sys
+import threading
 import time
 import urllib.error
+import urllib.request
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -329,6 +337,155 @@ class TestHttpTests:
         mock_urlopen.side_effect = OSError("Network unreachable")
         recv = {"type": "webhook", "url": "https://hooks.example.com", "_label": "net-err"}
         result = nt.test_receiver(recv)
+        assert result.status == nt.STATUS_CONNECTION_REFUSED
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# test_receiver — 讀取階段逾時分類（#2965）
+# ═══════════════════════════════════════════════════════════════════════
+class _SlowHandler(http.server.BaseHTTPRequestHandler):
+    """收到請求後等待（最多約 1 秒）才回 200；teardown 時由 release 提早放行。"""
+
+    def do_POST(self):  # noqa: N802 — BaseHTTPRequestHandler 的介面名稱
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        self.server.release.wait(self.server.delay)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+        except OSError:
+            pass  # client 已因逾時斷線
+
+    def log_message(self, *args):
+        pass
+
+
+@contextlib.contextmanager
+def _slow_server(delay, tls_context=None):
+    """以 0 號 port 起本機慢 server，回傳 URL；離開時關閉。"""
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+    srv.daemon_threads = True
+    srv.delay = delay
+    srv.release = threading.Event()
+    scheme = "http"
+    if tls_context is not None:
+        srv.socket = tls_context.wrap_socket(srv.socket, server_side=True)
+        scheme = "https"
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"{scheme}://127.0.0.1:{srv.server_address[1]}/hook"
+    finally:
+        srv.release.set()
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def _no_proxy(monkeypatch):
+    """urllib 會讀 *_proxy 環境變數；本機慢 server 必須直連。"""
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("no_proxy", "*")
+    monkeypatch.setenv("NO_PROXY", "*")
+    # 已快取的 opener 內 ProxyHandler 是依建立當時的環境變數組的
+    monkeypatch.setattr(urllib.request, "_opener", None)
+
+
+@pytest.fixture
+def _self_signed_tls(tmp_path, monkeypatch):
+    """產生 127.0.0.1 的自簽憑證；client 端以它為信任根（不關閉驗證）。"""
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("openssl not available")
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    proc = subprocess.run(
+        [openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+         "-keyout", str(key), "-out", str(cert), "-days", "1",
+         "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"],
+        capture_output=True, text=True, encoding="utf-8", check=False, timeout=60,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"openssl req failed: {proc.stderr.strip()[:200]}")
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(str(cert), str(key))
+    real_factory = ssl.create_default_context
+
+    def _client_ctx(*args, **kwargs):
+        ctx = real_factory(*args, **kwargs)
+        ctx.load_verify_locations(cafile=str(cert))
+        return ctx
+
+    monkeypatch.setattr(ssl, "_create_default_https_context", _client_ctx)
+    # urlopen 快取全域 opener，其 HTTPSHandler 的 context 在建立時就固定；
+    # 清掉讓本測試重建（離開時 monkeypatch 還原）。
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    return server_ctx
+
+
+@pytest.mark.usefixtures("_no_proxy")
+class TestReadTimeoutClassification:
+    """連線成功但回應遲到：urllib 不把讀取階段的 TimeoutError 包成 URLError（#2965）。"""
+
+    def _recv(self, url):
+        return {"type": "webhook", "url": url, "_label": "slow"}
+
+    def test_slow_http_server_read_timeout_is_timeout(self):
+        with _slow_server(delay=1.0) as url:
+            result = nt.test_receiver(self._recv(url), timeout=0.2)
+        assert result.status == nt.STATUS_TIMEOUT, result.detail
+
+    def test_slow_http_server_with_enough_timeout_is_ok(self):
+        with _slow_server(delay=0.3) as url:
+            result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_OK, result.detail
+
+    def test_slow_https_server_read_timeout_is_timeout(self, _self_signed_tls):
+        with _slow_server(delay=1.0, tls_context=_self_signed_tls) as url:
+            result = nt.test_receiver(self._recv(url), timeout=0.2)
+        assert result.status == nt.STATUS_TIMEOUT, result.detail
+
+    def test_slow_https_server_with_enough_timeout_is_ok(self, _self_signed_tls):
+        """對照組：證明 https 那筆 TIMEOUT 不是憑證設定錯誤造成的。"""
+        with _slow_server(delay=0.3, tls_context=_self_signed_tls) as url:
+            result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_OK, result.detail
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_urlerror_wrapping_empty_timeouterror_is_timeout(self, mock_urlopen):
+        """reason 是訊息為空的 TimeoutError：字串比對抓不到，要靠型別。"""
+        mock_urlopen.side_effect = urllib.error.URLError(TimeoutError())
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_TIMEOUT
+        assert result.detail == "timed out"  # 不留空白 detail 給 operator
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_bare_empty_timeouterror_is_timeout(self, mock_urlopen):
+        mock_urlopen.side_effect = TimeoutError()
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_TIMEOUT
+        assert result.detail == "timed out"
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_connection_reset_keeps_connection_refused(self, mock_urlopen):
+        """範圍釘：非逾時的 OSError 維持原標籤（另票處理）。"""
+        mock_urlopen.side_effect = ConnectionResetError("reset by peer")
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_CONNECTION_REFUSED
+
+    @pytest.mark.parametrize("reason", [
+        ConnectionRefusedError(111, "Connection refused"),
+        socket.gaierror(-2, "Name or service not known"),
+    ])
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_urlerror_wrapping_non_timeout_oserror_is_not_timeout(self, mock_urlopen, reason):
+        """URLError 包的是非逾時的 OSError 物件時，型別判斷不得放寬成 TIMEOUT。"""
+        mock_urlopen.side_effect = urllib.error.URLError(reason)
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
         assert result.status == nt.STATUS_CONNECTION_REFUSED
 
 
