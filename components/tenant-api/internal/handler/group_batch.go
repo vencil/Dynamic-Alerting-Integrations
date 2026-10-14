@@ -60,7 +60,7 @@ type GroupBatchResponse struct {
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
 // @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
-// @Description unset removes keys from every member (only "_routing"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy.
+// @Description unset removes keys from every member (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400).
 // @Description All or nothing, in one commit, as POST /api/v1/tenants/batch: when any member is refused nothing is written (422, status rejected, the refused members with status error, the others not_applied);
 // @Description otherwise every changed member file is in one commit (direct mode) or one PR/MR with one commit (PR write-back mode). A rejected async run ends the task as failed with the same results.
 // @Description Results and summary list only the members the caller may read; a refusal of a member the caller cannot read still rejects the batch.
@@ -85,7 +85,7 @@ type GroupBatchResponse struct {
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index."
 // @Failure     500   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

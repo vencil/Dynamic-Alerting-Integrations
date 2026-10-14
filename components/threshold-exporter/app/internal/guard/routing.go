@@ -211,6 +211,18 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 			})
 		}
 	}
+	for _, tenantID := range sortedStringSliceKeys(input.RoutingUnknownKeys) {
+		for _, key := range input.RoutingUnknownKeys[tenantID] {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     FindingRoutingKeyIgnored,
+				TenantID: tenantID,
+				Field:    key,
+				Message: fmt.Sprintf("tenant %q: %s is not a key the route generator reads (%s); it has no effect",
+					tenantID, key, routingpolicy.UnknownRoutingKeyHint(key, routingpolicy.LayerTenant)),
+			})
+		}
+	}
 	tenants := make([]string, 0, len(input.RoutingByTenant))
 	for t := range input.RoutingByTenant {
 		tenants = append(tenants, t)

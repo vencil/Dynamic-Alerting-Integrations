@@ -68,6 +68,7 @@ from _grar_validate import (  # noqa: E402
     group_by_problem_text,
     ignored_routing_keys,
     invalid_tenant_id_text,
+    unknown_routing_keys,
     routing_defaults_not_mapping_text,
     routing_group_by_invalid,
     routing_not_mapping_text,
@@ -229,6 +230,8 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     # #1538: display-only alias. `fname` itself stays raw — it is used for
     # lookups (_POLICY_FILENAMES) and stored into `result`, which feeds --json.
     _f = safe_label(fname)
+    if is_defaults_file:
+        _record_unknown_routing_keys(result, data, layer="platform", where="top level", file=fname)
 
     # Collect defaults keys for schema validation — from the carrier only.
     if isinstance(data.get("defaults"), dict):
@@ -357,6 +360,13 @@ def _record_ignored_keys(result: dict, obj: object, **kw) -> None:
     result.setdefault("ignored_routing_keys", []).extend(ignored_routing_keys(obj, **kw))
 
 
+def _record_unknown_routing_keys(result: dict, obj: object, **kw) -> None:
+    """#2983: name the `_routing`-prefixed keys *obj* carries that the
+    generator does not read in that layer (`unknown_routing_keys`; same
+    channel and verdict as `_record_ignored_keys`)."""
+    result.setdefault("ignored_routing_keys", []).extend(unknown_routing_keys(obj, **kw))
+
+
 def _routing_defaults_not_mapping(fname: str, value: object,
                                   result: dict) -> None:
     """#2341 R5: a ``_routing_defaults`` (root or a subdirectory's carrier)
@@ -471,6 +481,8 @@ def _parse_nested_config(data: dict, fname: str, level: str,
       it (validate_tenant_keys), as the root carrier's does for every tenant.
     """
     _f = safe_label(fname)
+    if is_reserved_name(os.path.basename(fname)):
+        _record_unknown_routing_keys(result, data, layer="platform", where="top level", file=fname)
 
     if "_routing_enforced" in data:
         _refuse_nested_enforced(fname, result)
@@ -625,6 +637,7 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     if tenant not in result["tenant_keys"]:
         result["tenant_keys"][tenant] = set()
     result["tenant_keys"][tenant].update(overrides.keys())
+    _record_unknown_routing_keys(result, overrides, layer="tenant", where=tenant, tenant=tenant)
 
     # v2.1.0 ADR-007: Extract _routing_profile reference
     rp_ref = overrides.get("_routing_profile")

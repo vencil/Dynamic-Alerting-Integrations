@@ -1841,6 +1841,58 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
     return out
 
 
+# ── #2983: the `_routing*` keys each layer is read for ──
+# `_routing` is a reserved PREFIX (VALID_RESERVED_PREFIXES), so a misspelling
+# such as `_routing_profle` passes every key check as reserved — and the
+# generator reads none of it. The generator reads exactly these names: a
+# tenant's own two, and the two it takes from the top level of a platform
+# (`_`) file. Any other `_routing`-prefixed key in that place is named
+# (`IgnoredKeyWarning`, blocking under `--validate`). The Go copy is
+# `routingpolicy.UnknownRoutingKeys`; tests/shared/routing_unknown_keys_cases.json
+# runs both.
+TENANT_ROUTING_KEYS = frozenset({"_routing", "_routing_profile"})
+PLATFORM_ROUTING_KEYS = frozenset({"_routing_defaults", "_routing_enforced"})
+
+
+def _unknown_routing_hint(key: str, layer: str) -> str:
+    if layer == "tenant" and key in PLATFORM_ROUTING_KEYS:
+        return "a platform key: it is read only at the top level of a conf.d `_` file"
+    if layer == "platform" and key in TENANT_ROUTING_KEYS:
+        return ("a tenant key: set it in the tenant's own file (or its root "
+                "platform `tenants:` entry); routing for every tenant is `_routing_defaults`")
+    if key == "_routing_receiver_type":
+        return "no longer read: set the receiver type as `_routing.receiver.type`"
+    allowed = TENANT_ROUTING_KEYS if layer == "tenant" else PLATFORM_ROUTING_KEYS
+    close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.8)
+    if close:
+        return f"did you mean '{close[0]}'?"
+    return f"read here: {sorted(allowed)}"
+
+
+def unknown_routing_keys(obj: object, *, layer: str, where: str,
+                         tenant: str | None = None,
+                         file: str | None = None) -> list[IgnoredKeyWarning]:
+    """One `IgnoredKeyWarning` per `_routing`-prefixed key of *obj* that the
+    generator does not read in *layer* (#2983): ``tenant`` (a tenant's
+    config, read for `TENANT_ROUTING_KEYS`) or ``platform`` (the top level of
+    a `_` file, read for `PLATFORM_ROUTING_KEYS`). Keys without the prefix
+    are other checks' (`validate_tenant_keys`); a non-string key is passed
+    over. ``field`` is the key itself."""
+    if not isinstance(obj, dict):
+        return []
+    allowed = TENANT_ROUTING_KEYS if layer == "tenant" else PLATFORM_ROUTING_KEYS
+    in_file = f" in {file}" if file else ""
+    return [
+        ignored_key_warning(
+            f"  WARN: {where}{in_file}: '{key}' is not a key the route generator reads "
+            f"({_unknown_routing_hint(key, layer)}); it has no effect",
+            kind="routing_key_ignored", tenant=tenant, file=file, field=key)
+        for key in sorted(k for k in obj
+                          if isinstance(k, str) and k.startswith("_routing")
+                          and k not in allowed)
+    ]
+
+
 # Prometheus / Alertmanager classic label-name grammar — the same pattern as
 # the schema's `routingRoute.match.propertyNames`.
 # fullmatch, never match(): `$` also matches before a final "\n", so

@@ -51,6 +51,11 @@ func loadRoutingLayers(configDir string) routingpolicy.Layers {
 		switch {
 		case p.Kind == routingpolicy.ProblemDomainPolicyUnusable && p.File != "":
 			continue
+		case p.Kind == routingpolicy.ProblemRoutingKeyIgnored:
+			// Not a layer left out (#2960 / #2983): the layer applies without
+			// a key the route generator does not read — da-guard and the
+			// generator's --validate name it.
+			continue
 		case p.Kind == routingpolicy.ProblemRoutingDefaultsRoutes:
 			// Not a layer left out: the rest of _routing_defaults applies;
 			// only its `routes` are dropped, as the route generator drops them.

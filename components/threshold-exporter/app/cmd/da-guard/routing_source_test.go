@@ -79,6 +79,18 @@ func TestRun_RoutingSource(t *testing.T) {
 	}{
 		// --- routing the generator never reads: named, never judged ---
 		{
+			// #2983: a misspelled tenant routing key, in the tenant file or
+			// the root platform `tenants:` entry.
+			name: "unknown-tenant-routing-key-is-named",
+			files: map[string]string{
+				"_defaults.yaml": rsDefaults + "tenants:\n  tx:\n    _routing_receiver_type: slack\n",
+				"tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"50\"\n    _routing_profle: p1\n",
+			},
+			wantCode: exitFindings,
+			want: []string{"error routing_key_ignored tx _routing_profle",
+				"error routing_key_ignored tx _routing_receiver_type"},
+		},
+		{
 			name: "profile-routing-is-named-not-judged",
 			files: map[string]string{
 				"_defaults.yaml": rsDefaults,
@@ -95,7 +107,8 @@ func TestRun_RoutingSource(t *testing.T) {
 				"tx.yaml":        rsTenant,
 			},
 			wantCode: exitFindings,
-			want:     []string{"error routing_in_unread_location  _defaults.yaml:_routing"},
+			// #2983: a top-level key of a `_` file is LoadRoot's.
+			want: []string{"error routing_key_ignored  _defaults.yaml:_routing"},
 		},
 		{
 			name: "nested-defaults-block-routing-is-named-not-judged",
