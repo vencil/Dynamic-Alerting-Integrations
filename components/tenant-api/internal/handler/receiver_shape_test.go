@@ -153,6 +153,8 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 		// generator does not read (it reads keys as text), so it is refused
 		// as the generator's --validate refuses it.
 		{"receiver with a 1: key", webhookOK + "        1: x\n", []string{"tenants.rs-t._routing.receiver.1"}},
+		// #2960 review: named as written, not as its PyYAML value (`true`).
+		{"receiver with an on: key", webhookOK + "        on: x\n", []string{"tenants.rs-t._routing.receiver.on"}},
 		{"proxy_connect_header with an on: key", webhookOK + "        http_config:\n" +
 			"          proxy_url: http://p.example.com:3128\n          proxy_connect_header:\n            on: [x]\n", nil},
 		{"http_config with a 1: key", webhookOK + "        http_config:\n          1: x\n          bearer_token: t\n",

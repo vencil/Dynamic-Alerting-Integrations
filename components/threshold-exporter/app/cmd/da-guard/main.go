@@ -559,8 +559,12 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 			if r, has := block["_routing"]; has && routingpolicy.RoutingNotMapping(r) {
 				notMapping[ec.TenantID] = r // #2341 R5
 			}
-			if f := routingpolicy.IgnoredKeys(block["_routing"], routingpolicy.BlockRouting); len(f) > 0 {
-				ignoredKeys[ec.TenantID] = f // #2960
+			// #2960: judged on the block as written — before the receivers are
+			// swapped for their PyYAML values, whose keys are decoded too (an
+			// `on:` key would be named `true`).
+			own := layers.TenantBlock(ec.TenantID, ec.TenantOverridesRaw)
+			if f := routingpolicy.IgnoredKeys(own["_routing"], routingpolicy.BlockRouting); len(f) > 0 {
+				ignoredKeys[ec.TenantID] = f
 			}
 			resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
 			if ok {

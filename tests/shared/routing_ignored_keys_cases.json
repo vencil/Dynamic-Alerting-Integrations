@@ -233,7 +233,7 @@
       "fields": []
     },
     {
-      "name": "defaults-routes-has-its-own-line",
+      "name": "defaults-routes-has-its-own-line-and-is-not-looked-into",
       "block": "routing_defaults",
       "value": {
         "receiver": {
@@ -244,6 +244,11 @@
           {
             "match": {
               "a": "b"
+            },
+            "receiver": {
+              "type": "webhook",
+              "url": "https://hooks.example.com/a",
+              "junk": 1
             }
           }
         ]

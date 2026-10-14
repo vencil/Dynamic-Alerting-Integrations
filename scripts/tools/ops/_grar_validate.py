@@ -1786,6 +1786,8 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
     does not read (#2960), looking into its receiver, `overrides` entries and
     the receivers of `routes` entries; *obj* is the block as read.
 
+    *where* names the block in the message without its file (`file`, when
+    given, is appended after the path).
     *block* is ``routing`` (a tenant `_routing`, a routing profile),
     ``routing_defaults`` or ``routing_enforced``. *where* names the block in
     the message; *field_prefix* is prepended to each finding's ``field``.
@@ -1797,12 +1799,15 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
     allowed = {"routing": ROUTING_BLOCK_KEYS, "routing_defaults": ROUTING_DEFAULTS_KEYS,
                "routing_enforced": ROUTING_ENFORCED_KEYS}[block]
     out: list[IgnoredKeyWarning] = []
+    # The file goes after the path: `_routing_defaults.overrides[0] in
+    # _defaults.yaml`, never `… in _defaults.yaml.overrides[0]`.
+    in_file = f" in {file}" if file else ""
 
     def check(obj: dict, keys: frozenset[str], label: str, path: str,
               in_override: bool = False) -> None:
         for key in sorted(k for k in obj if isinstance(k, str) and k not in keys):
             out.append(ignored_key_warning(
-                f"  WARN: {label}: '{key}' is not read by the route generator "
+                f"  WARN: {label}{in_file}: '{key}' is not read by the route generator "
                 f"({_ignored_hint(key, keys, in_override)}); the rest is rendered as if "
                 f"it were absent", kind="routing_key_ignored", tenant=tenant, file=file,
                 field=f"{path}{key}"))

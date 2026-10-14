@@ -48,6 +48,12 @@ var (
 // spells it "<nil>"). Any other key is named by its text — the generator
 // reads every mapping key as source text, so `1:` and `on:` are keys it does
 // not read. A value of the wrong shape is other checks' to name.
+//
+// Known limits (#2960 review): a key yaml.v3 decodes as a boolean, number or
+// date is named by that decoding (`True:` → `true`, `1.0:` and `0x1:` → `1`,
+// so two such keys can fold into one) — the verdict is the generator's, only
+// the spelling differs; and a key written as the literal text `"<nil>"` is
+// passed over (indistinguishable from a normalized null key).
 func IgnoredKeys(block any, kind BlockKind) []string {
 	var allowed []string
 	switch kind {

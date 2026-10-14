@@ -306,7 +306,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                                           kind="routing_defaults_routes_ignored", file=fname,
                                           field="_routing_defaults.routes"))
             _record_ignored_keys(result, rd, block="routing_defaults",
-                                 where=f"_routing_defaults in {fname}",
+                                 where="_routing_defaults",
                                  field_prefix="_routing_defaults.", file=fname)
             result["routing_defaults"] = rd
         else:
@@ -327,7 +327,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             # #2960: `enabeld: true` leaves NOC routing off — named, as every
             # key the generator does not read, whatever `enabled` says.
             _record_ignored_keys(result, raw, block="routing_enforced",
-                                 where=f"_routing_enforced in {fname}",
+                                 where="_routing_enforced",
                                  field_prefix="_routing_enforced.", file=fname)
             if isinstance(raw, dict) and enabled is True:
                 result["enforced_routing"] = raw
@@ -426,7 +426,7 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         by_dir.setdefault(level, {})[name] = cfg
         flat[name] = cfg
         _record_ignored_keys(result, cfg, block="routing",
-                             where=f"routing profile '{name}' in {fname}",
+                             where=f"routing profile '{name}'",
                              field_prefix=f"routing_profiles.{name}.", file=fname)
 
 
@@ -515,7 +515,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                                           kind="routing_defaults_routes_ignored", file=fname,
                                           field="_routing_defaults.routes"))
             _record_ignored_keys(result, rd, block="routing_defaults",
-                                 where=f"_routing_defaults in {fname}",
+                                 where="_routing_defaults",
                                  field_prefix="_routing_defaults.", file=fname)
             for key in ("receiver", "overrides"):
                 if key in rd and rd[key] is None:

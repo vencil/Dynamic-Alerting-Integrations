@@ -181,3 +181,12 @@ def test_validate_config_rows_fail(tmp_path, capsys, cli_argv):
     assert any("'continue' is not read by the route generator" in x
                for x in rows["schema"]["details"]), rows["schema"]
     assert exc.value.code == 1
+
+
+def test_file_follows_the_path_in_the_message():
+    """`_routing_defaults.overrides[0] in _defaults.yaml`, never
+    `… in _defaults.yaml.overrides[0]` (#2960 review)."""
+    (w,) = gv.ignored_routing_keys({"overrides": [{"alertname": "A", "matchers": []}]},
+                                   block="routing_defaults", where="_routing_defaults",
+                                   file="_defaults.yaml")
+    assert w.startswith("  WARN: _routing_defaults.overrides[0] in _defaults.yaml: 'matchers'")

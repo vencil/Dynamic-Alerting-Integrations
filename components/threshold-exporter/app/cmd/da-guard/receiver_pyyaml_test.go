@@ -203,3 +203,25 @@ func TestRun_PlatformIntKey(t *testing.T) {
 		}
 	}
 }
+
+// TestRun_IgnoredReceiverKeyNamedAsWritten (#2960 review): a receiver key is
+// named as the file writes it — `on`, not its PyYAML value `true` — because
+// the check reads the block before the receivers are swapped for PyYAML's.
+func TestRun_IgnoredReceiverKeyNamedAsWritten(t *testing.T) {
+	t.Parallel()
+	tenant := rsTenant + "    _routing:\n      receiver:\n        type: webhook\n        url: https://t.example/h\n        on: x\n"
+	code, got := runRoutingTree(t, map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": tenant}, "")
+	want := "error routing_key_ignored tx receiver.on"
+	found := false
+	for _, f := range got {
+		if strings.HasPrefix(f, "error routing_key_ignored ") {
+			if f != want {
+				t.Errorf("finding %q, want %q", f, want)
+			}
+			found = true
+		}
+	}
+	if !found || code == 0 {
+		t.Errorf("exit %d, findings %v; want %q", code, got, want)
+	}
+}
