@@ -41,9 +41,11 @@ var routingProfilesNames = map[string]bool{"_routing_profiles.yaml": true, "_rou
 //     any level;
 //   - anything else: no reader ([]).
 //
-// tests/shared/test_parse_tree_rendered_by.py holds every row to the renders
-// themselves: the key is changed and the views that changed must be exactly
-// these readers' — two tables agreeing with each other is not the oracle.
+// tests/shared/test_parse_tree_rendered_by.py holds the rows to the renders
+// themselves — each carrier changed in the root carrier, another root `_`
+// file, a directory's carrier and another `_` file below the root — and the
+// views that changed must be exactly these readers'. Two tables agreeing with
+// each other is not the oracle.
 func renderedBy(rel string, carrier bool, content parsetree.Content) map[string][]string {
 	base := path.Base(rel)
 	if !confdname.IsReserved(base) {

@@ -949,6 +949,30 @@ class TestPlatformSettings:
         md = _run_cli(old, new)
         assert "**Changed, no effect on the renders that read it** (1)" in md.stdout
 
+    def test_enforced_match_the_generator_drops_is_not_no_effect(self, tmp_path):
+        """#2962 review: the generator keeps `_routing_enforced.match` only as a list; a
+        mapping is dropped without a word. So `_routing_enforced` is partial, and an edit
+        to that mapping is "no difference" at rc 1 — never "no effect" at rc 0."""
+        enf = ("_routing_enforced:\n  enabled: true\n  match: {{severity: {sev}}}\n  receiver:\n"
+               "    type: webhook\n    url: https://noc.example.com/h\n")
+        old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                                    "_noc.yaml": enf.format(sev="critical")},
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
+                          "_noc.yaml": enf.format(sev="warning")})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert [s[2] for s in _settings(_json(p))] == [cd.SETTING_NO_RENDER_CHANGE]
+
+    def test_no_effect_only_says_so_in_the_last_line(self, tmp_path):
+        """#2962 review: not "No changes detected." under a list of changed settings."""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, base, {**base, "_platform.yaml": "tenants: {}\n"})
+        p = _run_cli(old, new)
+        assert p.returncode == 0, p.stdout + p.stderr
+        last = p.stdout.rstrip().splitlines()[-1]
+        assert last.startswith("No change in what the two renders show; 1 platform setting(s) "
+                               "changed with no effect"), last
+
     def test_partial_coverage_without_a_difference_still_exits_1(self, tmp_path):
         """`state_filters` 只部分涵蓋：`reasons` 沒有渲染讀，改它渲染沒有差異，仍是 rc 1。"""
         old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},

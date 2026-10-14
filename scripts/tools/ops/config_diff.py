@@ -109,7 +109,9 @@ RENDERED_CARRIERS = {
     "tenants": ((rd.VIEW_SERVED, rd.VIEW_ROUTES), "full"),
     "profiles": ((rd.VIEW_SERVED,), "full"),
     "_routing_defaults": ((rd.VIEW_ROUTES,), "partial"),   # its `routes` is dropped
-    "_routing_enforced": ((rd.VIEW_ROUTES,), "full"),
+    # partial: a `match` that is not a list, and any sub-key the generator
+    # does not render, are dropped without a word (#2989).
+    "_routing_enforced": ((rd.VIEW_ROUTES,), "partial"),
     "routing_profiles": ((rd.VIEW_ROUTES,), "full"),
 }
 
@@ -1385,6 +1387,10 @@ def render_markdown(report):
             lines.append("No change in what the two renders show; "
                          f"{len(report['uncovered_files'])} platform file(s) with settings "
                          "to review (above).")
+        elif any(r["status"] == SETTING_NO_EFFECT for r in report["platform_settings"]):
+            n = sum(r["status"] == SETTING_NO_EFFECT for r in report["platform_settings"])
+            lines.append(f"No change in what the two renders show; {n} platform setting(s) "
+                         "changed with no effect on them (above).")
         else:
             lines.append("No changes detected.")
         return _cap_for_comment("\n".join(lines))
