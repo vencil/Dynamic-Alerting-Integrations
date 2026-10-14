@@ -224,6 +224,10 @@ TOOL_FILES=(
     # #1516 — reads `da-guard parse-tree`'s document (ADR-036 §2); imported
     # by ops/migration_audit and ops/config_diff. Imports ops/guard_dispatch (above).
     _lib_parse_tree.py
+    # #2901 — the conf.d parse entry point + content-addressed cache; imported
+    # by _lib_confd and ops/_grar_parse, so without it every conf.d reader
+    # ImportErrors in the flat-layout image. Stdlib-only.
+    _lib_parse_cache.py
     # #2883 — reads a tenant-api state store copy (--state); imported by
     # ops/offboard_tenant. Imports _lib_io (above).
     _lib_tenant_state.py

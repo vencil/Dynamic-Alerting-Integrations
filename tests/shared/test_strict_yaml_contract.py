@@ -39,7 +39,13 @@ a local alias (`ld = yaml.safe_load; ld(f)`), and passing the reader as a
 value instead of calling it (`map(yaml.safe_load, …)`,
 `map(load_yaml_file, …)`). Readers written in a shape the predicate cannot
 see are pinned by behaviour instead, in
-`test_duplicate_key_rejected_across_tools._TOOLS`.
+`test_duplicate_key_rejected_across_tools._TOOLS`. ⚠️ That includes the
+`_lib_parse_cache.ParseMode` shape (#2901): the generator's conf.d reads pass
+the parser to `read_confd_yaml` as a value, so `_lib_confd.declared_tenant_ids`
+— lenient by design (an existence lookup that declares a file's tenants even
+when the exporter's decode rejects the file; its docstring) — is no longer
+flagged here. Every parser handed to a ParseMode is enumerated instead by
+`tests/ops/test_lib_parse_cache.py::test_every_parser_call_in_the_reader_modules_is_accounted_for`.
 """
 from __future__ import annotations
 
@@ -72,9 +78,6 @@ _LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
                 "load_yaml_file_exporter_keys"}
 
 LENIENT_BY_DESIGN: dict[str, str] = {
-    "_lib_confd.py":
-        "declared_tenant_ids: documented to declare a file's tenants even when the "
-        "exporter's decode rejects that file (its docstring); an existence lookup, not a verdict",
     "lint/_rule_tree.py":
         "reads rule-pack trees, not a tenant conf.d",
     "lint/check_k8s_manifests.py":

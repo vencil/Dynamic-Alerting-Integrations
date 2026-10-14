@@ -56,6 +56,8 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
 import sys
 from pathlib import Path
 
+from _lib_parse_cache import ParseMode, read_confd_yaml  # stdlib-only (#2901)
+
 __all__ = [
     "CONFIG_SUFFIXES",
     "LEGACY_STATE_FILES",
@@ -1400,6 +1402,24 @@ def tenant_carriers(
     return TenantCarriers(sorted(tenants), invalid, unusable)
 
 
+def _first_document_keys(stream: Any) -> Any:
+    from _lib_yaml_keys import load_first_document_exporter_keys  # lazy: see declared_tenant_ids
+    return load_first_document_exporter_keys(stream)
+
+
+def _strict_keys(stream: Any) -> Any:
+    from _lib_io import strict_load_exporter_keys  # lazy: see declared_tenant_ids
+    return strict_load_exporter_keys(stream)
+
+
+# #2901 (ADR-036 §3): the two reads below parse through `read_confd_yaml`, so
+# the generator container's cache can answer them. The parsers are imported
+# lazily, as before, by the parse functions themselves.
+FIRST_DOCUMENT_KEYS_READ = ParseMode(
+    "_lib_yaml_keys.load_first_document_exporter_keys()", _first_document_keys)
+STRICT_KEYS_READ = ParseMode("_lib_io.strict_load_exporter_keys()", _strict_keys)
+
+
 def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
     """Tenant ids some TENANT file declares anywhere in the tree: the keys of
     the FIRST YAML document's `tenants:` mapping in every non-`_` config file.
@@ -1445,17 +1465,14 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
     of skipped files). The loader is imported lazily: the rest of this
     module is pure name predicates.
     """
-    from _lib_yaml_keys import load_first_document_exporter_keys  # lazy: see above
-
     ids: set[str] = set()
     for path in iter_config_files(config_dir, recursive=True):
         if is_reserved_name(path.name):
             continue
         try:
-            with open(path, encoding="utf-8") as fh:
-                # First document only; the loader is not advanced past
-                # it, so a later document's error cannot drop this one.
-                data = load_first_document_exporter_keys(fh)
+            # First document only; the loader is not advanced past
+            # it, so a later document's error cannot drop this one.
+            data = read_confd_yaml(path, FIRST_DOCUMENT_KEYS_READ)
         except Exception:  # noqa: BLE001 — declares nothing; see docstring
             continue
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
@@ -1484,8 +1501,6 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]"
     that did not load, in walk order — a limit on the answer, which the
     caller must name.
     """
-    from _lib_io import strict_load_exporter_keys  # lazy: see declared_tenant_ids
-
     root = Path(config_dir)
     declared: dict[str, set[str]] = {}
     unreadable: list[str] = []
@@ -1497,12 +1512,11 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]"
         except ValueError:
             label = path.name
         try:
-            with open(path, encoding="utf-8") as fh:
-                # #2114: tenant ids are the key's raw TEXT, as the exporter
-                # keys them — see `_lib_yaml_keys` for the measured table.
-                # #2123: a key repeated in one mapping (by that same
-                # identity) makes the file unreadable here, as in Go.
-                data = strict_load_exporter_keys(fh)
+            # #2114: tenant ids are the key's raw TEXT, as the exporter
+            # keys them — see `_lib_yaml_keys` for the measured table.
+            # #2123: a key repeated in one mapping (by that same
+            # identity) makes the file unreadable here, as in Go.
+            data = read_confd_yaml(path, STRICT_KEYS_READ)
         except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
             unreadable.append(label)
             continue

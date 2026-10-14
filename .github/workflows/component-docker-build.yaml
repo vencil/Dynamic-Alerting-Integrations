@@ -55,6 +55,7 @@ on:
       - "scripts/tools/_lib_compat.py"                 # recipe-preview COPY source
       - "scripts/tools/_lib_io.py"                      # recipe-preview COPY source (#2873)
       - "scripts/tools/_lib_confd.py"                   # recipe-preview COPY source (#2873)
+      - "scripts/tools/_lib_parse_cache.py"             # recipe-preview COPY source (#2901)
       - "scripts/tools/_lib_constants.py"               # recipe-preview COPY source (#2873)
       - "scripts/tools/_lib_yaml_keys.py"               # recipe-preview COPY source (#2873)
       - "docs/interactive/**"        # da-portal Dockerfile COPY source

@@ -335,6 +335,8 @@ The workflow reads it through the step's `env:` (the value is never expanded int
 
 ⚠️ Content that is empty, is not a mapping (for example a path string pasted into the GitHub variable by mistake), or has no `allowed_domains` key makes `generate-routes` exit 2 and fails the job. `allowed_domains: []` means "no restriction", not "block everything". Entries are fnmatch patterns, so `*.chat.example.com` works.
 
+**Minimum generator version (optional)**: a policy file may add `min_generator_version: "X.Y.Z"` (three numbers, quoted), the oldest da-tools generator that may judge under it ([ADR-036](../adr/036-single-parser-effective-config.en.md) §6, [#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)). When the da-tools that runs is older (or cannot read its own version), `generate-routes` exits 2 and says how to fix it: raise the da-tools image version to at least that one. A value that is not `X.Y.Z` makes the whole policy unusable (also exit 2). The key is read only from the deployment policy file passed as `--policy`; written in a policy file inside conf.d it has no effect — otherwise anyone who can write to the repo could make tenant-api's generator container refuse every write.
+
 ## 3. Deployment Modes
 
 ### 3.1 Kustomize (Recommended for Getting Started)

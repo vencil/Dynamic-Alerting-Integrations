@@ -60,6 +60,7 @@ on:
       - "scripts/tools/_lib_redact.py"
       - "scripts/tools/_lib_parse_tree.py"
       - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/_lib_parse_cache.py"
       - "scripts/tools/_threshold_alerts.py"
       - "scripts/tools/_lib_tenant_values.py"
       - ".github/workflows/config-diff-advisory.yml"

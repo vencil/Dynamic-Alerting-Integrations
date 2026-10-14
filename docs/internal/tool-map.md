@@ -248,6 +248,7 @@ lang: zh
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
+- `scripts/tools/_lib_parse_cache.py`：conf.d parse entry point with a content-addressed cache.
 - `scripts/tools/_lib_parse_tree.py`：read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
