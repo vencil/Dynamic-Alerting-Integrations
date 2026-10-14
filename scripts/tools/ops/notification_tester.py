@@ -616,6 +616,17 @@ def _send_test_request(
             url_tested=target_url,
         )
 
+    except http.client.InvalidURL as exc:
+        # Also an HTTPException, but raised before anything is sent: the URL
+        # itself is bad (non-numeric port, control characters), not a reply.
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_INVALID_URL,
+            detail=f"invalid URL: {exc}"[:80],
+            url_tested=target_url,
+        )
+
     except http.client.HTTPException as exc:
         # The receiver answered, but not with a well-formed HTTP response
         # (BadStatusLine, IncompleteRead, ...). Not an OSError, so nothing above

@@ -535,6 +535,17 @@ class TestMalformedResponse:
         assert result.status == nt.STATUS_HTTP_ERROR, result.detail
         assert result.detail.startswith(f"malformed response: {exc_name}")
 
+    @pytest.mark.parametrize("url", [
+        "http://127.0.0.1:abc/hook",
+        "http://127.0.0.1:9/ho ok",
+    ], ids=["non-numeric-port", "space-in-path"])
+    def test_invalid_url_is_not_a_malformed_response(self, url):
+        """InvalidURL 也是 HTTPException，但在送出請求前就丟出：是 URL 錯，
+        不是 receiver 回了壞回應。"""
+        result = nt.test_receiver(self._recv(url), timeout=2)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert result.detail.startswith("invalid URL:")
+
     def test_close_without_response_stays_connection_error(self):
         """RemoteDisconnected 同時是 OSError 與 BadStatusLine：維持連線錯誤的
         標籤，不被新的 HTTPException 分支搶走（第 1 類的分類另票處理）。"""
