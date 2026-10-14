@@ -85,9 +85,9 @@ var writeModeLegalValues = []handler.WriteMode{
 //     the habit ADR-034 argues against.
 //
 // An empty value is rejected too. It cannot mean "operator said nothing" at
-// this point: main.go resolves the flag default through envOrDefault, so an
-// unset or empty TA_WRITE_MODE has already become "direct" before it gets
-// here. Empty here means someone passed --write-mode= explicitly.
+// this point: an unset TA_WRITE_MODE has already become "direct", and a
+// set-but-empty one was refused by envNonEmptyOrDefault before flags were
+// parsed (#2491). Empty here means someone passed --write-mode= explicitly.
 func parseWriteMode(raw string) (handler.WriteMode, error) {
 	wm := handler.WriteMode(strings.TrimSpace(raw))
 	for _, legal := range writeModeLegalValues {

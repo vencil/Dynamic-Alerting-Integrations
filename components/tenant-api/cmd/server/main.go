@@ -103,8 +103,8 @@ func main() {
 	configDir := &sf.ConfigDir
 	gitDir := flag.String("git-dir", envOrDefault("TA_GIT_DIR", ""),
 		"Git repository root for commit-on-write (defaults to config-dir)")
-	rbacPath := flag.String("rbac", envOrDefault("TA_RBAC_PATH", ""),
-		"Path to _rbac.yaml (leave empty for open-read mode)")
+	rbacPath := flag.String("rbac", envNonEmptyOrDefault("TA_RBAC_PATH", ""),
+		"Path to _rbac.yaml (omit it and TA_RBAC_PATH for open-read mode; an empty value is refused, #2491)")
 	rbacEmptyOpen := flag.Bool("rbac-empty-open", envBool("TA_RBAC_EMPTY_OPEN"),
 		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
 	policyUnavailableOpen := flag.Bool("policy-unavailable-open", envBool("TA_POLICY_UNAVAILABLE_OPEN"),
@@ -136,7 +136,7 @@ func main() {
 
 	// v2.6.0: PR-based write-back mode (ADR-011)
 	// Supports: "direct" (default), "pr" or "pr-github" (GitHub PRs), "pr-gitlab" (GitLab MRs)
-	writeMode := flag.String("write-mode", envOrDefault("TA_WRITE_MODE", "direct"),
+	writeMode := flag.String("write-mode", envNonEmptyOrDefault("TA_WRITE_MODE", "direct"),
 		"Write-back mode: 'direct' (commit-on-write), 'pr' or 'pr-github' (GitHub PR), 'pr-gitlab' (GitLab MR)")
 
 	// GitHub flags
@@ -258,6 +258,9 @@ func main() {
 		"ADR-027 D2-B: path to a pod-internal Unix domain socket for the human (oauth2-proxy) plane. When set, the same router is ALSO served here and this listener is tagged as the trusted human hop (excluded from the machine-identity audit). Empty (default) = TCP-only, unchanged behavior.")
 
 	flag.Parse()
+	if err := checkRBACFlag(flagExplicit(flag.CommandLine, "rbac"), *rbacPath); err != nil {
+		log.Fatalf("FATAL: %v (#2491)", err)
+	}
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
 	// any Manager / Writer / Tracker construction so their initial-
@@ -866,11 +869,77 @@ func parseDurationOrDefault(s string, def time.Duration) time.Duration {
 }
 
 // envOrDefault returns the environment variable value or the default if unset.
+//
+// ⚠️ Set-but-empty also returns def. That is wrong for a value whose default
+// is the MORE OPEN side — use envNonEmptyOrDefault there (#2491).
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
+}
+
+// errEnvSetButEmpty is the reason resolveNonEmptyEnv rejects a value.
+var errEnvSetButEmpty = errors.New("set but empty")
+
+// resolveNonEmptyEnv is envNonEmptyOrDefault's parse contract, split out so it
+// is testable without the process exit (#2491).
+//
+// Unset keeps def. Set to "" or whitespace only is rejected rather than read
+// as "unset": an unrendered Helm/Kustomize/Compose variable produces exactly
+// that, and for the values this guards, def is the more open side — direct
+// write (no review) or open-read RBAC. Landing there from an empty value is
+// indistinguishable from choosing it (ADR-034's failure shape). envBool may
+// treat whitespace as unset because every flag it serves defaults to the
+// fail-closed false; these do not.
+func resolveNonEmptyEnv(raw string, set bool, def string) (string, error) {
+	if !set {
+		return def, nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", errEnvSetButEmpty
+	}
+	return raw, nil
+}
+
+// envNonEmptyOrDefault is envOrDefault for a value whose default is the more
+// open side: unset keeps def, set-but-empty refuses to start. Like envBool it
+// runs while flags are being defined, so it fires before flag.Parse.
+func envNonEmptyOrDefault(key, def string) string {
+	raw, set := os.LookupEnv(key)
+	v, err := resolveNonEmptyEnv(raw, set, def)
+	if err != nil {
+		log.Fatalf("FATAL: %s is %v (%q). Refusing to start: unset it for the default, or give it a value. "+
+			"An empty value is not read as unset because the default here is the more open choice (#2491, ADR-034).",
+			key, err, raw)
+	}
+	return v
+}
+
+// errRBACFlagEmpty is checkRBACFlag's rejection.
+var errRBACFlagEmpty = errors.New("--rbac was given an empty path; omit --rbac and TA_RBAC_PATH entirely for open-read mode")
+
+// checkRBACFlag rejects --rbac passed explicitly with an empty or whitespace
+// value (#2491, R3). open-read is reached only by configuring no RBAC path at
+// all; an explicit empty value is the same accident envNonEmptyOrDefault
+// rejects for TA_RBAC_PATH.
+func checkRBACFlag(explicit bool, v string) error {
+	if explicit && strings.TrimSpace(v) == "" {
+		return errRBACFlagEmpty
+	}
+	return nil
+}
+
+// flagExplicit reports whether name was passed on the command line (as
+// opposed to taking its default). Call after Parse.
+func flagExplicit(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 // errEnvBoolUnparseable carries the operator-facing reason a TA_* boolean env

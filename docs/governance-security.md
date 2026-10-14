@@ -71,7 +71,7 @@ tenant-api 透過 `_rbac.yaml` 控制 API 層級的讀寫權限。RBAC Manager �
 | Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config`（內容來自 values 的 `rbac._rbacYaml`） |
 | try-local / QUICKSTART | `/conf.d/_rbac.yaml` | `conf.d` 目錄本身 |
 
-**空設定的行為是 fail-closed，不是 open-read**：只要指定了 `--rbac` 路徑（上表三種姿態皆是），檔案不存在或群組為空即 **一律拒絕，含讀取**。只有兩種情況會進入 open-read mode（所有已認證使用者可讀、無人可寫）：`--rbac` 路徑為空（不指定、`--rbac=`，或 `TA_RBAC_PATH` 設成空字串），或明示 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true`——出貨資產均未設定後者。
+**空設定的行為是 fail-closed，不是 open-read**：只要指定了 `--rbac` 路徑（上表三種姿態皆是），檔案不存在或群組為空即 **一律拒絕，含讀取**。只有兩種情況會進入 open-read mode（所有已認證使用者可讀、無人可寫）：完全沒有設定 RBAC 路徑（既不帶 `--rbac`、也不設 `TA_RBAC_PATH`），或明示 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true`——出貨資產均未設定後者。`--rbac=` 或 `TA_RBAC_PATH` 設成空字串**不會**進 open-read，而是拒絕啟動：模板沒渲染到值時，不該靜默把全部租戶開放讀取（[#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)）。
 
 ### RBAC 救援 SOP（Break-Glass Procedure）
 

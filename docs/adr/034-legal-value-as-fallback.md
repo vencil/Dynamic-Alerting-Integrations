@@ -9,14 +9,14 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-08-23
-updated_at: 2026-08-30
+updated_at: 2026-10-13
 ---
 
 # ADR-034: 合法值不得同時當作無法辨識時的 fallback
 
 ## 狀態
 
-✅ **Accepted**（2026-08-23 起草，2026-08-29 由 owner 核可）。本規則自核可起生效。
+✅ **Accepted**（2026-08-23 起草，2026-08-29 由 owner 核可）。本規則自核可起生效。2026-10-13 修訂：案例一補上「空值」的判準（設成空字串的 `TA_WRITE_MODE` 拒絕啟動）。
 
 > 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
@@ -108,9 +108,11 @@ default:                  → 直接 commit
 
 ⚠️ **終態必須是報錯**——「先出一版只警告」等於仍舊落到合法值上再多印一行 log，而本文的論證正是那行 log 不可靠。過渡要怎麼排（要不要先警告一版、警告多久）是那張票的 rollout 決定，但不改變終態。
 
-**已於本規則生效後修正**（`parseWriteMode` + `wirePRBackend`）。三件值得記下的，因為它們是「套用本規則」在真實程式碼上的具體形狀：
+**已於本規則生效後修正**（`parseWriteMode` + `wirePRBackend`）。四件值得記下的，因為它們是「套用本規則」在真實程式碼上的具體形狀：
 
 - **`default:` 分支不再是任何合法值的家。** `direct` 升為具名 `case`，`default:` 改成 `log.Fatalf("BUG: ...")`。這一步不是為了擋使用者輸入（那由 `parseWriteMode` 擋掉了），而是擋**下一次的自己**：往合法值集合加第五個模式卻忘了配線，會 fail-loud，而不是無聲落回 direct commit-on-write——那正是本 ADR 講的同一個形狀，只是往上挪了一層。
+- **設成空字串不等於沒設。** 環境變數 `TA_WRITE_MODE` 沒設時沿用預設的 `direct`；設成空字串或只有空白（常見於 Helm、Kustomize、Compose 模板沒渲染到值）則拒絕啟動，不會當成沒設而落到 `direct`。判準是：**空值只能落到偏保守的預設值；預設值是比較開放的那一側時，空值必須拒絕。** 案例二的布林旗標預設值都是 `false`（不放寬），所以那裡把空白當成沒設；`direct` 是不經審核的那一側，所以這裡不行。同一條判準也套用在 tenant-api 的 RBAC 路徑：它不是列舉值、不在本規則範圍內，但空路徑會進入「所有已認證身分可讀」的 open-read 模式，失敗形狀相同，所以空值一樣拒絕；要 open-read 就完全不設。追蹤於 [#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)。
+  - 範例：`TA_WRITE_MODE=""` → 啟動失敗，訊息含 `TA_WRITE_MODE is set but empty`；不設 `TA_WRITE_MODE` → 以 `direct` 啟動。
 - **空白 trim，大小寫不 trim。** 兩者看似對稱，判準卻不同：trim 空白不會把無法辨識的值變成合法值（`" pr-guthub "` 照樣被拒），這條界線是案例二的 doc comment 先寫下的，這裡沿用；折疊大小寫則會（`PR` → `pr`），而且沒有標準庫的既有契約可繼承——那是程式在猜意圖。⇒ `PR` / `DIRECT` 一律拒絕。
 - ⚠️ **這件事有代價，且它不在原票的預期內**：一個今天寫 `TA_WRITE_MODE=DIRECT` 的部署，現在拿到的**就是**它想要的 direct，修法後會直接開不起來。它不是「帶著打錯字在跑」——原票的 rollout 段只設想了後者。
 
