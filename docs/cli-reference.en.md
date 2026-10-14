@@ -3083,7 +3083,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | Validate URL format only, do not send | - |
 | `--json` | JSON output | - |
 | `--ci` | CI mode: exit 1 if any receiver fails | - |
-| `--timeout` | Connection timeout per receiver in seconds. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
+| `--timeout` | Timeout per receiver in seconds, applied to both connecting and waiting for the response; a timeout in either phase is reported as `TIMEOUT` ([#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)). Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
 | `--rate-limit` | Seconds to wait between each test | `0.5` |
 
 **Supported Receiver Types**

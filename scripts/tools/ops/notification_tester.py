@@ -103,8 +103,8 @@ _HELP = {
         'en': 'CI mode: exit 1 if any receiver fails',
     },
     'timeout': {
-        'zh': '每個 receiver 的連線逾時秒數（> 0，可帶小數；預設 10）',
-        'en': 'Connection timeout per receiver in seconds (> 0, fractions allowed; default: 10)',
+        'zh': '每個 receiver 的逾時秒數，連線與等待回應都適用（> 0，可帶小數；預設 10）',
+        'en': 'Timeout per receiver in seconds, for connecting and for the response (> 0, fractions allowed; default: 10)',
     },
     'rate_limit': {
         'zh': '每次測試之間的等待秒數（預設 0.5）',
@@ -570,18 +570,36 @@ def _send_test_request(
     except urllib.error.URLError as exc:
         latency = int((time.monotonic() - start) * 1000)
         reason = str(exc.reason) if exc.reason else str(exc)
-        if "timed out" in reason.lower():
+        # Type check first: an empty-message TimeoutError gives "" (#2965).
+        if isinstance(exc.reason, TimeoutError) or "timed out" in reason.lower():
             status = STATUS_TIMEOUT
         elif "refused" in reason.lower():
             status = STATUS_CONNECTION_REFUSED
         else:
             status = STATUS_CONNECTION_REFUSED
+        if status == STATUS_TIMEOUT and not reason:
+            reason = "timed out"
         return ReceiverTestResult(
             receiver_name=label,
             receiver_type=rtype,
             status=status,
             latency_ms=latency,
             detail=reason[:80],
+            url_tested=target_url,
+        )
+
+    except TimeoutError as exc:
+        # urllib wraps only connect/TLS-handshake errors in URLError; a timeout
+        # while waiting for the response (getresponse/read) surfaces as a bare
+        # TimeoutError (socket.timeout is its alias since 3.10). It must come
+        # before `except OSError`, of which it is a subclass (#2965).
+        latency = int((time.monotonic() - start) * 1000)
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_TIMEOUT,
+            latency_ms=latency,
+            detail=(str(exc) or "timed out")[:80],
             url_tested=target_url,
         )
 
