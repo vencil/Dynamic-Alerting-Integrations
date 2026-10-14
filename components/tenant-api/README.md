@@ -246,7 +246,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_STATE_CONFIGMAP` | `tenant-api-state` | `configmap` 模式的 ConfigMap 名稱（Helm chart 預建） |
 | `TA_STATE_NAMESPACE` | (空) | 上述 ConfigMap 所在 namespace;空 = pod 自身 namespace |
 | `TA_STATE_DIR` | (空) | `dir` 模式的目錄，必須在 `TA_CONFIG_DIR` 之外 |
-| `TA_RBAC_PATH` | (空) | `_rbac.yaml` 路徑;空 = open-read |
+| `TA_RBAC_PATH` | (空) | `_rbac.yaml` 路徑;**不設**(且不帶 `--rbac`)= open-read。⛔ 設成空字串或只有空白、或 `--rbac=` 一律**拒絕啟動**,不會當成沒設而進 open-read([#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)) |
 | `TA_ADDR` | `:8080` | HTTP listen address |
 | `TA_HUMAN_SOCKET` | (空) | 給 human plane(同 pod 的 oauth2-proxy)用的 Unix socket 路徑;設了就在這個 socket 上**另外**提供同一套路由。空 = 只有 TCP |
 | `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`;其他值當成 `info` |
@@ -268,7 +268,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 | 變數 | 預設 | 說明 |
 |------|------|------|
-| `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 前後空白先 trim,trim 後須逐字等於這四個之一;大小寫敏感,不符者(含 `DIRECT`、打錯字、`--write-mode=` 空值)一律**拒絕啟動**,不會退回 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |
+| `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 前後空白先 trim,trim 後須逐字等於這四個之一;大小寫敏感,不符者(含 `DIRECT`、打錯字、`--write-mode=` 空值、`TA_WRITE_MODE` 設成空字串)一律**拒絕啟動**,不會退回 `direct`;不設才是 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |
 | `TA_WRITE_QUEUE_DEPTH` | `5` | 排在進行中那筆寫入後面、可等待的寫入數;再多的直接拒絕。`0` = 不排隊 |
 | `TA_GIT_BASE_BRANCH` | `main` | PR／MR 模式下,本地 git 開分支的基準 branch(conf.d repo 預設 branch 不是 `main` 時要設) |
 | `TENANT_API_GIT_TIMEOUT` | `60s` | 單一 git 指令的期限(⚠️ 前綴是 `TENANT_API_`,不是 `TA_`) |
