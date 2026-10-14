@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -262,9 +263,13 @@ const putFixtureGroups = `groups:
     environments: [production]
 `
 
-// tenant write succeeds when a root platform file is unreadable: the write
-// reads the tenant layer's metadata, as it did before #2370.
-func TestPutTenant_SucceedsWhenRootPlatformFileUnreadable(t *testing.T) {
+// A root platform file that cannot be read does not trip the metadata write
+// gate (it reads the tenant layer's metadata, as it did before #2370) — the
+// write reaches the Writer, which refuses it on the whole tree (#2939,
+// ADR-036 §4): the route generator refuses a tree holding a dangling
+// `_dangling.yaml`, so the write is 409 TENANT_TREE_UNREADABLE, not 403,
+// and nothing is written.
+func TestPutTenant_RootPlatformFileUnreadablePassesTheGateRefusedOnTheTree(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n",
@@ -285,11 +290,11 @@ func TestPutTenant_SucceedsWhenRootPlatformFileUnreadable(t *testing.T) {
 	req.Header.Set("X-Forwarded-Groups", "prod-ops")
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("PUT status = %d, body %s; want 200", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantTreeUnreadable) {
+		t.Fatalf("PUT status = %d, body %s; want 409 %s", w.Code, w.Body.String(), CodeTenantTreeUnreadable)
 	}
-	if got, err := os.ReadFile(filepath.Join(configDir, "tx.yaml")); err != nil || string(got) != body {
-		t.Errorf("tx.yaml after PUT = %q, %v; want the body", got, err)
+	if got, err := os.ReadFile(filepath.Join(configDir, "tx.yaml")); err != nil || string(got) == body {
+		t.Errorf("tx.yaml after the refused PUT = %q, %v; want it unchanged", got, err)
 	}
 }
 

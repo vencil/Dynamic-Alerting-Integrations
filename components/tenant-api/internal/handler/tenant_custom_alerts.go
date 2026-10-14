@@ -75,6 +75,10 @@ type PutCustomAlertsResponse struct {
 // @Description repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
 // @Description not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
 // @Description whole-file PUT refuses it too, so replace it with a regular file in git.
+// @Description 409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other
+// @Description than the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot
+// @Description read (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's
+// @Description own file cannot be read.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -83,10 +87,10 @@ type PutCustomAlertsResponse struct {
 // @Success     200   {object} PutCustomAlertsResponse
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
-// @Failure     404   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse
+// @Failure     404   {object} ErrorResponse "Not found: no tenant file, or the tenant file is a symlink that cannot be resolved (dangling, looping — a self-loop included — or through a non-directory): it has no content to merge recipes into, so there is no tenant here (a whole-file PUT /api/v1/tenants/{id} replaces such a link)"
+// @Failure     409   {object} ErrorResponse "Conflict: base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
 // @Failure     413   {object} ErrorResponse
-// @Failure     500   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/custom-alerts [put]
@@ -168,8 +172,29 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 		// #2477: a tenant file that is not a regular file is refused at once
-		// (409, config_error not_regular_file) instead of being read.
-		raw, err := confd.ReadRegularFile(filePath)
+		// (409, config_error not_regular_file) instead of being read — before
+		// the tree is judged, exactly as PUT /tenants/{id} refuses it.
+		if errors.Is(confd.CheckRegularFile(filePath), confd.ErrNotRegularFile) {
+			writeTenantFileNotRegular(w, r, tenantID)
+			return
+		}
+		// #2939 R4-N3: the Writer's verdict on the tree BEFORE this handler
+		// reads the file, so PUT, /diff and this endpoint answer one tree the
+		// same way — a store fault elsewhere before the file's own
+		// unreadability (TENANT_CONFIG_NOT_LOADABLE), an unresolvable link
+		// elsewhere, a declaration elsewhere. The write is judged again
+		// under the lock.
+		if d.Writer != nil {
+			if err := d.Writer.JudgeWrite(tenantID); err != nil {
+				if !writeTenantPlacementError(w, r, d, err) {
+					WriteJSONError(w, r, http.StatusInternalServerError, writeErrorText(r, err))
+				}
+				return
+			}
+		}
+		// gitops.ReadTenantFile: an unresolvable symlink (dangling, looping)
+		// reads as missing — there is no tenant to merge recipes into.
+		raw, err := gitops.ReadTenantFile(filePath)
 		if errors.Is(err, fs.ErrNotExist) {
 			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
 			return
@@ -179,7 +204,10 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			// The judgement above refuses a tenant file that cannot be read
+			// (TargetUnreadableError), so this is a file that broke after it
+			// — a server-side failure, not a classification of the file.
+			WriteJSONError(w, r, http.StatusInternalServerError, writeErrorText(r, err))
 			return
 		}
 
@@ -323,7 +351,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			}
 			// #2078: the id is also declared by another conf.d file (the
 			// exporter already rejects that tree) → 409, fixed message.
-			if writeTenantPlacementError(w, r, err) {
+			if writeTenantPlacementError(w, r, d, err) {
 				return
 			}
 			// #1700: as PutTenant's fallback — the error's own text only

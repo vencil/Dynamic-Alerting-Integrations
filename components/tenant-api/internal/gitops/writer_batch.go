@@ -165,10 +165,13 @@ type stagingTree struct {
 	prior     *cfg.TreeScan // the staging tree's own walk prior
 	changed   map[string][]string
 	order     []string // changed paths relative to root, first-written order
+	// targets: every op's resolved tenant file, conf.d-relative (confRelKey)
+	// → its tenant — the files the batch replaces, which the #2939
+	// whole-tree verdict (judgeTree, in applyBatch) judges as targets.
+	targets map[string]string
 	// branchUnneeded (PR mode): the staging branch may be deleted with the
 	// worktree — it carries nothing worth keeping.
 	branchUnneeded bool
-	inPlace        bool // PR mode: write files in place (see applyBatchOp)
 }
 
 // stagingBatchMtime is the modification time a fresh staging checkout gets:
@@ -209,7 +212,8 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 		_ = os.RemoveAll(root)
 		return nil, fmt.Errorf("add batch worktree: %w", err)
 	}
-	st := &stagingTree{root: root, configDir: filepath.Join(root, rel), rel: rel, changed: map[string][]string{}}
+	st := &stagingTree{root: root, configDir: filepath.Join(root, rel), rel: rel,
+		changed: map[string][]string{}, targets: map[string]string{}}
 	if err := w.gitIn(root, "reset", "-q"); err != nil {
 		w.closeStaging(st)
 		return nil, fmt.Errorf("populate batch worktree index: %w", err)
@@ -253,39 +257,65 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 // serving tree, and a direct-mode write has always been judged on it (a
 // gitignored `team/x.yaml` declaring a tenant is a declaration). Nothing of
 // it is committed except the batch's own paths, and the copy is thrown away.
-// Directories and symlinks are recreated as such; `.git` is skipped. A
-// special file named like a config file (a FIFO named *.yaml) cannot be
-// copied without reading it, so the batch fails closed with
-// ErrTenantTreeScan. (A single write's walk used to block on one and fail
-// closed the same way; since #2939 the walker does not open it and records
-// it as unreadable instead, so a single write goes through.)
+// Directories and symlinks are recreated as such; `.git` is skipped.
+//
+// ⛔ IT JUDGES NOTHING (#2939). An entry it cannot copy — a special file (a
+// FIFO named *.yaml: copying would read it), a file whose read fails, a link
+// it cannot read — becomes a symlink to the serving entry, so every read of
+// it in the staging tree (the placement walk, an op's merge) meets the
+// serving entry and fails exactly as it does there, without blocking (the
+// walker never opens a special file, cfg.OpenConfFile refuses one). A
+// directory below the root that cannot be listed is left out: there is
+// nothing to copy, and the batch is refused on the serving walk's
+// walk_error (applyBatch judges the serving tree in direct mode). Whether
+// the batch may be written with such entries in the tree is decided once,
+// by refuseUnreadableTree — not here. Only the root itself failing to list,
+// or a failure to create the copy, fails the batch.
 func (w *Writer) mirrorServingConf(st *stagingTree) error {
 	src, err := filepath.Abs(w.configDir)
 	if err != nil {
 		return err
 	}
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	return mirrorDir(src, src, st.configDir, entries)
+}
+
+// mirrorDir copies the listed entries of the serving directory dir (under
+// the serving root src) into the matching staging directory under dstRoot,
+// recursively. See mirrorServingConf.
+func mirrorDir(src, dir, dstRoot string, entries []fs.DirEntry) error {
+	for _, d := range entries {
+		p := filepath.Join(dir, d.Name())
 		rel, err := filepath.Rel(src, p)
 		if err != nil {
 			return err
 		}
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() && d.Name() == ".git" {
-			return fs.SkipDir
-		}
-		dst := filepath.Join(st.configDir, rel)
+		dst := filepath.Join(dstRoot, rel)
 		switch t := d.Type(); {
 		case t.IsDir():
-			return os.MkdirAll(dst, 0o755)
+			if d.Name() == ".git" {
+				continue
+			}
+			sub, lerr := os.ReadDir(p)
+			if lerr != nil {
+				continue // not listable: left out (see mirrorServingConf)
+			}
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return err
+			}
+			if err := mirrorDir(src, p, dstRoot, sub); err != nil {
+				return err
+			}
 		case t&os.ModeSymlink != 0:
 			target, err := os.Readlink(p)
 			if err != nil {
-				return err
+				if err := linkServing(p, dst); err != nil {
+					return err
+				}
+				continue
 			}
 			// A relative target is resolved from the SERVING link: one that
 			// stays inside conf.d is copied as is (it resolves to the staging
@@ -298,25 +328,38 @@ func (w *Writer) mirrorServingConf(st *stagingTree) error {
 				}
 			}
 			_ = os.Remove(dst)
-			return os.Symlink(target, dst)
-		case t.IsRegular():
-			fi, err := d.Info()
-			if err != nil {
+			if err := os.Symlink(target, dst); err != nil {
 				return err
 			}
+		case t.IsRegular():
 			// cfg.ReadConfFile, not os.ReadFile: an entry swapped for a FIFO
-			// since the listing fails the copy instead of blocking it (#2939).
-			raw, err := cfg.ReadConfFile(p)
-			if err != nil {
-				return err
+			// since the listing is refused instead of blocking (#2939).
+			raw, rerr := cfg.ReadConfFile(p)
+			fi, ierr := d.Info()
+			if rerr != nil || ierr != nil {
+				if err := linkServing(p, dst); err != nil {
+					return err
+				}
+				continue
 			}
 			_ = os.Remove(dst)
-			return os.WriteFile(dst, raw, fi.Mode().Perm())
-		case cfg.IsSpecialFile(t) && cfg.IsScannedPath(filepath.ToSlash(rel)):
-			return fmt.Errorf("%w: conf.d holds a special file %s", ErrTenantTreeScan, filepath.ToSlash(rel))
+			if err := os.WriteFile(dst, raw, fi.Mode().Perm()); err != nil {
+				return err
+			}
+		default: // a special file: never opened (cfg.IsSpecialFile)
+			if err := linkServing(p, dst); err != nil {
+				return err
+			}
 		}
-		return nil
-	})
+	}
+	return nil
+}
+
+// linkServing makes the staging entry dst a symlink to the serving entry p
+// (absolute), for an entry mirrorDir does not copy.
+func linkServing(p, dst string) error {
+	_ = os.Remove(dst)
+	return os.Symlink(p, dst)
 }
 
 // closeStaging removes the staging worktree; best effort (startup's
@@ -373,47 +416,48 @@ func (w *Writer) stagingScan(st *stagingTree) func() (*cfg.TreeScan, error) {
 // and, when it passes and changes the file, writes it there so the next op
 // sees it. Caller holds w.mu.
 //
-// The file is written as each mode always wrote it: replaced by rename in
-// direct mode (writeFileAtomic, as every direct write), in place in PR mode
-// (os.WriteFile, as WritePR — through a symlink, into its target).
-func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
+// The file is replaced by rename (writeFileAtomic) in both modes, as every
+// tenant write: the directory entry itself is replaced, so a tenant file
+// that is a symlink — dangling, or pointing outside conf.d — becomes a
+// regular file and nothing is written where it pointed (#2939: ADR-036 §4's
+// repair path). PR mode used to write in place, through the link.
+//
+// target is the op's tenant file, conf.d-relative ("" when it was not
+// resolved), for applyBatch's whole-tree verdict.
+func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) (out BatchOpOutcome, target string) {
 	if err := guardTenantID(op.TenantID); err != nil {
-		return BatchOpOutcome{Err: err}
+		return BatchOpOutcome{Err: err}, ""
 	}
 	// #1673/#2078: one resolution per op, on the staging tree as the earlier
 	// ops left it — the file read by readMergeValidate and the file written
 	// below are the same one.
 	filePath, err := confd.TenantFilePathForWrite(st.configDir, op.TenantID)
 	if err == nil {
+		target = confRelKey(st.configDir, filePath)
+		st.targets[target] = op.TenantID
 		err = w.ensureNotDeclaredElsewhereIn(w.stagingScan(st), op.TenantID, filePath)
 	}
 	if err != nil {
-		return BatchOpOutcome{Err: err}
+		return BatchOpOutcome{Err: err}, target
 	}
 	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge)
 	if errors.Is(err, ErrMergeNoOp) {
 		// B2: the merge changes nothing — accepted, nothing written, its
 		// notices kept (#1231 F5).
-		return BatchOpOutcome{NoOp: true, Notices: notices}
+		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if err != nil {
-		return BatchOpOutcome{Err: err}
+		return BatchOpOutcome{Err: err}, target
 	}
 	if existing != nil && string(existing) == content {
-		return BatchOpOutcome{NoOp: true, Notices: notices}
+		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
-	var werr error
-	if st.inPlace {
-		werr = os.WriteFile(filePath, []byte(content), 0644)
-	} else {
-		werr = writeFileAtomic(filePath, []byte(content), 0644)
-	}
-	if werr != nil {
-		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}
+	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
+		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}, target
 	}
 	rel, err := filepath.Rel(st.root, filePath)
 	if err != nil {
-		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, err)}
+		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, err)}, target
 	}
 	if _, seen := st.changed[rel]; !seen {
 		st.order = append(st.order, rel)
@@ -421,24 +465,70 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
 	if !containsString(st.changed[rel], op.TenantID) {
 		st.changed[rel] = append(st.changed[rel], op.TenantID)
 	}
-	return BatchOpOutcome{Notices: notices}
+	return BatchOpOutcome{Notices: notices}, target
 }
 
 // applyBatch runs every op on the staging tree — every op is judged, even
 // after one is refused, so a caller can report every refusal. ctx is checked
 // before each op: a cancelled batch stops there and is not written.
-func (w *Writer) applyBatch(ctx context.Context, st *stagingTree, ops []BatchOp) ([]BatchOpOutcome, error) {
+//
+// Then the whole tree (#2939, ADR-036 §4; judgeTree with st.targets): judge
+// is the walk of the tree the batch lands on.
+//   - A store fault (ErrTenantStoreFault) fails the batch WHOLE: it is about
+//     tenant-api's copy, not about any op, so no op could be fixed or dropped
+//     to get past it — the same shape as a batch that cannot be copied,
+//     committed or admitted (TREE_NOT_ON_BASE, WRITE_OVERLOADED). It wins
+//     over every per-op refusal, as on a single write.
+//   - An op whose own tenant file is unreadable and not an unresolvable symlink
+//     gets that *TargetUnreadableError as its refusal (it replaces any
+//     error its merge hit reading the file, which says less).
+//   - Dangling symlinks no op replaces (ErrTenantTreeUnreadable): every op
+//     not already refused gets that error as its own refusal, so the caller
+//     reports it per op like any other.
+//
+// A judge walk that fails is the whole batch's error (ErrTenantTreeScan), as
+// a placement walk's is.
+//
+// judge is the SERVING tree's walk in direct mode (scanTree): the staging
+// copy cannot reproduce a directory the serving walk could not list
+// (mirrorServingConf leaves it out), and every other entry the batch did not
+// replace is the serving tree's own. PR mode passes the staging walk: its
+// tree is the fresh base, checked out there.
+func (w *Writer) applyBatch(ctx context.Context, st *stagingTree, ops []BatchOp, judge func() (*cfg.TreeScan, error)) ([]BatchOpOutcome, error) {
 	outcomes := make([]BatchOpOutcome, len(ops))
+	opTargets := make([]string, len(ops))
 	refused := false
 	for i, op := range ops {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		outcomes[i] = w.applyBatchOp(st, op)
+		outcomes[i], opTargets[i] = w.applyBatchOp(st, op)
 		refused = refused || outcomes[i].Err != nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	scan, err := judge()
+	if err != nil {
+		return nil, fmt.Errorf("%w: batch: %w", ErrTenantTreeScan, err)
+	}
+	perTarget, treeErr := judgeTree(scan, st.targets)
+	if errors.Is(treeErr, ErrTenantStoreFault) {
+		return nil, fmt.Errorf("batch: %w", treeErr)
+	}
+	for i := range outcomes {
+		if err := perTarget[opTargets[i]]; opTargets[i] != "" && err != nil {
+			outcomes[i] = BatchOpOutcome{Err: err}
+			refused = true
+		}
+	}
+	if treeErr != nil {
+		for i := range outcomes {
+			if outcomes[i].Err == nil {
+				outcomes[i] = BatchOpOutcome{Err: treeErr}
+			}
+		}
+		refused = true
 	}
 	if refused {
 		return nil, &BatchRejectedError{Outcomes: outcomes}
@@ -530,7 +620,7 @@ func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail stri
 	}
 	defer w.closeStaging(st) // also on a panic in an op's merge
 
-	outcomes, err := w.applyBatch(ctx, st, ops)
+	outcomes, err := w.applyBatch(ctx, st, ops, w.scanTree)
 	if err != nil {
 		return nil, err
 	}

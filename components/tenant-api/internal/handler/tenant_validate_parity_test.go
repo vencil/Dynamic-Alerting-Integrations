@@ -31,7 +31,7 @@ func dryRunAnswerFor(werr error) string {
 	if errors.Is(werr, gitops.ErrValidation) {
 		return strings.TrimPrefix(werr.Error(), gitops.ErrValidation.Error()+": ")
 	}
-	return dryRunRefusalMessage(werr)
+	return dryRunRefusalMessage(werr, false)
 }
 
 // TestValidateTenant_VerdictMatchesWrite pins #2124: for the SAME body against

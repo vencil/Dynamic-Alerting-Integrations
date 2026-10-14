@@ -20,6 +20,7 @@ lang: en
 | Multi-replica / multi-tenant values double-counted | Platform / SRE | [Dual-Replica Scrape Double-Counting](#dual-replica-scrape-double-counting) |
 | Platform self-monitoring alerts are Firing in Prometheus but nobody is notified | Platform / SRE | [Platform Alerts Never Reach Anyone](#platform-alerts-never-reach-anyone) |
 | Rules not loaded in an Operator environment | Platform Engineer | [Prometheus Operator Common Issues](#prometheus-operator-common-issues) |
+| Every write through tenant-api answers 409 `TENANT_TREE_UNREADABLE` or 500 `TENANT_STORE_FAULT` | Platform Engineer | [Every tenant-api Write Is Refused](#every-tenant-api-write-is-refused-tenant_tree_unreadable--tenant_store_fault) |
 
 ## SHA-256 Hot-Reload Delay
 
@@ -204,6 +205,20 @@ da-tools validate-config --config-dir ./conf.d/
 ```
 
 > See also: [Operator Prometheus Integration](integration/operator-prometheus-integration.en.md) · [Operator Alertmanager Integration](integration/operator-alertmanager-integration.en.md) · [Operator GitOps Deployment](integration/operator-gitops-deployment.en.md)
+
+## Every tenant-api Write Is Refused (`TENANT_TREE_UNREADABLE` / `TENANT_STORE_FAULT`)
+
+> 👤 **For:** Platform Engineer / maintainers of tools that call tenant-api
+
+**Symptom**: every write through tenant-api is refused with one of these ([#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)):
+
+- 409 `TENANT_TREE_UNREADABLE` (a batch: 422, `code: TENANT_TREE_UNREADABLE` per op)
+- 500 `TENANT_STORE_FAULT` (a batch: 500 whole); the tenant-api log shows `conf.d holds unreadable entries`, and the platform alert `TenantApiStoreUnreadable` or `TenantApiStoreScanStale` fires
+- 409 `TENANT_CONFIG_NOT_LOADABLE` with `config_error` `unreadable` or `not_regular_file`
+
+Unlike the exporter's `ConfigFilesUnreadable` (see [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay)), this is about the copy of conf.d tenant-api mounts.
+
+Causes and fixes: [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md#38-a-write-is-refused-while-confd-holds-an-entry-that-cannot-be-read-2939).
 
 ---
 

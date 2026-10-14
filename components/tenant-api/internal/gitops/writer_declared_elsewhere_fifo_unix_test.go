@@ -5,7 +5,10 @@ package gitops
 // #2939: a FIFO named *.yaml used to block the declared-elsewhere walk until
 // the bound failed the write closed (and every later write, while the walk
 // stayed stuck). The walker no longer opens a special file: the walk returns
-// at once, and the FIFO is one of its unreadable entries.
+// at once, and the FIFO is one of its unreadable entries — which refuses the
+// write (ADR-036 §4: the tree after it is one the route generator refuses),
+// at once, as a store fault (ErrTenantStoreFault: a FIFO is the server's
+// storage, not content git holds) rather than the walk's ErrTenantTreeScan.
 
 import (
 	"context"
@@ -17,7 +20,7 @@ import (
 	"time"
 )
 
-func TestTenantWrite_FIFOInTreeDoesNotBlockTheWalk(t *testing.T) {
+func TestTenantWrite_FIFOInTreeRefusedWithoutBlockingTheWalk(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"fifo-t.yaml": tenantBody("fifo-t")})
 	fifo := filepath.Join(dir, "stuck.yaml")
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
@@ -41,8 +44,8 @@ func TestTenantWrite_FIFOInTreeDoesNotBlockTheWalk(t *testing.T) {
 		if errors.Is(err, ErrTenantTreeScan) {
 			t.Fatalf("write err = %v: the walk did not return", err)
 		}
-		if err != nil {
-			t.Fatalf("write err = %v", err)
+		if !errors.Is(err, ErrTenantStoreFault) {
+			t.Fatalf("write err = %v, want ErrTenantStoreFault", err)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("write blocked")

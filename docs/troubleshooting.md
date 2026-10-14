@@ -22,6 +22,7 @@ lang: zh
 | 多副本 / 多租戶數值被重複計算 | Platform / SRE | [雙租戶抓取重複計數](#雙租戶抓取重複計數) |
 | 平台自監控告警在 Prometheus 有 firing，卻沒人收到 | Platform / SRE | [平台告警沒有收到通知](#平台告警沒有收到通知) |
 | Operator 環境規則沒載入 | Platform Engineer | [Operator 環境常見問題](#prometheus-operator-環境常見問題) |
+| 經 tenant-api 的寫入都回 409 `TENANT_TREE_UNREADABLE` 或 500 `TENANT_STORE_FAULT` | Platform Engineer | [tenant-api 寫入全部被拒](#tenant-api-寫入全部被拒tenant_tree_unreadabletenant_store_fault) |
 
 ## SHA-256 熱重新加載延遲
 
@@ -206,6 +207,20 @@ da-tools validate-config --config-dir ./conf.d/
 ```
 
 > 詳見：[Operator Prometheus 整合](integration/operator-prometheus-integration.md) · [Operator Alertmanager 整合](integration/operator-alertmanager-integration.md) · [Operator GitOps 部署](integration/operator-gitops-deployment.md)
+
+## tenant-api 寫入全部被拒（`TENANT_TREE_UNREADABLE`／`TENANT_STORE_FAULT`）
+
+> 👤 **適用：** Platform Engineer / 呼叫 tenant-api 的工具維護者
+
+**症狀**：經 tenant-api 的寫入都被拒，回應碼是下列其中之一（[#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)）：
+
+- 409 `TENANT_TREE_UNREADABLE`（批次 422、逐筆 `code: TENANT_TREE_UNREADABLE`）
+- 500 `TENANT_STORE_FAULT`（批次整批 500）；tenant-api 的 log 有 `conf.d holds unreadable entries`，平台告警 `TenantApiStoreUnreadable` 或 `TenantApiStoreScanStale`
+- 409 `TENANT_CONFIG_NOT_LOADABLE`，`config_error` 為 `unreadable` 或 `not_regular_file`
+
+與 exporter 的 `ConfigFilesUnreadable`（見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)）不同，這裡指的是 tenant-api 掛載的那份 conf.d。
+
+原因與修法見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md#38-confd-有讀不了的項目時寫入整個拒收2939)。
 
 ## 相關資源
 

@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 	"time"
 
@@ -260,8 +259,11 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
-	// its spelling, never a second file beside it.
-	if err := os.WriteFile(filePath, []byte(yamlContent), 0644); err != nil {
+	// its spelling, never a second file beside it. Replaced by rename, as a
+	// direct write (writeFileAtomic): a tenant file that is a symlink —
+	// dangling, or pointing outside conf.d — becomes a regular file, and
+	// nothing is written where it pointed (#2939, ADR-036 §4's repair path).
+	if err := w.writeTenant(filePath, []byte(yamlContent), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.
 		w.abortFeatureBranch(base, branchName)
@@ -403,7 +405,10 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			// on — the branch is cut from the fresh origin base, where the
 			// file may already be repaired. Tolerated here; the
 			// post-checkout loop re-merges and refuses (abortFeatureBranch).
-			if errors.Is(err, ErrMergeBaseNotLoadable) {
+			// #2939: so is a tenant file the local tree cannot read; on the
+			// base it lands on, judgeTree refuses it (TargetUnreadableError)
+			// or the read succeeds.
+			if errors.Is(err, ErrMergeBaseNotLoadable) || errors.Is(err, errReadTenantFile) {
 				continue
 			}
 			return nil, err
@@ -444,7 +449,6 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	if err != nil {
 		return nil, err
 	}
-	st.inPlace = true
 	pushed := false
 	defer func() {
 		w.closeStaging(st)
@@ -462,7 +466,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	for i, op := range ops {
 		batch[i] = BatchOp{TenantID: op.TenantID, Merge: op.mergeIn(st.configDir)}
 	}
-	outcomes, err := w.applyBatch(ctx, st, batch)
+	outcomes, err := w.applyBatch(ctx, st, batch, w.stagingScan(st))
 	if err != nil {
 		return nil, err
 	}

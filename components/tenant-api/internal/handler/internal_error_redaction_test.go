@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -171,7 +172,10 @@ func TestWriteErrorIsForClient(t *testing.T) {
 // msgBatchOpFailed, while a failure about the tenant's own file keeps its
 // text. (A file the merge cannot use is refused as "not loadable" before the
 // merge runs, so ErrMergeFailed's classification is pinned by
-// TestWriteErrorIsForClient rather than here.)
+// TestWriteErrorIsForClient rather than here. Since #2939 D3c an unreadable
+// tenant file is refused as not loadable too, so no on-disk fixture reaches
+// a server-side per-op failure any more; that branch is pinned directly
+// below, on the error shape the Writer returns for a failed write.)
 func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
@@ -182,8 +186,20 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 		"db-c.yml":  "tenants:\n  db-c:\n    _silent_mode: \"warning\"\n",
 	})
 	initGitRepo(t, configDir)
-	// db-a's file is a directory: reading it fails server-side.
-	if err := os.MkdirAll(filepath.Join(configDir, "db-a.yaml", "x"), 0o755); err != nil {
+	// db-a's file reads with an I/O error: a symlink to /proc/self/mem, a
+	// regular file whose read at offset 0 fails (EIO) even for root. It is
+	// the op's own file and not a dangling link, so #2939 D3c refuses the op
+	// as not loadable (it is never replaced) — naming the file's base name,
+	// never the server path.
+	if _, err := os.ReadFile("/proc/self/mem"); err == nil {
+		t.Skip("no /proc/self/mem that fails to read: cannot build a server-side read failure")
+	}
+	if err := os.Symlink("/proc/self/mem", filepath.Join(configDir, "db-a.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	// db-d's file is a directory: tenant-api neither reads nor replaces it,
+	// so the op is refused like PUT's not-regular-file 409 (#2939).
+	if err := os.MkdirAll(filepath.Join(configDir, "db-d.yaml", "x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rbacMgr := adminRBAC(t)
@@ -191,7 +207,8 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	body := `{"operations":[
 		{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}},
 		{"tenant_id":"db-b","patch":{"_silent_mode":"warning"}},
-		{"tenant_id":"db-c","patch":{"_silent_mode":"critical"}}
+		{"tenant_id":"db-c","patch":{"_silent_mode":"critical"}},
+		{"tenant_id":"db-d","patch":{"_silent_mode":"critical"}}
 	]}`
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -211,14 +228,22 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	for _, r := range resp.Results {
 		byTenant[r.TenantID] = r
 	}
-	if got := byTenant["db-a"]; got.Status != "error" || got.Message != msgBatchOpFailed {
-		t.Errorf("db-a (server-side failure) = %+v, want error %q", got, msgBatchOpFailed)
+	serverSide := fmt.Errorf("write file for db-a: %w",
+		&fs.PathError{Op: "rename", Path: filepath.Join(configDir, "db-a.yaml"), Err: errors.New("no space left on device")})
+	if got := batchErrorResult("db-a", serverSide, true); got.Message != msgBatchOpFailed || strings.Contains(got.Message, configDir) {
+		t.Errorf("server-side op failure = %+v, want %q", got, msgBatchOpFailed)
+	}
+	if got := byTenant["db-a"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-a.yaml") {
+		t.Errorf("db-a (unreadable tenant file) = %+v, want %s naming db-a.yaml", got, CodeTenantConfigNotLoadable)
 	}
 	if got := byTenant["db-b"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-b") {
 		t.Errorf("db-b (client-facing failure) = %+v, want its own not-loadable text", got)
 	}
 	if got := byTenant["db-c"]; got.Status != "error" || !strings.Contains(got.Message, "is claimed by") {
 		t.Errorf("db-c (two files claim it) = %+v, want its own ambiguous-tenant text", got)
+	}
+	if got := byTenant["db-d"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-d.yaml") {
+		t.Errorf("db-d (its file is a directory) = %+v, want %s naming db-d.yaml", got, CodeTenantConfigNotLoadable)
 	}
 }
 

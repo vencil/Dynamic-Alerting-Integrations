@@ -67,7 +67,7 @@ func TestBatchConflict_SyncAndAsyncSayNothingWasWritten(t *testing.T) {
 func TestBatchCommitted_ReportedAsCommitted(t *testing.T) {
 	err := &gitops.BatchCommittedError{Commit: "abc123", Cause: errors.New("sync failed")}
 	w := httptest.NewRecorder()
-	writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), err)
+	writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), nil, err)
 	var env map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &env)
 	if w.Code != http.StatusConflict || env["code"] != CodeConflict || env["committed"] != true || env["commit"] != "abc123" ||

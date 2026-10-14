@@ -511,6 +511,8 @@ func main() {
 	taskMgr := async.NewManager(4) // 4 worker goroutines
 	// #2913: /metrics reads how many of its tasks panicked (recovered, failed).
 	handler.SetAsyncTaskSource(taskMgr)
+	// #2939 D3c: /metrics reads the store faults of the Writer's last conf.d walk.
+	handler.SetStoreUnreadableSource(writer)
 
 	// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab.
 	// PR-5/11: bootstrap logic lives in wire.go::wirePRBackend so main()

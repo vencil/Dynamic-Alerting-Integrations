@@ -80,9 +80,9 @@ type PutTenantResponse struct {
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it), and a group_by entry the body writes (group_by, overrides[].group_by, routes[].group_by) that is not a string as the route generator reads it (unquoted 8, on), is empty, repeats a label or is ... beside other labels (#2503; quote or remove it), and a _routing the body writes that is neither a mapping nor a disabling string (disable / disabled / off / false), e.g. "slack", a list, null or an unquoted false / off, which the route generator reads as a boolean (#2341; to turn routing off quote it, 'off'). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
 // @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions, or the body breaks the domain policy (code POLICY_VIOLATION; nothing written). In PR write-back mode the body is judged again on the latest base branch, which this server's local copy may lag: a violation there, or a base whose _domain_policy.yaml / .yml cannot be loaded, is the same 403 with tenant_id, and no PR/MR or branch is left"
-// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)"
+// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
-// @Failure     500   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written)"
 // @Router      /api/v1/tenants/{id} [put]
@@ -252,7 +252,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			}
 			// #2078: the id is declared by another conf.d file → 409
 			// TENANT_DECLARED_ELSEWHERE (fixed message, path only in the log).
-			if writeTenantPlacementError(rw, r, err) {
+			if writeTenantPlacementError(rw, r, d, err) {
 				return
 			}
 			// #1700: the text is the caller's only when it is about the
@@ -397,7 +397,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		}
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the batch path).
-		if writeWriteFlowError(rw, r, err) {
+		if writeWriteFlowError(rw, r, d, err) {
 			return
 		}
 		// #795 F1: malformed body is a CLIENT error → 400 (matches the

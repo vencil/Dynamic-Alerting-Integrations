@@ -22,7 +22,7 @@ func TestValidate_CustomAlertsReadErrorCarriesNoPath(t *testing.T) {
 	}
 	errs, _ := validate(configDir, tid, target, "tenants:\n  "+tid+":\n    _silent_mode: \"false\"\n")
 	joined := strings.Join(errs, "; ")
-	if !strings.Contains(joined, "cannot read current custom alerts") {
+	if !strings.Contains(joined, "cannot read the current tenant file") {
 		t.Fatalf("did not reach the read-failure branch: %q", errs)
 	}
 	if strings.Contains(joined, configDir) {

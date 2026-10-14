@@ -1005,7 +1005,7 @@ data:
 
           # --- tenant-api domain policy UNAVAILABLE (hub #2486 Q7-2) ---
           # A _domain_policy.yaml / .yml that is present but unusable (a
-          # directory, a dangling symlink, unreadable, or refused by the parse)
+          # directory, an unresolvable symlink, unreadable, or refused by the parse)
           # and has no last good version of its own makes tenant-api refuse, in
           # direct write mode, every write the domain policy judges (503
           # POLICY_UNAVAILABLE) instead of judging it on no policy. /ready stays
@@ -1070,6 +1070,85 @@ data:
                 held can leave tenant-api wedged; if writes then hang, restart the
                 pod. The alert clears ~15m after the last panic as it leaves the
                 window.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
+
+          # --- tenant-api conf.d copy has entries the server cannot read (#2939) ---
+          # tenant-api judges every write on the conf.d tree after it (ADR-036
+          # §4). An entry of ITS OWN copy that the server cannot read and git
+          # cannot hold — a FIFO/socket/device named like a config file, a failed
+          # read, an unlistable directory, a failed stat that is not an
+          # unresolvable link — refuses EVERY write with 500 TENANT_STORE_FAULT, and nothing a
+          # client sends clears it. tenant-api computes the gauge at scrape time by
+          # walking conf.d itself (classification only, with a minimum interval,
+          # never blocking on a FIFO), so it fires with no write at all and clears by
+          # itself after the repair. Unresolvable symlinks (dangling, looping,
+          # ENOTDIR) are NOT counted: they are content git holds, answered 409
+          # TENANT_TREE_UNREADABLE, fixed in git.
+          #
+          # `> 0` with `for: 10m`: no entry of this kind is benign, but a write
+          # racing a short-lived file swap should not page. warning, not critical:
+          # reads and the exporter (its own copy, ConfigFilesUnreadable) go on.
+          # `max by (job, instance)` keeps one alert per pod whatever the reasons.
+          - alert: TenantApiStoreUnreadable
+            expr: max by (job, instance) (tenant_api_store_unreadable_entries{job="tenant-api"}) > 0
+            for: 10m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api's conf.d copy has entries the server cannot read — every write answers 500 TENANT_STORE_FAULT"
+              description: |
+                tenant-api's own copy of conf.d holds {{ $value }} or more entries
+                of one kind the server cannot read and git cannot hold
+                (tenant_api_store_unreadable_entries by reason: special_file = a
+                FIFO, socket or device named like a config file; read_error;
+                walk_error = a directory that cannot be listed; stat_error = a
+                failed stat that is not an unresolvable link). Every write through
+                tenant-api answers 500 TENANT_STORE_FAULT until it is gone; reads
+                are unaffected. This is the server's storage, not the
+                configuration: find the entries in the tenant-api log ("conf.d
+                holds unreadable entries" names them), then remove or repair them
+                on the pod's volume, or reset the copy from git. tenant-api
+                re-walks conf.d for the gauge at scrape time, so the alert
+                clears by itself after the repair.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
+
+          # --- tenant-api store scan cannot measure (#2939 R5-N2) ---
+          # tenant_api_store_unreadable_entries is NOT exported until a store
+          # walk has succeeded, and keeps its last value while later walks fail
+          # — so on its own "not measured" would read as "no fault", and
+          # TenantApiStoreUnreadable would stay silent. This alert watches the
+          # measurement itself through the walk's last-success timestamp:
+          #   - never succeeded: tenant-api is up (tenant_api_up) and the
+          #     timestamp is absent. `unless` on tenant_api_up, not absent():
+          #     a cluster that does not run tenant-api must stay quiet;
+          #   - stale: the last success is older than the threshold in the expr,
+          #     which must exceed the minimum walk interval plus one scrape
+          #     interval and tolerate a few missed scrapes. A walk that fails
+          #     (a hung mount trips its time limit) never moves it.
+          # `for: 10m`, as TenantApiStoreUnreadable: a pod start or a short
+          # mount hiccup must not page.
+          - alert: TenantApiStoreScanStale
+            expr: |
+              (time() - tenant_api_store_scan_last_success_timestamp_seconds{job="tenant-api"} > 300)
+              or
+              (tenant_api_up{job="tenant-api"} unless on (job, instance) tenant_api_store_scan_last_success_timestamp_seconds{job="tenant-api"})
+            for: 10m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
+              description: |
+                tenant-api's scrape-time walk of its own conf.d copy has not
+                succeeded within the rule's threshold, or never has since the
+                pod started, so tenant_api_store_unreadable_entries is missing or
+                stale and TenantApiStoreUnreadable cannot fire. Writes are judged
+                on their own walks and are not affected by this alert itself.
+                Check the tenant-api log for walk errors and the conf.d volume
+                (a missing directory, a hung mount: the walk has a time limit and
+                then fails fast until the stuck walk returns — restart the pod to
+                clear it). The alert clears once a walk succeeds.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
 
           # --- Prometheus reload failure (#1246) ---

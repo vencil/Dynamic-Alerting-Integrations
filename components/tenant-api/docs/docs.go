@@ -787,13 +787,13 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index.",
+                        "description": "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index. Codes TENANT_TREE_UNREADABLE and TENANT_CONFIG_NOT_LOADABLE as on POST /api/v1/tenants/batch (#2939).",
                         "schema": {
                             "$ref": "#/definitions/internal_handler.GroupBatchResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -959,13 +959,13 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest.",
+                        "description": "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them.",
                         "schema": {
                             "$ref": "#/definitions/internal_handler.BatchResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1187,7 +1187,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)",
+                        "description": "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1199,7 +1199,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1268,7 +1268,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
-                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a\nwhole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that\nrepair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error\nnot_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the\nwhole-file PUT refuses it too, so replace it with a regular file in git.",
+                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a\nwhole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that\nrepair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error\nnot_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the\nwhole-file PUT refuses it too, so replace it with a regular file in git.\n409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other\nthan the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot\nread (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's\nown file cannot be read.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1317,13 +1317,13 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Not found: no tenant file, or the tenant file is a symlink that cannot be resolved (dangling, looping — a self-loop included — or through a non-directory): it has no content to merge recipes into, so there is no tenant here (a whole-file PUT /api/v1/tenants/{id} replaces such a link)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "Conflict: base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1335,7 +1335,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1400,7 +1400,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "Conflict: the PUT this previews would be refused — ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1418,7 +1418,7 @@ const docTemplate = `{
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE (the 500 the PUT this previews would get)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1661,7 +1661,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/validate": {
             "post": {
-                "description": "Dry-run validation of a tenant YAML without writing to disk.",
+                "description": "Dry-run validation of a tenant YAML without writing to disk.\nWhen conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is\nvalid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a\nsymlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);\nwhen the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.",
                 "consumes": [
                     "application/yaml"
                 ],
@@ -3251,7 +3251,7 @@ const docTemplate = `{
                     ]
                 },
                 "config_error": {
-                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, errors the YAML library only detects on a typed decode, such\nas duplicate keys, or a declared tenant id that is not valid UTF-8,\nwhich threshold-exporter rejects the whole file for). The first three\ncome from confd.FileProblem; invalid_config is decided by this handler.",
+                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. an unresolvable symlink —\ndangling, looping or through a non-directory — or a permission\nerror), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, errors the YAML library only detects on a typed decode, such\nas duplicate keys, or a declared tenant id that is not valid UTF-8,\nwhich threshold-exporter rejects the whole file for). The first three\ncome from confd.FileProblem; invalid_config is decided by this handler.",
                     "type": "string",
                     "enum": [
                         "unreadable",
