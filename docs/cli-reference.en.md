@@ -335,7 +335,7 @@ None (auto-discover tenants).
 |--------|-------------|---------|
 | `--tenants <LIST>` | Comma-separated tenant list (if omitted, auto-discover) | (auto) |
 | `--workers <N>` | Number of parallel diagnosis threads | `5` |
-| `--timeout <SEC>` | Single diagnose timeout in seconds | `30` |
+| `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)) | `60` |
 | `--output <FILE>` | Output to file (JSON format) | stdout |
 | `--dry-run` | Only list tenants, don't run checks | false |
 | `--namespace <NS>` | K8s namespace (for auto-discover) | `monitoring` |
@@ -357,7 +357,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|-------------|
 | `0` | Every tenant is `healthy` or `unchecked` (including `--dry-run`) |
 | `1` | One or more tenant checks failed (see each tenant's `status` and `issues` in the output) |
-| `2` | Caller error: bad arguments (including `--workers` below 1), a failed Prometheus query or a missing `kubectl` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl` or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: a failed tenant check and a failed Prometheus query both return `0`. On v2.9.0, read each tenant's `status` in the output. <!-- image-caveat: v2.9.0 -->
 

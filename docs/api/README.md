@@ -26,13 +26,7 @@ Threshold Exporter 是 Multi-Tenant Dynamic Alerting 平台的核心元件，負
 
 ## API Overview
 
-```
-GET /metrics          → Prometheus 指標匯出 (200 OK)
-GET /health           → 存活探針 (200 OK)
-GET /ready            → 就緒探針 (200 OK / 503 Service Unavailable)
-GET /api/v1/config    → 設定狀態除錯端點 (200 OK)
-GET /api/v1/config/identity → 目前服務的設定之識別（給機器讀的 JSON 契約，200 OK）
-```
+端點清單只列在一處：[threshold-exporter README §3.1 Endpoints](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#31-endpoints)。那張表有測試比對原始碼（`ops_readme_parity_test.go`），這裡不再複製；以下各節是 GET 端點的細節。
 
 ---
 

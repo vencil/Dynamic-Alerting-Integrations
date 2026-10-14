@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -43,13 +44,24 @@ from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
 from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
 from diagnose import CommandNotFoundError  # noqa: E402  (#2493)
-from _lib_python import format_json_report, write_json_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import (  # noqa: E402
+    add_prometheus_arg, format_json_report, positive_seconds, write_json_or_die,
+)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
     has_yaml_extension,
     is_reserved_name,
 )
+
+
+# #2954: per-tenant deadline. diagnose.check() makes up to four Prometheus
+# queries, each bounded by query_prometheus_instant's own 10s timeout, so a
+# stuck Prometheus takes ~40s to come back as "Prometheus query failed". A
+# shorter deadline would replace that diagnosis (and its recommendation) with
+# a bare "timed out"; test_default_timeout_outlasts_the_prometheus_queries
+# keeps the two in step.
+DEFAULT_TIMEOUT_S = 60
 
 
 def discover_tenants(namespace="monitoring", configmap="threshold-config"):
@@ -132,16 +144,11 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
     return sorted(tenants)
 
 
-def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
-    """Run diagnose.check() for a single tenant with timeout protection.
-
-    Returns dict: {tenant, status, ...}; status "error" when the check could
-    not run. A missing `kubectl` also sets `_environment_error` (see
-    batch_exit_code), which main() strips before reporting.
-    """
+def _check_tenant(tenant, prom_url):
+    """diagnose.check() for one tenant, as a result dict (never raises for the
+    failures diagnose itself can report)."""
     import io
 
-    start = time.monotonic()
     try:
         # ⛔ Ask check() to write into OUR buffer. Do NOT reach for
         # `contextlib.redirect_stdout`: it rebinds the PROCESS-GLOBAL
@@ -165,6 +172,43 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
                   "_environment_error": True}
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         result = {"status": "error", "tenant": tenant, "issues": [str(exc)]}
+    return result
+
+
+def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
+    """Run diagnose.check() for a single tenant, giving up after timeout_sec.
+
+    Returns dict: {tenant, status, ...}; status "error" when the check could
+    not run. A missing `kubectl` also sets `_environment_error` (see
+    batch_exit_code), which main() strips before reporting.
+
+    #2954: the check runs in a daemon thread joined with `timeout_sec`; a
+    check still running then is reported as an environment error (it could
+    not be completed, like a missing kubectl), and the thread is left behind —
+    Python cannot stop it, but the batch no longer waits for it. A kubectl it
+    started is not killed either: it outlives the batch until its own 120s
+    subprocess timeout would have fired, or longer (#2968).
+    """
+    start = time.monotonic()
+    box = {}
+
+    def _work():
+        try:
+            box["result"] = _check_tenant(tenant, prom_url)
+        except BaseException as exc:  # noqa: BLE001 — re-raised in the caller below
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_work, name=f"diagnose-{tenant}", daemon=True)
+    worker.start()
+    worker.join(timeout_sec)
+    if worker.is_alive():
+        result = {"status": "error", "tenant": tenant,
+                  "issues": [f"timed out after {timeout_sec:g}s"],
+                  "_environment_error": True}
+    elif "exc" in box:
+        raise box["exc"]
+    else:
+        result = box["result"]
 
     elapsed = time.monotonic() - start
     result["elapsed_seconds"] = round(elapsed, 2)
@@ -336,8 +380,10 @@ def main():
         help="Max parallel diagnose workers (default: 5)",
     )
     parser.add_argument(
-        "--timeout", type=int, default=30,
-        help="Per-tenant timeout in seconds (default: 30)",
+        "--timeout", type=positive_seconds, default=DEFAULT_TIMEOUT_S,
+        help=(f"Per-tenant timeout in seconds (> 0, fractions allowed; default: "
+              f"{DEFAULT_TIMEOUT_S}); a tenant still being checked then is reported "
+              "as an error"),
     )
     parser.add_argument(
         "--namespace", default="monitoring",
@@ -413,7 +459,9 @@ def main():
         for future in as_completed(futures):
             tenant = futures[future]
             try:
-                result = future.result(timeout=args.timeout)
+                # Already bounded by run_diagnose_for_tenant's own deadline
+                # (#2954); as_completed only yields finished futures.
+                result = future.result()
             except Exception as exc:
                 result = {
                     "status": "error",
