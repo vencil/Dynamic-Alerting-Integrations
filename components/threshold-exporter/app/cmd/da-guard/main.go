@@ -225,8 +225,8 @@ func run(args []string, stdout, errOut io.Writer) int {
 }
 
 // checkFunc is guard.CheckDefaultsImpact's shape; runWith takes it so a test
-// can hand the output boundary a report no real check produces (a finding
-// with the zero Kind, #2904).
+// can hand the CLI a report no real check produces (a finding with an
+// unregistered kind, #2904).
 type checkFunc func(guard.CheckInput) (*guard.GuardReport, error)
 
 // runWith is run with the guard check passed in.
@@ -368,10 +368,9 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		return exitCallerErr
 	}
 	spellFindingsAsWritten(report, scoped)
-	// #2904: a finding whose kind is not registered (the zero Kind a check
-	// left, or one forged past the closed type) would fail the JSON encode —
-	// exit 2 and no report at all — and leave an empty kind column in
-	// Markdown. Write it as unregistered_finding_kind, an error, instead.
+	// #2904: the report's output writes any unregistered kind as
+	// unregistered_finding_kind, an error, by itself; sealing here as well
+	// lets stderr name them and the exit code count them.
 	if n := report.SealUnregisteredKinds(); n > 0 {
 		fmt.Fprintf(errOut, "%s: %d finding(s) carried no registered kind; reported as %q with severity error (a da-guard bug: please report it)\n",
 			programName, n, findingkind.Unregistered())

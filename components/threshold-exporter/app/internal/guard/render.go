@@ -35,6 +35,8 @@ func (r *GuardReport) Markdown() string {
 	if r == nil {
 		return "_(no guard report)_\n"
 	}
+	sealed, _ := r.sealed() // seal.go: only registered kinds are written
+	r = &sealed
 
 	out := strings.Builder{}
 	out.WriteString("## Dangling Defaults Guard\n\n")

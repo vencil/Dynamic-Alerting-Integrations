@@ -11,22 +11,13 @@ package guard
 // for the four ways of listing kinds this replaces — a regex, an AST shape
 // rule, a go/types computation, a check at Run's exit — and why each fell).
 //
-// First, the module-wide rules of finding_kind_isolation_test.go (no
-// unsafe, cgo or assembly in any non-test file of the module; no kind var
-// written or addressed from any package; no pointer-receiver method in
-// findingkind; the Unregistered sentinel used only at da-guard's output
-// boundary). Then, over every non-test .go file of this package whatever its
-// name or build constraint (go/build's default context would skip an
-// `_arm64.go` file):
-//
-//  1. No `unsafe` and no cgo: either could write a Kind's unexported field
-//     (also covered module-wide).
-//  2. findingkind is imported by name (no dot or blank import), so every
-//     use of a kind is a `findingkind.FindingXxx` selector this test sees.
-//  3. No kind var is assigned to, incremented or has its address taken: the
-//     var's name must keep meaning the kind it was registered as.
-//  4. Every registered kind is used by some file (else it is stale), and a
-//     kind used in routing.go is a routing kind.
+// First, finding_kind_isolation_test.go over the whole module: findingkind
+// is imported by name, so every use of a kind is a `findingkind.FindingXxx`
+// selector this test sees, and no kind var is written to. Then, over every
+// non-test .go file of this package whatever its name or build constraint
+// (go/build's default context would skip an `_arm64.go` file): every
+// registered kind is used by some file (else it is stale), and a kind used
+// in routing.go is a routing kind.
 //
 // With DA_GUARD_EMIT_KINDS=<path> the test writes
 // {kind: {"plane": ..., "files": [...]}} to <path> once every check passed;
@@ -139,31 +130,24 @@ func kindVars(t *testing.T) map[string]findingkind.Kind {
 func TestFindingKindPlanes(t *testing.T) {
 	requireKindIsolation(t) // finding_kind_isolation_test.go: rules a–e, module-wide
 	vars := kindVars(t)
-	fset, files := nonTestFiles(t, ".")
+	_, files := nonTestFiles(t, ".")
 	if files[routingFindingsFile] == nil {
 		t.Fatalf("%s is not among the package's files", routingFindingsFile)
 	}
 
 	kindFiles := map[findingkind.Kind]map[string]bool{}
 	for name, f := range files {
-		local := ""
+		local := map[string]bool{} // names findingkind is imported under
 		for _, imp := range f.Imports {
-			path, _ := strconv.Unquote(imp.Path.Value)
-			switch path {
-			case "unsafe", "C":
-				t.Errorf("%s: import %q in a non-test file", fset.Position(imp.Pos()), path)
-			case findingKindImport:
-				local = "findingkind"
-				if imp.Name != nil {
-					local = imp.Name.Name
-				}
-				if local == "." || local == "_" {
-					t.Errorf("%s: import findingkind by name, so each kind is a findingkind.FindingXxx selector",
-						fset.Position(imp.Pos()))
+			if path, _ := strconv.Unquote(imp.Path.Value); path == findingKindImport {
+				if imp.Name == nil {
+					local["findingkind"] = true
+				} else {
+					local[imp.Name.Name] = true
 				}
 			}
 		}
-		if local == "" {
+		if len(local) == 0 {
 			continue
 		}
 		kindOf := func(e ast.Expr) (findingkind.Kind, bool) {
@@ -171,41 +155,15 @@ func TestFindingKindPlanes(t *testing.T) {
 			if !ok {
 				return findingkind.Kind{}, false
 			}
-			if x, ok := sel.X.(*ast.Ident); !ok || x.Name != local {
+			if x, ok := sel.X.(*ast.Ident); !ok || !local[x.Name] {
 				return findingkind.Kind{}, false
 			}
 			k, ok := vars[sel.Sel.Name]
 			return k, ok
 		}
-		written := func(e ast.Expr) {
-			if _, ok := kindOf(e); ok {
-				t.Errorf("%s: a findingkind var is written to; it must keep the kind it was registered as",
-					fset.Position(e.Pos()))
-			}
-		}
 		ast.Inspect(f, func(n ast.Node) bool {
-			switch n := n.(type) {
-			case *ast.AssignStmt:
-				for _, lhs := range n.Lhs {
-					written(lhs)
-				}
-			case *ast.IncDecStmt:
-				written(n.X)
-			case *ast.RangeStmt:
-				if n.Tok == token.ASSIGN {
-					if n.Key != nil {
-						written(n.Key)
-					}
-					if n.Value != nil {
-						written(n.Value)
-					}
-				}
-			case *ast.UnaryExpr:
-				if n.Op == token.AND {
-					written(n.X)
-				}
-			case *ast.SelectorExpr:
-				if k, ok := kindOf(n); ok {
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if k, ok := kindOf(sel); ok {
 					if kindFiles[k] == nil {
 						kindFiles[k] = map[string]bool{}
 					}

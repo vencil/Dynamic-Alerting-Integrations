@@ -1,20 +1,20 @@
 package main
 
-// unregistered_kind_test.go — a finding whose kind is not registered still
-// reaches the report (#2904).
+// unregistered_kind_test.go — a finding whose kind is not registered is
+// still reported, as unregistered_finding_kind, and blocks (#2904).
 //
-// findingkind.Kind's MarshalJSON refuses the zero Kind, so before the output
-// boundary swapped it, one such finding cost the whole JSON report: exit 2,
-// nothing on stdout, nothing written to --output; and Markdown printed an
-// empty kind column with the finding's own severity. No real check produces
-// one today (TestDaGuard_FixtureFindingsHaveRegisteredKinds), so the check
-// is wrapped here to add one.
+// No real check produces one (TestDaGuard_FixtureFindingsHaveRegisteredKinds),
+// so the check is wrapped to add two: one with the zero Kind, one forged
+// with reflect as review round 6 did. The report's output seals them
+// (internal/guard/seal.go); this test holds the CLI's half — the whole report
+// written, stderr naming them, exit 1.
 
 import (
 	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,26 +25,33 @@ import (
 
 const unregisteredKindName = "unregistered_finding_kind"
 
-// withZeroKindFinding runs the real check and adds a warn finding with the
-// zero Kind on tenant-a, recomputing nothing: the summary it returns is the
-// one the real check computed plus one warning, as a check that forgot to
-// pick a kind would leave it.
-func withZeroKindFinding(in guard.CheckInput) (*guard.GuardReport, error) {
+// forgeKind writes name into a Kind's unexported field through reflect.
+func forgeKind(name string) findingkind.Kind {
+	var k findingkind.Kind
+	f := reflect.ValueOf(&k).Elem().Field(0)
+	reflect.NewAt(f.Type(), f.Addr().UnsafePointer()).Elem().SetString(name)
+	return k
+}
+
+// withUnregisteredFindings runs the real check and adds two warnings on
+// tenant-a whose kinds are not registered, as a check that forgot to pick a
+// kind, or forged one, would leave them.
+func withUnregisteredFindings(in guard.CheckInput) (*guard.GuardReport, error) {
 	r, err := guard.CheckDefaultsImpact(in)
 	if err != nil {
 		return nil, err
 	}
-	r.Findings = append(r.Findings, guard.Finding{
-		Severity: guard.SeverityWarn,
-		TenantID: "tenant-a",
-		Field:    "cpu",
-		Message:  "a finding whose check chose no kind",
-	})
-	r.Summary.Warnings++
+	r.Findings = append(r.Findings,
+		guard.Finding{Severity: guard.SeverityWarn, TenantID: "tenant-a", Field: "cpu",
+			Message: "a finding whose check chose no kind"},
+		guard.Finding{Severity: guard.SeverityWarn, Kind: forgeKind("not_a_registered_kind"), TenantID: "tenant-a",
+			Field: "mem", Message: "a finding with a forged kind"},
+	)
+	r.Summary.Warnings += 2
 	return r, nil
 }
 
-func TestRun_ZeroKindFinding_IsReportedAsUnregistered(t *testing.T) {
+func TestRun_UnregisteredKinds_AreReportedAsSentinel(t *testing.T) {
 	t.Parallel()
 	if findingkind.Unregistered().String() != unregisteredKindName {
 		t.Fatalf("the sentinel is %q; it is part of the JSON contract (docs/cli-reference.md)",
@@ -76,11 +83,11 @@ func TestRun_ZeroKindFinding_IsReportedAsUnregistered(t *testing.T) {
 					args = append(args, "--output", out)
 				}
 				var stdout, stderr bytes.Buffer
-				code := runWith(args, &stdout, &stderr, withZeroKindFinding)
+				code := runWith(args, &stdout, &stderr, withUnregisteredFindings)
 				if code != exitFindings {
 					t.Fatalf("exit %d, want %d; stderr=%q", code, exitFindings, stderr.String())
 				}
-				if !strings.Contains(stderr.String(), `1 finding(s) carried no registered kind; reported as "`+unregisteredKindName+`"`) {
+				if !strings.Contains(stderr.String(), `2 finding(s) carried no registered kind; reported as "`+unregisteredKindName+`"`) {
 					t.Errorf("stderr does not name the swap: %q", stderr.String())
 				}
 				body := stdout.String()
@@ -120,17 +127,20 @@ func checkUnregisteredJSON(t *testing.T, body string) {
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
 		t.Fatalf("report is not JSON: %v\n%s", err, body)
 	}
-	kinds := map[string]string{}
+	count := map[string]int{}
 	for _, f := range doc.Report.Findings {
-		kinds[f.Kind] = f.Severity
+		if f.Severity != "error" {
+			t.Errorf("finding %+v is not an error", f)
+		}
+		count[f.Kind]++
 	}
-	if len(doc.Report.Findings) != 2 || kinds[unregisteredKindName] != "error" ||
-		kinds[findingkind.FindingMissingRequired.String()] != "error" {
-		t.Errorf("findings: %+v; want missing_required and %s, both errors", doc.Report.Findings, unregisteredKindName)
+	if len(doc.Report.Findings) != 3 || count[unregisteredKindName] != 2 ||
+		count[findingkind.FindingMissingRequired.String()] != 1 {
+		t.Errorf("findings: %+v; want missing_required and two %s", doc.Report.Findings, unregisteredKindName)
 	}
-	want := guard.GuardSummary{TotalTenants: 2, Errors: 2, Warnings: 0, PassedTenantCount: 0}
+	want := guard.GuardSummary{TotalTenants: 2, Errors: 3, Warnings: 0, PassedTenantCount: 0}
 	if doc.Report.Summary != want {
-		t.Errorf("summary %+v, want %+v (the swapped finding is an error now)", doc.Report.Summary, want)
+		t.Errorf("summary %+v, want %+v (the swapped findings are errors now)", doc.Report.Summary, want)
 	}
 }
 
@@ -138,9 +148,14 @@ func checkUnregisteredMarkdown(t *testing.T, body string) {
 	t.Helper()
 	errorsAt := strings.Index(body, "### Errors")
 	warnsAt := strings.Index(body, "### Warnings")
-	row := strings.Index(body, "| tenant-a | cpu | "+unregisteredKindName+" |")
-	if errorsAt < 0 || row < errorsAt {
-		t.Errorf("the swapped finding is not a row of the Errors table:\n%s", body)
+	for _, field := range []string{"cpu", "mem"} {
+		row := strings.Index(body, "| tenant-a | "+field+" | "+unregisteredKindName+" |")
+		if errorsAt < 0 || row < errorsAt {
+			t.Errorf("the swapped %s finding is not a row of the Errors table:\n%s", field, body)
+		}
+	}
+	if strings.Contains(body, "not_a_registered_kind") {
+		t.Errorf("the forged name is written:\n%s", body)
 	}
 	if warnsAt >= 0 {
 		t.Errorf("a Warnings table is left; the swapped finding should be an error:\n%s", body)
@@ -151,7 +166,7 @@ func checkUnregisteredMarkdown(t *testing.T, body string) {
 	if strings.Contains(body, "|  |") {
 		t.Errorf("an empty column is left:\n%s", body)
 	}
-	if !strings.Contains(body, "- Errors: **2**") || !strings.Contains(body, "- Warnings: **0**") {
+	if !strings.Contains(body, "- Errors: **3**") || !strings.Contains(body, "- Warnings: **0**") {
 		t.Errorf("summary does not count the swapped finding as an error:\n%s", body)
 	}
 }

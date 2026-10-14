@@ -1,51 +1,15 @@
-// Package findingkind is the closed set of da-guard finding kinds: the
-// `kind` of every finding in a da-guard report, and for each one whether it
-// is a routing kind or a threshold kind (#2904, ADR-036 §9).
+// Package findingkind is the closed set of da-guard finding kinds, each
+// registered with its plane — routing or threshold (#2904, ADR-036 §9).
 //
-// Why a package of its own, and why a struct. ADR-036 §9 moves da-guard's
-// routing checks to the route generator, and
-// tests/shared/test_routing_policy_parity.py refuses to let one be deleted
-// from Go before the parity matrix pins the generator against it. That gate
-// needs the list of every kind da-guard can report, and four earlier ways of
-// producing it were each beaten:
-//
-//  1. a regex over the guard package's source — several names in one
-//     declaration, an alias type, a conversion or a literal were invisible;
-//  2. an AST rule allowing kinds in one written shape only — syntax cannot
-//     see types, so a kind written through an alias type slipped past;
-//  3. the set computed by go/types over the package's files — a kind made at
-//     run time (a generic conversion, `*(*FindingKind)(&s)`, json.Unmarshal,
-//     fmt.Sscan, go:embed) is no constant the type checker records, and
-//     go/build's default context does not even open `_arm64.go` or tagged
-//     files, while da-tools ships for arm64;
-//  4. checking the kinds at Run's exit against a closed list — rejected in
-//     review: it judges the kinds a run happened to produce, not the kinds
-//     the code can produce.
-//
-// With a string type the set of kinds is whatever any string can be, so
-// every one of those ways had to be found and closed. Here the type closes
-// it instead: Kind is a struct with one unexported field, so outside this
-// package a Kind can only be the zero value, a copy of one of the vars
-// below, or the Unregistered() sentinel. No conversion (from a string, a pointer, a generic type parameter
-// or a look-alike struct: a field of another package is never identical)
-// and no decoder (there is no UnmarshalJSON, and encoding/json cannot set an
-// unexported field) yields any other Kind. register, the one constructor, is
-// unexported and runs while this package initialises; All() is therefore
-// the complete set, and each entry carries its plane and the reason in the
-// same call. What is left is the zero value, which marks a finding no kind
-// was chosen for: MarshalJSON refuses it, and da-guard's tests assert no
-// finding of their fixtures carries it.
-//
-// Holes this does not close, held by tests instead: a file of this package
-// under a build constraint (findingkind_test.go refuses any); `unsafe` or
-// cgo anywhere in the module, which could write the unexported field from a
-// package that does not even import this one; a kind var reassigned or
-// addressed from any package of the module, and a pointer-receiver method
-// here (all refused by internal/guard/finding_kind_isolation_test.go, which
-// parses every .go file of the module whatever its build constraint); and a
-// Kind{...} literal in this package other than register's and
-// Unregistered's (findingkind_test.go). A kind that still reaches da-guard's
-// output unregistered is written as Unregistered() with severity error.
+// Kind's one unexported field keeps a kind from being made by accident: a
+// conversion, a literal or a decoder cannot produce one, so the only Kinds
+// are the registered vars below, the zero Kind and Unregistered(). What is
+// guaranteed is that every kind da-guard outputs is registered, and so
+// classified: the guard package's report output swaps any other kind for
+// Unregistered() with severity error (internal/guard/seal.go). Non-goal: a
+// kind forged on purpose (unsafe, reflect over unsafe pointers, linkname
+// into the registry) — under a registered name it is that kind, under any
+// other it becomes Unregistered() at the output.
 package findingkind
 
 import (
@@ -111,14 +75,9 @@ func register(name string, plane Plane, reason string) Kind {
 // of da-guard's JSON contract (docs/cli-reference.md §guard).
 const unregisteredName = "unregistered_finding_kind"
 
-// Unregistered is the kind da-guard's output writes in place of a kind it
-// does not know — the zero Kind, or one no register call made (which only
-// unsafe could produce) — so the report is still written, and the finding
-// still blocks, instead of the run failing with no report (#2904). It is
-// not a registered kind: All() does not hold it, it has no plane, and the
-// guard library never reports it; only the CLI's output boundary
-// substitutes it (cmd/da-guard). Its literal is the one Kind literal
-// outside register (findingkind_test.go holds this).
+// Unregistered is the kind a guard report's output writes in place of any
+// kind that is not registered (see the package comment). It is not in All()
+// and has no plane.
 func Unregistered() Kind { return Kind{s: unregisteredName} }
 
 // IsRegistered reports whether k is a kind register made: one of All().
@@ -137,12 +96,10 @@ func (k Kind) IsZero() bool { return k.s == "" }
 // Plane is the plane k was registered on; "" for the zero Kind.
 func (k Kind) Plane() Plane { return registry[k.s].Plane }
 
-// MarshalJSON writes the kind's name as a JSON string, the same bytes the
-// string type it replaces produced. Only a registered kind or Unregistered()
-// is written. The zero Kind is refused — a report that carries it would read
-// as a finding of no kind — and so is any other Kind no register call made:
-// the CLI swaps both for Unregistered() before it writes (#2904), so this is
-// the last line, for a caller that did not.
+// MarshalJSON writes the kind's name as a JSON string. Only a registered
+// kind or Unregistered() is written; the zero Kind and any other Kind are
+// refused, for a caller that marshals a Kind outside a guard report (a
+// report swaps them first; see the package comment).
 func (k Kind) MarshalJSON() ([]byte, error) {
 	switch {
 	case k.IsZero():
