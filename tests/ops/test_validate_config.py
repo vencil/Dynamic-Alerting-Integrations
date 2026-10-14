@@ -551,6 +551,19 @@ class TestPolicyDSLInvalidRules:
         assert (rc, row["status"], row["caller_error"]) == (2, "fail", True), row
         assert any("unknown key(s) ['check']" in d for d in row["details"]), row
 
+    def test_policy_dsl_rule_names_each_problem_with_the_rule_hint(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv,
+                            dsl="policies:\n" + self._BAD + "  - name: x\n    operator: required\n")
+        assert rc == 2
+        assert sum("rule #" in d for d in row["details"]) == 2, row
+        assert vc._POLICY_DSL_INVALID_RULE_HINT in json.dumps(row, ensure_ascii=False), row
+
+    def test_policy_dsl_both_keys(self, tmp_path, capsys, cli_argv):
+        rc, row = self._run(tmp_path, capsys, cli_argv,
+                            dsl="policies:\n_policies:\n" + self._BAD)
+        assert (rc, row["caller_error"]) == (2, True), row
+        assert any("both `policies:` and `_policies:`" in d for d in row["details"]), row
+
     def test_policy_dsl_unknown_top_level_key(self, tmp_path, capsys, cli_argv):
         rc, row = self._run(tmp_path, capsys, cli_argv,
                             dsl="polices:\n  - name: cap\n    target: x\n")

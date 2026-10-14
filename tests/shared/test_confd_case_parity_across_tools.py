@@ -182,8 +182,9 @@ def _write_tree(root: pathlib.Path, *, upper: bool, tenants: bool) -> None:
         "  pg_connections: 80\n"
         "_policies:\n"
         "  - name: p1\n"
-        "    when: \"tenant.pg_connections > 100\"\n"
-        "    then: deny\n",
+        "    target: pg_connections\n"
+        "    operator: lte\n"
+        "    value: 100\n",
         encoding="utf-8")
     # #1679: the two ADR-007 control files, in EVERY tree and always spelled
     # lower-case. They are what `check_routing_profiles` exists to read, and

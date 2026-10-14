@@ -1483,15 +1483,21 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
                 f"--policy-dsl: top level is {type(dsl_data).__name__}, "
                 f"expected a mapping with a `policies:` key: {policy_dsl_file!r}",
                 _POLICY_DSL_INPUT_HINT)
-        # ⚠️ An empty file, or a mapping with neither `policies:` nor
-        # `_policies:`, still reaches "No _policies defined — skipped" at
-        # exit 0. That is the CONTENT axis, which this PR does not close for
+        # ⚠️ An empty file, or an empty mapping (`{}`), still reaches "No
+        # _policies defined — skipped" at exit 0; any other top-level key is
+        # refused below (#2961). That is the CONTENT axis, which this PR does not close for
         # any of the three flags; see the NOT COVERED list in _grar_validate.
         # #2961: an unknown top-level key (`polices:`) read as "no rules" at
         # exit 0, and a rule the engine cannot read was skipped. Both are the
         # operator's argv, so both are argv errors (exit 2).
         unknown = (sorted(str(k) for k in dsl_data if k not in pe.POLICY_FILE_KEYS)
                    if isinstance(dsl_data, dict) else [])
+        if isinstance(dsl_data, dict) and set(dsl_data) >= pe.POLICY_FILE_KEYS:
+            return _argv_error_row(
+                "policy_dsl",
+                f"--policy-dsl: both `policies:` and `_policies:`; only one is read — keep one: "
+                f"{policy_dsl_file!r}",
+                _POLICY_DSL_INPUT_HINT)
         if unknown:
             return _argv_error_row(
                 "policy_dsl",
@@ -1501,11 +1507,13 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         try:
             rules.extend(pe.load_policies(policy_dsl_file))
         except pe.InvalidPolicyRules as exc:
-            return _argv_error_row(
+            row = _argv_error_row(
                 "policy_dsl",
                 f"--policy-dsl: policy rules the engine cannot read as written in "
-                f"{policy_dsl_file!r}: " + "; ".join(exc.problems),
-                _POLICY_DSL_INPUT_HINT)
+                f"{policy_dsl_file!r}:",
+                _POLICY_DSL_INVALID_RULE_HINT)
+            row["details"].extend(exc.problems)
+            return row
         # Only now: a --policy-dsl that failed above supplied no rule (#2725).
         scope["policy_dsl"] = True
 

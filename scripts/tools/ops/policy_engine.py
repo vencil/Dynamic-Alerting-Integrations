@@ -1210,6 +1210,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                            "expected a mapping with a `policies:` list",
                            f"{args.policy!r} 的頂層是 {kind}，應為含 "
                            "`policies:` 清單的 mapping")
+            elif isinstance(policy_data, dict) and set(policy_data) >= POLICY_FILE_KEYS:
+                # #2961 review: only one of the two is read; the other was
+                # ignored in silence (a null `policies:` hid a whole list).
+                problem = ("policy_file_invalid",
+                           f"{args.policy!r} has both `policies:` and `_policies:`; "
+                           "only one is read — keep one",
+                           f"{args.policy!r} 同時有 `policies:` 與 `_policies:`，只會讀一個——留一個")
             elif isinstance(policy_data, dict) and (
                     unknown := sorted(str(k) for k in policy_data if k not in POLICY_FILE_KEYS)):
                 # #2961: `polices:` used to read as "no rules" at rc 0.

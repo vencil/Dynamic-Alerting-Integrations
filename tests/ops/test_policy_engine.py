@@ -1161,6 +1161,17 @@ class TestInvalidRules:
         assert json.loads(out.out)["reason"] == "policy_file_invalid"
         assert "unknown top-level key(s) ['polices']" in out.err
 
+    @pytest.mark.parametrize("body", ["policies:\n" + _RULE_OK + "_policies:\n" + _RULE_OK,
+                                      "policies:\n_policies:\n" + _RULE_OK],
+                             ids=["both-lists", "null-hides-list"])
+    def test_policy_file_with_both_keys(self, body, tmp_path, capsys):
+        """Only one of the two is read; the other was ignored in silence."""
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
+        pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
+        pol.write_text(body, encoding="utf-8")
+        assert pe.main(["--config-dir", str(tmp_path), "--ci", "--policy", str(pol)]) == 2
+        assert "both `policies:` and `_policies:`" in capsys.readouterr().err
+
     def test_valid_rules_still_evaluate(self, tmp_path, capsys):
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         (tmp_path / "_defaults.yaml").write_text(
