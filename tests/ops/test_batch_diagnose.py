@@ -13,6 +13,7 @@ from pathlib import Path
 import os
 import subprocess
 import sys
+import time
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -689,3 +690,80 @@ class TestExitCode:
                             {"tenant": tenant, "status": "healthy"})
         assert bd.main() == 0
         json.loads(capsys.readouterr().out)
+
+
+# ── #2954：--timeout 真的會中斷單一租戶的檢查 ─────────────────────
+
+
+class TestPerTenantTimeout:
+    """#2954: timeout_sec was never read and future.result(timeout=…) ran on
+    already-finished futures, so a stuck check held the whole batch."""
+
+    @staticmethod
+    def _slow(seconds):
+        def check(tenant, prom_url, *, out):
+            time.sleep(seconds)
+            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+        return check
+
+    def test_a_check_past_its_deadline_is_cut_off(self, monkeypatch):
+        monkeypatch.setattr(bd, "diagnose_check", self._slow(3))
+        start = time.monotonic()
+        result = bd.run_diagnose_for_tenant("db-a", "http://prom", timeout_sec=0.3)
+        assert time.monotonic() - start < 2
+        assert result["status"] == "error"
+        assert result["issues"] == ["timed out after 0.3s"]
+        assert result["_environment_error"] is True
+
+    def test_a_check_within_its_deadline_is_untouched(self, monkeypatch):
+        """Control for the test above: same deadline, a fast check."""
+        monkeypatch.setattr(bd, "diagnose_check", self._slow(0))
+        result = bd.run_diagnose_for_tenant("db-a", "http://prom", timeout_sec=0.3)
+        assert result["status"] == "healthy"
+
+    def test_an_unexpected_exception_still_reaches_main(self, monkeypatch):
+        """Moving the check into a thread must not swallow what main() used to
+        catch from future.result() ("executor error")."""
+        def boom(tenant, prom_url, *, out):
+            raise RuntimeError("boom")
+        monkeypatch.setattr(bd, "diagnose_check", boom)
+        with pytest.raises(RuntimeError, match="boom"):
+            bd.run_diagnose_for_tenant("db-a", "http://prom", timeout_sec=5)
+
+    def test_cli_timeout_ends_the_run_with_2(self, monkeypatch, capsys, cli_argv):
+        """End to end: --timeout reaches the check, and a tenant that could not
+        be checked in time is an environment failure (rc 2, as a missing
+        kubectl), not a healthy result."""
+        monkeypatch.setattr(bd, "diagnose_check", self._slow(3))
+        cli_argv("batch_diagnose", "--tenants", "t1", "--timeout", "0.3",
+                 "--prometheus", "http://prom:9090", "--json")
+        start = time.monotonic()
+        assert bd.main() == 2
+        assert time.monotonic() - start < 2
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["tenants"]["t1"]["status"] == "error"
+        assert "_environment_error" not in doc["tenants"]["t1"]
+
+    @pytest.mark.parametrize("value", ["0", "-1", "nan"])
+    def test_timeout_must_be_above_zero(self, cli_argv, capsys, value):
+        cli_argv("batch_diagnose", "--tenants", "t1", "--timeout", value,
+                 "--prometheus", "http://prom:9090")
+        with pytest.raises(SystemExit) as exc:
+            bd.main()
+        assert exc.value.code == 2
+        assert "--timeout" in capsys.readouterr().err
+
+    def test_default_timeout_outlasts_the_prometheus_queries(self):
+        """A stuck Prometheus must still come back as "Prometheus query failed"
+        (with its recommendation) under the default deadline, not as a bare
+        timeout: the default outlasts every query diagnose can make."""
+        import ast
+        import inspect
+        import diagnose
+        tree = ast.parse(Path(diagnose.__file__).read_text(encoding="utf-8"))
+        calls = sum(1 for n in ast.walk(tree) if isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Name) and n.func.id == "query_prometheus")
+        per_query = inspect.signature(
+            diagnose.query_prometheus_instant).parameters["timeout"].default
+        assert calls >= 4
+        assert bd.DEFAULT_TIMEOUT_S > calls * per_query, (calls, per_query)
