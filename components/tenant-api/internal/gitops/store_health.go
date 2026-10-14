@@ -10,7 +10,7 @@ package gitops
 // recorded, never opened, so the walk cannot block on a FIFO). Two
 // safeguards keep scrapes cheap and safe:
 //
-//   - a minimum interval (storeScanMinInterval, 30s): a scrape within it of
+//   - a minimum interval (defaultStoreScanMinInterval): a scrape within it of
 //     the last completed walk gets that walk's counts;
 //   - the walk is bounded (boundedcall, treeScanTimeout) with its own stuck
 //     breaker, so a walk blocked on a hung mount fails later scrapes fast —
