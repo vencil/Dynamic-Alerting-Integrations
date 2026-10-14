@@ -79,7 +79,10 @@
 | `-reload-interval` | — | `30s` | 熱重載 watch tick 間隔 |
 | `-scan-debounce` | — | `300ms` | 變更 burst 的合併窗口（設 `0` 停用、回同步行為） |
 | `-free-os-mem-after-reload` | — | `false` | 每次 reload 後主動把閒置 heap 還給 OS（持續高頻 reload 才需要；代價是每次多一次 GC） |
+| — | `OPERATOR_CRD_SOURCE` | — | 非空時，`threshold_exporter_config_info` 的 `config_source` 標為 `operator`（設定目錄有 `.git-revision` 時仍是 `git-sync`）；只影響這個 label。repo 內的 chart 不設它 |
 
+> 這張表與 §3.1 由 `app/ops_readme_parity_test.go` 對原始碼比對：路徑、旗標、環境變數兩向一致，旗標預設值相同，環境變數與旗標的配對相同。`GOMEMLIMIT` 由 Go runtime 套用、不列在這裡，見 [deployment-sizing](../../docs/integration/deployment-sizing.md)。
+>
 > **自動偵測序**：`CONFIG_DIR` → `-config-dir` → `CONFIG_PATH` → `-config` → `/etc/threshold-exporter/conf.d/`（目錄存在時）→ `/etc/threshold-exporter/config.yaml`。
 
 ### 3.3 Metrics
