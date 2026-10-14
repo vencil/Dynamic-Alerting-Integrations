@@ -385,7 +385,7 @@ da-tools baseline --tenant <name> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--duration <SEC>` | Observation duration in whole seconds above 0 (`0`, a negative value or a fraction exits `2`) | `600` |
+| `--duration <SEC>` | Observation duration in whole seconds above 0 (`0`, a negative value or a fraction exits `2`; less than `--interval` takes no sample at all and exits `2` too, `--dry-run` included) | `600` |
 | `--interval <SEC>` | Sampling interval in whole seconds above 0 (`0`, a negative value or a fraction exits `2`) | `15` |
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
 | `-o, --output-dir <DIR>` | Output directory; both CSVs are written there (see Output below), created if missing | `baseline_output` |

@@ -382,7 +382,7 @@ da-tools baseline --tenant <name> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--duration <SEC>` | 觀測時長（正整數秒；`0`、負數、小數回 `2`） | `600` |
+| `--duration <SEC>` | 觀測時長（正整數秒；`0`、負數、小數回 `2`；小於 `--interval` 時一次都採不到，也回 `2`，`--dry-run` 亦同） | `600` |
 | `--interval <SEC>` | 採樣間隔（正整數秒；`0`、負數、小數回 `2`） | `15` |
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
 | `-o, --output-dir <DIR>` | 輸出目錄；兩個 CSV 都寫在這裡（見下方「輸出」），目錄不存在會建立 | `baseline_output` |

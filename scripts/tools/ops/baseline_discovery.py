@@ -269,6 +269,10 @@ def main():
                         help="僅顯示要觀測的指標，不實際採樣")
 
     args = parser.parse_args()
+    # 各自合法、組合起來卻一次都採不到：0 次採樣仍產出空 CSV 與 rc 0（#3001）。
+    if args.duration < args.interval:
+        parser.error(f"--duration ({args.duration}s) 小於 --interval ({args.interval}s)，"
+                     "一次都採樣不到；--duration 至少要等於 --interval")
 
     # 選擇指標
     if args.metrics:
