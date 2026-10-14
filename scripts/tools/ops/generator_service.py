@@ -42,15 +42,16 @@ THREAT MODEL. (1) The trust boundary is the socket: it is created 0600, the
 peer must run as this process's uid (SO_PEERCRED, checked on every
 connection; anyone else is closed unanswered and counted in
 ``da_generator_peer_rejected_total``), and only the tenant-api container
-mounts the directory holding it (the chart pins that with a test, #2902).
+mounts the directory holding it (the chart will pin that with a test, #2902).
 (2) The adversary is an API user writing through tenant-api: what a request
 carries and how fast requests come. The admission limits (connection slots,
 in-flight body bytes, queue, writes per request) bound that relayed load;
 they are not a defence against a hostile local peer. (3) Known limits, both
-needing code execution inside the pod — which already allows writing to the
-repository with git directly: a local peer's idle connections can hold
-reserved budget until the read timeout, and a connection flood can use up
-descriptors.
+needing code execution next to the socket: a local peer's idle connections
+can hold reserved budget until the read timeout, and a connection flood can
+use up descriptors. Whoever can run code in the tenant-api container can
+already write to the repository directly, and whoever can run code in this
+container can already replace the judgement itself.
 
 One judgement runs at a time; the others wait in a bounded queue. Each
 request's time budget is ``min(--max-judgement-seconds, deadline_ms -
@@ -123,6 +124,9 @@ HEADER_LIMIT_BYTES = 16 * 1024
 #: and pidfd, the policy copy and status reads, with margin.
 FD_RESERVE = 32
 _PR_SET_CHILD_SUBREAPER = 36
+#: Errors starting a judgement that mean "loaded", answered busy: out of
+#: descriptors (pipe, pidfd) or of processes / memory (fork).
+_LOAD_ERRNOS = frozenset({errno.EMFILE, errno.ENFILE, errno.EAGAIN, errno.ENOMEM})
 # A connection answered without its input read (busy, 413) is half-closed and
 # drained for at most this long, at most this many at once (fds: within
 # FD_RESERVE).
@@ -194,6 +198,17 @@ class Response:
                  "Connection: close"]
         lines += [f"{k}: {v}" for k, v in self.headers.items()]
         return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + body
+
+
+# struct ucred: pid_t (signed), uid_t and gid_t (unsigned — a uid mapped by
+# a user namespace can be 2^31 or more, and reading it signed would reject
+# every peer).
+_UCRED = struct.Struct("iII")
+
+
+def ucred_uid(raw: bytes) -> int:
+    """The uid in an SO_PEERCRED ``struct ucred``."""
+    return _UCRED.unpack(raw)[1]
 
 
 _CONTENT_LENGTH = re.compile(r"[0-9]{1,12}")  # ASCII digits only (#2901 O1)
@@ -343,15 +358,20 @@ class Service:
 
     # ── HTTP ──────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fork() -> int:
+        """``os.fork()`` — a seam for tests (a fork that fails)."""
+        return os.fork()
+
     def _peer_uid(self, sock: socket.socket) -> Optional[int]:
         """The connecting process's uid (SO_PEERCRED), None when unreadable.
         A seam: tests replace it rather than switch uid."""
         try:
             creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                                    struct.calcsize("3i"))
+                                    _UCRED.size)
         except (OSError, AttributeError):
             return None
-        return struct.unpack("3i", creds)[1]
+        return ucred_uid(creds)
 
     async def handle(self, reader: asyncio.StreamReader,
                      writer: asyncio.StreamWriter) -> None:
@@ -618,11 +638,12 @@ class Service:
                 run = await self._spawn(self._job(ticket.request, job_dir, policy),
                                         ticket.deadline_at, request=True)
             except OSError as exc:
-                if exc.errno not in (errno.EMFILE, errno.ENFILE):
+                if exc.errno not in _LOAD_ERRNOS:
                     raise
-                # #2901 R1: out of descriptors is load, not a broken
-                # container — reject this one write.
-                return _rejected("busy", "out of file descriptors; retry")
+                # #2901 R1: out of descriptors, processes or memory to fork
+                # with is load, not a broken container — reject this write.
+                return _rejected("busy", f"cannot start a judgement "
+                                         f"({errno.errorcode.get(exc.errno, exc.errno)}); retry")
             # #2901 E2: a new base: warm it after this request, so whatever
             # this request did not get to parse is parsed off the clock.
             if ticket.request.base_commit != pinned_before:
@@ -696,7 +717,12 @@ class Service:
         sys.stdout.flush()
         sys.stderr.flush()
         rfd, wfd = os.pipe()
-        pid = os.fork()
+        try:
+            pid = self._fork()
+        except OSError:
+            os.close(rfd)
+            os.close(wfd)
+            raise
         if pid == 0:  # the judgement (or warming) process
             os.close(rfd)
             _gsvc_child.run_child(job, wfd)

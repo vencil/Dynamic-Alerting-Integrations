@@ -586,3 +586,45 @@ def test_only_a_peer_with_this_uid_is_served(peer):
     else:
         assert data == b"" and svc.metrics.peer_rejected == 1
         assert "da_generator_peer_rejected_total 1" in svc._metrics().text
+
+
+def test_a_uid_at_or_above_2_31_is_read_unsigned():
+    """#2901 O-a: struct ucred's uid is unsigned; a user-namespace uid such as
+    3000000000 must read as itself (read signed, every peer was refused)."""
+    import struct
+    raw = struct.pack("iII", 4321, 3_000_000_000, 3_000_000_001)
+    assert gs.ucred_uid(raw) == 3_000_000_000
+    raw = struct.pack("iII", -1, 0, 0)
+    assert gs.ucred_uid(raw) == 0
+
+
+@pytest.mark.parametrize("err", ["EAGAIN", "ENOMEM", "EMFILE"])
+def test_a_fork_that_fails_for_load_is_busy_and_leaks_no_descriptor(tmp_path, monkeypatch, err):
+    """#2901: fork failing with EAGAIN / ENOMEM (like EMFILE) rejects that
+    write as busy — not 503 — and the result pipe is closed."""
+    import errno
+    import os
+    work = tmp_path / "work"
+    gs._prepare_work_dir(str(work))
+
+    class _Real(_FakeService):
+        _judge = gs.Service._judge
+        _spawn = gs.Service._spawn
+
+        @staticmethod
+        def _fork():
+            code = getattr(errno, err)
+            raise OSError(code, os.strerror(code))
+
+    svc = _Real(delay=0)
+    svc.s.work_dir = str(work)
+    monkeypatch.setattr(gs.shutil, "which", lambda name: "/bin/true")
+    before = len(os.listdir("/proc/self/fd"))
+
+    async def scenario():
+        svc.loop = asyncio.get_running_loop()
+        resp = await svc.submit(_req("1" * 40, 25000), svc.loop.time())
+        assert resp.status == 200, resp.doc
+        assert _doc(resp)["reason"] == "busy" and err in _doc(resp)["message"]
+    asyncio.run(scenario())
+    assert len(os.listdir("/proc/self/fd")) <= before
