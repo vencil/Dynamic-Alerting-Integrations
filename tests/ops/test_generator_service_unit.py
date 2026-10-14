@@ -197,7 +197,7 @@ class _FakeService(gs.Service):
             max_judgement_seconds=max_seconds, deadline_reserve_seconds=5.0,
             memory_limit_bytes=1, cache_max_bytes=1, max_queue=max_queue,
             max_body_bytes=1, read_timeout_seconds=1.0, max_result_bytes=1,
-            max_cache_transfer_bytes=1)
+            max_cache_transfer_bytes=1, warm_ref="", warm_seconds=1.0)
         super().__init__(settings, "sha1")
         self.delay = delay
         self.judged: list[str] = []
@@ -274,4 +274,119 @@ def test_queue_time_counts_against_the_budget():
         resp = await svc.submit(_req("2" * 40, 5800), t0 - 0.5)  # 0.8 s budget
         assert _doc(resp)["reason"] == "deadline"
         assert svc.loop.time() - t0 < 0.5
+    asyncio.run(scenario())
+
+
+# ── E1: incremental frames ───────────────────────────────────────────────
+
+def test_frames_fed_byte_by_byte_come_out_as_they_complete():
+    raw = (proto.frame(b"B", json.dumps(["b1", "b2"]).encode())
+           + proto.entry_frame(("b1", "m"), b"v1")
+           + proto.frame(b"R", b'{"rc": 0}') + proto.frame(b"Z", b""))
+    reader = proto.FrameReader(max_result=1000, max_entries=1000)
+    events = []
+    for i in range(len(raw)):
+        events += reader.feed(raw[i:i + 1])
+    assert events == [("B", ["b1", "b2"]), ("E", (("b1", "m"), b"v1")),
+                      ("R", {"rc": 0}), ("Z", None)]
+    assert reader.ended and reader.result == {"rc": 0}
+
+
+def test_an_entry_arrives_before_the_process_ends():
+    """The entry is usable as soon as its frame is complete — no end frame
+    and no result needed (a killed process's parses are kept)."""
+    reader = proto.FrameReader(max_result=1000, max_entries=1000)
+    piece = proto.entry_frame(("b1", "m"), b"value")
+    assert reader.feed(piece[:-1]) == []
+    assert reader.feed(piece[-1:]) == [("E", (("b1", "m"), b"value"))]
+    assert reader.result is None and not reader.ended
+
+
+def test_an_over_limit_frame_is_skipped_without_being_buffered():
+    reader = proto.FrameReader(max_result=10, max_entries=100)
+    big = proto.entry_frame(("b", "m"), b"x" * 5000)
+    after = proto.entry_frame(("c", "m"), b"y")
+    events = []
+    for i in range(0, len(big), 100):
+        events += reader.feed(big[i:i + 100])
+        assert len(reader._buf) < 200  # never holds the big payload
+    events += reader.feed(after)
+    assert events == [("E", (("c", "m"), b"y"))]
+    assert reader.dropped_entries == 1
+
+
+def test_coverage_of_the_pinned_tree():
+    store = proto.CacheStore(unpinned_limit=100)
+    assert store.coverage() == 0.0
+    store.set_pinned({"a", "b", "c", "d"})
+    store.add(("a", "m1"), b"x")
+    store.add(("a", "m2"), b"x")
+    store.add(("b", "m1"), b"x")
+    store.add(("z", "m1"), b"x")  # not in the tree
+    assert store.coverage() == 0.5
+
+
+# ── E1 / E2 rules of the long-running process (no fork) ──────────────────
+
+class _Evil:
+    def __reduce__(self):
+        import os
+        return (os.system, ("true",))
+
+
+def test_a_streamed_entry_must_read_back_under_the_restricted_unpickler():
+    import pickle
+    svc = _FakeService(delay=0)
+    assert svc._admit(("b", "m"), pickle.dumps({"ok": 1}, protocol=5)) is True
+    assert svc._admit(("c", "m"), pickle.dumps(_Evil(), protocol=5)) is False
+    assert svc._admit(("d", "m"), b"not a pickle") is False
+    assert list(svc.store.entries) == [("b", "m")]
+
+
+def test_the_pin_follows_requests_and_a_warm_commit_only_before_one():
+    svc = _FakeService(delay=0)
+    svc._pin(["w1"], "W" * 40, request=False)       # warming before any request
+    assert svc.pinned_commit == "W" * 40 and svc.store.pinned == {"w1"}
+    svc._pin(["r1"], "R" * 40, request=True)        # a request moves it
+    assert svc.pinned_commit == "R" * 40 and svc.store.pinned == {"r1"}
+    svc._pin(["w2"], "W" * 40, request=False)       # another commit's warming does not
+    assert svc.pinned_commit == "R" * 40 and svc.store.pinned == {"r1"}
+    svc._pin(["r1", "r2"], "R" * 40, request=False)  # warming the pinned commit does
+    assert svc.store.pinned == {"r1", "r2"}
+
+
+class _WarmingFake(_FakeService):
+    """_FakeService whose warming run is a sleep (no fork)."""
+
+    def __init__(self, delay: float, warm_for: float) -> None:
+        super().__init__(delay)
+        self.warm_for = warm_for
+        self.order: list[str] = []
+
+    async def _judge(self, ticket):
+        self.order.append("request")
+        return await super()._judge(ticket)
+
+    async def _warm(self, commit):
+        self.order.append("warm")
+        try:
+            await asyncio.sleep(self.warm_for)
+        finally:
+            self.warming = None
+            self._start_next()
+
+
+def test_waiting_requests_go_before_a_pending_warming_run():
+    async def scenario():
+        svc = _WarmingFake(delay=0.2, warm_for=0.01)
+        svc.loop = asyncio.get_running_loop()
+        now = svc.loop.time
+        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), now()))
+        await asyncio.sleep(0.05)
+        svc.pending_warm = "9" * 40
+        second = asyncio.create_task(svc.submit(_req("2" * 40, 25000), now()))
+        await first
+        await second
+        await asyncio.sleep(0.05)
+        assert svc.order == ["request", "request", "warm"]
     asyncio.run(scenario())

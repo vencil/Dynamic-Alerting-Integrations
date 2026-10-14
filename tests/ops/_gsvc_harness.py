@@ -109,7 +109,10 @@ class Service:
         self.proc = subprocess.Popen(
             [sys.executable, "-s", str(launcher), "--socket", str(self.socket),
              "--repo", str(repo), "--config-subdir", subdir,
-             "--work-dir", str(self.work), "--git", GIT, *args],
+             "--work-dir", str(self.work), "--git", GIT,
+             # start-up warming off unless a test asks for it (#2901 E2)
+             *(() if any(a.startswith("--warm-ref") for a in args) else ("--warm-ref=",)),
+             *args],
             env=run_env, stdout=subprocess.DEVNULL,
             stderr=open(self.log, "wb"))  # noqa: SIM115 — closed with the process
         if wait:

@@ -16,8 +16,13 @@ forked, and never returns. In order:
    with ``--validate --strict --findings-json`` — with the service's parse
    cache installed (``_lib_parse_cache``), so unchanged files are not parsed
    again.
-5. Send the result and the new cache entries to the service over a pipe
-   (``_gsvc_proto`` frames), then ``os._exit``.
+5. Report over one pipe (``_gsvc_proto`` frames): the base tree's blob ids
+   as soon as the tree is read, each new parse-cache entry the moment its
+   parse finishes, and the result last — so a process the deadline kills
+   still hands back every parse it completed. Then ``os._exit``.
+
+A warming run (``generator_service``'s pre-warm) is the same, with no writes
+and its result ignored: it exists only to fill the cache.
 
 Its exit status is how the service tells "no complete result" apart: it
 exits 0 only after the end frame is written.
@@ -79,6 +84,10 @@ class ChildJob:
     policy_sha256: Optional[str]
     store_entries: Mapping
     max_transfer: int
+    #: #2901 E2: a warming run — the generator's conf.d read only
+    #: (``load_tenant_tree``, where every parse of the judgement happens),
+    #: no writes, no verdict, no amtool: it exists to fill the cache.
+    warm: bool = False
 
 
 # ── git ──────────────────────────────────────────────────────────────────
@@ -249,7 +258,26 @@ def _send(fd: int, data: bytes) -> None:
         view = view[n:]
 
 
-def _judge(job: ChildJob) -> dict:
+class _Stream:
+    """The pipe to the long-running process: entries go out as they are
+    made, within the per-judgement transfer cap (past it they are dropped —
+    the verdict does not depend on them)."""
+
+    def __init__(self, fd: int, cap: int) -> None:
+        self.fd, self.cap, self.used = fd, cap, 0
+
+    def send(self, data: bytes) -> None:
+        _send(self.fd, data)
+
+    def entry(self, key: tuple[str, str], value: bytes) -> None:
+        piece = entry_frame(key, value)
+        if self.used + len(piece) > self.cap:
+            return
+        self.used += len(piece)
+        _send(self.fd, piece)
+
+
+def _judge(job: ChildJob, stream: _Stream) -> dict:
     tree_dir = os.path.join(job.job_dir, "conf.d")
     tree = None
     for attempt in (1, 2):
@@ -266,18 +294,26 @@ def _judge(job: ChildJob) -> dict:
     except (GitReadError, OSError) as exc:
         print(f"generator-service: base tree not written: {exc}", file=sys.stderr)
         return {"outcome": "git_read"}
-    base_blobs = sorted({oid for mode, oid, _p, _c in tree if mode != "160000"})
+    # #2901 E2: the base tree's blobs, as soon as they are known — the
+    # long-running process pins them even if this process is killed.
+    stream.send(frame(b"B", json.dumps(
+        sorted({oid for mode, oid, _p, _c in tree if mode != "160000"})).encode("utf-8")))
     try:
         files = apply_writes(tree_dir, job.request)
     except BadWrite as exc:
         return {"outcome": "bad_request", "message": str(exc)}
+
+    if job.warm:
+        return _warm(job, tree_dir, stream)
 
     findings_path = os.path.join(job.job_dir, "findings.json")
     argv = ["--config-dir", tree_dir, "--validate", "--strict",
             "--findings-json", findings_path]
     if job.policy_copy is not None:
         argv += ["--policy", job.policy_copy]
-    cache = _lib_parse_cache.ParseCache(job.store_entries, job.object_format)
+    # #2901 E1: every new entry goes down the pipe the moment it is made.
+    cache = _lib_parse_cache.ParseCache(job.store_entries, job.object_format,
+                                        on_store=stream.entry)
     _lib_parse_cache.install(cache)
     rc, memory = 1, False
     try:
@@ -295,7 +331,6 @@ def _judge(job: ChildJob) -> dict:
     sys.stdout.flush()
     sys.stderr.flush()
     common = {
-        "base_blobs": base_blobs,
         "validated": {"base_commit": job.request.base_commit, "files": files,
                       "policy_sha256": job.policy_sha256},
         "cache": {"parses": cache.parses, "hits": len(cache.hits),
@@ -303,7 +338,7 @@ def _judge(job: ChildJob) -> dict:
         "hit_keys": [list(k) for k in cache.hits],
     }
     if memory or cache.memory_error:
-        return {"outcome": "memory", **common, "_cache": cache}
+        return {"outcome": "memory", **common}
     try:
         with open(findings_path, encoding="utf-8") as fh:
             doc = json.load(fh)
@@ -311,8 +346,30 @@ def _judge(job: ChildJob) -> dict:
         return {"outcome": "incomplete", **common}
     if not isinstance(doc, dict) or doc.get("exit_code") != rc:
         return {"outcome": "incomplete", **common}
-    return {"outcome": "ran", "rc": rc, "findings": doc, **common,
-            "_cache": cache}
+    return {"outcome": "ran", "rc": rc, "findings": doc, **common}
+
+
+def _close_inherited(keep: int) -> None:
+    limit = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+    top = limit if 0 < limit < (1 << 20) else 65536
+    os.closerange(3, keep)
+    os.closerange(keep + 1, top)
+
+
+def _warm(job: ChildJob, tree_dir: str, stream: "_Stream") -> dict:
+    cache = _lib_parse_cache.ParseCache(job.store_entries, job.object_format,
+                                        on_store=stream.entry)
+    _lib_parse_cache.install(cache)
+    try:
+        gar.load_tenant_tree(tree_dir, strict_policies=True)
+    except SystemExit:
+        pass  # an unusable tree: whatever was parsed has been sent
+    finally:
+        _lib_parse_cache.install(None)
+    outcome = "memory" if cache.memory_error else "warmed"
+    return {"outcome": outcome,
+            "cache": {"parses": cache.parses, "hits": len(cache.hits),
+                      "stored": len(cache.new), "unreadable": cache.rejected_entries}}
 
 
 def run_child(job: ChildJob, result_fd: int) -> None:
@@ -321,6 +378,12 @@ def run_child(job: ChildJob, result_fd: int) -> None:
     try:
         os.setsid()
         resource.setrlimit(resource.RLIMIT_DATA, (job.memory_limit, job.memory_limit))
+        # ⛔ Close every inherited descriptor but stdio and the result pipe:
+        # a fork copies the service's open client connections and its
+        # listening socket, and a judgement (or warming run) holding a
+        # client's socket keeps that client waiting for EOF after the
+        # service has answered and closed its side.
+        _close_inherited(result_fd)
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, signal.SIG_DFL)
         try:
@@ -335,8 +398,8 @@ def run_child(job: ChildJob, result_fd: int) -> None:
                           os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             os.dup2(out, fd)
             os.close(out)
-        result = _judge(job)
-        cache = result.pop("_cache", None)
+        stream = _Stream(result_fd, job.max_transfer)
+        result = _judge(job, stream)
         sys.stdout.flush()
         sys.stderr.flush()
         result["stderr_tail"] = _tail(os.path.join(job.job_dir, "stderr"))
@@ -345,14 +408,6 @@ def run_child(job: ChildJob, result_fd: int) -> None:
         _send(result_fd, frame(b"R", json.dumps(result).encode("utf-8")))
         if TEST_HOOK is not None:
             TEST_HOOK("after_result")
-        if cache is not None:
-            used = 0
-            for key, value in cache.new.items():
-                piece = entry_frame(key, value)
-                if used + len(piece) > job.max_transfer:
-                    continue  # past the cap: dropped, the verdict is unaffected
-                used += len(piece)
-                _send(result_fd, piece)
         _send(result_fd, frame(b"Z", b""))
         if TEST_HOOK is not None:
             TEST_HOOK("after_end")

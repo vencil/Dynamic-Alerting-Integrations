@@ -82,6 +82,15 @@ def world(tmp_path_factory):
     svc.stop()
 
 
+def _jobs_empty(svc, timeout: float = 30.0) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if not list((svc.work / "jobs").iterdir()):
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def _norm(doc: dict, *dirs: Path) -> tuple:
     text = json.dumps(doc["findings"], sort_keys=True)
     for d in dirs:
@@ -197,8 +206,7 @@ def test_the_service_forks_with_one_thread(world):
 
 def test_job_directories_are_removed(world):
     world["svc"].validate(world["commits"]["clean"])
-    left = list((world["svc"].work / "jobs").iterdir())
-    assert left == [], left
+    assert _jobs_empty(world["svc"])
 
 
 def test_socket_is_0600(world):
@@ -265,7 +273,9 @@ def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
         while any(h.alive(p) for p in pids) and time.monotonic() < end:
             time.sleep(0.05)
         assert not any(h.alive(p) for p in pids), pids
-        assert list((svc.work / "jobs").iterdir()) == []
+        # the warming run the new base schedules (E2) has its own directory
+        # until it ends; then nothing is left
+        assert _jobs_empty(svc)
         assert svc.metrics()['da_generator_rejections_total{reason="deadline"}'] == 1
 
 
@@ -550,7 +560,8 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "amtool_available", "ready"}
+                       "da_guard_version", "amtool_available", "ready",
+                       "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
     assert st["ready"] is True
@@ -601,3 +612,182 @@ def test_result_and_transfer_limits(tmp_path, world):
                    args=("--max-result-bytes", "50")) as svc:
         status, doc = svc.validate(commit)
         assert (doc["result"], doc["reason"]) == ("rejected", "incomplete")
+
+
+# ── E1: cache entries stream back; E2: warming, pre-emptible ─────────────
+
+def _many_tenants(n: int) -> dict[str, str]:
+    files = {"_defaults.yaml": cases.FIXTURES["clean"]["_defaults.yaml"]}
+    for i in range(n):
+        files[f"tn-{i:02d}.yaml"] = cases._tenant(f"tn-{i:02d}")
+    return files
+
+
+def _slow_parse(log: Path, delay: float) -> str:
+    """Launcher prelude: every real parse sleeps *delay* and is logged, so
+    a cold judgement takes a known, long time on any host."""
+    return (
+        "import time, _lib_parse_cache as _pc\n"
+        "_orig_parse = _pc._parse_file\n"
+        "def _slow(path, mode):\n"
+        f"    with open({str(log)!r}, 'a', encoding='utf-8') as fh:\n"
+        "        fh.write('p\\n')\n"
+        f"    time.sleep({delay})\n"
+        "    return _orig_parse(path, mode)\n"
+        "_pc._parse_file = _slow\n")
+
+
+def _lines(p: Path) -> int:
+    return len(p.read_text(encoding="utf-8").splitlines()) if p.exists() else 0
+
+
+def _wait_metric(svc, name: str, at_least: float, timeout: float = 60.0) -> dict:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        m = svc.metrics()
+        if m.get(name, 0) >= at_least:
+            return m
+        time.sleep(0.1)
+    raise AssertionError(f"{name} never reached {at_least}: {svc.metrics()}")
+
+
+def test_killed_judgements_keep_their_parses_until_one_passes(tmp_path, world):
+    """E1: the deadline is shorter than a cold judgement. Each killed attempt
+    still leaves its finished parses in the cache, so the next attempt
+    parses fewer, and one of them passes."""
+    repo = h.init_repo(tmp_path / "r")
+    commit = h.commit_tree(repo, _many_tenants(30))
+    log = tmp_path / "parses.log"
+    # the warming run the new base schedules gets no time to help (E2 is
+    # tested on its own below)
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
+                   prelude=_slow_parse(log, 0.05),
+                   args=("--max-judgement-seconds", "1.2",
+                         "--warm-seconds", "0.01")) as svc:
+        counts, results, entries = [], [], []
+        for _attempt in range(12):
+            before = _lines(log)
+            status, doc = svc.validate(commit)
+            assert status == 200, doc
+            counts.append(_lines(log) - before)
+            results.append(doc["result"] if doc["result"] != "rejected"
+                           else doc["reason"])
+            if len(results) == 1:
+                # the first (new) base schedules one warming run; let its
+                # 0.01 s limit end it before counting again
+                _wait_metric(svc, 'da_generator_warm_runs_total{outcome="deadline"}', 1)
+            entries.append(svc.metrics()["da_generator_cache_entries"])
+            if doc["result"] == "rejected":
+                assert doc["cache"]["received"] > 0, doc  # kept, not lost
+            else:
+                break
+    assert results[0] == "deadline" and results[-1] == "pass", results
+    assert set(results[:-1]) == {"deadline"}, results
+    assert all(a >= b for a, b in zip(counts, counts[1:])), counts
+    assert counts[-1] < counts[0], counts
+    # every killed attempt added to the cache, and nothing was lost
+    killed = entries[:-1]
+    assert killed[0] > 0 and all(a < b for a, b in zip(killed, killed[1:])), entries
+    assert entries[-1] >= killed[-1], entries
+
+
+def test_startup_warming_leaves_only_the_changed_file_to_parse(tmp_path, world):
+    """E2: --warm-ref (HEAD) is warmed at start; the first request then
+    parses only the file it changes."""
+    repo = h.init_repo(tmp_path / "r")
+    files = _many_tenants(10)
+    commit = h.commit_tree(repo, files)
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
+                   args=("--warm-ref", "HEAD")) as svc:
+        m = _wait_metric(svc, 'da_generator_warm_runs_total{outcome="completed"}', 1)
+        assert m["da_generator_cache_base_coverage_ratio"] == 1.0
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["warm"]["commit"] == commit and st["cache_base_coverage_ratio"] == 1.0
+        assert st["warm"]["pinned_commit"] == commit
+        body = files["tn-03.yaml"] + f"# {uuid.uuid4().hex}\n"
+        status, doc = svc.validate(commit, [{"path": "tn-03.yaml",
+                                             "content_b64": h.b64(body)}])
+        assert status == 200 and doc["result"] == "pass", doc
+        # a tenant file is read in two modes (routing read + declarations)
+        assert doc["cache"]["parses"] == 2, doc["cache"]
+        assert doc["cache"]["hits"] > 0
+        # the request's base is the warmed (pinned) one: nothing more to warm
+        time.sleep(0.5)
+        m = svc.metrics()
+        assert sum(v for k, v in m.items()
+                   if k.startswith("da_generator_warm_runs_total")) == 1
+
+
+def test_a_request_preempts_warming(tmp_path, world):
+    """E2: a request arriving during a warming run does not wait for it:
+    the warming run is ended (preempted), what it parsed stays cached."""
+    repo = h.init_repo(tmp_path / "r")
+    commit = h.commit_tree(repo, _many_tenants(30))
+    log = tmp_path / "parses.log"
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
+                   prelude=_slow_parse(log, 0.1),
+                   args=("--warm-ref", "HEAD", "--warm-seconds", "60")) as svc:
+        end = time.monotonic() + 30
+        while _lines(log) < 5 and time.monotonic() < end:  # warming is parsing
+            time.sleep(0.05)
+        assert _lines(log) >= 5
+        t0 = time.monotonic()
+        status, doc = svc.validate(commit)
+        assert status == 200 and doc["result"] == "pass", doc
+        assert doc["queue_wait_ms"] < 1000, doc["queue_wait_ms"]  # vs a 60 s warm limit
+        assert doc["cache"]["hits"] > 0  # the preempted run's parses were kept
+        assert time.monotonic() - t0 < 20
+        m = svc.metrics()
+        assert m['da_generator_warm_runs_total{outcome="preempted"}'] == 1
+        assert m['da_generator_warm_runs_total{outcome="completed"}'] == 0
+
+
+def test_an_unresolvable_warm_ref_is_logged_and_counted(tmp_path, world):
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--warm-ref", "no-such-ref")) as svc:
+        m = svc.metrics()
+        assert m['da_generator_warm_runs_total{outcome="failed"}'] == 1
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["ready"] is True and "no-such-ref" in st["warm"]["error"]
+        assert svc.validate(world["commits"]["clean"])[1]["result"] == "pass"
+    assert "does not resolve" in svc.log.read_text(encoding="utf-8")
+
+
+def test_pinning_follows_the_latest_request_base(tmp_path, world):
+    """E2: the warm commit is pinned before any request; afterwards the pin
+    follows the latest request's base, and a warming run of another commit
+    does not move it."""
+    repo = h.init_repo(tmp_path / "r")
+    first = h.commit_tree(repo, _many_tenants(3))
+    second = h.commit_tree(repo, _many_tenants(4))  # HEAD
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
+                   args=("--warm-ref", "HEAD")) as svc:
+        _wait_metric(svc, 'da_generator_warm_runs_total{outcome="completed"}', 1)
+        assert svc.call("GET", "/v1/status")[1]["warm"]["pinned_commit"] == second
+        svc.validate(first)  # a new base: pinned now, and warmed after
+        _wait_metric(svc, 'da_generator_warm_runs_total{outcome="completed"}', 2)
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["warm"]["pinned_commit"] == first
+        assert st["cache_base_coverage_ratio"] == 1.0
+
+
+def test_a_judgement_does_not_hold_other_clients_connections(tmp_path, world):
+    """A forked process must not keep the service's client sockets open: C,
+    queued when B is forked, expires while B runs — its answer must end
+    (EOF) then, not when B ends."""
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 3\n")
+    commit = world["commits"]["clean+extra"]
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir) as svc, \
+            ThreadPoolExecutor(4) as pool:
+        a = pool.submit(svc.validate, commit)
+        time.sleep(0.3)
+        b = pool.submit(svc.validate, commit)
+        time.sleep(0.3)
+        t0 = time.monotonic()
+        c = pool.submit(svc.validate, commit, None, 9000)  # 4 s: ends during B
+        status, doc = c.result()
+        took = time.monotonic() - t0
+        assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
+        assert took < 5.0, took  # B runs until about 6 s
+        assert a.result()[1]["result"] == b.result()[1]["result"] == "pass"

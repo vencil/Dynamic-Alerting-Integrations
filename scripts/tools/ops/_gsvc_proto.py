@@ -149,8 +149,11 @@ def judgement_seconds(deadline_ms: int, max_seconds: float,
 # ── result frames (judgement process → long-running process, one pipe) ────
 #
 # frame := type (1 byte) | length (4 bytes, big-endian) | payload
-#   b"R"  the result, JSON
-#   b"E"  one parse-cache entry: key length (2 bytes) | key JSON | value bytes
+#   b"B"  the base tree's blob ids, JSON list — sent as soon as the tree is read
+#   b"E"  one parse-cache entry: key length (2 bytes) | key JSON | value bytes;
+#         sent the moment the parse finishes, so a judgement killed later
+#         still leaves its finished parses behind (#2901 E1)
+#   b"R"  the result, JSON — last but one
 #   b"Z"  end (length 0)
 
 _HEAD = struct.Struct(">cI")
@@ -165,54 +168,116 @@ def entry_frame(key: tuple[str, str], value: bytes) -> bytes:
     return frame(b"E", struct.pack(">H", len(k)) + k + value)
 
 
+def _entry(payload: bytes) -> Optional[tuple[tuple[str, str], bytes]]:
+    if len(payload) < 2:
+        return None
+    (klen,) = struct.unpack_from(">H", payload, 0)
+    try:
+        key = json.loads(payload[2:2 + klen].decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not (isinstance(key, list) and len(key) == 2
+            and all(isinstance(k, str) for k in key)):
+        return None
+    return (key[0], key[1]), payload[2 + klen:]
+
+
+class FrameReader:
+    """Incremental decoder of one judgement process's pipe.
+
+    :meth:`feed` takes whatever bytes arrived and returns the frames now
+    complete, as ``("B", [blob ids])``, ``("E", (key, value))``, ``("R",
+    dict)``, ``("Z", None)``. Limits: a result over *max_result* bytes is
+    skipped (never buffered); entries past *max_entries* bytes in total are
+    dropped and counted in :attr:`dropped_entries`; a base list over
+    *max_result* is skipped. Never an exception on bad input.
+    """
+
+    def __init__(self, *, max_result: int, max_entries: int) -> None:
+        self.max_result = max_result
+        self.max_entries = max_entries
+        self.entry_bytes = 0
+        self.dropped_entries = 0
+        self.result: Optional[dict] = None
+        self.ended = False
+        self._buf = bytearray()
+        self._skip = 0  # bytes of an over-limit frame still to discard
+
+    def _limit(self, kind: bytes, length: int) -> bool:
+        """True when a frame of *kind* and *length* is to be kept."""
+        if kind == b"E":
+            if self.entry_bytes + length > self.max_entries:
+                self.dropped_entries += 1
+                return False
+            return True
+        return length <= self.max_result
+
+    def feed(self, data: bytes) -> list:
+        out: list = []
+        view = memoryview(data)
+        if self._skip:
+            n = min(self._skip, len(view))
+            self._skip -= n
+            view = view[n:]
+        self._buf += view
+        while len(self._buf) >= _HEAD.size:
+            kind, length = _HEAD.unpack_from(self._buf, 0)
+            if not self._limit(kind, length):
+                have = len(self._buf) - _HEAD.size
+                if have >= length:
+                    del self._buf[:_HEAD.size + length]
+                    continue
+                self._skip = length - have
+                self._buf.clear()
+                break
+            if len(self._buf) < _HEAD.size + length:
+                break
+            payload = bytes(self._buf[_HEAD.size:_HEAD.size + length])
+            del self._buf[:_HEAD.size + length]
+            if kind == b"E":
+                entry = _entry(payload)
+                if entry is None:
+                    self.dropped_entries += 1
+                    continue
+                self.entry_bytes += length
+                out.append(("E", entry))
+            elif kind in (b"R", b"B"):
+                try:
+                    doc = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    continue
+                if kind == b"R" and isinstance(doc, dict) and self.result is None:
+                    self.result = doc
+                    out.append(("R", doc))
+                elif kind == b"B" and isinstance(doc, list) and all(
+                        isinstance(b, str) for b in doc):
+                    out.append(("B", doc))
+            elif kind == b"Z":
+                self.ended = True
+                out.append(("Z", None))
+        return out
+
+
 @dataclass
 class Decoded:
     result: Optional[dict] = None
     entries: list[tuple[tuple[str, str], bytes]] = field(default_factory=list)
+    base_blobs: Optional[list[str]] = None
     ended: bool = False
     dropped_entries: int = 0
 
 
 def decode_frames(buf: bytes, *, max_result: int, max_entries: int) -> Decoded:
-    """The frames in *buf*. A result larger than *max_result* bytes is not
-    decoded; entries past *max_entries* bytes in total are dropped (counted,
-    never an error). A truncated last frame is ignored."""
+    """All the frames in *buf* at once (:class:`FrameReader`'s rules)."""
+    reader = FrameReader(max_result=max_result, max_entries=max_entries)
     out = Decoded()
-    pos, used = 0, 0
-    while pos + _HEAD.size <= len(buf):
-        kind, length = _HEAD.unpack_from(buf, pos)
-        start, end = pos + _HEAD.size, pos + _HEAD.size + length
-        if end > len(buf):
-            break
-        payload = buf[start:end]
-        pos = end
-        if kind == b"R" and out.result is None:
-            if length > max_result:
-                continue
-            try:
-                doc = json.loads(payload.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                continue
-            if isinstance(doc, dict):
-                out.result = doc
-        elif kind == b"E":
-            if used + length > max_entries or length < 2:
-                out.dropped_entries += 1
-                continue
-            (klen,) = struct.unpack_from(">H", payload, 0)
-            try:
-                key = json.loads(payload[2:2 + klen].decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                out.dropped_entries += 1
-                continue
-            if not (isinstance(key, list) and len(key) == 2
-                    and all(isinstance(k, str) for k in key)):
-                out.dropped_entries += 1
-                continue
-            used += length
-            out.entries.append(((key[0], key[1]), payload[2 + klen:]))
-        elif kind == b"Z":
-            out.ended = True
+    for kind, value in reader.feed(buf):
+        if kind == "E":
+            out.entries.append(value)
+        elif kind == "B":
+            out.base_blobs = value
+    out.result, out.ended = reader.result, reader.ended
+    out.dropped_entries = reader.dropped_entries
     return out
 
 
@@ -252,6 +317,14 @@ class CacheStore:
             else:
                 unpinned += len(value)
         return pinned, unpinned
+
+    def coverage(self) -> float:
+        """Share of the pinned blobs with at least one entry (0.0 when
+        nothing is pinned)."""
+        if not self.pinned:
+            return 0.0
+        cached = {blob for blob, _mode in self.entries}
+        return len(self.pinned & cached) / len(self.pinned)
 
     def evict(self) -> int:
         """Drop least recently used unpinned entries until the unpinned

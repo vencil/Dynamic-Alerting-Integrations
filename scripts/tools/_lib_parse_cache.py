@@ -102,11 +102,17 @@ class ParseCache:
 
     *entries* maps ``(blob id, mode name)`` to pickled bytes and is only
     read (in the generator container it is the long-running process's
-    store, inherited by fork). Entries this process adds go to :attr:`new`.
+    store, inherited by fork). Entries this process adds go to :attr:`new`,
+    and each one is also handed to *on_store* ``(key, pickled bytes)`` the
+    moment it exists — the generator container streams it to the
+    long-running process, so a judgement that is killed later still leaves
+    the parses it finished behind (#2901).
     """
 
     def __init__(self, entries: "Mapping[tuple[str, str], bytes] | None" = None,
-                 object_format: str = "sha1") -> None:
+                 object_format: str = "sha1",
+                 on_store: "Callable[[tuple[str, str], bytes], None] | None" = None
+                 ) -> None:
         if object_format not in OBJECT_FORMATS:
             raise ValueError(f"unknown git object format: {object_format!r}")
         self.entries: Mapping[tuple[str, str], bytes] = entries or {}
@@ -116,6 +122,7 @@ class ParseCache:
         self.parses = 0
         self.rejected_entries = 0
         self.memory_error = False
+        self.on_store = on_store
 
     def _cached(self, key: tuple[str, str]) -> Any:
         raw = self.new.get(key)
@@ -151,12 +158,15 @@ class ParseCache:
         try:
             # Pickled BEFORE the caller sees the value, so the entry is the
             # parse result, never a structure the generator has since changed.
-            self.new[key] = pickle.dumps(value, protocol=PICKLE_PROTOCOL)
+            raw = pickle.dumps(value, protocol=PICKLE_PROTOCOL)
         except MemoryError:
             self.memory_error = True
             raise
         except Exception:  # noqa: BLE001 — e.g. RecursionError: just not kept
-            pass
+            return value
+        self.new[key] = raw
+        if self.on_store is not None:
+            self.on_store(key, raw)
         return value
 
 

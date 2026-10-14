@@ -68,9 +68,10 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
-    CacheStore, RequestError, ValidateRequest, decode_frames,
+    CacheStore, FrameReader, RequestError, ValidateRequest,
     judgement_seconds, parse_validate_request,
 )
+from _lib_parse_cache import restricted_loads  # noqa: E402
 from _grar_validate import (  # noqa: E402
     PolicyInputError, generator_version_problem, load_policy_document,
 )
@@ -88,6 +89,8 @@ DEFAULT_MAX_BODY_BYTES = 16 * MiB
 DEFAULT_READ_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RESULT_BYTES = 16 * MiB
 DEFAULT_MAX_CACHE_TRANSFER_BYTES = 64 * MiB
+DEFAULT_WARM_REF = "HEAD"
+DEFAULT_WARM_SECONDS = 300.0
 HEADER_LIMIT_BYTES = 16 * 1024
 _KILL_GRACE_SECONDS = 5.0
 
@@ -116,27 +119,37 @@ class Settings:
     read_timeout_seconds: float
     max_result_bytes: int
     max_cache_transfer_bytes: int
+    warm_ref: str
+    warm_seconds: float
 
 
 class Response:
-    def __init__(self, status: int, doc: object = None, *, text: str | None = None,
-                 headers: Optional[dict] = None) -> None:
+    def __init__(self, status: int, doc: Optional[dict] = None, *,
+                 text: str | None = None, headers: Optional[dict] = None) -> None:
         self.status = status
-        if text is not None:
-            self.body = text.encode("utf-8")
-            self.ctype = "text/plain; version=0.0.4; charset=utf-8"
-        else:
-            self.body = (json.dumps(doc, ensure_ascii=False) + "\n").encode("utf-8")
-            self.ctype = "application/json"
+        self.doc = doc if text is None else None
+        self.text = text
         self.headers = headers or {}
 
+    @property
+    def body(self) -> bytes:
+        if self.text is not None:
+            return self.text.encode("utf-8")
+        return (json.dumps(self.doc, ensure_ascii=False) + "\n").encode("utf-8")
+
+    @property
+    def ctype(self) -> str:
+        return ("text/plain; version=0.0.4; charset=utf-8" if self.text is not None
+                else "application/json")
+
     def encode(self) -> bytes:
+        body = self.body
         lines = [f"HTTP/1.1 {self.status} {_REASONS.get(self.status, 'Unknown')}",
                  f"Content-Type: {self.ctype}",
-                 f"Content-Length: {len(self.body)}",
+                 f"Content-Length: {len(body)}",
                  "Connection: close"]
         lines += [f"{k}: {v}" for k, v in self.headers.items()]
-        return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + self.body
+        return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + body
 
 
 def _rejected(reason: str, message: str, **extra) -> Response:
@@ -157,6 +170,18 @@ class Ticket:
     deadline_at: float  # loop time
     future: asyncio.Future
     timer: Optional[asyncio.TimerHandle] = None
+    received: float = 0.0  # loop time the body was read
+    started: Optional[float] = None  # loop time it left the queue
+
+
+@dataclass
+class ChildRun:
+    """How one forked process ended, and what it streamed back."""
+
+    timed_out: bool
+    status: int
+    reader: FrameReader
+    received: int  # cache entries admitted into the store
 
 
 @dataclass
@@ -174,6 +199,7 @@ class Metrics:
     judgements: Counter = field(default_factory=Counter)
     rejections: Counter = field(default_factory=Counter)
     unavailable: Counter = field(default_factory=Counter)
+    warm_runs: Counter = field(default_factory=Counter)
     peak_rss_bytes: int = 0
 
 
@@ -229,7 +255,14 @@ class Service:
         self.metrics = Metrics()
         self.waiting: deque[Ticket] = deque()
         self.running: Optional[Ticket] = None
-        self.running_pid: Optional[int] = None
+        self.warming: Optional[str] = None  # the commit a warming run is on
+        self.child_pid: Optional[int] = None
+        self.pending_warm: Optional[str] = None
+        self.pinned_commit: Optional[str] = None
+        self.warm_commit: Optional[str] = None
+        self.warm_error: Optional[str] = None
+        self._request_pinned = False
+        self._preempting = False
         self.generator_version = gar.da_tools_version()
         self.da_guard_version = da_guard_version(settings.da_guard_binary)
         self._job_seq = 0
@@ -327,9 +360,13 @@ class Service:
         if len(self.waiting) >= self.s.max_queue:
             return self._count(_rejected(
                 "busy", "too many judgements are waiting; retry"))
-        ticket = Ticket(request, received + budget, self.loop.create_future())
+        ticket = Ticket(request, received + budget, self.loop.create_future(),
+                        received=received)
         self.waiting.append(ticket)
         ticket.timer = self.loop.call_at(ticket.deadline_at, self._expire, ticket)
+        # #2901 E2: a request never waits for a warming run — end it now; the
+        # entries it already handed back stay in the cache (E1).
+        self._preempt_warm()
         self._start_next()
         return self._count(await ticket.future)
 
@@ -340,14 +377,26 @@ class Service:
                 ticket.future.set_result(_rejected(
                     "deadline", "the deadline passed while queued"))
 
+    def _preempt_warm(self) -> None:
+        if self.warming is not None and self.child_pid is not None \
+                and not self._preempting:
+            self._preempting = True
+            _kill_group(self.child_pid)
+
     def _start_next(self) -> None:
-        if self.running is not None or not self.waiting:
+        if self.running is not None or self.warming is not None:
             return
-        ticket = self.waiting.popleft()
-        if ticket.timer is not None:
-            ticket.timer.cancel()
-        self.running = ticket
-        self.loop.create_task(self._run(ticket))
+        if self.waiting:
+            ticket = self.waiting.popleft()
+            if ticket.timer is not None:
+                ticket.timer.cancel()
+            ticket.started = self.loop.time()
+            self.running = ticket
+            self.loop.create_task(self._run(ticket))
+        elif self.pending_warm is not None:
+            commit, self.pending_warm = self.pending_warm, None
+            self.warming = commit
+            self.loop.create_task(self._warm(commit))
 
     async def _run(self, ticket: Ticket) -> None:
         try:
@@ -357,20 +406,20 @@ class Service:
                                 f"generator service error: {exc!r}")
         finally:
             self.running = None
-            self.running_pid = None
+            self.child_pid = None
+        if resp.doc is not None and resp.status == 200 and ticket.started is not None:
+            resp.doc["queue_wait_ms"] = round((ticket.started - ticket.received) * 1000)
         if not ticket.future.done():
             ticket.future.set_result(resp)
         self._start_next()
 
     def _count(self, resp: Response) -> Response:
         if resp.status == 200:
-            doc = json.loads(resp.body)
-            self.metrics.judgements[doc["result"]] += 1
-            if doc["result"] == "rejected":
-                self.metrics.rejections[doc["reason"]] += 1
+            self.metrics.judgements[resp.doc["result"]] += 1
+            if resp.doc["result"] == "rejected":
+                self.metrics.rejections[resp.doc["reason"]] += 1
         elif resp.status == 503:
-            doc = json.loads(resp.body)
-            self.metrics.unavailable[doc.get("reason") or doc["error"]] += 1
+            self.metrics.unavailable[resp.doc.get("reason") or resp.doc["error"]] += 1
         return resp
 
     # ── one judgement ─────────────────────────────────────────────────────
@@ -380,6 +429,18 @@ class Service:
         path = os.path.join(_jobs_dir(self.s.work_dir), f"job-{self._job_seq}")
         os.mkdir(path, 0o700)
         return path
+
+    def _job(self, request: ValidateRequest, job_dir: str,
+             policy: Optional[PolicySnapshot], warm: bool = False) -> ChildJob:
+        return ChildJob(
+            request=request, job_dir=job_dir, repo=self.s.repo,
+            config_subdir=self.s.config_subdir, git=self.s.git,
+            object_format=self.object_format,
+            memory_limit=self.s.memory_limit_bytes,
+            policy_copy=policy.copy if policy else None,
+            policy_sha256=policy.sha256 if policy else None,
+            store_entries=self.store.entries,
+            max_transfer=self.s.max_cache_transfer_bytes, warm=warm)
 
     async def _judge(self, ticket: Ticket) -> Response:
         remaining = ticket.deadline_at - self.loop.time()
@@ -401,19 +462,72 @@ class Service:
             if too_old is not None:
                 return _unavailable("VALIDATOR_UNAVAILABLE", "generator_too_old",
                                     too_old)
-            job = ChildJob(
-                request=ticket.request, job_dir=job_dir, repo=self.s.repo,
-                config_subdir=self.s.config_subdir, git=self.s.git,
-                object_format=self.object_format,
-                memory_limit=self.s.memory_limit_bytes,
-                policy_copy=policy.copy, policy_sha256=policy.sha256,
-                store_entries=self.store.entries,
-                max_transfer=self.s.max_cache_transfer_bytes)
-            return await self._fork_judgement(job, ticket.deadline_at)
+            pinned_before = self.pinned_commit
+            run = await self._spawn(self._job(ticket.request, job_dir, policy),
+                                    ticket.deadline_at, request=True)
+            # #2901 E2: a new base: warm it after this request, so whatever
+            # this request did not get to parse is parsed off the clock.
+            if ticket.request.base_commit != pinned_before:
+                self.pending_warm = ticket.request.base_commit
+            return self._verdict(run)
         finally:
             shutil.rmtree(job_dir, ignore_errors=True)
 
-    async def _fork_judgement(self, job: ChildJob, deadline_at: float) -> Response:
+    async def _warm(self, commit: str) -> None:
+        """#2901 E2: run the generator's conf.d read (``load_tenant_tree`` —
+        every parse a judgement makes happens there) on *commit*'s tree, no
+        writes, no verdict, no amtool — only to fill the cache (E1). Ended
+        at once when a request arrives; bounded by --warm-seconds; never on
+        a request's clock."""
+        outcome = "failed"
+        job_dir = None
+        try:
+            job_dir = self._new_job_dir()
+            run = await self._spawn(
+                self._job(ValidateRequest(commit, (), 0), job_dir, None, warm=True),
+                self.loop.time() + self.s.warm_seconds, request=False)
+            complete = (os.WIFEXITED(run.status) and os.WEXITSTATUS(run.status) == 0
+                        and run.reader.ended and run.reader.result is not None
+                        and run.reader.result.get("outcome") == "warmed")
+            if complete:
+                outcome = "completed"
+            elif self._preempting:
+                outcome = "preempted"
+            elif run.timed_out:
+                outcome = "deadline"
+        except Exception as exc:  # noqa: BLE001 — warming never affects requests
+            print(f"generator-service: warming {commit} failed: {exc!r}",
+                  file=sys.stderr, flush=True)
+        finally:
+            if job_dir is not None:
+                shutil.rmtree(job_dir, ignore_errors=True)
+            self.metrics.warm_runs[outcome] += 1
+            self.warming = None
+            self.child_pid = None
+            self._preempting = False
+            self._start_next()
+
+    def _pin(self, blobs: list[str], commit: str, request: bool) -> None:
+        """The pinned base follows the latest REQUEST's base commit; a
+        warming run's commit counts only before any request (or when it is
+        that same commit)."""
+        if request or not self._request_pinned or commit == self.pinned_commit:
+            self.store.set_pinned(blobs)
+            self.pinned_commit = commit
+            self._request_pinned = self._request_pinned or request
+
+    def _admit(self, key: tuple[str, str], value: bytes) -> bool:
+        """One streamed cache entry, kept only if it reads back under the
+        restricted unpickler (``_lib_parse_cache.ALLOWED_GLOBALS``)."""
+        try:
+            restricted_loads(value)
+        except Exception:  # noqa: BLE001 — anything unreadable is dropped
+            return False
+        self.store.add(key, value)
+        return True
+
+    async def _spawn(self, job: ChildJob, deadline_at: float, *,
+                     request: bool) -> ChildRun:
         threads = threading.active_count()
         if threads != 1:
             raise RuntimeError(f"refusing to fork with {threads} threads")
@@ -421,16 +535,19 @@ class Service:
         sys.stderr.flush()
         rfd, wfd = os.pipe()
         pid = os.fork()
-        if pid == 0:  # the judgement process
+        if pid == 0:  # the judgement (or warming) process
             os.close(rfd)
             _gsvc_child.run_child(job, wfd)
         os.close(wfd)
-        self.running_pid = pid
-        buf = bytearray()
-        cap = self.s.max_result_bytes + self.s.max_cache_transfer_bytes + 64 * 1024
+        self.child_pid = pid
+        reader = FrameReader(max_result=self.s.max_result_bytes,
+                             max_entries=self.s.max_cache_transfer_bytes)
+        received = 0
+        commit = job.request.base_commit
         exited = self.loop.create_future()
 
         def on_data() -> None:
+            nonlocal received
             while True:
                 try:
                     chunk = os.read(rfd, 1 << 16)
@@ -441,8 +558,13 @@ class Service:
                 if not chunk:
                     self.loop.remove_reader(rfd)
                     return
-                if len(buf) < cap:
-                    buf.extend(chunk[:cap - len(buf)])
+                # #2901 E1: entries join the cache as they arrive, so a
+                # process killed later still leaves them behind.
+                for kind, value in reader.feed(chunk):
+                    if kind == "E":
+                        received += self._admit(*value)
+                    elif kind == "B":
+                        self._pin(value, commit, request)
 
         def on_exit() -> None:
             if not exited.done():
@@ -471,35 +593,34 @@ class Service:
                 self.loop.remove_reader(pidfd)
                 os.close(pidfd)
             _, status, rusage = os.wait4(pid, 0)
-            _kill_group(pid)  # anything the judgement left running
+            _kill_group(pid)  # anything the process left running
             on_data()
             self.loop.remove_reader(rfd)
             os.close(rfd)
-        self.metrics.peak_rss_bytes = rusage.ru_maxrss * 1024
-        if timed_out:
-            return _rejected("deadline", "the deadline passed while judging")
-        if os.WIFSIGNALED(status) or os.WEXITSTATUS(status) != 0:
-            return _rejected("incomplete", "the judgement process ended without "
-                             "a complete result")
-        got = decode_frames(bytes(buf), max_result=self.s.max_result_bytes,
-                            max_entries=self.s.max_cache_transfer_bytes)
-        if got.result is None or not got.ended:
-            return _rejected("incomplete", "the judgement process ended without "
-                             "a complete result")
-        return self._absorb(got)
+            self.store.evict()
+        if request:
+            self.metrics.peak_rss_bytes = rusage.ru_maxrss * 1024
+        return ChildRun(timed_out, status, reader, received)
 
-    def _absorb(self, got) -> Response:
-        res = got.result
-        for key, value in got.entries:
-            self.store.add(key, value)
+    def _verdict(self, run: ChildRun) -> Response:
+        received = {"received": run.received}
+        if run.timed_out:
+            return _rejected("deadline", "the deadline passed while judging",
+                             cache=received)
+        if os.WIFSIGNALED(run.status) or os.WEXITSTATUS(run.status) != 0:
+            return _rejected("incomplete", "the judgement process ended without "
+                             "a complete result", cache=received)
+        res = run.reader.result
+        if res is None or not run.reader.ended:
+            return _rejected("incomplete", "the judgement process ended without "
+                             "a complete result", cache=received)
         self.store.touch(tuple(k) for k in res.get("hit_keys", [])
                          if isinstance(k, list) and len(k) == 2)
-        if isinstance(res.get("base_blobs"), list):
-            self.store.set_pinned(b for b in res["base_blobs"] if isinstance(b, str))
-        self.store.evict()
         outcome = res.get("outcome")
+        cache = res.get("cache")
+        cache = {**cache, **received} if isinstance(cache, dict) else received
         common = {"stderr_tail": res.get("stderr_tail", ""),
-                  "validated": res.get("validated"), "cache": res.get("cache")}
+                  "validated": res.get("validated"), "cache": cache}
         if outcome == "ran":
             rc = res.get("rc")
             return Response(200, {"result": "pass" if rc == 0 else "findings",
@@ -543,6 +664,10 @@ class Service:
             "da_guard_version": self.da_guard_version,
             "amtool_available": amtool,
             "ready": policy.available and amtool and too_old is None,
+            "cache_base_coverage_ratio": self.store.coverage(),
+            "warm": {"ref": self.s.warm_ref or None, "commit": self.warm_commit,
+                     "error": self.warm_error, "running": self.warming,
+                     "pinned_commit": self.pinned_commit},
         })
 
     def _metrics(self) -> Response:
@@ -578,6 +703,14 @@ class Service:
                        "internal_error"):
             out.append(f'da_generator_unavailable_total{{reason="{reason}"}} '
                        f"{self.metrics.unavailable[reason]}")
+        out += ["# HELP da_generator_warm_runs_total Pre-warming runs (cache filling, no verdict), by outcome.",
+                "# TYPE da_generator_warm_runs_total counter"]
+        for outcome in ("completed", "preempted", "deadline", "failed"):
+            out.append(f'da_generator_warm_runs_total{{outcome="{outcome}"}} '
+                       f"{self.metrics.warm_runs[outcome]}")
+        out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",
+                "# TYPE da_generator_cache_base_coverage_ratio gauge",
+                f"da_generator_cache_base_coverage_ratio {self.store.coverage()}"]
         out += ["# HELP da_generator_queue_depth Validate requests waiting for the running judgement.",
                 "# TYPE da_generator_queue_depth gauge",
                 f"da_generator_queue_depth {len(self.waiting)}",
@@ -589,8 +722,33 @@ class Service:
         return Response(200, text="\n".join(out) + "\n")
 
     def shutdown(self) -> None:
-        if self.running_pid is not None:
-            _kill_group(self.running_pid)
+        if self.child_pid is not None:
+            _kill_group(self.child_pid)
+
+    def start_warming(self) -> None:
+        """#2901 E2: resolve --warm-ref and queue a warming run for it. A ref
+        that does not resolve is logged and counted, nothing else."""
+        ref = self.s.warm_ref
+        if not ref:
+            return
+        try:
+            proc = subprocess.run(
+                [self.s.git, "-C", self.s.repo, "rev-parse", "--verify",
+                 "--quiet", f"{ref}^{{commit}}"],
+                capture_output=True, check=False, timeout=60)
+            commit = proc.stdout.decode("ascii", "replace").strip()
+            ok = proc.returncode == 0 and bool(commit)
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok, commit = False, repr(exc)
+        if not ok:
+            self.warm_error = f"--warm-ref {ref!r} does not resolve to a commit"
+            self.metrics.warm_runs["failed"] += 1
+            print(f"generator-service: {self.warm_error}; not warming",
+                  file=sys.stderr, flush=True)
+            return
+        self.warm_commit = commit
+        self.pending_warm = commit
+        self._start_next()
 
 
 def _kill_group(pid: int) -> None:
@@ -658,6 +816,13 @@ def _build_parser() -> argparse.ArgumentParser:
                    default=DEFAULT_MAX_CACHE_TRANSFER_BYTES,
                    help="new parse-cache bytes one judgement may hand back; "
                         "the rest are dropped (default: %(default)s)")
+    p.add_argument("--warm-ref", default=DEFAULT_WARM_REF,
+                   help="commit-ish whose tree is parsed into the cache at start, "
+                        "off any request's clock; an empty value turns start-up "
+                        "warming off (default: %(default)s)")
+    p.add_argument("--warm-seconds", type=float, default=DEFAULT_WARM_SECONDS,
+                   help="time limit of one warming run; a request arriving ends "
+                        "it at once (default: %(default)s)")
     return p
 
 
@@ -711,6 +876,7 @@ async def serve(settings: Settings, object_format: str) -> None:
             sig, lambda: stop.done() or stop.set_result(None))
     print(f"generator-service: listening on {settings.socket}", file=sys.stderr,
           flush=True)
+    service.start_warming()
     try:
         await stop
     finally:

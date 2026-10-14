@@ -425,3 +425,22 @@ def test_changing_one_file_parses_only_that_file(tmp_path, monkeypatch):
         assert warm.parses == len(modes_of_file), rel
         assert {b for (b, _m) in warm.new} == {new_blob}, rel
         cold.new.update(warm.new)
+
+
+def test_each_new_entry_is_handed_on_as_it_is_made(tmp_path):
+    """#2901 E1: on_store sees every stored entry the moment it exists —
+    before the next parse starts — and never a failed parse."""
+    a, b, bad = tmp_path / "a.yaml", tmp_path / "b.yaml", tmp_path / "bad.yaml"
+    a.write_text("tenants: {alpha: {}}\n", encoding="utf-8")
+    b.write_text("tenants: {beta: {}}\n", encoding="utf-8")
+    bad.write_text("x: 1\nx: 2\n", encoding="utf-8")
+    seen = []
+    cache = pc.ParseCache(on_store=lambda key, raw: seen.append((key, raw)))
+    cache.load(a, _grar_parse.ROUTING_READ)
+    assert len(seen) == 1 and seen[0] == next(iter(cache.new.items()))
+    with pytest.raises(yaml.YAMLError):
+        cache.load(bad, _grar_parse.ROUTING_READ)
+    cache.load(a, _grar_parse.ROUTING_READ)  # a hit: nothing new
+    cache.load(b, _grar_parse.ROUTING_READ)
+    assert [k for k, _ in seen] == list(cache.new) and len(seen) == 2
+    assert pc.restricted_loads(seen[1][1]) == {"tenants": {"beta": {}}}
