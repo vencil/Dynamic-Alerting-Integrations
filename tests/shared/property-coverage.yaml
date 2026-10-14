@@ -252,6 +252,7 @@ modules:
       - _apply_timing_params
     excluded:
       build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
+      ignored_key_warning: "#2960 one-line constructor of the IgnoredKeyWarning mark (same shape as skipped_entry_warning / replaced_value_warning); its blocking effect pinned by test_routing_ignored_keys.py"
       receiver_type: "#2780 two-branch accessor (mapping receiver with a str type → that type, else ''), Go copy routingpolicy.ReceiverType; closed shape list (dict / list / int / bool / null type × main / overrides / routes × every check that reads a type) pinned by test_grar_strict_hardening.py::TestTenantReceiverTypeNotString"
       chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json, which pin it against Go's ChainLevels"
       level_contains: "#2326 subtree membership (root contains all; prefix + '/' so `team` does not contain `team-b`); example-covered by test_generate_routes_nested_tree.py"
@@ -281,6 +282,9 @@ modules:
       - drop_shadowed_spellings
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
+      ignored_routing_keys: "#2960 closed walk (block / receiver / overrides[i] / routes[i] receiver) against fixed key sets; every block and position example-pinned by the shared table routing_ignored_keys_cases.json, which the Go copy routingpolicy.IgnoredKeys reads too"
+      receiver_keys: "#2960 set union over RECEIVER_TYPES (pinned to the schema by test_receiver_spec_parity.py); example-pinned per type by test_routing_ignored_keys.py"
+      _ignored_hint: "#2960 message wording only (AM field / did-you-mean / read set); example-pinned by test_routing_ignored_keys.py"
       is_null_schedule: "#2708 closed shape predicate (a mapping whose only keys are a null `default`, an empty/null `overrides`, `expires`, `reason`), Go copy pkg/config nullSchedule; closed case list example-pinned by test_validate_config.py::TestScheduleNull::test_is_null_schedule_shapes (calls it directly) and cross-language by the n5-n13 rows of platform_tenant_overlay_matrix.json via describe_tenant"
       writes_nothing: "#2708 one-line disjunction (reserved key excluded; null or is_null_schedule), Go copy pkg/config nullThreshold; example-pinned by test_validate_config.py::TestScheduleNull::test_is_null_schedule_shapes"
       schedule_null_problems: "#2708 message list for a null inside a schedule with windows, Go copy pkg/config scheduleNullProblems; exact strings pinned by test_validate_config.py::TestScheduleNull::test_schedule_null_problems_messages (calls it directly; the Go side asserts the same list) and through check_schedule_null by test_a_null_beside_windows_fails_and_is_named"

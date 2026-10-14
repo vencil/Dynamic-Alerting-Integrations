@@ -199,6 +199,18 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 				tenantID, routingpolicy.RoutingNotMappingMessage(input.RoutingNotMapping[tenantID])),
 		})
 	}
+	for _, tenantID := range sortedStringSliceKeys(input.RoutingIgnoredKeys) {
+		for _, field := range input.RoutingIgnoredKeys[tenantID] {
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     FindingRoutingKeyIgnored,
+				TenantID: tenantID,
+				Field:    field,
+				Message: fmt.Sprintf("tenant %q: _routing.%s is not read by the route generator; "+
+					"the rest is rendered as if it were absent", tenantID, field),
+			})
+		}
+	}
 	tenants := make([]string, 0, len(input.RoutingByTenant))
 	for t := range input.RoutingByTenant {
 		tenants = append(tenants, t)
@@ -424,6 +436,8 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 			f.Kind = FindingDomainPolicyOutOfScope
 		case routingpolicy.ProblemRoutingDefaultsNotMapping:
 			f.Kind = FindingRoutingDefaultsNotMapping
+		case routingpolicy.ProblemRoutingKeyIgnored:
+			f.Kind = FindingRoutingKeyIgnored
 		}
 		switch {
 		case p.File != "" && p.Field != "":
@@ -439,6 +453,15 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 }
 
 func sortedAnyKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedStringSliceKeys(m map[string][]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

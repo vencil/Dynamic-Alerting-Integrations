@@ -165,6 +165,10 @@ FINDING_KINDS: dict[str, str] = {
         "rendered.",
     "invalid_route_entry":
         "A routes value or entry the generator does not render.",
+    "routing_key_ignored":
+        "A key in a routing block, routing profile, overrides entry or "
+        "receiver that the generator does not read; the rest is rendered "
+        "as if the key were absent.",
     "timing_value_replaced":
         "A timing value Alertmanager cannot read, rendered as the platform "
         "default.",
@@ -317,6 +321,32 @@ def replaced_value_warning(line: str, *, kind: str = UNCLASSIFIED,
 
     #2766: *kind* / *tenant* / *field* are its ``Finding`` fields."""
     return ReplacedValueWarning(line, kind=kind, tenant=tenant, field=field)
+
+
+# ── #2960: "a key the generator does not read" is a type too ─────────────
+# A routing block (a tenant `_routing`, a routing profile, `_routing_defaults`,
+# `_routing_enforced`, an `overrides` entry, a receiver) that carries a key
+# the generator never reads (`continue`, `mute_time_intervals`, a typo) still
+# renders — without that key, exactly as if it were absent. So it is neither a
+# `SkippedEntryWarning` (explain-route would list a live route as "not in
+# effect") nor a `ReplacedValueWarning`; but what was written is not what is
+# rendered, so `--validate` and validate-config refuse it:
+# `blocking_generation_errors` counts this type as its own category. Same
+# rules as the two types above — the mark lives on the str object.
+class IgnoredKeyWarning(Finding):
+    """A warning-stream line naming a routing key the generator does not read."""
+
+    __slots__ = ()
+    _DEFAULT_BLOCKS = "validate"
+
+
+def ignored_key_warning(line: str, *, kind: str = UNCLASSIFIED,
+                        tenant: str | None = None, file: str | None = None,
+                        field: str | None = None) -> IgnoredKeyWarning:
+    """Mark *line* (text unchanged) as an ignored-key line — blocking under
+    ``--validate`` and validate-config's ``schema`` / ``routes`` rows."""
+    return IgnoredKeyWarning(line, kind=kind, tenant=tenant, file=file,
+                             field=field)
 
 
 def _apply_timing_params(source_dict: dict, context_name: str, *,

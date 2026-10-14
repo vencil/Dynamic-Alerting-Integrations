@@ -129,7 +129,17 @@ func TestRun_ReceiverReadBesideNonStringKeys(t *testing.T) {
 			if tc.bad {
 				want = []string{"error invalid_receiver_field tx " + s.field + ".http_config.bearer_token"}
 			}
-			if strings.Join(bad, "|") != strings.Join(want, "|") || tc.bad == (code == 0) {
+			// #2960: a `1:` / `on:` key is a key the generator does not read
+			// (it reads keys as text) — named, and the run fails; a null key's
+			// pair is dropped by the generator's loader, so `~:` is not.
+			ignored := false
+			for _, f := range got {
+				ignored = ignored || strings.HasPrefix(f, "error routing_key_ignored tx ")
+			}
+			wantIgnored := (strings.HasPrefix(s.name, "routing ") && !strings.Contains(s.name, "~")) ||
+				strings.HasPrefix(s.name, "override ")
+			if strings.Join(bad, "|") != strings.Join(want, "|") || (tc.bad || ignored) == (code == 0) ||
+				ignored != wantIgnored {
 				t.Errorf("%s token %s: exit %d, findings %v; want receiver findings %v", s.name, tc.token, code, got, want)
 			}
 		}
@@ -181,8 +191,11 @@ func TestRun_PlatformIntKey(t *testing.T) {
 			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver: " + bad + "\n"}, 1},
 		{"platform 1: in tenant body, bad receiver", map[string]string{"tx.yaml": rsTenant,
 			"_platform.yaml": "tenants:\n  tx:\n    1: x\n    _routing:\n      receiver: " + bad + "\n"}, 1},
+		// #2960: the `1:` itself is a key the generator does not read.
 		{"platform 1: beside _routing, good receiver", map[string]string{"tx.yaml": rsTenant,
-			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver: " + good + "\n"}, 0},
+			"_platform.yaml": "tenants:\n  tx:\n    _routing:\n      1: x\n      receiver: " + good + "\n"}, 1},
+		{"platform 1: in tenant body, good receiver", map[string]string{"tx.yaml": rsTenant,
+			"_platform.yaml": "tenants:\n  tx:\n    1: x\n    _routing:\n      receiver: " + good + "\n"}, 0},
 	} {
 		tc.files["_defaults.yaml"] = rsDefaults
 		if code, got := runRoutingTree(t, tc.files, ""); code != tc.want {

@@ -229,6 +229,14 @@ const (
 	// it — a defaults block, the top level of an unwrapped defaults file,
 	// a threshold profile. Field is `<file>:<key path>`.
 	FindingRoutingInUnreadLocation FindingKind = "routing_in_unread_location"
+	// FindingRoutingKeyIgnored (error; #2960): a key in a tenant `_routing`,
+	// a routing profile, `_routing_defaults` or `_routing_enforced` (or in a
+	// receiver / `overrides` entry under them) the route generator does not
+	// read — `continue`, `mute_time_intervals`, a typo. The block renders as
+	// if the key were absent; the generator blocks `--validate` on it. Field
+	// is the path relative to the tenant's `_routing` (TenantID set), else
+	// `<file>:<key path>`.
+	FindingRoutingKeyIgnored FindingKind = "routing_key_ignored"
 	// FindingRoutingNotMapping (error; #2341): the tenant's `_routing`, as
 	// the route generator's PyYAML reads it, is neither a mapping nor a
 	// disabling string (`"slack"`, a list, null, an unquoted `false` / `off`
@@ -415,6 +423,12 @@ type CheckInput struct {
 	// (#2341, routingpolicy.RoutingNotMapping). Such tenants are absent from
 	// RoutingByTenant: the generator renders no route for them.
 	RoutingNotMapping map[string]any `json:"-"`
+
+	// RoutingIgnoredKeys maps tenant ID → the paths, relative to its own
+	// `_routing`, of the keys the route generator does not read (#2960,
+	// routingpolicy.IgnoredKeys). Profiles and `_routing_defaults` are named
+	// through PlatformProblems instead.
+	RoutingIgnoredKeys map[string][]string `json:"-"`
 
 	// InvalidTenantIDs maps each declared tenant id tenantid.Valid
 	// refuses to the tenant file that declares it (#2341). Such tenants are

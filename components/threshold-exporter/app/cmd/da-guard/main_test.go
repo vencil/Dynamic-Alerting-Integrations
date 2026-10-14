@@ -1000,6 +1000,11 @@ func TestRun_TaggedNullEscalationOutsidePolicyFile_StillEnforced(t *testing.T) {
 		}
 		sort.Strings(got)
 		want := []string{"error/critical_escalation_missing/t-pol/receiver.type", "error/domain_policy_violation/t-pol/receiver.type"}
+		if name == "profiles file, inside a profile" {
+			// #2960: a profile key the generator does not read.
+			want = append(want, "error/routing_key_ignored//_routing_profiles.yaml:routing_profiles.p1.require_critical_escalation")
+			sort.Strings(want)
+		}
 		if code != exitFindings || !equalStrings(got, want) {
 			t.Errorf("%s: exit = %d, findings %v; want exit %d and %v", name, code, got, exitFindings, want)
 		}

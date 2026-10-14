@@ -219,5 +219,11 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	for _, p := range routingpolicy.GroupByInvalidForTenant(tenantID, routing) {
 		out = append(out, ReceiverViolation{Field: base + "." + p.Field, Reason: p.Message()})
 	}
+	// #2960: a key the route generator does not read (`continue`, a typo) —
+	// the generator's --validate refuses the tenant over it.
+	for _, f := range routingpolicy.IgnoredKeys(routing, routingpolicy.BlockRouting) {
+		out = append(out, ReceiverViolation{Field: base + "." + f,
+			Reason: "not read by the route generator; the rest is rendered as if it were absent"})
+	}
 	return out
 }

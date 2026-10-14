@@ -3062,6 +3062,9 @@ class TestJsonSchemaRow:
         under `_routing_defaults`) while the generator's key check passes —
         the issue's own shape. ⚠️ Not `_routing_defaults.overrides` as filed:
         #2723 (PR-6c) made the schema accept it, so a misspelt key stands in.
+        #2960: the generator now names that key too, so the `schema` row
+        fails beside `json_schema` instead of passing — the json_schema row
+        must still report the schema's own refusal.
         """
         d = self._tree(tmp_path, {
             "_defaults.yaml": (self._DEFAULTS + "_routing_defaults:\n"
@@ -3071,7 +3074,9 @@ class TestJsonSchemaRow:
             "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
         })
         rc, rows = self._run(d, capsys, cli_argv)
-        assert rows["schema"]["status"] == "pass", rows["schema"]
+        assert rows["schema"]["status"] == "fail", rows["schema"]
+        assert any("'overides' is not read by the route generator" in x
+                   for x in rows["schema"]["details"]), rows["schema"]
         row = rows["json_schema"]
         assert row["status"] == "fail", row
         assert any("'overides' was unexpected" in x and "/_routing_defaults" in x

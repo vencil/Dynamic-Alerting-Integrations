@@ -1,0 +1,316 @@
+{
+  "_comment": "#2960: keys a routing block carries that the route generator does not read. One row = a block as read (`block`: routing = a tenant _routing or a routing profile, routing_defaults, routing_enforced) and the `field`s, relative to the block, that must be named — nothing more, nothing less. Read by tests/ops/test_routing_ignored_keys.py (_grar_validate.ignored_routing_keys) and by components/threshold-exporter/app/pkg/routingpolicy/ignored_keys_test.go (routingpolicy.IgnoredKeys).",
+  "cases": [
+    {
+      "name": "clean-full-block",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "group_by": [
+          "alertname"
+        ],
+        "group_wait": "30s",
+        "group_interval": "5m",
+        "repeat_interval": "4h",
+        "overrides": [
+          {
+            "alertname": "A",
+            "receiver": {
+              "type": "slack",
+              "api_url": "https://hooks.slack.com/x"
+            }
+          }
+        ],
+        "routes": [
+          {
+            "match": {
+              "team": "db"
+            },
+            "receiver": {
+              "type": "slack",
+              "api_url": "https://hooks.slack.com/x"
+            }
+          }
+        ]
+      },
+      "fields": []
+    },
+    {
+      "name": "am-route-fields",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "continue": true,
+        "mute_time_intervals": [
+          "weekends"
+        ],
+        "active_time_intervals": [
+          "office"
+        ],
+        "matchers": [
+          "a=\"b\""
+        ]
+      },
+      "fields": [
+        "active_time_intervals",
+        "continue",
+        "matchers",
+        "mute_time_intervals"
+      ]
+    },
+    {
+      "name": "typo-top-level",
+      "block": "routing",
+      "value": {
+        "recevier": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        }
+      },
+      "fields": [
+        "recevier"
+      ]
+    },
+    {
+      "name": "receiver-unknown-field",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "slack",
+          "api_url": "https://hooks.slack.com/x",
+          "color": "red"
+        }
+      },
+      "fields": [
+        "receiver.color"
+      ]
+    },
+    {
+      "name": "rocketchat-metadata-accepted",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "rocketchat",
+          "url": "https://chat.example.com/h",
+          "channel": "#a",
+          "username": "bot",
+          "icon_url": "https://chat.example.com/i.png"
+        }
+      },
+      "fields": []
+    },
+    {
+      "name": "pagerduty-exactly-one-of-fields-known",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "pagerduty",
+          "routing_key": "k",
+          "severity": "critical",
+          "foo": 1
+        }
+      },
+      "fields": [
+        "receiver.foo"
+      ]
+    },
+    {
+      "name": "unknown-receiver-type-not-looked-into",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "carrier-pigeon",
+          "wings": 2
+        }
+      },
+      "fields": []
+    },
+    {
+      "name": "http-config-not-looked-into",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a",
+          "http_config": {
+            "tls_cnfig": {}
+          }
+        }
+      },
+      "fields": []
+    },
+    {
+      "name": "override-entries",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "overrides": [
+          {
+            "alertname": "A",
+            "matchers": [
+              "x=\"y\""
+            ],
+            "continue": true
+          },
+          {
+            "metric_group": "g",
+            "receiver": {
+              "type": "slack",
+              "api_url": "https://hooks.slack.com/x",
+              "color": "red"
+            }
+          },
+          "not-a-mapping"
+        ]
+      },
+      "fields": [
+        "overrides[0].continue",
+        "overrides[0].matchers",
+        "overrides[1].receiver.color"
+      ]
+    },
+    {
+      "name": "route-entry-own-keys-left-to-route-check",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "routes": [
+          {
+            "match": {
+              "a": "b"
+            },
+            "continue": true
+          },
+          {
+            "match": {
+              "a": "c"
+            },
+            "receiver": {
+              "type": "webhook",
+              "url": "https://hooks.example.com/a",
+              "junk": 1
+            }
+          }
+        ]
+      },
+      "fields": [
+        "routes[1].receiver.junk"
+      ]
+    },
+    {
+      "name": "overrides-not-a-list",
+      "block": "routing",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "overrides": {
+          "alertname": "A",
+          "junk": 1
+        }
+      },
+      "fields": []
+    },
+    {
+      "name": "not-a-mapping",
+      "block": "routing",
+      "value": [
+        "receiver"
+      ],
+      "fields": []
+    },
+    {
+      "name": "defaults-routes-has-its-own-line",
+      "block": "routing_defaults",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "routes": [
+          {
+            "match": {
+              "a": "b"
+            }
+          }
+        ]
+      },
+      "fields": []
+    },
+    {
+      "name": "defaults-continue-and-override",
+      "block": "routing_defaults",
+      "value": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "continue": false,
+        "overrides": [
+          {
+            "alertname": "A",
+            "junk": 1
+          }
+        ]
+      },
+      "fields": [
+        "continue",
+        "overrides[0].junk"
+      ]
+    },
+    {
+      "name": "enforced-typo-enabled",
+      "block": "routing_enforced",
+      "value": {
+        "enabeld": true,
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a"
+        },
+        "match": [
+          "severity=\"critical\""
+        ]
+      },
+      "fields": [
+        "enabeld"
+      ]
+    },
+    {
+      "name": "enforced-has-no-overrides",
+      "block": "routing_enforced",
+      "value": {
+        "enabled": true,
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/a",
+          "junk": 1
+        },
+        "overrides": [
+          {
+            "alertname": "A",
+            "junk": 1
+          }
+        ],
+        "continue": true
+      },
+      "fields": [
+        "continue",
+        "overrides",
+        "receiver.junk"
+      ]
+    }
+  ]
+}

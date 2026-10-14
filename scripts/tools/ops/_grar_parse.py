@@ -66,6 +66,7 @@ from _grar_validate import (  # noqa: E402
     check_domain_policies,
     check_policy_scope,
     group_by_problem_text,
+    ignored_routing_keys,
     invalid_tenant_id_text,
     routing_defaults_not_mapping_text,
     routing_group_by_invalid,
@@ -304,6 +305,9 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                                           "tenant's _routing), skipping",
                                           kind="routing_defaults_routes_ignored", file=fname,
                                           field="_routing_defaults.routes"))
+            _record_ignored_keys(result, rd, block="routing_defaults",
+                                 where=f"_routing_defaults in {fname}",
+                                 field_prefix="_routing_defaults.", file=fname)
             result["routing_defaults"] = rd
         else:
             print(f"  WARN: _routing_defaults in {_f} ignored "
@@ -320,6 +324,11 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             # `enforced_errors` (→ schema_warnings, blocking under
             # `--validate`) and NOT enabled. A missing key stays "disabled".
             enabled = raw.get("enabled", False) if isinstance(raw, dict) else None
+            # #2960: `enabeld: true` leaves NOC routing off — named, as every
+            # key the generator does not read, whatever `enabled` says.
+            _record_ignored_keys(result, raw, block="routing_enforced",
+                                 where=f"_routing_enforced in {fname}",
+                                 field_prefix="_routing_enforced.", file=fname)
             if isinstance(raw, dict) and enabled is True:
                 result["enforced_routing"] = raw
             elif isinstance(raw, dict) and enabled is False:
@@ -340,6 +349,12 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                   "(only allowed in _ prefixed files)", file=sys.stderr)
 
     _parse_profiles_and_policies(data, fname, ROOT_LEVEL, result)
+
+
+def _record_ignored_keys(result: dict, obj: object, **kw) -> None:
+    """#2960: name the keys *obj* carries that the generator does not read
+    (`ignored_routing_keys`; → schema_warnings, blocking under `--validate`)."""
+    result.setdefault("ignored_routing_keys", []).extend(ignored_routing_keys(obj, **kw))
 
 
 def _routing_defaults_not_mapping(fname: str, value: object,
@@ -410,6 +425,9 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         origin[name] = fname
         by_dir.setdefault(level, {})[name] = cfg
         flat[name] = cfg
+        _record_ignored_keys(result, cfg, block="routing",
+                             where=f"routing profile '{name}' in {fname}",
+                             field_prefix=f"routing_profiles.{name}.", file=fname)
 
 
 def _refuse_nested_enforced(fname: str, result: dict) -> None:
@@ -496,6 +514,9 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                                           "tenant's _routing), skipping",
                                           kind="routing_defaults_routes_ignored", file=fname,
                                           field="_routing_defaults.routes"))
+            _record_ignored_keys(result, rd, block="routing_defaults",
+                                 where=f"_routing_defaults in {fname}",
+                                 field_prefix="_routing_defaults.", file=fname)
             for key in ("receiver", "overrides"):
                 if key in rd and rd[key] is None:
                     _tree_problem(
@@ -632,6 +653,8 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     if isinstance(routing, dict):
         if routing:
             result["explicit_routing"][tenant] = routing
+            _record_ignored_keys(result, routing, block="routing",
+                                 where=f"{tenant}: _routing", tenant=tenant)
     elif "_routing" in overrides:
         # #2341 R5: neither a mapping nor a disabling string (`"slack"`, a
         # list, null, an unquoted `false` / `off` / `no`, which PyYAML reads
@@ -1458,6 +1481,8 @@ def load_tenant_tree(
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     schema_warnings.extend(parsed.get("routing_defaults_errors", []))
+    # #2960: keys a routing block carries that the generator does not read.
+    schema_warnings.extend(parsed.get("ignored_routing_keys", []))
     # #2341 R5: a tenant `_routing` that is neither a mapping nor a disabling
     # string — the tenant renders no route; blocking like the lines above.
     refused = parsed.get("routing_refused", {})

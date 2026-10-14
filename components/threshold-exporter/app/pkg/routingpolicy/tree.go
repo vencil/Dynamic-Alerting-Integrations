@@ -284,6 +284,7 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 				if bad != nil {
 					probs = append(probs, routingDefaultsNotMapping(k, bad))
 				}
+				probs = append(probs, ignoredKeyProblems(k, "_routing_defaults.", k, d, BlockRoutingDefaults)...)
 				if stripped {
 					probs = append(probs, Problem{Kind: ProblemRoutingDefaultsRoutes, File: k,
 						Field: "_routing_defaults.routes",
@@ -318,6 +319,7 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 						t.levelProfiles[level] = map[string]map[string]any{}
 					}
 					t.levelProfiles[level][name] = p[name]
+					probs = append(probs, ignoredKeyProblems(k, "routing_profiles."+name+".", k, p[name], BlockRouting)...)
 				}
 			}
 		}

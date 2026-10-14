@@ -467,8 +467,9 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	} else if verdict(block) {
 		put = "403"
 	} else if (writesRouting && RoutingNotMapping(r)) || writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
-		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 {
-		put = "400" // #2295 receiver contract, #2431 a matcher value / #2503 a group_by element the block writes
+		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 ||
+		len(IgnoredKeys(block["_routing"], BlockRouting)) > 0 {
+		put = "400" // #2295 receiver contract, #2431 a matcher value / #2503 a group_by element / #2960 an ignored key the block writes
 	}
 	if put != want.Put {
 		t.Errorf("tenant_api.put model = %s, table says %s", put, want.Put)
