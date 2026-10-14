@@ -66,6 +66,7 @@ from _lib_python import (  # noqa: E402
     receiver_field_state,
     FIELD_SET,
     exit_on_yaml_file_error,
+    non_negative_seconds,
     positive_seconds,
 )
 # Aliased: the local format_json_report() below (domain report builder,
@@ -107,8 +108,8 @@ _HELP = {
         'en': 'Connection timeout per receiver in seconds (> 0, fractions allowed; default: 10)',
     },
     'rate_limit': {
-        'zh': '每次測試之間的等待秒數（預設 0.5）',
-        'en': 'Seconds to wait between each test (default: 0.5)',
+        'zh': '每次測試之間的等待秒數（≥ 0，0 = 不等待，可帶小數；預設 0.5）',
+        'en': 'Seconds to wait between each test (>= 0, 0 = no wait, fractions allowed; default: 0.5)',
     },
 }
 
@@ -857,7 +858,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--rate-limit",
-        type=float,
+        type=non_negative_seconds,
         default=0.5,
         help=_HELP['rate_limit'][_LANG],
     )

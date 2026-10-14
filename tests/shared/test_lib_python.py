@@ -187,6 +187,79 @@ class TestPositiveSeconds:
 
 
 # ============================================================
+# non_negative_seconds / positive_int / positive_int_seconds (#2966)
+# ============================================================
+
+class TestNonNegativeSeconds:
+    @pytest.mark.parametrize("text, expected", [
+        ("0", 0.0), ("0.0", 0.0), ("-0", 0.0),   # 0 = "do not wait"
+        ("0.5", 0.5), ("1e-3", 0.001), (" 2 ", 2.0), ("30", 30.0),
+        ("9223372036", 9223372036.0),          # threading.TIMEOUT_MAX
+    ])
+    def test_accepts_finite_from_zero(self, text, expected):
+        assert lib.non_negative_seconds(text) == expected
+
+    @pytest.mark.parametrize("text", [
+        "-1", "-0.5", "-1e-9", "nan", "inf", "-inf", "abc", "", "5s",
+        "9223372037", "1e10", "1e308",        # past TIMEOUT_MAX: OverflowError later
+    ])
+    def test_refuses_the_rest(self, text):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError):
+            lib.non_negative_seconds(text)
+
+    def test_message_names_the_range(self):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError, match=r"from 0 to \d+: '-1'"):
+            lib.non_negative_seconds("-1")
+
+
+class TestPositiveInt:
+    @pytest.mark.parametrize("text, expected", [
+        ("1", 1), ("5", 5), (" 7 ", 7), ("10000000000000", 10000000000000),
+    ])
+    def test_accepts_one_and_above(self, text, expected):
+        assert lib.positive_int(text) == expected
+
+    @pytest.mark.parametrize("text, message", [
+        ("0", "must be >= 1, got 0"), ("-3", "must be >= 1, got -3"),
+        ("1.5", "not an integer: '1.5'"), ("abc", "not an integer: 'abc'"),
+        ("", "not an integer: ''"), ("nan", "not an integer: 'nan'"),
+        ("inf", "not an integer: 'inf'"),
+    ])
+    def test_refuses_the_rest(self, text, message):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            lib.positive_int(text)
+        assert str(exc.value) == message
+
+
+class TestPositiveIntSeconds:
+    @pytest.mark.parametrize("text, expected", [
+        ("1", 1), ("15", 15), ("9223372036", 9223372036),   # TIMEOUT_MAX
+    ])
+    def test_accepts_whole_seconds_above_zero(self, text, expected):
+        value = lib.positive_int_seconds(text)
+        assert value == expected and type(value) is int  # range() needs an int
+
+    @pytest.mark.parametrize("text", [
+        "0", "-1", "1.5", "0.5", "nan", "inf", "abc", "", "9223372037",
+    ])
+    def test_refuses_the_rest(self, text):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError):
+            lib.positive_int_seconds(text)
+
+    @pytest.mark.parametrize("text", ["0", "-1", "9223372037"])
+    def test_one_message_for_both_ends_of_the_range(self, text):
+        import argparse
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            lib.positive_int_seconds(text)
+        assert str(exc.value) == (
+            f"must be a whole number of seconds from 1 to 9223372036: {text!r}")
+
+
+# ============================================================
 # format_duration
 # ============================================================
 

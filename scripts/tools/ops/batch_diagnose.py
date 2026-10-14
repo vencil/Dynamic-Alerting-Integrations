@@ -45,7 +45,8 @@ from diagnose import query_prometheus  # noqa: E402
 from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
 from diagnose import CommandNotFoundError  # noqa: E402  (#2493)
 from _lib_python import (  # noqa: E402
-    add_prometheus_arg, format_json_report, positive_seconds, write_json_or_die,
+    add_prometheus_arg, format_json_report, positive_int, positive_seconds,
+    write_json_or_die,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -330,18 +331,6 @@ def print_text_report(report):
     print("=" * 60)
 
 
-def _positive_int(text):
-    """argparse type for --workers: 0 used to end in a ThreadPoolExecutor
-    traceback (rc 1, which now means "a tenant check failed")."""
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
-    if value < 1:
-        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
-    return value
-
-
 def batch_exit_code(results, environment_errors=()) -> int:
     """The run's exit code from every tenant's result (#2493).
 
@@ -376,7 +365,7 @@ def main():
                   "(default: $PROMETHEUS_URL, else http://localhost:9090)",
     )
     parser.add_argument(
-        "--workers", type=_positive_int, default=5,
+        "--workers", type=positive_int, default=5,
         help="Max parallel diagnose workers (default: 5)",
     )
     parser.add_argument(

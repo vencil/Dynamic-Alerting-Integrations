@@ -62,7 +62,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     http_get_json, write_text_secure, query_prometheus_instant,
-    add_prometheus_arg, DOCS_INSTALL_URL,
+    add_prometheus_arg, DOCS_INSTALL_URL, positive_int_seconds,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
@@ -257,10 +257,10 @@ def main():
     parser.add_argument("--tenant", required=True, help="Tenant namespace (e.g. db-a)")
     add_prometheus_arg(parser,
                        help_text="Prometheus URL (預設: $PROMETHEUS_URL，否則 http://localhost:9090)")
-    parser.add_argument("--duration", type=int, default=600,
-                        help="觀測持續時間（秒，預設: 600 = 10 分鐘）")
-    parser.add_argument("--interval", type=int, default=15,
-                        help="採樣間隔（秒，預設: 15）")
+    parser.add_argument("--duration", type=positive_int_seconds, default=600,
+                        help="觀測持續時間（正整數秒，預設: 600 = 10 分鐘）")
+    parser.add_argument("--interval", type=positive_int_seconds, default=15,
+                        help="採樣間隔（正整數秒，預設: 15）")
     parser.add_argument("--metrics", default=None,
                         help="觀測指標（逗號分隔，預設: 全部）")
     parser.add_argument("-o", "--output-dir", default="baseline_output",

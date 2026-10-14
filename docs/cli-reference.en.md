@@ -385,8 +385,8 @@ da-tools baseline --tenant <name> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--duration <SEC>` | Observation duration in seconds | `600` |
-| `--interval <SEC>` | Sampling interval in seconds | `15` |
+| `--duration <SEC>` | Observation duration in whole seconds above 0 (`0`, a negative value or a fraction exits `2`) | `600` |
+| `--interval <SEC>` | Sampling interval in whole seconds above 0 (`0`, a negative value or a fraction exits `2`) | `15` |
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
 | `-o, --output-dir <DIR>` | Output directory; both CSVs are written there (see Output below), created if missing | `baseline_output` |
 | `--dry-run` | Only show metrics to observe, don't sample | false |
@@ -418,7 +418,7 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 | Code | Description |
 |------|-------------|
 | `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
-| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured with `--interval 0` (`duration // interval` raises `ZeroDivisionError`). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit. ⛔ `--interval 0` (formerly `duration // interval` raising `ZeroDivisionError`) has exited `2` at parse time since #2966, and an unwritable output path has been `2` since #1789; neither lands here any more | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
 
 ---
@@ -461,7 +461,7 @@ Choose one mode:
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
-| `--interval <SEC>` | Monitoring interval in seconds | `60` |
+| `--interval <SEC>` | Monitoring interval in seconds (>= 0, fractions allowed; `0` = no pause between rounds, capped by `--rounds`; a negative value, `nan` or `inf` exits `2`) | `60` |
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
 | `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1%. Must be a finite number ≥ 0; `inf`, `nan` or a negative value exits 2 | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
@@ -3050,7 +3050,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--identity-groups` | X-Forwarded-Groups (an RBAC group with write perm; required for direct `--apply`) | `$DA_GOVERN_GROUPS` |
 | `--auth-token` | Bearer token (oauth2-proxy mode; or `$DA_GOVERN_TOKEN`) | - |
 | `--auth-token-file` | Path to a Bearer token file (K8s audience-bound projected SA token, read at call time; or `$DA_GOVERN_TOKEN_FILE`) | - |
-| `--throttle-seconds` | Seconds to pause between opened PRs | `2` |
+| `--throttle-seconds` | Seconds to pause between opened PRs (>= 0, fractions allowed; `0` = no pause; a negative value, `nan` or `inf` exits `2` before any PR is opened) | `2` |
 | `--timeout` | HTTP timeout in seconds for the tenant-api calls (GET / PUT), used only with `--apply`; Prometheus queries are not affected. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)) | `30` |
 | `--json` | JSON output | - |
 
@@ -3084,7 +3084,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--json` | JSON output | - |
 | `--ci` | CI mode: exit 1 if any receiver fails | - |
 | `--timeout` | Connection timeout per receiver in seconds. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
-| `--rate-limit` | Seconds to wait between each test | `0.5` |
+| `--rate-limit` | Seconds to wait between each test (>= 0, fractions allowed; `0` = no wait; a negative value, `nan` or `inf` exits `2`) | `0.5` |
 
 **Supported Receiver Types**
 

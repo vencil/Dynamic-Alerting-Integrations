@@ -11,6 +11,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ops" / "check_image_refs_resolve.py"
 
 # Load the script as a module to unit-test pure helpers directly (no subprocess).
@@ -118,3 +120,57 @@ def test_resolvable_drops_tag_when_digest_present() -> None:
     # tag-only and digest-only refs pass through unchanged.
     assert _cir._resolvable("foo/bar:1.0") == "foo/bar:1.0"
     assert _cir._resolvable("foo/bar@sha256:xyz") == "foo/bar@sha256:xyz"
+
+
+# ── #2966: --timeout must be a whole number of seconds above 0 ────────────────
+
+
+def _run(*argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *argv],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "1.5", "nan", "inf", "abc",
+                                 "2147484", "9223372036", "9223372037"])
+def test_timeout_that_judges_nothing_is_refused(tmp_path: Path, bad: str) -> None:
+    """`--timeout 0` (or negative) reported every ref as "timeout after 0s" — a
+    false verdict about registry state. Refused at parse time (rc 2), so even a
+    `--list` run (no network) says so before doing anything."""
+    proc = _run("--root", str(tmp_path), "--list", "--timeout", bad)
+    assert proc.returncode == 2, (proc.returncode, proc.stderr)
+    assert "--timeout" in proc.stderr
+
+
+@pytest.mark.parametrize("good", ["1", "5", "2147483"])
+def test_a_positive_timeout_is_accepted(tmp_path: Path, good: str) -> None:
+    """Must-fire control for the refusal above, up to the ceiling itself."""
+    proc = _run("--root", str(tmp_path), "--list", "--timeout", good)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the poll() ceiling is POSIX")
+def test_the_ceiling_is_what_subprocess_can_actually_wait() -> None:
+    """MAX_TIMEOUT_S is the poll() millisecond C-int ceiling: subprocess.run with
+    capture_output accepts it and raises OverflowError one second past it (the
+    rc 1 traceback threading.TIMEOUT_MAX used to let through)."""
+    assert _cir.MAX_TIMEOUT_S == 2147483
+    subprocess.run([sys.executable, "-c", ""], capture_output=True,
+                   timeout=_cir.MAX_TIMEOUT_S, check=True)
+    with pytest.raises(OverflowError):
+        subprocess.run([sys.executable, "-c", ""], capture_output=True,
+                       timeout=_cir.MAX_TIMEOUT_S + 1)
+
+
+def test_timeout_reaches_the_resolver_as_an_int(tmp_path: Path, monkeypatch) -> None:
+    """The verdict text says "timeout after {N}s"; it stays an int, as before."""
+    _write(tmp_path / "helm/x/values.yaml", "image:\n  repository: quay.io/o/p\n  tag: v1\n")
+    seen: list = []
+    monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: ["true"], "stub"))
+    monkeypatch.setattr(_cir, "_resolve_once",
+                        lambda cmd, timeout: (seen.append(timeout), (True, ""))[1])
+    monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py",
+                                      "--root", str(tmp_path), "--timeout", "7"])
+    assert _cir.main() == 0
+    assert seen == [7] and type(seen[0]) is int
