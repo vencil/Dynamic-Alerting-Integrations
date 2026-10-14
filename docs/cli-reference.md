@@ -1937,7 +1937,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 
 | 參數 | 用途 |
 |------|------|
-| `--socket <path>` | 監聽的 Unix socket（建立時權限 0600）。路徑上若是舊的 socket 檔就換掉；是其他種類的檔則拒絕啟動（exit 2） |
+| `--socket <path>` | 監聽的 Unix socket（建立時權限 0600；對端程序的 uid 必須與服務相同，否則不回應直接關閉；威脅模型見 `generator_service.py` 模組說明）。路徑上若是舊的 socket 檔就換掉；是其他種類的檔則拒絕啟動（exit 2） |
 | `--repo <dir>` | git repo（唯讀掛載即可）。檔案一律從 git 物件取（`git ls-tree` 加 `git cat-file`），不讀工作目錄、不用 `git archive` |
 | `--config-subdir <path>` | conf.d 在 repo 內的相對路徑 |
 | `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹；判定結束（含被終止）後刪除 |
@@ -1953,7 +1953,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `GET /v1/status` | 部署端 policy 檔是否可用（含 sha256、錯誤、`min_generator_version`）、產生器與 da-guard 版本、amtool 是否存在、`ready` |
 | `GET /metrics` | Prometheus 文字格式：快取大小（`pinned` 區分最新 base 樹裡的檔）、最近一次判定的峰值記憶體與子程序記憶體上限、各結果與各拒收原因的計數、佇列長度、版本 |
 
-每次判定在 fork 出的子程序裡做（自成 process group、設 `RLIMIT_DATA`，期限到時整組結束），一次只跑一個，其餘排隊；排隊時間算在期限內。conf.d 檔的解析結果以（git blob id, 解析模式）為 key 跨請求快取，同一棵樹只改一個檔時只重新解析那個檔。子程序每解析完一份檔就把結果交回，所以期限到被結束的判定，已完成的解析仍留在快取裡，下一筆接著做。
+每次判定在 fork 出的子程序裡做（自成 process group、設 `RLIMIT_DATA`，期限到時整組結束），一次只跑一個，其餘排隊；排隊時間算在期限內。conf.d 檔的解析結果以（檔案內容的 SHA-256, 解析模式）為 key 跨請求快取，同一棵樹只改一個檔時只重新解析那個檔。子程序每解析完一份檔就把結果交回，所以期限到被結束的判定，已完成的解析仍留在快取裡，下一筆接著做。
 
 **預熱**：啟動時（`--warm-ref`）以及收到與目前 base 不同的 `base_commit` 之後，服務在請求之外以同樣的子程序讀一次該 commit 的整棵樹，只為了填快取，不給判定、不跑 amtool；有自己的期限（`--warm-seconds`）。有請求進來時預熱立刻結束、讓請求先跑，已讀完的部分保留。`/metrics` 的 `da_generator_warm_runs_total{outcome}`（`completed`、`preempted`、`deadline`、`failed`）與 `da_generator_cache_base_coverage_ratio`（最新 base 樹的檔有多少比例已在快取裡；狀態端點同樣回報）可看預熱的狀況。
 
@@ -1962,7 +1962,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | Code | 含義 |
 |------|------|
 | 0 | 收到 SIGTERM／SIGINT 後正常結束 |
-| 2 | caller error：`--repo` 不是 git repo、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd |
+| 2 | caller error：`--repo` 不是 git repo、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd、`--max-inflight-body-bytes` 小於 `--max-body-bytes` |
 
 ---
 

@@ -36,9 +36,10 @@ _HEX = re.compile(r"[0-9a-f]+")
 # repeat record per group and measured +113 MiB on a 4 MB string.
 _B64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
 
-#: The largest ``deadline_ms`` accepted (one hour). Larger is a malformed
-#: request (400): the budget is capped far below it anyway, and an unbounded
-#: integer would overflow the float arithmetic of the deadline.
+#: The largest ``deadline_ms`` accepted (one hour). Outside 0..this is a
+#: malformed request (400): the budget is capped far below it anyway, and an
+#: unbounded integer — either sign — would overflow the float arithmetic of
+#: the deadline.
 MAX_DEADLINE_MS = 3_600_000
 
 
@@ -122,8 +123,8 @@ def parse_validate_request(body: bytes, object_format: str,
     deadline = doc["deadline_ms"]
     if isinstance(deadline, bool) or not isinstance(deadline, int):
         raise RequestError("deadline_ms must be an integer (milliseconds)")
-    if deadline > MAX_DEADLINE_MS:
-        raise RequestError(f"deadline_ms must be at most {MAX_DEADLINE_MS}")
+    if not 0 <= deadline <= MAX_DEADLINE_MS:
+        raise RequestError(f"deadline_ms must be between 0 and {MAX_DEADLINE_MS}")
 
     raw_writes = doc["writes"]
     if not isinstance(raw_writes, list):

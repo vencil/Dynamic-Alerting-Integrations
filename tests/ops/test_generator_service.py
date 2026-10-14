@@ -426,7 +426,8 @@ def test_tree_entries_are_written_by_mode(tmp_path):
     assert os.readlink(root / "link.yml") == "alpha.yaml"
     assert os.readlink(root / "sub" / "dangling.yaml") == "../../nowhere"
     assert (root / "vendor").is_dir() and not os.listdir(root / "vendor")
-    # the blob ids reported for pinning are git's own
+    # read_tree's object ids are git's own blob ids (pinning uses content
+    # SHA-256, computed from these contents)
     listed = [line.split()[:3] for line in
               h.run_git(repo, "ls-tree", "-r", commit, "--", "conf.d").splitlines()]
     assert {o for m, o, _r, _c in tree if m != "160000"} == {
@@ -894,8 +895,12 @@ def test_a_non_ascii_or_signed_content_length_is_400(world, raw_request):
 
 @pytest.mark.parametrize("body", [
     b'{"base_commit": "' + b"a" * 40 + b'", "writes": [], "deadline_ms": 1' + b"0" * 400 + b"}",
+    b'{"base_commit": "' + b"a" * 40 + b'", "writes": [], "deadline_ms": -1' + b"0" * 400 + b"}",
+    b'{"base_commit": "' + b"a" * 40 + b'", "writes": [], "deadline_ms": -5}',
+    b'{"base_commit": "' + b"a" * 40 + b'", "writes": [], "deadline_ms": true}',
     b"[" * 200000,
-], ids=["deadline-10e400", "json-depth"])
+], ids=["deadline-10e400", "deadline-minus-10e400", "deadline-negative", "deadline-bool",
+        "json-depth"])
 def test_inputs_that_used_to_end_the_connection_are_400(world, body):
     """#2901 O1: no empty answer, no traceback."""
     status, _h, data = world["svc"].raw(_post_head(len(body)) + body)
@@ -956,16 +961,41 @@ def test_shutdown_ends_the_running_judgement(tmp_path, world):
     assert still == [], still
 
 
+def _hold_body(svc, length: int) -> socket.socket:
+    """A request admitted with *length* reserved whose body never completes."""
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(str(svc.socket))
+    s.sendall(_post_head(length) + b"{")
+    time.sleep(0.3)
+    return s
+
+
+def test_an_inflight_budget_below_the_largest_body_refuses_to_start(tmp_path, world):
+    """#2901 N5: a request between the two limits could never be admitted."""
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                    args=("--max-body-bytes", "1000",
+                          "--max-inflight-body-bytes", "999"), wait=False)
+    assert svc.proc.wait(60) == 2
+    assert "--max-inflight-body-bytes" in svc.log.read_text(encoding="utf-8")
+    svc.stop()
+
+
 def test_inflight_budget_and_writes_limit_flags(tmp_path, world):
     """Each admission flag changes the answer it bounds."""
     commit = world["commits"]["clean"]
     two = [{"path": "x.yaml", "delete": True}, {"path": "y.yaml", "delete": True}]
     with h.Service(tmp_path / "a", world["repo"], bin_dir=world["bin"],
-                   args=("--max-inflight-body-bytes", "50")) as svc:
-        status, doc = svc.validate(commit)  # a body of ~85 bytes
+                   args=("--max-body-bytes", "300",
+                         "--max-inflight-body-bytes", "300")) as svc:
+        held = _hold_body(svc, 250)  # admitted, its body never completes
+        status, doc = svc.validate(commit)  # ~85 bytes: 250 + 85 > 300
         assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "busy")
+        held.close()
+        time.sleep(0.3)
+        assert svc.validate(commit)[1]["result"] == "pass"
     with h.Service(tmp_path / "c", world["repo"], bin_dir=world["bin"],
-                   args=("--max-inflight-body-bytes", "200")) as svc:
+                   args=("--max-body-bytes", "200",
+                         "--max-inflight-body-bytes", "200")) as svc:
         # each request's bytes are given back when it is answered: five in a
         # row fit a budget that holds two at once
         for _ in range(5):
@@ -1004,7 +1034,10 @@ def test_a_busy_answer_reaches_a_client_still_sending_its_body(tmp_path, world):
     reset."""
     body = b"x" * (2 * 1024 * 1024)
     with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
-                   args=("--max-inflight-body-bytes", "1000")) as svc:
+                   args=("--max-body-bytes", str(3 * 1024 * 1024),
+                         "--max-inflight-body-bytes", str(3 * 1024 * 1024))) as svc:
+        held = _hold_body(svc, 2 * 1024 * 1024)  # 2 of the 3 MiB reserved
         status, _h, data = svc.raw(_post_head(len(body)) + body)
+        held.close()
         doc = json.loads(data)
         assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "busy")

@@ -1949,7 +1949,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 
 | Parameter | Purpose |
 |------|------|
-| `--socket <path>` | Unix socket to listen on (created with mode 0600). An old socket file at the path is replaced; any other kind of file refuses the start (exit 2) |
+| `--socket <path>` | Unix socket to listen on (created with mode 0600; a peer whose uid differs from the service's is closed unanswered; the threat model is in the `generator_service.py` module docstring). An old socket file at the path is replaced; any other kind of file refuses the start (exit 2) |
 | `--repo <dir>` | The git repository (a read-only mount is enough). Files always come from git objects (`git ls-tree` plus `git cat-file`), never from the working tree and never through `git archive` |
 | `--config-subdir <path>` | conf.d's path inside the repository |
 | `--work-dir <dir>` | Scratch directory for the tree of each judgement; removed when the judgement ends (also when it is killed) |
@@ -1965,7 +1965,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `GET /v1/status` | Whether the deployment policy file is usable (with its sha256, error and `min_generator_version`), the generator and da-guard versions, whether amtool is present, `ready` |
 | `GET /metrics` | Prometheus text format: cache size (`pinned` marks files in the latest base tree), the latest judgement's peak memory and the judgement process's memory limit, counts by result and by rejection reason, queue depth, versions |
 
-Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` set, the whole group ended when the deadline passes), one at a time; the others queue, and queue time counts against the deadline. Parse results of conf.d files are cached across requests by (git blob id, parse mode), so when one file of a tree changes only that file is parsed again. The judgement process hands back each parse the moment it finishes, so a judgement ended by its deadline still leaves its completed parses in the cache, and the next request carries on from there.
+Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` set, the whole group ended when the deadline passes), one at a time; the others queue, and queue time counts against the deadline. Parse results of conf.d files are cached across requests by (SHA-256 of the file's content, parse mode), so when one file of a tree changes only that file is parsed again. The judgement process hands back each parse the moment it finishes, so a judgement ended by its deadline still leaves its completed parses in the cache, and the next request carries on from there.
 
 **Warming**: at start (`--warm-ref`), and after a request whose `base_commit` differs from the current base, the service reads that commit's whole tree in the same kind of process outside any request, only to fill the cache — no verdict, no amtool — with its own time limit (`--warm-seconds`). A request arriving ends the warming run at once and goes first; what it already read is kept. `da_generator_warm_runs_total{outcome}` (`completed`, `preempted`, `deadline`, `failed`) and `da_generator_cache_base_coverage_ratio` (the share of the latest base tree's files already cached; also on the status endpoint) in `/metrics` show how warming goes.
 
@@ -1974,7 +1974,7 @@ Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` se
 | Code | Meaning |
 |------|------|
 | 0 | Stopped normally after SIGTERM / SIGINT |
-| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created, the `RLIMIT_NOFILE` hard limit cannot hold `--max-connections` plus the reserved descriptors |
+| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created, the `RLIMIT_NOFILE` hard limit cannot hold `--max-connections` plus the reserved descriptors, `--max-inflight-body-bytes` below `--max-body-bytes` |
 
 ---
 

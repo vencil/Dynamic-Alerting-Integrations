@@ -99,8 +99,11 @@ def test_a_valid_request():
     (_body(writes=[{"path": "a", "content_b64": "", "delete": True}]), "must be"),
     (_body(writes=[{"path": "a"}]), "must be"),
     # #2901 O1 / O2: inputs that used to escape as an exception
-    (_body(deadline_ms=10 ** 400), "at most"),
-    (_body(deadline_ms=proto.MAX_DEADLINE_MS + 1), "at most"),
+    (_body(deadline_ms=10 ** 400), "between 0 and"),
+    (_body(deadline_ms=-10 ** 400), "between 0 and"),
+    (_body(deadline_ms=-1), "between 0 and"),
+    (_body(deadline_ms=proto.MAX_DEADLINE_MS + 1), "between 0 and"),
+    (_body(deadline_ms=False), "deadline_ms"),
     (b"[" * 200000, "nested too deeply"),
     (_body(writes=[{"path": f"p{i}", "delete": True} for i in range(101)]), "at most 100"),
     (_body(writes=[{"path": "a", "content_b64": "QQ"}]), "not base64"),       # unpadded
@@ -488,3 +491,98 @@ def test_out_of_descriptors_when_forking_is_busy_not_503(tmp_path, monkeypatch):
         resp = await svc.submit(_req("1" * 40, 25000), svc.loop.time())
         assert resp.status == 200 and _doc(resp)["reason"] == "busy"
     asyncio.run(scenario())
+
+
+
+@pytest.mark.parametrize("deadline", [0, proto.MAX_DEADLINE_MS])
+def test_deadline_bounds_are_accepted(deadline):
+    assert proto.parse_validate_request(_body(deadline_ms=deadline), "sha1",
+                                        100).deadline_ms == deadline
+
+
+def test_accept_errors_are_counted_and_logged_at_most_once_a_minute(capsys):
+    """#2901 N2: EMFILE on accept is a metric plus a rate-limited line, not
+    a traceback each time; anything else still reaches the default handler."""
+    import errno
+
+    class _Loop:
+        t = 1000.0
+        defaults: list = []
+
+        def time(self):
+            return self.t
+
+        def default_exception_handler(self, context):
+            self.defaults.append(context)
+
+    svc = _FakeService(delay=0)
+    loop = _Loop()
+    ctx = {"message": "socket.accept() out of system resource",
+           "exception": OSError(errno.EMFILE, "Too many open files")}
+    for _ in range(5):
+        svc.loop_exception(loop, ctx)
+    loop.t += gs.ACCEPT_ERROR_LOG_INTERVAL_SECONDS - 1
+    svc.loop_exception(loop, ctx)
+    first = capsys.readouterr().err
+    assert first.count("accept() failed with EMFILE") == 1
+    assert "Traceback" not in first
+    loop.t += 1
+    svc.loop_exception(loop, ctx)
+    svc.loop_exception(loop, {"message": "socket.accept() out of system resource",
+                              "exception": OSError(errno.ENFILE, "x")})
+    later = capsys.readouterr().err
+    assert later.count("EMFILE") == 1 and later.count("ENFILE") == 1
+    assert svc.metrics.accept_errors == {"EMFILE": 7, "ENFILE": 1}
+    text = svc._metrics().text
+    assert 'da_generator_accept_errors_total{errno="EMFILE"} 7' in text
+    svc.loop_exception(loop, {"message": "something else", "exception": ValueError()})
+    assert len(loop.defaults) == 1
+
+
+@pytest.mark.parametrize("peer", ["same", "other", "unreadable"])
+def test_only_a_peer_with_this_uid_is_served(peer):
+    """#2901: SO_PEERCRED is read from the real socket; a different (or
+    unreadable) uid is closed unanswered and counted. The uid is injected
+    through the _peer_uid seam — the test does not switch uid."""
+    import os
+    import tempfile
+    sdir = tempfile.mkdtemp(prefix="gsvcu", dir="/tmp")
+    path = os.path.join(sdir, "s.sock")
+    svc = _FakeService(delay=0)
+    seen = []
+    real = svc._peer_uid
+
+    def peer_uid(sock):
+        uid = real(sock)
+        seen.append(uid)
+        return {"same": uid, "other": uid + 1, "unreadable": None}[peer]
+
+    svc._peer_uid = peer_uid
+
+    async def scenario():
+        svc.loop = asyncio.get_running_loop()
+        server = await asyncio.start_unix_server(svc.handle, path=path)
+        try:
+            reader, writer = await asyncio.open_unix_connection(path)
+            writer.write(b"GET /v1/status HTTP/1.1\r\n\r\n")
+            await writer.drain()
+            try:
+                data = await asyncio.wait_for(reader.read(), 10)
+            except ConnectionResetError:
+                data = b""  # closed with our request unread: no answer either way
+            writer.close()
+            return data
+        finally:
+            server.close()
+
+    try:
+        data = asyncio.run(scenario())
+    finally:
+        import shutil
+        shutil.rmtree(sdir, ignore_errors=True)
+    assert seen == [os.getuid()]  # the real SO_PEERCRED read
+    if peer == "same":
+        assert data.startswith(b"HTTP/1.1 200") and svc.metrics.peer_rejected == 0
+    else:
+        assert data == b"" and svc.metrics.peer_rejected == 1
+        assert "da_generator_peer_rejected_total 1" in svc._metrics().text

@@ -38,6 +38,20 @@ process group of its own that the deadline ends with ``killpg``. What the
 judgement process sends back — the result and new parse-cache entries — is
 read within byte limits, and the cache entries are kept as opaque bytes.
 
+THREAT MODEL. (1) The trust boundary is the socket: it is created 0600, the
+peer must run as this process's uid (SO_PEERCRED, checked on every
+connection; anyone else is closed unanswered and counted in
+``da_generator_peer_rejected_total``), and only the tenant-api container
+mounts the directory holding it (the chart pins that with a test, #2902).
+(2) The adversary is an API user writing through tenant-api: what a request
+carries and how fast requests come. The admission limits (connection slots,
+in-flight body bytes, queue, writes per request) bound that relayed load;
+they are not a defence against a hostile local peer. (3) Known limits, both
+needing code execution inside the pod — which already allows writing to the
+repository with git directly: a local peer's idle connections can hold
+reserved budget until the read timeout, and a connection flood can use up
+descriptors.
+
 One judgement runs at a time; the others wait in a bounded queue. Each
 request's time budget is ``min(--max-judgement-seconds, deadline_ms -
 --deadline-reserve-seconds)`` from the moment its header has been read —
@@ -55,7 +69,9 @@ import os
 import re
 import shutil
 import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import threading
@@ -88,21 +104,13 @@ DEFAULT_DEADLINE_RESERVE_SECONDS = 5.0
 DEFAULT_MEMORY_LIMIT_BYTES = 192 * MiB
 DEFAULT_CACHE_MAX_BYTES = 32 * MiB
 DEFAULT_MAX_QUEUE = 32
-# #2901 R1, admission. The long-running process is budgeted about 80 Mi in
-# ADR-036 §3 (container 512 Mi = judgement 192 + a Go tool 192 + this
-# process). Measured on this branch (Python 3.13, 5000-tenant tree):
-#   * 38 MiB after warming the whole tree (pinned cache 3.6 MiB);
-#   * 41 MiB with all 40 connection slots held by partial 15 KiB headers
-#     (about 0.1 MiB per connection);
-#   * 49 MiB peak while one 4 MiB body is read, parsed and judged (the bytes,
-#     the parsed JSON string, transient buffers: about 2× the body);
-#   * plus at most --cache-max-bytes (32 MiB) of unpinned cache entries.
-# 49 + 32 = 81 MiB: the in-flight body budget is held to one maximal body
-# (4 MiB), which is also why the largest body is 4 MiB.
+# #2901 R1, admission: sized so that, all full, this process stays within the
+# about 80 Mi ADR-036 §3 budgets for it — the reasoning and the measurements
+# are in the pull request's description. The in-flight budget must hold at
+# least one largest body (checked at start, _check_limits).
 DEFAULT_MAX_BODY_BYTES = 4 * MiB
 DEFAULT_MAX_INFLIGHT_BODY_BYTES = 4 * MiB
 DEFAULT_MAX_CONNECTIONS = 40
-#: More writes than files in a 5000-tenant tree, two-fold.
 DEFAULT_MAX_WRITES = 10_000
 DEFAULT_READ_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RESULT_BYTES = 16 * MiB
@@ -121,6 +129,9 @@ _PR_SET_CHILD_SUBREAPER = 36
 _LINGER_SECONDS = 1.0
 _MAX_LINGERING = 16
 _SLOT_FULL_READ_SECONDS = 0.05
+#: An accept() that fails for lack of resources is counted every time and
+#: logged at most once per errno in this many seconds (#2901 N2).
+ACCEPT_ERROR_LOG_INTERVAL_SECONDS = 60.0
 _KILL_GRACE_SECONDS = 5.0
 
 _REASONS = {200: "OK", 400: "Bad Request", 404: "Not Found",
@@ -255,6 +266,8 @@ class Metrics:
     unavailable: Counter = field(default_factory=Counter)
     warm_runs: Counter = field(default_factory=Counter)
     orphans_reaped: int = 0
+    accept_errors: Counter = field(default_factory=Counter)
+    peer_rejected: int = 0
     peak_rss_bytes: int = 0
 
 
@@ -324,12 +337,35 @@ class Service:
         self.connections = 0
         self.inflight_body_bytes = 0
         self._lingering = 0
+        self._accept_logged: dict[str, float] = {}
+        self.own_uid = os.getuid()
         self.loop: asyncio.AbstractEventLoop = None  # type: ignore[assignment]
 
     # ── HTTP ──────────────────────────────────────────────────────────────
 
+    def _peer_uid(self, sock: socket.socket) -> Optional[int]:
+        """The connecting process's uid (SO_PEERCRED), None when unreadable.
+        A seam: tests replace it rather than switch uid."""
+        try:
+            creds = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                    struct.calcsize("3i"))
+        except (OSError, AttributeError):
+            return None
+        return struct.unpack("3i", creds)[1]
+
     async def handle(self, reader: asyncio.StreamReader,
                      writer: asyncio.StreamWriter) -> None:
+        # #2901: the trust boundary — only a process running as this uid
+        # (tenant-api, see the module docstring) may talk to the service.
+        # Anything else is closed at once, unanswered, and counted.
+        if self._peer_uid(writer.get_extra_info("socket")) != self.own_uid:
+            self.metrics.peer_rejected += 1
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except (ConnectionError, OSError):
+                pass
+            return
         # #2901 R1, admission (a): a connection slot before anything is read.
         # Past the limit the connection is answered busy and closed at once,
         # so no number of idle connections can take this process's fds.
@@ -853,6 +889,14 @@ class Service:
                 "# HELP da_generator_inflight_body_bytes Request body bytes reserved by requests being read or queued.",
                 "# TYPE da_generator_inflight_body_bytes gauge",
                 f"da_generator_inflight_body_bytes {self.inflight_body_bytes}"]
+        out += ["# HELP da_generator_peer_rejected_total Connections closed unanswered: the peer's uid (SO_PEERCRED) is not this process's.",
+                "# TYPE da_generator_peer_rejected_total counter",
+                f"da_generator_peer_rejected_total {self.metrics.peer_rejected}"]
+        out += ["# HELP da_generator_accept_errors_total Failed accept() of a client connection, by errno.",
+                "# TYPE da_generator_accept_errors_total counter"]
+        for name in sorted(self.metrics.accept_errors):
+            out.append(f'da_generator_accept_errors_total{{errno="{name}"}} '
+                       f"{self.metrics.accept_errors[name]}")
         out += ["# HELP da_generator_queue_depth Validate requests waiting for the running judgement.",
                 "# TYPE da_generator_queue_depth gauge",
                 f"da_generator_queue_depth {len(self.waiting)}",
@@ -886,6 +930,28 @@ class Service:
             reaped += 1
         self.metrics.orphans_reaped += reaped
         return reaped
+
+    def loop_exception(self, loop: asyncio.AbstractEventLoop, context: dict) -> None:
+        """The event loop's exception handler. #2901 N2: an accept() that
+        fails for lack of resources (EMFILE, ENFILE, …; asyncio retries it
+        itself) is counted in da_generator_accept_errors_total{errno} and
+        logged at most once per errno per ACCEPT_ERROR_LOG_INTERVAL_SECONDS,
+        without a traceback. Everything else goes to the default handler."""
+        exc = context.get("exception")
+        if (isinstance(exc, OSError)
+                and context.get("message", "").startswith("socket.accept()")):
+            name = errno.errorcode.get(exc.errno or 0, str(exc.errno))
+            self.metrics.accept_errors[name] += 1
+            now = loop.time()
+            last = self._accept_logged.get(name)
+            if last is None or now - last >= ACCEPT_ERROR_LOG_INTERVAL_SECONDS:
+                self._accept_logged[name] = now
+                print(f"generator-service: accept() failed with {name} "
+                      f"({self.metrics.accept_errors[name]} so far); new "
+                      f"connections wait until descriptors free up",
+                      file=sys.stderr, flush=True)
+            return
+        loop.default_exception_handler(context)
 
     def shutdown(self) -> None:
         if self.child_pid is not None:
@@ -1029,6 +1095,18 @@ def _jobs_dir(work_dir: str) -> str:
     return os.path.join(work_dir, "jobs")
 
 
+def _check_limits(settings: Settings) -> None:
+    """Limits that contradict each other are a caller error at start: an
+    in-flight budget below the largest body would answer busy, forever, to
+    every request whose body lies between the two."""
+    if settings.max_inflight_body_bytes < settings.max_body_bytes:
+        raise RuntimeError(
+            f"--max-inflight-body-bytes {settings.max_inflight_body_bytes} is "
+            f"below --max-body-bytes {settings.max_body_bytes}: a request in "
+            f"between could never be admitted; raise the first or lower the "
+            f"second")
+
+
 def _ensure_fd_limit(max_connections: int) -> None:
     """#2901 R1: RLIMIT_NOFILE must hold every connection slot plus
     FD_RESERVE, so running out of descriptors is decided here, at start, and
@@ -1081,6 +1159,7 @@ async def serve(settings: Settings, object_format: str) -> None:
     print(f"generator-service: listening on {settings.socket}", file=sys.stderr,
           flush=True)
     service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
+    service.loop.set_exception_handler(service.loop_exception)
     service.start_warming()
     try:
         await stop
@@ -1107,6 +1186,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         fmt = _object_format(settings.git, settings.repo)
         _prepare_work_dir(settings.work_dir)
+        _check_limits(settings)
         _prepare_socket_path(settings.socket)
         _ensure_fd_limit(settings.max_connections)
         _become_subreaper()
