@@ -70,7 +70,7 @@ paths:
                 user_severity_dedup{tenant="db-b",alertname="HighMemory"} 0
                 
                 # HELP tenant_metadata_info Tenant metadata information
-                # TYPE tenant_metadata_info info
+                # TYPE tenant_metadata_info gauge
                 tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
                 tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
                 

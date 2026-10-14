@@ -18,13 +18,16 @@ package main
 // README side: every table row under the heading, `| 項目 | 值 |`.
 // A row whose label is not in svcSpecRows, or whose value does not parse,
 // fails the test, and so does a label missing from the table. The format
-// row's value must hold one backticked media type that the Content-Type
-// starts with (promhttp appends charset and escaping parameters).
+// row's value must hold one backticked media type with a version parameter;
+// type and every parameter it names must match the Content-Type (promhttp
+// appends charset and escaping, which the docs may leave out).
 //
 // NOT COVERED: the prose around the table; the LISTEN_ADDR override (README
 // §3.2 has it); the openapi file's other schemas and descriptions.
 
 import (
+	"fmt"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -125,6 +128,32 @@ func svcSourceSpec(t *testing.T) map[string]string {
 	return want
 }
 
+// svcMediaMatch checks a documented media type against the served one: the
+// type must be equal, the doc must name a version, and every parameter the
+// doc names must have the served value.
+func svcMediaMatch(doc, served string) error {
+	dt, dp, err := mime.ParseMediaType(doc)
+	if err != nil {
+		return err
+	}
+	st, sp, err := mime.ParseMediaType(served)
+	if err != nil {
+		return fmt.Errorf("served %q: %v", served, err)
+	}
+	if dt != st {
+		return fmt.Errorf("type %s, but /metrics answers %q", dt, served)
+	}
+	if _, ok := dp["version"]; !ok {
+		return fmt.Errorf("no version parameter; /metrics answers %q", served)
+	}
+	for k, v := range dp {
+		if sp[k] != v {
+			return fmt.Errorf("%s=%s, but /metrics answers %q", k, v, served)
+		}
+	}
+	return nil
+}
+
 // svcDocTable reads the first table under heading in docs/api/<file>.
 func svcDocTable(t *testing.T, file, heading string) ([][]string, []int) {
 	t.Helper()
@@ -191,8 +220,8 @@ func TestServiceSpecReadmeParity(t *testing.T) {
 					if len(ms) != 1 {
 						t.Fatalf("%s line %d: %q must hold exactly one backticked media type", doc.file, ln, cells[1])
 					}
-					if !strings.HasPrefix(exp, ms[0][1]) {
-						t.Errorf("%s line %d: format `%s`, but /metrics answers %q", doc.file, ln, ms[0][1], exp)
+					if err := svcMediaMatch(ms[0][1], exp); err != nil {
+						t.Errorf("%s line %d: format `%s`: %v", doc.file, ln, ms[0][1], err)
 					}
 					continue
 				case r.field == "MaxHeaderBytes":
@@ -244,8 +273,8 @@ func TestServiceSpecOpenAPIMetricsMediaType(t *testing.T) {
 		t.Fatal("openapi: /metrics get 200 has no content")
 	}
 	for mt := range content {
-		if !strings.HasPrefix(want, mt) {
-			t.Errorf("openapi: /metrics 200 declares %q, but /metrics answers %q", mt, want)
+		if err := svcMediaMatch(mt, want); err != nil {
+			t.Errorf("openapi: /metrics 200 declares %q: %v", mt, err)
 		}
 	}
 }
