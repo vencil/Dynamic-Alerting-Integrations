@@ -920,17 +920,57 @@ class TestPlatformSettings:
         doc = _json(_run_cli(old, new, "--format", "json"))
         assert [(f, k) for f, k, _ in _settings(doc)] == [("_defaults.yaml", "defaults")]
 
-    def test_no_render_difference_still_exits_1(self, tmp_path):
+    def test_defaults_outside_a_carrier_is_not_read_here(self, tmp_path):
         """`defaults` 寫在非預設載體的 `_platform.yaml`：exporter 不讀，渲染沒有差異。
-        第一階段不能把它當成「完整涵蓋、沒效果」放過。"""
+        #2962：parse-tree 的 rendered_by 說這裡沒人讀 ⇒「這裡不會被讀」、rc 1，
+        不會被當成「完整涵蓋、沒效果」放過。"""
         old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},
                          {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
                           "_platform.yaml": "defaults:\n  cpu: 1\n"})
         p = _run_cli(old, new)
         assert p.returncode == 1, p.stdout + p.stderr
-        assert "**:warning: Changed, but the renders show no difference** (1)" in p.stdout
+        assert "**:warning: Not read where it is written** (1)" in p.stdout
         assert "- `_platform.yaml` `defaults` (added)" in p.stdout
-        assert p.stdout.rstrip().splitlines()[-1].startswith("No change in what the two renders show")
+
+    @pytest.mark.parametrize("rel,text", [
+        ("_platform.yaml", "tenants: {}\n"),
+        ("_profiles.yaml", "profiles:\n  unused:\n    cpu: 1\n"),
+    ], ids=["empty-tenants", "unbound-profile"])
+    def test_full_coverage_without_a_difference_is_a_note(self, tmp_path, rel, text):
+        """#2962 (ADR-037 決定 3 第二步)：完整涵蓋、讀取端就在這裡讀、渲染沒有差異
+        ⇒「沒有效果」，只附註、不影響結束碼。"""
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, base, {**base, rel: text})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        doc = _json(p)
+        assert [s[2] for s in _settings(doc)] == [cd.SETTING_NO_EFFECT]
+        assert doc["uncovered_files"] == []
+        md = _run_cli(old, new)
+        assert "**Changed, no effect on the renders that read it** (1)" in md.stdout
+
+    def test_partial_coverage_without_a_difference_still_exits_1(self, tmp_path):
+        """`state_filters` 只部分涵蓋：`reasons` 沒有渲染讀，改它渲染沒有差異，仍是 rc 1。"""
+        old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS},
+                         {"db-a.yaml": self.TENANT,
+                          "_defaults.yaml": self.DEFAULTS.replace("reasons: []", "reasons: [OOMKilled]")})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert [s[2] for s in _settings(_json(p))] == [cd.SETTING_NO_RENDER_CHANGE]
+
+    def test_a_da_guard_without_rendered_by_is_refused(self, tmp_path, monkeypatch):
+        """#2962：較舊的 da-guard 沒有 rendered_by ⇒ 不退回檔案層判斷，parse-tree 失敗、rc 2。"""
+        import _lib_parse_tree
+        real = _lib_parse_tree.run
+        def older(*a, **k):
+            doc = real(*a, **k)
+            doc.pop("rendered_by")
+            return doc
+        monkeypatch.setattr(_lib_parse_tree, "run", older)
+        base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
+        old, new = _pair(tmp_path, base, base)
+        with pytest.raises(_lib_parse_tree.ParseTreeError, match="older than this tool"):
+            cd._read_tree(new, 60)
 
     @pytest.mark.parametrize("rel,text,status", [
         ("_defaults.yaml", "defaults:\n  cpu: 80\n_custom_alerts: []\n", cd.SETTING_NOT_COMPARED),
@@ -1021,15 +1061,19 @@ class TestPlatformSettings:
         assert [r["status"] for r in doc["platform_settings"]] == [cd.SETTING_CHECKED]
         assert doc["uncovered_files"] == []
 
-    @pytest.mark.parametrize("rel", ["_platform.yaml", "team-x/_defaults.yaml", "_profiles.yaml"])
-    def test_added_platform_file_is_named(self, tmp_path, rel):
+    @pytest.mark.parametrize("rel,status,rc", [
+        ("_platform.yaml", cd.SETTING_NO_EFFECT, 0),
+        ("team-x/_defaults.yaml", cd.SETTING_NOT_READ_HERE, 1),   # nested `tenants:` is ignored
+        ("_profiles.yaml", cd.SETTING_NO_EFFECT, 0),
+    ])
+    def test_added_platform_file_is_named(self, tmp_path, rel, status, rc):
         old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT},
                          {"db-a.yaml": self.TENANT, rel: "tenants: {}\n"})
         p = _run_cli(old, new, "--format", "json")
-        assert p.returncode == 1, p.stdout + p.stderr
+        assert p.returncode == rc, p.stdout + p.stderr
         doc = _json(p)
-        assert _settings(doc) == [(rel, "tenants", cd.SETTING_NO_RENDER_CHANGE)]
-        assert doc["uncovered_files"] == [rel]
+        assert _settings(doc) == [(rel, "tenants", status)]
+        assert doc["uncovered_files"] == ([rel] if rc else [])
 
     def test_tenant_files_are_compared_not_listed(self, tmp_path):
         """租戶檔（子目錄裡的也是）由渲染比較報出，不列在平台設定；`.` 開頭的檔 exporter 不讀。"""

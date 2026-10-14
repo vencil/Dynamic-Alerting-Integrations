@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-10
-updated_at: 2026-10-13
+updated_at: 2026-10-14
 ---
 
 # ADR-037: config-diff 改為比較渲染結果
@@ -18,7 +18,7 @@ updated_at: 2026-10-13
 
 ## 狀態
 
-✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上目前分兩步的做法、由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。
+✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。2026-10-14 決定 3 改由 parse-tree 逐鍵說出讀取位置，「完整涵蓋、渲染結果沒有差異只附註」自此啟用。
 
 ## 摘要
 
@@ -84,7 +84,8 @@ updated_at: 2026-10-13
 
 - 有變、而且有面向涵蓋：照常比較渲染結果。
 - 有變、但沒有面向涵蓋：在報告裡具名列為「沒有比對」，結束碼 1。
-- 有變、表上標為**完整涵蓋**，但渲染結果沒有差異：這是真的沒有效果，例如改了一個所有租戶都自己覆寫的預設值。報告印一行「值變了，但渲染結果沒有差異」，不影響結束碼。
+- 有變、有面向涵蓋這個載體，但它寫在那個面向不讀的位置：列為「這裡不會被讀」，結束碼 1。
+- 有變、表上標為**完整涵蓋**，但渲染結果沒有差異：這是真的沒有效果，例如改了一個所有租戶都自己覆寫的預設值。報告列在「沒有效果」之下（`Changed, no effect on the renders that read it`），不影響結束碼。
 - 有變、表上標為**部分涵蓋**（已知渲染程式看不到其中一部分），而渲染結果沒有差異：列出並寫明「可能沒有效果，也可能落在比較看不到的部分」，結束碼 1。這一條防的正是 `state_filters` 補上 severity 之前那種缺口：寧可多列一行，不說「沒有變更」。
 - 表上沒有的新鍵：一律當成沒有涵蓋。
 
@@ -102,18 +103,25 @@ updated_at: 2026-10-13
 
 **兩支渲染程式都不讀的鍵。** 表上沒有的鍵（例如 `_tenant_orgs.yaml` 的 `tenant_orgs`、`_rbac.yaml` 的 `groups`）列為沒有比對，結束碼 1。報告只寫 config-diff 確定的事：exporter 與路由產生器都不讀這個鍵；在 tenant-api 相關的檔裡另附一句誰可能讀它，因為讀不讀取決於 tenant-api 怎麼部署，例如 `_rbac.yaml` 只有在 tenant-api 的 `--rbac` 指到 conf.d 時才從這裡讀。同一個檔裡渲染程式會讀的鍵（例如根目錄任何 `_` 檔裡的 `tenants:`）照常比較。沒有比對的鍵，非字串的值以原文比較：`007` 與 `7` 在 YAML 1.2 是同一個整數，但以字串讀它的程式看到的是兩個值，而這裡沒有渲染結果可以佐證。
 
-**目前的做法：分兩步。** 值以 `da-guard parse-tree` 讀出的結果比較（ADR-036：Python 不自己解析 YAML），純量比型別與值，所以只改註解、縮排、引號或鍵的順序都不算變更。parse-tree 列為沒有讀取端讀的 `_` 檔（例如 `_defaults.yaml` 旁邊另一個沒被選上的 `_defaults.yml`）內容不在它的輸出裡，以位元組比較，有差異就列為「這裡不會被讀」。渲染程式所讀的鍵，若寫在那支程式根本不讀的檔裡（parse-tree 會說每個檔由哪些讀取端讀），也列為「這裡不會被讀」。但目前還分不出「真的沒有效果」與「寫在讀取端不讀的位置」：同一個鍵寫在哪個檔、哪一層，決定讀取端讀不讀它，例如 `defaults` 只在預設檔（`_defaults.yaml`）裡被讀，`tenants:` 寫在子目錄的 `_` 檔不會被讀。所以在讀取端能逐鍵說出它讀哪些位置之前，上面「標為完整涵蓋、渲染結果沒有差異：只印一行、不影響結束碼」這一條暫不啟用：值變了而涵蓋它的渲染結果沒有差異，一律列出並以結束碼 1 結束。
+**怎麼知道寫在那裡有沒有人讀。** 值以 `da-guard parse-tree` 讀出的結果比較（ADR-036：Python 不自己解析 YAML），純量比型別與值，所以只改註解、縮排、引號或鍵的順序都不算變更。同一個鍵寫在哪個檔、哪一層，決定讀取端讀不讀它：例如 `defaults` 只在預設檔（`_defaults.yaml`）裡被讀，`tenants:` 寫在子目錄的 `_` 檔不會被讀。parse-tree 對每個 `_` 檔的每個載體，輸出「改它會影響哪一份渲染結果」（`rendered_by`：`exporter` 是 served-values，`generator` 是路由），config-diff 只在那個面向真的讀這個位置時才算涵蓋，其餘列為「這裡不會被讀」、結束碼 1。parse-tree 的輸出裡沒有這一項時（da-guard 比 config-diff 舊），config-diff 以結束碼 2 結束，不退回只看「這個檔有誰讀」的判斷，因為那會把寫在不讀位置的鍵當成有涵蓋。這份逐鍵的答案由 CI 測試以實際渲染驗證：每個載體寫在每種位置各改一次，斷言出現差異的面向恰好是 parse-tree 說的那些。parse-tree 列為沒有讀取端讀的 `_` 檔（例如 `_defaults.yaml` 旁邊另一個沒被選上的 `_defaults.yml`）內容不在它的輸出裡，以位元組比較，有差異就列為「這裡不會被讀」。
 
-範例：在根目錄的 `_platform.yaml` 加上 `defaults: {cpu: 1}`（這個檔不是預設檔，exporter 不讀它的 `defaults`），報告的「Platform Settings」段列出：
+範例一：在根目錄的 `_platform.yaml` 加上 `defaults: {cpu: 1}`（這個檔不是預設檔，exporter 不讀它的 `defaults`），報告的「Platform Settings」段列出下面這段，結束碼 1：
 
 ```text
-**:warning: Changed, but the renders show no difference** (1)
+**:warning: Not read where it is written** (1)
 
 - `_platform.yaml` `defaults` (added)
-  - the renders show no difference: it may have no effect, or a reader may not read it where it is written
+  - no render reads this key where it is written
 ```
 
-結束碼 1。
+範例二：在根目錄加一個只有 `tenants: {}` 的 `_platform.yaml`（`tenants` 標為完整涵蓋，這裡也有人讀，但空的區塊不改變任何渲染結果），列出下面這段，結束碼 0：
+
+```text
+**Changed, no effect on the renders that read it** (1)
+
+- `_platform.yaml` `tenants` (added)
+  - read here by the renders that show it in full, which show no difference: the change has no effect on them
+```
 
 ### 4. 結束碼與報告
 

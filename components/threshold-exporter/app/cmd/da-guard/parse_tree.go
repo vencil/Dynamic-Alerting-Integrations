@@ -3,13 +3,16 @@ package main
 // parse-tree: the conf.d "parse result" of ADR-036 §2, as JSON (#2897) —
 // which files each reader reads, every readable file's content as yaml.v3
 // decodes it, and the files that cannot be read, each with a fixed kind.
-// No reader consumes it yet; ADR-036's switch moves the Python side onto it.
+// config-diff and migration-audit read it (scripts/tools/_lib_parse_tree.py).
 //
 // ⛔ NO RULES OF ITS OWN. Which files exist is the exporter's walker
 // (config.ScanDirTree: hidden names, extensions in any case, directories
 // below the root, the one defaults carrier per directory); which of them
 // the route generator reads besides is stated once, in readersFor, from
 // `_grar_parse._parse_config_files`; what a file holds is internal/parsetree.
+// The one table of its own is rendered_by (rendered_by.go): which render a
+// platform carrier reaches where it is written, held to the renders by
+// tests/shared/test_parse_tree_rendered_by.py.
 
 import (
 	"encoding/json"
@@ -81,6 +84,12 @@ type parseTreeDoc struct {
 	Files map[string]parsetree.Content `json:"files"`
 	// Unreadable: each file no reader can read, with a parsetree.Kind.
 	Unreadable []parseTreeUnreadable `json:"unreadable"`
+	// RenderedBy (#2962): for each readable `_` file in Files, the platform
+	// carriers it holds (renderedByKeys) → the readers whose render a change
+	// to that key can alter; [] = no render reads it there. A key outside
+	// renderedByKeys is absent (not answered). Added beside the v1 fields
+	// (ADR-036 §2): a reader that needs it must refuse a document without it.
+	RenderedBy map[string]map[string][]string `json:"rendered_by"`
 }
 
 type parseTreeNotRead struct {
@@ -126,7 +135,13 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"                                       in file mode also hidden, not_config_name,\n"+
 			"                                       parent_not_walked)\n"+
 			"   \"files\": {<path>: <content>},  every readable selected file\n"+
-			"   \"unreadable\": [{\"file\", \"kind\", \"message\"}]}  every selected file that cannot be read\n"+
+			"   \"unreadable\": [{\"file\", \"kind\", \"message\"}],  every selected file that cannot be read\n"+
+			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}}}  for each readable `_` file,\n"+
+			"                                       its platform carriers (defaults, state_filters,\n"+
+			"                                       optional_overrides, profiles, tenants,\n"+
+			"                                       _routing_defaults, _routing_enforced, routing_profiles)\n"+
+			"                                       and the renders a change to one there can alter;\n"+
+			"                                       [] = read by nothing there; other keys are absent\n"+
 			"Paths are relative to --config-dir, with '/'; <dir> is \".\" for the root. The keys of\n"+
 			"\"selected\" are the keys of \"files\" plus the files of \"unreadable\".\n"+
 			"Readers: the exporter reads every tenant file, the root's platform (`_`) files and each\n"+
@@ -243,7 +258,7 @@ func newParseTreeDoc(mode string) *parseTreeDoc {
 		Schema: parseTreeSchema, DaGuardVersion: Version, Mode: mode,
 		Selected: map[string][]string{}, DefaultsCarriers: map[string]string{},
 		NotRead: []parseTreeNotRead{}, Files: map[string]parsetree.Content{},
-		Unreadable: []parseTreeUnreadable{},
+		Unreadable: []parseTreeUnreadable{}, RenderedBy: map[string]map[string][]string{},
 	}
 }
 
@@ -282,6 +297,9 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 		}
 		doc.Selected[rel] = readers
 		doc.Files[rel] = content
+		if rb := renderedBy(rel, confdname.IsDefaults(path.Base(rel)) && selected[f.AbsPath], content); rb != nil {
+			doc.RenderedBy[rel] = rb
+		}
 	}
 	for _, u := range scan.Unreadable {
 		readers := []string{readerExporter, readerGenerator}
@@ -328,6 +346,7 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 		doc.Unreadable = append(doc.Unreadable, parseTreeUnreadable{File: rel, Kind: issue.kind, Message: issue.msg})
 		return doc, nil
 	}
+	carrier := false
 	if reason == "" {
 		selected := true
 		if confdname.IsDefaults(path.Base(rel)) {
@@ -343,6 +362,7 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 			}
 			chosen := config.SelectDefaultsCarriers(set).ByDir[dir]
 			selected = chosen == abs
+			carrier = selected
 			d, err := relTo(scan.AbsRoot, dir)
 			if err != nil {
 				return nil, err
@@ -366,6 +386,9 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (*parseTreeDoc
 		doc.Unreadable = append(doc.Unreadable, parseTreeUnreadable{File: rel, Kind: bad.Kind, Message: bad.Message})
 	} else {
 		doc.Files[rel] = content
+		if rb := renderedBy(rel, carrier, content); rb != nil && reason == "" {
+			doc.RenderedBy[rel] = rb
+		}
 	}
 	return doc, nil
 }

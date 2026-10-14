@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the current two-step approach, the carriers that CI checks own, and how files neither renderer reads are listed.
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the carriers that CI checks own, and how files neither renderer reads are listed. On 2026-10-14 decision 3 started reading where each key is read from parse-tree, which turns on "fully covered, no difference: a note only".
 
 ## Summary
 
@@ -78,7 +78,8 @@ The rendered results cover only the settings in the table above. Below, each top
 
 - Changed and covered: the rendered results are compared as usual.
 - Changed but not covered: the report names it as "not compared"; exit code 1.
-- Changed, marked **fully covered**, but no difference in the rendered results: it really has no effect, for example a default every tenant overrides. The report prints one line, "the value changed but the rendered result did not", and the exit code is unaffected.
+- Changed, covered, but written where the covering view does not read it: listed as "not read here"; exit code 1.
+- Changed, marked **fully covered**, but no difference in the rendered results: it really has no effect, for example a default every tenant overrides. The report lists it under "no effect" (`Changed, no effect on the renders that read it`), and the exit code is unaffected.
 - Changed, marked **partly covered** (a renderer is known not to see part of it), and no difference in the rendered results: listed, stating "either it has no effect or it lies in the part the comparison does not see"; exit code 1. This rule exists for exactly the kind of gap `state_filters` had before its severity was added: one extra line is better than saying "no changes".
 - A new key not in the table: treated as not covered.
 
@@ -96,18 +97,25 @@ Carriers not covered yet, and when they will be:
 
 **Keys neither renderer reads.** A key not in the table (for example `tenant_orgs` in `_tenant_orgs.yaml`, `groups` in `_rbac.yaml`) is listed as not compared, exit code 1. The report states only what config-diff knows for certain, that neither the exporter nor the route generator reads the key; in tenant-api's files it adds one line on who may read it, because that depends on how tenant-api is deployed: `_rbac.yaml`, for example, is read from conf.d only when tenant-api's `--rbac` points there. A key in the same file that a renderer does read (such as `tenants:` in any root `_` file) is compared as usual. For a key that is not compared, a value that is not a string is compared by its source text: `007` and `7` are the same integer in YAML 1.2, but a program that reads them as strings sees two values, and no rendered result can vouch for either.
 
-**Current approach: two steps.** Values are compared as `da-guard parse-tree` reads them (ADR-036: Python does not parse the YAML itself); scalars by type and value, so a change only to comments, indentation, quoting or key order is no change. A `_` file parse-tree reports as read by no reader (such as an unselected `_defaults.yml` beside `_defaults.yaml`) has no content in its output; it is compared byte for byte and, when it differs, listed as "not read here". A key a renderer reads, written in a file that renderer does not read at all (parse-tree says which readers read each file), is listed as "not read here" too. What cannot be told apart yet is "really has no effect" from "written where no reader reads it": which file and which level a key is written in decides whether a reader reads it. `defaults`, for example, is read only in a defaults file (`_defaults.yaml`), and `tenants:` in a `_` file in a sub-directory is not read. So until the readers can say, key by key, where they read it, the rule above for a **fully covered** carrier ("one line, exit code unaffected") is not applied: a changed value whose covering renders show no difference is always listed, with exit code 1.
+**How config-diff knows whether a key is read where it is written.** Values are compared as `da-guard parse-tree` reads them (ADR-036: Python does not parse the YAML itself); scalars by type and value, so a change only to comments, indentation, quoting or key order is no change. Which file and which level a key is written in decides whether a reader reads it: `defaults`, for example, is read only in a defaults file (`_defaults.yaml`), and `tenants:` in a `_` file in a sub-directory is not read. For every carrier of every `_` file, parse-tree outputs which rendered result a change to it can alter (`rendered_by`: `exporter` is served-values, `generator` the routes); config-diff counts a carrier as covered only where that view really reads it, and lists it as "not read here", exit code 1, everywhere else. When parse-tree's output has no such entry (a da-guard older than config-diff), config-diff exits 2 rather than falling back to "which readers read this file", which would call a key written where nothing reads it covered. A CI test holds this per-key answer to the actual renders: each carrier is changed once in each location, and the views that change must be exactly the ones parse-tree names. A `_` file parse-tree reports as read by no reader (such as an unselected `_defaults.yml` beside `_defaults.yaml`) has no content in its output; it is compared byte for byte and, when it differs, listed as "not read here".
 
-Example: add `defaults: {cpu: 1}` to the root `_platform.yaml` (not a defaults file, so the exporter does not read its `defaults`). The report's "Platform Settings" section lists:
+Example one: add `defaults: {cpu: 1}` to the root `_platform.yaml` (not a defaults file, so the exporter does not read its `defaults`). The report's "Platform Settings" section lists the following, exit code 1:
 
 ```text
-**:warning: Changed, but the renders show no difference** (1)
+**:warning: Not read where it is written** (1)
 
 - `_platform.yaml` `defaults` (added)
-  - the renders show no difference: it may have no effect, or a reader may not read it where it is written
+  - no render reads this key where it is written
 ```
 
-Exit code 1.
+Example two: add a root `_platform.yaml` holding only `tenants: {}` (`tenants` is fully covered and read here, but an empty block changes no rendered result). It lists the following, exit code 0:
+
+```text
+**Changed, no effect on the renders that read it** (1)
+
+- `_platform.yaml` `tenants` (added)
+  - read here by the renders that show it in full, which show no difference: the change has no effect on them
+```
 
 ### 4. Exit codes and the report
 

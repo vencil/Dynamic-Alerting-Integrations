@@ -86,14 +86,13 @@ _RFC3339 = re.compile(
 # value), so a comment, a re-indent or another quoting of the same string is
 # no change; the report names keys, never values.
 #
-# ⛔ Stage 1 of decision 3 (owner decision on #1516, 2026-10-13): a changed
-# carrier that a render covers but whose renders show no difference exits 1,
-# full coverage or not. Where a key is written decides whether a reader reads
-# it at all (`defaults` outside a defaults carrier, `tenants:` in a nested
-# `_` file, ...), and nothing here knows that per key yet — reading it from
-# Go is #2962. Until then "no difference" cannot be told from "not read
-# there", and "full coverage: a note, exit code unaffected" would hide the
-# second.
+# Decision 3, stage 2 (#2962): where a key is written decides whether a
+# reader reads it at all (`defaults` outside a defaults carrier, `tenants:` in
+# a nested `_` file, ...). parse-tree's `rendered_by` answers that per key,
+# so a carrier no render reads where it is written is "not read here" (exit
+# 1), and one its render reads there in full but shows no difference for is
+# "no effect" (a note, exit code unaffected). A partly covered carrier with no
+# difference still exits 1: the part no render reads may matter.
 
 VIEW_PLATFORM = "platform"
 # The parse-tree reader behind each render.
@@ -101,7 +100,8 @@ _VIEW_READER = {rd.VIEW_SERVED: "exporter", rd.VIEW_ROUTES: "generator"}
 
 # Carrier -> (views that render it, coverage). Coverage is what the
 # self-test (tests/ops/test_config_diff_carriers.py) holds the renders to;
-# in stage 1 it changes no exit code.
+# it also decides the exit code: "full" with no difference is "no effect"
+# (a note), "partial" with no difference exits 1 (#2962).
 RENDERED_CARRIERS = {
     "defaults": ((rd.VIEW_SERVED,), "full"),
     "optional_overrides": ((rd.VIEW_SERVED,), "partial"),  # the list itself is not served
@@ -156,6 +156,10 @@ OTHER_SERVICE_FILES = {
 
 # Row statuses, and which of them raise the exit code to 1.
 SETTING_RENDERED = "rendered"            # a view that covers it shows changes
+# #2962 (ADR-037 decision 3, stage 2): a fully covered carrier, read by its
+# render right where it is written, whose renders show no difference — the
+# change has no effect on them. A note; the exit code is not raised.
+SETTING_NO_EFFECT = "no_effect"
 SETTING_NO_RENDER_CHANGE = "no_render_change"
 SETTING_CHECKED = "checked"
 SETTING_NOT_READ_HERE = "not_read_here"
@@ -164,7 +168,7 @@ SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
                                 SETTING_NOT_COMPARED})
 
 _EMPTY_TREE = {"files": {}, "unreadable": [], "not_read": [], "selected": {},
-               "defaults_carriers": {}}
+               "defaults_carriers": {}, "rendered_by": {}}
 
 
 def _canonical(node, *, by_text=False):
@@ -207,7 +211,15 @@ def _read_tree(conf_d, timeout):
     config (a first import). Raises `_lib_parse_tree.ParseTreeError`."""
     if not rd.has_config(conf_d):
         return _EMPTY_TREE
-    return _lib_parse_tree.run(conf_d, None, timeout)
+    doc = _lib_parse_tree.run(conf_d, None, timeout)
+    # #2962: which reader reads a key WHERE it is written. A da-guard without
+    # it is older than this tool; falling back to the file-level `selected`
+    # would call a key covered that no reader reads there.
+    if not isinstance(doc.get("rendered_by"), dict):
+        raise _lib_parse_tree.ParseTreeError(
+            "da-guard parse-tree wrote no `rendered_by` (#2962): this da-guard is older "
+            "than this tool; use the da-guard from the same release")
+    return doc
 
 
 def _platform_files(doc):
@@ -298,14 +310,18 @@ def _classify(rel, key, change, stem, doc, changed_views, view_status):
         if stem in OTHER_SERVICE_FILES:
             note += "; " + OTHER_SERVICE_FILES[stem]
         return _setting_row(rel, key, change, SETTING_NOT_COMPARED, note)
-    # A view counts only where its reader reads the file at all (parse-tree's
-    # `selected`); which keys of the file it reads is #2962.
-    readers = (doc.get("selected") or {}).get(rel) or []
+    # #2962: a view counts only where its reader reads THIS key in THIS file
+    # (parse-tree's `rendered_by`, held to the renders by
+    # tests/shared/test_parse_tree_rendered_by.py).
+    readers = ((doc.get("rendered_by") or {}).get(rel) or {}).get(key)
+    if readers is None:
+        return _setting_row(rel, key, change, SETTING_NOT_COMPARED,
+                            "parse-tree does not say which reader reads this key here")
     views = tuple(v for v in RENDERED_CARRIERS[key][0]
                   if _VIEW_READER[v] in readers)
     if not views:
         return _setting_row(rel, key, change, SETTING_NOT_READ_HERE,
-                            "no reader that renders this key reads this file")
+                            "no render reads this key where it is written")
     if any(view_status.get(v) != "computed" for v in views):
         return _setting_row(rel, key, change, SETTING_NOT_COMPARED,
                             "a view that renders it was not computed or not compared", views)
@@ -313,9 +329,13 @@ def _classify(rel, key, change, stem, doc, changed_views, view_status):
         return _setting_row(rel, key, change, SETTING_RENDERED,
                             "the renders that read it changed; which of those changes "
                             "come from this key is not told apart", views)
+    if RENDERED_CARRIERS[key][1] == "full":
+        return _setting_row(rel, key, change, SETTING_NO_EFFECT,
+                            "read here by the renders that show it in full, which show no "
+                            "difference: the change has no effect on them", views)
     return _setting_row(rel, key, change, SETTING_NO_RENDER_CHANGE,
-                        "the renders show no difference: it may have no effect, or a reader "
-                        "may not read it where it is written", views)
+                        "the renders show no difference, and part of this key is read by no "
+                        "render (partial coverage): it may matter elsewhere", views)
 
 
 def _platform_view(old_dir, new_dir, timeout):
@@ -1034,6 +1054,7 @@ def _render_views(report, lines):
 
 _SETTING_HEADINGS = (
     (SETTING_NO_RENDER_CHANGE, ":warning: Changed, but the renders show no difference"),
+    (SETTING_NO_EFFECT, "Changed, no effect on the renders that read it"),
     (SETTING_NOT_READ_HERE, ":warning: Not read where it is written"),
     (SETTING_NOT_COMPARED, ":warning: Not compared"),
     (SETTING_CHECKED, "Checked by CI, not compared"),
