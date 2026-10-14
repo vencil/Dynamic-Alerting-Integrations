@@ -190,7 +190,7 @@ func NewConfigMetrics() *ConfigMetrics {
 		}),
 		ProfileRoutingKeys: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_profile_routing_keys",
-			Help: "Number of routing-layer keys (`_severity_dedup`, and every key starting with `_routing`) written in the threshold profiles (`profiles:`) of the committed config (#2914), counted per (file, profile, key). The route generator reads these keys from a tenant's own entry only, never from a threshold profile, so the exporter does not apply them either: a tenant on such a profile gets neither the profile's routing nor its severity dedup. Move `_routing` to a routing profile in `_routing_profiles.yaml` (elected by the tenant's `_routing_profile`) or to the tenant's own `_routing`, and `_severity_dedup` to the tenant's own entry. State-coded: re-Set on every config commit, so it returns to 0 once the profiles no longer write them. The accompanying ERROR (once per commit) names file, profile and key; `da-guard` reports each as routing_in_unread_location. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
+			Help: "Number of routing-layer keys (`_severity_dedup`, and every key starting with `_routing`) written in the threshold profiles (`profiles:`) of the committed config, counted per (file, profile, key); the exporter does not fill them into any tenant. Why, and where they belong: da-guard's routing_in_unread_location (docs/cli-reference.md#guard). State-coded: re-Set on every config commit, so it returns to 0 once the profiles no longer write them. The accompanying ERROR (once per commit) names file, profile and key. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}),
 	}
 }

@@ -29,7 +29,7 @@
     },
     "profiles": {
       "title": "ThresholdConfig.profiles — threshold profiles (name → keys a tenant on `_profile: <name>` gets filled in); usually in _profiles.yaml, read from any `_` file at the conf.d root",
-      "description": "Profile names are dynamic → each profile's values are left loose, except: a profile may not carry `_severity_dedup` or any key starting with `_routing` (#2914). The route generator reads those keys from a tenant's own entry only, never from a threshold profile, and the exporter does not apply them from one either (it logs an ERROR, counts da_config_profile_routing_keys; da-guard reports routing_in_unread_location, validate-config's profiles row fails). Routing belongs in `_routing_profiles.yaml` (`routing_profiles:`, elected by the tenant's `_routing_profile`) or the tenant's own `_routing`; `_severity_dedup` in the tenant's own entry. `_metadata` is allowed: it is filled in like a threshold (docs/design/config-driven.md).",
+      "description": "Profile names are dynamic → each profile's values are left loose, except: a profile may not carry `_severity_dedup` or any key starting with `_routing` (#2914; why, and where they belong: da-guard's routing_in_unread_location in docs/cli-reference.md#guard). `_metadata` is allowed.",
       "additionalProperties": {
         "propertyNames": {
           "not": {

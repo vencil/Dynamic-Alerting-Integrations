@@ -39,12 +39,8 @@ var rootTopLevelRoutingKeys = map[string]bool{
 //     exporter's decode, so da-guard skips it as parse_failed, exit 3);
 //  2. inside a profile of a root platform file's `profiles:` block (the
 //     threshold `_profile` mechanism; routing profiles are
-//     `_routing_profiles.yaml`'s `routing_profiles:`). Here the keys are
-//     every routing-layer key (config.IsRoutingLayerKey: `_severity_dedup`
-//     and every key starting with `_routing`, #2914) — the exporter's own
-//     predicate for the keys its profile expansion refuses to fill in, so
-//     the finding names exactly what the exporter ignores. The generator
-//     never reads any of them from a threshold profile either.
+//     `_routing_profiles.yaml`'s `routing_profiles:`): every key
+//     config.IsRoutingLayerKey accepts (#2914).
 //
 // defaults are the carriers the chains read (config.ScopedTenants.
 // DefaultsFiles); the root platform files are read from configDir. skip

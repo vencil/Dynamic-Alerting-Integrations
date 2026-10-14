@@ -194,7 +194,7 @@ db-b sets `container_memory` to 90 itself, so it is unaffected.
 - **Keys the exporter does not serve** (such as `_namespaces`): served-values lists them as "not served", so a change is still seen, but the report can only say "the config changed", not "alerting behaviour changed".
 - **Sibling nodes with identical matchers** are paired by order; if their order changes, the report may show one removal and one addition.
 - **Loosening or removing a rule does not show**: `domain_policies` and `_policies` are listed as notes only, so loosening or removing a rule is not blocked by CI and does not raise the exit code; a violated `_policies` rule of `severity: warning` does not fail CI either.
-- **`_routing` written in a profile**: the exporter applies it, the route generator does not read it. The report lists a setting change in the exporter plane and nothing in the routing plane; that is two readers disagreeing ([#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)), not something the comparison misses.
+- **Routing-layer keys written in a threshold profile** (`_routing`, `_severity_dedup`, …): neither reader applies them, so the report lists such a change as having no effect (no_effect); why is under [`routing_in_unread_location`](../cli-reference.en.md#guard).
 - **The platform's blast-radius report** (`blast_radius.py`) overlaps with this decision; retiring it is evaluated separately.
 
 ## Rejected alternatives

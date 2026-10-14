@@ -478,12 +478,9 @@ def _is_routing_key(key: object) -> bool:
 
 
 def _is_routing_layer_key(key: object) -> bool:
-    """``_severity_dedup`` or any key starting with ``_routing`` — a key of
-    the routing layer (Go: ``config.IsRoutingLayerKey``). This reader takes
-    each of them from a tenant's own entry only (``_parse_tenant_overrides``:
-    route, receiver, inhibit rule), never from a threshold profile, and since
-    #2914 the exporter does not fill one in from a profile either — so in a
-    profile every such key is unread, not only the routing keys."""
+    """``_severity_dedup`` or any key starting with ``_routing`` (Go:
+    ``config.IsRoutingLayerKey``; #2914, why: ``routing_in_unread_location``
+    in docs/cli-reference.md#guard)."""
     return isinstance(key, str) and (key == "_severity_dedup" or key.startswith("_routing"))
 
 
@@ -522,9 +519,8 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
        carrier (root or below) — field ``defaults.<key>``;
     2. inside a threshold profile of a root platform file's ``profiles:``
        mapping (``_profile``; routing profiles are ``routing_profiles:``) —
-       field ``profiles.<name>.<key>``. Here every routing-layer key
-       (``_is_routing_layer_key``: ``_severity_dedup`` too, #2914), as
-       da-guard names them; a profile that is not a mapping carries none.
+       field ``profiles.<name>.<key>``, every key ``_is_routing_layer_key``
+       accepts; a profile that is not a mapping carries none.
 
     Each is a ``WARN … skipping`` line (blocking under ``--validate``, as the
     #2326 F3 shape of this kind is) and a routing-tree record for the parity

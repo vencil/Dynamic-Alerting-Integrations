@@ -432,6 +432,26 @@ class TestProfilesCheck:
             assert any(x.startswith("_platform.yaml: profiles.unused._severity_dedup ") for x in named), result
             assert any(x.startswith("_platform.yaml: profiles.unused._routing_profile ") for x in named), result
 
+    def test_dotted_profile_name_or_key_is_only_a_fail(self):
+        """#2914: a `.` in a profile name or in a key does not split da-guard's
+        `<file>:profiles.<profile>.<key>` field wrongly, so the key is the
+        FAIL alone — not also a reserved-key WARN of the structure check."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n"
+                                  "    _routing_v1.2: x\n"
+                                  "  team.x:\n    mysql_connections: 80\n"
+                                  "    _routing.a: x\n    _severity_dedup: disable\n",
+                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+            })
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.FAIL, result
+            for field in ("p._routing_v1.2", "team.x._routing.a", "team.x._severity_dedup"):
+                assert any(x.startswith(f"_profiles.yaml: profiles.{field} is not rendered")
+                           for x in result["details"]), (field, result)
+            assert not [x for x in result["details"] if x.startswith("profile=")], result
+
     def test_metadata_in_profile_passes(self):
         """#2914: a profile's `_metadata` is a documented fill-in (#2830), not
         a reserved key to warn about."""

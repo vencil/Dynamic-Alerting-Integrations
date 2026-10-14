@@ -200,7 +200,7 @@ db-b 自己把 `container_memory` 設成 90，所以不受影響。
 - **exporter 不送出的鍵**（例如 `_namespaces`）：served-values 把它列在「沒有送出」的清單裡，變更仍比得到，但報告只能說「設定變了」，不能說「告警行為變了」。
 - **matcher 完全相同的兄弟節點**：只能依出現順序對應。順序改變時，可能報成一刪一增。
 - **放寬或刪除規則看不出來**：`domain_policies`、`_policies` 只列為提示，放寬或刪除一條規則不會被 CI 擋，報告也不會以結束碼標出；`severity: warning` 的 `_policies` 規則違反時，CI 也不會失敗。
-- **profile 裡寫的 `_routing`**：exporter 會套用，路由產生器不讀。報告在 exporter 的面向列出設定變更，路由面向沒有變化；這是兩個讀取端不一致（[#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)），不是比較漏掉。
+- **閾值 profile 裡寫的路由層鍵**（`_routing`、`_severity_dedup` 等）：兩個讀取端都不套用，報告把這種變更列為「沒有效果」（no_effect）；為什麼見 [`routing_in_unread_location`](../cli-reference.md#guard)。
 - **平台的 blast-radius 報告**（`blast_radius.py`）與本決策重疊，之後另行評估是否退役。
 
 ## 考慮過但否決

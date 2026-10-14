@@ -49,9 +49,7 @@ func publishProfileRoutingKeys(metrics *configMetrics, logger *log.Logger, keys 
 		names = append(names, fmt.Sprintf("%s: profile %q key %s", k.File, k.Profile, k.Key))
 	}
 	logger.Printf("ERROR: %d routing-layer keys in threshold profiles are not applied (#2914): %s%s — "+
-		"a threshold profile may not carry `_severity_dedup` or any `_routing*` key, because the route generator "+
-		"never reads them from a profile; move `_routing` to `_routing_profiles.yaml` (elected by the tenant's "+
-		"`_routing_profile`) or to the tenant's own `_routing`, and `_severity_dedup` to the tenant's own entry, "+
-		"then delete them from the profile",
+		"a threshold profile may not carry `_severity_dedup` or any `_routing*` key; why, and where they "+
+		"belong: routing_in_unread_location in docs/cli-reference.md#guard",
 		len(keys), strings.Join(names, ", "), more)
 }

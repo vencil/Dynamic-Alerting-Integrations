@@ -288,14 +288,7 @@ func withProfileText(body map[string]any, texts map[string]string, tenantID stri
 // skipped only because it is declared without a platform value — never for
 // one the tenant sets itself (that would report a non-event).
 //
-// ⛔ A ROUTING-LAYER KEY IS NEVER FILLED IN (#2914). `_severity_dedup` and
-// the `_routing*` keys (IsRoutingLayerKey) are read by the route generator,
-// and it reads them from the tenant's own entry only — never from a
-// threshold profile. Filling them in made the exporter's answer (its
-// /effective, `user_severity_dedup`, `da-guard served-values`) differ from
-// the routes and inhibit rules Alertmanager actually gets. Such a key in a
-// profile is an error: ProfileRoutingKeys names it, the exporter logs it,
-// and da-guard reports routing_in_unread_location (routingpolicy.UnreadRouting).
+// ⛔ A routing-layer key (IsRoutingLayerKey) is never filled in (#2914).
 func profileFill[V, O any](canonProfile map[string]V, own map[string]O, canonDeclared map[string]struct{}, onDeclared func(key string)) map[string]V {
 	var fill map[string]V
 	for key, profileValue := range canonProfile {
@@ -573,10 +566,7 @@ func ProfileKeysSetBy(own map[string]any, keys []string) bool {
 }
 
 // ProfileRoutingKey is one routing-layer key (IsRoutingLayerKey) a threshold
-// profile writes (#2914): the file, the profile and the key. The profile
-// expansion ignores it (profileFill); it belongs in the tenant's own entry
-// (`_routing`, `_severity_dedup`) or in a routing profile
-// (`_routing_profiles.yaml`, elected by the tenant's `_routing_profile`).
+// profile writes (#2914): the file, the profile and the key.
 type ProfileRoutingKey struct {
 	File    string `json:"file"`
 	Profile string `json:"profile"`

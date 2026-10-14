@@ -1300,8 +1300,7 @@ def _canonical_view(m: dict) -> dict:
 
 def _is_routing_layer_key(key: str) -> bool:
     """Go `IsRoutingLayerKey` (#2914): `_severity_dedup` or a key starting
-    with `_routing` — the keys the route generator reads from a tenant's own
-    entry, which a threshold profile may not carry."""
+    with `_routing`."""
     return key == "_severity_dedup" or key.startswith("_routing")
 
 
