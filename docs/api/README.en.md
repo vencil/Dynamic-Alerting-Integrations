@@ -22,7 +22,9 @@ Threshold Exporter is the core component of the Multi-Tenant Dynamic Alerting pl
 | Write Timeout | 10 seconds |
 | Idle Timeout | 30 seconds |
 | Max Header Size | 8192 bytes |
-| Metric Format | OpenMetrics text format |
+| Metric Format | Prometheus text format `text/plain; version=0.0.4` (OpenMetrics is not enabled) |
+
+A test checks this table against the source (`service_spec_readme_parity_test.go`).
 
 ## API Overview
 

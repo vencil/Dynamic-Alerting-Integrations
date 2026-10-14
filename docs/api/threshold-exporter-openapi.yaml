@@ -27,7 +27,7 @@ paths:
     get:
       summary: Prometheus Metrics Export
       description: |
-        Exports metrics in Prometheus text format (application/openmetrics-text).
+        Exports metrics in Prometheus text format (text/plain; version=0.0.4). OpenMetrics is not enabled, so `Accept: application/openmetrics-text` gets the same.
         Includes threshold states, silent modes, severity deduplication flags, and tenant metadata.
         
         **Metric Types:**
@@ -44,7 +44,7 @@ paths:
         '200':
           description: Metrics exported successfully in Prometheus text format
           content:
-            application/openmetrics-text; version=1.0.0:
+            text/plain; version=0.0.4:
               schema:
                 type: string
               example: |
@@ -70,7 +70,7 @@ paths:
                 user_severity_dedup{tenant="db-b",alertname="HighMemory"} 0
                 
                 # HELP tenant_metadata_info Tenant metadata information
-                # TYPE tenant_metadata_info info
+                # TYPE tenant_metadata_info gauge
                 tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
                 tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
                 
@@ -256,7 +256,7 @@ components:
             type: string
     PrometheusMetric:
       type: object
-      description: Prometheus metric in OpenMetrics text format
+      description: Prometheus metric in Prometheus text format
       properties:
         name:
           type: string
