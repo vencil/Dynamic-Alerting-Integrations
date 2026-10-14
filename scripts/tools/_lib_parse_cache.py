@@ -11,11 +11,16 @@ and the parser on that stream, so a run's output does not change by a byte.
 
 The generator container (``ops/generator_service``) installs a
 :class:`ParseCache` in each judgement process. Then a read is: the file's
-bytes → their git blob id (the repo's object format, sha1 or sha256) → look up
-``(blob id, mode name)`` → on a miss, parse as above and keep a pickled copy
-of the result. The key is computed from the content, so a changed file can
-never be answered with an older file's result; the mode is in the key because
-one content read by two parsers gives two different results.
+bytes → their SHA-256 → look up ``(content sha256, mode name)`` → on a miss,
+parse as above and keep a pickled copy of the result. The key is computed from
+the content, so a changed file can never be answered with an older file's
+result; the mode is in the key because one content read by two parsers gives
+two different results.
+
+⛔ SHA-256 of the content, whatever the repository's object format — never
+the git blob id. In a SHA-1 repository a blob id can be collided (chosen
+prefix), and two contents with one key would let the parse of one be served
+for the other: a write could be judged on content it does not contain.
 
 ⛔ A cached value is pickled bytes, and it is read back with
 :func:`restricted_loads`, whose ``find_class`` admits only the types a
@@ -39,9 +44,6 @@ import io
 import pickle
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional
-
-#: The object formats git supports, by ``git rev-parse --show-object-format``.
-OBJECT_FORMATS = ("sha1", "sha256")
 
 #: The only globals a cached value may name. A parser built on PyYAML's
 #: SafeConstructor yields dict / list / str / int / float / bool / None /
@@ -68,14 +70,9 @@ class ParseMode:
     parse: Callable[[Any], Any] = field(compare=False)
 
 
-def git_blob_id(data: bytes, object_format: str = "sha1") -> str:
-    """The id ``git hash-object`` gives *data* in a repo of *object_format*."""
-    if object_format not in OBJECT_FORMATS:
-        raise ValueError(f"unknown git object format: {object_format!r}")
-    h = hashlib.new(object_format)
-    h.update(b"blob %d\0" % len(data))
-    h.update(data)
-    return h.hexdigest()
+def content_key(data: bytes) -> str:
+    """The cache key's first half: SHA-256 of *data* (hex)."""
+    return hashlib.sha256(data).hexdigest()
 
 
 class _RestrictedUnpickler(pickle.Unpickler):
@@ -100,7 +97,7 @@ def _parse_file(path: Any, mode: ParseMode) -> Any:
 class ParseCache:
     """The cache one judgement process reads and fills.
 
-    *entries* maps ``(blob id, mode name)`` to pickled bytes and is only
+    *entries* maps ``(content sha256, mode name)`` to pickled bytes and is only
     read (in the generator container it is the long-running process's
     store, inherited by fork). Entries this process adds go to :attr:`new`,
     and each one is also handed to *on_store* ``(key, pickled bytes)`` the
@@ -110,13 +107,9 @@ class ParseCache:
     """
 
     def __init__(self, entries: "Mapping[tuple[str, str], bytes] | None" = None,
-                 object_format: str = "sha1",
                  on_store: "Callable[[tuple[str, str], bytes], None] | None" = None
                  ) -> None:
-        if object_format not in OBJECT_FORMATS:
-            raise ValueError(f"unknown git object format: {object_format!r}")
         self.entries: Mapping[tuple[str, str], bytes] = entries or {}
-        self.object_format = object_format
         self.new: dict[tuple[str, str], bytes] = {}
         self.hits: dict[tuple[str, str], None] = {}  # ordered set
         self.parses = 0
@@ -144,7 +137,7 @@ class ParseCache:
         except OSError:
             # The uncached read raises the same error the call site expects.
             return _parse_file(path, mode)
-        key = (git_blob_id(data, self.object_format), mode.name)
+        key = (content_key(data), mode.name)
         value = self._cached(key)
         if value is not _MISS:
             self.hits[key] = None

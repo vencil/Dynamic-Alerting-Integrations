@@ -40,16 +40,19 @@ read within byte limits, and the cache entries are kept as opaque bytes.
 
 One judgement runs at a time; the others wait in a bounded queue. Each
 request's time budget is ``min(--max-judgement-seconds, deadline_ms -
---deadline-reserve-seconds)`` from the moment its body has been read, queue
-time included.
+--deadline-reserve-seconds)`` from the moment its header has been read —
+reading the body and queueing included.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
+import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -85,13 +88,39 @@ DEFAULT_DEADLINE_RESERVE_SECONDS = 5.0
 DEFAULT_MEMORY_LIMIT_BYTES = 192 * MiB
 DEFAULT_CACHE_MAX_BYTES = 32 * MiB
 DEFAULT_MAX_QUEUE = 32
-DEFAULT_MAX_BODY_BYTES = 16 * MiB
+# #2901 R1, admission. The long-running process is budgeted about 80 Mi in
+# ADR-036 §3 (container 512 Mi = judgement 192 + a Go tool 192 + this
+# process). Measured on this branch (Python 3.13, 5000-tenant tree):
+#   * 38 MiB after warming the whole tree (pinned cache 3.6 MiB);
+#   * 41 MiB with all 40 connection slots held by partial 15 KiB headers
+#     (about 0.1 MiB per connection);
+#   * 49 MiB peak while one 4 MiB body is read, parsed and judged (the bytes,
+#     the parsed JSON string, transient buffers: about 2× the body);
+#   * plus at most --cache-max-bytes (32 MiB) of unpinned cache entries.
+# 49 + 32 = 81 MiB: the in-flight body budget is held to one maximal body
+# (4 MiB), which is also why the largest body is 4 MiB.
+DEFAULT_MAX_BODY_BYTES = 4 * MiB
+DEFAULT_MAX_INFLIGHT_BODY_BYTES = 4 * MiB
+DEFAULT_MAX_CONNECTIONS = 40
+#: More writes than files in a 5000-tenant tree, two-fold.
+DEFAULT_MAX_WRITES = 10_000
 DEFAULT_READ_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_RESULT_BYTES = 16 * MiB
 DEFAULT_MAX_CACHE_TRANSFER_BYTES = 64 * MiB
 DEFAULT_WARM_REF = "HEAD"
 DEFAULT_WARM_SECONDS = 300.0
 HEADER_LIMIT_BYTES = 16 * 1024
+#: Descriptors kept free beyond the connection slots: stdio, the listening
+#: socket, the event loop's epoll and self-pipe, a judgement's result pipe
+#: and pidfd, the policy copy and status reads, with margin.
+FD_RESERVE = 32
+_PR_SET_CHILD_SUBREAPER = 36
+# A connection answered without its input read (busy, 413) is half-closed and
+# drained for at most this long, at most this many at once (fds: within
+# FD_RESERVE).
+_LINGER_SECONDS = 1.0
+_MAX_LINGERING = 16
+_SLOT_FULL_READ_SECONDS = 0.05
 _KILL_GRACE_SECONDS = 5.0
 
 _REASONS = {200: "OK", 400: "Bad Request", 404: "Not Found",
@@ -121,12 +150,16 @@ class Settings:
     max_cache_transfer_bytes: int
     warm_ref: str
     warm_seconds: float
+    max_connections: int
+    max_inflight_body_bytes: int
+    max_writes: int
 
 
 class Response:
     def __init__(self, status: int, doc: Optional[dict] = None, *,
                  text: str | None = None, headers: Optional[dict] = None) -> None:
         self.status = status
+        self.unread_body = False  # answered before the body was read
         self.doc = doc if text is None else None
         self.text = text
         self.headers = headers or {}
@@ -150,6 +183,27 @@ class Response:
                  "Connection: close"]
         lines += [f"{k}: {v}" for k, v in self.headers.items()]
         return ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1") + body
+
+
+_CONTENT_LENGTH = re.compile(r"[0-9]{1,12}")  # ASCII digits only (#2901 O1)
+
+
+def _parse_head(head: bytes) -> tuple[str, str, dict[str, list[str]]]:
+    """(method, target, headers by lower-case name); raises on anything
+    malformed."""
+    lines = head.decode("latin-1").split("\r\n")
+    method, target, version = lines[0].split(" ")
+    if not version.startswith("HTTP/1."):
+        raise ValueError(version)
+    headers: dict[str, list[str]] = {}
+    for line in lines[1:]:
+        if not line:
+            continue
+        name, sep, value = line.partition(":")
+        if not sep or not name or name != name.strip():
+            raise ValueError(line)
+        headers.setdefault(name.lower(), []).append(value.strip())
+    return method, target, headers
 
 
 def _rejected(reason: str, message: str, **extra) -> Response:
@@ -200,6 +254,7 @@ class Metrics:
     rejections: Counter = field(default_factory=Counter)
     unavailable: Counter = field(default_factory=Counter)
     warm_runs: Counter = field(default_factory=Counter)
+    orphans_reaped: int = 0
     peak_rss_bytes: int = 0
 
 
@@ -266,17 +321,64 @@ class Service:
         self.generator_version = gar.da_tools_version()
         self.da_guard_version = da_guard_version(settings.da_guard_binary)
         self._job_seq = 0
+        self.connections = 0
+        self.inflight_body_bytes = 0
+        self._lingering = 0
         self.loop: asyncio.AbstractEventLoop = None  # type: ignore[assignment]
 
     # ── HTTP ──────────────────────────────────────────────────────────────
 
     async def handle(self, reader: asyncio.StreamReader,
                      writer: asyncio.StreamWriter) -> None:
+        # #2901 R1, admission (a): a connection slot before anything is read.
+        # Past the limit the connection is answered busy and closed at once,
+        # so no number of idle connections can take this process's fds.
+        if self.connections >= self.s.max_connections:
+            # Take what the client already sent (a request's header, briefly)
+            # so closing does not reset it before it reads the answer; an
+            # idle connection costs at most _SLOT_FULL_READ_SECONDS.
+            try:
+                await asyncio.wait_for(reader.read(HEADER_LIMIT_BYTES),
+                                       _SLOT_FULL_READ_SECONDS)
+            except (asyncio.TimeoutError, ConnectionError, OSError):
+                pass
+            await self._send(reader, writer, self._count(_rejected(
+                "busy", "too many open connections; retry")))
+            return
+        self.connections += 1
         try:
             resp = await self._respond(reader)
+            # a request answered without reading its body: linger so the
+            # client reads the answer instead of a connection reset
+            await self._send(reader, writer, resp,
+                             linger=resp is not None and resp.unread_body)
+        finally:
+            self.connections -= 1
+
+    async def _send(self, reader: asyncio.StreamReader,
+                    writer: asyncio.StreamWriter, resp: Optional[Response], *,
+                    linger: bool = False) -> None:
+        try:
             if resp is not None:
                 writer.write(resp.encode())
                 await writer.drain()
+            # Closing with unread input makes the kernel reset the peer, who
+            # may then never read the answer. So, for a bounded time and a
+            # bounded number of connections, half-close and drop whatever
+            # the client still sends (dropped, never kept).
+            if linger and self._lingering < _MAX_LINGERING:
+                self._lingering += 1
+                try:
+                    if writer.can_write_eof():
+                        writer.write_eof()
+                    end = self.loop.time() + _LINGER_SECONDS
+                    while (left := end - self.loop.time()) > 0:
+                        if not await asyncio.wait_for(reader.read(1 << 16), left):
+                            break
+                except (asyncio.TimeoutError, ConnectionError, OSError):
+                    pass
+                finally:
+                    self._lingering -= 1
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
@@ -293,22 +395,14 @@ class Service:
         except asyncio.LimitOverrunError:
             return Response(431, {"error": "BAD_REQUEST",
                                   "message": "request header too large"})
-        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
             return None
+        # #2901 O6: the request's clock starts here — reading the body is
+        # part of its budget.
+        received = self.loop.time()
         try:
-            lines = head.decode("latin-1").split("\r\n")
-            method, target, version = lines[0].split(" ")
-            if not version.startswith("HTTP/1."):
-                raise ValueError(version)
-            headers: dict[str, list[str]] = {}
-            for line in lines[1:]:
-                if not line:
-                    continue
-                name, sep, value = line.partition(":")
-                if not sep or not name or name != name.strip():
-                    raise ValueError(line)
-                headers.setdefault(name.lower(), []).append(value.strip())
-        except ValueError:
+            method, target, headers = _parse_head(head)
+        except Exception:  # noqa: BLE001 — #2901 O1: any bad header is a 400
             return Response(400, {"error": "BAD_REQUEST",
                                   "message": "malformed request line or header"})
 
@@ -330,24 +424,40 @@ class Service:
         if not lengths:
             return Response(411, {"error": "LENGTH_REQUIRED",
                                   "message": "Content-Length is required"})
-        if len(lengths) != 1 or not lengths[0].isdigit():
+        if len(lengths) != 1 or not _CONTENT_LENGTH.fullmatch(lengths[0]):
             return Response(400, {"error": "BAD_REQUEST",
                                   "message": "invalid Content-Length"})
         length = int(lengths[0])
         if length > self.s.max_body_bytes:
-            return Response(413, {"error": "PAYLOAD_TOO_LARGE",
+            resp = Response(413, {"error": "PAYLOAD_TOO_LARGE",
                                   "message": f"body is {length} bytes; the limit "
                                              f"is {self.s.max_body_bytes}"})
+            resp.unread_body = True
+            return resp
+        # #2901 R1, admission (b): the body's bytes are reserved against the
+        # in-flight budget BEFORE they are read, and given back when this
+        # request is answered. Over budget: busy, body never read.
+        if self.inflight_body_bytes + length > self.s.max_inflight_body_bytes:
+            resp = self._count(_rejected(
+                "busy", "too many request bytes in flight; retry"))
+            resp.unread_body = True
+            return resp
+        self.inflight_body_bytes += length
         try:
-            body = await asyncio.wait_for(reader.readexactly(length), timeout)
-        except (asyncio.TimeoutError, asyncio.IncompleteReadError):
-            return None
-        received = self.loop.time()
-        try:
-            request = parse_validate_request(body, self.object_format)
-        except RequestError as exc:
-            return Response(400, {"error": "BAD_REQUEST", "message": str(exc)})
-        return await self.submit(request, received)
+            try:
+                body = await asyncio.wait_for(reader.readexactly(length), timeout)
+            except (asyncio.TimeoutError, asyncio.IncompleteReadError,
+                    ConnectionError):
+                return None
+            try:
+                request = parse_validate_request(body, self.object_format,
+                                                 self.s.max_writes)
+            except RequestError as exc:
+                return Response(400, {"error": "BAD_REQUEST", "message": str(exc)})
+            del body
+            return await self.submit(request, received)
+        finally:
+            self.inflight_body_bytes -= length
 
     # ── queue ─────────────────────────────────────────────────────────────
 
@@ -378,9 +488,14 @@ class Service:
                     "deadline", "the deadline passed while queued"))
 
     def _preempt_warm(self) -> None:
-        if self.warming is not None and self.child_pid is not None \
-                and not self._preempting:
-            self._preempting = True
+        """End the warming run for a request. #2901 R2: the flag is set even
+        when the warming run has not forked yet (its task is scheduled but has
+        not run): ``_warm`` then does not start, and ``_spawn`` kills a child
+        it forks while the flag is up."""
+        if self.warming is None or self._preempting:
+            return
+        self._preempting = True
+        if self.child_pid is not None:
             _kill_group(self.child_pid)
 
     def _start_next(self) -> None:
@@ -463,8 +578,15 @@ class Service:
                 return _unavailable("VALIDATOR_UNAVAILABLE", "generator_too_old",
                                     too_old)
             pinned_before = self.pinned_commit
-            run = await self._spawn(self._job(ticket.request, job_dir, policy),
-                                    ticket.deadline_at, request=True)
+            try:
+                run = await self._spawn(self._job(ticket.request, job_dir, policy),
+                                        ticket.deadline_at, request=True)
+            except OSError as exc:
+                if exc.errno not in (errno.EMFILE, errno.ENFILE):
+                    raise
+                # #2901 R1: out of descriptors is load, not a broken
+                # container — reject this one write.
+                return _rejected("busy", "out of file descriptors; retry")
             # #2901 E2: a new base: warm it after this request, so whatever
             # this request did not get to parse is parsed off the clock.
             if ticket.request.base_commit != pinned_before:
@@ -482,6 +604,9 @@ class Service:
         outcome = "failed"
         job_dir = None
         try:
+            if self._preempting or self.waiting:
+                outcome = "preempted"  # a request came before the fork
+                return
             job_dir = self._new_job_dir()
             run = await self._spawn(
                 self._job(ValidateRequest(commit, (), 0), job_dir, None, warm=True),
@@ -531,6 +656,7 @@ class Service:
         threads = threading.active_count()
         if threads != 1:
             raise RuntimeError(f"refusing to fork with {threads} threads")
+        self._reap_orphans()  # whatever the previous run's killpg left behind
         sys.stdout.flush()
         sys.stderr.flush()
         rfd, wfd = os.pipe()
@@ -540,6 +666,8 @@ class Service:
             _gsvc_child.run_child(job, wfd)
         os.close(wfd)
         self.child_pid = pid
+        if not request and self._preempting:
+            _kill_group(pid)  # #2901 R2: a request came while forking
         reader = FrameReader(max_result=self.s.max_result_bytes,
                              max_entries=self.s.max_cache_transfer_bytes)
         received = 0
@@ -594,6 +722,11 @@ class Service:
                 os.close(pidfd)
             _, status, rusage = os.wait4(pid, 0)
             _kill_group(pid)  # anything the process left running
+            self.child_pid = None
+            # the one direct child has been collected by wait4 above; only
+            # orphans can be left for waitpid(-1)
+            assert self.child_pid is None
+            self._reap_orphans()
             on_data()
             self.loop.remove_reader(rfd)
             os.close(rfd)
@@ -711,6 +844,15 @@ class Service:
         out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",
                 "# TYPE da_generator_cache_base_coverage_ratio gauge",
                 f"da_generator_cache_base_coverage_ratio {self.store.coverage()}"]
+        out += ["# HELP da_generator_orphans_reaped_total Exited processes left by judgements (amtool and its children) collected by this subreaper.",
+                "# TYPE da_generator_orphans_reaped_total counter",
+                f"da_generator_orphans_reaped_total {self.metrics.orphans_reaped}",
+                "# HELP da_generator_connections Open client connections (admission slots in use).",
+                "# TYPE da_generator_connections gauge",
+                f"da_generator_connections {self.connections}",
+                "# HELP da_generator_inflight_body_bytes Request body bytes reserved by requests being read or queued.",
+                "# TYPE da_generator_inflight_body_bytes gauge",
+                f"da_generator_inflight_body_bytes {self.inflight_body_bytes}"]
         out += ["# HELP da_generator_queue_depth Validate requests waiting for the running judgement.",
                 "# TYPE da_generator_queue_depth gauge",
                 f"da_generator_queue_depth {len(self.waiting)}",
@@ -720,6 +862,30 @@ class Service:
                 % (_escape_label(self.generator_version or ""),
                    _escape_label(self.da_guard_version or ""))]
         return Response(200, text="\n".join(out) + "\n")
+
+    def _reap_orphans(self) -> int:
+        """#2901 R3: collect the zombies of processes a judgement started
+        (amtool, its children). This process is a child subreaper, so they are
+        re-parented here when the judgement ends — whether or not it is PID 1.
+
+        ⛔ Only between runs: ``waitpid(-1)`` would also collect the running
+        judgement and take its exit status from ``wait4``. At most one direct
+        child exists at a time, and this is called only after ``wait4`` has
+        collected it (or before the next fork), so there is none to steal.
+        """
+        if self.child_pid is not None:
+            return 0  # a run is in progress: wait for it to end first
+        reaped = 0
+        while True:
+            try:
+                pid, _status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if pid == 0:
+                break
+            reaped += 1
+        self.metrics.orphans_reaped += reaped
+        return reaped
 
     def shutdown(self) -> None:
         if self.child_pid is not None:
@@ -816,6 +982,16 @@ def _build_parser() -> argparse.ArgumentParser:
                    default=DEFAULT_MAX_CACHE_TRANSFER_BYTES,
                    help="new parse-cache bytes one judgement may hand back; "
                         "the rest are dropped (default: %(default)s)")
+    p.add_argument("--max-connections", type=int, default=DEFAULT_MAX_CONNECTIONS,
+                   help="open client connections served at once; past it a new "
+                        "connection is answered busy and closed (default: %(default)s)")
+    p.add_argument("--max-inflight-body-bytes", type=int,
+                   default=DEFAULT_MAX_INFLIGHT_BODY_BYTES,
+                   help="request body bytes being read or queued at once, "
+                        "reserved from Content-Length before the body is read; "
+                        "past it a request is answered busy (default: %(default)s)")
+    p.add_argument("--max-writes", type=int, default=DEFAULT_MAX_WRITES,
+                   help="writes in one request; more is a 400 (default: %(default)s)")
     p.add_argument("--warm-ref", default=DEFAULT_WARM_REF,
                    help="commit-ish whose tree is parsed into the cache at start, "
                         "off any request's clock; an empty value turns start-up "
@@ -853,6 +1029,34 @@ def _jobs_dir(work_dir: str) -> str:
     return os.path.join(work_dir, "jobs")
 
 
+def _ensure_fd_limit(max_connections: int) -> None:
+    """#2901 R1: RLIMIT_NOFILE must hold every connection slot plus
+    FD_RESERVE, so running out of descriptors is decided here, at start, and
+    not as an EMFILE under load. The soft limit is raised (up to the hard
+    limit) when it is short; still short is a refusal to start."""
+    import resource
+    need = max_connections + FD_RESERVE
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft == resource.RLIM_INFINITY or soft >= need:
+        return
+    if hard != resource.RLIM_INFINITY and hard < need:
+        raise RuntimeError(
+            f"RLIMIT_NOFILE hard limit {hard} is below the {need} descriptors "
+            f"--max-connections {max_connections} needs; lower "
+            f"--max-connections or raise the limit")
+    resource.setrlimit(resource.RLIMIT_NOFILE, (need, hard))
+
+
+def _become_subreaper() -> None:
+    """#2901 R3: adopt orphaned descendants (prctl PR_SET_CHILD_SUBREAPER), so
+    the processes a killed judgement leaves behind are collected here whether
+    or not this process is PID 1."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(_PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        err = ctypes.get_errno()
+        raise RuntimeError(f"prctl(PR_SET_CHILD_SUBREAPER): {os.strerror(err)}")
+
+
 def _prepare_work_dir(path: str) -> None:
     """Create --work-dir, and empty what a previous run left in its jobs
     directory (a crash between fork and cleanup)."""
@@ -876,6 +1080,7 @@ async def serve(settings: Settings, object_format: str) -> None:
             sig, lambda: stop.done() or stop.set_result(None))
     print(f"generator-service: listening on {settings.socket}", file=sys.stderr,
           flush=True)
+    service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
     service.start_warming()
     try:
         await stop
@@ -903,6 +1108,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         fmt = _object_format(settings.git, settings.repo)
         _prepare_work_dir(settings.work_dir)
         _prepare_socket_path(settings.socket)
+        _ensure_fd_limit(settings.max_connections)
+        _become_subreaper()
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

@@ -245,6 +245,15 @@ SAME_NAME_DIFFERENT_MEANING: dict[tuple[str, str], str] = {
     ("generator_service", "--max-result-bytes"): (
         "server limit: a larger judgement result is answered rejected/incomplete "
         "(test_result_and_transfer_limits)"),
+    ("generator_service", "--max-connections"): (
+        "server limit: past it a connection is answered rejected/busy "
+        "(test_connection_slots_answer_busy_and_never_503)"),
+    ("generator_service", "--max-inflight-body-bytes"): (
+        "server limit: past it a request is answered rejected/busy unread "
+        "(test_inflight_budget_and_writes_limit_flags)"),
+    ("generator_service", "--max-writes"): (
+        "server limit: more writes in one request is a 400 "
+        "(test_inflight_budget_and_writes_limit_flags)"),
     ("generator_service", "--max-cache-transfer-bytes"): (
         "server limit on parse-cache entries handed back; never changes an answer, "
         "only what is cached (test_result_and_transfer_limits)"),

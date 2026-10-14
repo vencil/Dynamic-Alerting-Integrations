@@ -1943,13 +1943,13 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹；判定結束（含被終止）後刪除 |
 | `--policy <FILE>` | 部署端 policy 檔（`allowed_domains`、`min_generator_version`），每次判定都重讀 |
 | `--warm-ref <ref>` | 啟動時預熱的 commit（預設 `HEAD`；空字串關閉）。解析不到只記 log 與 metric，不影響可用性 |
-| 其他 | 判定期限上限、保留給呼叫端的時間、子程序的 `RLIMIT_DATA`、快取上限、佇列長度、請求大小等，預設值見 `--help` |
+| 其他 | 判定期限上限、保留給呼叫端的時間、子程序的 `RLIMIT_DATA`、快取上限、佇列長度、同時連線數、讀取中與排隊中的 body 總量、單一請求大小與寫入筆數等，預設值見 `--help` |
 
 **端點**
 
 | 端點 | 回應 |
 |------|------|
-| `POST /v1/validate` | body：`base_commit`（完整 hex commit id）、`writes`（`{path, content_b64}` 或 `{path, delete: true}`，路徑相對 conf.d）、`deadline_ms`（呼叫端剩餘時間）。有判定結果時一律 200：`result` 為 `pass`（產生器結束碼 0）、`findings`（非 0）或 `rejected`（只拒收這一筆，`reason` 為 `deadline`、`memory`、`incomplete`、`git_read`、`busy`）；另帶 `rc`、`findings`（產生器 `--findings-json` 的文件）、`stderr_tail`、`validated`（`base_commit`、每個寫入檔的 sha256、部署端 policy 檔的 sha256）。請求格式錯誤 400。容器無法判定時 503：`VALIDATOR_UNAVAILABLE`（`reason`：`amtool_missing`、`generator_too_old`、`internal_error`）、`POLICY_UNAVAILABLE`（部署端 policy 檔不可用） |
+| `POST /v1/validate` | body：`base_commit`（完整 hex commit id）、`writes`（`{path, content_b64}` 或 `{path, delete: true}`，路徑相對 conf.d）、`deadline_ms`（呼叫端剩餘時間）。有判定結果時一律 200：`result` 為 `pass`（產生器結束碼 0）、`findings`（非 0）或 `rejected`（只拒收這一筆，`reason` 為 `deadline`、`memory`、`incomplete`、`git_read`、`busy`；`busy` 也用在同時連線或讀取中、排隊中的 body 總量已滿時，此時 body 不會被讀）；另帶 `rc`、`findings`（產生器 `--findings-json` 的文件）、`stderr_tail`、`validated`（`base_commit`、每個寫入檔的 sha256、部署端 policy 檔的 sha256）。請求格式錯誤 400，寫入路徑與 base 樹衝突（上層在 base 樹裡是檔案或 symlink、要寫的路徑是目錄）也是 400。容器無法判定時 503：`VALIDATOR_UNAVAILABLE`（`reason`：`amtool_missing`、`generator_too_old`、`internal_error`）、`POLICY_UNAVAILABLE`（部署端 policy 檔不可用） |
 | `GET /v1/status` | 部署端 policy 檔是否可用（含 sha256、錯誤、`min_generator_version`）、產生器與 da-guard 版本、amtool 是否存在、`ready` |
 | `GET /metrics` | Prometheus 文字格式：快取大小（`pinned` 區分最新 base 樹裡的檔）、最近一次判定的峰值記憶體與子程序記憶體上限、各結果與各拒收原因的計數、佇列長度、版本 |
 
@@ -1962,7 +1962,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | Code | 含義 |
 |------|------|
 | 0 | 收到 SIGTERM／SIGINT 後正常結束 |
-| 2 | caller error：`--repo` 不是 git repo、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來 |
+| 2 | caller error：`--repo` 不是 git repo、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd |
 
 ---
 

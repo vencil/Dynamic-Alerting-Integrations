@@ -11,7 +11,6 @@ pickled parse results as opaque bytes.
 from __future__ import annotations
 
 import base64
-import binascii
 import json
 import re
 import struct
@@ -31,6 +30,16 @@ UNAVAILABLE_REASONS = ("amtool_missing", "generator_too_old", "internal_error")
 
 _COMMIT_LEN = {"sha1": 40, "sha256": 64}
 _HEX = re.compile(r"[0-9a-f]+")
+# Standard base64, padded: checked without decoding, so this process never
+# holds a second (decoded) copy of what a request carries. ⛔ A flat class
+# plus a length check, not a grouped `(?:X{4})*`: the grouped form keeps a
+# repeat record per group and measured +113 MiB on a 4 MB string.
+_B64 = re.compile(r"[A-Za-z0-9+/]*={0,2}")
+
+#: The largest ``deadline_ms`` accepted (one hour). Larger is a malformed
+#: request (400): the budget is capped far below it anyway, and an unbounded
+#: integer would overflow the float arithmetic of the deadline.
+MAX_DEADLINE_MS = 3_600_000
 
 
 class RequestError(ValueError):
@@ -40,11 +49,19 @@ class RequestError(ValueError):
 @dataclass(frozen=True)
 class Write:
     path: str
-    content: Optional[bytes]  # None: delete
+    content_b64: Optional[str]  # None: delete
 
     @property
     def delete(self) -> bool:
-        return self.content is None
+        return self.content_b64 is None
+
+    @property
+    def content(self) -> Optional[bytes]:
+        """The decoded bytes — decoded where they are used (the judgement
+        process), never kept twice by the long-running process."""
+        if self.content_b64 is None:
+            return None
+        return base64.b64decode(self.content_b64, validate=True)
 
 
 @dataclass(frozen=True)
@@ -74,10 +91,14 @@ def path_problem(path: object) -> Optional[str]:
     return None
 
 
-def parse_validate_request(body: bytes, object_format: str) -> ValidateRequest:
-    """The validate request in *body*, or RequestError naming what is wrong."""
+def parse_validate_request(body: bytes, object_format: str,
+                           max_writes: int) -> ValidateRequest:
+    """The validate request in *body*, or RequestError naming what is wrong.
+    Every malformed input is a RequestError — never another exception."""
     try:
         doc = json.loads(body.decode("utf-8"))
+    except RecursionError:
+        raise RequestError("body is not JSON: nested too deeply") from None
     except (UnicodeDecodeError, ValueError) as exc:
         raise RequestError(f"body is not JSON: {exc}") from None
     if not isinstance(doc, dict):
@@ -101,10 +122,15 @@ def parse_validate_request(body: bytes, object_format: str) -> ValidateRequest:
     deadline = doc["deadline_ms"]
     if isinstance(deadline, bool) or not isinstance(deadline, int):
         raise RequestError("deadline_ms must be an integer (milliseconds)")
+    if deadline > MAX_DEADLINE_MS:
+        raise RequestError(f"deadline_ms must be at most {MAX_DEADLINE_MS}")
 
     raw_writes = doc["writes"]
     if not isinstance(raw_writes, list):
         raise RequestError("writes must be an array")
+    if len(raw_writes) > max_writes:
+        raise RequestError(f"writes has {len(raw_writes)} entries; at most "
+                           f"{max_writes} per request")
     writes: list[Write] = []
     seen: set[str] = set()
     for i, w in enumerate(raw_writes):
@@ -123,11 +149,9 @@ def parse_validate_request(body: bytes, object_format: str) -> ValidateRequest:
             text = w["content_b64"]
             if not isinstance(text, str):
                 raise RequestError(f"{where}: content_b64 must be a string")
-            try:
-                content = base64.b64decode(text, validate=True)
-            except (binascii.Error, ValueError):
-                raise RequestError(f"{where}: content_b64 is not base64") from None
-            writes.append(Write(path, content))
+            if len(text) % 4 or not _B64.fullmatch(text):
+                raise RequestError(f"{where}: content_b64 is not base64")
+            writes.append(Write(path, text))
         elif keys == {"path", "delete"}:
             if w["delete"] is not True:
                 raise RequestError(f"{where}: delete must be true")
@@ -149,7 +173,8 @@ def judgement_seconds(deadline_ms: int, max_seconds: float,
 # ── result frames (judgement process → long-running process, one pipe) ────
 #
 # frame := type (1 byte) | length (4 bytes, big-endian) | payload
-#   b"B"  the base tree's blob ids, JSON list — sent as soon as the tree is read
+#   b"B"  the base tree's content keys (SHA-256), JSON list — sent as soon as
+#         the tree is read
 #   b"E"  one parse-cache entry: key length (2 bytes) | key JSON | value bytes;
 #         sent the moment the parse finishes, so a judgement killed later
 #         still leaves its finished parses behind (#2901 E1)
@@ -186,7 +211,7 @@ class FrameReader:
     """Incremental decoder of one judgement process's pipe.
 
     :meth:`feed` takes whatever bytes arrived and returns the frames now
-    complete, as ``("B", [blob ids])``, ``("E", (key, value))``, ``("R",
+    complete, as ``("B", [content keys])``, ``("E", (key, value))``, ``("R",
     dict)``, ``("Z", None)``. Limits: a result over *max_result* bytes is
     skipped (never buffered); entries past *max_entries* bytes in total are
     dropped and counted in :attr:`dropped_entries`; a base list over
@@ -284,9 +309,10 @@ def decode_frames(buf: bytes, *, max_result: int, max_entries: int) -> Decoded:
 # ── the parse-cache store of the long-running process ─────────────────────
 
 class CacheStore:
-    """Pickled parse results by ``(blob id, mode)``, most recently used last.
+    """Pickled parse results by ``(content sha256, mode)``, most recently used
+    last.
 
-    Every entry whose blob is in the latest base tree (:meth:`set_pinned`) is
+    Every entry whose content is in the latest base tree (:meth:`set_pinned`) is
     kept; the others together may use at most *unpinned_limit* bytes, the
     least recently used going first (ADR-036 §3 淘汰).
     """

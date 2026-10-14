@@ -5,7 +5,8 @@
 1. `generate-routes --validate --strict` 路徑上每一處把 conf.d 檔解析成物件的
    呼叫都經 `read_confd_yaml`（以 AST 窮舉呼叫點，並以實跑記錄 YAML reader
    的建立位置對照）。
-2. key 的 blob id 與 `git hash-object` 相同（sha1 與 sha256 兩種 repo）。
+2. key 是內容的 SHA-256 加解析模式，不論 repo 的 object format（SHA-1 blob id
+   可被碰撞）；同一內容兩種模式各自快取、結果不同。
 3. 沒裝快取時讀法不變（逐位元組的證明在 `test_grar_findings.py` 的 golden）；
    裝了快取時，同一棵樹的 rc 與 findings 和不裝時相同，冷、熱快取皆然。
 4. 讀回快取用限制型 unpickler：只放行解析器實際產生的型別，其他一律當 miss。
@@ -19,6 +20,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import datetime
+import hashlib
 import io
 import os
 import pickle
@@ -218,19 +220,47 @@ def _git(cwd, *args, stdin=None):
 
 
 @pytest.mark.parametrize("fmt", ["sha1", "sha256"])
-def test_blob_id_matches_git_hash_object(tmp_path, fmt):
+def test_the_key_is_the_content_sha256_in_either_object_format(tmp_path, fmt):
+    """Not the git blob id: a SHA-1 blob id can be collided, and a shared key
+    would serve one content's parse for another."""
     _git(tmp_path, "init", "-q", f"--object-format={fmt}")
-    for data in (b"", b"tenants: {}\n", "租戶: x\n".encode("utf-8"),
-                 bytes(range(256)) * 40):
-        want = _git(tmp_path, "hash-object", "--stdin", stdin=data).decode().strip()
-        assert pc.git_blob_id(data, fmt) == want
+    f = tmp_path / "t.yaml"
+    for data in (b"", b"tenants: {}\n", "租戶: x\n".encode("utf-8")):
+        f.write_bytes(data)
+        cache = pc.ParseCache()
+        try:
+            cache.load(f, _grar_parse.ROUTING_READ)
+        except Exception:  # noqa: BLE001 — the key is what is checked
+            pass
+        blob = _git(tmp_path, "hash-object", "--stdin", stdin=data).decode().strip()
+        for key in cache.new:
+            assert key[0] == hashlib.sha256(data).hexdigest() != blob
 
 
-def test_unknown_object_format_is_refused():
-    with pytest.raises(ValueError):
-        pc.git_blob_id(b"", "md5")
-    with pytest.raises(ValueError):
-        pc.ParseCache({}, "md5")
+_NULL_KEY_FILE = """\
+tenants:
+  demo-apac:
+    _routing:
+      receiver: {type: webhook, url: "https://hooks.example.com/main"}
+      routes:
+      - match: {~: x, severity: critical}
+        receiver: {type: pagerduty, service_key: k}
+"""
+
+
+def test_one_content_two_modes_two_entries_two_results(tmp_path):
+    """The mode is half the key: the routing read drops the null key, the
+    probe keeps it — both cached, neither served for the other."""
+    f = tmp_path / "a.yaml"
+    f.write_text(_NULL_KEY_FILE, encoding="utf-8")
+    cache = pc.ParseCache()
+    plain = cache.load(f, _grar_parse.ROUTING_READ)
+    probe = cache.load(f, _grar_parse.NULL_KEY_PROBE)
+    assert plain != probe and cache.parses == 2 and len(cache.new) == 2
+    warm = pc.ParseCache(dict(cache.new))
+    assert warm.load(f, _grar_parse.ROUTING_READ) == plain
+    assert warm.load(f, _grar_parse.NULL_KEY_PROBE) == probe
+    assert warm.parses == 0
 
 
 # Every tag PyYAML's SafeConstructor builds, plus what the exporter-key
@@ -251,6 +281,18 @@ tenants:
   anchor: &x {k: v}
   alias: *x
 """
+
+
+def _canon(x):
+    if isinstance(x, dict):
+        return ("dict", sorted((repr(_canon(k)), _canon(v)) for k, v in x.items()))
+    if isinstance(x, (set, frozenset)):
+        return (type(x).__name__, sorted(repr(_canon(v)) for v in x))
+    if isinstance(x, (list, tuple)):
+        return (type(x).__name__, [_canon(v) for v in x])
+    if isinstance(x, float) and x != x:
+        return ("float", "nan")
+    return (type(x).__name__, repr(x))
 
 
 class _Recording(pickle.Unpickler):
@@ -276,7 +318,9 @@ def test_allowed_globals_are_exactly_what_the_parsers_produce(tmp_path, mode):
     _Recording(io.BytesIO(raw)).load()
     assert _Recording.seen == set(pc.ALLOWED_GLOBALS)
     back = pc.restricted_loads(raw)
-    assert repr(back) == repr(value)
+    # compared in a form that does not depend on set iteration order (hash
+    # seed) and in which NaN equals NaN
+    assert _canon(back) == _canon(value)
     # shared references survive (an alias is one object)
     t = back["tenants"]
     assert t["anchor"] is t["alias"]
@@ -308,7 +352,7 @@ def test_restricted_loads_control_needs_no_global():
 def test_an_entry_that_does_not_load_is_a_miss_and_is_reparsed(tmp_path):
     f = tmp_path / "t.yaml"
     f.write_text("tenants: {alpha: {}}\n", encoding="utf-8")
-    key = (pc.git_blob_id(f.read_bytes()), _grar_parse.ROUTING_READ.name)
+    key = (pc.content_key(f.read_bytes()), _grar_parse.ROUTING_READ.name)
     cache = pc.ParseCache({key: pickle.dumps(_Evil())})
     assert cache.load(f, _grar_parse.ROUTING_READ) == {"tenants": {"alpha": {}}}
     assert (cache.parses, cache.rejected_entries, len(cache.hits)) == (1, 1, 0)
@@ -369,12 +413,13 @@ def _run_findings(d: Path, out: Path):
     return rc, doc["findings"]
 
 
-@pytest.mark.parametrize("fixture", sorted(cases.FIXTURES) + ["every_read"])
+@pytest.mark.parametrize("fixture", sorted(cases.FIXTURES) + ["every_read", "null_key"])
 def test_cached_and_uncached_runs_agree(tmp_path, monkeypatch, fixture):
     """Same tree, no cache vs a cold cache vs a warm one: same rc, same
     findings."""
     monkeypatch.setenv("PATH", os.devnull)
-    files = _EVERY_READ if fixture == "every_read" else cases.FIXTURES[fixture]
+    files = ({"every_read": _EVERY_READ, "null_key": {"a.yaml": _NULL_KEY_FILE}}.get(fixture)
+             or cases.FIXTURES[fixture])
     d = _write_tree(tmp_path, files)
     results = []
     entries: dict = {}
@@ -410,11 +455,11 @@ def test_changing_one_file_parses_only_that_file(tmp_path, monkeypatch):
         pc.install(None)
     for rel in ("alpha.yaml", "_defaults.yaml", "team/beta.yaml"):
         f = d / rel
-        old_blob = pc.git_blob_id(f.read_bytes())
+        old_blob = pc.content_key(f.read_bytes())
         modes_of_file = {m for (b, m) in cold.new if b == old_blob}
         assert modes_of_file, rel
         f.write_text(f.read_text(encoding="utf-8") + "# changed\n", encoding="utf-8")
-        new_blob = pc.git_blob_id(f.read_bytes())
+        new_blob = pc.content_key(f.read_bytes())
         warm = pc.ParseCache(dict(cold.new))
         _lib_confd.reset_warned_for_test()
         pc.install(warm)

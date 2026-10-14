@@ -69,7 +69,7 @@ def test_a_valid_request():
     req = proto.parse_validate_request(_body(writes=[
         {"path": "alpha.yaml", "content_b64": base64.b64encode(content).decode()},
         {"path": "beta.yaml", "delete": True},
-    ]), "sha1")
+    ]), "sha1", 100)
     assert req.base_commit == C1 and req.deadline_ms == 25000
     assert req.writes[0].content == content and not req.writes[0].delete
     assert req.writes[1].delete and req.writes[1].content is None
@@ -98,16 +98,23 @@ def test_a_valid_request():
     (_body(writes=[{"path": "a", "content_b64": 5}]), "string"),
     (_body(writes=[{"path": "a", "content_b64": "", "delete": True}]), "must be"),
     (_body(writes=[{"path": "a"}]), "must be"),
+    # #2901 O1 / O2: inputs that used to escape as an exception
+    (_body(deadline_ms=10 ** 400), "at most"),
+    (_body(deadline_ms=proto.MAX_DEADLINE_MS + 1), "at most"),
+    (b"[" * 200000, "nested too deeply"),
+    (_body(writes=[{"path": f"p{i}", "delete": True} for i in range(101)]), "at most 100"),
+    (_body(writes=[{"path": "a", "content_b64": "QQ"}]), "not base64"),       # unpadded
+    (_body(writes=[{"path": "a", "content_b64": "QQ==\n"}]), "not base64"),
 ])
 def test_malformed_requests(body, needle):
     with pytest.raises(proto.RequestError, match=needle):
-        proto.parse_validate_request(body, "sha1")
+        proto.parse_validate_request(body, "sha1", 100)
 
 
 def test_sha256_repo_takes_64_char_commits():
-    assert proto.parse_validate_request(_body(base_commit=C256), "sha256").base_commit == C256
+    assert proto.parse_validate_request(_body(base_commit=C256), "sha256", 100).base_commit == C256
     with pytest.raises(proto.RequestError):
-        proto.parse_validate_request(_body(base_commit=C1), "sha256")
+        proto.parse_validate_request(_body(base_commit=C1), "sha256", 100)
 
 
 # ── result frames ────────────────────────────────────────────────────────
@@ -197,7 +204,8 @@ class _FakeService(gs.Service):
             max_judgement_seconds=max_seconds, deadline_reserve_seconds=5.0,
             memory_limit_bytes=1, cache_max_bytes=1, max_queue=max_queue,
             max_body_bytes=1, read_timeout_seconds=1.0, max_result_bytes=1,
-            max_cache_transfer_bytes=1, warm_ref="", warm_seconds=1.0)
+            max_cache_transfer_bytes=1, warm_ref="", warm_seconds=1.0,
+            max_connections=40, max_inflight_body_bytes=1 << 20, max_writes=100)
         super().__init__(settings, "sha1")
         self.delay = delay
         self.judged: list[str] = []
@@ -389,4 +397,94 @@ def test_waiting_requests_go_before_a_pending_warming_run():
         await second
         await asyncio.sleep(0.05)
         assert svc.order == ["request", "request", "warm"]
+    asyncio.run(scenario())
+
+
+
+def test_base64_is_checked_but_not_decoded_by_the_service():
+    text = base64.b64encode(b"x" * 1000).decode()
+    req = proto.parse_validate_request(_body(writes=[
+        {"path": "a", "content_b64": text}]), "sha1", 100)
+    assert req.writes[0].content_b64 == text  # kept as text, decoded where used
+    assert req.writes[0].content == b"x" * 1000
+
+
+@pytest.mark.parametrize("n,ok", [(100, True), (101, False)])
+def test_writes_limit_boundary(n, ok):
+    body = _body(writes=[{"path": f"p{i}", "delete": True} for i in range(n)])
+    if ok:
+        assert len(proto.parse_validate_request(body, "sha1", 100).writes) == n
+    else:
+        with pytest.raises(proto.RequestError):
+            proto.parse_validate_request(body, "sha1", 100)
+
+
+def test_a_warming_run_scheduled_but_not_started_is_preempted():
+    """#2901 R2 (the blind review's race): the warming task is created but
+    has not run when a request arrives — the request must not wait for it."""
+    async def scenario():
+        svc = _WarmingFake(delay=0.05, warm_for=5.0)
+        svc.loop = asyncio.get_running_loop()
+        svc._warm = gs.Service._warm.__get__(svc)  # the real _warm …
+        spawned = []
+
+        async def fake_spawn(job, deadline_at, *, request):
+            spawned.append(request)
+            await asyncio.sleep(5.0)
+        svc._spawn = fake_spawn                     # … with no fork
+        svc.pending_warm = "9" * 40
+        svc._start_next()                           # task created, not stepped
+        t0 = svc.loop.time()
+        resp = await svc.submit(_req("1" * 40, 9000), svc.loop.time())
+        assert _doc(resp)["result"] == "pass"
+        assert svc.loop.time() - t0 < 1.0
+        assert spawned == []                        # the warm run never forked
+        assert svc.metrics.warm_runs["preempted"] == 1
+    asyncio.run(scenario())
+
+
+def test_checking_a_large_content_b64_does_not_balloon_memory():
+    """#2901 R1: a grouped base64 regex measured +113 MiB on a 4 MB string;
+    the check must stay flat (run in a fresh interpreter: ru_maxrss only
+    ever grows)."""
+    import subprocess
+    import sys
+    code = (
+        "import base64, json, resource, sys\n"
+        "import _gsvc_proto as p\n"
+        "body = json.dumps({'base_commit': 'a' * 40, 'deadline_ms': 1, 'writes': [\n"
+        "    {'path': 'x', 'content_b64': base64.b64encode(b'a' * 3_000_000).decode()}]}).encode()\n"
+        "before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+        "p.parse_validate_request(body, 'sha1', 10)\n"
+        "print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - before)\n")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         encoding="utf-8", timeout=120, check=True,
+                         env={**__import__("os").environ,
+                              "PYTHONPATH": str(__import__("pathlib").Path(proto.__file__).parent)})
+    assert int(out.stdout.strip()) < 20 * 1024, out.stdout  # KiB
+
+
+def test_out_of_descriptors_when_forking_is_busy_not_503(tmp_path, monkeypatch):
+    """#2901 R1: EMFILE at fork time rejects that write (busy); it does not
+    make the container unavailable."""
+    import errno
+    work = tmp_path / "work"
+    gs._prepare_work_dir(str(work))
+
+    class _Real(_FakeService):
+        _judge = gs.Service._judge
+
+    svc = _Real(delay=0)
+    svc.s.work_dir = str(work)
+    monkeypatch.setattr(gs.shutil, "which", lambda name: "/bin/true")
+
+    async def no_fds(job, deadline_at, *, request):
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    svc._spawn = no_fds
+
+    async def scenario():
+        svc.loop = asyncio.get_running_loop()
+        resp = await svc.submit(_req("1" * 40, 25000), svc.loop.time())
+        assert resp.status == 200 and _doc(resp)["reason"] == "busy"
     asyncio.run(scenario())

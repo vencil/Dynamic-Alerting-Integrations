@@ -217,10 +217,22 @@ def run_cli(confdir: Path, bin_dir: Path, findings: Path,
 
 
 def alive(pid: int) -> bool:
-    """True unless the process is gone or a zombie."""
-    try:
-        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
-            state = fh.read().rsplit(")", 1)[1].split()[0]
-    except (FileNotFoundError, ProcessLookupError, IndexError):
-        return False
-    return state != "Z"
+    """True while the process exists — a zombie included: one nobody has
+    reaped is still a leak (#2901 R3)."""
+    return os.path.exists(f"/proc/{pid}")
+
+
+def zombies_of(pid: int) -> list[int]:
+    """The zombie children of *pid*."""
+    out = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", encoding="utf-8") as fh:
+                fields = fh.read().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        if fields[0] == "Z" and int(fields[1]) == pid:
+            out.append(int(entry))
+    return out

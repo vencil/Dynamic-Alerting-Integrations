@@ -1955,13 +1955,13 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--work-dir <dir>` | Scratch directory for the tree of each judgement; removed when the judgement ends (also when it is killed) |
 | `--policy <FILE>` | Deployment policy file (`allowed_domains`, `min_generator_version`), read again for every judgement |
 | `--warm-ref <ref>` | The commit warmed at start (default `HEAD`; an empty value turns it off). One that does not resolve is logged and counted, and the service stays usable |
-| Others | The judgement time limit, the time left to the caller, the judgement process's `RLIMIT_DATA`, the cache limit, the queue length, request sizes: defaults in `--help` |
+| Others | The judgement time limit, the time left to the caller, the judgement process's `RLIMIT_DATA`, the cache limit, the queue length, open connections, the body bytes being read or queued, one request's size and number of writes: defaults in `--help` |
 
 **Endpoints**
 
 | Endpoint | Response |
 |------|------|
-| `POST /v1/validate` | Body: `base_commit` (a full hex commit id), `writes` (`{path, content_b64}` or `{path, delete: true}`, paths relative to conf.d), `deadline_ms` (the caller's remaining time). Always 200 when there is a verdict: `result` is `pass` (generator exit 0), `findings` (non-zero) or `rejected` (this request only; `reason` is `deadline`, `memory`, `incomplete`, `git_read` or `busy`), with `rc`, `findings` (the generator's `--findings-json` document), `stderr_tail` and `validated` (`base_commit`, the sha256 of each written file, the sha256 of the deployment policy file). A malformed request is 400. When the container cannot judge at all, 503: `VALIDATOR_UNAVAILABLE` (`reason`: `amtool_missing`, `generator_too_old`, `internal_error`) or `POLICY_UNAVAILABLE` (the deployment policy file is unusable) |
+| `POST /v1/validate` | Body: `base_commit` (a full hex commit id), `writes` (`{path, content_b64}` or `{path, delete: true}`, paths relative to conf.d), `deadline_ms` (the caller's remaining time). Always 200 when there is a verdict: `result` is `pass` (generator exit 0), `findings` (non-zero) or `rejected` (this request only; `reason` is `deadline`, `memory`, `incomplete`, `git_read` or `busy`; `busy` is also the answer when the open connections or the body bytes being read or queued are at their limit, and the body is then not read), with `rc`, `findings` (the generator's `--findings-json` document), `stderr_tail` and `validated` (`base_commit`, the sha256 of each written file, the sha256 of the deployment policy file). A malformed request is 400, and so is a write path that conflicts with the base tree (a parent that is a file or symlink there, a path that is a directory). When the container cannot judge at all, 503: `VALIDATOR_UNAVAILABLE` (`reason`: `amtool_missing`, `generator_too_old`, `internal_error`) or `POLICY_UNAVAILABLE` (the deployment policy file is unusable) |
 | `GET /v1/status` | Whether the deployment policy file is usable (with its sha256, error and `min_generator_version`), the generator and da-guard versions, whether amtool is present, `ready` |
 | `GET /metrics` | Prometheus text format: cache size (`pinned` marks files in the latest base tree), the latest judgement's peak memory and the judgement process's memory limit, counts by result and by rejection reason, queue depth, versions |
 
@@ -1974,7 +1974,7 @@ Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` se
 | Code | Meaning |
 |------|------|
 | 0 | Stopped normally after SIGTERM / SIGINT |
-| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created |
+| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created, the `RLIMIT_NOFILE` hard limit cannot hold `--max-connections` plus the reserved descriptors |
 
 ---
 

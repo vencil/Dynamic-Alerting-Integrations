@@ -16,8 +16,8 @@ forked, and never returns. In order:
    with ``--validate --strict --findings-json`` — with the service's parse
    cache installed (``_lib_parse_cache``), so unchanged files are not parsed
    again.
-5. Report over one pipe (``_gsvc_proto`` frames): the base tree's blob ids
-   as soon as the tree is read, each new parse-cache entry the moment its
+5. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
+   base tree's files as soon as the tree is read, each new parse-cache entry the moment its
    parse finishes, and the result last — so a process the deadline kills
    still hands back every parse it completed. Then ``os._exit``.
 
@@ -224,9 +224,10 @@ def apply_writes(root: str, request: ValidateRequest) -> list[dict]:
                 os.unlink(target)
             files.append({"path": w.path, "deleted": True})
         else:
-            _write_file(root, w.path, w.content, BadWrite)
+            content = w.content
+            _write_file(root, w.path, content, BadWrite)
             files.append({"path": w.path,
-                          "sha256": hashlib.sha256(w.content).hexdigest()})
+                          "sha256": hashlib.sha256(content).hexdigest()})
     return files
 
 
@@ -294,10 +295,12 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     except (GitReadError, OSError) as exc:
         print(f"generator-service: base tree not written: {exc}", file=sys.stderr)
         return {"outcome": "git_read"}
-    # #2901 E2: the base tree's blobs, as soon as they are known — the
-    # long-running process pins them even if this process is killed.
-    stream.send(frame(b"B", json.dumps(
-        sorted({oid for mode, oid, _p, _c in tree if mode != "160000"})).encode("utf-8")))
+    # #2901 E2: the base tree's files, as soon as they are known — the
+    # long-running process pins them even if this process is killed. By the
+    # cache's own key (SHA-256 of the content), not the git blob id.
+    stream.send(frame(b"B", json.dumps(sorted(
+        {_lib_parse_cache.content_key(c) for mode, _o, _p, c in tree
+         if mode != "160000"})).encode("utf-8")))
     try:
         files = apply_writes(tree_dir, job.request)
     except BadWrite as exc:
@@ -312,7 +315,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     if job.policy_copy is not None:
         argv += ["--policy", job.policy_copy]
     # #2901 E1: every new entry goes down the pipe the moment it is made.
-    cache = _lib_parse_cache.ParseCache(job.store_entries, job.object_format,
+    cache = _lib_parse_cache.ParseCache(job.store_entries,
                                         on_store=stream.entry)
     _lib_parse_cache.install(cache)
     rc, memory = 1, False
@@ -357,7 +360,7 @@ def _close_inherited(keep: int) -> None:
 
 
 def _warm(job: ChildJob, tree_dir: str, stream: "_Stream") -> dict:
-    cache = _lib_parse_cache.ParseCache(job.store_entries, job.object_format,
+    cache = _lib_parse_cache.ParseCache(job.store_entries,
                                         on_store=stream.entry)
     _lib_parse_cache.install(cache)
     try:
@@ -384,7 +387,7 @@ def run_child(job: ChildJob, result_fd: int) -> None:
         # client's socket keeps that client waiting for EOF after the
         # service has answered and closed its side.
         _close_inherited(result_fd)
-        for sig in (signal.SIGTERM, signal.SIGINT):
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD):
             signal.signal(sig, signal.SIG_DFL)
         try:
             signal.set_wakeup_fd(-1)

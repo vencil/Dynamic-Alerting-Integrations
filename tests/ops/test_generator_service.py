@@ -179,7 +179,7 @@ def test_changing_one_file_parses_only_that_file(world, tmp_path, monkeypatch):
                                   str(tmp_path / "f.json")])
     finally:
         pc.install(None)
-    blob = pc.git_blob_id(body.encode())
+    blob = pc.content_key(body.encode())
     modes = {m for (b, m) in cache.new if b == blob}
     assert len(modes) >= 2
     assert doc["cache"]["parses"] == len(modes)
@@ -791,3 +791,220 @@ def test_a_judgement_does_not_hold_other_clients_connections(tmp_path, world):
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
         assert took < 5.0, took  # B runs until about 6 s
         assert a.result()[1]["result"] == b.result()[1]["result"] == "pass"
+
+
+# ── round 2: admission, malformed input, zombies, shutdown ───────────────
+
+def _hwm_kib(pid: int) -> int:
+    with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith("VmHWM"):
+                return int(line.split()[1])
+    raise AssertionError("no VmHWM")
+
+
+def _post_head(length: int) -> bytes:
+    return (f"POST /v1/validate HTTP/1.1\r\nHost: g\r\n"
+            f"Content-Length: {length}\r\n\r\n").encode()
+
+
+def test_body_bytes_are_admitted_before_they_are_read(tmp_path, world):
+    """#2901 R1 (the blind review's exp_mem): many clients each sending most
+    of a large body do not grow the service's memory with their number —
+    past the in-flight budget they are answered busy without being read —
+    and a legitimate request gets a verdict or busy, never a 503."""
+    commit = world["commits"]["clean"]
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"]) as svc:
+        pid = svc.proc.pid
+        base = _hwm_kib(pid)
+        length = 3 * 1024 * 1024
+        socks, answered = [], 0
+        for _ in range(20):
+            s = socket.socket(socket.AF_UNIX)
+            s.connect(str(svc.socket))
+            s.settimeout(10)
+            s.sendall(_post_head(length))
+            socks.append(s)
+        chunk = b"x" * (256 * 1024)
+        for s in socks:
+            try:
+                for _ in range(10):  # 2.5 of 3 MiB
+                    s.sendall(chunk)
+            except OSError:
+                pass  # answered busy and closed after its linger: nothing kept
+        time.sleep(0.5)
+        grew = _hwm_kib(pid) - base
+        status, doc = svc.validate(commit)
+        assert status == 200 and doc["result"] in ("pass", "rejected"), doc
+        if doc["result"] == "rejected":
+            assert doc["reason"] == "busy"
+        for s in socks:
+            s.close()
+        assert grew < 24 * 1024, grew    # not 20 × 2.5 MiB
+        time.sleep(1.5)
+        assert svc.validate(commit)[1]["result"] == "pass"
+        # one fits the budget, the rest are answered busy unread
+        assert svc.metrics()['da_generator_rejections_total{reason="busy"}'] >= 15
+
+
+def test_connection_slots_answer_busy_and_never_503(tmp_path, world):
+    """#2901 R1 (the blind review's exp_fd): idle connections past the slot
+    limit are answered busy and closed; a legitimate request is never 503."""
+    commit = world["commits"]["clean"]
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   prelude="import resource; resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))\n",
+                   args=("--max-connections", "20")) as svc:
+        idle = []
+        for _ in range(56):
+            s = socket.socket(socket.AF_UNIX)
+            s.connect(str(svc.socket))
+            idle.append(s)
+        time.sleep(0.5)
+        # every slot is held (the readiness probe's slot may just have been
+        # freed, so the legitimate request may get it): busy or a verdict,
+        # never 503 / EMFILE
+        status, doc = svc.validate(commit, timeout=30)
+        assert status == 200 and (doc["result"] == "pass"
+                                  or (doc["result"], doc["reason"]) == ("rejected", "busy")), doc
+        for s in idle:
+            s.close()
+        time.sleep(0.5)
+        assert svc.metrics()['da_generator_rejections_total{reason="busy"}'] >= 56 - 20
+        status, doc = svc.validate(commit)
+        assert (status, doc["result"]) == (200, "pass"), doc
+
+
+def test_a_too_low_descriptor_limit_refuses_to_start(tmp_path, world):
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                    prelude="import resource; resource.setrlimit(resource.RLIMIT_NOFILE, (40, 40))\n",
+                    wait=False)
+    assert svc.proc.wait(60) == 2
+    assert "RLIMIT_NOFILE" in svc.log.read_text(encoding="utf-8")
+    svc.stop()
+
+
+@pytest.mark.parametrize("raw_request", [
+    "POST /v1/validate HTTP/1.1\r\nContent-Length: ²\r\n\r\n".encode("latin-1"),
+    b"POST /v1/validate HTTP/1.1\r\nContent-Length: +5\r\n\r\nxxxxx",
+], ids=["superscript-digit", "signed"])
+def test_a_non_ascii_or_signed_content_length_is_400(world, raw_request):
+    status, _h, _b = world["svc"].raw(raw_request)
+    assert status == 400
+
+
+@pytest.mark.parametrize("body", [
+    b'{"base_commit": "' + b"a" * 40 + b'", "writes": [], "deadline_ms": 1' + b"0" * 400 + b"}",
+    b"[" * 200000,
+], ids=["deadline-10e400", "json-depth"])
+def test_inputs_that_used_to_end_the_connection_are_400(world, body):
+    """#2901 O1: no empty answer, no traceback."""
+    status, _h, data = world["svc"].raw(_post_head(len(body)) + body)
+    assert status == 400 and json.loads(data)["error"] == "BAD_REQUEST"
+    assert "Traceback" not in world["svc"].log.read_text(encoding="utf-8")
+
+
+def test_two_content_lengths_are_400_even_if_the_first_fits(world):
+    """#2901 R7 (N14): a valid body under the first of two Content-Length
+    headers is still refused."""
+    body = json.dumps({"base_commit": world["commits"]["clean"], "writes": [],
+                       "deadline_ms": 25000}).encode()
+    raw = (f"POST /v1/validate HTTP/1.1\r\nContent-Length: {len(body)}\r\n"
+           f"Content-Length: {len(body) + 7}\r\n\r\n").encode() + body
+    status, _h, _b = world["svc"].raw(raw)
+    assert status == 400
+
+
+def test_no_zombies_are_left_after_a_deadline(tmp_path, world):
+    """#2901 R3: the service is a child subreaper, so what a killed judgement
+    leaves (amtool, its sleep) is re-parented to it and collected."""
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 60 &\nwait\n")
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir) as svc:
+        for _ in range(3):
+            status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=6500)
+            assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
+        end = time.monotonic() + 10
+        while h.zombies_of(svc.proc.pid) and time.monotonic() < end:
+            time.sleep(0.1)
+        assert h.zombies_of(svc.proc.pid) == []
+        assert svc.metrics()["da_generator_orphans_reaped_total"] >= 6
+
+
+def test_shutdown_ends_the_running_judgement(tmp_path, world):
+    """#2901 R7 (N19): SIGTERM while judging ends the judgement's whole group."""
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", _SLOW_AMTOOL)
+    pid_dir = tmp_path / "pids"
+    pid_dir.mkdir()
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+                    env={"GSVC_PID_DIR": str(pid_dir)})
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(svc.validate, world["commits"]["clean"])
+        end = time.monotonic() + 30
+        while not (pid_dir / "grandchild.pid").exists() and time.monotonic() < end:
+            time.sleep(0.05)
+        pids = [int((pid_dir / n).read_text().strip())
+                for n in ("amtool.pid", "grandchild.pid")]
+        svc.stop()
+        with pytest.raises(Exception):
+            pending.result()
+    end = time.monotonic() + 5
+    while any(h.alive(p) and p not in h.zombies_of(1) for p in pids) \
+            and time.monotonic() < end:
+        time.sleep(0.05)
+    still = [p for p in pids if h.alive(p) and p not in h.zombies_of(1)]
+    assert still == [], still
+
+
+def test_inflight_budget_and_writes_limit_flags(tmp_path, world):
+    """Each admission flag changes the answer it bounds."""
+    commit = world["commits"]["clean"]
+    two = [{"path": "x.yaml", "delete": True}, {"path": "y.yaml", "delete": True}]
+    with h.Service(tmp_path / "a", world["repo"], bin_dir=world["bin"],
+                   args=("--max-inflight-body-bytes", "50")) as svc:
+        status, doc = svc.validate(commit)  # a body of ~85 bytes
+        assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "busy")
+    with h.Service(tmp_path / "c", world["repo"], bin_dir=world["bin"],
+                   args=("--max-inflight-body-bytes", "200")) as svc:
+        # each request's bytes are given back when it is answered: five in a
+        # row fit a budget that holds two at once
+        for _ in range(5):
+            assert svc.validate(commit)[1]["result"] == "pass"
+        assert svc.metrics()["da_generator_inflight_body_bytes"] == 0
+    with h.Service(tmp_path / "b", world["repo"], bin_dir=world["bin"],
+                   args=("--max-writes", "1")) as svc:
+        status, doc = svc.validate(commit, two)
+        assert status == 400 and "at most 1" in doc["message"]
+        assert svc.validate(commit, two[:1])[1]["result"] == "pass"
+
+
+def test_reading_the_body_counts_against_the_deadline(tmp_path, world):
+    """#2901 O6: the clock starts when the header has been read."""
+    body = json.dumps({"base_commit": world["commits"]["clean"], "writes": [],
+                       "deadline_ms": 25000}).encode()
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--max-judgement-seconds", "1.5")) as svc:
+        s = socket.socket(socket.AF_UNIX)
+        s.connect(str(svc.socket))
+        s.settimeout(30)
+        s.sendall(_post_head(len(body)))
+        time.sleep(1.8)  # longer than the whole budget
+        s.sendall(body)
+        data = b""
+        while chunk := s.recv(65536):
+            data += chunk
+        s.close()
+        doc = json.loads(data.split(b"\r\n\r\n", 1)[1])
+        assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
+
+
+def test_a_busy_answer_reaches_a_client_still_sending_its_body(tmp_path, world):
+    """#2901 R1: answered busy before its body is read, the connection is
+    half-closed and drained, so the client reads the answer rather than a
+    reset."""
+    body = b"x" * (2 * 1024 * 1024)
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--max-inflight-body-bytes", "1000")) as svc:
+        status, _h, data = svc.raw(_post_head(len(body)) + body)
+        doc = json.loads(data)
+        assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "busy")
