@@ -207,56 +207,127 @@ def load_policies(source: str) -> list[PolicyRule]:
     Returns:
         PolicyRule 清單。
 
+    Raises:
+        InvalidPolicyRules: 有讀不懂的規則（#2961），不再跳過。
+
     ``exclude_tenants`` 的項目以**原始文字**讀入（#2114）：租戶 id 是
     exporter 讀到的 key 文字（``010`` 就是 ``"010"``），排除清單必須用同一種
     讀法比對，否則 ``exclude_tenants: [010]`` 會被 PyYAML 讀成 ``8``、
     對不上租戶 ``"010"``。
     """
     return rules_from_policy_data(load_yaml_file_strict_exporter_keys(
-        source, raw_text_sequences=POLICY_TENANT_LISTS))
+        source, raw_text_sequences=POLICY_TENANT_LISTS), source=str(source))
 
 
-def rules_from_policy_data(data: Any) -> list[PolicyRule]:
+#: The keys a rule is read for (#2961) — `PolicyRule`'s fields — and those of
+#: its `when` clause. Any other key is a rule the engine cannot read as written.
+RULE_KEYS = frozenset({"name", "description", "target", "operator", "value",
+                       "severity", "when", "exclude_tenants"})
+WHEN_KEYS = frozenset({"target", "operator", "value"})
+
+
+class InvalidPolicyRules(ValueError):
+    """#2961: policy rules the engine cannot read as written. Raised instead
+    of skipping them: a skipped (or coerced) rule is a rule that silently
+    passes — `check: lte` used to become `operator: required`, an unknown
+    operator was dropped with one stderr line and the run passed.
+
+    ``problems`` is one line per bad rule (or the container), naming the rule
+    by index and name."""
+
+    def __init__(self, source: str, problems: list[str]):
+        self.source = source
+        self.problems = problems
+        super().__init__(f"{source}: {len(problems)} invalid policy rule(s)")
+
+
+def _rule_problem(i: int, r: Any) -> Optional[str]:
+    """Why rule *i* cannot be read as written, or None."""
+    if not isinstance(r, dict):
+        return f"rule #{i} is {type(r).__name__}, expected a mapping"
+    label = f"rule #{i} ({r.get('name')!r})" if "name" in r else f"rule #{i}"
+    unknown = sorted(str(k) for k in r if k not in RULE_KEYS)
+    if unknown:
+        hint = (" — the operator goes in `operator:`" if "check" in unknown
+                and "operator" not in r else "")
+        return (f"{label}: unknown key(s) {unknown} (read: {sorted(RULE_KEYS)}){hint}")
+    target = r.get("target")
+    if not isinstance(target, str) or not target:
+        return f"{label}: `target` must be a non-empty string, got {target!r}"
+    excl = r.get("exclude_tenants", [])
+    if not isinstance(excl, list) or not all(isinstance(t, str) for t in excl):
+        return (f"{label}: `exclude_tenants` must be a list of tenant ids, got {excl!r} "
+                "(a single id is still a list: `[t1]`)")
+    if "when" in r:
+        w = r["when"]
+        if not isinstance(w, dict):
+            return f"{label}: `when` must be a mapping, got {type(w).__name__}"
+        unknown = sorted(str(k) for k in w if k not in WHEN_KEYS)
+        if unknown:
+            return f"{label}: `when` has unknown key(s) {unknown} (read: {sorted(WHEN_KEYS)})"
+        if not isinstance(w.get("target"), str) or not w.get("target"):
+            return f"{label}: `when.target` must be a non-empty string, got {w.get('target')!r}"
+        op = str(w.get("operator", "required"))
+        if op not in VALID_OPERATORS:
+            return (f"{label}: `when.operator` {op!r} is not an operator "
+                    f"(valid: {sorted(VALID_OPERATORS)})")
+    return None
+
+
+def rules_from_policy_data(data: Any, source: str = "policies") -> list[PolicyRule]:
     """把已解析的 policy YAML（頂層 mapping）轉成 PolicyRule 清單。
 
     ``None``（空檔）或非 mapping 的頂層 → ``[]``。CLI 的 ``--policy`` 守衛在
     呼叫前就把非 mapping 當 caller error 擋掉；這裡的 ``isinstance`` 是給
     ``load_policies``（library 呼叫端）用的，避免 ``"policies" in "a str"``
     變成子字串測試。
+
+    #2961: a rule list the engine cannot read as written raises
+    ``InvalidPolicyRules`` (every bad rule named, *source* in the message):
+    ``policies`` / ``_policies`` that is neither a list nor null, a rule that
+    is not a mapping, an unknown key, an empty `target`, an `exclude_tenants`
+    that is not a list of ids, a `when` that is not a mapping or has an
+    unknown key / no `target` / an unknown operator, an unknown operator or
+    severity. ``_policies:`` with no value is no rules, as before.
     """
     if not isinstance(data, dict):
         return []
 
-    raw_rules: list[dict] = []
     if "policies" in data:
-        raw_rules = data["policies"]
+        key = "policies"
     elif "_policies" in data:
-        raw_rules = data["_policies"]
+        key = "_policies"
     else:
         return []
-
-    if not isinstance(raw_rules, list):
+    raw_rules = data[key]
+    if raw_rules is None:
         return []
+    if not isinstance(raw_rules, list):
+        raise InvalidPolicyRules(source, [
+            f"`{key}` is {type(raw_rules).__name__}, expected a list of rules"])
 
     rules: list[PolicyRule] = []
+    problems: list[str] = []
     for i, r in enumerate(raw_rules):
-        if not isinstance(r, dict):
-            continue
-        try:
-            rule = PolicyRule(
-                name=r.get("name", f"rule-{i}"),
-                description=r.get("description", ""),
-                target=str(r.get("target", "")),
-                operator=str(r.get("operator", "required")),
-                value=r.get("value"),
-                severity=str(r.get("severity", "error")),
-                when=r.get("when") if isinstance(r.get("when"), dict) else None,
-                exclude_tenants=r.get("exclude_tenants", []),
-            )
-            rules.append(rule)
-        except ValueError as exc:
-            print(f"  WARN: 跳過無效策略規則 #{i}: {exc}", file=sys.stderr)
-
+        problem = _rule_problem(i, r)
+        if problem is None:
+            try:
+                rules.append(PolicyRule(
+                    name=r.get("name", f"rule-{i}"),
+                    description=r.get("description", ""),
+                    target=r["target"],
+                    operator=str(r.get("operator", "required")),
+                    value=r.get("value"),
+                    severity=str(r.get("severity", "error")),
+                    when=r.get("when"),
+                    exclude_tenants=r.get("exclude_tenants", []),
+                ))
+                continue
+            except ValueError as exc:
+                problem = f"rule #{i}: {exc}"
+        problems.append(problem)
+    if problems:
+        raise InvalidPolicyRules(source, problems)
     return rules
 
 
@@ -959,6 +1030,35 @@ def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> int:
     return EXIT_CALLER_ERROR
 
 
+#: The top-level keys a standalone `--policy` file is read for (#2961): any
+#: other key (`polices:`) is a file the engine cannot read rules from.
+POLICY_FILE_KEYS = frozenset({"policies", "_policies"})
+
+
+def _invalid_rules_exit(exc: InvalidPolicyRules, args, lang: str) -> int:
+    """#2961: rules the engine cannot read as written → rc 2, nothing
+    evaluated (a skipped rule is a rule that passes). Each bad rule named."""
+    head = (f"{safe_label(exc.source)}: 無法照原文讀取的策略規則（不評估任何規則）："
+            if lang == "zh" else
+            f"ERROR: {safe_label(exc.source)}: policy rules the engine cannot read as "
+            "written (nothing evaluated):")
+    print(head, file=sys.stderr)
+    for line in exc.problems:
+        print(f"  - {safe_label(line)}", file=sys.stderr)
+    if args.json_output:
+        print(format_json_report({
+            "status": "caller_error",
+            "reason": "policy_rule_invalid",
+            "tenants_evaluated": 0,
+            "rules_evaluated": 0,
+            "error_count": 0,
+            "warning_count": 0,
+            "passed": False,
+            "violations": [],
+        }))
+    return EXIT_CALLER_ERROR
+
+
 def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
     """#2115: the tenants could not be read the way the exporter reads them
     → rc 2, nothing evaluated. da-guard missing or failing, a file the
@@ -1063,6 +1163,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             rules.extend(load_policies(defaults_path))
         except YamlFileError as exc:
             return _unreadable_yaml_exit(exc, args, lang)
+        except InvalidPolicyRules as exc:
+            return _invalid_rules_exit(exc, args, lang)
 
     # From standalone policy file
     if args.policy is not None:   # ⛔ not truthiness: '' is supplied (#1651)
@@ -1108,6 +1210,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                            "expected a mapping with a `policies:` list",
                            f"{args.policy!r} 的頂層是 {kind}，應為含 "
                            "`policies:` 清單的 mapping")
+            elif isinstance(policy_data, dict) and (
+                    unknown := sorted(str(k) for k in policy_data if k not in POLICY_FILE_KEYS)):
+                # #2961: `polices:` used to read as "no rules" at rc 0.
+                problem = ("policy_file_invalid",
+                           f"{args.policy!r} has unknown top-level key(s) {unknown} "
+                           "(read: `policies:`)",
+                           f"{args.policy!r} 有不認得的頂層鍵 {unknown}（只讀 `policies:`）")
         if problem is not None:
             reason, en, zh = problem
             print(f"--policy: {zh}" if lang == "zh" else f"--policy: {en}",
@@ -1130,7 +1239,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "violations": [],
                 }))
             return EXIT_CALLER_ERROR
-        rules.extend(rules_from_policy_data(policy_data))
+        try:
+            rules.extend(rules_from_policy_data(policy_data, source=str(args.policy)))
+        except InvalidPolicyRules as exc:
+            return _invalid_rules_exit(exc, args, lang)
 
     # #1112: an early return is still a `--json` terminal path — emit the report
     # schema with everything zeroed (`passed: true`: nothing was evaluated, so

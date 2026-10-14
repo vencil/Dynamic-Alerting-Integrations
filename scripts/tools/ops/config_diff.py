@@ -135,7 +135,8 @@ CHECKED_CARRIERS = {
         lambda rel, doc: PurePosixPath(rel).name in ("_domain_policy.yaml", "_domain_policy.yml")),
     "_policies": (
         "`validate-config` fails on a violated rule of severity `error` "
-        "(a `warning` rule does not fail it)",
+        "or on a rule it cannot read as written (a `warning` rule does not "
+        "fail it)",
         _is_root_defaults_carrier),
 }
 

@@ -1374,6 +1374,10 @@ _POLICY_DSL_TREE_UNREADABLE_HINT = (
     "threshold-exporter cannot load this tree as the lines above say: repair "
     "or remove the file they name (or the shape da-guard refuses), then re-run. "
     "No policy was evaluated.")
+_POLICY_DSL_INVALID_RULE_HINT = (
+    "Fix the rules named above so the engine reads them as written (a rule it "
+    "cannot read is no longer skipped, #2961: a skipped rule passes). No policy "
+    "was evaluated.")
 _POLICY_DSL_NO_CONFIG_FILE_HINT = (
     "There is no config file under --config-dir at all: point it at your conf.d "
     "tree, then re-run. No policy was evaluated.")
@@ -1425,7 +1429,14 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # symlink) is not "no carrier" — that line told the operator to create one.
     if os.path.isfile(defaults_path):
         scope["root_carrier"] = True
-        rules.extend(pe.load_policies(defaults_path))
+        # #2961: the customer's tree — a tree finding (FAIL, rc 1), as the
+        # comment at the --policy-dsl read below says.
+        try:
+            rules.extend(pe.load_policies(defaults_path))
+        except pe.InvalidPolicyRules as exc:
+            return _make_result("policy_dsl", FAIL,
+                                [f"{os.path.basename(defaults_path)}: {p}" for p in exc.problems],
+                                hint=_POLICY_DSL_INVALID_RULE_HINT)
     else:
         scope["root_carrier"] = "unreadable" if os.path.lexists(defaults_path) else False
 
@@ -1476,7 +1487,25 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         # `_policies:`, still reaches "No _policies defined — skipped" at
         # exit 0. That is the CONTENT axis, which this PR does not close for
         # any of the three flags; see the NOT COVERED list in _grar_validate.
-        rules.extend(pe.load_policies(policy_dsl_file))
+        # #2961: an unknown top-level key (`polices:`) read as "no rules" at
+        # exit 0, and a rule the engine cannot read was skipped. Both are the
+        # operator's argv, so both are argv errors (exit 2).
+        unknown = (sorted(str(k) for k in dsl_data if k not in pe.POLICY_FILE_KEYS)
+                   if isinstance(dsl_data, dict) else [])
+        if unknown:
+            return _argv_error_row(
+                "policy_dsl",
+                f"--policy-dsl: unknown top-level key(s) {unknown} (read: `policies:`): "
+                f"{policy_dsl_file!r}",
+                _POLICY_DSL_INPUT_HINT)
+        try:
+            rules.extend(pe.load_policies(policy_dsl_file))
+        except pe.InvalidPolicyRules as exc:
+            return _argv_error_row(
+                "policy_dsl",
+                f"--policy-dsl: policy rules the engine cannot read as written in "
+                f"{policy_dsl_file!r}: " + "; ".join(exc.problems),
+                _POLICY_DSL_INPUT_HINT)
         # Only now: a --policy-dsl that failed above supplied no rule (#2725).
         scope["policy_dsl"] = True
 
