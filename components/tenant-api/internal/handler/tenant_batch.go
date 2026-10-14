@@ -132,8 +132,8 @@ type BatchResponse struct {
 // @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (An operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     409  {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413  {object} ErrorResponse
-// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an entry that cannot be read and that no operation replaces; every operation not refused for another reason carries it, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them."
-// @Failure     500  {object} ErrorResponse
+// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds a dangling symlink that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not a dangling symlink) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them."
+// @Failure     500  {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them"
 // @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE); or, in direct mode, an operation writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
@@ -798,12 +798,21 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 	code := ""
 	var notLoadable *tenantFileNotLoadableError
 	var treeUnreadable *gitops.TreeUnreadableError
+	var targetUnreadable *gitops.TargetUnreadableError
 	switch {
 	case errors.As(err, &treeUnreadable):
 		// #2939: the tree after the batch holds entries the route generator
-		// cannot read, and no op of the batch replaces them.
-		logTreeUnreadable("batch op refused: conf.d holds unreadable entries", tenantID, err)
-		msg, code = treeUnreadableText(treeUnreadable, treeVisible), CodeTenantTreeUnreadable
+		// cannot read, and no op of the batch replaces them — dangling links
+		// (per op, TENANT_TREE_UNREADABLE) or a store fault (the whole
+		// batch, TENANT_STORE_FAULT; every op reports it).
+		logTreeUnreadable("batch refused: conf.d holds unreadable entries", tenantID, err)
+		_, treeCode, _ := treeRefusal(treeUnreadable)
+		msg, code = treeUnreadableText(treeUnreadable, treeVisible), treeCode
+	case errors.As(err, &targetUnreadable):
+		// #2939 D3c: the op's own tenant file has content nobody can read;
+		// it is not replaced (as PUT's 409).
+		slog.Warn("batch op refused: the tenant file cannot be read", "tenant", tenantID, "error", err)
+		msg, code = targetUnreadableText(targetUnreadable), CodeTenantConfigNotLoadable
 	case errors.Is(err, confd.ErrNotRegularFile):
 		// #2939: the op's own tenant file is a FIFO, socket or device —
 		// tenant-api neither reads nor replaces it (as PUT's 409). The text

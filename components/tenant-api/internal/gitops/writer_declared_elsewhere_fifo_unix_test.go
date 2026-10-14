@@ -7,8 +7,8 @@ package gitops
 // stayed stuck). The walker no longer opens a special file: the walk returns
 // at once, and the FIFO is one of its unreadable entries — which refuses the
 // write (ADR-036 §4: the tree after it is one the route generator refuses),
-// at once, with ErrTenantTreeUnreadable rather than the walk's
-// ErrTenantTreeScan.
+// at once, as a store fault (ErrTenantStoreFault: a FIFO is the server's
+// storage, not content git holds) rather than the walk's ErrTenantTreeScan.
 
 import (
 	"context"
@@ -44,8 +44,8 @@ func TestTenantWrite_FIFOInTreeRefusedWithoutBlockingTheWalk(t *testing.T) {
 		if errors.Is(err, ErrTenantTreeScan) {
 			t.Fatalf("write err = %v: the walk did not return", err)
 		}
-		if !errors.Is(err, ErrTenantTreeUnreadable) {
-			t.Fatalf("write err = %v, want ErrTenantTreeUnreadable", err)
+		if !errors.Is(err, ErrTenantStoreFault) {
+			t.Fatalf("write err = %v, want ErrTenantStoreFault", err)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("write blocked")

@@ -35,7 +35,9 @@ type ValidateResponse struct {
 // @Summary     Validate tenant config
 // @Description Dry-run validation of a tenant YAML without writing to disk.
 // @Description When conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is
-// @Description valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE.
+// @Description valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
+// @Description dangling symlink) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
+// @Description when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json
@@ -97,14 +99,20 @@ const msgTenantFileUnresolved = "cannot resolve the tenant's config file in conf
 // names only the id and the rule) and ErrAmbiguousTenantFile,
 // whose text names only this tenant's own files and which PUT already returns
 // as is. Everything else gets fixed text; the full error goes to the log.
-// A TENANT_TREE_UNREADABLE refusal (#2939) is the text PUT's 409 carries,
-// naming the entries only when treeVisible (treePathsVisible) — the same
-// verdict and the same disclosure as the write this previews.
+// A TENANT_TREE_UNREADABLE / TENANT_STORE_FAULT refusal (#2939) is the text
+// PUT's 409 / 500 carries, naming the entries only when treeVisible
+// (treePathsVisible), and a tenant file that cannot be read gets PUT's
+// TENANT_CONFIG_NOT_LOADABLE text — the same verdict and the same
+// disclosure as the write this previews.
 func dryRunRefusalMessage(err error, treeVisible bool) string {
 	var te *gitops.TreeUnreadableError
 	if errors.As(err, &te) {
 		logTreeUnreadable("tenant dry-run: conf.d holds unreadable entries", "", err)
 		return treeUnreadableText(te, treeVisible)
+	}
+	var tu *gitops.TargetUnreadableError
+	if errors.As(err, &tu) {
+		return targetUnreadableText(tu)
 	}
 	switch {
 	case errors.Is(err, gitops.ErrReservedTenantID), errors.Is(err, gitops.ErrInvalidTenantID),

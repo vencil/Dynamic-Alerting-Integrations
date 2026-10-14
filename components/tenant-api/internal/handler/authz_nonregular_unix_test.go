@@ -276,7 +276,9 @@ func putTenantBody(tenantID string) string {
 // Writer. #2939 (ADR-036 §4): the tree after that write still holds the
 // special file, which the route generator refuses, so the write is refused —
 // at once (no conf.d walk blocks on the entry, nor was one left blocked by
-// the refused request), with TENANT_TREE_UNREADABLE, and nothing is written.
+// the refused request), with 500 TENANT_STORE_FAULT (#2939 D3c: a special
+// file is the server's storage, not content git holds), and nothing is
+// written.
 func (f *nonRegularFixture) assertOtherTenantRefusedWholeTree(t *testing.T) {
 	t.Helper()
 	before := f.state(t)
@@ -285,9 +287,9 @@ func (f *nonRegularFixture) assertOtherTenantRefusedWholeTree(t *testing.T) {
 	if took >= immediate {
 		t.Errorf("answered after %v, want under %v", took, immediate)
 	}
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantTreeUnreadable) {
-		t.Fatalf("PUT to another tenant after the refusal = %d, want 409 %s: %s",
-			w.Code, CodeTenantTreeUnreadable, w.Body.String())
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeTenantStoreFault) {
+		t.Fatalf("PUT to another tenant after the refusal = %d, want 500 %s: %s",
+			w.Code, CodeTenantStoreFault, w.Body.String())
 	}
 	f.assertNothingWritten(t, before)
 }

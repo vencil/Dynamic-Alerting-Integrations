@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"syscall"
 	"testing"
 	"time"
@@ -65,7 +66,8 @@ var unreadableShapes = []struct {
 }
 
 // (b) (d) and read_error: every direct write path and preview refuses, at
-// once, naming exactly the entry, and nothing is written. The PR modes judge
+// once, as a STORE FAULT (D3c: none of these is content git holds), naming
+// exactly the entry, and nothing is written. The PR modes judge
 // the base git holds, where none of these untracked shapes exists; their
 // verdict is pinned with a committed shape (writer_tree_unreadable_test.go).
 func TestTreeUnreadable_ShapesRefuseEveryDirectPath(t *testing.T) {
@@ -80,7 +82,7 @@ func TestTreeUnreadable_ShapesRefuseEveryDirectPath(t *testing.T) {
 				go func() { done <- treeVerdictVia(t, mode, w, "sh-t") }()
 				select {
 				case err := <-done:
-					assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{want})
+					assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{want}, true)
 				case <-time.After(30 * time.Second):
 					t.Fatal("blocked")
 				}
@@ -111,32 +113,132 @@ func TestTreeUnreadable_ReadErrorOnTheBaseRefusesPRModes(t *testing.T) {
 			gitRun(t, dir, "add", "-A")
 			gitRun(t, dir, "commit", "-m", "read_error link")
 			err := treeVerdictVia(t, mode, NewWriter(dir, dir), "prr-t")
-			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "eio.yaml", Reason: cfg.UnreadableReadError}})
+			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "eio.yaml", Reason: cfg.UnreadableReadError}}, true)
 		})
 	}
 }
 
-// read_error on the write's OWN file is not counted by the whole-tree
-// verdict: it is a target (refuseUnreadableTree excludes it, as a dangling
-// one). ⚠️ The write is still refused today — by validate's eol-expansion
-// guard, which fails closed on a current file it cannot read (#2405,
-// eolGuardErrs) — so this pins only that the refusal is NOT the tree's.
-// Whether the guard should let such a file be replaced is an open decision.
-func TestTreeUnreadable_ReadErrorTargetIsNotCountedByTheTree(t *testing.T) {
+// D3c-1: the write's OWN tenant file being unreadable in a way that is not a
+// dangling symlink — a read_error, or a FIFO — refuses the write for EVERY
+// caller (TargetUnreadableError, TENANT_CONFIG_NOT_LOADABLE): the file has
+// content nobody can read, and replacing it would erase it. The platform-wide
+// writer (WithReplaceUnparseable) is refused too. Every direct path and
+// preview agrees, and the PR modes for the read_error shape (a committed
+// symlink to /proc/self/mem; a FIFO cannot be committed).
+func TestTreeUnreadable_UnreadableTargetIsRefusedForEveryCaller(t *testing.T) {
 	mem, ok := testutil.ProcSelfMem()
 	if !ok {
 		t.Skip("no /proc/self/mem that fails to read")
 	}
-	dir := seedTreeRepo(t, map[string]string{"other-t.yaml": tenantBody("other-t")})
-	if err := os.Symlink(mem, filepath.Join(dir, "eio-t.yaml")); err != nil {
+	for _, shape := range []struct {
+		name, reason string
+		build        func(t *testing.T, target string)
+		pr           bool
+	}{
+		{"read_error", cfg.UnreadableReadError, func(t *testing.T, target string) {
+			if err := os.Symlink(mem, target); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"fifo", cfg.UnreadableSpecialFile, func(t *testing.T, target string) { mkfifoReleased(t, target) }, false},
+	} {
+		modes := append(append([]string{}, directTreeModes...), "Write+platform")
+		if shape.pr {
+			modes = append(modes, "WritePR", "WritePRBatch")
+		}
+		for _, mode := range modes {
+			t.Run(shape.name+"/"+mode, func(t *testing.T) {
+				dir := seedTreeRepo(t, map[string]string{"other-t.yaml": tenantBody("other-t")})
+				shape.build(t, filepath.Join(dir, "un-t.yaml"))
+				if mode == "WritePR" || mode == "WritePRBatch" {
+					gitRun(t, dir, "add", "-A")
+					gitRun(t, dir, "commit", "-m", "unreadable tenant file")
+				}
+				w := NewWriter(dir, dir)
+				done := make(chan error, 1)
+				go func() {
+					if mode == "Write+platform" {
+						_, err := w.Write(WithReplaceUnparseable(context.Background()), "un-t", "op@example.com", tenantBody("un-t"))
+						done <- err
+						return
+					}
+					done <- treeVerdictVia(t, mode, w, "un-t")
+				}()
+				var err error
+				select {
+				case err = <-done:
+				case <-time.After(30 * time.Second):
+					t.Fatal("blocked")
+				}
+				var te *TargetUnreadableError
+				if !errors.As(err, &te) || te.Reason != shape.reason || te.TenantID != "un-t" {
+					t.Fatalf("%s: err = %v, want *TargetUnreadableError (%s)", mode, err, shape.reason)
+				}
+				if errors.Is(err, ErrTenantTreeUnreadable) || errors.Is(err, ErrTenantStoreFault) {
+					t.Errorf("%s: err = %v: the target was also counted against the tree", mode, err)
+				}
+			})
+		}
+	}
+}
+
+// D3c-2: a store fault and a dangling link elsewhere at once — the store
+// fault wins (the server must be repaired first), naming both entries; in a
+// batch it fails the batch whole rather than per op.
+func TestTreeUnreadable_StoreFaultWinsOverDanglingLink(t *testing.T) {
+	for _, mode := range append(append([]string{}, directTreeModes...), "WritePR") {
+		t.Run(mode, func(t *testing.T) {
+			dir := seedTreeRepo(t, map[string]string{"mx-t.yaml": tenantBody("mx-t")})
+			if err := os.Symlink("missing-target.yaml", filepath.Join(dir, "gone.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			mkfifoReleased(t, filepath.Join(dir, "stuck.yaml"))
+			w := NewWriter(dir, dir)
+			err := treeVerdictVia(t, mode, w, "mx-t")
+			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{
+				{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError},
+				{RelKey: "stuck.yaml", Reason: cfg.UnreadableSpecialFile},
+			}, true)
+			if mode == "WriteBatch" { // treeVerdictVia unwraps a per-op refusal; ask the batch itself
+				_, berr := w.WriteBatch(context.Background(), []BatchOp{{TenantID: "mx-t",
+					Merge: func([]byte) (string, error) { return tenantBody("mx-t"), nil }}}, "op@example.com")
+				var rej *BatchRejectedError
+				if errors.As(berr, &rej) || !errors.Is(berr, ErrTenantStoreFault) {
+					t.Errorf("WriteBatch: %v, want the batch failed whole with the store fault", berr)
+				}
+			}
+		})
+	}
+}
+
+// The tenant_api_store_unreadable_entries source: after a serving walk the
+// Writer reports that walk's store faults by reason — a dangling link is not
+// one — and nothing before its first walk.
+func TestWriter_StoreUnreadableCountsTheLastWalk(t *testing.T) {
+	mem, ok := testutil.ProcSelfMem()
+	if !ok {
+		t.Skip("no /proc/self/mem that fails to read")
+	}
+	dir := seedTreeRepo(t, map[string]string{"cnt-t.yaml": tenantBody("cnt-t")})
+	w := NewWriter(dir, dir)
+	if _, ok := w.StoreUnreadable(); ok {
+		t.Fatal("StoreUnreadable reported counts before any walk")
+	}
+	mkfifoReleased(t, filepath.Join(dir, "stuck.yaml"))
+	if err := os.Symlink(mem, filepath.Join(dir, "eio.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	_, err := NewWriter(dir, dir).Write(context.Background(), "eio-t", "op@example.com", tenantBody("eio-t"))
-	if errors.Is(err, ErrTenantTreeUnreadable) {
-		t.Fatalf("err = %v: the write's own file was counted against the tree", err)
+	if err := os.Symlink("missing-target.yaml", filepath.Join(dir, "gone.yaml")); err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(err, ErrValidation) {
-		t.Fatalf("err = %v, want the eol guard's fail-closed ErrValidation", err)
+	testutil.UnlistableDeepDir(t, dir, 100)
+	if _, _, err := w.DryRunValidate(context.Background(), "cnt-t", tenantBody("cnt-t")); !errors.Is(err, ErrTenantStoreFault) {
+		t.Fatalf("DryRunValidate: %v, want the store fault", err)
+	}
+	got, ok := w.StoreUnreadable()
+	want := map[string]int{cfg.UnreadableSpecialFile: 1, cfg.UnreadableReadError: 1, cfg.UnreadableWalkError: 1}
+	if !ok || !reflect.DeepEqual(got, want) {
+		t.Errorf("StoreUnreadable = %v, %v; want %v (the dangling link not counted)", got, ok, want)
 	}
 }
 

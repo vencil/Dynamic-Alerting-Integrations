@@ -1,0 +1,18 @@
+# Bare-rules promtool target for the TenantApiStoreUnreadable alert. promtool
+# can't consume the deployed ConfigMap directly (it needs a top-level `groups:`
+# document, not `data: platform-alert.yml: |`), so this is an EXTRACTED COPY of
+# the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — the expr/for/labels/summary here must match
+# byte-for-byte. tests/rulepacks/test_platform_rules_extract_sync.py enforces it.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantApiStoreUnreadable
+        expr: max by (job, instance) (tenant_api_store_unreadable_entries{job="tenant-api"}) > 0
+        for: 10m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "tenant-api's conf.d copy has entries the server cannot read — every write answers 500 TENANT_STORE_FAULT"

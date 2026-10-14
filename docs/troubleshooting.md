@@ -22,7 +22,7 @@ lang: zh
 | 多副本 / 多租戶數值被重複計算 | Platform / SRE | [雙租戶抓取重複計數](#雙租戶抓取重複計數) |
 | 平台自監控告警在 Prometheus 有 firing，卻沒人收到 | Platform / SRE | [平台告警沒有收到通知](#平台告警沒有收到通知) |
 | Operator 環境規則沒載入 | Platform Engineer | [Operator 環境常見問題](#prometheus-operator-環境常見問題) |
-| 經 tenant-api 的寫入都回 409／422 `TENANT_TREE_UNREADABLE` | Platform Engineer | [tenant-api 寫入全部被拒](#tenant-api-寫入全部被拒tenant_tree_unreadable) |
+| 經 tenant-api 的寫入都回 409 `TENANT_TREE_UNREADABLE` 或 500 `TENANT_STORE_FAULT` | Platform Engineer | [tenant-api 寫入全部被拒](#tenant-api-寫入全部被拒tenant_tree_unreadabletenant_store_fault) |
 
 ## SHA-256 熱重新加載延遲
 
@@ -208,11 +208,16 @@ da-tools validate-config --config-dir ./conf.d/
 
 > 詳見：[Operator Prometheus 整合](integration/operator-prometheus-integration.md) · [Operator Alertmanager 整合](integration/operator-alertmanager-integration.md) · [Operator GitOps 部署](integration/operator-gitops-deployment.md)
 
-## tenant-api 寫入全部被拒（`TENANT_TREE_UNREADABLE`）
+## tenant-api 寫入全部被拒（`TENANT_TREE_UNREADABLE`／`TENANT_STORE_FAULT`）
 
 > 👤 **適用：** Platform Engineer / 呼叫 tenant-api 的工具維護者
 
-**經 tenant-api 的寫入全部被拒，回 409／422 `TENANT_TREE_UNREADABLE`**：同一棵 conf.d 裡有讀不到的項目——設定檔名的 FIFO／socket／裝置檔、懸空的 symlink、讀取失敗的檔或列不出的子目錄（`da_config_unreadable_files{reason}` 非 0，見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)），而且不是這次寫入要取代的租戶檔。寫入判的是寫入後的整棵樹，route generator 的 `--validate --strict` 會拒收有這種項目的樹，所以 tenant-api 一併拒收（[#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)，ADR-036 §4）。單筆寫入回 409，批次回 422、該筆 `code: TENANT_TREE_UNREADABLE`；`/validate` 回 `valid: false`。回應只對所有租戶都有寫入權限的呼叫者列出項目名稱，其他人只看到數量；完整名稱在 tenant-api 的 server log（`conf.d holds unreadable entries`）。處理：在 git 修好或移除那些項目；要寫的租戶檔本身是懸空 symlink 時，直接經 tenant-api 寫入它就會換成一般檔（修復路徑）。細節見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md)。
+**經 tenant-api 的寫入全部被拒，回 409 `TENANT_TREE_UNREADABLE` 或 500 `TENANT_STORE_FAULT`**：寫入判的是寫入後的整棵 conf.d，route generator 的 `--validate --strict` 會拒收有讀不了項目的樹，所以 tenant-api 一併拒收（[#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939)，ADR-036 §4）。兩種回應的差別在「能不能用 git 修」：
+
+- **409 `TENANT_TREE_UNREADABLE`**：樹上有**懸空的 symlink**（不是這次要寫的租戶檔）。git 記得它，在 git 修好或移除即可；要寫的租戶檔本身就是懸空 symlink 時，直接經 tenant-api 寫入它，會換成一般檔（修復路徑）。批次回 422、該筆 `code: TENANT_TREE_UNREADABLE`。
+- **500 `TENANT_STORE_FAULT`**：tenant-api **自己那份** conf.d 有伺服器讀不了、git 也記錄不了的項目——設定檔名的 FIFO／socket／裝置檔、讀取失敗的檔、列不出的子目錄。這是伺服器或 volume 的儲存問題，不是設定內容，經 tenant-api 修不了：從 tenant-api 的 server log（`conf.d holds unreadable entries`）找出項目，在 pod／volume 上移除或修好，或把那份 conf.d 從 git 重設。批次整批回 500。兩種同時存在時回這一種。平台告警 `TenantApiStoreUnreadable`（`tenant_api_store_unreadable_entries` 非 0 超過 10 分鐘）會提醒；修好後下一次寫入、`/validate` 或 `/effective` 會更新 gauge、告警解除。
+
+回應只對所有租戶都有寫入權限的呼叫者列出項目名稱，其他人只看到數量。另外，**要寫的租戶檔本身**讀取失敗或是 FIFO 時，回 409 `TENANT_CONFIG_NOT_LOADABLE`（任何角色都一樣，因為整檔替換會抹掉讀不到的內容）。與 exporter 的 `ConfigFilesUnreadable`（見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)）不同，這裡說的是 tenant-api 掛的那份 conf.d。細節見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md)。
 
 ## 相關資源
 

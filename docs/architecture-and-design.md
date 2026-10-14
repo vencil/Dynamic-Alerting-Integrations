@@ -260,8 +260,8 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | postgresql | postgres_exporter | 11 | 9 |
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
-| platform | threshold-exporter 自監控 | 0 | 47 |
-| **合計** | | **166** | **166** |
+| platform | threshold-exporter 自監控 | 0 | 48 |
+| **合計** | | **166** | **167** |
 <!-- RULE_PACK_STATS_END -->
 
 

@@ -96,22 +96,29 @@ func (f *treeFixture) head(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-// assertTreeRefusal checks a 409 single-write envelope: the code, the count,
-// and — only when visible — the entry's name.
+// assertTreeRefusal checks a 409 TENANT_TREE_UNREADABLE single-write
+// envelope with one entry (assertTreeRefusalAs).
 func assertTreeRefusal(t *testing.T, w *httptest.ResponseRecorder, entry string, visible bool) {
 	t.Helper()
-	if w.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409: %s", w.Code, w.Body.String())
+	assertTreeRefusalAs(t, w, http.StatusConflict, CodeTenantTreeUnreadable, 1, entry, visible)
+}
+
+// assertTreeRefusalAs checks a whole-tree refusal envelope: the status, the
+// code, the count, and — only when visible — the entry's name.
+func assertTreeRefusalAs(t *testing.T, w *httptest.ResponseRecorder, status int, code string, count int, entry string, visible bool) {
+	t.Helper()
+	if w.Code != status {
+		t.Fatalf("status = %d, want %d: %s", w.Code, status, w.Body.String())
 	}
 	var body map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("body: %v: %s", err, w.Body.String())
 	}
-	if body["code"] != CodeTenantTreeUnreadable {
-		t.Errorf("code = %v, want %s", body["code"], CodeTenantTreeUnreadable)
+	if body["code"] != code {
+		t.Errorf("code = %v, want %s", body["code"], code)
 	}
-	if body["unreadable_count"] != float64(1) {
-		t.Errorf("unreadable_count = %v, want 1", body["unreadable_count"])
+	if body["unreadable_count"] != float64(count) {
+		t.Errorf("unreadable_count = %v, want %d", body["unreadable_count"], count)
 	}
 	if got := strings.Contains(w.Body.String(), entry); got != visible {
 		t.Errorf("body names %s = %v, want %v: %s", entry, got, visible, w.Body.String())

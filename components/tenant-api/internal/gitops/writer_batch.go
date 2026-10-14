@@ -166,9 +166,9 @@ type stagingTree struct {
 	changed   map[string][]string
 	order     []string // changed paths relative to root, first-written order
 	// targets: every op's resolved tenant file, conf.d-relative (confRelKey)
-	// — the files the batch replaces, which the #2939 whole-tree verdict
-	// (refuseUnreadableTree, in applyBatch) does not count against it.
-	targets map[string]bool
+	// → its tenant — the files the batch replaces, which the #2939
+	// whole-tree verdict (judgeTree, in applyBatch) judges as targets.
+	targets map[string]string
 	// branchUnneeded (PR mode): the staging branch may be deleted with the
 	// worktree — it carries nothing worth keeping.
 	branchUnneeded bool
@@ -213,7 +213,7 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 		return nil, fmt.Errorf("add batch worktree: %w", err)
 	}
 	st := &stagingTree{root: root, configDir: filepath.Join(root, rel), rel: rel,
-		changed: map[string][]string{}, targets: map[string]bool{}}
+		changed: map[string][]string{}, targets: map[string]string{}}
 	if err := w.gitIn(root, "reset", "-q"); err != nil {
 		w.closeStaging(st)
 		return nil, fmt.Errorf("populate batch worktree index: %w", err)
@@ -421,39 +421,43 @@ func (w *Writer) stagingScan(st *stagingTree) func() (*cfg.TreeScan, error) {
 // that is a symlink — dangling, or pointing outside conf.d — becomes a
 // regular file and nothing is written where it pointed (#2939: ADR-036 §4's
 // repair path). PR mode used to write in place, through the link.
-func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
+//
+// target is the op's tenant file, conf.d-relative ("" when it was not
+// resolved), for applyBatch's whole-tree verdict.
+func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) (out BatchOpOutcome, target string) {
 	if err := guardTenantID(op.TenantID); err != nil {
-		return BatchOpOutcome{Err: err}
+		return BatchOpOutcome{Err: err}, ""
 	}
 	// #1673/#2078: one resolution per op, on the staging tree as the earlier
 	// ops left it — the file read by readMergeValidate and the file written
 	// below are the same one.
 	filePath, err := confd.TenantFilePathForWrite(st.configDir, op.TenantID)
 	if err == nil {
-		st.targets[confRelKey(st.configDir, filePath)] = true
+		target = confRelKey(st.configDir, filePath)
+		st.targets[target] = op.TenantID
 		err = w.ensureNotDeclaredElsewhereIn(w.stagingScan(st), op.TenantID, filePath)
 	}
 	if err != nil {
-		return BatchOpOutcome{Err: err}
+		return BatchOpOutcome{Err: err}, target
 	}
 	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge)
 	if errors.Is(err, ErrMergeNoOp) {
 		// B2: the merge changes nothing — accepted, nothing written, its
 		// notices kept (#1231 F5).
-		return BatchOpOutcome{NoOp: true, Notices: notices}
+		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if err != nil {
-		return BatchOpOutcome{Err: err}
+		return BatchOpOutcome{Err: err}, target
 	}
 	if existing != nil && string(existing) == content {
-		return BatchOpOutcome{NoOp: true, Notices: notices}
+		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
-		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}
+		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}, target
 	}
 	rel, err := filepath.Rel(st.root, filePath)
 	if err != nil {
-		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, err)}
+		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, err)}, target
 	}
 	if _, seen := st.changed[rel]; !seen {
 		st.order = append(st.order, rel)
@@ -461,19 +465,29 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
 	if !containsString(st.changed[rel], op.TenantID) {
 		st.changed[rel] = append(st.changed[rel], op.TenantID)
 	}
-	return BatchOpOutcome{Notices: notices}
+	return BatchOpOutcome{Notices: notices}, target
 }
 
 // applyBatch runs every op on the staging tree — every op is judged, even
 // after one is refused, so a caller can report every refusal. ctx is checked
 // before each op: a cancelled batch stops there and is not written.
 //
-// Then the whole tree (#2939, ADR-036 §4): judge is the walk of the tree the
-// batch lands on, and an unreadable entry in it that no op of the batch
-// replaces (refuseUnreadableTree, st.targets) refuses the batch — every op
-// not already refused gets that *TreeUnreadableError as its own refusal, so
-// the caller reports it per op like any other. A judge walk that fails is the
-// whole batch's error (ErrTenantTreeScan), as a placement walk's is.
+// Then the whole tree (#2939, ADR-036 §4; judgeTree with st.targets): judge
+// is the walk of the tree the batch lands on.
+//   - A store fault (ErrTenantStoreFault) fails the batch WHOLE: it is about
+//     tenant-api's copy, not about any op, so no op could be fixed or dropped
+//     to get past it — the same shape as a batch that cannot be copied,
+//     committed or admitted (TREE_NOT_ON_BASE, WRITE_OVERLOADED). It wins
+//     over every per-op refusal, as on a single write.
+//   - An op whose own tenant file is unreadable and not a dangling symlink
+//     gets that *TargetUnreadableError as its refusal (it replaces any
+//     error its merge hit reading the file, which says less).
+//   - Dangling symlinks no op replaces (ErrTenantTreeUnreadable): every op
+//     not already refused gets that error as its own refusal, so the caller
+//     reports it per op like any other.
+//
+// A judge walk that fails is the whole batch's error (ErrTenantTreeScan), as
+// a placement walk's is.
 //
 // judge is the SERVING tree's walk in direct mode (scanTree): the staging
 // copy cannot reproduce a directory the serving walk could not list
@@ -482,12 +496,13 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) BatchOpOutcome {
 // tree is the fresh base, checked out there.
 func (w *Writer) applyBatch(ctx context.Context, st *stagingTree, ops []BatchOp, judge func() (*cfg.TreeScan, error)) ([]BatchOpOutcome, error) {
 	outcomes := make([]BatchOpOutcome, len(ops))
+	opTargets := make([]string, len(ops))
 	refused := false
 	for i, op := range ops {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		outcomes[i] = w.applyBatchOp(st, op)
+		outcomes[i], opTargets[i] = w.applyBatchOp(st, op)
 		refused = refused || outcomes[i].Err != nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -497,7 +512,17 @@ func (w *Writer) applyBatch(ctx context.Context, st *stagingTree, ops []BatchOp,
 	if err != nil {
 		return nil, fmt.Errorf("%w: batch: %w", ErrTenantTreeScan, err)
 	}
-	if treeErr := refuseUnreadableTree(scan, st.targets); treeErr != nil {
+	perTarget, treeErr := judgeTree(scan, st.targets)
+	if errors.Is(treeErr, ErrTenantStoreFault) {
+		return nil, fmt.Errorf("batch: %w", treeErr)
+	}
+	for i := range outcomes {
+		if err := perTarget[opTargets[i]]; opTargets[i] != "" && err != nil {
+			outcomes[i] = BatchOpOutcome{Err: err}
+			refused = true
+		}
+	}
+	if treeErr != nil {
 		for i := range outcomes {
 			if outcomes[i].Err == nil {
 				outcomes[i] = BatchOpOutcome{Err: treeErr}

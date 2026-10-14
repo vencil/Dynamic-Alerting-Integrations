@@ -57,10 +57,10 @@ type DiffResponse struct {
 // @Param       body  body     DiffRequest true "Proposed YAML"
 // @Success     200   {object} DiffResponse
 // @Failure     400   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an entry that cannot be read — a FIFO, socket or device named like a config file, a dangling symlink, a file whose read fails, a sub-directory that cannot be listed — other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants)"
+// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds a dangling symlink other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse
-// @Failure     500   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not a dangling link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE (the 500 the PUT this previews would get)"
 // @Router      /api/v1/tenants/{id}/diff [post]
 func DiffTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {

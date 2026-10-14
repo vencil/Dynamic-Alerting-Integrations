@@ -9,6 +9,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,7 +52,8 @@ func treeVerdictVia(t *testing.T, mode string, w *Writer, tenantID string) error
 	case "DryRunValidate":
 		errs, _, err := w.DryRunValidate(ctx, tenantID, body)
 		if err == nil && len(errs) > 0 {
-			t.Fatalf("DryRunValidate: unexpected validation errors %q", errs)
+			// Returned, not t.Fatalf: callers may run this on another goroutine.
+			return fmt.Errorf("DryRunValidate: validation errors %q", errs)
 		}
 		return err
 	case "Diff":
@@ -62,12 +64,17 @@ func treeVerdictVia(t *testing.T, mode string, w *Writer, tenantID string) error
 }
 
 // assertTreeUnreadable checks err is the whole-tree refusal naming exactly
-// want.
-func assertTreeUnreadable(t *testing.T, mode string, err error, want []cfg.UnreadableFile) {
+// want: a store fault (ErrTenantStoreFault) when storeFault, else the
+// git-fixable ErrTenantTreeUnreadable.
+func assertTreeUnreadable(t *testing.T, mode string, err error, want []cfg.UnreadableFile, storeFault bool) {
 	t.Helper()
+	sentinel := ErrTenantTreeUnreadable
+	if storeFault {
+		sentinel = ErrTenantStoreFault
+	}
 	var te *TreeUnreadableError
-	if !errors.As(err, &te) || !errors.Is(err, ErrTenantTreeUnreadable) {
-		t.Fatalf("%s: err = %v, want *TreeUnreadableError (ErrTenantTreeUnreadable)", mode, err)
+	if !errors.As(err, &te) || !errors.Is(err, sentinel) || te.StoreFault != storeFault {
+		t.Fatalf("%s: err = %v, want *TreeUnreadableError (%v)", mode, err, sentinel)
 	}
 	if !reflect.DeepEqual(te.Entries, want) {
 		t.Errorf("%s: entries = %v, want %v", mode, te.Entries, want)
@@ -88,7 +95,7 @@ func TestTreeUnreadable_DanglingSymlinkElsewhereRefusesEveryPath(t *testing.T) {
 			gitRun(t, dir, "commit", "-m", "dangling link")
 			head := gitRevParse(t, dir, "HEAD")
 			err := treeVerdictVia(t, mode, NewWriter(dir, dir), "dang-t")
-			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError}})
+			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError}}, false)
 			if got := gitRevParse(t, dir, "HEAD"); got != head {
 				t.Errorf("HEAD moved %s → %s", head, got)
 			}
@@ -229,22 +236,28 @@ func TestTreeUnreadable_PreviewMatchesWrite(t *testing.T) {
 					}
 					continue
 				}
-				assertTreeUnreadable(t, mode, err, c.want)
+				assertTreeUnreadable(t, mode, err, c.want, false)
 			}
 		})
 	}
 }
 
 // The error the handlers log (logTreeUnreadable) names every entry and its
-// reason, whatever the caller is shown (#2939 D3a).
+// reason, whatever the caller is shown (#2939 D3a); the written file is
+// judged apart (perTarget), and a non-dangling entry makes it a store fault.
 func TestTreeUnreadableError_NamesEveryEntry(t *testing.T) {
-	err := refuseUnreadableTree(&cfg.TreeScan{Unreadable: []cfg.UnreadableFile{
+	scan := &cfg.TreeScan{AbsRoot: t.TempDir(), Unreadable: []cfg.UnreadableFile{
 		{RelKey: "a.yaml", Reason: cfg.UnreadableSpecialFile},
 		{RelKey: "t.yaml", Reason: cfg.UnreadableStatError},
 		{RelKey: "team", Reason: cfg.UnreadableWalkError},
-	}}, map[string]bool{"t.yaml": true})
-	want := ErrTenantTreeUnreadable.Error() + ": a.yaml (special_file), team (walk_error)"
-	if err == nil || err.Error() != want {
-		t.Fatalf("err = %v, want %q (the target t.yaml excluded)", err, want)
+	}}
+	perTarget, tree := judgeTree(scan, map[string]string{"t.yaml": "t"})
+	want := ErrTenantStoreFault.Error() + ": a.yaml (special_file), team (walk_error)"
+	if tree == nil || tree.Error() != want || !errors.Is(tree, ErrTenantStoreFault) {
+		t.Fatalf("tree = %v, want %q (the target t.yaml left out)", tree, want)
+	}
+	var te *TargetUnreadableError
+	if !errors.As(perTarget["t.yaml"], &te) || te.Reason != cfg.UnreadableStatError {
+		t.Errorf("perTarget[t.yaml] = %v, want the target's own refusal", perTarget["t.yaml"])
 	}
 }

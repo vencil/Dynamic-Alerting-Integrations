@@ -405,7 +405,10 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			// on — the branch is cut from the fresh origin base, where the
 			// file may already be repaired. Tolerated here; the
 			// post-checkout loop re-merges and refuses (abortFeatureBranch).
-			if errors.Is(err, ErrMergeBaseNotLoadable) {
+			// #2939: so is a tenant file the local tree cannot read; on the
+			// base it lands on, judgeTree refuses it (TargetUnreadableError)
+			// or the read succeeds.
+			if errors.Is(err, ErrMergeBaseNotLoadable) || errors.Is(err, errReadTenantFile) {
 				continue
 			}
 			return nil, err

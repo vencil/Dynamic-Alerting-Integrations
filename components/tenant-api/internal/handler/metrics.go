@@ -162,6 +162,10 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// #2913: async batch tasks whose work panicked (recovered, marked failed).
 	writeAsyncTaskMetrics(w)
 
+	// #2939 D3c: entries of tenant-api's conf.d copy the server cannot read
+	// (every write answers 500 TENANT_STORE_FAULT while one is there).
+	writeStoreUnreadableMetrics(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0

@@ -411,6 +411,11 @@ type Writer struct {
 	// (scanTreeForRead).
 	treePrior atomic.Pointer[cfg.TreeScan]
 
+	// storeUnreadable is StoreFaultCounts of the last serving conf.d walk
+	// that completed (the walks that become treePrior), nil before the
+	// first. Read by StoreUnreadable for tenant_api_store_unreadable_entries.
+	storeUnreadable atomic.Pointer[map[string]int]
+
 	// onTreeScan is a TEST-ONLY seam (#2153): walkTree calls it, when
 	// non-nil, once per walk it starts, on the walking goroutine inside the
 	// treeScanTimeout bound — so a test can hold a walk open, or make it
@@ -880,6 +885,13 @@ var ErrMergeNoOp = errors.New("merge changes nothing")
 // tolerates it (see there); the post-checkout pass decides.
 var ErrMergeBaseNotLoadable = errors.New("merge base cannot be loaded as a tenant config")
 
+// errReadTenantFile wraps (errors.Is) readMerge's failure to read the tenant
+// file — a verdict on the tree it was read from, which WritePRBatch's
+// pre-flight tolerates (#2939: the fresh base decides, where judgeTree
+// refuses an unreadable tenant file with TargetUnreadableError). Its text is
+// the prefix readMerge always used.
+var errReadTenantFile = errors.New("read current tenant file")
+
 // ErrMergeFailed wraps (errors.Is) every error a caller's MergeFunc returned,
 // as readMerge reports it. A merge error describes the patch against the
 // file's content, which the caller is meant to read; the other errors out of
@@ -934,8 +946,9 @@ func (w *Writer) previewTenantFilePath(tenantID string) (string, error) {
 // resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath;
 // walk is the conf.d walk the #2078 guard judges. The same walk then decides
 // #2939's whole-tree verdict (refuseUnreadableTree): an unreadable conf.d
-// entry other than path refuses the write — and, the preview resolving here
-// too, the preview — with *TreeUnreadableError.
+// entry refuses the write — and, the preview resolving here too, the
+// preview — with *TreeUnreadableError (git-fixable, or a store fault), or,
+// for path itself when it is not a dangling symlink, *TargetUnreadableError.
 func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeScan, error)) (string, error) {
 	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
 	if err != nil {
@@ -950,7 +963,7 @@ func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeSc
 	if err := w.ensureNotDeclaredElsewhereIn(walked, tenantID, path); err != nil {
 		return "", err
 	}
-	if err := refuseUnreadableTree(scan, map[string]bool{confRelKey(w.configDir, path): true}); err != nil {
+	if err := refuseUnreadableTree(scan, confRelKey(w.configDir, path), tenantID); err != nil {
 		return "", fmt.Errorf("tenant %s: %w", tenantID, err)
 	}
 	return path, nil
@@ -1108,7 +1121,27 @@ func (w *Writer) walkTreeFrom(stuck *atomic.Int32, withPrior bool) (*cfg.TreeSca
 	if withPrior {
 		prior = w.treePrior.Load()
 	}
-	return w.walkDir(w.configDir, stuck, prior, func(s *cfg.TreeScan) { w.treePrior.Store(s) })
+	return w.walkDir(w.configDir, stuck, prior, func(s *cfg.TreeScan) {
+		w.treePrior.Store(s)
+		counts := StoreFaultCounts(s)
+		w.storeUnreadable.Store(&counts)
+	})
+}
+
+// StoreUnreadable returns the store faults (#2939, see judgeTree) of the
+// last serving conf.d walk that completed, by the walker's reason — a write,
+// a preview or a read of /effective walks it — and ok false before any walk
+// completed. The map is the caller's.
+func (w *Writer) StoreUnreadable() (counts map[string]int, ok bool) {
+	p := w.storeUnreadable.Load()
+	if p == nil {
+		return nil, false
+	}
+	counts = make(map[string]int, len(*p))
+	for k, v := range *p {
+		counts[k] = v
+	}
+	return counts, true
 }
 
 // walkDir is the bounded conf.d walk of root with prior as the walker's prior;
@@ -1212,7 +1245,7 @@ func (w *Writer) ensureNotDeclaredElsewhereIn(walk func() (*cfg.TreeScan, error)
 func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, err error) {
 	existing, rerr := confd.ReadRegularFile(filePath)
 	if rerr != nil && !os.IsNotExist(rerr) {
-		return "", nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+		return "", nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
 	}
 	content, merr := merge(existing)
 	if merr != nil {
@@ -2072,7 +2105,10 @@ func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string, r
 		}
 		// err != nil with the bit: baseline unknown ⇒ oldAlerts stays empty.
 	case !os.IsNotExist(baseErr):
-		return []string{"internal error: cannot read current custom alerts: " + pathlessErrText(baseErr)}
+		// Reached only when the file became unreadable after the write's
+		// walk (the walk refuses an unreadable tenant file first:
+		// TargetUnreadableError), so it says what failed, not "internal".
+		return []string{"cannot read the current tenant file to compare its custom alerts: " + pathlessErrText(baseErr)}
 	}
 	newAlerts, err := customalerts.Extract(yamlContent, tenantID)
 	if err != nil {

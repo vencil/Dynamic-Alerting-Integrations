@@ -1072,6 +1072,45 @@ data:
                 window.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
 
+          # --- tenant-api conf.d copy has entries the server cannot read (#2939) ---
+          # tenant-api judges every write on the conf.d tree after it (ADR-036
+          # §4). An entry of ITS OWN copy that the server cannot read and git
+          # cannot hold — a FIFO/socket/device named like a config file, a failed
+          # read, an unlistable directory, a failed stat that is not a dangling
+          # link — refuses EVERY write with 500 TENANT_STORE_FAULT, and nothing a
+          # client sends clears it. The gauge is the last conf.d walk's count
+          # (writes, previews and /effective walk), so it is current whenever
+          # anyone tries to write. Dangling symlinks are NOT counted: they are
+          # content git holds, answered 409 TENANT_TREE_UNREADABLE, fixed in git.
+          #
+          # `> 0` with `for: 10m`: no entry of this kind is benign, but a write
+          # racing a short-lived file swap should not page. warning, not critical:
+          # reads and the exporter (its own copy, ConfigFilesUnreadable) go on.
+          # `max by (job, instance)` keeps one alert per pod whatever the reasons.
+          - alert: TenantApiStoreUnreadable
+            expr: max by (job, instance) (tenant_api_store_unreadable_entries{job="tenant-api"}) > 0
+            for: 10m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api's conf.d copy has entries the server cannot read — every write answers 500 TENANT_STORE_FAULT"
+              description: |
+                tenant-api's own copy of conf.d holds {{ $value }} or more entries
+                of one kind the server cannot read and git cannot hold
+                (tenant_api_store_unreadable_entries by reason: special_file = a
+                FIFO, socket or device named like a config file; read_error;
+                walk_error = a directory that cannot be listed; stat_error = a
+                failed stat that is not a dangling link). Every write through
+                tenant-api answers 500 TENANT_STORE_FAULT until it is gone; reads
+                are unaffected. This is the server's storage, not the
+                configuration: find the entries in the tenant-api log ("conf.d
+                holds unreadable entries" names them), then remove or repair them
+                on the pod's volume, or reset the copy from git. The gauge
+                refreshes on the next conf.d walk (any write, /validate or
+                /effective), which clears the alert.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
+
           # --- Prometheus reload failure (#1246) ---
           # The config-reloader sidecar added in #1246 automates what used to be a
           # manual POST /-/reload — and in doing so creates a failure mode that did

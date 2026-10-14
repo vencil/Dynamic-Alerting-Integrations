@@ -208,27 +208,37 @@ This is an interim measure: the long-term fix is a reference form for credential
 
 ### 3.8 A write is refused while conf.d holds an entry that cannot be read ([#2939](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2939))
 
-**Behaviour change (breaking)**: a write is judged on the whole conf.d tree as it will be after the write ([ADR-036 §4](../adr/036-single-parser-effective-config.en.md)). The route generator's `--validate --strict` refuses a tree holding any entry it cannot read, and `da-guard` exits 3 on one; so tenant-api refuses the write too, with error code `TENANT_TREE_UNREADABLE`, and writes nothing.
+**Behaviour change (breaking)**: a write is judged on the whole conf.d tree as it will be after the write ([ADR-036 §4](../adr/036-single-parser-effective-config.en.md)). The route generator's `--validate --strict` refuses a tree holding any entry it cannot read, and `da-guard` exits 3 on one; so tenant-api refuses the write too and writes nothing. The response depends on whether the entry can be fixed in git:
 
-| Entry | `reason` the walker records |
-|---|---|
-| A FIFO, socket or device named like a config file, or a symlink to one | `special_file` |
-| A dangling symlink, or another failed stat | `stat_error` |
-| A file whose stat succeeds but whose read fails (e.g. an I/O error) | `read_error` |
-| A sub-directory that cannot be listed | `walk_error` |
+| Entry (the walker's `reason`) | Fixable in git? | Response |
+|---|---|---|
+| A dangling symlink (`stat_error`: the link exists, its target does not) | Yes: git holds it (mode 120000) | 409 `TENANT_TREE_UNREADABLE` |
+| A FIFO, socket or device named like a config file, or a symlink to one (`special_file`) | No: git cannot hold it | 500 `TENANT_STORE_FAULT` |
+| A file whose stat succeeds but whose read fails, e.g. an I/O error (`read_error`) | No: it is the server's storage state | 500 `TENANT_STORE_FAULT` |
+| A sub-directory that cannot be listed (`walk_error`) | No | 500 `TENANT_STORE_FAULT` |
+| Another failed stat, e.g. permissions or a symlink loop (`stat_error`, not dangling) | No | 500 `TENANT_STORE_FAULT` |
 
-| Endpoint | Response |
-|---|---|
-| `PUT /tenants/{id}`, `PUT /tenants/{id}/custom-alerts` | 409 `TENANT_TREE_UNREADABLE` |
-| `POST /tenants/{id}/diff` | 409 `TENANT_TREE_UNREADABLE` (the same as the PUT it previews) |
-| `POST /tenants/{id}/validate` | 200 with `valid: false`; `warnings` is the text PUT would return. **Except in PR mode**: there validate checks the body only and does not read the tree (#1718: the local tree may lag the base), so it does not predict this refusal; it is decided when the branch is cut |
-| `POST /tenants/batch`, `POST /groups/{id}/batch` (direct and PR mode) | 422, nothing of the batch written; every op not refused for another reason is `status: error`, `code: TENANT_TREE_UNREADABLE` |
+When both kinds are present the answer is `TENANT_STORE_FAULT`: the server's copy has to be repaired before an answer about the configuration's content means anything, and a 409 would send the client to git to fix something git cannot fix. `TENANT_STORE_FAULT` is a storage problem of tenant-api's own copy of conf.d, not of the configuration, and not [ADR-036 §5](../adr/036-single-parser-effective-config.en.md)'s 503 (the generator container being unavailable).
 
-- **The file the write replaces does not count**: when the tenant file being written is itself a dangling symlink, the write replaces it with a regular file (in direct and PR mode alike, by renaming over the directory entry itself — never writing through the link to where it points) and goes through — ADR-036 §4's repair path. A batch leaves out the tenant files of all its ops. When the tenant file is itself a FIFO, socket or device, tenant-api does not replace it and still answers 409 `TENANT_CONFIG_NOT_LOADABLE` (the same code on that op of a batch). When the tenant file cannot be read (`read_error`), the whole-tree check does not count it either, but the existing eol check still refuses the write (it does not pass a current file it cannot read; see #2405).
-- **What these requests got before**: with a FIFO elsewhere in conf.d, a single write hung for about 5 seconds (the walk's time limit) and then answered 500, and a batch answered 500 while copying conf.d; a dangling symlink and the other entries did not stop a write. They now get the 409 / 422 above.
+| Endpoint | Dangling symlink | Unreadable on the server |
+|---|---|---|
+| `PUT /tenants/{id}`, `PUT /tenants/{id}/custom-alerts` | 409 `TENANT_TREE_UNREADABLE` | 500 `TENANT_STORE_FAULT` |
+| `POST /tenants/{id}/diff` | 409 (the same as the PUT it previews) | 500 (likewise) |
+| `POST /tenants/{id}/validate` | 200 with `valid: false`; `warnings` is the text PUT would return | likewise |
+| `POST /tenants/batch`, `POST /groups/{id}/batch` (direct and PR mode) | 422, nothing of the batch written; every op not refused for another reason is `status: error`, `code: TENANT_TREE_UNREADABLE` | the **whole batch** answers 500 `TENANT_STORE_FAULT` (not a 422 per op: the problem belongs to no op and no change to the ops gets past it — the same shape as a full write queue or a worktree left on a PR branch); an async batch's task is `failed`, every result carrying the same code |
+
+**`/validate` in PR mode is the exception**: there validate checks the body only and does not read the tree (#1718: the local tree may lag the base), so it predicts neither refusal; they are decided when the branch is cut.
+
+- **The tenant file the write replaces**:
+  - A dangling symlink: the write replaces it with a regular file (in direct and PR mode alike, by renaming over the directory entry itself — never writing through the link to where it points) and goes through. This is ADR-036 §4's repair path: the link has no content, so nothing is lost. A batch leaves out the tenant files of all its ops.
+  - A failed read (`read_error`), a FIFO or another non-regular file, or another failed stat: always 409 `TENANT_CONFIG_NOT_LOADABLE` (`config_error` `unreadable` or `not_regular_file`; the same code on that op of a batch), **for every caller**, the one with write permission on all tenants included. The file has content that cannot be read, and replacing it would silently erase that content (#2405 already refuses a file that cannot be read). It is fixed on the server or volume, or by resetting from git.
+- **What these requests got before**: with a FIFO elsewhere in conf.d, a single write hung for about 5 seconds (the walk's time limit) and then answered 500, and a batch answered 500 while copying conf.d; a dangling symlink and the other entries did not stop a write.
 - **PR mode** judges the latest base the branch is cut from, i.e. the tree as git holds it: an entry that is not committed (a FIFO in the serving directory, for example) is not there. A single PR-mode write walks the serving worktree and does see it; a PR-mode batch does not.
-- **Who sees the entry names**: an unreadable entry can be any tenant's file, so only a caller with write permission on **all** tenants (an RBAC rule with `tenants: ["*"]` and `write`, and no org-scope, environments or domains — the same bar #2405 sets for replacing a file that cannot be parsed) is told which entries and their `reason`: in a single write's 409 the `error` text lists them, and `unreadable: [{path, reason}]` carries them; in a batch, the op's `message`. Every other caller gets the fixed text and the number of entries (`unreadable_count`; `(unreadable entries: N)` in a batch op's `message`). Giving the number does not conflict with §3.6's "no number": §3.6 keeps hidden group members from being counted, while this is only how many entries are broken, and it reveals no tenant. An async batch's results are stored in its task and served to whoever polls it, so they never carry the names, even when the submitter may see them. The full names always go to the server log, whoever the caller is.
-- **How to fix it**: repair or remove the entries in git (a FIFO or another non-regular file, or a dangling symlink, is fixed in git or in whatever mounts conf.d). Until then every write through tenant-api is refused.
+- **Who sees the entry names**: an unreadable entry can be any tenant's file, so only a caller with write permission on **all** tenants (an RBAC rule with `tenants: ["*"]` and `write`, and no org-scope, environments or domains — the same bar #2405 sets for replacing a file that cannot be parsed) is told which entries and their `reason`: in a single write's `error` text, and in `unreadable: [{path, reason}]`; in a batch, in `message`. Every other caller gets the fixed text and the number of entries (`unreadable_count`; `(unreadable entries: N)` in `message`). Giving the number does not conflict with §3.6's "no number": §3.6 keeps hidden group members from being counted, while this is only how many entries are broken, and it reveals no tenant. An async batch's results are stored in its task and served to whoever polls it, so they never carry the names, even when the submitter may see them. The full names always go to the server log, whoever the caller is.
+- **How to fix it**:
+  - `TENANT_TREE_UNREADABLE`: repair or remove the dangling symlinks in git; when the tenant file being written is itself one, writing it through tenant-api is enough.
+  - `TENANT_STORE_FAULT`: find the entries in the server log (`conf.d holds unreadable entries`) and remove or repair them on tenant-api's pod / volume, or reset that copy of conf.d from git. Until then every write through tenant-api is refused.
+- **Monitoring**: when `tenant_api_store_unreadable_entries{reason}` (a gauge taken from the last completed conf.d walk; writes, previews and `/effective` walk it) stays above 0 for 10 minutes, the platform alert `TenantApiStoreUnreadable` (warning) fires; after the repair the next walk returns it to 0 and the alert clears. Dangling symlinks are not counted.
 
 ---
 

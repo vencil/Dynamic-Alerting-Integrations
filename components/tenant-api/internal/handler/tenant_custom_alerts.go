@@ -20,8 +20,10 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -75,8 +77,10 @@ type PutCustomAlertsResponse struct {
 // @Description repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
 // @Description not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
 // @Description whole-file PUT refuses it too, so replace it with a regular file in git.
-// @Description 409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an entry that cannot be read
-// @Description other than the tenant's file (#2939; nothing written).
+// @Description 409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds a dangling symlink other
+// @Description than the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot
+// @Description read (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's
+// @Description own file cannot be read.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -86,9 +90,9 @@ type PutCustomAlertsResponse struct {
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse "Conflict: base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an entry that cannot be read — a FIFO, socket or device named like a config file, a dangling symlink, a file whose read fails, a sub-directory that cannot be listed — other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants)"
+// @Failure     409   {object} ErrorResponse "Conflict: base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds a dangling symlink other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
 // @Failure     413   {object} ErrorResponse
-// @Failure     500   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not a dangling link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/custom-alerts [put]
@@ -181,7 +185,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			// #2939 D3c: the file exists and cannot be read — the same 409
+			// TENANT_CONFIG_NOT_LOADABLE the write's own judgement gives
+			// (gitops.TargetUnreadableError), not a 500.
+			writeTenantTargetUnreadable(w, r, fmt.Errorf("%w: %w", &gitops.TargetUnreadableError{
+				TenantID: tenantID, RelKey: filepath.Base(filePath), Reason: cfg.UnreadableReadError}, err))
 			return
 		}
 

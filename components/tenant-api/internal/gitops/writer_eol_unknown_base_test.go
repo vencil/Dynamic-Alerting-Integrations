@@ -142,7 +142,7 @@ func TestEolGuard_KnownBaselineUnchanged(t *testing.T) {
 	}
 	unreadable := &fs.PathError{Op: "read", Path: "x.yaml", Err: errors.New("input/output error")}
 	errs := eolGuardErrs(nil, unreadable, eolBody(), eolTestTenant, false, fakeEolViolations)
-	if len(errs) != 1 || !strings.Contains(errs[0], "cannot read current custom alerts") {
+	if len(errs) != 1 || !strings.Contains(errs[0], "cannot read the current tenant file") {
 		t.Errorf("unreadable base: errs = %q, want the read-failure refusal", errs)
 	}
 }
