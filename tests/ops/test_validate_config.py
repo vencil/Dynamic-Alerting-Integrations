@@ -20,6 +20,7 @@ import yaml
 
 import validate_config as vc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _platform_fs import require_shebang_scripts  # noqa: E402
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -451,6 +452,31 @@ class TestProfilesCheck:
                 assert any(x.startswith(f"_profiles.yaml: profiles.{field} is not rendered")
                            for x in result["details"]), (field, result)
             assert not [x for x in result["details"] if x.startswith("profile=")], result
+
+    def test_failing_check_run_fails_the_row_as_the_binarys_fault(self, tmp_path, monkeypatch,
+                                                                   da_guard_binary):
+        """#2914: the routing-layer-key verdict is a second da-guard run (the
+        check itself). When `effective` answers but that run fails, the row
+        FAILs as da-guard's fault — never PASSes on findings it did not get."""
+        require_shebang_scripts()
+        fake = tmp_path / "guard-check-fails"
+        fake.write_text(f'#!/bin/sh\nif [ "$1" = effective ]; then exec "{da_guard_binary}" "$@"; fi\n'
+                        "echo 'check run broke' >&2\nexit 5\n", encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("DA_GUARD_BINARY", str(fake))
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        self._tree(str(d), {
+            "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n",
+            "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+            "tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: p\n",
+        })
+        result = vc.check_profiles(str(d))
+        assert result["status"] == vc.FAIL and result["caller_error"], result
+        assert result["hint"] == vc._DA_GUARD_BROKEN_HINT, result
+        # the check run's error (`da-guard exited 5`), not `effective`'s
+        assert "ERROR: da-guard exited 5" in result["details"], result
+        assert any("check run broke" in x for x in result["details"]), result
 
     def test_metadata_in_profile_passes(self):
         """#2914: a profile's `_metadata` is a documented fill-in (#2830), not
