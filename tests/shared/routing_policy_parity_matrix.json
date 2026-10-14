@@ -80,6 +80,7 @@
     "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
     "platform row, field = the key path in that file. Since #2904 the generator reports the same row (a blocking",
     "`WARN ... skipping`, --validate fails), so both halves compare it.",
+    "#2914 - in a threshold profile every routing-layer key is such a row, not only `_routing*`: `_severity_dedup` and any key starting with `_routing` (Go config.IsRoutingLayerKey, Python _grar_parse._is_routing_layer_key), whether or not a tenant elects the profile; the exporter does not fill them in either. A profile that is null or empty carries none. A profile that is a scalar or a list (or a `profiles:` that is) makes the exporter drop the whole file, da-guard exit 3, so it is no tree here.",
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
     "#2677 - merge precedence is PyYAML's SafeConstructor.flatten_mapping in the generator and da-guard: a key the mapping writes itself wins; among several merge keys in one mapping (`<<:` beside a tagged `!!merge x:`) the LATER one wins; within one merge sequence (`<<: [*a, *b]`) the EARLIER source wins; a merge source is itself flattened by the same rules first. The trees domain-policy-merge-key-order(-top) pin it; their policy cells are the generator's own --strict lines.",
@@ -7191,6 +7192,128 @@
               "type": "slack"
             }
           ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "threshold-profile-severity-dedup-2914",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_profiles.yaml": "profiles:\n  p-dedup:\n    cpu_usage_percent: 60\n    _severity_dedup: disable\n  p-unused:\n    _severity_dedup: enable\n",
+        "t-dedup.yaml": "tenants:\n  t-dedup:\n    _profile: p-dedup\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "_profiles.yaml",
+          "profiles.p-dedup._severity_dedup"
+        ],
+        [
+          "routing_in_unread_location",
+          "_profiles.yaml",
+          "profiles.p-unused._severity_dedup"
+        ]
+      ],
+      "expect": {
+        "t-dedup": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "threshold-profile-routing-and-dedup-2914",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  hook-free:\n    constraints:\n      forbidden_receiver_types:\n      - webhook\n    tenants:\n    - t-both\n",
+        "_platform.yaml": "profiles:\n  p-both:\n    cpu_usage_percent: 60\n    _severity_dedup: disable\n    _routingx: 1\n    _metadata:\n      owner: x\n    _silent_mode: warning\n    _routing:\n      receiver:\n        type: webhook\n        url: https://p.example/hook\n",
+        "t-both.yaml": "tenants:\n  t-both:\n    _profile: p-both\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "_platform.yaml",
+          "profiles.p-both._routing"
+        ],
+        [
+          "routing_in_unread_location",
+          "_platform.yaml",
+          "profiles.p-both._routingx"
+        ],
+        [
+          "routing_in_unread_location",
+          "_platform.yaml",
+          "profiles.p-both._severity_dedup"
+        ]
+      ],
+      "expect": {
+        "t-both": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "threshold-profile-not-a-mapping-2914",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "profiles: ~\n",
+        "_profiles.yaml": "profiles:\n  p-null: ~\n  p-empty: {}\n  p-dedup:\n    _severity_dedup: disable\n",
+        "t-null.yaml": "tenants:\n  t-null:\n    _profile: p-null\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "_profiles.yaml",
+          "profiles.p-dedup._severity_dedup"
+        ]
+      ],
+      "expect": {
+        "t-null": {
+          "targets": null,
           "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
