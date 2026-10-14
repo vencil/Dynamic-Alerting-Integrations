@@ -678,7 +678,7 @@ class TestExitCode:
         with pytest.raises(SystemExit) as exc:
             bd.main()
         assert exc.value.code == 2
-        # argparse alone would say "invalid _positive_int value"; name the problem.
+        # argparse alone would say "invalid positive_int value"; name the problem.
         assert "not an integer: 'abc'" in capsys.readouterr().err
 
     def test_an_explicit_worker_count_is_used(self, monkeypatch, capsys, cli_argv):

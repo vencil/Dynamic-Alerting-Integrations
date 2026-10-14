@@ -857,6 +857,39 @@ class TestCLI:
         assert "--timeout" in capsys.readouterr().err
         mock_urlopen.assert_not_called()
 
+    @pytest.mark.parametrize("value", ["-1", "nan", "inf", "abc"])
+    def test_rate_limit_must_be_zero_or_above(self, tmp_path, capsys, value):
+        """#2966: a negative pause was skipped silently by the ``> 0`` guard
+        and ``inf`` raised OverflowError in time.sleep after the first
+        receiver had been tested; all are refused before any request."""
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", routing={"receiver": {"type": "webhook",
+                                          "url": "https://hooks.example.com"}}))
+        with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
+                                 "--rate-limit", value]):
+            with patch("notification_tester.urllib.request.urlopen") as mock_urlopen:
+                with pytest.raises(SystemExit) as exc_info:
+                    nt.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert "--rate-limit" in capsys.readouterr().err
+        mock_urlopen.assert_not_called()
+
+    @pytest.mark.parametrize("value, expected", [("0", 0.0), ("0.25", 0.25)])
+    def test_rate_limit_zero_and_fraction_reach_the_tester(self, tmp_path, value, expected):
+        """Control for the test above: 0 keeps its "do not wait" meaning."""
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", routing={"receiver": {"type": "webhook",
+                                          "url": "https://hooks.example.com"}}))
+        with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
+                                 "--rate-limit", value]):
+            with patch("notification_tester.run_all_tests",
+                       return_value=[]) as mock_all:
+                try:
+                    nt.main()
+                except SystemExit as e:
+                    assert e.code in (0, None)
+        assert mock_all.call_args.kwargs["rate_limit"] == expected
+
     def test_fractional_timeout_reaches_urlopen(self, tmp_path):
         """Control for the test above: a value above 0 is accepted as is."""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(

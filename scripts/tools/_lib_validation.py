@@ -82,6 +82,65 @@ def positive_seconds(value: str) -> float:
     return seconds
 
 
+def non_negative_seconds(value: str) -> float:
+    """argparse ``type=`` for a pause in seconds where 0 means "do not wait" (#2966).
+
+    The sibling of :func:`positive_seconds` for a rate limit, a throttle or a
+    poll interval: a finite number from 0 up to ``threading.TIMEOUT_MAX``,
+    fractions allowed; anything else is refused, so argparse exits 2
+    (CALLER_ERROR) before any work. A negative pause used to be skipped
+    silently by a ``> 0`` guard (or raise ValueError in ``time.sleep``), and
+    ``inf`` raised OverflowError in ``time.sleep`` partway through a run.
+    """
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {value!r}") from None
+    if not math.isfinite(seconds) or seconds < 0 or seconds > threading.TIMEOUT_MAX:
+        raise argparse.ArgumentTypeError(
+            f"must be a number of seconds from 0 to "
+            f"{threading.TIMEOUT_MAX:.0f}: {value!r}")
+    return seconds
+
+
+def positive_int(value: str) -> int:
+    """argparse ``type=`` for a count that must be at least 1 (#2966).
+
+    ``int()`` parsing (so ``"1.5"`` is refused), then ``>= 1``; anything else
+    raises ArgumentTypeError, so argparse exits 2 (CALLER_ERROR) with a
+    message that names the problem instead of the function.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {number}")
+    return number
+
+
+def positive_int_seconds(value: str) -> int:
+    """argparse ``type=`` for a whole number of seconds above 0 (#2966).
+
+    For a value that is both slept on and used in integer arithmetic
+    (``duration // interval`` feeding ``range()``), where a float would turn a
+    sample count into ``40.0`` and break ``range``. ``int()`` parsing, then 1
+    up to the ``threading.TIMEOUT_MAX`` ceiling of :func:`positive_seconds`
+    (past it ``time.sleep`` raises OverflowError). ⚠️ Not a ceiling for a
+    ``subprocess`` timeout: that waits in poll(), which overflows past
+    2147483 s on Linux.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
+    if not 1 <= number <= threading.TIMEOUT_MAX:
+        raise argparse.ArgumentTypeError(
+            f"must be a whole number of seconds from 1 to "
+            f"{threading.TIMEOUT_MAX:.0f}: {value!r}")
+    return number
+
+
 def format_duration(seconds: int) -> str:
     """Format seconds back to a Prometheus-compatible duration string.
 

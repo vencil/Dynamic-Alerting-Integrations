@@ -60,6 +60,9 @@ from pathlib import Path as _P
 # legacy Windows console. scripts/tools is one level up from ops/.
 sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
+# #2966: the chart forwards reconcile.intervalSeconds verbatim (no values schema),
+# so this argparse type is the only gate against 0 (busy loop) / negative (crash).
+from _lib_validation import positive_seconds  # noqa: E402
 
 # ── pure domain logic (unit-tested without a cluster) ──────────────────────────
 
@@ -754,7 +757,7 @@ class Config:
     victorialogs_url: str
     revoked_file: str
     metrics_port: int
-    interval_s: int
+    interval_s: float
     lookback_s: int
     settle_s: int
     skew_margin_s: int
@@ -799,7 +802,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--revoked-file", default="/etc/revoked/revoked.txt",
                    help="Mounted tenant-federation-store revoked.txt key (direct CM read).")
     p.add_argument("--metrics-port", type=int, default=9099)
-    p.add_argument("--interval", type=int, default=300, help="Reconcile interval, seconds.")
+    p.add_argument("--interval", type=positive_seconds, default=300,
+                   help="Reconcile interval, seconds (> 0, fractions allowed).")
     p.add_argument("--lookback", type=int, default=DEFAULT_WINDOW_LOOKBACK_S)
     p.add_argument("--settle", type=int, default=DEFAULT_WINDOW_SETTLE_S)
     p.add_argument("--projection-grace", type=int, default=DEFAULT_PROJECTION_GRACE_S,

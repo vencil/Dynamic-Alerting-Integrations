@@ -102,6 +102,8 @@ victorialogs:
   url: "http://victorialogs.monitoring.svc.cluster.local:9428"
 
 reconcile:
+  # Must be above 0 (fractions allowed): 0 or a negative value makes the
+  # reconciler exit 2 at startup (#2966; no values schema checks it at render).
   intervalSeconds: 300      # reconcile cadence
   lookbackSeconds: 86400    # revocation-event window [now-24h, now-settle]
   settleSeconds: 60         # skip logs younger than this (ingestion lag)

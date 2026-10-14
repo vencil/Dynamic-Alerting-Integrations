@@ -966,3 +966,40 @@ class TestToleranceFlag:
 
     def test_zero_tolerance_is_accepted(self, tmp_path):
         assert self._statuses(tmp_path, "--tolerance", "0") == ["mismatch"]
+
+
+# ---------------------------------------------------------------------------
+# --interval must be 0 or above (#2966)
+# ---------------------------------------------------------------------------
+
+class TestIntervalFlag:
+    """A negative `--interval` used to run the first round and then raise
+    ValueError from time.sleep (rc 1); `inf` raised OverflowError the same
+    way. 0 keeps its meaning — back-to-back rounds, capped by `--rounds` —
+    which tests/shared/test_verdict_flag_contract.py relies on."""
+
+    @staticmethod
+    def _watch(tmp_path, interval):
+        side = [([{"metric": {"tenant": "t1"}, "value": [0, "1"]}], None)] * 4
+        with mock.patch("validate_migration.query_prometheus", side_effect=side) as q, \
+             mock.patch("validate_migration.time.sleep") as sleep, \
+             mock.patch("sys.argv", ["validate_migration.py", "--old", "old_q",
+                                     "--new", "new_q", "--prometheus",
+                                     "http://p:9090", "-o", str(tmp_path / "out"),
+                                     "--watch", "--rounds", "2",
+                                     "--interval", interval]):
+            vm.main()
+        return q, sleep
+
+    @pytest.mark.parametrize("bad", ["-1", "-0.5", "nan", "inf", "abc"])
+    def test_a_pause_that_cannot_be_slept_is_refused(self, tmp_path, capsys, bad):
+        with pytest.raises(SystemExit) as exc:
+            self._watch(tmp_path, bad)
+        assert exc.value.code == 2
+        assert "--interval" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("value, expected", [("0", 0.0), ("0.5", 0.5), ("60", 60.0)])
+    def test_zero_and_fractions_reach_the_sleep(self, tmp_path, value, expected):
+        q, sleep = self._watch(tmp_path, value)
+        assert q.call_count == 4                       # two rounds ran
+        sleep.assert_called_once_with(expected)

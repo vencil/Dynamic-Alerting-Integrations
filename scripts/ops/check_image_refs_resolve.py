@@ -36,7 +36,7 @@ Usage:
                               [--scope {deploy,delivered}]
     --root    repo root to scan (default: cwd)
     --list    print the discovered concrete refs and exit 0 (no network) — for tests
-    --timeout per-ref resolver timeout in seconds (default 30)
+    --timeout per-ref resolver timeout in whole seconds, 1..2147483 (default 30)
     --scope   which ref set to check (default: deploy — see the ⛔ note on
               `--list` compatibility next to _SCOPES below)
 """
@@ -418,6 +418,36 @@ def _resolver():
     return (None, None)
 
 
+# Ceiling for --timeout (#2966). NOT threading.TIMEOUT_MAX: on Linux,
+# subprocess.run(capture_output=True, timeout=…) waits in poll(), whose timeout
+# is a C int of milliseconds, so anything past 2**31-1 ms = 2147483 s raises
+# OverflowError ("timeout is too large") — a traceback, rc 1, which this gate
+# uses for "a ref does not resolve". Measured: 2147483 runs, 2147484 raises.
+MAX_TIMEOUT_S = (2**31 - 1) // 1000
+
+
+def _positive_timeout(text: str) -> int:
+    """argparse type for --timeout (#2966): a whole number of seconds from 1 to
+    MAX_TIMEOUT_S (the subprocess poll() ceiling, see above). 0 or a negative
+    value made every ref report "timeout after 0s" — a false verdict about
+    registry state; a larger value crashed with OverflowError.
+
+    Local on purpose, not scripts/tools/_lib_validation.positive_int_seconds
+    (whose ceiling is threading.TIMEOUT_MAX, too high for a subprocess timeout):
+    importing it needs scripts/tools on sys.path for the whole process, and this
+    module (also loaded in-process by tests) keeps its path and module cache
+    effects confined to the init_project load above.
+    """
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if not 1 <= value <= MAX_TIMEOUT_S:
+        raise argparse.ArgumentTypeError(
+            f"must be a whole number of seconds from 1 to {MAX_TIMEOUT_S}: {text!r}")
+    return value
+
+
 def _resolve_once(cmd: list[str], timeout: int) -> tuple[bool, str]:
     """Run one resolver command; return (resolved, last-line-of-reason)."""
     try:
@@ -434,7 +464,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Verify chart/manifest image refs resolve in their registry.")
     ap.add_argument("--root", default=".", help="repo root to scan (default: cwd)")
     ap.add_argument("--list", action="store_true", help="print discovered concrete refs and exit (no network)")
-    ap.add_argument("--timeout", type=int, default=30, help="per-ref resolver timeout (s)")
+    ap.add_argument("--timeout", type=_positive_timeout, default=30,
+                    help=f"per-ref resolver timeout, whole seconds from 1 to {MAX_TIMEOUT_S} (default 30)")
     ap.add_argument("--scope", choices=_SCOPES, default="deploy",
                     help="which ref set to check: deploy (helm values + k8s manifests, "
                          "the default) or delivered (what `da-tools init` writes into a "
