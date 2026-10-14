@@ -2974,7 +2974,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--dry-run` | Show PromQL queries without executing | - |
 | `--json` | JSON output | - |
 | `--markdown` | Markdown table output | - |
-| `--export-patch` | Output an applyable conf.d override fragment (#720 STAGE-1); only keys with \|delta\|≥5% and a mapping | - |
+| `--export-patch` | Output an applyable conf.d override fragment (#720 STAGE-1); only keys with \|delta\|≥5%, HIGH/MEDIUM confidence and a mapping | - |
 | `--generate-observed-map` | Regenerate the observed-map from rule-packs (#719); does not need `--config-dir` | - |
 
 > **#720 STAGE-1 (`--export-patch`)**: emits a `tenants:`-rooted conf.d override (only keys with an actionable recommendation; within-margin / skipped keys are listed as comments). The operator reviews it, merges it into the matching `conf.d/<tenant>.yaml`, and opens a PR → the existing `backtest.yaml` CI posts the old-vs-new firing-count risk report (the STAGE-1 value basis). The tool does **not** edit conf.d in place (the heavier in-place ruamel round-trip is deferred — #721).
@@ -3000,7 +3000,7 @@ da-tools threshold-recommend --generate-observed-map
 | MEDIUM | ≥ `--min-samples` (default and floor: 100) |
 | LOW | otherwise |
 
-Only finite samples count; NaN / Inf are dropped ([#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)). Upper-bound keys also have a coverage floor: when their samples fall in fewer than 24 distinct UTC hours the key is LOW whatever its count (the reason says `data in N distinct hour(s) < 24`), and `threshold-govern` opens no PR for it ([#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)). It counts hours covered, not the first-to-last span, so one stray early sample or two short stretches far apart do not pass for a day. Lower-bound keys are gated by "at least 5 full UTC days" instead. A LOW recommendation is still listed in the report and still written by `--export-patch` (its line says LOW): check the confidence before applying it.
+Only finite samples count; NaN / Inf are dropped ([#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)). Upper-bound keys also have a coverage floor: when their samples fall in fewer than 24 distinct UTC hours the key is LOW whatever its count (the reason says `data in N distinct hour(s) < 24`), and `threshold-govern` opens no PR for it ([#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)). It counts hours covered, not the first-to-last span, so one stray early sample or two short stretches far apart do not pass for a day. Lower-bound keys are gated by "at least 5 full UTC days" instead. A LOW recommendation is still listed in the report, but it is not counted in `recommended_changes` and is never a `--export-patch` value line: it is written as a whole-line comment `# [tenant] (low confidence) key: recommended X, was Y, -Z% — <reason>`, to be judged and copied by hand if wanted ([#2969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2969)). The text report's heading reads `0/1 changes recommended, 1 low-confidence`, and `--json` gains a `low_confidence_changes` field in the summary and in each tenant. When a patch holds only LOW recommendations, the first line after its fixed header says how many low-confidence recommendations are listed below and that there is no value line to apply, instead of `no actionable recommendations`. This is the same confidence floor `threshold-govern` applies.
 
 **Examples**
 

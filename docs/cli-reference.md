@@ -2960,7 +2960,7 @@ da-tools threshold-recommend --generate-observed-map
 | `--dry-run` | 僅顯示 PromQL 查詢，不實際執行 | - |
 | `--json` | JSON 輸出 | - |
 | `--markdown` | Markdown 表格輸出 | - |
-| `--export-patch` | 輸出可套用的 conf.d override 片段（#720 STAGE-1）；只含 \|delta\|≥5% 且有對映的 key | - |
+| `--export-patch` | 輸出可套用的 conf.d override 片段（#720 STAGE-1）；只含 \|delta\|≥5%、信心等級 HIGH／MEDIUM 且有對映的 key | - |
 | `--generate-observed-map` | 從 rule-packs 重新產生 observed-map（#719）；不需 `--config-dir` | - |
 
 > **#720 STAGE-1（`--export-patch`）**：輸出一段 `tenants:`-rooted 的 conf.d override（只含有實際建議的 key，within-margin / 略過的 key 以註解列出）。operator review 後 merge 進對應 `conf.d/<tenant>.yaml` 並自開 PR → 既有 `backtest.yaml` CI 自動貼 old-vs-new 觸發次數風險報告（STAGE-1 價值基石）。本工具**不就地改檔**（in-place ruamel round-trip 為 defer，見 #721）。
@@ -2986,7 +2986,7 @@ da-tools threshold-recommend --generate-observed-map
 | MEDIUM | ≥ `--min-samples`（預設與下限都是 100） |
 | LOW | 其餘 |
 
-樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，也仍會寫進 `--export-patch`（行尾註明 LOW），套用前請看信心等級。
+樣本只算有限值，NaN／Inf 不計（[#2956](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2956)）。上界 key 另有資料覆蓋下限：樣本落在的不同 UTC 小時數少於 24 就一律為 LOW（reason 註明 `data in N distinct hour(s) < 24`），`threshold-govern` 不會為它開 PR（[#2941](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2941)）。量的是覆蓋的小時數而不是最早到最晚的跨度，所以一個孤立的早期樣本或兩段相隔很遠的短資料不會被當成一整天。下界 key 改由「至少 5 個完整 UTC 日」把關。LOW 的建議值仍會列在報表裡，但不算進 `recommended_changes`，也不會寫成 `--export-patch` 的值行：它改以整行註解 `# [租戶] (low confidence) key: recommended X, was Y, -Z% — <reason>` 列出，需要時請自行判斷、手動抄寫（[#2969](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2969)）。文字報表的標題會寫成 `0/1 changes recommended, 1 low-confidence`，`--json` 的 summary 與每個租戶多一個 `low_confidence_changes` 欄位。整份 patch 只有 LOW 時，固定標頭後的第一行會說明下方列了幾筆 low-confidence 建議、沒有可套用的值行，不會寫成 `no actionable recommendations`。與 `threshold-govern` 用的是同一道信心門檻。
 
 **範例**
 
