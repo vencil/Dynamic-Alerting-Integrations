@@ -477,6 +477,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	disabled := make(map[string]bool)
 	notMapping := make(map[string]any)
 	ignoredKeys := make(map[string][]string)
+	unknownKeys := make(map[string][]string) // #2983
 	invalidIDs := make(map[string]string)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
@@ -566,6 +567,21 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 			if f := routingpolicy.IgnoredKeys(own["_routing"], routingpolicy.BlockRouting); len(f) > 0 {
 				ignoredKeys[ec.TenantID] = f
 			}
+			// #2983: a `_routing`-prefixed key the generator does not read
+			// in a tenant's config (`_routing_profle`) — the tenant file's
+			// block and its root platform `tenants.<id>` entries, the two
+			// places the generator reads a tenant from (TenantBlock and
+			// Overlay keep only the two keys it reads).
+			written := map[string]any{}
+			for k := range ec.TenantOverridesRaw {
+				written[k] = nil
+			}
+			for k := range layers.OverlayUnknownKeys[ec.TenantID] {
+				written[k] = nil
+			}
+			if f := routingpolicy.UnknownRoutingKeys(written, routingpolicy.LayerTenant); len(f) > 0 {
+				unknownKeys[ec.TenantID] = f
+			}
 			resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
 			if ok {
 				routing[ec.TenantID] = resolved
@@ -610,6 +626,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		RoutingDisabled:        disabled,
 		RoutingNotMapping:      notMapping,
 		RoutingIgnoredKeys:     ignoredKeys,
+		RoutingUnknownKeys:     unknownKeys,
 		InvalidTenantIDs:       invalidIDs,
 		UnloadedTenants:        unloaded,
 		UnknownRoutingProfiles: unknownProfiles,

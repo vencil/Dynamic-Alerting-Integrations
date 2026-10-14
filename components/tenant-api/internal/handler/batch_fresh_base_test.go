@@ -271,10 +271,8 @@ func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
 		{"unset, tenant added to the policy on the base", offDisabledChat,
 			`[{"tenant_id":"t-off","unset":["_routing"]}]`,
 			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
-		// CheckWrite's flat key is re-judged on the base too.
-		{"receiver-type patch, tenant added to the policy on the base", "    _routing_profile: domain-ok\n",
-			`[{"tenant_id":"t-off","patch":{"_routing_receiver_type":"slack"}}]`,
-			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
+		// (#2983: the flat `_routing_receiver_type` this list also had is
+		// refused as a body violation now, before any policy is read.)
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {

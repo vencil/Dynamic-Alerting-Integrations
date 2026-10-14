@@ -1,0 +1,133 @@
+{
+  "_comment": "#2983: `_routing`-prefixed keys the route generator does not read in a layer. One row = a mapping as read (`layer`: tenant = a tenant's config, read for _routing / _routing_profile; platform = the top level of a conf.d `_` file, read for _routing_defaults / _routing_enforced) and the keys that must be named — nothing more, nothing less. Read by tests/ops/test_routing_unknown_keys.py (_grar_validate.unknown_routing_keys) and by components/threshold-exporter/app/pkg/routingpolicy/unknown_keys_test.go (routingpolicy.UnknownRoutingKeys).",
+  "cases": [
+    {
+      "name": "tenant-clean",
+      "layer": "tenant",
+      "value": {
+        "_routing": {
+          "receiver": {
+            "type": "webhook",
+            "url": "u"
+          }
+        },
+        "_routing_profile": "p",
+        "cpu_usage_percent": "80",
+        "_severity_dedup": "disable",
+        "_state_maintenance": "enable"
+      },
+      "keys": []
+    },
+    {
+      "name": "tenant-misspelled-profile",
+      "layer": "tenant",
+      "value": {
+        "_routing_profle": "team-a",
+        "cpu_usage_percent": "80"
+      },
+      "keys": [
+        "_routing_profle"
+      ]
+    },
+    {
+      "name": "tenant-flat-receiver-type",
+      "layer": "tenant",
+      "value": {
+        "_routing_receiver_type": "slack"
+      },
+      "keys": [
+        "_routing_receiver_type"
+      ]
+    },
+    {
+      "name": "tenant-platform-keys",
+      "layer": "tenant",
+      "value": {
+        "_routing_defaults": {},
+        "_routing_enforced": {
+          "enabled": true
+        }
+      },
+      "keys": [
+        "_routing_defaults",
+        "_routing_enforced"
+      ]
+    },
+    {
+      "name": "tenant-prefix-without-underscore",
+      "layer": "tenant",
+      "value": {
+        "_routingProfile": "p",
+        "_routings": {}
+      },
+      "keys": [
+        "_routingProfile",
+        "_routings"
+      ]
+    },
+    {
+      "name": "tenant-lookalikes-without-the-prefix",
+      "layer": "tenant",
+      "value": {
+        "_routng": {},
+        "routing": {},
+        "__routing": "x",
+        "_Routing": "x"
+      },
+      "keys": []
+    },
+    {
+      "name": "platform-clean",
+      "layer": "platform",
+      "value": {
+        "defaults": {
+          "cpu_usage_percent": 80
+        },
+        "_routing_defaults": {},
+        "_routing_enforced": {
+          "enabled": false
+        },
+        "tenants": {},
+        "_custom_alerts": [],
+        "routing_profiles": {}
+      },
+      "keys": []
+    },
+    {
+      "name": "platform-misspelled",
+      "layer": "platform",
+      "value": {
+        "_routing_defualts": {
+          "group_wait": "10s"
+        },
+        "_routing_enforce": {
+          "enabled": true
+        }
+      },
+      "keys": [
+        "_routing_defualts",
+        "_routing_enforce"
+      ]
+    },
+    {
+      "name": "platform-tenant-keys",
+      "layer": "platform",
+      "value": {
+        "_routing": {},
+        "_routing_profile": "p"
+      },
+      "keys": [
+        "_routing",
+        "_routing_profile"
+      ]
+    },
+    {
+      "name": "not-a-mapping",
+      "layer": "tenant",
+      "value": [
+        "_routing_profle"
+      ],
+      "keys": []
+    }
+  ]
+}

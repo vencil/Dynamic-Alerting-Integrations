@@ -42,6 +42,7 @@ import (
 	"strings"
 
 	"github.com/go-playground/validator/v10"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
@@ -313,6 +314,17 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 			violations = append(violations, viol)
 			continue
 		}
+		// #2983: a `_routing`-prefixed key the route generator does not read
+		// (`_routing_profle`, the flat `_routing_receiver_type`) — refused
+		// here, before the domain policy is consulted, so the answer names
+		// the key rather than a policy verdict on a value nothing renders.
+		if cfg.IsUnknownRoutingKey(k, false) {
+			violations = append(violations, Violation{
+				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
+				Reason: "not a key the route generator reads (" + cfg.UnknownRoutingKeyHint(k, false) + "); it has no effect",
+			})
+			continue
+		}
 		// Reserved-key strict validation (only for keys in the registry).
 		if validator, ok := reservedKeyValidators[k]; ok {
 			if reason := validator(v); reason != "" {
@@ -339,6 +351,11 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 // `_metadata` or `_profile`, touchesScopeMetadata, which judges only the patch.
 var unsetAllowedKeys = map[string]bool{
 	"_routing": true,
+	// #2983: the flat key tenant-api's batch patch used to write. Nothing
+	// renders it, so removing it changes no route and is not judged; while
+	// it is on disk, the write gate (ValidateTenantKeys) refuses every other
+	// write to the tenant, so a batch must be able to remove it.
+	"_routing_receiver_type": true,
 }
 
 // unsetAllowedList is unsetAllowedKeys sorted, for the violation text.

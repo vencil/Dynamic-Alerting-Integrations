@@ -316,6 +316,49 @@ var validReservedPrefixes = []string{
 	"_routing",
 }
 
+// tenantRoutingKeys / platformRoutingKeys are the `_routing`-prefixed keys
+// the route generator reads (#2983): a tenant's own two, and the two it takes
+// from the top level of a conf.d `_` file. The `_routing` PREFIX above keeps
+// every other spelling reserved (not a metric), so `_routing_profle` passed
+// every key check while nothing read it. Copies of _grar_validate.
+// TENANT_ROUTING_KEYS / PLATFORM_ROUTING_KEYS; the shared table
+// tests/shared/routing_unknown_keys_cases.json runs both.
+var (
+	tenantRoutingKeys   = map[string]bool{"_routing": true, "_routing_profile": true}
+	platformRoutingKeys = map[string]bool{"_routing_defaults": true, "_routing_enforced": true}
+)
+
+// IsUnknownRoutingKey reports whether k carries the `_routing` prefix but is
+// not a key the route generator reads in that place: a tenant's config when
+// platform is false, the top level of a conf.d `_` file when it is true.
+func IsUnknownRoutingKey(k string, platform bool) bool {
+	if !strings.HasPrefix(k, "_routing") {
+		return false
+	}
+	if platform {
+		return !platformRoutingKeys[k]
+	}
+	return !tenantRoutingKeys[k]
+}
+
+// UnknownRoutingKeyHint is the hint printed after a key IsUnknownRoutingKey
+// names (platform as there): where the key belongs, or what replaces it.
+func UnknownRoutingKeyHint(k string, platform bool) string {
+	switch {
+	case !platform && platformRoutingKeys[k]:
+		return "a platform key: it is read only at the top level of a conf.d `_` file"
+	case platform && tenantRoutingKeys[k]:
+		return "a tenant key: set it in the tenant's own file (or its root platform `tenants:` entry); " +
+			"routing for every tenant is `_routing_defaults`"
+	case k == "_routing_receiver_type":
+		return "no longer read: set the receiver type as `_routing.receiver.type`"
+	case platform:
+		return "read here: _routing_defaults, _routing_enforced"
+	default:
+		return "read here: _routing, _routing_profile"
+	}
+}
+
 // IsReservedKey reports whether k is a reserved tenant config key: one of
 // validReservedKeys, or starting with one of validReservedPrefixes.
 func IsReservedKey(k string) bool {

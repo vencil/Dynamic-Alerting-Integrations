@@ -31,19 +31,13 @@ var rootTopLevelRoutingKeys = map[string]bool{
 }
 
 // UnreadRouting reports the routing keys the route generator never reads
-// (#2291), in three places:
+// (#2291), in two places (a key at the TOP level of any `_` file is
+// LoadRoot / LoadTree's ProblemRoutingKeyIgnored since #2983):
 //
 //  1. inside the `defaults:` block of a defaults carrier (root or nested —
 //     though a ROOT carrier whose block holds `_routing*` fails the
 //     exporter's decode, so da-guard skips it as parse_failed, exit 3);
-//  2. at the top level of a defaults carrier with no `defaults:` mapping —
-//     the exporter then takes the whole document as the defaults block —
-//     except `_routing_defaults` / `_routing_enforced`: the generator reads
-//     both at the top level of the ROOT carrier, and since #2326
-//     `_routing_defaults` at the top level of a NESTED carrier too (the
-//     routing layer chain), while `_routing_enforced` there is LoadTree's
-//     blocking ProblemRoutingEnforcedBelowRoot;
-//  3. inside a profile of a root platform file's `profiles:` block (the
+//  2. inside a profile of a root platform file's `profiles:` block (the
 //     threshold `_profile` mechanism; routing profiles are
 //     `_routing_profiles.yaml`'s `routing_profiles:`).
 //
@@ -107,19 +101,12 @@ func unreadInDefaults(name string, data []byte) []Problem {
 		}
 		return out
 	}
-	var out []Problem
-	for _, k := range sortedRoutingKeys(doc) {
-		// #2326: `_routing_defaults` at the top level of a NESTED carrier is
-		// read too now (the routing layer chain), and `_routing_enforced`
-		// there is LoadTree's blocking ProblemRoutingEnforcedBelowRoot — not
-		// "unread" either way, and named once.
-		if rootTopLevelRoutingKeys[k] {
-			continue
-		}
-		out = append(out, unreadProblem(name, k, k,
-			"this file has no `defaults:` block, so its whole top level is merged into every tenant's effective config as defaults, but the route generator never reads routing from it"))
-	}
-	return out
+	// #2983: a carrier with no `defaults:` mapping — the exporter takes the
+	// whole document as the block — has its top-level `_routing*` keys named
+	// by LoadRoot / LoadTree instead (unknownPlatformKeyProblems): every key
+	// there but `_routing_defaults` / `_routing_enforced`, in any `_` file,
+	// once.
+	return nil
 }
 
 func unreadInProfiles(name string, data []byte) []Problem {

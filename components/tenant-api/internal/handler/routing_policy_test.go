@@ -401,18 +401,28 @@ func statuses(results []BatchResult) string {
 func TestBatchTenants_RefusedOpIsNotStacked(t *testing.T) {
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
 		t.Run(string(mode)+"/bypass: refused op carried _routing: disable", func(t *testing.T) {
-			// op1 is refused (its flat receiver-type key is forbidden) but
-			// also sets `_routing: disable`. Stacked, it would make op2's
-			// violating profile look disabled — while what lands is op2's
-			// profile with routing ENABLED.
+			// op2 is refused (a key not in defaults) but also sets
+			// `_routing: disable`. Stacked, it would make op3's violating
+			// profile look disabled — while what lands is op3's profile with
+			// routing ENABLED. (#2983: this used to be a refusal by the flat
+			// `_routing_receiver_type`'s policy check, the one policy refusal
+			// an op carrying `_routing: disable` could get; that key is a body
+			// violation now.)
 			results, file := runOffBatch(t, mode, "    _routing_profile: domain-ok\n", `[
 				{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}},
-				{"tenant_id":"t-off","patch":{"_routing":"disable","_routing_receiver_type":"slack"}},
+				{"tenant_id":"t-off","patch":{"_routing":"disable","cpu_usage_percnt":"90"}},
 				{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-			// #2900: the batch is rejected; op1 is not applied either. op3 is
-			// refused only because op2 is NOT stacked under it.
-			if got := statuses(results); got != "not_applied,error,error" {
-				t.Fatalf("statuses = %s, want not_applied,error,error: %+v", got, results)
+			// #2900: the batch is rejected; op1 is not applied either. PR
+			// mode judges op2's keys while stacking, so op3 is refused only
+			// because op2 is NOT stacked under it. Direct mode's write gate
+			// finds op2's key after op3 is judged (op3: not_applied); the
+			// batch is still rejected whole, so nothing lands.
+			want := "not_applied,error,error"
+			if mode == WriteModeDirect {
+				want = "not_applied,error,not_applied"
+			}
+			if got := statuses(results); got != want {
+				t.Fatalf("statuses = %s, want %s: %+v", got, want, results)
 			}
 			if strings.Contains(file, "team-chat") || strings.Contains(file, "disable") {
 				t.Errorf("t-off.yaml must not carry the refused ops:\n%s", file)

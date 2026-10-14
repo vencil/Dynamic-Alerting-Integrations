@@ -115,7 +115,7 @@ func (t Tree) TenantLevel(tenantID string) string {
 // included); the profiles of the root and of those levels; the root overlay.
 // The result shares its maps' values with t but not the maps themselves.
 func (t Tree) LayersFor(level string) Layers {
-	out := Layers{Overlay: t.Root.Overlay, PlatformBodies: t.Root.PlatformBodies}
+	out := Layers{Overlay: t.Root.Overlay, OverlayUnknownKeys: t.Root.OverlayUnknownKeys, PlatformBodies: t.Root.PlatformBodies}
 	chain := ChainLevels(level)
 	var defaults map[string]any
 	if t.Root.Defaults != nil {
@@ -258,6 +258,11 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 		}
 		if top == nil {
 			continue
+		}
+		// #2983: an unselected carrier spelling is left out, as the F3 check
+		// below leaves it out — the generator skips that file whole.
+		if strings.HasPrefix(base, "_") && (selected[k] || !f.IsDefaults) {
+			probs = append(probs, unknownPlatformKeyProblems(k, top)...)
 		}
 		if lookup(top, "_routing_enforced") != nil {
 			probs = append(probs, Problem{Kind: ProblemRoutingEnforcedBelowRoot, File: k, Field: "_routing_enforced",
