@@ -3069,7 +3069,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `--dry-run` | 僅驗證 URL 格式，不實際發送 | - |
 | `--json` | JSON 輸出 | - |
 | `--ci` | CI 模式：任一 receiver 失敗時 exit 1 | - |
-| `--timeout` | 每個 receiver 的連線逾時秒數。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
+| `--timeout` | 每個 receiver 的逾時秒數，連線與等待回應兩個階段都適用，任一階段逾時皆回報 `TIMEOUT`（[#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)）。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)） | `10` |
 | `--rate-limit` | 每次測試之間的等待秒數 | `0.5` |
 
 **支援的 Receiver 類型**
