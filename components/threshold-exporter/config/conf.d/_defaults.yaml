@@ -40,6 +40,49 @@ defaults:
   # 加嚴 opt-in：mysql_replication_lag_critical，registry 建議 120）
   mysql_replication_lag: 30
   # <<< GENERATED:threshold-registry:dev-defaults
+  # 以下是 examples/ 子目錄租戶所用 pack 的 defaults（#3014）。不放在
+  # examples/ 自己的 _defaults.yaml：只有子樹 carrier 宣告的 key 送不上 /metrics（#1976）。
+  # >>> GENERATED:threshold-registry:dev-example-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+  # ── redis：Redis (oliver006/redis_exporter) ──
+  # bytes (4GB) — Memory usage warning
+  redis_memory_used_bytes: 4294967296
+  # count — Connected clients warning
+  redis_connected_clients: 200
+  # keys/s — Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert
+  # demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
+  redis_evicted_keys_rate: 100
+  # seconds — Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication
+  # is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call);
+  # #1196 C identity fix, no alias
+  redis_replication_lag: 30
+  # ── mongodb：MongoDB (percona/mongodb_exporter) ──
+  # count — Current connections warning
+  mongodb_connections_current: 300
+  # seconds — Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds
+  # (alert demands mongodb_replication_lag) — unwired dead key, no alias
+  mongodb_replication_lag: 10
+  # ops/s — Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total
+  # (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
+  mongodb_opcounters_rate: 10000
+  # ── elasticsearch：Elasticsearch (elasticsearch_exporter) ──
+  # % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert
+  # demands es_heap_usage_percent) — unwired dead key, no alias
+  es_heap_usage_percent: 85
+  # % — Disk USAGE % warning (used = 1 - available/size, recording rule
+  # tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
+  # tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %)
+  # — carrying 15 into a used-% rule would fire permanently
+  es_disk_usage_percent: 85
+  # count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
+  # catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded but absent from
+  # scaffold
+  es_pending_tasks: 50
+  # ms — Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 =
+  # Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) —
+  # the only community rule semantically identical to ours; full derivation + calibration caveat in
+  # the pack header (#1196 D)
+  es_search_latency_ms: 1000
+  # <<< GENERATED:threshold-registry:dev-example-defaults
 
 # optional_overrides 為生成段（#1310）——「平台認得這個 key，但不主張它的值」。
 # 與 defaults 的差別是整個對比的重點：進 defaults ＝ 對每個租戶都武裝一個平台選的

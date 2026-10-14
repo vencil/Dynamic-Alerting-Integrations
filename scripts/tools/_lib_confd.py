@@ -238,8 +238,8 @@ def is_defaults_name(name: str) -> bool:
     the lowercased name
     against the two literals; this table's own contract says the same in
     words ("name lowercased is exactly ..."). And
-    `conf.d/examples/_defaults-multidb.yaml` EXISTS in this repo, while the
-    exporter never merges it into any tenant's chain.
+    `conf.d/examples/_defaults-multidb.yaml` existed in this repo (until
+    #3014), while the exporter never merged it into any tenant's chain.
 
     ⚠️ A prefix version shipped briefly during #1588 and blind review
     measured what it did: `describe_tenant` went from reproducing the
