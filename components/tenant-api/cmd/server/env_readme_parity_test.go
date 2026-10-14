@@ -8,7 +8,7 @@ package main
 // Source side is read with go/ast over this module's non-test files
 // (cmd/server and internal/**, minus internal/testutil). A variable is any
 // string literal named TA_*, TENANT_API_* or GIT_COMMITTER_* passed to:
-//   - envOrDefault(name, "<lit>")                → default <lit>
+//   - envOrDefault / envNonEmptyOrDefault(name, "<lit>") → default <lit>
 //   - envBool(name)                              → default false
 //   - parseDurationOrDefault(os.Getenv(name), d) → default d, where d is 0,
 //     N*time.<Unit>, or a constant defined that way
@@ -287,7 +287,7 @@ func collectEnvSources(t *testing.T) (map[string]envSource, map[string]constVal)
 				}
 				pos := fset.Position(call.Pos()).String()
 				switch {
-				case isCallTo(call, "", "envOrDefault") && len(call.Args) == 2:
+				case (isCallTo(call, "", "envOrDefault") || isCallTo(call, "", "envNonEmptyOrDefault")) && len(call.Args) == 2:
 					name, ok1 := strLit(call.Args[0])
 					def, ok2 := strLit(call.Args[1])
 					if ok1 && ok2 && envNameRe.MatchString(name) {

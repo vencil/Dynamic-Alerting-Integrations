@@ -36,7 +36,7 @@ tenants:
 EOF
 ```
 
-### 2) 跑 tenant-api(零 DB;`TA_RBAC_PATH` 啟用 RBAC,否則為 open-read)
+### 2) 跑 tenant-api(零 DB;`TA_RBAC_PATH` 啟用 RBAC,不設則為 open-read;設成空字串會拒絕啟動)
 
 ```sh
 # 從 repo root build 一個本機 image（go.mod 需 threshold-exporter 模組）
