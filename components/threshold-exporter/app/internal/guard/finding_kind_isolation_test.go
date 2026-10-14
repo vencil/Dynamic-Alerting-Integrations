@@ -1,0 +1,486 @@
+package guard
+
+// finding_kind_isolation_test.go — what findingkind's closed type cannot hold
+// by itself, checked over the whole module (#2904, round 5 of review).
+//
+// findingkind.Kind is a struct with one unexported field, so the compiler
+// keeps every other package from building a Kind. Two things get past the
+// compiler, from any package of the module, not only internal/guard:
+//
+//   - `unsafe` (or cgo, or assembly) writes memory regardless of types. A
+//     generic `func Cast[T any](p unsafe.Pointer) T` does not even import
+//     findingkind, so no check scoped to findingkind's importers sees it.
+//   - The kinds are package-level vars. `findingkind.FindingX =
+//     findingkind.FindingY` compiles, and afterwards the name FindingX
+//     reports another kind; so does writing through `&findingkind.FindingX`
+//     or a pointer-receiver method.
+//
+// checkKindIsolation parses every .go file under the module root with
+// go/parser — no go/build, so no build constraint or `_GOOS_GOARCH` file
+// name hides a file: da-tools ships arm64 — and reports:
+//
+//	a. a non-test file importing "unsafe" or "C", and any assembly, C or
+//	   .syso file (the go tool compiles them into the package);
+//	b. findingkind dot- or blank-imported (every use must be a selector);
+//	c. a findingkind package-level var as the target of an assignment,
+//	   ++/--, a range clause or &, outside findingkind matched by import
+//	   path (any alias, the package imported twice), inside it by the
+//	   parser's object resolution (a local of the same name is fine);
+//	d. a pointer-receiver method in findingkind;
+//	e. findingkind.Unregistered named by a non-test file other than the
+//	   output boundary (allowedUnregisteredUsers): no check may report the
+//	   sentinel itself.
+//
+// Test files are held to b, c and e as well: they are compiled with the
+// package under test, and a test that reassigns a kind changes what every
+// other test of that run observes.
+//
+// Only `testdata` directories are skipped (the go tool never compiles them).
+// There is no vendor directory; if one appears, its packages are walked too
+// and any that imports unsafe makes this red — on purpose: vendored code is
+// compiled into da-guard.
+
+import (
+	"bufio"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// moduleRoot is the threshold-exporter module, relative to this package.
+const moduleRoot = "../.."
+
+// findingKindRel is findingkind's directory relative to the module root
+// (and, joined to the module path, its import path).
+const findingKindRel = "internal/guard/findingkind"
+
+// allowedUnregisteredUsers are the non-test files, relative to the module
+// root, that may name findingkind.Unregistered: the method that swaps an
+// unregistered kind for it, and the CLI that calls it and names it on
+// stderr.
+var allowedUnregisteredUsers = map[string]bool{
+	"internal/guard/seal.go": true,
+	"cmd/da-guard/main.go":   true,
+}
+
+// nonGoSources are file extensions the go tool compiles or links into a
+// package besides .go (cmd/go: assembly, cgo sources, syso objects).
+var nonGoSources = map[string]bool{
+	".s": true, ".S": true, ".sx": true, ".c": true, ".cc": true, ".cpp": true, ".cxx": true,
+	".h": true, ".hh": true, ".hpp": true, ".hxx": true, ".m": true, ".f": true, ".F": true,
+	".for": true, ".f90": true, ".syso": true, ".swig": true, ".swigcxx": true,
+}
+
+type parsedFile struct {
+	rel  string // slash-separated, relative to the module root
+	test bool
+	file *ast.File
+}
+
+// checkKindIsolation runs rules a–e over the module at root and returns one
+// line per violation, sorted. An error means the walk itself failed.
+func checkKindIsolation(root string) ([]string, error) {
+	modPath, err := modulePath(filepath.Join(root, "go.mod"))
+	if err != nil {
+		return nil, err
+	}
+	fkImport := modPath + "/" + findingKindRel
+
+	fset := token.NewFileSet()
+	var files []parsedFile
+	var out []string
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		ext := filepath.Ext(path)
+		if nonGoSources[ext] {
+			out = append(out, fmt.Sprintf("%s: a %s file is compiled into its package and can write any memory (rule a)", rel, ext))
+			return nil
+		}
+		if ext != ".go" {
+			return nil
+		}
+		// Object resolution on: rule c inside findingkind needs it.
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", rel, err)
+		}
+		files = append(files, parsedFile{rel: rel, test: strings.HasSuffix(rel, "_test.go"), file: f})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// findingkind's package-level vars, and the specs that declare them.
+	pkgVars := map[string]bool{}
+	pkgSpecs := map[*ast.ValueSpec]bool{}
+	inFindingKind := func(pf parsedFile) bool {
+		return filepath.ToSlash(filepath.Dir(pf.rel)) == findingKindRel && pf.file.Name.Name == "findingkind"
+	}
+	for _, pf := range files {
+		if !inFindingKind(pf) {
+			continue
+		}
+		for _, decl := range pf.file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				vs := spec.(*ast.ValueSpec)
+				pkgSpecs[vs] = true
+				for _, n := range vs.Names {
+					pkgVars[n.Name] = true
+				}
+			}
+		}
+	}
+	if len(pkgVars) == 0 {
+		return nil, fmt.Errorf("no package-level var found in %s/%s; the check is not looking at findingkind", root, findingKindRel)
+	}
+
+	report := func(pos token.Pos, format string, args ...any) {
+		p := fset.Position(pos)
+		rel, err := filepath.Rel(root, p.Filename)
+		if err != nil {
+			rel = p.Filename
+		}
+		out = append(out, fmt.Sprintf("%s:%d: %s", filepath.ToSlash(rel), p.Line, fmt.Sprintf(format, args...)))
+	}
+
+	for _, pf := range files {
+		f := pf.file
+		local := map[string]bool{} // names findingkind is imported under in this file
+		for _, imp := range f.Imports {
+			path, _ := strconv.Unquote(imp.Path.Value)
+			switch {
+			case (path == "unsafe" || path == "C") && !pf.test:
+				report(imp.Pos(), "import %q in a non-test file: it can forge or overwrite a findingkind.Kind from any package (rule a)", path)
+			case path == fkImport:
+				name := "findingkind"
+				if imp.Name != nil {
+					name = imp.Name.Name
+				}
+				if name == "." || name == "_" {
+					report(imp.Pos(), "findingkind imported as %q; import it by name so each kind is a selector (rule b)", name)
+					continue
+				}
+				local[name] = true
+			}
+		}
+
+		own := inFindingKind(pf)
+		// isKindVar: e names a findingkind package-level var.
+		isKindVar := func(e ast.Expr) (string, bool) {
+			switch e := ast.Unparen(e).(type) {
+			case *ast.SelectorExpr:
+				if x, ok := e.X.(*ast.Ident); ok && local[x.Name] && pkgVars[e.Sel.Name] {
+					return x.Name + "." + e.Sel.Name, true
+				}
+			case *ast.Ident:
+				if !own || !pkgVars[e.Name] {
+					return "", false
+				}
+				if e.Obj == nil { // declared in another file of the package
+					return e.Name, true
+				}
+				if vs, ok := e.Obj.Decl.(*ast.ValueSpec); ok && pkgSpecs[vs] {
+					return e.Name, true
+				}
+			}
+			return "", false
+		}
+		written := func(e ast.Expr, how string) {
+			if name, ok := isKindVar(e); ok {
+				report(e.Pos(), "%s %s: a findingkind var must keep the kind it was registered as (rule c)", how, name)
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range n.Lhs {
+					written(lhs, "assignment to")
+				}
+			case *ast.IncDecStmt:
+				written(n.X, "++/-- on")
+			case *ast.RangeStmt:
+				if n.Key != nil {
+					written(n.Key, "range assigns to")
+				}
+				if n.Value != nil {
+					written(n.Value, "range assigns to")
+				}
+			case *ast.UnaryExpr:
+				if n.Op == token.AND {
+					written(n.X, "address taken of")
+				}
+			case *ast.SelectorExpr:
+				if x, ok := n.X.(*ast.Ident); ok && local[x.Name] && n.Sel.Name == "Unregistered" &&
+					!pf.test && !allowedUnregisteredUsers[pf.rel] {
+					report(n.Pos(), "findingkind.Unregistered named outside %s: no check reports the sentinel (rule e)",
+						strings.Join(sortedKeysOf(allowedUnregisteredUsers), ", "))
+				}
+			case *ast.FuncDecl:
+				if own && n.Recv != nil && len(n.Recv.List) == 1 {
+					if _, ptr := ast.Unparen(n.Recv.List[0].Type).(*ast.StarExpr); ptr {
+						report(n.Pos(), "pointer-receiver method %s in findingkind: calling it on a kind var takes the var's address (rule d)", n.Name.Name)
+					}
+				}
+			}
+			return true
+		})
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func sortedKeysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// modulePath reads the `module` line of a go.mod.
+func modulePath(goMod string) (string, error) {
+	fh, err := os.Open(goMod)
+	if err != nil {
+		return "", err
+	}
+	defer fh.Close()
+	sc := bufio.NewScanner(fh)
+	for sc.Scan() {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "module "); ok {
+			if p, err := strconv.Unquote(strings.TrimSpace(rest)); err == nil {
+				return p, nil
+			}
+			return strings.TrimSpace(rest), nil
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("%s: no module line", goMod)
+}
+
+// requireKindIsolation runs the check over this module; TestFindingKindPlanes
+// calls it first, so the kind table it emits for the Python gate is never
+// written while a rule is broken.
+func requireKindIsolation(t *testing.T) {
+	t.Helper()
+	start := time.Now()
+	violations, err := checkKindIsolation(moduleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range violations {
+		t.Error(v)
+	}
+	t.Logf("module-wide findingkind isolation check: %s", time.Since(start))
+}
+
+// --- the check against synthetic modules ---------------------------------
+
+const syntheticFindingKind = `package findingkind
+
+type Kind struct{ s string }
+
+func register(name string) Kind { return Kind{s: name} }
+
+func Unregistered() Kind { return Kind{s: "unregistered_finding_kind"} }
+
+func (k Kind) String() string { return k.s }
+
+var registry = map[string]Kind{}
+
+var (
+	FindingA = register("a")
+	FindingB = register("b")
+)
+`
+
+// syntheticModule writes a module example.com/m holding a findingkind
+// package and one clean consumer, plus extra (relative path -> source).
+func syntheticModule(t *testing.T, extra map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod":                       "module example.com/m\n\ngo 1.24\n",
+		findingKindRel + "/kinds.go":   syntheticFindingKind,
+		"internal/guard/consumer.go":   "package guard\n\nimport \"example.com/m/" + findingKindRel + "\"\n\nvar k = findingkind.FindingA\n\nfunc use() string { x := findingkind.FindingB; return x.String() + k.String() }\n",
+		"internal/guard/seal.go":       "package guard\n\nimport \"example.com/m/" + findingKindRel + "\"\n\nvar s = findingkind.Unregistered()\n",
+		"internal/guard/guard_test.go": "package guard\n\nimport (\n\t\"unsafe\"\n\n\tfk \"example.com/m/" + findingKindRel + "\"\n)\n\nvar _ = unsafe.Sizeof(fk.FindingA)\nvar _ = fk.Unregistered()\n",
+		"pkg/x/testdata/forge.go":      "package forge\n\nimport \"unsafe\"\n\nvar _ = unsafe.Sizeof(0)\n",
+	}
+	for k, v := range extra {
+		files[k] = v
+	}
+	for rel, src := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+func runIsolation(t *testing.T, extra map[string]string) []string {
+	t.Helper()
+	v, err := checkKindIsolation(syntheticModule(t, extra))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+const fkImportLine = `"example.com/m/` + findingKindRel + `"`
+
+// The synthetic module with nothing added is clean: a positive control, so
+// each case below is red for what it adds. It also pins what is allowed:
+// unsafe in a test file, anything in testdata, the sentinel in seal.go and
+// in tests, locals named like a kind var inside findingkind, and the
+// register-initialised vars themselves.
+func TestFindingKindIsolation_SyntheticCleanModule(t *testing.T) {
+	t.Parallel()
+	if v := runIsolation(t, map[string]string{
+		findingKindRel + "/shadow.go": "package findingkind\n\nfunc f(FindingB Kind) Kind {\n\tFindingA := FindingB\n\tFindingA = Kind{}\n\tp := &FindingA\n\t_ = p\n\tfor FindingA = range []Kind{} {\n\t}\n\tregistry[\"x\"] = FindingB\n\treturn FindingA\n}\n",
+	}); len(v) != 0 {
+		t.Errorf("clean module reported:\n%s", strings.Join(v, "\n"))
+	}
+}
+
+func TestFindingKindIsolation_RulesFire(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  string // substring of the one expected violation
+	}{
+		{
+			// The round-5 bypass: an arm64-only file with a generic cast
+			// that never imports findingkind.
+			name: "a/unsafe generic cast in an arm64-only file",
+			files: map[string]string{"pkg/conv/cast_arm64.go": "//go:build arm64\n\npackage conv\n\nimport \"unsafe\"\n\n" +
+				"func Cast[T any](p unsafe.Pointer) T { return *(*T)(p) }\n"},
+			want: "pkg/conv/cast_arm64.go:5: import \"unsafe\"",
+		},
+		{
+			name:  "a/unsafe under a build tag no platform sets",
+			files: map[string]string{"cmd/x/x.go": "//go:build never\n\npackage main\n\nimport _ \"unsafe\"\n"},
+			want:  "cmd/x/x.go:5: import \"unsafe\"",
+		},
+		{
+			name:  "a/cgo",
+			files: map[string]string{"pkg/c/c.go": "package c\n\n// int x;\nimport \"C\"\n"},
+			want:  "pkg/c/c.go:4: import \"C\"",
+		},
+		{
+			name:  "a/assembly file",
+			files: map[string]string{"pkg/asm/write_amd64.s": "TEXT ·w(SB),0,$0\n"},
+			want:  "pkg/asm/write_amd64.s: a .s file",
+		},
+		{
+			name:  "b/dot import",
+			files: map[string]string{"pkg/d/d.go": "package d\n\nimport . " + fkImportLine + "\n\nvar _ = FindingA\n"},
+			want:  "pkg/d/d.go:3: findingkind imported as \".\"",
+		},
+		{
+			name:  "b/blank import",
+			files: map[string]string{"pkg/d/d.go": "package d\n\nimport _ " + fkImportLine + "\n"},
+			want:  "pkg/d/d.go:3: findingkind imported as \"_\"",
+		},
+		{
+			name: "c/assignment from another package",
+			files: map[string]string{"pkg/r/r.go": "package r\n\nimport " + fkImportLine +
+				"\n\nfunc init() { findingkind.FindingA = findingkind.FindingB }\n"},
+			want: "pkg/r/r.go:5: assignment to findingkind.FindingA",
+		},
+		{
+			name: "c/assignment through an alias, parenthesised",
+			files: map[string]string{"pkg/r/r.go": "package r\n\nimport kinds " + fkImportLine +
+				"\n\nfunc init() { (kinds.FindingA) = kinds.FindingB }\n"},
+			want: "pkg/r/r.go:5: assignment to kinds.FindingA",
+		},
+		{
+			name: "c/address taken through the second of two imports",
+			files: map[string]string{"pkg/r/r.go": "package r\n\nimport (\n\tone " + fkImportLine + "\n\ttwo " + fkImportLine +
+				"\n)\n\nvar _ = one.FindingA\n\nvar P = &two.FindingB\n"},
+			want: "pkg/r/r.go:10: address taken of two.FindingB",
+		},
+		{
+			name: "c/increment",
+			files: map[string]string{"pkg/r/r.go": "package r\n\nimport " + fkImportLine +
+				"\n\nfunc init() { findingkind.FindingA++ }\n"},
+			want: "pkg/r/r.go:5: ++/-- on findingkind.FindingA",
+		},
+		{
+			name: "c/range target",
+			files: map[string]string{"pkg/r/r.go": "package r\n\nimport " + fkImportLine +
+				"\n\nfunc init() {\n\tfor _, findingkind.FindingA = range []findingkind.Kind{findingkind.FindingB} {\n\t}\n}\n"},
+			want: "pkg/r/r.go:6: range assigns to findingkind.FindingA",
+		},
+		{
+			name: "c/assignment in a test file",
+			files: map[string]string{"pkg/r/r_test.go": "package r\n\nimport " + fkImportLine +
+				"\n\nfunc init() { findingkind.FindingA = findingkind.FindingB }\n"},
+			want: "pkg/r/r_test.go:5: assignment to findingkind.FindingA",
+		},
+		{
+			name:  "c/assignment inside findingkind",
+			files: map[string]string{findingKindRel + "/swap.go": "package findingkind\n\nfunc init() { FindingA = FindingB }\n"},
+			want:  findingKindRel + "/swap.go:3: assignment to FindingA",
+		},
+		{
+			name:  "c/address taken inside findingkind, same file as the var",
+			files: map[string]string{findingKindRel + "/kinds.go": syntheticFindingKind + "\nvar p = &FindingB\n"},
+			want:  findingKindRel + "/kinds.go:18: address taken of FindingB",
+		},
+		{
+			name:  "d/pointer-receiver method",
+			files: map[string]string{findingKindRel + "/set.go": "package findingkind\n\nfunc (k *Kind) Set(s string) { k.s = s }\n"},
+			want:  findingKindRel + "/set.go:3: pointer-receiver method Set",
+		},
+		{
+			name: "e/sentinel named by a check",
+			files: map[string]string{"internal/guard/check.go": "package guard\n\nimport " + fkImportLine +
+				"\n\nvar u = findingkind.Unregistered()\n"},
+			want: "internal/guard/check.go:5: findingkind.Unregistered named outside",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := runIsolation(t, tc.files)
+			if len(v) != 1 || !strings.Contains(v[0], tc.want) {
+				t.Errorf("violations:\n%s\nwant exactly one containing %q", strings.Join(v, "\n"), tc.want)
+			}
+		})
+	}
+}

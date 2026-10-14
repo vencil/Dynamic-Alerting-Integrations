@@ -55,6 +55,14 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkCustomAlertDuplicates(input)...)
 	findings = append(findings, checkMetricsNotGatherable(input)...)
 
+	return newGuardReport(findings, len(input.EffectiveConfigs)), nil
+}
+
+// newGuardReport sorts findings into the report's order and computes the
+// summary over totalTenants tenants. CheckDefaultsImpact builds its report
+// with it, and SealUnregisteredKinds rebuilds one after changing a
+// finding's severity.
+func newGuardReport(findings []Finding, totalTenants int) *GuardReport {
 	// Stable sort: errors before warnings, then by tenant id, then
 	// by field path. Within the same (severity, tenant, field) we
 	// don't expect duplicates from PR-1 checks but the final tie-
@@ -78,7 +86,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	report := &GuardReport{
 		Findings: findings,
 		Summary: GuardSummary{
-			TotalTenants: len(input.EffectiveConfigs),
+			TotalTenants: totalTenants,
 		},
 	}
 
@@ -100,8 +108,8 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 			report.Summary.Warnings++
 		}
 	}
-	report.Summary.PassedTenantCount = len(input.EffectiveConfigs) - len(failingTenants)
-	return report, nil
+	report.Summary.PassedTenantCount = totalTenants - len(failingTenants)
+	return report
 }
 
 // sortedTenantIDs returns the keys of m sorted alphabetically.

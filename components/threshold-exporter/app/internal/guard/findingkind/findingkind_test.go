@@ -158,32 +158,75 @@ func TestNoBuildConstraints(t *testing.T) {
 }
 
 // TestOnlyRegisterMakesAKind: a Kind composite literal appears in register
-// alone, so register's checks see every Kind there is.
+// and in Unregistered alone (one each), so register's checks see every Kind
+// there is but the sentinel, and the sentinel's literal names the constant
+// register refuses.
 func TestOnlyRegisterMakesAKind(t *testing.T) {
 	fset, files := packageFiles(t, false)
-	inRegister := 0
+	literals := map[string]int{}
 	for _, f := range files {
 		for _, decl := range f.Decls {
 			fd, isFunc := decl.(*ast.FuncDecl)
-			allowed := isFunc && fd.Recv == nil && fd.Name.Name == "register"
+			where := ""
+			if isFunc && fd.Recv == nil && (fd.Name.Name == "register" || fd.Name.Name == "Unregistered") {
+				where = fd.Name.Name
+			}
 			ast.Inspect(decl, func(n ast.Node) bool {
 				lit, ok := n.(*ast.CompositeLit)
 				if !ok {
 					return true
 				}
 				if id, ok := lit.Type.(*ast.Ident); ok && id.Name == "Kind" {
-					if !allowed {
-						t.Errorf("%s: Kind literal outside register", fset.Position(lit.Pos()))
-					} else {
-						inRegister++
+					switch {
+					case where == "":
+						t.Errorf("%s: Kind literal outside register and Unregistered", fset.Position(lit.Pos()))
+					case where == "Unregistered" && !namesUnregistered(lit):
+						t.Errorf("%s: Unregistered's literal must be Kind{s: unregisteredName}", fset.Position(lit.Pos()))
 					}
+					literals[where]++
 				}
 				return true
 			})
 		}
 	}
-	if inRegister != 1 {
-		t.Errorf("register holds %d Kind literals, want 1", inRegister)
+	if literals["register"] != 1 || literals["Unregistered"] != 1 {
+		t.Errorf("Kind literals: register %d, Unregistered %d; want one each",
+			literals["register"], literals["Unregistered"])
+	}
+}
+
+func namesUnregistered(lit *ast.CompositeLit) bool {
+	if len(lit.Elts) != 1 {
+		return false
+	}
+	kv, ok := lit.Elts[0].(*ast.KeyValueExpr)
+	return ok && identName(kv.Key) == "s" && identName(kv.Value) == "unregisteredName"
+}
+
+// The sentinel is no registered kind and cannot become one.
+func TestUnregisteredSentinel(t *testing.T) {
+	u := Unregistered()
+	if u.IsZero() || u.IsRegistered() || u.Plane() != "" || u.String() != unregisteredName {
+		t.Errorf("Unregistered(): IsZero %v, IsRegistered %v, Plane %q, String %q",
+			u.IsZero(), u.IsRegistered(), u.Plane(), u.String())
+	}
+	for _, e := range All() {
+		if e.Kind == u {
+			t.Error("All() holds Unregistered()")
+		}
+		if !e.Kind.IsRegistered() {
+			t.Errorf("%s: in All() but IsRegistered is false", e.Kind)
+		}
+	}
+	mustPanic(t, "the sentinel's name", func() { register(unregisteredName, PlaneThreshold, "r") })
+	got, err := json.Marshal(u)
+	if err != nil || string(got) != `"`+unregisteredName+`"` {
+		t.Errorf("Unregistered() marshals to %s, %v", got, err)
+	}
+	// A Kind no register call made (what unsafe could forge) is refused
+	// like the zero Kind.
+	if _, err := json.Marshal(Kind{s: "forged"}); err == nil {
+		t.Error("an unregistered Kind marshalled without error")
 	}
 }
 

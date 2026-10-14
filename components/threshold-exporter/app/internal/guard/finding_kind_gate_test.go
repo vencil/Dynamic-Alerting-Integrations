@@ -11,11 +11,16 @@ package guard
 // for the four ways of listing kinds this replaces — a regex, an AST shape
 // rule, a go/types computation, a check at Run's exit — and why each fell).
 //
-// What is left to check here, over every non-test .go file of this package
-// whatever its name or build constraint (go/build's default context would
-// skip an `_arm64.go` file):
+// First, the module-wide rules of finding_kind_isolation_test.go (no
+// unsafe, cgo or assembly in any non-test file of the module; no kind var
+// written or addressed from any package; no pointer-receiver method in
+// findingkind; the Unregistered sentinel used only at da-guard's output
+// boundary). Then, over every non-test .go file of this package whatever its
+// name or build constraint (go/build's default context would skip an
+// `_arm64.go` file):
 //
-//  1. No `unsafe` and no cgo: either could write a Kind's unexported field.
+//  1. No `unsafe` and no cgo: either could write a Kind's unexported field
+//     (also covered module-wide).
 //  2. findingkind is imported by name (no dot or blank import), so every
 //     use of a kind is a `findingkind.FindingXxx` selector this test sees.
 //  3. No kind var is assigned to, incremented or has its address taken: the
@@ -132,6 +137,7 @@ func kindVars(t *testing.T) map[string]findingkind.Kind {
 }
 
 func TestFindingKindPlanes(t *testing.T) {
+	requireKindIsolation(t) // finding_kind_isolation_test.go: rules a–e, module-wide
 	vars := kindVars(t)
 	fset, files := nonTestFiles(t, ".")
 	if files[routingFindingsFile] == nil {

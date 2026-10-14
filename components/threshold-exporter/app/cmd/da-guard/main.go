@@ -106,6 +106,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/internal/guard"
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
@@ -220,6 +221,16 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 // (usage errors, exception messages); the report itself goes to
 // either stdout (if --output empty) or the named file.
 func run(args []string, stdout, errOut io.Writer) int {
+	return runWith(args, stdout, errOut, guard.CheckDefaultsImpact)
+}
+
+// checkFunc is guard.CheckDefaultsImpact's shape; runWith takes it so a test
+// can hand the output boundary a report no real check produces (a finding
+// with the zero Kind, #2904).
+type checkFunc func(guard.CheckInput) (*guard.GuardReport, error)
+
+// runWith is run with the guard check passed in.
+func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// run() never touches the process-global `log` (see main, #2444).
 	if len(args) > 0 && args[0] == servedValuesCmd {
 		return runServedValues(args[1:], stdout, errOut)
@@ -351,12 +362,20 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return reportDroppedFiles(errOut, scoped, exitOK)
 	}
 
-	report, err := guard.CheckDefaultsImpact(input)
+	report, err := check(input)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
 		return exitCallerErr
 	}
 	spellFindingsAsWritten(report, scoped)
+	// #2904: a finding whose kind is not registered (the zero Kind a check
+	// left, or one forged past the closed type) would fail the JSON encode —
+	// exit 2 and no report at all — and leave an empty kind column in
+	// Markdown. Write it as unregistered_finding_kind, an error, instead.
+	if n := report.SealUnregisteredKinds(); n > 0 {
+		fmt.Fprintf(errOut, "%s: %d finding(s) carried no registered kind; reported as %q with severity error (a da-guard bug: please report it)\n",
+			programName, n, findingkind.Unregistered())
+	}
 
 	if err := writeReport(stdout, errOut, f, scoped, report, notices); err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)

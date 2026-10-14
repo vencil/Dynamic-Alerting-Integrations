@@ -51,6 +51,22 @@ linters:
           deny:
             - pkg: net/http
               desc: pure logic packages (CLI-reusable) must not import net/http
+        # #2904: unsafe or cgo in ANY package can forge a findingkind.Kind (a
+        # generic cast need not import findingkind) or overwrite a kind var.
+        # This is the early layer only: golangci-lint loads files for one
+        # GOOS/GOARCH, so an `_arm64.go` or tagged file escapes it. The gate
+        # that parses every file whatever its constraint is
+        # internal/guard/finding_kind_isolation_test.go.
+        no-unsafe-or-cgo:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!$test"
+          deny:
+            - pkg: unsafe
+              desc: "can forge or overwrite a da-guard finding kind (#2904); see internal/guard/finding_kind_isolation_test.go"
+            - pkg: C
+              desc: "cgo can forge or overwrite a da-guard finding kind (#2904); see internal/guard/finding_kind_isolation_test.go"
   exclusions:
     rules:
       - path: _test\.go

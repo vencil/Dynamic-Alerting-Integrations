@@ -25,8 +25,8 @@
 // With a string type the set of kinds is whatever any string can be, so
 // every one of those ways had to be found and closed. Here the type closes
 // it instead: Kind is a struct with one unexported field, so outside this
-// package a Kind can only be the zero value or a copy of one of the vars
-// below. No conversion (from a string, a pointer, a generic type parameter
+// package a Kind can only be the zero value, a copy of one of the vars
+// below, or the Unregistered() sentinel. No conversion (from a string, a pointer, a generic type parameter
 // or a look-alike struct: a field of another package is never identical)
 // and no decoder (there is no UnmarshalJSON, and encoding/json cannot set an
 // unexported field) yields any other Kind. register, the one constructor, is
@@ -37,9 +37,15 @@
 // finding of their fixtures carries it.
 //
 // Holes this does not close, held by tests instead: a file of this package
-// under a build constraint (findingkind_test.go refuses any), `unsafe` or
-// cgo in this package or in internal/guard (refused by the same tests), and
-// a second Kind{...} literal in this package (only register may write one).
+// under a build constraint (findingkind_test.go refuses any); `unsafe` or
+// cgo anywhere in the module, which could write the unexported field from a
+// package that does not even import this one; a kind var reassigned or
+// addressed from any package of the module, and a pointer-receiver method
+// here (all refused by internal/guard/finding_kind_isolation_test.go, which
+// parses every .go file of the module whatever its build constraint); and a
+// Kind{...} literal in this package other than register's and
+// Unregistered's (findingkind_test.go). A kind that still reaches da-guard's
+// output unregistered is written as Unregistered() with severity error.
 package findingkind
 
 import (
@@ -90,12 +96,36 @@ func register(name string, plane Plane, reason string) Kind {
 	case reason == "":
 		panic(fmt.Sprintf("findingkind: %q registered without a reason", name))
 	}
+	if name == unregisteredName {
+		panic(fmt.Sprintf("findingkind: %q is the sentinel Unregistered returns, never a registered kind", name))
+	}
 	if _, dup := registry[name]; dup {
 		panic(fmt.Sprintf("findingkind: %q registered twice", name))
 	}
 	k := Kind{s: name}
 	registry[name] = Entry{Kind: k, Plane: plane, Reason: reason}
 	return k
+}
+
+// unregisteredName is the name of the kind Unregistered returns. It is part
+// of da-guard's JSON contract (docs/cli-reference.md §guard).
+const unregisteredName = "unregistered_finding_kind"
+
+// Unregistered is the kind da-guard's output writes in place of a kind it
+// does not know — the zero Kind, or one no register call made (which only
+// unsafe could produce) — so the report is still written, and the finding
+// still blocks, instead of the run failing with no report (#2904). It is
+// not a registered kind: All() does not hold it, it has no plane, and the
+// guard library never reports it; only the CLI's output boundary
+// substitutes it (cmd/da-guard). Its literal is the one Kind literal
+// outside register (findingkind_test.go holds this).
+func Unregistered() Kind { return Kind{s: unregisteredName} }
+
+// IsRegistered reports whether k is a kind register made: one of All().
+// False for the zero Kind and for Unregistered().
+func (k Kind) IsRegistered() bool {
+	e, ok := registry[k.s]
+	return ok && e.Kind == k
 }
 
 // String is the kind's name as it appears in reports; "" for the zero Kind.
@@ -108,11 +138,17 @@ func (k Kind) IsZero() bool { return k.s == "" }
 func (k Kind) Plane() Plane { return registry[k.s].Plane }
 
 // MarshalJSON writes the kind's name as a JSON string, the same bytes the
-// string type it replaces produced. The zero Kind is refused: a report that
-// carries it would read as a finding of no kind.
+// string type it replaces produced. Only a registered kind or Unregistered()
+// is written. The zero Kind is refused — a report that carries it would read
+// as a finding of no kind — and so is any other Kind no register call made:
+// the CLI swaps both for Unregistered() before it writes (#2904), so this is
+// the last line, for a caller that did not.
 func (k Kind) MarshalJSON() ([]byte, error) {
-	if k.IsZero() {
+	switch {
+	case k.IsZero():
 		return nil, fmt.Errorf("findingkind: a finding with no kind (the zero Kind) cannot be reported")
+	case !k.IsRegistered() && k != Unregistered():
+		return nil, fmt.Errorf("findingkind: kind %q was not registered and cannot be reported", k.s)
 	}
 	return json.Marshal(k.s)
 }
