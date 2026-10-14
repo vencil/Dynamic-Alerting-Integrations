@@ -288,7 +288,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
+已經有問題、但抓 log 的 `kubectl logs` 在時限內沒回應時，`recent_logs` 是空的並多一個 `recent_logs_error` 說明原因，結束碼照問題本身（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）。租戶在維護或靜音模式時多一個 `operational_mode`；給了 `--config-dir` 時多 `profile`（有設才出現）與 `inheritance_chain`。跳過 Pod 與 exporter 兩項時多一個 `skipped`：
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -308,7 +308,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
-| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`（stderr 一行說明，沒有 JSON）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，沒有 JSON，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -332,7 +332,7 @@ da-tools batch-diagnose [options]
 |------|------|--------|
 | `--tenants <LIST>` | 逗號分隔租戶列表（若不指定則自動探索） | （自動） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
-| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)） | `60` |
+| `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)）。期限也傳到檢查裡的每次呼叫：`kubectl` 在期限前稍早（`min(0.5 秒, --timeout/4)`）被終止，不會在整批結束後留下行程（`--timeout` 很短（低於約 0.5 秒）或機器負載高時不保證）；期限已過就不再啟動 `kubectl` 或送出 Prometheus 查詢（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)） | `60` |
 | `--output <FILE>` | 輸出至檔案（JSON 格式） | stdout |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | K8s namespace（auto-discover 用） | `monitoring` |
@@ -354,7 +354,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|------|
 | `0` | 所有租戶都是 `healthy` 或 `unchecked`（含 `--dry-run`） |
 | `1` | 一個或多個租戶檢查失敗（看輸出裡各租戶的 `status` 與 `issues`） |
-| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl`，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl` 或 `kubectl` 在時限內沒回應，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：租戶檢查失敗與 Prometheus 查詢失敗都回 `0`。用 v2.9.0 時請讀輸出裡各租戶的 `status`。 <!-- image-caveat: v2.9.0 -->
 

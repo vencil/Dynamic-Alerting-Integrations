@@ -287,7 +287,7 @@ When something is wrong it lists `issues` and recent error logs:
 {"status": "error", "tenant": "db-a", "issues": ["Pod not found", "Prometheus query failed (http://localhost:9090)"], "recent_logs": []}
 ```
 
-A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
+When an issue was found but the `kubectl logs` call that fetches the logs does not answer in time, `recent_logs` is empty and an extra `recent_logs_error` says why; the exit code follows the issue itself ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)). A tenant in maintenance or silent mode gets an extra `operational_mode`; with `--config-dir` you also get `profile` (when set) and `inheritance_chain`. When the Pod and exporter checks are skipped there is an extra `skipped`:
 
 ```json
 {"status": "unchecked", "tenant": "db-b", "skipped": [{"check": "pod", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}, {"check": "exporter", "reason": "db_type=postgresql; the Pod and exporter checks are written for MariaDB (app=mariadb, mysql_up)"}]}
@@ -307,7 +307,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|-------------|
 | `0` | `status: healthy`, or `status: unchecked` (the Pod and exporter checks were skipped and nothing else was wrong) |
 | `1` | `status: error`: the Pod is missing or not Running, or `mysql_up` is not 1 |
-| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment (one line on stderr, no JSON); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr, no JSON) |
+| `2` | Caller error: bad arguments (missing tenant, or `--show-inheritance` without `--config-dir`); a failed Prometheus query (the output is still the `status: error` JSON, `issues` contains `Prometheus query failed`, and the code is 2 even alongside other issues); the Pod check needs to run but `kubectl` is not in the environment, or `kubectl` does not answer in time (120s limit per call; either way one line on stderr, no JSON, [#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)); or, with `--config-dir`, da-guard is missing, a file the exporter drops or cannot read, or da-guard fails (one `ERROR:` line plus da-guard's stderr, no JSON) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: it returns `0` whether `status` is `healthy` or `error`, and ends with a Python traceback (rc=1) when `kubectl` is missing. On v2.9.0, read the output's `status`. <!-- image-caveat: v2.9.0 -->
 
@@ -335,7 +335,7 @@ None (auto-discover tenants).
 |--------|-------------|---------|
 | `--tenants <LIST>` | Comma-separated tenant list (if omitted, auto-discover) | (auto) |
 | `--workers <N>` | Number of parallel diagnosis threads | `5` |
-| `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)) | `60` |
+| `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)). The deadline reaches every call inside the check: `kubectl` is stopped slightly before it (`min(0.5s, --timeout/4)`), so no process is left behind after the batch ends (not guaranteed with a very short `--timeout`, below about 0.5s, or on a heavily loaded machine), and past the deadline no `kubectl` is started and no Prometheus query is sent ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)) | `60` |
 | `--output <FILE>` | Output to file (JSON format) | stdout |
 | `--dry-run` | Only list tenants, don't run checks | false |
 | `--namespace <NS>` | K8s namespace (for auto-discover) | `monitoring` |
@@ -357,7 +357,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|-------------|
 | `0` | Every tenant is `healthy` or `unchecked` (including `--dry-run`) |
 | `1` | One or more tenant checks failed (see each tenant's `status` and `issues` in the output) |
-| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl` or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl`, a `kubectl` that does not answer in time, or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: a failed tenant check and a failed Prometheus query both return `0`. On v2.9.0, read each tenant's `status` in the output. <!-- image-caveat: v2.9.0 -->
 
