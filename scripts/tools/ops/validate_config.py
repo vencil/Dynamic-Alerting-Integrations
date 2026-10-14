@@ -196,6 +196,7 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ParseFailedError,
     load_effective_tree,
+    load_guard_findings,
     print_load_error,
     value_not_served_as_written,
 )
@@ -1245,6 +1246,22 @@ def _effective_tree(config_dir: str):
     return tree
 
 
+# #2914: the profiles row's FAIL for a routing-layer key in a threshold profile.
+_PROFILE_ROUTING_KEY_HINT = (
+    "A threshold profile (`profiles:`) may not carry `_severity_dedup` or any "
+    "`_routing*` key; why, and where they belong: routing_in_unread_location "
+    "in docs/cli-reference.md#guard (`da-guard --config-dir <dir>` names each).")
+
+
+def _profile_routing_findings(config_dir: str) -> list[tuple[str, str]]:
+    """(field, message) of each da-guard `routing_in_unread_location` finding
+    inside a threshold profile (field `<file>:profiles.<profile>.<key>`).
+    #2914: the verdict is da-guard's, not this row's. The field is compared
+    whole, never split: a profile name and a key may both hold a `.`."""
+    return [(f.field, f.message) for f in load_guard_findings(config_dir)
+            if f.kind == "routing_in_unread_location" and ":profiles." in f.field]
+
+
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
@@ -1252,7 +1269,15 @@ def check_profiles(config_dir: str) -> dict[str, object]:
       - Each tenant's `_profile` binds the profile it names (#2115 0-B: the
         exporter's answer, `da-guard effective`'s `profile`, not a Python
         reading of the files)
-      - Profile keys in `_profiles.yaml` don't use reserved prefixes (_, _routing, _state_)
+      - No threshold profile carries a routing-layer key (#2914): FAIL. The
+        verdict is da-guard's own `routing_in_unread_location` finding inside
+        a profile (a second da-guard run, the check itself), so it covers
+        every root `_` file's `profiles:`, not only `_profiles.yaml`, and
+        profiles no tenant elects. ⚠️ A tree with no
+        tenant at all gets an empty da-guard report, so nothing is named then.
+      - Other reserved keys in `_profiles.yaml` (`_silent_mode`, `_state_*`,
+        …) are a WARN; `_metadata` is not — a profile's `_metadata` is filled
+        into its tenants (docs/design/config-driven.md, #2830)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
 
@@ -1316,6 +1341,19 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     warnings = []
     profile_ref_count = 0
 
+    # ── #2914: routing-layer keys in a threshold profile (FAIL) ──
+    # da-guard's own `routing_in_unread_location` findings inside a profile:
+    # every root platform file's `profiles:`, bound or not.
+    try:
+        in_profiles = _profile_routing_findings(config_dir)
+    except (DaGuardNotFoundError, DaGuardError) as exc:
+        return _tenant_load_failure_row(
+            "profiles", exc, config_dir,
+            (_PROFILES_TREE_UNREADABLE_HINT, _PROFILES_NO_CONFIG_FILE_HINT,
+             _PROFILES_NO_DA_GUARD_HINT))
+    errors = [msg for _field, msg in in_profiles]
+    routing_fields = {field for field, _msg in in_profiles}
+
     # ── Profile structure validation ──
     for p_name, p_data in profiles.items():
         if not isinstance(p_data, dict):
@@ -1329,6 +1367,10 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         for key in p_data:
             # Reserved keys should not be in profiles (they belong in tenant config)
             if key.startswith("_"):
+                if f"_profiles.yaml:profiles.{p_name}.{key}" in routing_fields:
+                    continue  # a FAIL above (#2914)
+                if key == "_metadata":
+                    continue  # filled into the tenants, a documented use (#2830)
                 if _is_reserved_key(key):
                     warnings.append(
                         f"profile={p_name}: contains reserved key \"{key}\" "
@@ -1359,6 +1401,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                 f"tenant={t_name}: _profile references unknown profile "
                 f"\"{name}\"")
 
+    if errors:
+        return _make_result("profiles", FAIL, errors + warnings + skipped_lines,
+                            hint=_PROFILE_ROUTING_KEY_HINT)
     if warnings:
         return _make_result("profiles", WARN, warnings + skipped_lines)
     details = [f"{len(effective)} tenants scanned, {profile_ref_count} profile refs, "

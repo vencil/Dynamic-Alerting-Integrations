@@ -734,6 +734,17 @@ func pathAtOrBelow(p, dir string, wholeTree bool) bool {
 	return strings.HasPrefix(p, dir+string(filepath.Separator))
 }
 
+// ProfileRoutingKeys is ProfileRoutingKeys over the WHOLE tree's build —
+// every routing-layer key a threshold profile writes, in every profile source
+// the exporter reads, whatever the scope and whether or not a tenant elects
+// the profile (#2914). nil when there is none, or when the tree has no file.
+func (s *ScopedTenants) ProfileRoutingKeys() []ProfileRoutingKey {
+	if s == nil || s.built == nil {
+		return nil
+	}
+	return ProfileRoutingKeys(s.built.FileConfigs)
+}
+
 // WrittenKeys is, over the whole tree, each tenant's
 // EffectiveConfig.KeySpellings (#2031; nil when none): how to spell a key of
 // Config as written. Resolved on each call; da-guard asks it only to name

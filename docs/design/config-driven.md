@@ -109,7 +109,8 @@ tenants:
 
 - **優先序**：租戶檔 > 根目錄平台檔的 `tenants:` 值 > profile > defaults chain（含子目錄的 `_defaults.yaml`）。`_profile` 本身也可以由平台 `tenants:` 值給，租戶檔寫的優先。
 - **讀哪些檔**：只讀根目錄 `_` 前綴檔（`_profiles.yaml`、`_defaults.yaml` …）的 `profiles:`；同名 profile 跨檔依檔名排序逐鍵合併、後者贏。子目錄平台檔與租戶檔的 `profiles:` 不被任何平面讀取。找不到的 profile 名稱不展開任何鍵。
-- **不補的鍵**：租戶層以任一拼法（含 #1231 的舊名）已設的鍵；根目錄 defaults 載體 `optional_overrides` 宣告的鍵（`_critical` 形式除外）。
+- **不補的鍵**：租戶層以任一拼法（含 #1231 的舊名）已設的鍵；根目錄 defaults 載體 `optional_overrides` 宣告的鍵（`_critical` 形式除外）；路由層的鍵——`_severity_dedup` 與所有以 `_routing` 開頭的鍵（見下一點）。
+- **profile 不准帶路由層的鍵**（[#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)）：`_severity_dedup` 與 `_routing` 開頭的鍵不補入租戶，寫在 profile 裡是錯誤；判定、原因與遷移見 [`routing_in_unread_location`](../cli-reference.md#guard)。
 - **回應**：walker 平面以 `profile_overlay`（`[{profile, file, keys}]`，依合併順序，無貢獻時省略）標出 profile 補上的鍵；da-guard 的冗餘覆寫判斷以「刪掉後會回落到的值」為準，因此含 profile 值。
 - ⚠️ `/simulate` 只展開請求 chain **根層（L0）** `_defaults.yaml` 的 `profiles:`——`_profiles.yaml` 不在請求內，只定義在那裡的 profile 在 `/simulate` 不展開。
 - **`merged_hash` 與 reload 歸因**：exporter 的 `merged_hash` 也含 profile 補上的值，因此選用 profile 的租戶其 `merged_hash` 與先前不同。只改根目錄平台檔的 `profiles:` 也會重算「選用了被改 profile」的租戶並計入 reload 歸因（與改平台 `tenants:` 值同一桶：reason `defaults`、scope `global`；租戶層已設所有被改的鍵時為 `shadowed`）。

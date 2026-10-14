@@ -516,6 +516,9 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// maps (the merged cfg here would overstate a tenant's own mapping).
 	// #2859: the entries that still write `_metadata` as a string.
 	publishMetadataStringForm(m.getMetrics(), m.getLogger(), metadataStringFormOf(cfg, flatScan))
+	// #2914: routing-layer keys in a threshold profile, which the expansion
+	// ignores.
+	publishProfileRoutingKeys(m.getMetrics(), m.getLogger(), profileRoutingKeysOf(cfg, flatScan, m.path))
 	if flatScan != nil {
 		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
 		// #2592: the `_defaults` files this commit could not parse — state,

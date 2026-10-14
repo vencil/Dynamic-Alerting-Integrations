@@ -322,6 +322,26 @@ class TestDefaultsValidation:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert viol == [], f"loader-legit top-level keys false-rejected: {viol}"
 
+    @pytest.mark.parametrize("key", ["_routing", "_routing_profile", "_routingx", "_severity_dedup"])
+    def test_routing_layer_key_in_a_profile_rejected(self, confd, schema, platform_schema, key):
+        # #2914: a threshold profile may not carry `_severity_dedup` or any
+        # `_routing*` key — the route generator never reads them from a
+        # profile, and the exporter does not apply them.
+        _write(confd, "_defaults.yaml",
+               "defaults:\n  mysql_threads_running: 80\n"
+               f"profiles:\n  std:\n    mysql_threads_running: 60\n    {key}: x\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert len(viol) == 1 and key in viol[0], viol
+
+    def test_metadata_and_lookalikes_in_a_profile_pass(self, confd, schema, platform_schema):
+        # #2914 control: `_metadata` is a documented profile fill-in (#2830);
+        # `_severity_dedupe` is not `_severity_dedup`.
+        _write(confd, "_defaults.yaml",
+               "defaults:\n  mysql_threads_running: 80\n"
+               "profiles:\n  std:\n    _metadata: {owner: dba}\n    _severity_dedupe: 1\n  empty:\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == [], viol
+
     def test_empty_or_null_defaults_tolerated(self, confd, schema, platform_schema):
         # An empty / comment-only / explicit-`null` _defaults.yaml is loader-legal (a
         # placeholder) → must NOT be flagged "must be a mapping". Adversarial review N1.

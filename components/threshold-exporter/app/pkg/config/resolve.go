@@ -444,7 +444,7 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // never become a base row.
 func baseRowsSkipKey(metricKey string) bool {
 	return strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
-		metricKey == "_severity_dedup" || strings.HasPrefix(metricKey, "_routing")
+		IsRoutingLayerKey(metricKey)
 }
 
 // resolveBaseRows resolves a tenant's base thresholds from the given defaults
@@ -783,7 +783,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 			continue // not a dimensional key
 		}
 		if strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
-			key == "_severity_dedup" || strings.HasPrefix(key, "_routing") {
+			IsRoutingLayerKey(key) {
 			continue
 		}
 		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {

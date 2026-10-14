@@ -28,7 +28,15 @@
       "title": "ThresholdConfig.tenants — loader-legitimate top-level field (left loose; guarded by tenant-config.schema.json when in a tenant file)"
     },
     "profiles": {
-      "title": "ThresholdConfig.profiles — loader-legitimate top-level field (profile map; usually in _routing_profiles.yaml but the loader reads it from any file)"
+      "title": "ThresholdConfig.profiles — threshold profiles (name → keys a tenant on `_profile: <name>` gets filled in); usually in _profiles.yaml, read from any `_` file at the conf.d root",
+      "description": "Profile names are dynamic → each profile's values are left loose, except: a profile may not carry `_severity_dedup` or any key starting with `_routing` (#2914; why, and where they belong: da-guard's routing_in_unread_location in docs/cli-reference.md#guard). `_metadata` is allowed.",
+      "additionalProperties": {
+        "propertyNames": {
+          "not": {
+            "pattern": "^(_severity_dedup$|_routing)"
+          }
+        }
+      }
     },
     "max_metrics_per_tenant": {
       "title": "ThresholdConfig.max_metrics_per_tenant — platform-wide cardinality cap; in directory mode the exporter honours it ONLY in the conf.d ROOT _defaults.yaml (#2028) and ignores it with a WARN anywhere else"

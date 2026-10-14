@@ -69,6 +69,11 @@ type ConfigMetrics struct {
 	// `_metadata` as a string. The exporter still reads them; the write
 	// side (tenant-api, the conf.d schema lint) refuses the form.
 	MetadataStringForm prometheus.Gauge
+	// #2914: state-coded gauge, re-Set on every config commit: the
+	// routing-layer keys (`_severity_dedup`, `_routing*`) the threshold
+	// profiles of the committed config write. The exporter does not apply
+	// them.
+	ProfileRoutingKeys prometheus.Gauge
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
@@ -183,6 +188,10 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_metadata_string_form",
 			Help: "Number of `tenants:` and `profiles:` entries in the committed config that write `_metadata` as a string rather than a mapping (#2859). The exporter still reads such a string as YAML, so the metadata is served; the conf.d schema lint fails on it, and tenant-api refuses a write whose target tenant section writes the form, so a tenant whose own section in its file uses it cannot be edited through tenant-api until that section is rewritten as a mapping; a counted profile or platform-file entry does not block tenant writes. Counted per file of the committed config, so an entry written in two files counts twice; a file that failed to parse is not counted. State-coded: re-Set on every config commit, so it returns to 0 once every entry is a mapping. The accompanying WARN (once per commit) names the entries. Informational — no PrometheusRule ships for it.",
 		}),
+		ProfileRoutingKeys: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "da_config_profile_routing_keys",
+			Help: "Number of routing-layer keys (`_severity_dedup`, and every key starting with `_routing`) written in the threshold profiles (`profiles:`) of the committed config, counted per (file, profile, key); the exporter does not fill them into any tenant. Why, and where they belong: da-guard's routing_in_unread_location (docs/cli-reference.md#guard). State-coded: re-Set on every config commit, so it returns to 0 once the profiles no longer write them. The accompanying ERROR (once per commit) names file, profile and key. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
+		}),
 	}
 }
 
@@ -209,5 +218,6 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.DefaultsUnusable,
 		s.ValuesNotServed,
 		s.MetadataStringForm,
+		s.ProfileRoutingKeys,
 	}
 }

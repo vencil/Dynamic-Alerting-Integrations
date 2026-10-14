@@ -37,6 +37,9 @@ package main
 //   da_config_metadata_string_form         (Gauge)  [#2859]
 //     re-Set by every commit (metadataStringFormOf).
 //
+//   da_config_profile_routing_keys         (Gauge)  [#2914]
+//     re-Set by every commit (profileRoutingKeysOf).
+//
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
 //     merged_hash moved (ADR-017 "quiet defaults edit"). v2.8.0 Issue #61
@@ -146,6 +149,8 @@ type configMetrics struct {
 	valuesNotServed map[string]prometheus.Gauge
 	// #2859: da_config_metadata_string_form. See SetMetadataStringForm.
 	metadataStringForm prometheus.Gauge
+	// #2914: da_config_profile_routing_keys. See SetProfileRoutingKeys.
+	profileRoutingKeys prometheus.Gauge
 }
 
 // da_config_scan_failures_total{reason} label values (#2452, #2592). ⛔ A
@@ -321,6 +326,7 @@ func newConfigMetrics() *configMetrics {
 		defaultsUnusable:            defaultsUnusable,
 		valuesNotServed:             valuesNotServed,
 		metadataStringForm:          s.MetadataStringForm,
+		profileRoutingKeys:          s.ProfileRoutingKeys,
 		set:                         s,
 		scanDuration:                s.ScanDuration,
 		reloadTriggers:              s.ReloadTriggers,
@@ -611,6 +617,17 @@ func (cm *configMetrics) SetMetadataStringForm(n int) {
 		return
 	}
 	cm.metadataStringForm.Set(float64(n))
+}
+
+// SetProfileRoutingKeys publishes da_config_profile_routing_keys (#2914):
+// the number of routing-layer keys the threshold profiles of the committed
+// config write (profileRoutingKeysOf). Called on every commit, including the
+// healthy one, so a fixed tree reads 0 again. Nil-receiver safe.
+func (cm *configMetrics) SetProfileRoutingKeys(n int) {
+	if cm == nil {
+		return
+	}
+	cm.profileRoutingKeys.Set(float64(n))
 }
 
 // SetConfigShape publishes the two whole-tree size maxima of the config

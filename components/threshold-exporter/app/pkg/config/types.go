@@ -384,6 +384,18 @@ func IsRoutingKey(k string) bool {
 	return k == "_routing" || strings.HasPrefix(k, "_routing_")
 }
 
+// IsRoutingLayerKey reports whether k is a routing-layer key:
+// `_severity_dedup`, or any key starting with `_routing` (Python:
+// _grar_parse._is_routing_layer_key). The resolvers skip such a key when they
+// build threshold rows (baseRowsSkipKey, resolveDimensionalRows,
+// reservedShapeWins); profileFill does not fill one in from a threshold
+// profile and ProfileRoutingKeys names each one a profile writes (#2914; why:
+// routing_in_unread_location in docs/cli-reference.md#guard). Broader than
+// IsRoutingKey, which is the routing keys alone (`_routing`, `_routing_<…>`).
+func IsRoutingLayerKey(k string) bool {
+	return k == "_severity_dedup" || strings.HasPrefix(k, "_routing")
+}
+
 // IsRecognisedReservedKey reports whether k is a reserved key something
 // reads by name: one of validReservedKeys, a routing key (IsRoutingKey), or a
 // `_state_<filter>` key (read for each declared filter). Narrower than

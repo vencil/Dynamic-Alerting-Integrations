@@ -106,10 +106,10 @@ var (
 		"judges `_routing_defaults.routes`, which the generator drops")
 	// FindingRoutingInUnreadLocation (error, TenantID ""; #2291): a
 	// `_routing` / `_routing_*` key where the route generator never reads
-	// it — a defaults block, the top level of an unwrapped defaults file,
-	// a threshold profile. Field is `<file>:<key path>`.
+	// it — a defaults block, a threshold profile (there: every key
+	// config.IsRoutingLayerKey accepts, #2914). Field is `<file>:<key path>`.
 	FindingRoutingInUnreadLocation = register("routing_in_unread_location", PlaneRouting,
-		"judges where a `_routing*` key sits relative to what the generator reads")
+		"judges where a routing-layer key (`_routing*`, `_severity_dedup`) sits relative to what the generator reads")
 	// FindingRoutingKeyIgnored (error; #2960): a key in a tenant `_routing`,
 	// a routing profile, `_routing_defaults` or `_routing_enforced` (or in a
 	// receiver / `overrides` entry under them) the route generator does not

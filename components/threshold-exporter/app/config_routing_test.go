@@ -181,15 +181,22 @@ func TestResolve_ProfileWithSilentMode(t *testing.T) {
 	}
 }
 
-func TestResolve_ProfileWithRouting(t *testing.T) {
+// #2914: a threshold profile's `_routing` and `_severity_dedup` are not
+// filled in — the route generator never reads them from a profile, so
+// applying them made the exporter's answer differ from the routes and
+// inhibit rules Alertmanager gets. Its `_metadata` and thresholds still are.
+func TestResolve_ProfileRoutingLayerKeysAreNotApplied(t *testing.T) {
 	t.Parallel()
-	// Profile includes _routing → tenant inherits routing config
 	routingYAML := "receiver:\n  type: \"webhook\"\n  url: \"https://noc.example.com/alerts\"\ngroup_wait: \"30s\""
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Profiles: map[string]map[string]ScheduledValue{
 			"standard-mariadb": {
-				"_routing": SV(routingYAML),
+				"_routing":          SV(routingYAML),
+				"_routing_profile":  SV("team"),
+				"_severity_dedup":   SV("disable"),
+				"mysql_connections": SV("60"),
+				"_metadata":         SV("owner: team-dba\n"),
 			},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -197,12 +204,31 @@ func TestResolve_ProfileWithRouting(t *testing.T) {
 		},
 	}
 	cfg.ApplyProfiles()
-	routes := cfg.ResolveRouting()
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 routing config from profile, got %d", len(routes))
+	if routes := cfg.ResolveRouting(); len(routes) != 0 {
+		t.Errorf("routing from a threshold profile: %+v, want none", routes)
 	}
-	if routes[0].ReceiverType != "webhook" {
-		t.Errorf("expected webhook receiver from profile, got %s", routes[0].ReceiverType)
+	// ResolveSeverityDedup lists a tenant only when dedup is on (a disable
+	// has no entry), so the tenant must be listed, as enable.
+	dedupOn := false
+	for _, d := range cfg.ResolveSeverityDedup() {
+		if d.Tenant == "db-a" {
+			dedupOn = d.Mode == "enable"
+		}
+	}
+	if !dedupOn {
+		t.Errorf("severity dedup for db-a is not the default enable (the profile's disable was applied)")
+	}
+	for _, k := range []string{"_routing", "_routing_profile", "_severity_dedup"} {
+		if _, filled := cfg.Tenants["db-a"][k]; filled {
+			t.Errorf("%s filled in from the profile", k)
+		}
+	}
+	// Control: the rest of the profile still applies.
+	if got := cfg.Tenants["db-a"]["mysql_connections"].Default; got != "60" {
+		t.Errorf("mysql_connections = %q, want the profile's 60", got)
+	}
+	if _, filled := cfg.Tenants["db-a"]["_metadata"]; !filled {
+		t.Error("_metadata not filled in from the profile")
 	}
 }
 

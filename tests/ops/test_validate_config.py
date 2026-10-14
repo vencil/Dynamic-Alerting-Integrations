@@ -20,6 +20,7 @@ import yaml
 
 import validate_config as vc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _platform_fs import require_shebang_scripts  # noqa: E402
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -393,20 +394,115 @@ class TestProfilesCheck:
             result = vc.check_profiles(d)
             assert result["status"] == vc.PASS
 
-    def test_reserved_key_in_profile_warns(self):
-        """Profile containing reserved keys should warn."""
+    @staticmethod
+    def _tree(d, files):
+        for name, body in files.items():
+            with open(os.path.join(d, name), "w", encoding="utf-8") as f:
+                f.write(body)
+
+    def test_routing_in_profile_fails(self):
+        """#2914: `_routing` in a threshold profile is a FAIL (was a WARN):
+        the route generator never reads it and the exporter does not apply it."""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"bad-profile": {
-                    "mysql_connections": 80,
-                    "_routing": {"receiver": {"type": "webhook"}},
-                }}}, f)
-            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {}}, f)
+            self._tree(d, {
+                "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connections: 80\n"
+                                  "    _routing: {receiver: {type: webhook}}\n",
+                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+            })
             result = vc.check_profiles(d)
-            assert result["status"] == vc.WARN
-            assert any("reserved key" in detail
-                       for detail in result["details"])
+            assert result["status"] == vc.FAIL, result
+            # da-guard's routing_in_unread_location message, as it writes it.
+            assert any(detail.startswith("_profiles.yaml: profiles.bad-profile._routing is not rendered")
+                       for detail in result["details"]), result
+
+    def test_severity_dedup_in_another_root_file_and_unbound_profile_fails(self):
+        """#2914: every profile source the exporter reads, not only
+        `_profiles.yaml`, and a profile no tenant elects."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "_platform.yaml": "profiles:\n  unused:\n    _severity_dedup: disable\n"
+                                  "    _routing_profile: team\n",
+                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+            })
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.FAIL, result
+            named = [x for x in result["details"] if x.startswith("_platform.yaml: profiles.unused.")]
+            assert len(named) == 2, result
+            assert any(x.startswith("_platform.yaml: profiles.unused._severity_dedup ") for x in named), result
+            assert any(x.startswith("_platform.yaml: profiles.unused._routing_profile ") for x in named), result
+
+    def test_dotted_profile_name_or_key_is_only_a_fail(self):
+        """#2914: a `.` in a profile name or in a key does not split da-guard's
+        `<file>:profiles.<profile>.<key>` field wrongly, so the key is the
+        FAIL alone — not also a reserved-key WARN of the structure check."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n"
+                                  "    _routing_v1.2: x\n"
+                                  "  team.x:\n    mysql_connections: 80\n"
+                                  "    _routing.a: x\n    _severity_dedup: disable\n",
+                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+            })
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.FAIL, result
+            for field in ("p._routing_v1.2", "team.x._routing.a", "team.x._severity_dedup"):
+                assert any(x.startswith(f"_profiles.yaml: profiles.{field} is not rendered")
+                           for x in result["details"]), (field, result)
+            assert not [x for x in result["details"] if x.startswith("profile=")], result
+
+    def test_failing_check_run_fails_the_row_as_the_binarys_fault(self, tmp_path, monkeypatch,
+                                                                   da_guard_binary):
+        """#2914: the routing-layer-key verdict is a second da-guard run (the
+        check itself). When `effective` answers but that run fails, the row
+        FAILs as da-guard's fault — never PASSes on findings it did not get."""
+        require_shebang_scripts()
+        fake = tmp_path / "guard-check-fails"
+        fake.write_text(f'#!/bin/sh\nif [ "$1" = effective ]; then exec "{da_guard_binary}" "$@"; fi\n'
+                        "echo 'check run broke' >&2\nexit 5\n", encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("DA_GUARD_BINARY", str(fake))
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        self._tree(str(d), {
+            "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n",
+            "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+            "tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: p\n",
+        })
+        result = vc.check_profiles(str(d))
+        assert result["status"] == vc.FAIL and result["caller_error"], result
+        assert result["hint"] == vc._DA_GUARD_BROKEN_HINT, result
+        # the check run's error (`da-guard exited 5`), not `effective`'s
+        assert "ERROR: da-guard exited 5" in result["details"], result
+        assert any("check run broke" in x for x in result["details"]), result
+
+    def test_metadata_in_profile_passes(self):
+        """#2914: a profile's `_metadata` is a documented fill-in (#2830), not
+        a reserved key to warn about."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "_profiles.yaml": "profiles:\n  standard:\n    mysql_connections: 80\n"
+                                  "    _metadata: {owner: team-dba}\n",
+                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: standard\n",
+            })
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.PASS, result
+
+    def test_other_reserved_key_in_profile_still_warns(self):
+        """Out of #2914's scope: `_silent_mode` in a profile stays a WARN."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n"
+                                  "    _silent_mode: warning\n",
+                "_defaults.yaml": "defaults: {}\n",
+            })
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.WARN, result
+            assert any("reserved key \"_silent_mode\"" in detail
+                       for detail in result["details"]), result
 
     def test_empty_profile_warns(self):
         """Empty profile should warn."""

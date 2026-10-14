@@ -39,7 +39,8 @@ var rootTopLevelRoutingKeys = map[string]bool{
 //     exporter's decode, so da-guard skips it as parse_failed, exit 3);
 //  2. inside a profile of a root platform file's `profiles:` block (the
 //     threshold `_profile` mechanism; routing profiles are
-//     `_routing_profiles.yaml`'s `routing_profiles:`).
+//     `_routing_profiles.yaml`'s `routing_profiles:`): every key
+//     config.IsRoutingLayerKey accepts (#2914).
 //
 // defaults are the carriers the chains read (config.ScopedTenants.
 // DefaultsFiles); the root platform files are read from configDir. skip
@@ -136,18 +137,22 @@ func unreadInProfiles(name string, data []byte) []Problem {
 		if !ok {
 			continue
 		}
-		for _, k := range sortedRoutingKeys(body) {
+		for _, k := range keysWhere(body, config.IsRoutingLayerKey) {
 			out = append(out, unreadProblem(name, "profiles."+pn+"."+k, k,
-				fmt.Sprintf("a threshold profile fills its keys into the tenants on `_profile: %s`, but the route generator never reads routing from it", pn)))
+				fmt.Sprintf("a threshold profile fills its keys into the tenants on `_profile: %s`, but the route generator never reads "+
+					"routing or severity dedup from it, and the exporter does not apply it either (#2914)", pn)))
 		}
 	}
 	return out
 }
 
-func sortedRoutingKeys(m map[string]any) []string {
+func sortedRoutingKeys(m map[string]any) []string { return keysWhere(m, config.IsRoutingKey) }
+
+// keysWhere is the keys of m that keep reports, sorted.
+func keysWhere(m map[string]any, keep func(string) bool) []string {
 	var out []string
 	for k := range m {
-		if config.IsRoutingKey(k) {
+		if keep(k) {
 			out = append(out, k)
 		}
 	}
@@ -165,6 +170,8 @@ func unreadProblem(file, field, key, why string) Problem {
 			"or the tenant's own file (one tenant)"
 	case key == "_routing_profile":
 		fix = "set `_routing_profile` in the tenant's own file (or its root platform `tenants:` entry)"
+	case key == "_severity_dedup": // only reported in a threshold profile (#2914)
+		fix = "move `_severity_dedup` into each tenant's own file (or its root platform `tenants:` entry), then delete it from the profile"
 	case key == "_routing_enforced":
 		fix = "move `_routing_enforced` to the top level of a conf.d ROOT platform file (not under `defaults:`, not below the root)"
 	case rootTopLevelRoutingKeys[key]:

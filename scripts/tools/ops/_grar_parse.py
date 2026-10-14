@@ -477,6 +477,13 @@ def _is_routing_key(key: object) -> bool:
     return isinstance(key, str) and (key == "_routing" or key.startswith("_routing_"))
 
 
+def _is_routing_layer_key(key: object) -> bool:
+    """``_severity_dedup`` or any key starting with ``_routing`` (Go:
+    ``config.IsRoutingLayerKey``; #2914, why: ``routing_in_unread_location``
+    in docs/cli-reference.md#guard)."""
+    return isinstance(key, str) and (key == "_severity_dedup" or key.startswith("_routing"))
+
+
 def _unread_routing_fix(key: str) -> str:
     """Where *key* belongs instead (the remedy of one unread-location line)."""
     if key == "_routing":
@@ -487,6 +494,9 @@ def _unread_routing_fix(key: str) -> str:
     if key == "_routing_profile":
         return ("set `_routing_profile` in the tenant's own file (or its root "
                 "platform `tenants:` entry)")
+    if key == "_severity_dedup":  # only reported in a threshold profile (#2914)
+        return ("move `_severity_dedup` into each tenant's own file (or its root "
+                "platform `tenants:` entry), then delete it from the profile")
     if key == "_routing_enforced":
         return ("move `_routing_enforced` to the top level of a conf.d ROOT platform "
                 "file (not under `defaults:`, not below the root)")
@@ -509,7 +519,8 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
        carrier (root or below) — field ``defaults.<key>``;
     2. inside a threshold profile of a root platform file's ``profiles:``
        mapping (``_profile``; routing profiles are ``routing_profiles:``) —
-       field ``profiles.<name>.<key>``.
+       field ``profiles.<name>.<key>``, every key ``_is_routing_layer_key``
+       accepts; a profile that is not a mapping carries none.
 
     Each is a ``WARN … skipping`` line (blocking under ``--validate``, as the
     #2326 F3 shape of this kind is) and a routing-tree record for the parity
@@ -537,8 +548,9 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
                 (f"profiles.{name}.{k}", k,
                  f"a threshold profile fills its keys into the tenants on "
                  f"`_profile: {name}`, but the route generator never reads "
-                 f"routing from it")
-                for k in sorted(k for k in body if _is_routing_key(k)))
+                 f"routing or severity dedup from it, and the exporter does "
+                 f"not apply it either (#2914)")
+                for k in sorted(k for k in body if _is_routing_layer_key(k)))
     for fld, key, why in found:
         text = f"{fname}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
         result.setdefault("routing_defaults_errors", []).append(

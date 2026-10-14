@@ -46,7 +46,7 @@
         "_profile": {
           "type": "string",
           "title": "Profile Reference (v1.12.0)",
-          "description": "Reference to a profile name defined in _profiles.yaml. Profile values act as fill-in (not overwrite) — tenant settings take precedence. Inheritance chain: _defaults.yaml → profile → tenant config.",
+          "description": "Reference to a profile name defined in _profiles.yaml. Profile values act as fill-in (not overwrite) — tenant settings take precedence. Inheritance chain: _defaults.yaml → profile → tenant config. A profile's `_severity_dedup` and `_routing*` keys are not filled in (#2914; docs/cli-reference.md#guard, routing_in_unread_location).",
           "minLength": 1,
           "examples": ["standard-db", "high-volume-service"]
         },

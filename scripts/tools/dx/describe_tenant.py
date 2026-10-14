@@ -1298,13 +1298,22 @@ def _canonical_view(m: dict) -> dict:
     return out
 
 
+def _is_routing_layer_key(key: str) -> bool:
+    """Go `IsRoutingLayerKey` (#2914): `_severity_dedup` or a key starting
+    with `_routing`."""
+    return key == "_severity_dedup" or key.startswith("_routing")
+
+
 def _profile_fill(canon_profile: dict, own: dict, declared: set) -> dict:
     """Go `profileFill`: the entries of `canon_profile` that fill in for a
-    tenant whose own layer is `own` — not a key `own` sets under any
-    spelling, not a key declared in `optional_overrides` (by its base before
-    `{`), except the `_critical` shape."""
+    tenant whose own layer is `own` — not a routing-layer key (#2914), not a
+    key `own` sets under any spelling, not a key declared in
+    `optional_overrides` (by its base before `{`), except the `_critical`
+    shape."""
     fill: dict = {}
     for key, value in canon_profile.items():
+        if _is_routing_layer_key(key):
+            continue
         brace = key.find("{")
         declared_key = key[:brace] if brace > 0 else key
         is_declared = declared_key in declared and not key.endswith("_critical")
