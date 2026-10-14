@@ -22,7 +22,9 @@ Threshold Exporter 是 Multi-Tenant Dynamic Alerting 平台的核心元件，負
 | 寫入逾時 | 10 秒 |
 | 空閒逾時 | 30 秒 |
 | 最大標頭大小 | 8192 字節 |
-| 指標格式 | OpenMetrics text format |
+| 指標格式 | Prometheus 文字格式 `text/plain; version=0.0.4`（沒有開 OpenMetrics） |
+
+這張表有測試比對原始碼（`service_spec_readme_parity_test.go`）。
 
 ## API Overview
 
