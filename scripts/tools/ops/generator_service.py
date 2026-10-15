@@ -67,6 +67,7 @@ import errno
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import signal
@@ -1033,7 +1034,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="the git repository (read-only is enough); files are "
                         "read from git objects, never from its working tree")
     p.add_argument("--config-subdir", required=True,
-                   help="conf.d's path inside the repository, e.g. conf.d")
+                   help="conf.d's path inside the repository, e.g. conf.d (. is the "
+                        "root; absolute or with a '..' segment refuses to start)")
     p.add_argument("--work-dir", required=True,
                    help="scratch directory for the trees being judged")
     p.add_argument("--policy", default=None,
@@ -1102,6 +1104,24 @@ def _object_format(git: str, repo: str) -> str:
         raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip()
                            or f"unknown object format {fmt!r}")
     return fmt
+
+
+def _normalize_config_subdir(value: str) -> str:
+    """--config-subdir as the paths ``git ls-tree`` prints: no ``./``, no
+    trailing ``/``, and ``""`` for the repository root (``.``). Normalised
+    once here and used as is from then on, because a spelling ls-tree does not
+    print (``./conf.d``) matches no entry: the judged tree would be empty and
+    every write would come back as findings, which reads as a config error
+    when it is a deployment one. An absolute path or a ``..`` segment names
+    nothing inside the repository and refuses to start."""
+    if value.startswith("/"):
+        raise RuntimeError(f"--config-subdir {value!r} is absolute; give conf.d's "
+                           f"path inside the repository")
+    if ".." in value.split("/"):
+        raise RuntimeError(f"--config-subdir {value!r} has a '..' segment; give "
+                           f"conf.d's path inside the repository")
+    norm = posixpath.normpath(value) if value else "."
+    return "" if norm == "." else norm
 
 
 def _prepare_socket_path(path: str) -> None:
@@ -1206,6 +1226,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         value = getattr(settings, name)
         if value is not None:
             setattr(settings, name, os.path.abspath(value))
+    try:
+        settings.config_subdir = _normalize_config_subdir(settings.config_subdir)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     if not os.path.isdir(settings.repo):
         print(f"ERROR: --repo {settings.repo!r} is not a directory", file=sys.stderr)
         return EXIT_CALLER_ERROR

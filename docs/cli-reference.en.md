@@ -1951,7 +1951,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 |------|------|
 | `--socket <path>` | Unix socket to listen on (created with mode 0600; a peer whose uid differs from the service's is closed unanswered; the threat model is in the `generator_service.py` module docstring). An old socket file at the path is replaced; any other kind of file refuses the start (exit 2) |
 | `--repo <dir>` | The git repository (a read-only mount is enough). Files always come from git objects (`git ls-tree` plus `git cat-file`), never from the working tree and never through `git archive` |
-| `--config-subdir <path>` | conf.d's path inside the repository |
+| `--config-subdir <path>` | conf.d's path inside the repository (`.` is the root; an absolute path or a `..` segment refuses to start, exit 2) |
 | `--work-dir <dir>` | Scratch directory for the tree of each judgement; removed when the judgement ends (also when it is killed) |
 | `--policy <FILE>` | Deployment policy file (`allowed_domains`, `min_generator_version`), read again for every judgement |
 | `--warm-ref <ref>` | The commit warmed at start (default `HEAD`; an empty value turns it off). One that does not resolve is logged and counted, and the service stays usable |

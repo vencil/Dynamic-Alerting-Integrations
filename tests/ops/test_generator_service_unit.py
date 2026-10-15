@@ -628,3 +628,19 @@ def test_a_fork_that_fails_for_load_is_busy_and_leaks_no_descriptor(tmp_path, mo
         assert _doc(resp)["reason"] == "busy" and err in _doc(resp)["message"]
     asyncio.run(scenario())
     assert len(os.listdir("/proc/self/fd")) <= before
+
+
+# ── --config-subdir normalisation (CodeRabbit on #3015) ─────────────────
+
+@pytest.mark.parametrize("given,expected", [
+    (".", ""), ("", ""), ("./", ""), ("./conf.d", "conf.d"), ("conf.d/", "conf.d"),
+    ("conf.d", "conf.d"), ("a//b/./c/", "a/b/c"),
+])
+def test_config_subdir_is_normalised_to_what_ls_tree_prints(given, expected):
+    assert gs._normalize_config_subdir(given) == expected
+
+
+@pytest.mark.parametrize("given", ["/abs", "/", "../x", "conf.d/../x", ".."])
+def test_config_subdir_outside_the_repository_is_refused(given):
+    with pytest.raises(RuntimeError, match="--config-subdir"):
+        gs._normalize_config_subdir(given)

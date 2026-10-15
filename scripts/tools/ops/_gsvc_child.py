@@ -108,8 +108,9 @@ def _git(job: ChildJob, *args: str, stdin=None) -> bytes:
 def read_tree(job: ChildJob) -> list[tuple[str, str, str, bytes]]:
     """``(mode, blob id, path below conf.d, content)`` for every entry of
     the config subdirectory in the base commit; content is empty for a
-    gitlink."""
-    sub = job.config_subdir.strip("/")
+    gitlink. ``config_subdir`` arrives normalised by the service's start
+    (generator_service._normalize_config_subdir): ``""`` is the root."""
+    sub = job.config_subdir
     out = _git(job, "ls-tree", "-r", "-z", job.request.base_commit, "--",
                sub or ".")
     entries: list[tuple[str, str, str]] = []

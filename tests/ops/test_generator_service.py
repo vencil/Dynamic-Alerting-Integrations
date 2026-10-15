@@ -1041,3 +1041,59 @@ def test_a_busy_answer_reaches_a_client_still_sending_its_body(tmp_path, world):
         held.close()
         doc = json.loads(data)
         assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "busy")
+
+
+# ── --config-subdir spellings (CodeRabbit on #3015) ─────────────────────
+
+def _verdict(doc: dict) -> tuple:
+    return (doc["result"], doc["rc"],
+            _norm(doc["findings"], Path(doc["findings"]["config_dir"])))
+
+
+def _root_repo(path: Path) -> tuple[Path, dict[str, str]]:
+    """The fixtures again, with conf.d at the repository's root."""
+    repo = h.init_repo(path)
+    commits = {}
+    for fx in FIXTURES:
+        for child in repo.iterdir():
+            if child.name != ".git":
+                shutil.rmtree(child) if child.is_dir() else child.unlink()
+        h.write_tree(repo, _split(fx)[0])
+        h.run_git(repo, "add", "-A")
+        h.run_git(repo, "commit", "-q", "--allow-empty", "-m", fx)
+        commits[fx] = h.run_git(repo, "rev-parse", "HEAD")
+    return repo, commits
+
+
+def test_config_subdir_spellings_judge_the_same_tree(tmp_path, world):
+    """`./conf.d` judges like `conf.d`, and `.` like `""` (the root): before
+    the start-up normalisation `./conf.d` matched no ls-tree path, so every
+    write came back as findings on an empty tree."""
+    root_repo, root_commits = _root_repo(tmp_path / "rootrepo")
+    with h.Service(tmp_path / "dot", world["repo"], bin_dir=world["bin"],
+                   subdir="./conf.d") as dotted, \
+         h.Service(tmp_path / "r1", root_repo, bin_dir=world["bin"],
+                   subdir=".") as dot_root, \
+         h.Service(tmp_path / "r2", root_repo, bin_dir=world["bin"],
+                   subdir="") as empty_root:
+        results = set()
+        for fx in FIXTURES:
+            _base, write = _split(fx)
+            writes = [{"path": write,
+                       "content_b64": h.b64(cases.FIXTURES[fx][write])}]
+            plain = _verdict(world["svc"].validate(world["commits"][fx], writes)[1])
+            assert _verdict(dotted.validate(world["commits"][fx], writes)[1]) == plain, fx
+            at_root = _verdict(dot_root.validate(root_commits[fx], writes)[1])
+            assert at_root == _verdict(empty_root.validate(root_commits[fx], writes)[1]), fx
+            assert at_root == plain, fx
+            results.add(plain[0])
+    assert results == {"pass", "findings"}  # both verdicts were compared
+
+
+@pytest.mark.parametrize("subdir", ["/abs", "../x"])
+def test_a_config_subdir_outside_the_repository_refuses_to_start(tmp_path, world, subdir):
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                    subdir=subdir, wait=False)
+    assert svc.proc.wait(60) == 2
+    assert "--config-subdir" in svc.log.read_text(encoding="utf-8")
+    svc.stop()
