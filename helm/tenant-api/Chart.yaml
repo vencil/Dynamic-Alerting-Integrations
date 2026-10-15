@@ -32,7 +32,11 @@ type: application
 # 2.9.23 — ADR-036 §3 / #2902: opt-in generator container (generator.enabled,
 #          default false = no-op): da-tools generator-service on a pod-internal
 #          socket, read-only conf.d, deployment policy ConfigMap, gc.auto=0.
-version: 2.9.23
+# 2.9.24 — ADR-036 §3–§5 / #2903: the generator container is REQUIRED (no
+#          generator.enabled): tenant-api gets --generator-socket (and
+#          --deploy-policy with a policy ConfigMap); conf.d must hold a git
+#          repository or the render fails. policy.unavailableOpen removed.
+version: 2.9.24
 # appVersion: Go binary 版本
 # ⚠ appVersion pins the image tag. The --human-socket binary flag ships in a NEW
 # tenant-api image; humanSocket.enabled=true REQUIRES that image (NOTES + values

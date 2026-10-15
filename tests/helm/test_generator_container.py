@@ -1,12 +1,13 @@
-"""test_generator_container.py — tenant-api chart's generator container (#2902)
+"""test_generator_container.py — tenant-api chart's generator container (#2902, #2903)
 
-ADR-036 §3/§5: `generator.enabled=true` adds a da-tools sidecar running
-`da-tools generator-service`, which tenant-api will ask before every write
-(#2903). Its trust boundary and its correctness both live in the chart, so the
-chart is what these tests pin:
+ADR-036 §3/§5: the chart runs a da-tools sidecar, `da-tools generator-service`,
+which tenant-api asks before every content-changing write. Since #2903 it is
+REQUIRED — the `enabled` switch is gone. Its trust boundary and its
+correctness both live in the chart, so the chart is what these tests pin:
 
-  * OFF is a no-op: with `generator.enabled=false` no generator value changes
-    a byte of the render, and nothing of the generator appears in it.
+  * required: no switch; tenant-api is passed the generator's socket
+    (--generator-socket) and, with a deployment policy, the same file
+    (--deploy-policy = the generator's --policy).
   * same uid: the generator and tenant-api run as one uid, counting a
     container-level `runAsUser` (git refuses a repository another uid owns).
   * the socket directory is mounted by EXACTLY two containers — the generator
@@ -56,7 +57,9 @@ _SH = shutil.which("sh")
 _GIT = shutil.which("git")
 _needs_sh_git = pytest.mark.skipif(_SH is None or _GIT is None, reason="no sh / git on PATH")
 
-_ON = ("generator.enabled=true", "gitRepoUrl=https://git.example.com/org/conf.git")
+# The generator is always on (#2903); a clone shape on top of the render
+# baseline's hostPath conf.d.
+_ON = ("gitRepoUrl=https://git.example.com/org/conf.git",)
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount"
 
 
@@ -131,13 +134,15 @@ def _values_file(tmp_path: Path, tree: dict) -> Path:
     return vf
 
 
-# ── off: a no-op ─────────────────────────────────────────────────────────────
-def test_values_default_off_with_explicit_pin() -> None:
-    """Default false (tools/v2.9.0 has no generator-service; #2903 removes the
-    switch), and the image tag is a written fact — the capability gate and
-    bump_docs both read it from values.yaml."""
-    gen = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))["generator"]
-    assert gen["enabled"] is False
+# ── required: no switch ──────────────────────────────────────────────────────
+def test_values_required_with_explicit_pin() -> None:
+    """No `enabled` switch any more (#2903), no policy escape hatch, and the
+    image tag is a written fact — the capability gate and bump_docs both read
+    it from values.yaml."""
+    values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
+    gen = values["generator"]
+    assert "enabled" not in gen
+    assert "policy" not in values, "policy.unavailableOpen is removed (#2903, ADR-036 §5)"
     assert gen["image"]["repository"] == "ghcr.io/vencil/da-tools"
     assert re.fullmatch(r"v\d+\.\d+\.\d+", gen["image"]["tag"])
     assert gen["resources"]["requests"] == gen["resources"]["limits"] == {
@@ -145,25 +150,30 @@ def test_values_default_off_with_explicit_pin() -> None:
 
 
 @_needs_helm
-def test_disabled_generator_values_change_nothing(tmp_path: Path) -> None:
-    """With enabled=false, every other generator value is inert: the render is
-    byte-identical to the default one, across the repository shapes and with
-    tenant-api's body limits raised (which feed the generator's)."""
-    odd = {"generator": {
-        "enabled": False,
-        "image": {"repository": "example.com/other", "tag": "v9.9.9",
-                  "digest": "sha256:" + "a" * 64, "pullPolicy": "Always"},
-        "resources": {"requests": {"cpu": "2", "memory": "1Gi"},
-                      "limits": {"cpu": "3", "memory": "2Gi"}},
-        "workDir": {"sizeLimit": "7Gi"},
-        "policy": {"existingConfigMap": "p", "key": ""},
-    }, "tenantApi": {"server": {"maxBodyBytes": 33554432}}}
-    vf = _values_file(tmp_path, odd)
-    for shape in ((), ("gitRepoUrl=https://git.example.com/o/r.git",),
-                  ("confDir.type=pvc",), ("confDir.type=hostPath", "confDir.hostPath=/x")):
-        base = _render(*shape, "tenantApi.server.maxBodyBytes=33554432")
-        assert _render(*shape, values=vf) == base, shape
-        assert "generator" not in base and "gc.auto" not in base, shape
+@pytest.mark.parametrize("shape", [(), _ON, ("confDir.type=pvc",)], ids=["hostPath", "clone", "pvc"])
+def test_generator_always_rendered_and_wired_to_tenant_api(shape) -> None:
+    """Every repository shape renders the generator, and tenant-api dials
+    exactly the socket the generator listens on."""
+    pod = _pod(_render(*shape))
+    gen, ta = _container(pod, "generator"), _container(pod, "tenant-api")
+    assert _flag(ta, "generator-socket") == _flag(gen, "socket")
+    assert _flag(ta, "generator-socket").startswith(_mounts(ta, "generator-sock")[0]["mountPath"] + "/")
+    assert _flag(ta, "deploy-policy") is None
+    assert "--policy-unavailable-open" not in ta["args"]
+
+
+@_needs_helm
+def test_tenant_api_reads_the_policy_file_the_generator_judges_with() -> None:
+    pod = _pod(_render("generator.policy.existingConfigMap=da-policy"))
+    gen, ta = _container(pod, "generator"), _container(pod, "tenant-api")
+    assert _flag(ta, "deploy-policy") == _flag(gen, "policy") is not None
+
+
+@_needs_helm
+def test_removed_policy_escape_hatch_value_is_not_read() -> None:
+    """`policy.unavailableOpen` (#2486) is gone: setting it renders nothing."""
+    ta = _container(_pod(_render("policy.unavailableOpen=true")), "tenant-api")
+    assert not any("unavailable-open" in a for a in ta["args"])
 
 
 # ── uid ──────────────────────────────────────────────────────────────────────
@@ -328,7 +338,7 @@ def test_request_not_equal_to_limit_fails(override: str) -> None:
 # ── git: a repository must exist, gc.auto=0 ──────────────────────────────────
 @_needs_helm
 def test_emptydir_without_git_repo_url_fails() -> None:
-    out = _helm("generator.enabled=true")
+    out = _helm("confDir.type=emptyDir")
     assert out.returncode != 0 and "gitRepoUrl" in out.stderr
 
 
@@ -383,7 +393,7 @@ def test_clone_init_sets_gc_auto_and_keeps_a_failed_pull_failing(tmp_path: Path)
                                    ("confDir.type=hostPath", "confDir.hostPath=/x")],
                          ids=["pvc", "hostPath"])
 def test_existing_repo_shapes_get_a_gc_off_init(shape) -> None:
-    pod = _pod(_render("generator.enabled=true", *shape))
+    pod = _pod(_render(*shape))
     names = [c["name"] for c in pod["initContainers"]]
     assert names == ["git-gc-off"], names
     assert "gc.auto 0" in _container(pod, "git-gc-off")["command"][2]
@@ -392,7 +402,7 @@ def test_existing_repo_shapes_get_a_gc_off_init(shape) -> None:
 @_needs_helm
 @_needs_sh_git
 def test_gc_off_init_sets_it_or_skips_without_failing(tmp_path: Path) -> None:
-    gc_off = _container(_pod(_render("generator.enabled=true", "confDir.type=pvc")), "git-gc-off")
+    gc_off = _container(_pod(_render("confDir.type=pvc")), "git-gc-off")
     empty = tmp_path / "empty"
     empty.mkdir()
     skipped = _run(_script(gc_off, empty))

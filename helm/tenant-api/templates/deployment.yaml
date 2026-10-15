@@ -62,10 +62,11 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
       # ── Init: clone git repository (skipped if gitRepoUrl is empty) ──────────
-      {{- $gcOffInit := and .Values.generator.enabled (not .Values.gitRepoUrl) }}
-      {{- if or .Values.gitRepoUrl $gcOffInit }}
+      {{- /* #2903: the generator container is required, so gc.auto=0 is
+           always set — by git-clone, or by git-gc-off when there is no
+           gitRepoUrl. One of the two always runs. */}}
+      {{- $gcOffInit := not .Values.gitRepoUrl }}
       initContainers:
-      {{- end }}
       {{- if .Values.gitRepoUrl }}
         - name: git-clone
           image: alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f
@@ -84,7 +85,6 @@ spec:
               else
                 git clone "$GIT_REPO_URL" /conf.d
               fi
-              {{- if .Values.generator.enabled }}
               # ADR-036 §3 (#2902): the generator reads git objects of this
               # repository while tenant-api commits to it; automatic gc could
               # prune or repack them under its reads. The clone/pull status is
@@ -92,7 +92,6 @@ spec:
               status=$?
               [ "$status" -eq 0 ] || exit "$status"
               git -C /conf.d config gc.auto 0
-              {{- end }}
           env:
             - name: GIT_REPO_URL
               valueFrom:
@@ -209,11 +208,14 @@ spec:
             # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
             - --rbac-org-scope-enforce
             {{- end }}
-            {{- if .Values.policy.unavailableOpen }}
-            # Hub #2486 Q7-2 escape hatch: direct-mode writes the domain policy
-            # judges go through while the policy file is unusable (logged,
-            # counted in tenant_api_policy_unavailable_open_total).
-            - --policy-unavailable-open
+            # ADR-036 §3–§5 (#2903): every content-changing write asks the
+            # generator container on this socket before it commits; with a
+            # deployment policy file, tenant-api reads the same file (same
+            # path in both containers) to check that the generator judged
+            # with it.
+            - --generator-socket={{ include "tenant-api.generatorSocketPath" . }}
+            {{- if .Values.generator.policy.existingConfigMap }}
+            - --deploy-policy={{ include "tenant-api.generatorPolicyPath" . }}
             {{- end }}
             {{- if .Values.identity.claimHeaders }}
             # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
@@ -382,19 +384,18 @@ spec:
             - name: human-sock
               mountPath: {{ dir .Values.humanSocket.path }}
             {{- end }}
-            {{- if .Values.generator.enabled }}
             # ADR-036 §3 (#2902): the generator's socket directory. tenant-api
-            # only dials the socket (#2903), so read-only.
+            # only dials the socket (--generator-socket, #2903), so read-only.
             - name: generator-sock
               mountPath: {{ include "tenant-api.generatorSocketDir" . }}
               readOnly: true
             {{- if .Values.generator.policy.existingConfigMap }}
             # ADR-036 §4/§5: the same deployment policy file the generator
-            # judges with, at the same path; tenant-api hashes it (#2903).
+            # judges with, at the same path; tenant-api hashes it
+            # (--deploy-policy, #2903).
             - name: generator-policy
               mountPath: {{ include "tenant-api.generatorPolicyDir" . }}
               readOnly: true
-            {{- end }}
             {{- end }}
           resources:
             {{- toYaml .Values.resources.tenantApi | nindent 12 }}
@@ -413,8 +414,7 @@ spec:
             periodSeconds: 15
             failureThreshold: 3
 
-        {{- if .Values.generator.enabled }}
-        # ── Sidecar: generator (ADR-036 §3, #2902) ─────────────────────────────
+        # ── Sidecar: generator (ADR-036 §3, #2902; required since #2903) ─────
         # `da-tools generator-service` judges conf.d writes with
         # generate-routes --validate --strict over a Unix socket. No network
         # port. Runs as the pod's uid (no runAsUser here): git refuses a
@@ -496,7 +496,6 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 3
-        {{- end }}
 
         # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
         {{- if .Values.oauth2Proxy.enabled }}
@@ -610,7 +609,6 @@ spec:
             sizeLimit: 1Mi
         {{- end }}
 
-        {{- if .Values.generator.enabled }}
         # ADR-036 §3 (#2902): the generator's socket directory. Memory-backed
         # and tiny (one socket inode). Mounted ONLY by the generator and
         # tenant-api — that mount is part of the service's trust boundary,
@@ -644,7 +642,6 @@ spec:
             items:
               - key: {{ .Values.generator.policy.key }}
                 path: policy.yaml
-        {{- end }}
         {{- end }}
 
         {{- if .Values.federation.enabled }}

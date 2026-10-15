@@ -217,12 +217,14 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
     ("helm/tenant-api", "generator-service", "v2.9.0"):
         "#2901 added `generator-service` to entrypoint.py COMMAND_MAP after "
         "tools/v2.9.0 was cut, so the pinned image cannot run the tenant-api "
-        "chart's generator container (#2902). It renders only with "
-        "generator.enabled=true, which defaults to false for exactly this "
-        "reason (values.yaml): enabled with this tag the container "
-        "crash-loops and keeps tenant-api out of Ready. EXIT: bump "
-        "generator.image.tag in the next tools/v* release (bump_docs.py "
-        "--tools does it); then delete this entry (the gate will demand it).",
+        "chart's generator container (#2902). Since #2903 the container is "
+        "required (no generator.enabled switch): with this tag it "
+        "crash-loops, keeps tenant-api out of Ready and every write is "
+        "refused, so values.yaml and NOTES tell the operator to point "
+        "generator.image at an image that ships generator-service until the "
+        "next tools release. EXIT: bump generator.image.tag in the next "
+        "tools/v* release (bump_docs.py --tools does it); then delete this "
+        "entry (the gate will demand it).",
 }
 
 # --- YAML loading -----------------------------------------------------------

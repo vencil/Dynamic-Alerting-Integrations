@@ -172,12 +172,13 @@ here; deployment.yaml and the chart tests read them from the render, never
 from a second copy.
 
   socketDir   the emptyDir holding generator.sock. Mounted ONLY by the
-              generator (which binds the socket) and tenant-api (which will
-              dial it, #2903): the service's trust boundary is that mount plus
+              generator (which binds the socket) and tenant-api (which dials
+              it, --generator-socket, #2903): the service's trust boundary is that mount plus
               the socket's 0600 mode plus a same-uid peer (SO_PEERCRED).
   workDir     the generator's --work-dir (disk-backed emptyDir).
   policyDir   where the deployment policy ConfigMap key is projected, at the
-              SAME path in both containers (tenant-api hashes it, #2903).
+              SAME path in both containers (tenant-api hashes it,
+              --deploy-policy, #2903).
 */}}
 {{- define "tenant-api.generatorSocketDir" -}}/run/da-generator{{- end }}
 {{- define "tenant-api.generatorSocketPath" -}}{{ include "tenant-api.generatorSocketDir" . }}/generator.sock{{- end }}
@@ -252,8 +253,9 @@ body be read; erring small turns a write tenant-api accepted into a 413.
 ⚠️ The derivation sizes the generator for what tenant-api RECEIVED. A write
 whose resulting files are larger than its request (a small patch merged into
 a large existing file) is not covered by it; the generator's own default is
-the floor for that case. The caller that builds those requests is #2903; a
-batch's resulting files can add up to more than this derivation.
+the floor for that case, and a batch's resulting files can add up to more
+than this derivation: tenant-api then refuses the write with 422
+GENERATOR_REJECTED, reason too_large ("split the batch"; #2903).
 */ -}}
 {{- define "tenant-api.generatorJsonEnvelopeBytes" -}}65536{{- end }}
 
@@ -272,24 +274,24 @@ batch's resulting files can add up to more than this derivation.
 {{- end }}
 
 {{/*
-Generator guard (#2902). Renders nothing; fails the render when
-generator.enabled is set on a configuration the container cannot run in.
+Generator guard (#2902). Renders nothing; fails the render on a
+configuration the generator container cannot run in. The container is
+required since #2903, so this always applies.
 */}}
 {{- define "tenant-api.generatorGuard" -}}
-{{- if .Values.generator.enabled -}}
 {{- $g := .Values.generator -}}
 {{- /* ADR-036 §3: git refuses a repository another uid owns ("dubious
      ownership"), so tenant-api and the generator must run as ONE uid. Both
      inherit it from the pod; without a pod-level runAsUser each container
      runs as its image's USER (da-tools: 10001), and the two differ. */ -}}
 {{- if not (.Values.podSecurityContext | default dict).runAsUser -}}
-{{- fail "generator.enabled needs podSecurityContext.runAsUser: tenant-api and the generator container must run as the same uid (git refuses a repository another uid owns, ADR-036 §3), and without a pod-level uid each runs as its own image's user (#2902)." -}}
+{{- fail "the generator container (required, #2903) needs podSecurityContext.runAsUser: tenant-api and the generator container must run as the same uid (git refuses a repository another uid owns, ADR-036 §3), and without a pod-level uid each runs as its own image's user (#2902)." -}}
 {{- end -}}
 {{- /* ADR-036 §3: the generator reads only git objects; "git 為必要". An
      emptyDir conf.d with no gitRepoUrl never holds a repository, so the
      container could only crash-loop (and keep the pod out of Ready). */ -}}
 {{- if and (not .Values.gitRepoUrl) (not (has .Values.confDir.type (list "pvc" "hostPath"))) -}}
-{{- fail "generator.enabled needs a git repository in conf.d: set gitRepoUrl, or confDir.type=pvc / hostPath holding an existing repository. An emptyDir conf.d without gitRepoUrl is never a repository, and the generator reads only git objects (ADR-036 §3, #2902)." -}}
+{{- fail "the generator container (required, #2903) needs a git repository in conf.d: set gitRepoUrl, or confDir.type=pvc / hostPath holding an existing repository. An emptyDir conf.d without gitRepoUrl is never a repository, and the generator reads only git objects (ADR-036 §3, #2902)." -}}
 {{- end -}}
 {{- /* ADR-036 §3: the container's request equals its limit. */ -}}
 {{- $req := ($g.resources | default dict).requests | default dict -}}
@@ -302,7 +304,6 @@ generator.enabled is set on a configuration the container cannot run in.
 {{- end -}}
 {{- if and $g.policy.existingConfigMap (not $g.policy.key) -}}
 {{- fail "generator.policy.existingConfigMap is set but generator.policy.key is empty: name the ConfigMap key that holds the deployment policy file (#2902)." -}}
-{{- end -}}
 {{- end -}}
 {{- end }}
 

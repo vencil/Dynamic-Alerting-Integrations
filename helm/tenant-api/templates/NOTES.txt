@@ -38,17 +38,21 @@ NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some manage
   sending a packet that SHOULD be denied — do not trust a successful install. The
   CNI-independent root-cause fix is L7 identity verification (roadmap #5); this
   policy is L4 defense-in-depth.
-{{- if .Values.generator.enabled }}
 
-GENERATOR CONTAINER (ADR-036 §3) — ENABLED, image {{ .Values.generator.image.repository }}:{{ .Values.generator.image.tag }}.
-  `da-tools generator-service` listens on a pod-internal Unix socket and reads
-  /conf.d read-only. That image tag MUST ship generator-service (tools/v2.9.0
-  does not): otherwise the container crash-loops and keeps tenant-api out of
-  Ready. tenant-api does not call it yet (#2903).
+GENERATOR CONTAINER (ADR-036 §3, required since #2903) — image {{ .Values.generator.image.repository }}:{{ .Values.generator.image.tag }}{{ with .Values.generator.image.digest }}@{{ . }}{{ end }}.
+  tenant-api asks `da-tools generator-service` (pod-internal Unix socket,
+  /conf.d read-only) before every write that changes a conf.d file; only a
+  pass is committed. While it does not answer, every such write is refused
+  (503 VALIDATOR_UNAVAILABLE); reads keep working.
+  That image MUST ship generator-service. tools/v2.9.0 — the chart's default
+  pin until the next da-tools release raises it — does NOT: set
+  generator.image to an image that does. With generator.image.digest set the
+  digest is what runs: changing only the tag changes nothing, so update (or
+  clear) the digest too; both must name an image with generator-service.
   {{- if .Values.generator.policy.existingConfigMap }}
-  Deployment policy: ConfigMap {{ .Values.generator.policy.existingConfigMap }}, key {{ .Values.generator.policy.key }} (must exist).
+  Deployment policy: ConfigMap {{ .Values.generator.policy.existingConfigMap }}, key {{ .Values.generator.policy.key }} (must exist); mounted
+  into both containers, tenant-api checks the generator judged with it.
   {{- else }}
   Deployment policy: none (generator.policy.existingConfigMap is empty, so no
   allowed_domains check applies to webhook hosts).
   {{- end }}
-{{- end }}
