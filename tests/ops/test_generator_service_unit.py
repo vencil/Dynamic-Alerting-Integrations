@@ -642,6 +642,11 @@ def test_a_fork_that_fails_for_load_is_busy_and_leaks_no_descriptor(tmp_path, mo
     svc = _Real(delay=0)
     svc.s.work_dir = str(work)
     monkeypatch.setattr(gs.shutil, "which", lambda name: "/bin/true")
+    # _spawn refuses to fork with more than one thread; a thread another
+    # test or plugin left running in this worker would turn the fork
+    # failure under test into that refusal. The one-thread property itself
+    # is test_generator_service.py::test_the_service_forks_with_one_thread.
+    monkeypatch.setattr(gs.threading, "active_count", lambda: 1)
     before = len(os.listdir("/proc/self/fd"))
 
     async def scenario():
@@ -650,6 +655,43 @@ def test_a_fork_that_fails_for_load_is_busy_and_leaks_no_descriptor(tmp_path, mo
         assert resp.status == 200, resp.doc
         assert _doc(resp)["reason"] == "busy" and err in _doc(resp)["message"]
     asyncio.run(scenario())
+    assert len(os.listdir("/proc/self/fd")) <= before
+
+
+def test_more_than_one_thread_refuses_to_fork(tmp_path, monkeypatch):
+    """#2901: a judgement process is forked only from a single-threaded
+    service (a fork copies one thread and whatever locks the others held).
+    With another thread running the write is refused 503
+    VALIDATOR_UNAVAILABLE / internal_error, and nothing is forked."""
+    import os
+    work = tmp_path / "work"
+    gs._prepare_work_dir(str(work))
+    forked = []
+
+    class _Real(_FakeService):
+        _judge = gs.Service._judge
+        _spawn = gs.Service._spawn
+
+        @staticmethod
+        def _fork():
+            forked.append(1)
+            raise OSError(1, "must not be reached")
+
+    svc = _Real(delay=0)
+    svc.s.work_dir = str(work)
+    monkeypatch.setattr(gs.shutil, "which", lambda name: "/bin/true")
+    monkeypatch.setattr(gs.threading, "active_count", lambda: 2)
+    before = len(os.listdir("/proc/self/fd"))
+
+    async def scenario():
+        svc.loop = asyncio.get_running_loop()
+        resp = await svc.submit(_req("1" * 40, 25000), svc.loop.time())
+        doc = _doc(resp)
+        assert resp.status == 503, (resp.status, doc)
+        assert doc["error"] == "VALIDATOR_UNAVAILABLE" and doc["reason"] == "internal_error", doc
+        assert "thread" in doc["message"], doc
+    asyncio.run(scenario())
+    assert not forked, "forked with two threads"
     assert len(os.listdir("/proc/self/fd")) <= before
 
 
