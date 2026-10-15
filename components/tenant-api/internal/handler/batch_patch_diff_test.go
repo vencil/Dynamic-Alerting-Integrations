@@ -413,6 +413,10 @@ func TestVerifyPartialWrite_ChecksTheEditedValues(t *testing.T) {
 		{"set as another type", "tenants:\n  t1:\n    a: true\n    b: \"2\"\n", []partialEdit{{key: "a", set: true, checkValue: true, value: "true"}}, false},
 		{"removed", "tenants:\n  t1:\n    b: \"2\"\n", []partialEdit{{key: "a"}}, true},
 		{"not removed", base, []partialEdit{{key: "a"}}, false},
+		// The right string, but not written double-quoted: a reader that
+		// resolves plain or single-quoted scalars its own way may differ.
+		{"set single-quoted", "tenants:\n  t1:\n    a: 'true'\n    b: \"2\"\n", []partialEdit{{key: "a", set: true, checkValue: true, value: "true"}}, false},
+		{"set plain", "tenants:\n  t1:\n    a: x\n    b: \"2\"\n", []partialEdit{{key: "a", set: true, checkValue: true, value: "x"}}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", c.edits)
@@ -420,6 +424,15 @@ func TestVerifyPartialWrite_ChecksTheEditedValues(t *testing.T) {
 				t.Errorf("err = %v, want ok=%v", err, c.ok)
 			}
 		})
+	}
+	// The block already holds z as an alias key; the merge appends a second
+	// z. The decoder keeps the last one, so the value reads right, and the
+	// alias pair is untouched — only the key count refuses it.
+	const aliasBase = "k: &k z\ntenants:\n  t1:\n    *k : \"old\"\n"
+	err := verifyPartialWrite([]byte(aliasBase), []byte(aliasBase+"    z: \"1\"\n"), "t1",
+		[]partialEdit{{key: "z", set: true, checkValue: true, value: "1"}})
+	if err == nil || !strings.Contains(err.Error(), "tenants.t1.z") {
+		t.Errorf("z beside an alias key z: err = %v, want a refusal naming tenants.t1.z", err)
 	}
 }
 

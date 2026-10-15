@@ -1,6 +1,7 @@
 package customalerts
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -133,6 +134,55 @@ func TestMerge_CanonicalKeyOrderAndQuoting(t *testing.T) {
 	// another type (a plain `1:20` is an integer to PyYAML).
 	if !strings.Contains(out, `recipe: "rate"`) {
 		t.Errorf("a string must be double-quoted:\n%s", out)
+	}
+}
+
+// #2903: a string with a line break is a literal block, so a diff shows its
+// lines; one the block cannot carry unchanged stays double-quoted (trailing
+// spaces: the encoder's own fallback; a leading line break would read back
+// without it; a leading tab would not parse). Each reads back as the same
+// string, and the merged file re-encodes to the same bytes (the next partial
+// write would otherwise refuse it).
+func TestMerge_MultilineStringIsALiteralBlock(t *testing.T) {
+	const twoLines = "line one\nline two"
+	out, err := MergeCustomAlerts(tenantWithComments, "shop-a", []map[string]any{
+		{"recipe": "rate", "name": "a", "metric": "m",
+			"x_block": twoLines, "x_trailing": "a  \nb", "x_blank": "\nteam", "x_tab": "\ta\nb"},
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	for _, frag := range []string{"x_block: |-\n          line one\n          line two\n",
+		`x_trailing: "a  \nb"`, `x_blank: "\nteam"`, `x_tab: "\ta\nb"`, `name: "a"`} {
+		if !strings.Contains(out, frag) {
+			t.Errorf("want %q in:\n%s", frag, out)
+		}
+	}
+	var doc struct {
+		Tenants map[string]struct {
+			Alerts []map[string]any `yaml:"_custom_alerts"`
+		} `yaml:"tenants"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("re-parse: %v\n%s", err, out)
+	}
+	got := doc.Tenants["shop-a"].Alerts[0]
+	if got["x_block"] != twoLines || got["x_trailing"] != "a  \nb" || got["x_blank"] != "\nteam" || got["x_tab"] != "\ta\nb" {
+		t.Errorf("strings do not read back unchanged: %#v", got)
+	}
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(out), &n); err != nil {
+		t.Fatal(err)
+	}
+	DropImplicitTags(&n)
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&n); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != out {
+		t.Errorf("the merged file does not re-encode unchanged:\n%s\n---\n%s", out, buf.String())
 	}
 }
 

@@ -16,7 +16,9 @@ package customalerts
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -127,15 +129,22 @@ func recipeNode(r map[string]any) *yaml.Node {
 	return m
 }
 
-// valueNode renders a recipe field value. Every string is double-quoted
+// valueNode renders a recipe field value. Every string is quoted or a block
 // (#2903), whatever it holds: a plain scalar is read by each YAML reader by
 // its own rules (`1:20` is an integer to PyYAML, `2001-12-14t21:59:43` a
-// datetime), so only a quoted one is a string to all of them. Numbers and
-// bools encode as their type; nested maps (selectors / selectors_re) are
+// datetime), so only a quoted one or a block scalar is a string to all of
+// them. A string with a line break is a literal block (`|`), so a diff shows
+// its lines, when that block reads back as the same text (see
+// literalBlockKeeps); any other string is double-quoted. Numbers
+// and bools encode as their type; nested maps (selectors / selectors_re) are
 // rendered with the same rule for their string values.
 func valueNode(v any) *yaml.Node {
 	if s, ok := v.(string); ok {
-		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.DoubleQuotedStyle}
+		style := yaml.DoubleQuotedStyle
+		if strings.Contains(s, "\n") && literalBlockKeeps(s) {
+			style = yaml.LiteralStyle
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: style}
 	}
 	if m, ok := v.(map[string]any); ok {
 		keys := make([]string, 0, len(m))
@@ -152,6 +161,26 @@ func valueNode(v any) *yaml.Node {
 	var n yaml.Node
 	_ = n.Encode(v) // numbers / bools
 	return &n
+}
+
+// literalBlockKeeps reports whether s, written as a literal block where a
+// recipe value sits, parses and reads back as s. Some texts do not: one
+// opening with a line break loses it (`|2-` reads back without it), and one
+// opening with a tab is written as YAML that does not parse. (A text a block
+// cannot carry at all, e.g. one with trailing spaces, the encoder itself
+// writes double-quoted.)
+func literalBlockKeeps(s string) bool {
+	// An encode error leaves out short, and a text that does not parse leaves
+	// back without it: either way the comparison fails, so neither error is
+	// checked on its own. The block is probed at the top level; the indent
+	// a block scalar carries is relative, so the recipe's nesting reads the
+	// same (TestMerge_MultilineStringIsALiteralBlock reads the file back).
+	out, _ := yaml.Marshal(&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "v"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.LiteralStyle}}})
+	var back map[string]string
+	_ = yaml.Unmarshal(out, &back)
+	return reflect.DeepEqual(back, map[string]string{"v": s})
 }
 
 // stringTypedContractFields are the recipe fields whose TEXT enters the
