@@ -54,7 +54,7 @@ func TestSpike_ReplacePreservesComments(t *testing.T) {
 		}
 	}
 	// The new recipe data is present.
-	for _, frag := range []string{"2000:critical", "window: 10m"} {
+	for _, frag := range []string{"2000:critical", `window: "10m"`} {
 		if !strings.Contains(out, frag) {
 			t.Errorf("new recipe value missing: %q", frag)
 		}
@@ -117,9 +117,9 @@ func TestMerge_CanonicalKeyOrderAndQuoting(t *testing.T) {
 	}
 	block := out[blockAt:]
 	// canonical order: recipe → name → metric → window → threshold
-	ri := strings.Index(block, "recipe: rate")
-	ni := strings.Index(block, "name: a")
-	mi := strings.Index(block, "metric: m")
+	ri := strings.Index(block, `recipe: "rate"`)
+	ni := strings.Index(block, `name: "a"`)
+	mi := strings.Index(block, `metric: "m"`)
 	wi := strings.Index(block, "window:")
 	ti := strings.Index(block, `threshold: "100`)
 	if ri < 0 || ri >= ni || ni >= mi || mi >= wi || wi >= ti {
@@ -129,9 +129,10 @@ func TestMerge_CanonicalKeyOrderAndQuoting(t *testing.T) {
 	if !strings.Contains(out, `threshold: "100:warning"`) {
 		t.Errorf("threshold with a colon must be double-quoted:\n%s", out)
 	}
-	// plain enum stays unquoted
-	if !strings.Contains(out, "recipe: rate") {
-		t.Errorf("plain scalar should stay unquoted:\n%s", out)
+	// #2903: every string is double-quoted, so no reader takes it for
+	// another type (a plain `1:20` is an integer to PyYAML).
+	if !strings.Contains(out, `recipe: "rate"`) {
+		t.Errorf("a string must be double-quoted:\n%s", out)
 	}
 }
 

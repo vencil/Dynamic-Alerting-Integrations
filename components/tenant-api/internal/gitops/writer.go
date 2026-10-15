@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -191,6 +192,21 @@ var ErrTenantTreeScan = errors.New("cannot scan conf.d to check where the tenant
 // is on origin with no PR/MR opened for it.
 var ErrBaseRestore = errors.New("failed to return the config worktree to the base branch after a PR-mode write")
 
+// yamlDecodeMessage is what a caller is told about a YAML decode error: what
+// failed and on which line, never the parser's own text (#2903). That text
+// quotes the value it choked on, and the file may be one several tenants
+// share — a batch merges into it — so it could hand one tenant another's
+// value. The full text goes to the server log.
+func yamlDecodeMessage(what string, err error) string {
+	slog.Warn("tenant config does not decode", "what", what, "error", err)
+	if m := yamlErrorLine.FindStringSubmatch(err.Error()); m != nil {
+		return fmt.Sprintf("%s (line %s; the details are in the server log)", what, m[1])
+	}
+	return what + " (the details are in the server log)"
+}
+
+var yamlErrorLine = regexp.MustCompile(`\bline (\d+)\b`)
+
 // yamlDocumentShapeErrors is the whole-body YAML gate behind validateShape
 // (#1681, #1721). It exists because Write commits the body VERBATIM while the
 // struct yaml.Unmarshal in validateShape reads only the FIRST document and only
@@ -236,7 +252,7 @@ func yamlDocumentShapeErrors(yamlContent string) []string {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return []string{fmt.Sprintf("invalid YAML in document %d: %v", i+1, err)}
+			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
 		}
 		// Before the generic decode: a complex root key makes that decode fail
 		// with a message about the key's value, not about the rule it broke.
@@ -247,7 +263,7 @@ func yamlDocumentShapeErrors(yamlContent string) []string {
 		}
 		var doc any
 		if err := node.Decode(&doc); err != nil {
-			return []string{fmt.Sprintf("invalid YAML in document %d: %v", i+1, err)}
+			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
 		}
 		if i > 0 && doc != nil {
 			extra++
@@ -1877,7 +1893,7 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 		return tcfg, errs
 	}
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
-		return tcfg, []string{"invalid YAML: " + err.Error()}
+		return tcfg, []string{yamlDecodeMessage("invalid YAML", err)}
 	}
 	// Reject any non-`tenants` top-level key before anything else (#705).
 	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {

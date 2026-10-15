@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -256,8 +257,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		if err != nil {
 			// The text describes the tenant file's content, not the
 			// server (#1700): its own code, so it is not withheld.
+			// #2903: the decode error's text may quote another tenant's
+			// value (the file can be shared); it goes to the log only.
+			slog.Warn("custom alerts: cannot merge into the tenant file", "tenant", tenantID, "error", err)
 			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
-				"internal error: cannot merge into the tenant file: "+err.Error())
+				"internal error: cannot merge into the tenant file (the details are in the server log)")
 			return
 		}
 		// #2903: the re-encode must change nothing but `_custom_alerts`.
@@ -279,8 +283,9 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			// misleading 400.
 			// The text describes the tenant file's content, not the
 			// server (#1700): its own code, so it is not withheld.
+			slog.Warn("custom alerts: merged config is not parseable", "tenant", tenantID, "error", err)
 			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
-				"internal error: merged config is not parseable: "+err.Error())
+				"internal error: merged config is not parseable (the details are in the server log)")
 			return
 		}
 		if viol := cfg.ValidateTenantCustomAlerts(tenantID, mcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault); len(viol) > 0 {
@@ -303,8 +308,9 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		if err != nil {
 			// The text describes the tenant file's content, not the
 			// server (#1700): its own code, so it is not withheld.
+			slog.Warn("custom alerts: cannot read current custom alerts", "tenant", tenantID, "error", err)
 			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
-				"internal error: cannot read current custom alerts: "+err.Error())
+				"internal error: cannot read current custom alerts (the details are in the server log)")
 			return
 		}
 		if viol := customalerts.EolExpansionViolations(currentAlerts, *req.CustomAlerts); len(viol) > 0 {

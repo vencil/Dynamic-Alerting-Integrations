@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 
@@ -384,27 +382,26 @@ func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
 // file into yaml.v3 nodes, edits tenants.<id> and re-encodes the WHOLE file.
 // The route generator only judges the result; it cannot tell a value the
 // edit meant to change from one the re-encode changed on its own (a block
-// scalar's leading blank line, an alias that now names another anchor, a
-// value a `<<` merge key still supplies after the explicit one was removed,
-// an anchored block another tenant aliases).
+// scalar's leading blank line, a plain scalar the encoder now quotes, an
+// alias that now names another anchor, an anchored block another tenant
+// aliases).
 //
-// So the result is checked against an invariant instead of the base against
-// a list of risky shapes: decoded as values by yaml.v3 (every document,
-// aliases expanded, anchors and `<<` as yaml.v3 resolves them), the merged
-// file must equal the base with exactly the edit applied — the keys it sets
-// hold the new value, the keys it removes are gone, and nothing else differs.
-// The anchors the file defines are part of it too: the merged file must
-// define the same ones, in the same order. yaml.v3 lets an anchor be defined
-// twice (an alias names the latest), so an edit that removes one definition
-// can re-point an alias without changing any value yaml.v3 decodes — while
-// the generator, which refuses a repeated anchor, would go from refusing the
-// file to reading it. Anything else is refused before the write, config_error
-// not_round_trippable. A file yaml.v3 cannot decode as values is refused
-// too: it cannot be shown to come back unchanged.
+// So the result must keep, outside what the edit replaces, the very same
+// written YAML: parsed back into nodes, every node has the same kind, style
+// (flow or block, plain or which quotes), tag as written (explicit or
+// implicit), scalar text, anchor and — for an alias — the same target, node
+// for node; the documents are as many, and the file defines the same anchors
+// in the same order (yaml.v3 lets an anchor be defined twice, so removing one
+// definition can re-point an alias to an equal-looking node). The same
+// characters mean the same to every reader, whichever one reads them. On top
+// of that, the edited keys of the tenant's block must, decoded, be exactly
+// what the edit says (a set key holds its new value, an unset key is gone) —
+// a `<<` merge key can still supply a key whose explicit entry was removed.
+// Comments and positions are not compared.
 //
-// yaml.v3's reading is not the generator's. Where the two differ, a merge
-// this check passes may still change what the generator reads; the offline
-// diff (batch_patch_diff_test.go) holds the check to the generator.
+// Anything else is refused before the write: config_error
+// not_round_trippable, the first difference named only inside the written
+// tenant's own block. The parser's own error text never reaches the client.
 
 // configErrorNotRoundTrippable is the config_error of a partial write whose
 // re-encode would change content the write does not edit.
@@ -412,20 +409,20 @@ const configErrorNotRoundTrippable = "not_round_trippable"
 
 // partialEdit is one key of tenants.<id> a partial write changes. set with
 // checkValue: the merged file must hold value there (a batch patch value,
-// always a string); set without checkValue: the key must be there, its value
-// is the write's own (custom alerts, validated elsewhere); !set: the key
-// must be gone.
+// always a string, written double-quoted); set without checkValue: the key
+// must be there, its value is the write's own (custom alerts, validated
+// elsewhere); !set: the key must be gone.
 type partialEdit struct {
 	key        string
 	set        bool
 	checkValue bool
-	value      any
+	value      string
 }
 
 // verifyPartialWrite returns a *tenantFileNotLoadableError (Reason
-// configErrorNotRoundTrippable) unless merged is base with exactly edits
-// applied to tenants.<tenantID>, as yaml.v3 decodes both. An empty base (a
-// new file) has nothing to keep.
+// configErrorNotRoundTrippable) unless merged keeps base's written YAML
+// everywhere outside the edits to tenants.<tenantID>, and the edited keys
+// read as the edits say. An empty base (a new file) has nothing to keep.
 func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdit) error {
 	if len(bytes.TrimSpace(base)) == 0 {
 		return nil
@@ -433,300 +430,243 @@ func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdi
 	refuse := func(detail string) error {
 		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: configErrorNotRoundTrippable, Detail: detail}
 	}
-	bNodes, bVals, err := decodeAllDocs(base)
+	bDocs, err := parseAllDocs(base)
 	if err != nil {
-		return refuse("the current file does not decode as YAML values (" + err.Error() + ")")
+		return refuse("the current file does not parse") // the parser's text may quote other tenants' values
 	}
-	mNodes, mVals, err := decodeAllDocs(merged)
+	mDocs, err := parseAllDocs(merged)
 	if err != nil {
-		return refuse("the merged file would not decode as YAML values")
+		return refuse("the merged file would not parse")
 	}
-	if len(bVals) != len(mVals) {
-		return refuse(fmt.Sprintf("the number of YAML documents (%d, would be %d)", len(bVals), len(mVals)))
+	if len(bDocs) != len(mDocs) {
+		return refuse(fmt.Sprintf("the number of YAML documents (%d, would be %d)", len(bDocs), len(mDocs)))
 	}
-	if len(bVals) == 0 {
+	if len(bDocs) == 0 {
 		return refuse("the current file has no document")
 	}
-	if b, m := anchorsOf(bNodes), anchorsOf(mNodes); !reflect.DeepEqual(b, m) {
-		return refuse("the anchors the file defines (an edit would remove or add one)")
+	if !reflect.DeepEqual(anchorsOf(bDocs), anchorsOf(mDocs)) {
+		return refuse("the anchors the file defines (the edit would remove or add one)")
 	}
-	// The merge encodes one document, so with the counts equal there is
-	// nothing past document 1 to compare.
-	want, err := applyEdits(bNodes[0], mNodes[0], bVals[0], tenantID, edits)
-	if err != nil {
-		return refuse(err.Error())
+	c := &nodeCompare{tenantID: tenantID, edits: edits, seen: map[[2]*yaml.Node]bool{}}
+	for i := range bDocs {
+		if path, ok := c.equal(bDocs[i], mDocs[i], nil, i == 0); !ok {
+			return refuse(describePath(path, tenantID))
+		}
 	}
-	if path, differ := firstDifference(want, mVals[0], nil); differ {
-		return refuse(describePath(path, tenantID))
+	if detail := c.checkEdits(); detail != "" {
+		return refuse(detail)
 	}
 	return nil
 }
 
-// decodeAllDocs is every document of data as nodes and as values (maps
-// normalised to map[any]any).
-func decodeAllDocs(data []byte) ([]*yaml.Node, []any, error) {
+func parseAllDocs(data []byte) ([]*yaml.Node, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	var nodes []*yaml.Node
-	var vals []any
+	var docs []*yaml.Node
 	for {
 		n := new(yaml.Node)
 		if err := dec.Decode(n); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nodes, vals, nil
+				return docs, nil
 			}
-			return nil, nil, err
-		}
-		var v any
-		if err := n.Decode(&v); err != nil {
-			return nil, nil, err
-		}
-		nodes = append(nodes, n)
-		vals = append(vals, normalizeValue(v))
-	}
-}
-
-func normalizeValue(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[any]any, len(t))
-		for k, x := range t {
-			out[k] = normalizeValue(x)
-		}
-		return out
-	case map[any]any:
-		out := make(map[any]any, len(t))
-		for k, x := range t {
-			out[k] = normalizeValue(x)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, x := range t {
-			out[i] = normalizeValue(x)
-		}
-		return out
-	}
-	return v
-}
-
-// keyNodeByText is the key node of mapping m written as text — the lookup
-// the merge itself makes (yamlMapValue) — or nil.
-func keyNodeByText(m *yaml.Node, text string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == text {
-			return m.Content[i]
-		}
-	}
-	return nil
-}
-
-func valueOfKey(m, key *yaml.Node) *yaml.Node {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i] == key {
-			return m.Content[i+1]
-		}
-	}
-	return nil
-}
-
-// decodedKey is a key node as yaml.v3 decodes it (aliases followed).
-func decodedKey(n *yaml.Node) (any, error) {
-	var v any
-	if err := n.Decode(&v); err != nil {
-		return nil, err
-	}
-	return normalizeValue(v), nil
-}
-
-// keyFor is the decoded key text names in mapping bMap (base) — the key
-// node the merge finds by text — else, for a key the merge adds, its node
-// in mMap (merged). An added key that decodes like one of mMap's other own
-// keys is a second key for the same thing: refused.
-func keyFor(bMap, mMap *yaml.Node, text string) (any, error) {
-	if kn := keyNodeByText(bMap, text); kn != nil {
-		return decodedKey(kn)
-	}
-	added := keyNodeByText(mMap, text)
-	if added == nil {
-		return decodedKey(&yaml.Node{Kind: yaml.ScalarNode, Value: text})
-	}
-	k, err := decodedKey(added)
-	if err != nil {
-		return nil, err
-	}
-	for i := 0; i+1 < len(mMap.Content); i += 2 {
-		if other := mMap.Content[i]; other != added {
-			if o, err := decodedKey(other); err == nil && valuesEqual(o, k) {
-				return nil, fmt.Errorf("the key %q would be added beside another key written another way that "+
-					"decodes the same", text)
-			}
-		}
-	}
-	return k, nil
-}
-
-func asMap(v any) (map[any]any, bool) {
-	m, ok := v.(map[any]any)
-	return m, ok
-}
-
-// applyEdits is a copy of bVal (document 0 of the base) with edits applied to
-// tenants.<tenantID>, keys located as the merge locates them.
-func applyEdits(bDoc, mDoc *yaml.Node, bVal any, tenantID string, edits []partialEdit) (any, error) {
-	if len(bDoc.Content) == 0 || len(mDoc.Content) == 0 {
-		return nil, errors.New("the file has no top-level mapping")
-	}
-	bRoot, mRoot := bDoc.Content[0], mDoc.Content[0]
-	want := deepCopyValue(bVal)
-	root, ok := asMap(want)
-	if !ok {
-		return nil, errors.New("the top level is not a mapping")
-	}
-	tKey, err := keyFor(bRoot, mRoot, "tenants")
-	if err != nil {
-		return nil, err
-	}
-	tenants, ok := asMap(root[tKey])
-	if !ok {
-		return nil, errors.New("`tenants` is not a mapping")
-	}
-	bTenants, mTenants := yamlMapValue(bRoot, "tenants"), yamlMapValue(mRoot, "tenants")
-	if mTenants == nil {
-		return nil, errors.New("`tenants` would be gone")
-	}
-	idKey, err := keyFor(bTenants, mTenants, tenantID)
-	if err != nil {
-		return nil, err
-	}
-	var bBlock *yaml.Node
-	if kn := keyNodeByText(bTenants, tenantID); kn != nil {
-		bBlock = valueOfKey(bTenants, kn)
-	}
-	mBlock := yamlMapValue(mTenants, tenantID)
-	if mBlock == nil {
-		return nil, fmt.Errorf("tenants.%s would be gone", tenantID)
-	}
-	block, ok := asMap(tenants[idKey])
-	if !ok {
-		if _, present := tenants[idKey]; present {
-			return nil, fmt.Errorf("tenants.%s is not a mapping", tenantID)
-		}
-		block = map[any]any{}
-	}
-	var mVal any
-	_ = mBlock.Decode(&mVal)
-	mBlockVal, _ := asMap(normalizeValue(mVal))
-	for _, e := range edits {
-		k, err := keyFor(bBlock, mBlock, e.key)
-		if err != nil {
 			return nil, err
 		}
+		docs = append(docs, n)
+	}
+}
+
+// nodeCompare walks base and merged in step. In document 1 it knows where
+// the edit is: the root mapping's `tenants`, its tenantID pair (which the
+// merge may append) and that pair's block, where the edited keys are skipped.
+type nodeCompare struct {
+	tenantID     string
+	edits        []partialEdit
+	seen         map[[2]*yaml.Node]bool
+	mBlock       *yaml.Node // the merged block, for checkEdits
+	blockMissing bool
+}
+
+func (c *nodeCompare) edited(key string) bool {
+	for _, e := range c.edits {
+		if e.key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// sameScalarShape is the per-node part of the comparison.
+func sameNode(b, m *yaml.Node) bool {
+	return b.Kind == m.Kind && b.Style == m.Style && b.Tag == m.Tag && b.Value == m.Value && b.Anchor == m.Anchor
+}
+
+// equal reports whether b and m are the same written YAML; role says where
+// the walk is in document 1 (0: elsewhere, 1: the root, 2: `tenants`, 3: the
+// written tenant's block). On a difference it returns the path to it.
+func (c *nodeCompare) equal(b, m *yaml.Node, path []string, root bool) ([]string, bool) {
+	role := 0
+	if root {
+		role = 1
+	}
+	return c.eq(b, m, path, role)
+}
+
+func (c *nodeCompare) eq(b, m *yaml.Node, path []string, role int) ([]string, bool) {
+	if b == nil || m == nil {
+		return path, b == m
+	}
+	if b.Kind == yaml.DocumentNode && m.Kind == yaml.DocumentNode {
+		if len(b.Content) != len(m.Content) {
+			return path, false
+		}
+		for i := range b.Content {
+			if p, ok := c.eq(b.Content[i], m.Content[i], path, role); !ok {
+				return p, false
+			}
+		}
+		return nil, true
+	}
+	if !sameNode(b, m) {
+		return path, false
+	}
+	if b.Kind == yaml.AliasNode {
+		if b.Alias == nil || m.Alias == nil {
+			return path, b.Alias == m.Alias
+		}
+		key := [2]*yaml.Node{b.Alias, m.Alias}
+		if c.seen[key] {
+			return nil, true
+		}
+		c.seen[key] = true
+		// The target, written the same, wherever it is — not just its name.
+		return c.eq(b.Alias, m.Alias, path, 0)
+	}
+	if b.Kind != yaml.MappingNode {
+		if len(b.Content) != len(m.Content) {
+			return path, false
+		}
+		for i := range b.Content {
+			if p, ok := c.eq(b.Content[i], m.Content[i], append(append([]string{}, path...), fmt.Sprintf("[%d]", i)), 0); !ok {
+				return p, false
+			}
+		}
+		return nil, true
+	}
+	bp, mp := pairs(b), pairs(m)
+	switch role {
+	case 2: // `tenants`: the merge may append the written tenant's pair.
+		if keyIndex(bp, c.tenantID) < 0 {
+			// ...unless the id is already there, written as an alias: the
+			// merge would add a second key for it.
+			if resolvedKeyCount(bp, c.tenantID) > 0 {
+				return path, false
+			}
+			if j := keyIndex(mp, c.tenantID); j == len(mp)-1 {
+				c.mBlock, c.blockMissing = mp[j][1], true
+				mp = mp[:j]
+			}
+		}
+	case 3: // the written tenant's block: skip the edited keys.
+		bp, mp = c.withoutEdited(bp), c.withoutEdited(mp)
+	}
+	if len(bp) != len(mp) {
+		return path, false
+	}
+	for i := range bp {
+		kb, km := bp[i][0], mp[i][0]
+		sub := append(append([]string{}, path...), kb.Value)
+		if p, ok := c.eq(kb, km, sub, 0); !ok {
+			return p, false
+		}
+		next := 0
+		switch {
+		case role == 1 && kb.Kind == yaml.ScalarNode && kb.Value == "tenants":
+			next = 2
+		case role == 2 && kb.Kind == yaml.ScalarNode && kb.Value == c.tenantID:
+			next, c.mBlock = 3, mp[i][1]
+		}
+		if p, ok := c.eq(bp[i][1], mp[i][1], sub, next); !ok {
+			return p, false
+		}
+	}
+	return nil, true
+}
+
+func pairs(m *yaml.Node) [][2]*yaml.Node {
+	out := make([][2]*yaml.Node, 0, len(m.Content)/2)
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		out = append(out, [2]*yaml.Node{m.Content[i], m.Content[i+1]})
+	}
+	return out
+}
+
+func keyIndex(ps [][2]*yaml.Node, text string) int {
+	for i, p := range ps {
+		if p[0].Kind == yaml.ScalarNode && p[0].Value == text {
+			return i
+		}
+	}
+	return -1
+}
+
+// resolvedKeyCount is how many keys of ps are text, an alias followed.
+func resolvedKeyCount(ps [][2]*yaml.Node, text string) int {
+	n := 0
+	for _, p := range ps {
+		k := p[0]
+		for k != nil && k.Kind == yaml.AliasNode {
+			k = k.Alias
+		}
+		if k != nil && k.Kind == yaml.ScalarNode && k.Value == text {
+			n++
+		}
+	}
+	return n
+}
+
+func (c *nodeCompare) withoutEdited(ps [][2]*yaml.Node) [][2]*yaml.Node {
+	out := make([][2]*yaml.Node, 0, len(ps))
+	for _, p := range ps {
+		if p[0].Kind == yaml.ScalarNode && c.edited(p[0].Value) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// checkEdits: in the merged block, decoded (so a `<<` merge key counts),
+// every set key holds its value and every unset key is gone; and a value the
+// merge wrote is a double-quoted string.
+func (c *nodeCompare) checkEdits() string {
+	if c.mBlock == nil || c.mBlock.Kind != yaml.MappingNode {
+		return fmt.Sprintf("tenants.%s would not be a mapping", c.tenantID)
+	}
+	var decoded map[string]any
+	if err := c.mBlock.Decode(&decoded); err != nil {
+		return fmt.Sprintf("tenants.%s would not decode", c.tenantID)
+	}
+	mp := pairs(c.mBlock)
+	for _, e := range c.edits {
+		where := fmt.Sprintf("tenants.%s.%s", c.tenantID, e.key)
+		if resolvedKeyCount(mp, e.key) > 1 { // written twice, one an alias
+			return where
+		}
+		v, present := decoded[e.key]
 		switch {
 		case !e.set:
-			delete(block, k)
+			if present {
+				return where
+			}
+		case !present:
+			return where
 		case e.checkValue:
-			block[k] = e.value
-		default:
-			v, present := mBlockVal[k]
-			if !present {
-				return nil, fmt.Errorf("tenants.%s.%s would be missing", tenantID, e.key)
-			}
-			block[k] = v
-		}
-	}
-	tenants[idKey] = block
-	return want, nil
-}
-
-func deepCopyValue(v any) any {
-	switch t := v.(type) {
-	case map[any]any:
-		out := make(map[any]any, len(t))
-		for k, x := range t {
-			out[k] = deepCopyValue(x)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, x := range t {
-			out[i] = deepCopyValue(x)
-		}
-		return out
-	}
-	return v
-}
-
-// valuesEqual is reflect.DeepEqual, except that NaN equals NaN (a `.nan` the
-// file holds is the same value on both sides).
-func valuesEqual(a, b any) bool {
-	_, differ := firstDifference(a, b, nil)
-	return !differ
-}
-
-// firstDifference reports whether a and b differ and, if so, the path of the
-// first difference (map keys in sorted order, so the answer is stable).
-func firstDifference(a, b any, path []string) ([]string, bool) {
-	switch x := a.(type) {
-	case map[any]any:
-		y, ok := b.(map[any]any)
-		if !ok {
-			return path, true
-		}
-		keys := make([]any, 0, len(x)+len(y))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		for k := range y {
-			if _, seen := x[k]; !seen {
-				keys = append(keys, k)
+			j := keyIndex(mp, e.key)
+			if s, ok := v.(string); !ok || s != e.value || j < 0 || mp[j][1].Style != yaml.DoubleQuotedStyle {
+				return where
 			}
 		}
-		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j]) })
-		for _, k := range keys {
-			xv, xok := x[k]
-			yv, yok := y[k]
-			sub := append(append([]string{}, path...), fmt.Sprint(k))
-			if xok != yok {
-				return sub, true
-			}
-			if p, d := firstDifference(xv, yv, sub); d {
-				return p, true
-			}
-		}
-		return nil, false
-	case []any:
-		y, ok := b.([]any)
-		if !ok || len(x) != len(y) {
-			return path, true
-		}
-		for i := range x {
-			if p, d := firstDifference(x[i], y[i], append(append([]string{}, path...), fmt.Sprintf("[%d]", i))); d {
-				return p, true
-			}
-		}
-		return nil, false
-	case float64:
-		if y, ok := b.(float64); ok && math.IsNaN(x) && math.IsNaN(y) {
-			return nil, false
-		}
 	}
-	if !reflect.DeepEqual(a, b) {
-		return path, true
-	}
-	return nil, false
-}
-
-// describePath names a difference for the refusal message: a path in the
-// written tenant's own block in full, anything else only as "another place
-// in the file" — another tenant's block may be one the caller cannot read.
-func describePath(path []string, tenantID string) string {
-	if len(path) >= 2 && path[0] == "tenants" && path[1] == tenantID {
-		return strings.Join(path, ".")
-	}
-	return "another place in the file"
+	return ""
 }
 
 // anchorsOf is every anchor name the documents define, in document order
@@ -741,12 +681,22 @@ func anchorsOf(docs []*yaml.Node) []string {
 		if n.Anchor != "" {
 			out = append(out, n.Anchor)
 		}
-		for _, c := range n.Content {
-			walk(c)
+		for _, k := range n.Content {
+			walk(k)
 		}
 	}
 	for _, d := range docs {
 		walk(d)
 	}
 	return out
+}
+
+// describePath names a difference for the refusal message: a path in the
+// written tenant's own block in full, anything else only as "another place
+// in the file" — another tenant's block may be one the caller cannot read.
+func describePath(path []string, tenantID string) string {
+	if len(path) >= 2 && path[0] == "tenants" && path[1] == tenantID {
+		return strings.Join(path, ".")
+	}
+	return "another place in the file"
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/customalerts"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -1046,15 +1047,20 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 			return "", fmt.Errorf("%w: batch patch cannot overwrite structured key %q with a scalar value", gitops.ErrValidation, k)
 		}
 		var vn yaml.Node
-		if err := vn.Encode(patch[k]); err != nil { // string → correctly-quoted scalar (e.g. "50" stays a string)
+		if err := vn.Encode(patch[k]); err != nil {
 			return "", fmt.Errorf("encode patch value for %q: %w", k, err)
 		}
+		// #2903: a patch value is a string, written double-quoted whatever it
+		// holds, so no reader takes it for a timestamp, a number or a
+		// boolean (`2001-12-14t21:59:43` plain is a datetime to PyYAML).
+		vn.Style = yaml.DoubleQuotedStyle
 		yamlSetMapValue(tenantVal, k, &vn)
 	}
 	for _, k := range unset {
 		yamlDeleteMapValue(tenantVal, k)
 	}
 
+	customalerts.DropImplicitTags(&doc)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	// SetIndent(2) matches the conf.d 2-space convention, under which a file

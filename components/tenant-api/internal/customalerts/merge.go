@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -66,6 +65,7 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 		setMapValue(tenantVal, key, seq)
 	}
 
+	DropImplicitTags(&doc)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	// SetIndent(2) matches the platform's 2-space conf.d convention, under
@@ -127,20 +127,30 @@ func recipeNode(r map[string]any) *yaml.Node {
 	return m
 }
 
-// valueNode renders a recipe field value. String scalars containing a colon
-// (e.g. `value:severity`) or other quote-worthy chars are force double-quoted
-// to match the source convention + stay unambiguous for downstream parsers;
-// nested maps (selectors / selectors_re) and non-strings encode naturally.
+// valueNode renders a recipe field value. Every string is double-quoted
+// (#2903), whatever it holds: a plain scalar is read by each YAML reader by
+// its own rules (`1:20` is an integer to PyYAML, `2001-12-14t21:59:43` a
+// datetime), so only a quoted one is a string to all of them. Numbers and
+// bools encode as their type; nested maps (selectors / selectors_re) are
+// rendered with the same rule for their string values.
 func valueNode(v any) *yaml.Node {
 	if s, ok := v.(string); ok {
-		n := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}
-		if strings.ContainsAny(s, ":#") || s == "" || strings.TrimSpace(s) != s {
-			n.Style = yaml.DoubleQuotedStyle
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.DoubleQuotedStyle}
+	}
+	if m, ok := v.(map[string]any); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		for _, k := range keys {
+			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, valueNode(m[k]))
 		}
 		return n
 	}
 	var n yaml.Node
-	_ = n.Encode(v) // numbers / bools / nested maps (selectors)
+	_ = n.Encode(v) // numbers / bools
 	return &n
 }
 
@@ -228,5 +238,23 @@ func deleteMapKey(m *yaml.Node, key string) {
 			m.Content = append(m.Content[:i], m.Content[i+2:]...)
 			return
 		}
+	}
+}
+
+// DropImplicitTags clears the tag of every node whose tag was not written
+// (no explicit `!!x`), before a re-encode (#2903). yaml.v3 fills in the tag
+// it resolved, and its encoder writes some of those back out explicitly —
+// a `<<` merge key comes back as `!!merge <<` — so a file would not be
+// re-emitted as it was written. With the tag cleared the encoder resolves
+// it again and writes the node as it came.
+func DropImplicitTags(n *yaml.Node) {
+	if n == nil {
+		return
+	}
+	if n.Kind != yaml.AliasNode && n.Style&yaml.TaggedStyle == 0 {
+		n.Tag = ""
+	}
+	for _, c := range n.Content {
+		DropImplicitTags(c)
 	}
 }

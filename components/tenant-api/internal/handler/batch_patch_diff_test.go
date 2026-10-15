@@ -179,9 +179,32 @@ var patchDiffCases = []patchDiffCase{
 	{name: "shared-block-patch-alias", tenant: "t2", patch: map[string]string{"z": "5"}, want: "error",
 		base: "tenants:\n  t1: &b\n    a: \"1\"\n  t2: *b\n"},
 
+	// Blind review #2903, round 2: a plain scalar in a flow sequence the
+	// encoder now quotes (an integer and a datetime to PyYAML, strings to
+	// yaml.v3): not written back as it was, so refused.
+	{name: "flow-sequence-sexagesimal", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\n  t2:\n    k: [1:20]\n"},
+	{name: "flow-sequence-time", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\n  t2:\n    k: [12:30, 2001-12-14t21:59:43]\n"},
+	// A tag the generator cannot construct in the written tenant's own
+	// block: refused (it does not decode); in another tenant's, kept as
+	// written (want unreadable_kept below).
+	{name: "tag-construct-failure-own-block", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    secret_x: !!int hunter2\n"},
+	// Known limit: a TAB right after `k:` is no node of its own.
+	{name: "tab-after-key", tenant: "t1", patch: map[string]string{"z": "1"}, want: "known_healed",
+		base: "tenants:\n  t1: {}\n  t2:\n    k:\t\n"},
+
 	// --- read by the generator, merged unchanged ------------------------
-	// An alias cycle: yaml.v3 cannot decode it as values (Go stricter).
-	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "flow-sequence-plain-words", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
+		base: "tenants:\n  t1: {}\n  t2:\n    k: [a, b-c, 5, yes]\n"},
+	// Patch values written double-quoted: a datetime- or integer-looking
+	// value stays the string the patch carries, to every reader.
+	{name: "patch-value-t-timestamp", tenant: "t1", patch: map[string]string{"z": "2001-12-14t21:59:43"}, want: "merged",
+		base: "tenants:\n  t1: {}\n"},
+	{name: "patch-value-sexagesimal", tenant: "t1", patch: map[string]string{"z": "1:20"}, want: "merged",
+		base: "tenants:\n  t1: {}\n"},
+	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
 		base: "tenants:\n  t1: {}\nextra: &a\n  b: *a\n"},
 	{name: "merge-key-then-explicit", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
 		base: "tenants:\n  t1: {}\nextra:\n  <<: {a: 1}\n  a: 2\n"},
@@ -189,29 +212,30 @@ var patchDiffCases = []patchDiffCase{
 		base: "tenants:\n  t1: {}\nextra:\n  1: a\n  01: b\n"},
 
 	// --- unreadable, and the re-encode keeps it so ----------------------
-	// yaml.v3 cannot decode these as values either: refused before any
-	// write (the generator could not read them anyway).
-	{name: "duplicate-in-unread-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	// Written back as they came: the generator refuses the merged file too.
+	{name: "tag-construct-failure-other-tenant", tenant: "t1", patch: map[string]string{"z": "1"}, want: "unreadable_kept",
+		base: "tenants:\n  t1: {}\n  t2:\n    secret_x: !!int hunter2\n"},
+	{name: "duplicate-in-unread-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1:\n    redis_memory: \"1\"\nextra:\n  a: 1\n  a: 2\n"},
 	{name: "duplicate-via-alias-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "k: &k a\ntenants:\n  t1: {}\nextra:\n  a: 1\n  *k : 2\n"},
-	{name: "duplicate-quoted-and-plain", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "duplicate-quoted-and-plain", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra:\n  a: 1\n  'a': 2\n"},
-	{name: "mapping-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "mapping-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra:\n  ? {a: 1}\n  : x\n"},
-	{name: "sequence-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "sequence-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra:\n  ? [a]\n  : x\n"},
 	{name: "unknown-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !foo bar\n"},
-	{name: "int-tag-not-int", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "int-tag-not-int", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!int abc\n"},
-	{name: "bool-tag-not-bool", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "bool-tag-not-bool", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!bool maybe\n"},
 	{name: "map-tag-on-sequence", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!map [1]\n"},
 	{name: "date-out-of-range", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: 2001-13-45\n"},
-	{name: "merge-key-scalar", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+	{name: "merge-key-scalar", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra:\n  <<: 1\n"},
 	{name: "python-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!python/name:os.system ''\n"},
@@ -291,6 +315,17 @@ func TestBatchPatchMerge_OfflineDiffAgainstGenerator(t *testing.T) {
 	for i, c := range patchDiffCases {
 		r := res[i]
 		wantOutcome := c.want
+		if wantOutcome == "known_healed" {
+			// A known limit (ADR-036 §4): the base is unreadable only because
+			// of what yaml.v3 does not keep as a node at all (a TAB after
+			// `k:`), so the round trip "heals" it. Pinned, so a change here
+			// shows up.
+			if outcome[i] != "merged" || r.BaseReadable || !r.MergedReadable {
+				t.Errorf("%s: known_healed changed: mergePatchYAML %s, base readable %v, merged readable %v",
+					c.name, outcome[i], r.BaseReadable, r.MergedReadable)
+			}
+			continue
+		}
 		if wantOutcome == "unreadable_kept" {
 			wantOutcome = "merged"
 			if r.BaseReadable || r.MergedReadable {
@@ -385,5 +420,30 @@ func TestVerifyPartialWrite_ChecksTheEditedValues(t *testing.T) {
 				t.Errorf("err = %v, want ok=%v", err, c.ok)
 			}
 		})
+	}
+}
+
+// Outside the edit, every node must be written as it was: each property on
+// its own refuses the merged file (here the edit only adds z to t1, and the
+// change is in t2's block, which the refusal does not name).
+func TestVerifyPartialWrite_ComparesTheWrittenNode(t *testing.T) {
+	const base = "tenants:\n  t1: {}\n  t2:\n    k: !!str 5\n    q: 'a'\n    v: x\n    s: &s y\n"
+	edit := []partialEdit{{key: "z", set: true, checkValue: true, value: "1"}}
+	for _, c := range []struct{ name, merged string }{
+		{"tag", "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!int 5\n    q: 'a'\n    v: x\n    s: &s y\n"},
+		{"style", "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!str 5\n    q: \"a\"\n    v: x\n    s: &s y\n"},
+		{"text", "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!str 5\n    q: 'a'\n    v: xx\n    s: &s y\n"},
+		{"anchor", "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!str 5\n    q: 'a'\n    v: x\n    s: &t y\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", edit); err == nil ||
+				strings.Contains(err.Error(), "t2") {
+				t.Errorf("err = %v; want a refusal that does not name t2", err)
+			}
+		})
+	}
+	same := "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!str 5\n    q: 'a'\n    v: x\n    s: &s y\n"
+	if err := verifyPartialWrite([]byte(base), []byte(same), "t1", edit); err != nil {
+		t.Errorf("unchanged elsewhere: %v", err)
 	}
 }

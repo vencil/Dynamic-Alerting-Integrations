@@ -103,6 +103,7 @@ linters:
         domain-no-handler:
           list-mode: lax
           files:
+            - "**/internal/policy/**"
             - "**/internal/rbac/**"
             - "**/internal/customalerts/**"
             - "**/internal/groups/**"

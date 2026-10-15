@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // wantNotLoadableCode is the error code of the refusal (#2373 review round 3,
@@ -659,6 +662,43 @@ func TestBatchTenants_PRMode_RefusesBaseThatCannotRoundTrip(t *testing.T) {
 			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: not_round_trippable")
 			if created {
 				t.Error("a PR was created over a base that cannot round-trip")
+			}
+		})
+	}
+}
+
+// #2903: no refusal of a partial write quotes another tenant's value. The
+// file db-a shares with db-z holds, in db-z's block, values a decoder or the
+// round-trip check chokes on; the custom-alerts PUT and the batch (direct
+// and PR mode) for db-a must answer without any of them.
+func TestPartialWrites_NeverQuoteAnotherTenantsValue(t *testing.T) {
+	for i, other := range []string{
+		"    secret_x: !!int SECRETINT\n",
+		"    _routing:\n      receiver: {type: webhook, url: !!timestamp \"SECRETTS\"}\n",
+		"    k: !!binary \"@@SECRETBIN@@\"\n",
+		"    b: |\n\n      SECRETMULTI\n",
+		"    k: [1:20, SECRETFLOW]\n",
+		"    secret_y: SECRETDUP\n    secret_y: SECRETDUP2\n",
+		"    _metadata: {owner: SECRETMETA, owner: x}\n",
+	} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			file := "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert + "  db-z:\n" + other
+			dir := rejDir(t, file)
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+			body, _ := json.Marshal(map[string]any{"base_hash": cfg.ComputeSourceHash([]byte(file)),
+				"custom_alerts": []map[string]any{{"recipe": "threshold", "name": "n", "metric": "m", "threshold": "2", "window": "5m"}}})
+			resp := putCustomAlerts(t, deps, "db-a", string(body), "alice@example.com", []string{"dba"})
+			ca, _ := readBody(resp)
+			res := applyPatch(context.Background(), newTestWriter(dir), dir,
+				BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}}, "op@example.com")
+			pdir := setupConfigDir(t, map[string]string{"db-a.yaml": file, "db-b.yaml": rejHealthyB, "_defaults.yaml": caDefaults})
+			initGitRepo(t, pdir)
+			runGit(t, pdir, "branch", "-M", "main")
+			w, _ := prBatchRun(t, pdir, rejTwoOps)
+			for name, txt := range map[string]string{"custom-alerts": ca, "batch": res.Message, "pr batch": w.Body.String()} {
+				if strings.Contains(txt, "SECRET") {
+					t.Errorf("%s quotes db-z's value: %s", name, txt)
+				}
 			}
 		})
 	}

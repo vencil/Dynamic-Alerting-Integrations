@@ -123,7 +123,7 @@ func TestBatchTenants_DisableStackedUnderProfile(t *testing.T) {
 			if got := statuses(results); got != want {
 				t.Fatalf("statuses = %s, want %s: %+v", got, want, results)
 			}
-			if !strings.Contains(file, "team-chat") || !strings.Contains(file, "_routing: disable") {
+			if !strings.Contains(file, "team-chat") || !strings.Contains(file, `_routing: "disable"`) {
 				t.Errorf("t-off.yaml must carry both ops:\n%s", file)
 			}
 		})
