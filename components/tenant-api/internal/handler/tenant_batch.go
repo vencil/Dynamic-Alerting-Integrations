@@ -132,6 +132,7 @@ type BatchResponse struct {
 // @Description An operation may also remove keys with unset (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write, which nothing renders and which, while on disk, makes every other write to the tenant fail key validation (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400 INVALID_BODY).
 // @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
+// @Description Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -1064,6 +1065,17 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 		return "", fmt.Errorf("re-encode tenant yaml: %w", err)
 	}
 	_ = enc.Close()
+	// #2903: the re-encode must change nothing the edit does not.
+	edits := make([]partialEdit, 0, len(keys)+len(unset))
+	for _, k := range keys {
+		edits = append(edits, partialEdit{key: k, set: true, checkValue: true, value: patch[k]})
+	}
+	for _, k := range unset {
+		edits = append(edits, partialEdit{key: k})
+	}
+	if err := verifyPartialWrite(existing, buf.Bytes(), tenantID, edits); err != nil {
+		return "", err
+	}
 	return buf.String(), nil
 }
 

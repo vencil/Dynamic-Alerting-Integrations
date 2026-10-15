@@ -11,21 +11,25 @@ package handler
 //   - a base the generator reads, whose meaning the edit changed without any
 //     finding (a key removed while a `<<` merge key still supplies it).
 //
-// tenant-api's rule is that it does not rewrite a file the round trip would
-// not keep whole (notRoundTrippable, refused before the merge with
-// ErrMergeBaseNotLoadable). This test holds that rule to the generator, in
-// both directions. For every case, one side is Go's merge read back by the
-// generator; the other is the generator's own read of the base with the same
-// patch laid over tenants.<id> (testdata/batch_patch_diff.py):
+// tenant-api's rule is an invariant on the merge's result
+// (verifyPartialWrite): decoded by yaml.v3, the merged file must be the base
+// with exactly the edit applied, and define the same anchors; otherwise the
+// write is refused (ErrMergeBaseNotLoadable, config_error
+// not_round_trippable). yaml.v3's reading is not the generator's, so this
+// test holds the invariant to the generator, in both directions. For every
+// case, one side is Go's merge read back by the generator; the other is the
+// generator's own read of the base with the same patch laid over
+// tenants.<id> (testdata/batch_patch_diff.py):
 //
-//   - Go too loose (it merges where the round trip loses something): the two
-//     sides differ over the WHOLE file — every other tenant and key included
-//     — or a base the generator cannot read comes out readable. Both are red.
+//   - Go too loose (it merges where the round trip changed something): the
+//     two sides differ over the WHOLE file — every other tenant and key
+//     included — or a base the generator cannot read comes out readable.
+//     Both are red.
 //   - Go stricter than needed (it refuses a file it could rewrite): only
 //     more refusals; the cases pin each one (want "base_refused").
 //
-// Everything else the generator cannot read survives the round trip as it
-// is (want "unreadable_kept"): the merged file is just as unreadable, so the
+// A shape the generator cannot read that the round trip keeps as it is
+// (want "unreadable_kept") leaves the merged file just as unreadable, so the
 // generator refuses the write.
 //
 // Needs python3 with PyYAML (as generator_real_test.go): skips locally
@@ -105,7 +109,7 @@ var patchDiffCases = []patchDiffCase{
 	{name: "scalar-over-structured", base: "tenants:\n  t1:\n    _metadata: {owner: a}\n", tenant: "t1",
 		patch: map[string]string{"_metadata": "x"}, want: "error"},
 
-	// --- refused before the merge: the round trip would not keep it -------
+	// --- refused: the merge would change what the edit does not ----------
 	// The documents after the first `---` would be dropped by the re-encode.
 	{name: "multi-document", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1:\n    redis_memory: \"1\"\n---\ntenants:\n  t2:\n    redis_memory: \"2\"\n"},
@@ -116,9 +120,8 @@ var patchDiffCases = []patchDiffCase{
 	// were it merged).
 	{name: "unset-over-merge-key", tenant: "t1", unset: []string{"_routing"}, want: "base_refused",
 		base: "x: &s\n  _routing: disable\ntenants:\n  t1:\n    <<: *s\n    _routing:\n      receiver: {type: webhook, url: \"https://a.example/x\"}\n"},
-	// Readable and unchanged by this patch — refused all the same (Go
-	// stricter: the rule does not look at which key a `<<` brings).
-	{name: "patch-beside-merge-key", tenant: "t1", patch: map[string]string{"_silent_mode": "warning"}, want: "base_refused",
+	// Setting a key a `<<` also supplies: the explicit key wins, as before.
+	{name: "patch-beside-merge-key", tenant: "t1", patch: map[string]string{"_silent_mode": "warning"}, want: "merged",
 		base: "x: &s\n  _silent_mode: critical\ntenants:\n  t1:\n    <<: *s\n"},
 	// An alias key `*k` naming `_routing`: the edit removes `_routing` and the
 	// alias key's value survives (Go loose, were it merged).
@@ -140,8 +143,45 @@ var patchDiffCases = []patchDiffCase{
 	{name: "not-yaml", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: [\n"},
 
+	// Blind review #2903: a block scalar the re-encode rewrites (a leading
+	// blank line, a more-indented folded line, kept or stripped trailing
+	// blanks) — in the edited tenant or another one.
+	{name: "block-literal-strip-leading-blank", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: |-\n\n      a\n"},
+	{name: "block-literal-leading-blank", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: |\n\n      a\n"},
+	{name: "block-literal-leading-space-line", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: |\n      \n      a\n"},
+	{name: "block-folded-more-indented", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: >\n      a\n       b\n      c\n"},
+	{name: "block-folded-keep-trailing", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: >+\n      a\n\n"},
+	{name: "block-folded-leading-blanks", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: >\n\n\n      a\n"},
+	{name: "block-in-other-tenant", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n"},
+	// A TAB inside a block scalar: yaml.v3 refuses the file (malformed_yaml),
+	// the generator reads it (Go stricter).
+	{name: "block-literal-tab", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    d: |\n      \tTAB\n"},
+	// An anchor defined twice: the edit removes one definition and an alias
+	// would name the other.
+	{name: "anchor-redefined-value", tenant: "t1", patch: map[string]string{"x": "5"}, want: "base_refused",
+		base: "tenants:\n  t0:\n    x: &v \"9\"\n  t1:\n    x: &v \"1\"\n    z: *v\n"},
+	{name: "anchor-redefined-key-unset", tenant: "t1", unset: []string{"_routing"}, want: "base_refused",
+		base: "tenants:\n  t0:\n    &k _routing: disable\n  t1:\n    &k _routing: disable\n    z: *k\n"},
+	// Removing the anchored value leaves its alias undefined.
+	{name: "anchor-undefined-after-unset", tenant: "t1", unset: []string{"_routing"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    _routing: &v disable\n    z: *v\n"},
+	// One block shared through an alias: patching t1 would change t2 too.
+	{name: "shared-block-patch-owner", tenant: "t1", patch: map[string]string{"z": "5"}, want: "base_refused",
+		base: "tenants:\n  t1: &b\n    a: \"1\"\n  t2: *b\n"},
+	{name: "shared-block-patch-alias", tenant: "t2", patch: map[string]string{"z": "5"}, want: "error",
+		base: "tenants:\n  t1: &b\n    a: \"1\"\n  t2: *b\n"},
+
 	// --- read by the generator, merged unchanged ------------------------
-	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
+	// An alias cycle: yaml.v3 cannot decode it as values (Go stricter).
+	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: &a\n  b: *a\n"},
 	{name: "merge-key-then-explicit", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
 		base: "tenants:\n  t1: {}\nextra:\n  <<: {a: 1}\n  a: 2\n"},
@@ -149,30 +189,29 @@ var patchDiffCases = []patchDiffCase{
 		base: "tenants:\n  t1: {}\nextra:\n  1: a\n  01: b\n"},
 
 	// --- unreadable, and the re-encode keeps it so ----------------------
-	// A repeated key outside the edited mappings, written plain, quoted or as
-	// an alias, and a key the generator cannot build: the nodes go back as
-	// they came.
-	{name: "duplicate-in-unread-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	// yaml.v3 cannot decode these as values either: refused before any
+	// write (the generator could not read them anyway).
+	{name: "duplicate-in-unread-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1:\n    redis_memory: \"1\"\nextra:\n  a: 1\n  a: 2\n"},
 	{name: "duplicate-via-alias-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "k: &k a\ntenants:\n  t1: {}\nextra:\n  a: 1\n  *k : 2\n"},
-	{name: "duplicate-quoted-and-plain", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "duplicate-quoted-and-plain", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra:\n  a: 1\n  'a': 2\n"},
-	{name: "mapping-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "mapping-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra:\n  ? {a: 1}\n  : x\n"},
-	{name: "sequence-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "sequence-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra:\n  ? [a]\n  : x\n"},
 	{name: "unknown-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !foo bar\n"},
-	{name: "int-tag-not-int", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "int-tag-not-int", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: !!int abc\n"},
-	{name: "bool-tag-not-bool", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "bool-tag-not-bool", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra: !!bool maybe\n"},
 	{name: "map-tag-on-sequence", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!map [1]\n"},
 	{name: "date-out-of-range", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: 2001-13-45\n"},
-	{name: "merge-key-scalar", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
+	{name: "merge-key-scalar", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\nextra:\n  <<: 1\n"},
 	{name: "python-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!python/name:os.system ''\n"},
@@ -294,5 +333,57 @@ func TestBatchPatchMerge_OfflineDiffAgainstGenerator(t *testing.T) {
 	if refusedUnreadable < 5 {
 		t.Errorf("only %d cases have a base the generator cannot read; the refusal rule is barely exercised",
 			refusedUnreadable)
+	}
+}
+
+// verifyPartialWrite names the first difference only inside the written
+// tenant's own block; anywhere else — another tenant's block may be one the
+// caller cannot read — it says "another place in the file".
+func TestVerifyPartialWrite_NamesOnlyTheOwnBlock(t *testing.T) {
+	for _, c := range []struct {
+		name, base, want, never string
+		unset                   []string
+		patch                   map[string]string
+	}{
+		{name: "own block", unset: []string{"_routing"},
+			base: "x: &s\n  _routing: disable\ntenants:\n  t1:\n    <<: *s\n    _routing:\n      receiver: {type: webhook, url: \"https://a.example/x\"}\n",
+			want: "first difference: tenants.t1._routing"},
+		{name: "other tenant", patch: map[string]string{"z": "1"},
+			base: "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n",
+			want: "first difference: another place in the file", never: "t2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if c.patch == nil {
+				c.patch = map[string]string{}
+			}
+			_, err := mergePatchYAML([]byte(c.base), "t1", c.patch, c.unset)
+			if err == nil || !strings.Contains(err.Error(), c.want) || (c.never != "" && strings.Contains(err.Error(), c.never)) {
+				t.Errorf("err = %v; want it to contain %q (and not %q)", err, c.want, c.never)
+			}
+		})
+	}
+}
+
+// The keys an edit sets must hold exactly the new value in the merged file
+// (here a plain `true`, which decodes as a boolean, not the string "true"),
+// and the keys it removes must be gone.
+func TestVerifyPartialWrite_ChecksTheEditedValues(t *testing.T) {
+	const base = "tenants:\n  t1:\n    a: \"1\"\n    b: \"2\"\n"
+	for _, c := range []struct {
+		name, merged string
+		edits        []partialEdit
+		ok           bool
+	}{
+		{"set as a string", "tenants:\n  t1:\n    a: \"true\"\n    b: \"2\"\n", []partialEdit{{key: "a", set: true, checkValue: true, value: "true"}}, true},
+		{"set as another type", "tenants:\n  t1:\n    a: true\n    b: \"2\"\n", []partialEdit{{key: "a", set: true, checkValue: true, value: "true"}}, false},
+		{"removed", "tenants:\n  t1:\n    b: \"2\"\n", []partialEdit{{key: "a"}}, true},
+		{"not removed", base, []partialEdit{{key: "a"}}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", c.edits)
+			if (err == nil) != c.ok {
+				t.Errorf("err = %v, want ok=%v", err, c.ok)
+			}
+		})
 	}
 }

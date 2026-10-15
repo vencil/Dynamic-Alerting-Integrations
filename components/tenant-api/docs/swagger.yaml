@@ -1843,6 +1843,7 @@ paths:
         PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
         Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
         is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
+        Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
       parameters:
       - description: Group ID
         in: path
@@ -2107,15 +2108,16 @@ paths:
         "400":
           description: 'Bad request. A value the body writes that is the masked-credential
             placeholder is code INVALID_BODY with one violations[] entry per value
-            (#1560; send the real value; nothing written); so is the flat _routing_receiver_type
-            (#2903; the receiver type is _routing.receiver.type). Routing (receivers,
-            matcher values, group_by, the domain policy) is judged by the route generator
-            container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when
-            the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits
-            and -, starting and ending with a letter or digit (ADR-035; the route
-            generator refuses a tree that declares any other id; nothing written).
-            Also 400 when the current tenant file cannot be parsed and the caller
-            lacks write permission on all tenants (#2405; nothing written)'
+            (#1560; send the real value; nothing written); The flat _routing_receiver_type
+            is a 400 BAD_REQUEST from the tenant key validation (#2903; the receiver
+            type is _routing.receiver.type). Routing (receivers, matcher values, group_by,
+            the domain policy) is judged by the route generator container: a refusal
+            is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not
+            a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
+            with a letter or digit (ADR-035; the route generator refuses a tree that
+            declares any other id; nothing written). Also 400 when the current tenant
+            file cannot be parsed and the caller lacks write permission on all tenants
+            (#2405; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
@@ -2248,6 +2250,7 @@ paths:
         `_custom_alerts` (comment-preserving AST edit), validates
         (S5 Go validator), and commits. Optimistic concurrency via
         base_hash (409 on drift). Empty array deletes the key.
+        409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
         409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
         tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
         whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
@@ -2689,6 +2692,7 @@ paths:
         An operation may also remove keys with unset (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write, which nothing renders and which, while on disk, makes every other write to the tenant fail key validation (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400 INVALID_BODY).
         Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
         is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
+        Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
       parameters:
       - description: Batch operations
         in: body

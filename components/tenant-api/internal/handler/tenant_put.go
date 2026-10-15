@@ -66,7 +66,7 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); so is the flat _routing_receiver_type (#2903; the receiver type is _routing.receiver.type). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
+// @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); The flat _routing_receiver_type is a 400 BAD_REQUEST from the tenant key validation (#2903; the receiver type is _routing.receiver.type). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
 // @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions. In PR write-back mode the write scope is judged again on the latest base branch, which this server's local copy may lag: a refusal there is the same 403 with tenant_id, and no PR/MR or branch is left"
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
@@ -128,12 +128,6 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// the axis is enforced.
 		gatePost, ok := requireOrgWriteProposedAt(rw, r, d, tenantID, rbac.PermWrite, string(body))
 		if !ok {
-			return
-		}
-
-		// #2903: the flat `_routing_receiver_type` is a 400 on every write.
-		if v := flatReceiverTypeViolations(body, tenantID); len(v) > 0 {
-			WriteValidationErrors(rw, r, v)
 			return
 		}
 

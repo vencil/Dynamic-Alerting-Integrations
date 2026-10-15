@@ -5,7 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"reflect"
+	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -209,15 +213,18 @@ func tenantConfigError(data []byte) string {
 type tenantFileNotLoadableError struct {
 	TenantID string
 	Reason   string
+	// Detail (configErrorNotRoundTrippable only): where the merged file
+	// first differs from the base with the edit applied — a path in the
+	// tenant's own block, never another tenant's (verifyPartialWrite).
+	Detail string
 }
 
 func (e *tenantFileNotLoadableError) Error() string {
-	switch e.Reason {
-	case configErrorMultipleDocuments, configErrorAliasOrMergeKey:
-		return fmt.Sprintf("tenant %s: a partial update re-encodes the config file, and this file would not "+
-			"come back unchanged (config_error: %s: %s); the update is refused before any change. Rewrite the "+
-			"tenant file without it (a whole-file PUT /api/v1/tenants/{id} replaces it)",
-			e.TenantID, e.Reason, roundTripLoss[e.Reason])
+	if e.Reason == configErrorNotRoundTrippable {
+		return fmt.Sprintf("tenant %s: a partial update re-encodes the config file, and here it would also "+
+			"change content the update does not edit (config_error: %s; first difference: %s); nothing was "+
+			"written. Rewrite the tenant file in plain form (a whole-file PUT /api/v1/tenants/{id} replaces it)",
+			e.TenantID, e.Reason, e.Detail)
 	}
 	return fmt.Sprintf("tenant %s: its config file cannot be loaded as a tenant config (config_error: %s), "+
 		"so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first "+
@@ -229,89 +236,13 @@ func (e *tenantFileNotLoadableError) Error() string {
 // importing this package: WritePRBatch's pre-flight tolerates it.
 func (e *tenantFileNotLoadableError) Unwrap() error { return gitops.ErrMergeBaseNotLoadable }
 
-// The config_error of a partial write's base that tenant-api cannot rewrite
-// without changing it (#2903, ADR-036 §4). A partial write (a batch patch,
-// PUT .../custom-alerts) decodes the file into yaml.v3 nodes, edits
-// tenants.<id> and re-encodes the whole file, so tenant-api only does that
-// to a file the round trip keeps whole:
-//
-//   - multiple_documents: the re-encode writes the first document only;
-//     the others would be dropped.
-//   - alias_or_merge_key: the edit finds keys by their written text, at the
-//     top level (`tenants`), in `tenants` (the tenant id) and in the tenant's
-//     block. A key written there as an alias (`*k`), or values brought in by
-//     a `<<` merge key, are not where the edit looks: removing a key would
-//     leave the value a `<<` supplies, and a key added beside an alias of
-//     the same text would be a second one.
-//
-// This is tenant-api's own round-trip limit, not a reading of the file as
-// the route generator reads it: everything else the generator cannot read
-// survives the round trip unchanged and the generator refuses the merged
-// file. A repeated plain key in the tenant's block is already refused by
-// tenantConfigError (the typed decode, cfg.ParseTenantFile). Being stricter
-// than needed only refuses more; a shape this misses that a merge would
-// change is what batch_patch_diff_test.go is for (it compares the merged
-// file with the base as the generator reads it, patch applied).
-const (
-	configErrorMultipleDocuments = "multiple_documents"
-	configErrorAliasOrMergeKey   = "alias_or_merge_key"
-)
-
-// roundTripLoss says, per config_error above, what the re-encode would lose.
-var roundTripLoss = map[string]string{
-	configErrorMultipleDocuments: "it holds more than one YAML document and only the first would be written back",
-	configErrorAliasOrMergeKey: "a key in the edited mappings is an alias or a `<<` merge key, which the edit " +
-		"cannot see through",
-}
-
-// notRoundTrippable is a config_error above for data (a file tenantConfigError
-// accepts) when a partial write to tenantID could not rewrite it unchanged,
-// else "".
-func notRoundTrippable(data []byte, tenantID string) string {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	var doc yaml.Node
-	if err := dec.Decode(&doc); err != nil {
-		return "" // empty, or not YAML: tenantConfigError's to report
-	}
-	var next yaml.Node
-	if err := dec.Decode(&next); !errors.Is(err, io.EOF) {
-		return configErrorMultipleDocuments
-	}
-	if len(doc.Content) == 0 {
-		return ""
-	}
-	// The mappings the edit walks: the top level, `tenants`, the block.
-	edited := []*yaml.Node{doc.Content[0]}
-	if tenants := yamlMapValue(doc.Content[0], "tenants"); tenants != nil {
-		edited = append(edited, tenants)
-		if block := yamlMapValue(tenants, tenantID); block != nil {
-			edited = append(edited, block)
-		}
-	}
-	for _, m := range edited {
-		if m.Kind != yaml.MappingNode {
-			continue // a shape error mergePatchYAML reports itself
-		}
-		for i := 0; i+1 < len(m.Content); i += 2 {
-			k := m.Content[i]
-			if k.Kind == yaml.AliasNode || k.Tag == "!!merge" || (k.Kind == yaml.ScalarNode && k.Value == "<<" && k.Style == 0) {
-				return configErrorAliasOrMergeKey
-			}
-		}
-	}
-	return ""
-}
-
 // checkPartialWriteBase returns a *tenantFileNotLoadableError when existing —
 // tenantID's file that a partial write would merge into — is not a usable
-// tenant config, or (#2903) is one the merge could not re-encode unchanged
-// (notRoundTrippable): such a base is refused BEFORE any merge. Empty bytes
-// (no file yet) are not refused: that is a new tenant.
+// tenant config. Empty bytes (no file yet) are not refused: that is a new
+// tenant. (Whether the merge itself kept everything else is checked after
+// it, on its result: verifyPartialWrite, #2903.)
 func checkPartialWriteBase(tenantID string, existing []byte) error {
 	if reason := tenantConfigError(existing); reason != "" {
-		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason}
-	}
-	if reason := notRoundTrippable(existing, tenantID); reason != "" {
 		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason}
 	}
 	return nil
@@ -444,4 +375,378 @@ func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
 	if len(meta.Groups) > 0 {
 		summary.Groups = meta.Groups
 	}
+}
+
+// --- the partial-write invariant -------------------------------------
+//
+// #2903 (ADR-036 §4): a partial write — a batch patch (mergePatchYAML), PUT
+// .../custom-alerts (customalerts.MergeCustomAlerts) — decodes the tenant
+// file into yaml.v3 nodes, edits tenants.<id> and re-encodes the WHOLE file.
+// The route generator only judges the result; it cannot tell a value the
+// edit meant to change from one the re-encode changed on its own (a block
+// scalar's leading blank line, an alias that now names another anchor, a
+// value a `<<` merge key still supplies after the explicit one was removed,
+// an anchored block another tenant aliases).
+//
+// So the result is checked against an invariant instead of the base against
+// a list of risky shapes: decoded as values by yaml.v3 (every document,
+// aliases expanded, anchors and `<<` as yaml.v3 resolves them), the merged
+// file must equal the base with exactly the edit applied — the keys it sets
+// hold the new value, the keys it removes are gone, and nothing else differs.
+// The anchors the file defines are part of it too: the merged file must
+// define the same ones, in the same order. yaml.v3 lets an anchor be defined
+// twice (an alias names the latest), so an edit that removes one definition
+// can re-point an alias without changing any value yaml.v3 decodes — while
+// the generator, which refuses a repeated anchor, would go from refusing the
+// file to reading it. Anything else is refused before the write, config_error
+// not_round_trippable. A file yaml.v3 cannot decode as values is refused
+// too: it cannot be shown to come back unchanged.
+//
+// yaml.v3's reading is not the generator's. Where the two differ, a merge
+// this check passes may still change what the generator reads; the offline
+// diff (batch_patch_diff_test.go) holds the check to the generator.
+
+// configErrorNotRoundTrippable is the config_error of a partial write whose
+// re-encode would change content the write does not edit.
+const configErrorNotRoundTrippable = "not_round_trippable"
+
+// partialEdit is one key of tenants.<id> a partial write changes. set with
+// checkValue: the merged file must hold value there (a batch patch value,
+// always a string); set without checkValue: the key must be there, its value
+// is the write's own (custom alerts, validated elsewhere); !set: the key
+// must be gone.
+type partialEdit struct {
+	key        string
+	set        bool
+	checkValue bool
+	value      any
+}
+
+// verifyPartialWrite returns a *tenantFileNotLoadableError (Reason
+// configErrorNotRoundTrippable) unless merged is base with exactly edits
+// applied to tenants.<tenantID>, as yaml.v3 decodes both. An empty base (a
+// new file) has nothing to keep.
+func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdit) error {
+	if len(bytes.TrimSpace(base)) == 0 {
+		return nil
+	}
+	refuse := func(detail string) error {
+		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: configErrorNotRoundTrippable, Detail: detail}
+	}
+	bNodes, bVals, err := decodeAllDocs(base)
+	if err != nil {
+		return refuse("the current file does not decode as YAML values (" + err.Error() + ")")
+	}
+	mNodes, mVals, err := decodeAllDocs(merged)
+	if err != nil {
+		return refuse("the merged file would not decode as YAML values")
+	}
+	if len(bVals) != len(mVals) {
+		return refuse(fmt.Sprintf("the number of YAML documents (%d, would be %d)", len(bVals), len(mVals)))
+	}
+	if len(bVals) == 0 {
+		return refuse("the current file has no document")
+	}
+	if b, m := anchorsOf(bNodes), anchorsOf(mNodes); !reflect.DeepEqual(b, m) {
+		return refuse("the anchors the file defines (an edit would remove or add one)")
+	}
+	// The merge encodes one document, so with the counts equal there is
+	// nothing past document 1 to compare.
+	want, err := applyEdits(bNodes[0], mNodes[0], bVals[0], tenantID, edits)
+	if err != nil {
+		return refuse(err.Error())
+	}
+	if path, differ := firstDifference(want, mVals[0], nil); differ {
+		return refuse(describePath(path, tenantID))
+	}
+	return nil
+}
+
+// decodeAllDocs is every document of data as nodes and as values (maps
+// normalised to map[any]any).
+func decodeAllDocs(data []byte) ([]*yaml.Node, []any, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var nodes []*yaml.Node
+	var vals []any
+	for {
+		n := new(yaml.Node)
+		if err := dec.Decode(n); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nodes, vals, nil
+			}
+			return nil, nil, err
+		}
+		var v any
+		if err := n.Decode(&v); err != nil {
+			return nil, nil, err
+		}
+		nodes = append(nodes, n)
+		vals = append(vals, normalizeValue(v))
+	}
+}
+
+func normalizeValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[any]any, len(t))
+		for k, x := range t {
+			out[k] = normalizeValue(x)
+		}
+		return out
+	case map[any]any:
+		out := make(map[any]any, len(t))
+		for k, x := range t {
+			out[k] = normalizeValue(x)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = normalizeValue(x)
+		}
+		return out
+	}
+	return v
+}
+
+// keyNodeByText is the key node of mapping m written as text — the lookup
+// the merge itself makes (yamlMapValue) — or nil.
+func keyNodeByText(m *yaml.Node, text string) *yaml.Node {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == text {
+			return m.Content[i]
+		}
+	}
+	return nil
+}
+
+func valueOfKey(m, key *yaml.Node) *yaml.Node {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i] == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// decodedKey is a key node as yaml.v3 decodes it (aliases followed).
+func decodedKey(n *yaml.Node) (any, error) {
+	var v any
+	if err := n.Decode(&v); err != nil {
+		return nil, err
+	}
+	return normalizeValue(v), nil
+}
+
+// keyFor is the decoded key text names in mapping bMap (base) — the key
+// node the merge finds by text — else, for a key the merge adds, its node
+// in mMap (merged). An added key that decodes like one of mMap's other own
+// keys is a second key for the same thing: refused.
+func keyFor(bMap, mMap *yaml.Node, text string) (any, error) {
+	if kn := keyNodeByText(bMap, text); kn != nil {
+		return decodedKey(kn)
+	}
+	added := keyNodeByText(mMap, text)
+	if added == nil {
+		return decodedKey(&yaml.Node{Kind: yaml.ScalarNode, Value: text})
+	}
+	k, err := decodedKey(added)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i+1 < len(mMap.Content); i += 2 {
+		if other := mMap.Content[i]; other != added {
+			if o, err := decodedKey(other); err == nil && valuesEqual(o, k) {
+				return nil, fmt.Errorf("the key %q would be added beside another key written another way that "+
+					"decodes the same", text)
+			}
+		}
+	}
+	return k, nil
+}
+
+func asMap(v any) (map[any]any, bool) {
+	m, ok := v.(map[any]any)
+	return m, ok
+}
+
+// applyEdits is a copy of bVal (document 0 of the base) with edits applied to
+// tenants.<tenantID>, keys located as the merge locates them.
+func applyEdits(bDoc, mDoc *yaml.Node, bVal any, tenantID string, edits []partialEdit) (any, error) {
+	if len(bDoc.Content) == 0 || len(mDoc.Content) == 0 {
+		return nil, errors.New("the file has no top-level mapping")
+	}
+	bRoot, mRoot := bDoc.Content[0], mDoc.Content[0]
+	want := deepCopyValue(bVal)
+	root, ok := asMap(want)
+	if !ok {
+		return nil, errors.New("the top level is not a mapping")
+	}
+	tKey, err := keyFor(bRoot, mRoot, "tenants")
+	if err != nil {
+		return nil, err
+	}
+	tenants, ok := asMap(root[tKey])
+	if !ok {
+		return nil, errors.New("`tenants` is not a mapping")
+	}
+	bTenants, mTenants := yamlMapValue(bRoot, "tenants"), yamlMapValue(mRoot, "tenants")
+	if mTenants == nil {
+		return nil, errors.New("`tenants` would be gone")
+	}
+	idKey, err := keyFor(bTenants, mTenants, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	var bBlock *yaml.Node
+	if kn := keyNodeByText(bTenants, tenantID); kn != nil {
+		bBlock = valueOfKey(bTenants, kn)
+	}
+	mBlock := yamlMapValue(mTenants, tenantID)
+	if mBlock == nil {
+		return nil, fmt.Errorf("tenants.%s would be gone", tenantID)
+	}
+	block, ok := asMap(tenants[idKey])
+	if !ok {
+		if _, present := tenants[idKey]; present {
+			return nil, fmt.Errorf("tenants.%s is not a mapping", tenantID)
+		}
+		block = map[any]any{}
+	}
+	var mVal any
+	_ = mBlock.Decode(&mVal)
+	mBlockVal, _ := asMap(normalizeValue(mVal))
+	for _, e := range edits {
+		k, err := keyFor(bBlock, mBlock, e.key)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case !e.set:
+			delete(block, k)
+		case e.checkValue:
+			block[k] = e.value
+		default:
+			v, present := mBlockVal[k]
+			if !present {
+				return nil, fmt.Errorf("tenants.%s.%s would be missing", tenantID, e.key)
+			}
+			block[k] = v
+		}
+	}
+	tenants[idKey] = block
+	return want, nil
+}
+
+func deepCopyValue(v any) any {
+	switch t := v.(type) {
+	case map[any]any:
+		out := make(map[any]any, len(t))
+		for k, x := range t {
+			out[k] = deepCopyValue(x)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = deepCopyValue(x)
+		}
+		return out
+	}
+	return v
+}
+
+// valuesEqual is reflect.DeepEqual, except that NaN equals NaN (a `.nan` the
+// file holds is the same value on both sides).
+func valuesEqual(a, b any) bool {
+	_, differ := firstDifference(a, b, nil)
+	return !differ
+}
+
+// firstDifference reports whether a and b differ and, if so, the path of the
+// first difference (map keys in sorted order, so the answer is stable).
+func firstDifference(a, b any, path []string) ([]string, bool) {
+	switch x := a.(type) {
+	case map[any]any:
+		y, ok := b.(map[any]any)
+		if !ok {
+			return path, true
+		}
+		keys := make([]any, 0, len(x)+len(y))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		for k := range y {
+			if _, seen := x[k]; !seen {
+				keys = append(keys, k)
+			}
+		}
+		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j]) })
+		for _, k := range keys {
+			xv, xok := x[k]
+			yv, yok := y[k]
+			sub := append(append([]string{}, path...), fmt.Sprint(k))
+			if xok != yok {
+				return sub, true
+			}
+			if p, d := firstDifference(xv, yv, sub); d {
+				return p, true
+			}
+		}
+		return nil, false
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return path, true
+		}
+		for i := range x {
+			if p, d := firstDifference(x[i], y[i], append(append([]string{}, path...), fmt.Sprintf("[%d]", i))); d {
+				return p, true
+			}
+		}
+		return nil, false
+	case float64:
+		if y, ok := b.(float64); ok && math.IsNaN(x) && math.IsNaN(y) {
+			return nil, false
+		}
+	}
+	if !reflect.DeepEqual(a, b) {
+		return path, true
+	}
+	return nil, false
+}
+
+// describePath names a difference for the refusal message: a path in the
+// written tenant's own block in full, anything else only as "another place
+// in the file" — another tenant's block may be one the caller cannot read.
+func describePath(path []string, tenantID string) string {
+	if len(path) >= 2 && path[0] == "tenants" && path[1] == tenantID {
+		return strings.Join(path, ".")
+	}
+	return "another place in the file"
+}
+
+// anchorsOf is every anchor name the documents define, in document order
+// (keys included; an alias is not followed).
+func anchorsOf(docs []*yaml.Node) []string {
+	out := []string{}
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n == nil || n.Kind == yaml.AliasNode {
+			return
+		}
+		if n.Anchor != "" {
+			out = append(out, n.Anchor)
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	for _, d := range docs {
+		walk(d)
+	}
+	return out
 }

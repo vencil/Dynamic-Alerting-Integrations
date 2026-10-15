@@ -259,10 +259,9 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 `GENERATOR_REJECTED` 與 503 的回應只帶 code、`reason` 與固定說明，不帶產生器或 tenant-api 的錯誤訊息（可能含路徑、例外內容或其他租戶的檔名）；不認得的 reason 一律顯示 `unknown`。原本的 reason 與訊息只寫進 tenant-api 的 log。`GENERATOR_FINDINGS` 的 `findings[]` 是判定結果本身，依上面的可見性規則揭露。
 
 - **監控**：`tenant_api_policy_available`（產生器容器能否判定，scrape 時讀它的狀態端點）、`tenant_api_generator_rejections_total{reason}`、`tenant_api_generator_scrape_success`，以及附在 tenant-api `/metrics` 之後的產生器 `da_generator_*`；告警 `TenantApiPolicyUnavailable`、`GeneratorJudgementMemoryNearLimit`。
-- **寫入扁平鍵 `_routing_receiver_type`** 一律 400（`PUT` 與批次 patch），receiver type 寫在 `_routing.receiver.type`。
 - **repo 裡不是一般檔的項目**：產生器從 git 物件取檔，symlink（mode 120000）、gitlink（160000）等不是 100644／100755 的項目一律是 `not_regular_file`（路徑中有一段以 `.` 開頭的除外，與所有讀取端略過隱藏項目一致），以 finding 擋下寫入：domain policy 檔名（`_domain_policy.yaml`／`.yml`）報 `domain_policy_unusable`，其他報 `tenant_file_unreadable`，與其他讀不了的檔同一條分類；把它換成一般檔即可。tenant-api 寫該路徑時本來就寫成一般檔（[#2981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2981)）。
 - **routing 與 domain policy 只由產生器判（breaking）**：tenant-api 不再自己讀 `_domain_policy.yaml`、不再自己判 routing。domain policy 違規（含 `require_critical_escalation`）、receiver 形狀、不是 mapping 的 `_routing`、matcher 與 `group_by` 的值、產生器不讀的鍵、`_domain_policy.yaml` 讀不了，都是上表的 422 `GENERATOR_FINDINGS`（finding 的 `kind` 如 `domain_policy_violation`、`missing_receiver_field`、`routing_not_mapping`、`routing_group_by_invalid`、`routing_value_not_string`、`routing_key_ignored`、`domain_policy_unusable`）。不再有 403 `POLICY_VIOLATION`、tenant-api 自己的 503 `POLICY_UNAVAILABLE`（上表那一列是產生器的部署端 policy 檔，照舊），`PUT` 這幾類也不再回 400；critical 告警可能被提早攔走的警告不再附在 `warnings`。批次 patch 寫 `_routing` 的非停用值不再是 400，合併後同樣交產生器判。
-- **合併前拒收無法無損往返的檔**：批次與 `PUT .../custom-alerts` 是把變更合併進現有租戶檔再整份重新輸出，只對往返後內容不變的檔做。檔裡有多份 YAML 文件（重新輸出只寫第一份），或最上層、`tenants`、該租戶 block 裡有別名當鍵或 `<<` merge key（合併依鍵的原文找鍵，看不到它們帶來的鍵）時，合併前就拒收：`TENANT_CONFIG_NOT_LOADABLE`（custom-alerts 回 409；批次是該筆結果的 code），`config_error` 為 `multiple_documents`／`alias_or_merge_key`。其他產生器讀不了的形狀往返後原樣保留，由產生器拒收。修法是用整檔 `PUT /tenants/{id}` 或直接在 git 改寫那個檔（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。
+- **部分更新不得改到沒編輯的內容**：批次與 `PUT .../custom-alerts` 是把變更合併進現有租戶檔再整份重新輸出。寫入前以 yaml.v3 把原檔與合併結果都解成值（所有文件、別名展開、`<<` 照 yaml.v3 解）比對：合併結果必須恰好等於「原檔套上這次的編輯」，定義的 anchor 也要相同；有任何其他差異（例如 block scalar 開頭空行被改、重複的 anchor 讓別名改指、別名共用的租戶 block 連帶被改、`<<` 帶進來的值在刪掉明寫的鍵後仍在），或 yaml.v3 解不出值，就拒收：`TENANT_CONFIG_NOT_LOADABLE`（custom-alerts 回 409；批次是該筆結果的 code），`config_error` 為 `not_round_trippable`，訊息附第一個差異的位置（只在本租戶 block 內才寫出路徑，其他位置只說「另一處」）。修法是用整檔 `PUT /tenants/{id}` 或直接在 git 改寫那個檔（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。
 
 ---
 
@@ -326,7 +325,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
 | `PutGroupRequest.filters` / `PutViewRequest.filters` 項目數 | ≤ 20 entries（view 另外 required、至少 1 個）。transform 跑在 state store 的讀改寫內（輸掉並行寫入會重跑），且結果寫進 state store 的 `_groups.yaml` / `_views.yaml` 紀錄 ⇒ 劣化是永久的 |
 | `Filters` map values | ≤ 1024 chars per value |
-| `PUT /tenants/{id}` body 自己寫的 receiver（`_routing.receiver`、`overrides[].receiver`、`routes[].receiver`） | tenant-api 不再自己判（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）：receiver 契約、產生器不讀的鍵、未知的 `_routing*` 鍵都由產生器對寫入後的整棵樹判，回 422 `GENERATOR_FINDINGS`（見 §3.9）。Go 端只剩扁平鍵 `_routing_receiver_type` 與遮罩佔位字串兩項 400 |
+| `PUT /tenants/{id}` body 自己寫的 receiver（`_routing.receiver`、`overrides[].receiver`、`routes[].receiver`） | tenant-api 不再自己判（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）：receiver 契約、產生器不讀的鍵、未知的 `_routing*` 鍵都由產生器對寫入後的整棵樹判，回 422 `GENERATOR_FINDINGS`（見 §3.9）。Go 端只剩扁平鍵 `_routing_receiver_type`（租戶鍵驗證，`BAD_REQUEST`）與遮罩佔位字串（`INVALID_BODY`）兩項 400 |
 
 **Failure response shape**：
 

@@ -410,7 +410,12 @@ func TestGeneratorGate_FlatReceiverTypeIs400(t *testing.T) {
 	}
 	body := "tenants:\n  t-a:\n    mysql_connections: \"72\"\n    _routing_receiver_type: slack\n"
 	w := putTenantAs(t, f.deps, "t-a", body, "admins", nil)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "_routing.receiver.type") {
+	// One source: the tenant key validation (gitops, cfg.ValidateTenantKeys)
+	// — code BAD_REQUEST with its "unknown routing key" text, not a handler
+	// INVALID_BODY violation.
+	if m := genEnvelope(t, w); w.Code != http.StatusBadRequest || m["code"] != CodeBadRequest ||
+		!strings.Contains(w.Body.String(), `unknown routing key \"_routing_receiver_type\"`) ||
+		!strings.Contains(w.Body.String(), "_routing.receiver.type") {
 		t.Errorf("PUT: status %d body %s", w.Code, w.Body.String())
 	}
 	code, _, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":{"_routing_receiver_type":"slack"}}]}`, false)

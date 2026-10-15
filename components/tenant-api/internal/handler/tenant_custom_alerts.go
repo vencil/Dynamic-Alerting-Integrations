@@ -69,6 +69,7 @@ type PutCustomAlertsResponse struct {
 // @Description `_custom_alerts` (comment-preserving AST edit), validates
 // @Description (S5 Go validator), and commits. Optimistic concurrency via
 // @Description base_hash (409 on drift). Empty array deletes the key.
+// @Description 409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
 // @Description tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
 // @Description whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
@@ -257,6 +258,12 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			// server (#1700): its own code, so it is not withheld.
 			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
 				"internal error: cannot merge into the tenant file: "+err.Error())
+			return
+		}
+		// #2903: the re-encode must change nothing but `_custom_alerts`.
+		edit := partialEdit{key: "_custom_alerts", set: len(*req.CustomAlerts) > 0}
+		if err := verifyPartialWrite(raw, []byte(merged), tenantID, []partialEdit{edit}); errors.As(err, &notLoadable) {
+			writeTenantFileNotLoadable(w, r, notLoadable)
 			return
 		}
 

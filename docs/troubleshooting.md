@@ -219,6 +219,8 @@ da-tools validate-config --config-dir ./conf.d/
 - 500 `TENANT_STORE_FAULT`（批次整批 500）；tenant-api 的 log 有 `conf.d holds unreadable entries`，平台告警 `TenantApiStoreUnreadable` 或 `TenantApiStoreScanStale`
 - 409 `TENANT_CONFIG_NOT_LOADABLE`，`config_error` 為 `unreadable` 或 `not_regular_file`
 
+只有某個租戶的部分更新（批次 patch、`PUT .../custom-alerts`）被拒、`config_error` 為 `not_round_trippable` 時，不是這一節的問題：重新輸出那個檔會連帶改到沒有編輯的內容，見 [Tenant API 硬化 §3.9](api/tenant-api-hardening.md#39-每筆寫入先問產生器容器2903)。
+
 與 exporter 的 `ConfigFilesUnreadable`（見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)）不同，這裡指的是 tenant-api 掛載的那份 conf.d。
 
 原因與修法見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md#38-confd-有讀不了的項目時寫入整個拒收2939)。

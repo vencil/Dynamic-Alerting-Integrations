@@ -576,20 +576,19 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	}
 }
 
-// #2903 (ADR-036 §4): a base threshold-exporter loads (GET reports no
-// config_error) but a partial write could not re-encode unchanged
-// (notRoundTrippable) is refused BEFORE the merge by every partial write,
-// with the reason as config_error, and its bytes stay.
-// batch_patch_diff_test.go holds the rule to the generator itself.
+// #2903 (ADR-036 §4): a file threshold-exporter loads (GET reports no
+// config_error) whose re-encode would change content a partial write does
+// not edit (verifyPartialWrite) is refused by every partial write,
+// config_error not_round_trippable, and its bytes stay.
+// batch_patch_diff_test.go holds the invariant to the generator itself.
 var roundTripRejFiles = []struct {
-	name, body, reason string
+	name, body string
 }{
 	{"multiple_documents", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
-		"---\ntenants:\n  db-z:\n    mysql_connections: \"1\"\n", "multiple_documents"},
-	{"merge_key_in_block", "x_shared: &s\n  mysql_connections: \"60\"\ntenants:\n  db-a:\n    <<: *s\n" +
-		rejExistingAlert, "alias_or_merge_key"},
-	{"alias_key_in_block", "k: &k mysql_connections\ntenants:\n  db-a:\n    *k : \"70\"\n" +
-		rejExistingAlert, "alias_or_merge_key"},
+		"---\ntenants:\n  db-z:\n    mysql_connections: \"1\"\n"},
+	{"shared_block", "tenants:\n  db-a: &b\n    mysql_connections: \"70\"\n" + rejExistingAlert + "  db-z: *b\n"},
+	{"block_scalar_leading_blank", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
+		"  db-z:\n    _metadata:\n      owner: |-\n\n        team\n"},
 }
 
 func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
@@ -626,18 +625,21 @@ func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
 				t.Fatalf("unmarshal %s: %v", rb, err)
 			}
 			if resp.StatusCode != http.StatusConflict || env["code"] != wantNotLoadableCode ||
-				env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
-				t.Errorf("custom-alerts: %d %v; want 409 %s, config_error %s", resp.StatusCode, env, wantNotLoadableCode, c.reason)
+				env["tenant_id"] != "db-a" || env["config_error"] != "not_round_trippable" {
+				t.Errorf("custom-alerts: %d %v; want 409 %s, config_error not_round_trippable", resp.StatusCode, env, wantNotLoadableCode)
 			}
-			if msg, _ := env["error"].(string); !strings.Contains(msg, "would not come back unchanged") {
+			if msg, _ := env["error"].(string); strings.Contains(msg, "db-z") {
+				t.Errorf("the refusal names another tenant: %q", msg)
+			}
+			if msg, _ := env["error"].(string); !strings.Contains(msg, "change content the update does not edit") {
 				t.Errorf("custom-alerts message does not say the file would not round-trip: %q", msg)
 			}
 
 			// The batch patch (POST /tenants/batch direct mode, the group batch).
 			res := applyPatch(context.Background(), newTestWriter(dir), dir,
 				BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}}, "op@example.com")
-			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "config_error: "+c.reason) {
-				t.Errorf("batch: result = %+v, want %s naming config_error %s", res, wantNotLoadableCode, c.reason)
+			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "config_error: not_round_trippable") {
+				t.Errorf("batch: result = %+v, want %s naming config_error not_round_trippable", res, wantNotLoadableCode)
 			}
 			if after := mustRead(t, path); after != before {
 				t.Errorf("file changed:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -654,7 +656,7 @@ func TestBatchTenants_PRMode_RefusesBaseThatCannotRoundTrip(t *testing.T) {
 			initGitRepo(t, dir)
 			runGit(t, dir, "branch", "-M", "main")
 			w, created := prBatchRun(t, dir, rejTwoOps)
-			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
+			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: not_round_trippable")
 			if created {
 				t.Error("a PR was created over a base that cannot round-trip")
 			}

@@ -80,6 +80,7 @@ type GroupBatchResponse struct {
 // @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
 // @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
+// @Description Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
 // @Tags        groups
 // @Accept      json
 // @Produce     json
