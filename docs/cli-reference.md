@@ -1927,7 +1927,7 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 
 #### generator-service
 
-產生器容器的服務程式（[ADR-036](adr/036-single-parser-effective-config.md) §3、§5、§6，[#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)）。常駐執行，tenant-api 在每次寫入前問它：這個 base commit 加上這些寫入之後，整棵 conf.d 能不能通過 `generate-routes --validate --strict`。只走 Unix socket 上的 HTTP/1.1，不開網路埠。部署方式（chart）與 tenant-api 端的呼叫另見後續版本。
+產生器容器的服務程式（[ADR-036](adr/036-single-parser-effective-config.md) §3、§5、§6，[#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)）。常駐執行，tenant-api 在每次寫入前問它：這個 base commit 加上這些寫入之後，整棵 conf.d 能不能通過 `generate-routes --validate --strict`。只走 Unix socket 上的 HTTP/1.1，不開網路埠。tenant-api chart 把它當成必備的 sidecar 部署，tenant-api 每筆會改變 conf.d 內容的寫入 commit 前都問它，回應碼的對應見 [Tenant API 硬化 §3.9](api/tenant-api-hardening.md#39-每筆寫入先問產生器容器2903)（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）。
 
 ```bash
 da-tools generator-service --socket <path> --repo <git repo> --config-subdir conf.d --work-dir <dir> [--policy <FILE>]

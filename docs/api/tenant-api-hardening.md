@@ -240,6 +240,24 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
   - `TENANT_STORE_FAULT`：從 server log（`conf.d holds unreadable entries`）找出項目，在 tenant-api 的 pod／volume 上移除或修好，或把那份 conf.d 從 git 重設。修好前，經 tenant-api 的寫入都會被拒。
 - **監控**：gauge `tenant_api_store_unreadable_entries`、`tenant_api_store_scan_last_success_timestamp_seconds` 與告警 `TenantApiStoreUnreadable`、`TenantApiStoreScanStale`，見 [tenant-api README 的 metrics 表](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics)。
 
+### 3.9 每筆寫入先問產生器容器（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）
+
+凡是會改變 conf.d 檔案內容的寫入——`PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts`、`POST /tenants/batch`、`POST /groups/{id}/batch`，直寫與 PR 模式、同步與非同步——在寫入鎖之下、所有既有檢查之後、commit 之前，tenant-api 把「這次落在哪個 commit 上（直寫是鎖下的 HEAD，PR 模式是分支起點）＋每個要寫的檔的完整新內容」送給同 pod 的產生器容器，由它對寫入後的整棵樹跑 `generate-routes --validate --strict`（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。批次整批判一次。通過才 commit；其他任何結果都不寫入、不 commit、不留暫存。
+
+- **期限**：給產生器的時間是請求剩下的時間（非同步批次從 task 開始起算 `--write-timeout`）；產生器自己保留 5 秒給 tenant-api 核對與 commit。
+- **驗的和寫的是同一份**：產生器回報它判的 base commit、每個檔的 sha256 與部署端 policy 檔（`--deploy-policy`，chart 掛同一份）的 sha256，都要和 tenant-api 要寫的一致；不一致就重判一次，仍不一致回 429 `mismatch`。
+
+| 結果 | HTTP | `code` | 說明 |
+|---|---|---|---|
+| 有 finding | 422 | `GENERATOR_FINDINGS` | `findings[]` 是產生器的 finding，與這次寫入的檔或租戶相關的排前面並標 `related: true`；`findings_compared_with_base: true` 時每筆另有 `pre_existing`（寫入前就有）。不相關的 finding 只給對所有租戶有寫入權限的呼叫者看，其他人只拿到 `unrelated_findings_withheld`（數量）。批次則是一般的 422 `status: rejected`，每筆結果都是這個 code，訊息列出與該筆租戶相關的 finding |
+| 產生器這次沒判出結果，可重試 | 429（`Retry-After`） | `GENERATOR_REJECTED` | `reason`：`busy`、`deadline`、`git_read`、`mismatch`、`no_time`（剩下的時間不夠判定） |
+| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request` |
+| 產生器容器不可用 | 503（`Retry-After`） | `VALIDATOR_UNAVAILABLE` | `reason`：`unreachable`（連不上或期限內沒回應）、`bad_response`、`amtool_missing`、`generator_too_old`、`internal_error` |
+| 部署端 policy 檔不可用 | 503（`Retry-After`） | `POLICY_UNAVAILABLE` | `reason`：`policy_unusable`（產生器讀不了）、`policy_unreadable`（tenant-api 讀不了自己掛的那份） |
+
+- **監控**：`tenant_api_policy_available`（產生器容器能否判定，scrape 時讀它的狀態端點）、`tenant_api_generator_rejections_total{reason}`、`tenant_api_generator_scrape_success`，以及附在 tenant-api `/metrics` 之後的產生器 `da_generator_*`；告警 `TenantApiPolicyUnavailable`、`GeneratorJudgementMemoryNearLimit`。
+- **寫入扁平鍵 `_routing_receiver_type`** 一律 400（`PUT` 與批次 patch），receiver type 寫在 `_routing.receiver.type`。
+
 ---
 
 ## 4. 升級指引

@@ -240,6 +240,24 @@ When both kinds are present the answer is `TENANT_STORE_FAULT`: the server's cop
   - `TENANT_STORE_FAULT`: find the entries in the server log (`conf.d holds unreadable entries`) and remove or repair them on tenant-api's pod / volume, or reset that copy of conf.d from git. Until then every write through tenant-api is refused.
 - **Monitoring**: the gauges `tenant_api_store_unreadable_entries` and `tenant_api_store_scan_last_success_timestamp_seconds` and the alerts `TenantApiStoreUnreadable` and `TenantApiStoreScanStale` are described in [the tenant-api README's metrics table](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics).
 
+### 3.9 Every write asks the generator container first ([#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903))
+
+Every write that changes a conf.d file — `PUT /tenants/{id}`, `PUT /tenants/{id}/custom-alerts`, `POST /tenants/batch`, `POST /groups/{id}/batch`, in direct and PR mode, sync and async — sends, under the writer lock, after every existing check and before the commit, "the commit the write lands on (direct: the HEAD under the lock; PR mode: the branch point) + the full new content of every file it writes" to the generator container in the same pod, which runs `generate-routes --validate --strict` on the whole tree with the write applied ([ADR-036 §4](../adr/036-single-parser-effective-config.en.md)). A batch is judged once, whole. Only a pass is committed; anything else writes nothing, commits nothing and leaves nothing behind.
+
+- **Deadline**: the generator gets what is left of the request's time (an async batch: `--write-timeout` from when its task starts); it keeps 5 seconds of it back for tenant-api's check and commit.
+- **Judged = written**: the generator reports the base commit, each file's sha256 and the sha256 of the deployment policy file (`--deploy-policy`; the chart mounts the same one) it judged with; all must match what tenant-api is about to write. A mismatch is judged once more; a second one is a 429 `mismatch`.
+
+| Outcome | HTTP | `code` | Notes |
+|---|---|---|---|
+| Findings | 422 | `GENERATOR_FINDINGS` | `findings[]` holds the generator's findings, the ones naming a file or tenant of this write first and marked `related: true`; with `findings_compared_with_base: true` each also carries `pre_existing` (already there before the write). Unrelated findings are shown only to a caller with write permission on all tenants; others get `unrelated_findings_withheld` (a count). A batch gets the usual 422 `status: rejected`, every result with this code and a message listing the findings about its tenant |
+| No verdict this time, retryable | 429 (`Retry-After`) | `GENERATOR_REJECTED` | `reason`: `busy`, `deadline`, `git_read`, `mismatch`, `no_time` (too little time left to judge) |
+| No verdict, and resending will not help | 422 | `GENERATOR_REJECTED` | `reason`: `memory`, `incomplete`, `too_large` (the files the write produces are too large — split the batch), `invalid_request` |
+| The generator container cannot judge | 503 (`Retry-After`) | `VALIDATOR_UNAVAILABLE` | `reason`: `unreachable` (no connection, or no answer in time), `bad_response`, `amtool_missing`, `generator_too_old`, `internal_error` |
+| The deployment policy file is unusable | 503 (`Retry-After`) | `POLICY_UNAVAILABLE` | `reason`: `policy_unusable` (the generator cannot use it), `policy_unreadable` (tenant-api cannot read its own copy) |
+
+- **Monitoring**: `tenant_api_policy_available` (whether the generator container can judge; its status endpoint is read at scrape time), `tenant_api_generator_rejections_total{reason}`, `tenant_api_generator_scrape_success`, and the generator's own `da_generator_*` appended to tenant-api's `/metrics`; alerts `TenantApiPolicyUnavailable`, `GeneratorJudgementMemoryNearLimit`.
+- **The flat key `_routing_receiver_type`** is a 400 on every write (`PUT` and batch patches); the receiver type is `_routing.receiver.type`.
+
 ---
 
 ## 4. Upgrade guidance
