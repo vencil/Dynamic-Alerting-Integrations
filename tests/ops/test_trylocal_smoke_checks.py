@@ -95,6 +95,15 @@ def _make_handler(preview: dict, seen: list):
                 self._send(200, [{"id": "tenant-one"}, {"id": "tenant-two"}])
             elif path == "/":
                 self._send(200, {})
+            elif path == "/metrics":
+                # #2903: tenant-api's view of the generator container.
+                text = ("tenant_api_up 1\ntenant_api_policy_available "
+                        f"{preview.get('generator', '1')}\n").encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(text)))
+                self.end_headers()
+                self.wfile.write(text)
             elif path == "/healthz":
                 mode = preview["healthz"]
                 if mode == "down":
@@ -134,6 +143,7 @@ def _run_smoke(tmp_path: Path, preview: dict):
         shutil.copy(SMOKE, script)
         port = str(srv.server_address[1])
         env = {**os.environ, "SMOKE_HOST": "127.0.0.1", "SMOKE_ALERT_TIMEOUT": "5",
+               "SMOKE_GENERATOR_TIMEOUT": "2",
                "EXPOSE_PROM_PORT": port, "EXPOSE_API_PORT": port,
                "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": port}
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
@@ -174,6 +184,15 @@ def test_smoke_fails_when_recipe_preview_is_broken(tmp_path, preview, needle):
     assert "ALL CHECKS PASSED" not in proc.stdout
 
 
+def test_smoke_fails_when_the_generator_container_cannot_judge(tmp_path):
+    """#2903: tenant-api answers, but its generator container does not (a
+    different uid, not running, no amtool) — every write would answer 503,
+    so the stack is not working even though every page loads."""
+    proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "generator": "0"})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "tenant_api_policy_available is not 1" in proc.stderr, proc.stderr
+
+
 def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
     """#2873 as smoke.sh sees it: app.py fails at import, the container
     crash-loops, nothing listens — connection refused, no HTTP status."""
@@ -188,6 +207,7 @@ def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
         shutil.copy(SMOKE, script)
         port = str(srv.server_address[1])
         env = {**os.environ, "SMOKE_HOST": "127.0.0.1", "SMOKE_ALERT_TIMEOUT": "5",
+               "SMOKE_GENERATOR_TIMEOUT": "2",
                "EXPOSE_PROM_PORT": port, "EXPOSE_API_PORT": port,
                "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": dead_port}
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
