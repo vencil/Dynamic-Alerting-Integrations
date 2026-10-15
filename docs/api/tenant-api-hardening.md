@@ -260,6 +260,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 - **監控**：`tenant_api_policy_available`（產生器容器能否判定，scrape 時讀它的狀態端點）、`tenant_api_generator_rejections_total{reason}`、`tenant_api_generator_scrape_success`，以及附在 tenant-api `/metrics` 之後的產生器 `da_generator_*`；告警 `TenantApiPolicyUnavailable`、`GeneratorJudgementMemoryNearLimit`。
 - **寫入扁平鍵 `_routing_receiver_type`** 一律 400（`PUT` 與批次 patch），receiver type 寫在 `_routing.receiver.type`。
+- **repo 裡不是一般檔的項目**：產生器從 git 物件取檔，symlink（mode 120000）、gitlink（160000）等不是 100644／100755 的項目一律是 `not_regular_file`，以 `tenant_file_unreadable` finding 擋下寫入；把它換成一般檔即可。tenant-api 寫該路徑時本來就寫成一般檔（[#2981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2981)）。
 
 ---
 

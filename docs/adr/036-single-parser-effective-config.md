@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-14
+updated_at: 2026-10-15
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -24,6 +24,7 @@ updated_at: 2026-10-14
 - **2026-10-11 再修訂（已由 owner 核可）**：改為在 main 上依序合併五步、每一步都可以發布（§7）；訂定 `parse-tree` 的輸出外層、封閉的「讀不了」清單與固定語料（§2）、產生器容器不可用時的錯誤碼（§5）、da-guard「未判定」的 exit code（§9）。
 - **2026-10-12 第三次修訂（已由 owner 核可）**：產生器容器從步驟 1 起就跨請求快取解析結果，每次判定在有記憶體與時間上限的獨立程序裡跑，並訂定逾時與「拒收該筆」和「容器不可用」的分界（§3）；批次改為全有全無，在步驟 1 之前單獨發布，並在暫存的 git worktree 裡判定與 commit（§4、§7）。
 - **2026-10-14 修訂**：解析快取的 key 改用檔案內容的 SHA-256，不再用 git 的 blob SHA（§3）。
+- **2026-10-15 修訂（owner 決定）**：從 git 物件取檔時，不是一般檔的項目（symlink、gitlink 等）一律判為 `not_regular_file`（§3）。
 - 設計與修訂都經過對抗審查（由不同模型擔任）。
 
 ## 摘要
@@ -270,6 +271,11 @@ tenant-api pod
 - 唯讀掛載 tenant-api 用的同一個 repo，依指定的 commit 取出檔案（`git ls-tree` 加 `git cat-file`）。
 - 不讀工作目錄：PR 模式（寫入時開 PR，而不是直接 commit）會就地切換分支，直接讀可能讀到切換一半的狀態。
 - 不用 `git archive`：它會套用 `.gitattributes` 的匯出規則，客戶若把 policy 檔標成不匯出，產生器就看不到。
+- **只取一般檔**：tree 裡 mode 是 100644 或 100755 的項目才寫進判定用的樹。其他項目一律判為 `not_regular_file`（§2 的「讀不了」清單裡那一項），包括 symlink（mode 120000）與 gitlink（mode 160000，也就是子模組）；這是會擋下寫入的 finding。
+  - 為什麼：從 git 物件讀到的 symlink 只是連結文字，不是它指向的檔；gitlink 沒有內容。照連結文字判，結果取決於文字碰巧長什麼樣，例如文字剛好讀得出一個 mapping。
+  - 例子：`t1.yaml` 在 repo 裡是指向 `real.yaml` 的 symlink。寫入被拒，finding 是 `tenant_file_unreadable`，原因寫「is not a regular file (not_regular_file): git tree mode 120000, a symlink」，修法是把它換成內容相同的一般檔。tenant-api 寫這個路徑時本來就會寫成一般檔，所以這筆寫入本身不受影響。
+  - 例外：路徑中有一段以 `.` 開頭的項目不判，因為所有讀取端都略過隱藏項目。
+  - 從檔案系統讀的讀取端（exporter、`da-guard parse-tree` 讀目錄、客戶 CI）照舊跟隨檔案 symlink：Kubernetes ConfigMap 掛載後每個 key 都是一條 symlink，不能禁止。所以同一棵樹，客戶 CI 可能是綠的，而 tenant-api 的寫入被拒。
 - **兩個容器必須用同一個 uid**（程序執行時的 Linux 使用者編號）：git 會拒絕讀別的 uid 擁有的 repo（實測：不同 uid 以 `-C` 讀，報 dubious ownership）。chart 加測試釘住。
 - **repo 關閉 git 的自動垃圾回收（`gc.auto=0`）**。實測：同 uid 下一邊 15 輪 commit 加 `repack -a -d` 加 `gc --prune=now`，另一邊讀固定 commit 1376 次，0 失敗；唯讀掛載可讀。
 - **讀取失敗**：重試一次，再失敗就拒收。

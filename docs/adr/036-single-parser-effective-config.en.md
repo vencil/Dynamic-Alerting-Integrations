@@ -18,6 +18,7 @@ lang: en
 - **Revised again 2026-10-11 (approved by the owner)**: five steps merged in order on main, each releasable (§7); sets the `parse-tree` output envelope, its closed "unreadable" list and fixed corpus (§2), the error code when the generator container is unavailable (§5), and da-guard's "not judged" exit code (§9).
 - **Third revision 2026-10-12 (approved by the owner)**: from step 1 the generator container caches parse results across requests and runs each judgement in a separate process with memory and time limits, and sets the timeouts and the line between "refuse this write" and "container unavailable" (§3); batches become all-or-nothing, released on their own before step 1, and are judged and committed in a temporary git worktree (§4, §7).
 - **Revision 2026-10-14**: the parse cache key uses the SHA-256 of the file's content instead of git's blob SHA (§3).
+- **Revision 2026-10-15 (owner decision)**: when files are read from git objects, every entry that is not a regular file (a symlink, a gitlink, …) is judged `not_regular_file` (§3).
 - Both the design and the revision went through adversarial review (by a different model).
 
 ## Summary
@@ -266,6 +267,11 @@ The structure inside the container, conclusion first: a long-running process (a 
 - It mounts the same repo tenant-api uses, read-only, and checks out files at a given commit (`git ls-tree` plus `git cat-file`).
 - Not the working directory: PR mode (opening a PR per write instead of committing directly) switches branches in place, so a direct read can see a half-switched state.
 - Not `git archive`: it applies the export rules in `.gitattributes`, and if a customer marks the policy file as not exported, the generator would not see it.
+- **Regular files only**: only tree entries with mode 100644 or 100755 are written into the tree being judged. Every other entry is judged `not_regular_file` (that item of §2's "unreadable" list), including a symlink (mode 120000) and a gitlink (mode 160000, a submodule); it is a finding that refuses the write.
+  - Why: read from git objects, a symlink is only its link text, not the file it points to, and a gitlink has no content. Judging the link text makes the result depend on what the text happens to look like, for example text that happens to read as a mapping.
+  - Example: `t1.yaml` is a symlink to `real.yaml` in the repo. The write is refused with the finding `tenant_file_unreadable`, reason "is not a regular file (not_regular_file): git tree mode 120000, a symlink"; the fix is to replace it with a regular file with the same content. tenant-api already writes a regular file when it writes that path, so a write of that path itself is not affected.
+  - Exception: an entry with a path component starting with `.` is not judged, because every reader skips hidden entries.
+  - Readers that read from the file system (the exporter, `da-guard parse-tree` reading a directory, customer CI) still follow file symlinks: after a Kubernetes ConfigMap is mounted, every key is a symlink, so they cannot be forbidden. So for the same tree, customer CI can be green while tenant-api refuses writes.
 - **Both containers must run as the same uid** (the Linux user id a process runs as): git refuses to read a repo owned by another uid (measured: reading with `-C` as a different uid reports dubious ownership). The chart pins this with a test.
 - **The repo disables git's automatic garbage collection (`gc.auto=0`)**. Measured: as the same uid, one side ran 15 rounds of commit plus `repack -a -d` plus `gc --prune=now` while the other read a fixed commit 1376 times, with 0 failures; a read-only mount reads fine.
 - **On a read failure**: retry once, then refuse.

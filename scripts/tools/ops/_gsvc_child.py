@@ -9,9 +9,11 @@ forked, and never returns. In order:
    -r -z`` and one ``git cat-file --batch`` — never from a working tree and
    never with ``git archive`` (it applies ``.gitattributes`` export rules).
    A failed read is retried once.
-3. Write them under the job directory (by tree entry mode: a file, a symlink
-   with its target text as stored, an empty directory for a gitlink), then
-   apply the request's writes.
+3. Write them under the job directory — the regular files (mode 100644 /
+   100755) only. Every other entry (a symlink, a gitlink, any other mode)
+   is not written: it is handed to the generator as not_regular_file
+   (#2981, ADR-036 §3), unless it is hidden (no reader reads those) or the
+   request writes that path. Then apply the request's writes.
 4. Run the generator in this process — ``generate_alertmanager_routes.main``
    with ``--validate --strict --findings-json`` — with the service's parse
    cache installed (``_lib_parse_cache``), so unchanged files are not parsed
@@ -49,6 +51,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 # ⛔ Imported here, at the service's start: the judgement process is a fork,
 # so it finds every generator module already loaded (ADR-036 §3).
 import generate_alertmanager_routes as gar  # noqa: E402
+import _grar_parse  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
     STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
@@ -191,31 +194,48 @@ def _write_file(root: str, rel: str, content: bytes, err: type) -> None:
         fh.write(content)
 
 
-def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> None:
-    """Write *tree* below *root* (created when the tree has entries)."""
+REGULAR_MODES = ("100644", "100755")
+
+
+def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str, str]:
+    """Write the regular files of *tree* below *root* (created when the tree
+    has entries); return the other entries as {path: mode}.
+
+    #2981 (ADR-036 §3): read from git objects, a symlink is its link text
+    and a gitlink is nothing — neither is the file a filesystem reader
+    would follow to. Writing the link back as a symlink made the verdict
+    depend on what the text happened to point at (or parse as), so every
+    entry that is not a regular file is judged not_regular_file instead
+    (_grar_parse.set_git_irregular_entries). A hidden one (a component
+    starting with `.`) is left out without a word: every reader skips it,
+    whatever its shape."""
     if tree:
         os.makedirs(root, mode=0o700, exist_ok=True)
+    irregular: dict[str, str] = {}
     for mode, _oid, rel, content in tree:
         if path_problem(rel) is not None:
             raise GitReadError(f"tree entry with an unusable path: {rel!r}")
-        if mode == "160000":
-            parent = _parent_dir(root, rel, GitReadError)
-            os.mkdir(os.path.join(parent, rel.split("/")[-1]), 0o700)
-        elif mode == "120000":
-            parent = _parent_dir(root, rel, GitReadError)
-            os.symlink(os.fsdecode(content), os.path.join(parent, rel.split("/")[-1]))
-        elif mode.startswith("100"):
+        if mode in REGULAR_MODES:
             _write_file(root, rel, content, GitReadError)
-        else:
-            raise GitReadError(f"tree entry {rel!r} has unknown mode {mode}")
+        elif not any(part.startswith(".") for part in rel.split("/")):
+            irregular[rel] = mode
+    return irregular
 
 
-def apply_writes(root: str, request: ValidateRequest) -> list[dict]:
-    """Apply the request's writes; the ``validated.files`` records."""
+def apply_writes(root: str, request: ValidateRequest,
+                 irregular: "Mapping[str, str] | None" = None) -> list[dict]:
+    """Apply the request's writes; the ``validated.files`` records.
+    *irregular* (materialise's answer) is not on disk, so a write below one
+    of those entries is refused here, as one below a file is."""
     files: list[dict] = []
     if request.writes:
         os.makedirs(root, mode=0o700, exist_ok=True)
     for w in request.writes:
+        parts = w.path.split("/")
+        for i in range(1, len(parts)):
+            if "/".join(parts[:i]) in (irregular or {}):
+                raise BadWrite(f"{w.path}: {parts[i - 1]!r} in its path is not a directory "
+                               f"in the base tree")
         if w.delete:
             parent = _parent_dir(root, w.path, BadWrite)
             target = os.path.join(parent, w.path.split("/")[-1])
@@ -292,7 +312,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     if tree is None:
         return {"outcome": "git_read"}
     try:
-        materialise(tree_dir, tree)
+        irregular = materialise(tree_dir, tree)
     except (GitReadError, OSError) as exc:
         print(f"generator-service: base tree not written: {exc}", file=sys.stderr)
         return {"outcome": "git_read"}
@@ -303,9 +323,13 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         {_lib_parse_cache.content_key(c) for mode, _o, _p, c in tree
          if mode != "160000"})).encode("utf-8")))
     try:
-        files = apply_writes(tree_dir, job.request)
+        files = apply_writes(tree_dir, job.request, irregular)
     except BadWrite as exc:
         return {"outcome": "bad_request", "message": str(exc)}
+    # A write (or delete) of a path that was not a regular file replaces it:
+    # tenant-api writes a regular file there.
+    for w in job.request.writes:
+        irregular.pop(w.path, None)
 
     if job.warm:
         return _warm(job, tree_dir, stream)
@@ -319,6 +343,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     cache = _lib_parse_cache.ParseCache(job.store_entries,
                                         on_store=stream.entry)
     _lib_parse_cache.install(cache)
+    _grar_parse.set_git_irregular_entries(irregular)
     rc, memory = 1, False
     try:
         gar.main(argv)
@@ -332,6 +357,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         rc = 1
     finally:
         _lib_parse_cache.install(None)
+        _grar_parse.set_git_irregular_entries(None)
     sys.stdout.flush()
     sys.stderr.flush()
     common = {
