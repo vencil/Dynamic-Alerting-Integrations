@@ -212,11 +212,22 @@ class _FakeService(gs.Service):
         super().__init__(settings, "sha1")
         self.delay = delay
         self.judged: list[str] = []
+        #: when set (inside the running loop), a judgement runs until the test
+        #: sets it — "still running" is then a fact, not a sleep's guess
+        self.gate: asyncio.Event | None = None
 
     async def _judge(self, ticket):
         self.judged.append(ticket.request.base_commit)
+        if self.gate is not None:
+            await self.gate.wait()
         await asyncio.sleep(self.delay)
         return gs.Response(200, {"result": "pass", "rc": 0})
+
+
+async def _settle() -> None:
+    """Let every ready task run up to its next real wait."""
+    for _ in range(20):
+        await asyncio.sleep(0)
 
 
 def _req(commit: str, deadline_ms: int) -> proto.ValidateRequest:
@@ -229,17 +240,18 @@ def _doc(resp) -> dict:
 
 def test_a_request_that_expires_in_the_queue_is_answered_and_removed():
     async def scenario():
-        svc = _FakeService(delay=0.6)
+        svc = _FakeService(delay=0)
         svc.loop = asyncio.get_running_loop()
-        t0 = svc.loop.time()
-        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), t0))
-        await asyncio.sleep(0.05)
+        svc.gate = asyncio.Event()  # the first runs until released
+        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), svc.loop.time()))
+        await _settle()
         second = asyncio.create_task(svc.submit(_req("2" * 40, 5200), svc.loop.time()))
         third = asyncio.create_task(svc.submit(_req("3" * 40, 25000), svc.loop.time()))
         r2 = await second
-        when = svc.loop.time() - t0
-        assert _doc(r2)["reason"] == "deadline" and when < 0.5
+        assert _doc(r2)["reason"] == "deadline"
+        assert not first.done()           # answered without waiting for it
         assert len(svc.waiting) == 1      # only the third still waits
+        svc.gate.set()
         r1, r3 = await first, await third
         assert _doc(r1)["result"] == _doc(r3)["result"] == "pass"
         assert svc.judged == ["1" * 40, "3" * 40]  # the expired one never ran
@@ -249,16 +261,19 @@ def test_a_request_that_expires_in_the_queue_is_answered_and_removed():
 
 def test_a_full_queue_answers_busy():
     async def scenario():
-        svc = _FakeService(delay=0.3, max_queue=1)
+        svc = _FakeService(delay=0, max_queue=1)
         svc.loop = asyncio.get_running_loop()
+        svc.gate = asyncio.Event()
         now = svc.loop.time
         running = asyncio.create_task(svc.submit(_req("1" * 40, 25000), now()))
-        await asyncio.sleep(0.05)
+        await _settle()
         waiting = asyncio.create_task(svc.submit(_req("2" * 40, 25000), now()))
-        await asyncio.sleep(0.05)
+        await _settle()
+        assert len(svc.waiting) == 1
         busy = await svc.submit(_req("3" * 40, 25000), now())
         assert _doc(busy)["result"] == "rejected"
         assert _doc(busy)["reason"] == "busy" and busy.status == 200
+        svc.gate.set()
         assert _doc(await running)["result"] == _doc(await waiting)["result"] == "pass"
         assert svc.metrics.rejections["busy"] == 1
     asyncio.run(scenario())
@@ -275,16 +290,21 @@ def test_no_time_left_is_refused_before_queueing():
 
 def test_queue_time_counts_against_the_budget():
     """Received at t, budget min(20, deadline−5): the clock started at
-    receipt, so a request received 'earlier' expires sooner."""
+    receipt, so a request received 'earlier' expires sooner. Received 10 s
+    ago with a 10.3 s budget it expires 0.3 s from now; counted from now it
+    would take 10.3 s — the bound sits far between the two."""
     async def scenario():
-        svc = _FakeService(delay=1.0)
+        svc = _FakeService(delay=0)
         svc.loop = asyncio.get_running_loop()
-        asyncio.create_task(svc.submit(_req("1" * 40, 25000), svc.loop.time()))
-        await asyncio.sleep(0.05)
+        svc.gate = asyncio.Event()  # the running one never ends on its own
+        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), svc.loop.time()))
+        await _settle()
         t0 = svc.loop.time()
-        resp = await svc.submit(_req("2" * 40, 5800), t0 - 0.5)  # 0.8 s budget
+        resp = await svc.submit(_req("2" * 40, 15300), t0 - 10.0)  # 10.3 s budget
         assert _doc(resp)["reason"] == "deadline"
-        assert svc.loop.time() - t0 < 0.5
+        assert svc.loop.time() - t0 < 5.0
+        svc.gate.set()
+        await first
     asyncio.run(scenario())
 
 
@@ -389,13 +409,16 @@ class _WarmingFake(_FakeService):
 
 def test_waiting_requests_go_before_a_pending_warming_run():
     async def scenario():
-        svc = _WarmingFake(delay=0.2, warm_for=0.01)
+        svc = _WarmingFake(delay=0, warm_for=0.01)
         svc.loop = asyncio.get_running_loop()
+        svc.gate = asyncio.Event()  # the first runs until both are in place
         now = svc.loop.time
         first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), now()))
-        await asyncio.sleep(0.05)
+        await _settle()
         svc.pending_warm = "9" * 40
         second = asyncio.create_task(svc.submit(_req("2" * 40, 25000), now()))
+        await _settle()
+        svc.gate.set()
         await first
         await second
         await asyncio.sleep(0.05)
@@ -433,14 +456,14 @@ def test_a_warming_run_scheduled_but_not_started_is_preempted():
 
         async def fake_spawn(job, deadline_at, *, request):
             spawned.append(request)
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(60.0)
         svc._spawn = fake_spawn                     # … with no fork
         svc.pending_warm = "9" * 40
         svc._start_next()                           # task created, not stepped
         t0 = svc.loop.time()
         resp = await svc.submit(_req("1" * 40, 9000), svc.loop.time())
         assert _doc(resp)["result"] == "pass"
-        assert svc.loop.time() - t0 < 1.0
+        assert svc.loop.time() - t0 < 30.0  # vs the warm run's 60 s
         assert spawned == []                        # the warm run never forked
         assert svc.metrics.warm_runs["preempted"] == 1
     asyncio.run(scenario())

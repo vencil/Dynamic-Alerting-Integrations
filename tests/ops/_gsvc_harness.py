@@ -27,6 +27,20 @@ GIT = shutil.which("git") or "git"
 
 ACCEPTING_AMTOOL = "#!/bin/sh\nexit 0\n"
 
+#: ⛔ The time limit of every judgement a test makes unless the test is ABOUT
+#: a time limit. A test whose verdict merely has to arrive must not race a
+#: wall-clock limit it is not testing: CI runs this file under coverage
+#: tracing and on loaded hosts, where a judgement that takes a second here
+#: takes many (#3015 lost two runs that way: a memory test answered
+#: ``deadline``, an E1 count off by a timing). Ten minutes is past pytest's
+#: own per-test --timeout (300 s), so this limit is never what ends a test.
+#: Only a test of a deadline passes its own ``--max-judgement-seconds`` /
+#: ``deadline_ms``, and asserts only what that limit guarantees.
+LONG_JUDGEMENT_SECONDS = 600.0
+#: ``deadline_ms`` that leaves LONG_JUDGEMENT_SECONDS after the service's
+#: default --deadline-reserve-seconds (5).
+LONG_DEADLINE_MS = int((LONG_JUDGEMENT_SECONDS + 5.0) * 1000)
+
 
 def run_git(repo: Path, *args: str, stdin: Optional[bytes] = None) -> str:
     env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
@@ -112,6 +126,9 @@ class Service:
              "--work-dir", str(self.work), "--git", GIT,
              # start-up warming off unless a test asks for it (#2901 E2)
              *(() if any(a.startswith("--warm-ref") for a in args) else ("--warm-ref=",)),
+             # no judgement limit in play unless a test asks for one (above)
+             *(() if any(a.startswith("--max-judgement-seconds") for a in args)
+               else ("--max-judgement-seconds", str(LONG_JUDGEMENT_SECONDS))),
              *args],
             env=run_env, stdout=subprocess.DEVNULL,
             stderr=open(self.log, "wb"))  # noqa: SIM115 — closed with the process
@@ -188,7 +205,8 @@ class Service:
         return status, data.decode("utf-8")
 
     def validate(self, commit: str, writes: list[dict] | None = None,
-                 deadline_ms: int = 25000, timeout: float = 60.0) -> tuple[int, dict]:
+                 deadline_ms: int = LONG_DEADLINE_MS,
+                 timeout: float = LONG_JUDGEMENT_SECONDS + 60) -> tuple[int, dict]:
         return self.call("POST", "/v1/validate",
                          {"base_commit": commit, "writes": writes or [],
                           "deadline_ms": deadline_ms}, timeout)

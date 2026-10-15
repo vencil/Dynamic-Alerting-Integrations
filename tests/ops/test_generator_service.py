@@ -91,6 +91,16 @@ def _jobs_empty(svc, timeout: float = 30.0) -> bool:
     return False
 
 
+def _until(pred, what: str, timeout: float = 60.0) -> None:
+    """Wait for a state instead of sleeping for it: a fixed sleep is a bet on
+    the host's speed (#3015)."""
+    end = time.monotonic() + timeout
+    while not pred():
+        if time.monotonic() > end:
+            raise AssertionError(f"never reached: {what}")
+        time.sleep(0.05)
+
+
 def _norm(doc: dict, *dirs: Path) -> tuple:
     text = json.dumps(doc["findings"], sort_keys=True)
     for d in dirs:
@@ -254,7 +264,33 @@ wait
 """
 
 
+# One amtool call per judgement (check-config): call n records ``started-n``
+# and blocks until the test creates ``release-n`` (or ``release-all``). A
+# judgement held here ends when the TEST says, not when a sleep runs out.
+# Builtins and full paths only: PATH holds just the stub directory.
+_GATED_AMTOOL = f"""#!/bin/sh
+d="$GSVC_GATE_DIR"
+n=0
+while [ -e "$d/started-$n" ]; do n=$((n+1)); done
+: > "$d/started-$n"
+while [ ! -e "$d/release-$n" ] && [ ! -e "$d/release-all" ]; do {SLEEP} 0.05; done
+exit 0
+"""
+
+
+def _gate(tmp_path: Path) -> tuple[Path, Path]:
+    """(bin directory with the gated amtool, the gate directory)."""
+    bin_dir, gate = tmp_path / "bin", tmp_path / "gate"
+    h.stub(bin_dir, "amtool", _GATED_AMTOOL)
+    gate.mkdir()
+    return bin_dir, gate
+
+
 def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
+    """The deadline (8 s here) is what ends a judgement stuck in amtool (60 s),
+    with amtool's own child. Asserted only what the deadline guarantees: not
+    answered before it, answered long before amtool would end, nothing left.
+    The 8 s is room to REACH amtool on a slow host (the pid files say so)."""
     bin_dir = tmp_path / "bin"
     h.stub(bin_dir, "amtool", _SLOW_AMTOOL)
     pid_dir = tmp_path / "pids"
@@ -262,11 +298,15 @@ def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
     with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
                    env={"GSVC_PID_DIR": str(pid_dir)}) as svc:
         t0 = time.monotonic()
-        status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=7000)
+        status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=13000)
         took = time.monotonic() - t0
         assert status == 200
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
-        assert 1.5 <= took < 10
+        # the clock starts after t0, so it cannot have ended sooner; and the
+        # answer did not wait for amtool's 60 s
+        assert 8.0 <= took < 50, took
+        assert (pid_dir / "grandchild.pid").exists(), \
+            "the judgement never reached amtool within its 8 s: nothing was tested"
         pids = [int((pid_dir / n).read_text().strip())
                 for n in ("amtool.pid", "grandchild.pid")]
         end = time.monotonic() + 5
@@ -280,22 +320,26 @@ def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
 
 
 def test_queue_expiry_and_busy(tmp_path, world):
-    bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 3\n")
+    """A queued request whose deadline passes is answered then, without
+    waiting for the running one; a full queue answers busy. The running
+    judgement is held in amtool until the test releases it, so "the first is
+    still running" is a fact, not a sleep's guess."""
+    bin_dir, gate = _gate(tmp_path)
     commit = world["commits"]["clean+extra"]
     with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+                   env={"GSVC_GATE_DIR": str(gate)},
                    args=("--max-queue", "1")) as svc, \
             ThreadPoolExecutor(4) as pool:
         first = pool.submit(svc.validate, commit)
-        time.sleep(1.0)  # running
-        t0 = time.monotonic()
-        expiring = pool.submit(svc.validate, commit, None, 6500)  # 1.5 s
-        time.sleep(0.2)
+        _until(lambda: (gate / "started-0").exists(), "the first judgement in amtool")
+        expiring = pool.submit(svc.validate, commit, None, 10000)  # 5 s
+        _until(lambda: svc.metrics()["da_generator_queue_depth"] == 1, "one queued")
         status, busy = svc.validate(commit)  # queue (1) is full
         assert status == 200 and (busy["result"], busy["reason"]) == ("rejected", "busy")
         status, exp = expiring.result()
         assert (exp["result"], exp["reason"]) == ("rejected", "deadline")
-        assert time.monotonic() - t0 < 2.5  # did not wait for the first
+        assert not first.done()  # answered without waiting for the first
+        (gate / "release-all").touch()
         assert first.result()[1]["result"] == "pass"
         # the next one is judged as usual
         assert svc.validate(commit)[1]["result"] == "pass"
@@ -591,10 +635,10 @@ def test_judgement_seconds_and_body_limits(tmp_path, world):
     with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
                    args=("--max-judgement-seconds", "1",
                          "--max-body-bytes", "300")) as svc:
-        t0 = time.monotonic()
-        status, doc = svc.validate(commit)  # deadline_ms 25000: 1 s, not 20
+        # amtool alone takes 3 s: a deadline answer means the 1 s limit
+        # applied (without it, the harness's 600 s would let this pass)
+        status, doc = svc.validate(commit)
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
-        assert time.monotonic() - t0 < 2.5
         status, doc = svc.validate(commit, [{"path": "x.yaml",
                                              "content_b64": h.b64("a" * 300)}])
         assert status == 413
@@ -624,18 +668,32 @@ def _many_tenants(n: int) -> dict[str, str]:
     return files
 
 
-def _slow_parse(log: Path, delay: float) -> str:
-    """Launcher prelude: every real parse sleeps *delay* and is logged, so
-    a cold judgement takes a known, long time on any host."""
+def _slow_parse(log: Path, delay: float, *, slow: str = "judgement",
+                warm_exits: bool = False) -> str:
+    """Launcher prelude: in the forked processes of kind *slow*
+    (``judgement`` or ``warm``) every real parse is logged and sleeps
+    *delay*, so that kind takes a known, long time on any host; the other
+    kind parses at full speed, unlogged — so a warming run starting right
+    after a response cannot add to a judgement's count. *warm_exits* makes
+    every warming run end at once, having parsed nothing."""
     return (
-        "import time, _lib_parse_cache as _pc\n"
+        "import time, _lib_parse_cache as _pc, _gsvc_child as _gc\n"
         "_orig_parse = _pc._parse_file\n"
+        "_SLOW = [False]\n"
         "def _slow(path, mode):\n"
-        f"    with open({str(log)!r}, 'a', encoding='utf-8') as fh:\n"
-        "        fh.write('p\\n')\n"
-        f"    time.sleep({delay})\n"
+        "    if _SLOW[0]:\n"
+        f"        with open({str(log)!r}, 'a', encoding='utf-8') as fh:\n"
+        "            fh.write('p\\n')\n"
+        f"        time.sleep({delay})\n"
         "    return _orig_parse(path, mode)\n"
-        "_pc._parse_file = _slow\n")
+        "_pc._parse_file = _slow\n"
+        "_orig_run_child = _gc.run_child\n"
+        "def _run_child(job, fd):\n"
+        f"    if job.warm and {warm_exits!r}:\n"
+        "        os._exit(1)\n"
+        f"    _SLOW[0] = job.warm == {slow == 'warm'!r}\n"
+        "    return _orig_run_child(job, fd)\n"
+        "_gc.run_child = _run_child\n")
 
 
 def _lines(p: Path) -> int:
@@ -652,22 +710,6 @@ def _wait_metric(svc, name: str, at_least: float, timeout: float = 60.0) -> dict
     raise AssertionError(f"{name} never reached {at_least}: {svc.metrics()}")
 
 
-def _judgement_parses_only(prelude: str) -> str:
-    """Wrap a _slow_parse prelude so only a judgement's parses are logged:
-    a warming run (its own forked process) parses unlogged and unslowed, so
-    one starting right after a response cannot add to that count."""
-    return prelude + (
-        "import _gsvc_child as _gc\n"
-        "_orig_run_child = _gc.run_child\n"
-        "def _tagged_run_child(job, fd):\n"
-        "    if job.warm:\n"
-        "        def _quiet(path, mode):\n"
-        "            return _orig_parse(path, mode)\n"
-        "        _pc._parse_file = _quiet\n"
-        "    return _orig_run_child(job, fd)\n"
-        "_gc.run_child = _tagged_run_child\n")
-
-
 def test_killed_judgements_keep_their_parses_until_one_passes(tmp_path, world):
     """E1: the deadline is shorter than a cold judgement. Each killed attempt
     hands back what it finished parsing, so the cache grows with every
@@ -678,18 +720,23 @@ def test_killed_judgements_keep_their_parses_until_one_passes(tmp_path, world):
     E1: a killed attempt's last parses may still be in the pipe when it is
     killed, so the next attempt parses them again and then gets further —
     its count can be larger (CI saw [21, 22, 20, 0]). The bound that holds is
-    against what is cached, not against the previous attempt's count."""
+    against what is cached, not against the previous attempt's count.
+
+    A cold judgement is 61 parses × 0.15 s ≈ 9 s of sleeps against a 3 s
+    limit, so the first attempt is killed on any host. What remains timed is
+    only that a 3 s attempt gets past its fixed start (fork, git, the tree)
+    and into parsing; the attempt count is bounded by (1), not by a guess at
+    the host's speed."""
     repo = h.init_repo(tmp_path / "r")
     commit = h.commit_tree(repo, _many_tenants(30))
     log = tmp_path / "parses.log"
-    # the warming run the new base schedules gets no time to help (E2 is
-    # tested on its own below), and its parses are not counted
+    # the warming run the new base schedules ends at once, parsing nothing
+    # (E2 is tested on its own below)
     with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
-                   prelude=_judgement_parses_only(_slow_parse(log, 0.05)),
-                   args=("--max-judgement-seconds", "1.2",
-                         "--warm-seconds", "0.01")) as svc:
+                   prelude=_slow_parse(log, 0.15, warm_exits=True),
+                   args=("--max-judgement-seconds", "3")) as svc:
         counts, results, cached_before = [], [], []
-        for _attempt in range(12):
+        for _attempt in range(80):  # (1) bounds it by the 61 keys
             cached_before.append(svc.metrics()["da_generator_cache_entries"])
             before = _lines(log)
             status, doc = svc.validate(commit)
@@ -697,12 +744,12 @@ def test_killed_judgements_keep_their_parses_until_one_passes(tmp_path, world):
             counts.append(_lines(log) - before)
             results.append(doc["result"] if doc["result"] != "rejected"
                            else doc["reason"])
-            if len(results) == 1:
-                # the first (new) base schedules one warming run; let its
-                # 0.01 s limit end it before reading the cache again
-                _wait_metric(svc, 'da_generator_warm_runs_total{outcome="deadline"}', 1)
             if doc["result"] == "rejected":
                 assert doc["cache"]["received"] > 0, doc  # kept, not lost
+                after = svc.metrics()["da_generator_cache_entries"]
+                if after == cached_before[-1]:
+                    cached_before.append(after)  # no progress: (1) fails on it
+                    break
             else:
                 break
         total = svc.metrics()["da_generator_cache_entries"]
@@ -750,23 +797,21 @@ def test_startup_warming_leaves_only_the_changed_file_to_parse(tmp_path, world):
 
 def test_a_request_preempts_warming(tmp_path, world):
     """E2: a request arriving during a warming run does not wait for it:
-    the warming run is ended (preempted), what it parsed stays cached."""
+    the warming run is ended (preempted), what it parsed stays cached.
+    Only the warming run is slowed (61 parses × 0.5 s): after 4 of them it
+    has ≥ 28 s of sleeps left, so a request that waited for it would show a
+    queue wait of that order; the judgement itself parses at full speed."""
     repo = h.init_repo(tmp_path / "r")
     commit = h.commit_tree(repo, _many_tenants(30))
     log = tmp_path / "parses.log"
     with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
-                   prelude=_slow_parse(log, 0.1),
-                   args=("--warm-ref", "HEAD", "--warm-seconds", "60")) as svc:
-        end = time.monotonic() + 30
-        while _lines(log) < 5 and time.monotonic() < end:  # warming is parsing
-            time.sleep(0.05)
-        assert _lines(log) >= 5
-        t0 = time.monotonic()
+                   prelude=_slow_parse(log, 0.5, slow="warm"),
+                   args=("--warm-ref", "HEAD", "--warm-seconds", "300")) as svc:
+        _until(lambda: _lines(log) >= 4, "warming has parsed (3 handed back)")
         status, doc = svc.validate(commit)
         assert status == 200 and doc["result"] == "pass", doc
-        assert doc["queue_wait_ms"] < 1000, doc["queue_wait_ms"]  # vs a 60 s warm limit
+        assert doc["queue_wait_ms"] < 15000, doc["queue_wait_ms"]  # vs ≥ 28 s left
         assert doc["cache"]["hits"] > 0  # the preempted run's parses were kept
-        assert time.monotonic() - t0 < 20
         m = svc.metrics()
         assert m['da_generator_warm_runs_total{outcome="preempted"}'] == 1
         assert m['da_generator_warm_runs_total{outcome="completed"}'] == 0
@@ -804,22 +849,26 @@ def test_pinning_follows_the_latest_request_base(tmp_path, world):
 def test_a_judgement_does_not_hold_other_clients_connections(tmp_path, world):
     """A forked process must not keep the service's client sockets open: C,
     queued when B is forked, expires while B runs — its answer must end
-    (EOF) then, not when B ends."""
-    bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 3\n")
+    (EOF) then, not when B ends. A and B are held in amtool until released."""
+    bin_dir, gate = _gate(tmp_path)
     commit = world["commits"]["clean+extra"]
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir) as svc, \
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+                   env={"GSVC_GATE_DIR": str(gate)}) as svc, \
             ThreadPoolExecutor(4) as pool:
         a = pool.submit(svc.validate, commit)
-        time.sleep(0.3)
+        _until(lambda: (gate / "started-0").exists(), "A in amtool")
         b = pool.submit(svc.validate, commit)
-        time.sleep(0.3)
-        t0 = time.monotonic()
-        c = pool.submit(svc.validate, commit, None, 9000)  # 4 s: ends during B
+        _until(lambda: svc.metrics()["da_generator_queue_depth"] == 1, "B queued")
+        # 10 s: room for A to end and B to be forked while C still waits
+        c = pool.submit(svc.validate, commit, None, 15000)
+        _until(lambda: svc.metrics()["da_generator_queue_depth"] == 2, "C queued")
+        (gate / "release-0").touch()  # A ends; B is forked with C queued
+        _until(lambda: (gate / "started-1").exists(), "B in amtool")
+        assert not c.done(), "C ended before B was forked: nothing was tested"
         status, doc = c.result()
-        took = time.monotonic() - t0
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
-        assert took < 5.0, took  # B runs until about 6 s
+        assert not b.done()  # C's answer ended while B still runs
+        (gate / "release-1").touch()
         assert a.result()[1]["result"] == b.result()[1]["result"] == "pass"
 
 
@@ -871,7 +920,7 @@ def test_body_bytes_are_admitted_before_they_are_read(tmp_path, world):
         for s in socks:
             s.close()
         assert grew < 24 * 1024, grew    # not 20 × 2.5 MiB
-        time.sleep(1.5)
+        _inflight_released(svc)
         assert svc.validate(commit)[1]["result"] == "pass"
         # one fits the budget, the rest are answered busy unread
         assert svc.metrics()['da_generator_rejections_total{reason="busy"}'] >= 15
@@ -898,8 +947,10 @@ def test_connection_slots_answer_busy_and_never_503(tmp_path, world):
                                   or (doc["result"], doc["reason"]) == ("rejected", "busy")), doc
         for s in idle:
             s.close()
-        time.sleep(0.5)
-        assert svc.metrics()['da_generator_rejections_total{reason="busy"}'] >= 56 - 20
+        _wait_metric(svc, 'da_generator_rejections_total{reason="busy"}', 56 - 20)
+        # only the metrics request itself is still open
+        _until(lambda: svc.metrics()["da_generator_connections"] == 1,
+               "the idle connections' slots given back")
         status, doc = svc.validate(commit)
         assert (status, doc["result"]) == (200, "pass"), doc
 
@@ -955,7 +1006,9 @@ def test_no_zombies_are_left_after_a_deadline(tmp_path, world):
     h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 60 &\nwait\n")
     with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir) as svc:
         for _ in range(3):
-            status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=6500)
+            # 6 s: room to reach amtool on a slow host; the deadline is what
+            # ends it (amtool's sleep is 60 s)
+            status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=11000)
             assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
         end = time.monotonic() + 10
         while h.zombies_of(svc.proc.pid) and time.monotonic() < end:
@@ -995,8 +1048,14 @@ def _hold_body(svc, length: int) -> socket.socket:
     s = socket.socket(socket.AF_UNIX)
     s.connect(str(svc.socket))
     s.sendall(_post_head(length) + b"{")
-    time.sleep(0.3)
+    _until(lambda: svc.metrics()["da_generator_inflight_body_bytes"] >= length,
+           f"{length} body bytes reserved")
     return s
+
+
+def _inflight_released(svc) -> None:
+    _until(lambda: svc.metrics()["da_generator_inflight_body_bytes"] == 0,
+           "every reserved body byte given back")
 
 
 def test_an_inflight_budget_below_the_largest_body_refuses_to_start(tmp_path, world):
@@ -1017,10 +1076,10 @@ def test_inflight_budget_and_writes_limit_flags(tmp_path, world):
                    args=("--max-body-bytes", "300",
                          "--max-inflight-body-bytes", "300")) as svc:
         held = _hold_body(svc, 250)  # admitted, its body never completes
-        status, doc = svc.validate(commit)  # ~85 bytes: 250 + 85 > 300
+        status, doc = svc.validate(commit)  # ~90 bytes: 250 + 90 > 300
         assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "busy")
         held.close()
-        time.sleep(0.3)
+        _inflight_released(svc)
         assert svc.validate(commit)[1]["result"] == "pass"
     with h.Service(tmp_path / "c", world["repo"], bin_dir=world["bin"],
                    args=("--max-body-bytes", "200",
@@ -1047,7 +1106,7 @@ def test_reading_the_body_counts_against_the_deadline(tmp_path, world):
         s.connect(str(svc.socket))
         s.settimeout(30)
         s.sendall(_post_head(len(body)))
-        time.sleep(1.8)  # longer than the whole budget
+        time.sleep(4.0)  # far longer than the whole 1.5 s budget
         s.sendall(body)
         data = b""
         while chunk := s.recv(65536):
