@@ -29,14 +29,15 @@ import (
 //     purpose is to validate against tenants; running it against
 //     an empty tenant set is almost always a caller bug (the
 //     correct path for "no tenants in this scope" is to skip
-//     calling the guard entirely). Except with MetricsNotGatherable
-//     set (#2031): that covers the whole tree, whatever the scope.
+//     calling the guard entirely). Except when HasWholeTreeInput:
+//     MetricsNotGatherable (#2031) and PlatformProblems (#2991) cover
+//     the whole tree, whatever the scope.
 //
 // Otherwise CheckDefaultsImpact never errors. A clean run is a
 // GuardReport with zero Findings and PassedTenantCount equal to
 // the number of tenants.
 func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
-	if len(input.EffectiveConfigs) == 0 && input.MetricsNotGatherable == "" {
+	if len(input.EffectiveConfigs) == 0 && !HasWholeTreeInput(input) {
 		return nil, fmt.Errorf("guard: no tenants supplied in EffectiveConfigs (caller should skip the guard entirely when scope is empty)")
 	}
 
@@ -56,6 +57,15 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkMetricsNotGatherable(input)...)
 
 	return newGuardReport(findings, len(input.EffectiveConfigs)), nil
+}
+
+// HasWholeTreeInput reports whether input carries something judged for the
+// whole tree rather than per tenant, which is reported even with no tenant
+// in scope: the /metrics gather verdict (#2031) or a platform file the
+// routing checks cannot use (PlatformProblems, #2991). A caller with an
+// empty scope skips CheckDefaultsImpact only when this is false.
+func HasWholeTreeInput(input CheckInput) bool {
+	return input.MetricsNotGatherable != "" || len(input.PlatformProblems) > 0
 }
 
 // NewGuardReport builds a report from findings over totalTenants tenants

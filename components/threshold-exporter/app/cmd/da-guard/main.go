@@ -353,8 +353,12 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// 3, never the vacuous 0.
 	// #2031: not when the whole tree's /metrics cannot be gathered — that
 	// fails every tenant's scrape, whatever the scope (the report below).
+	// #2991: nor when a platform file has a problem (PlatformProblems, read
+	// from the whole tree at --config-dir): reported with tenants in scope,
+	// it must not turn into a 0 without them. guard.HasWholeTreeInput is
+	// also what lets CheckDefaultsImpact run on zero tenants.
 	input := buildCheckInput(scoped, f)
-	if len(scoped.Tenants) == 0 && input.MetricsNotGatherable == "" {
+	if len(scoped.Tenants) == 0 && !guard.HasWholeTreeInput(input) {
 		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
