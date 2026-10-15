@@ -1,8 +1,9 @@
-# promtool behavioural test for TenantApiPolicyUnavailable (hub #2486 Q7-2):
-#   1) FIRES when the domain policy stays unavailable (gauge == 0 sustained).
-#   2) does NOT fire while it is available (gauge == 1).
+# promtool behavioural test for TenantApiPolicyUnavailable (hub #2486 Q7-2;
+# since #2903 the gauge is the generator container's readiness, ADR-036 §5):
+#   1) FIRES when writes stay unjudgeable (gauge == 0 sustained).
+#   2) does NOT fire while they can be judged (gauge == 1).
 #   3) does NOT fire on a one-tick dip (gauge 0 for < the 2m hold-down) — a
-#      non-atomic write the watcher caught mid-way.
+#      container restart or a policy ConfigMap update caught mid-way.
 # Run: promtool test rules tests/rulepacks/platform-policy-unavailable_test.yaml
 rule_files:
   - platform-policy-unavailable.rules.yaml
@@ -25,7 +26,7 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
-              summary: "tenant-api domain policy is unavailable — policy-judged writes answer 503"
+              summary: "tenant-api writes cannot be judged — the generator container or its deployment policy is unavailable; writes answer 503"
 
   - interval: 1m
     name: available-no-fire
