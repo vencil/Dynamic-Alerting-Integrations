@@ -652,21 +652,45 @@ def _wait_metric(svc, name: str, at_least: float, timeout: float = 60.0) -> dict
     raise AssertionError(f"{name} never reached {at_least}: {svc.metrics()}")
 
 
+def _judgement_parses_only(prelude: str) -> str:
+    """Wrap a _slow_parse prelude so only a judgement's parses are logged:
+    a warming run (its own forked process) parses unlogged and unslowed, so
+    one starting right after a response cannot add to that count."""
+    return prelude + (
+        "import _gsvc_child as _gc\n"
+        "_orig_run_child = _gc.run_child\n"
+        "def _tagged_run_child(job, fd):\n"
+        "    if job.warm:\n"
+        "        def _quiet(path, mode):\n"
+        "            return _orig_parse(path, mode)\n"
+        "        _pc._parse_file = _quiet\n"
+        "    return _orig_run_child(job, fd)\n"
+        "_gc.run_child = _tagged_run_child\n")
+
+
 def test_killed_judgements_keep_their_parses_until_one_passes(tmp_path, world):
     """E1: the deadline is shorter than a cold judgement. Each killed attempt
-    still leaves its finished parses in the cache, so the next attempt
-    parses fewer, and one of them passes."""
+    hands back what it finished parsing, so the cache grows with every
+    attempt; nothing already cached is parsed again; and one attempt passes,
+    parsing exactly what was still missing.
+
+    ⛔ "each attempt parses fewer than the one before" is NOT a property of
+    E1: a killed attempt's last parses may still be in the pipe when it is
+    killed, so the next attempt parses them again and then gets further —
+    its count can be larger (CI saw [21, 22, 20, 0]). The bound that holds is
+    against what is cached, not against the previous attempt's count."""
     repo = h.init_repo(tmp_path / "r")
     commit = h.commit_tree(repo, _many_tenants(30))
     log = tmp_path / "parses.log"
     # the warming run the new base schedules gets no time to help (E2 is
-    # tested on its own below)
+    # tested on its own below), and its parses are not counted
     with h.Service(tmp_path / "s", repo, bin_dir=world["bin"],
-                   prelude=_slow_parse(log, 0.05),
+                   prelude=_judgement_parses_only(_slow_parse(log, 0.05)),
                    args=("--max-judgement-seconds", "1.2",
                          "--warm-seconds", "0.01")) as svc:
-        counts, results, entries = [], [], []
+        counts, results, cached_before = [], [], []
         for _attempt in range(12):
+            cached_before.append(svc.metrics()["da_generator_cache_entries"])
             before = _lines(log)
             status, doc = svc.validate(commit)
             assert status == 200, doc
@@ -675,21 +699,26 @@ def test_killed_judgements_keep_their_parses_until_one_passes(tmp_path, world):
                            else doc["reason"])
             if len(results) == 1:
                 # the first (new) base schedules one warming run; let its
-                # 0.01 s limit end it before counting again
+                # 0.01 s limit end it before reading the cache again
                 _wait_metric(svc, 'da_generator_warm_runs_total{outcome="deadline"}', 1)
-            entries.append(svc.metrics()["da_generator_cache_entries"])
             if doc["result"] == "rejected":
                 assert doc["cache"]["received"] > 0, doc  # kept, not lost
             else:
                 break
+        total = svc.metrics()["da_generator_cache_entries"]
+    assert cached_before[0] == 0, cached_before
+    # (1) every killed attempt handed something back: the cache before each
+    # attempt grows strictly up to the one that passes
+    assert all(a < b for a, b in zip(cached_before, cached_before[1:])), \
+        (cached_before, counts, results)
     assert results[0] == "deadline" and results[-1] == "pass", results
     assert set(results[:-1]) == {"deadline"}, results
-    assert all(a >= b for a, b in zip(counts, counts[1:])), counts
-    assert counts[-1] < counts[0], counts
-    # every killed attempt added to the cache, and nothing was lost
-    killed = entries[:-1]
-    assert killed[0] > 0 and all(a < b for a, b in zip(killed, killed[1:])), entries
-    assert entries[-1] >= killed[-1], entries
+    # (2) what is cached is not parsed again
+    assert all(n <= total - c for n, c in zip(counts, cached_before)), \
+        (counts, cached_before, total)
+    # (3) the passing attempt parsed exactly what was still missing (0 when
+    # nothing was), and handed all of it back
+    assert counts[-1] == total - cached_before[-1], (counts, cached_before, total)
 
 
 def test_startup_warming_leaves_only_the_changed_file_to_parse(tmp_path, world):
