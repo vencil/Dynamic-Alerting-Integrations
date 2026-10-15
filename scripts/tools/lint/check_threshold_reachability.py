@@ -444,7 +444,7 @@ def _written_faces() -> dict[str, set[str]]:
 # blind review walked straight past them three different ways: an `examples/`
 # sibling inside the very conf.d tree they named
 # (`conf.d/examples/_defaults-multidb.yaml`, a copy-me file whose own header
-# teaches this rule), a NESTED `_defaults.yaml` (the loader enters one at every
+# taught this rule; #3014 deleted it), a NESTED `_defaults.yaml` (the loader enters one at every
 # depth — `config_hierarchy.go` — while the constants named depth 0 only), and a
 # whole second conf.d root (`rule-packs/recipes/examples/conf.d/`). All three
 # were demonstrated: inject `mysql_connections_critical` into any of them and

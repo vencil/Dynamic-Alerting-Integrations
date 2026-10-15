@@ -57,6 +57,25 @@ def test_shipped_example_tree_serves_every_tenant_key(root, da_guard_binary):
         f"knows them: {dead}")
 
 
+def test_a_key_with_no_base_is_reported_unserved(tmp_path, da_guard_binary):
+    """Positive control: the measurement this file rests on can say "no".
+
+    A tenant key whose base is in no defaults carrier — the #3014 shape — must
+    come back in `unserved`, or every assertion above passes vacuously.
+    """
+    (tmp_path / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "_defaults-multidb.yaml").write_text(
+        "defaults:\n  redis_connected_clients: 200\n", encoding="utf-8")
+    (tmp_path / "t1.yaml").write_text(
+        'tenants:\n  t1:\n    mysql_connections: "70"\n'
+        '    redis_connected_clients: "500"\n', encoding="utf-8")
+    tv = load_served_values(tmp_path, binary=da_guard_binary)["t1"]
+    assert "redis_connected_clients" in tv.unserved
+    assert "mysql_connections" not in tv.unserved
+
+
 @pytest.mark.parametrize("key,value,expected", [
     ("_routing_profile", "domain-finance-tier1", True),
     ('redis_db_keys{db="db2"}', "disable", True),
