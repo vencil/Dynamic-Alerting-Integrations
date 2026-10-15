@@ -98,6 +98,34 @@ ROUTING_READ = ParseMode(
     lambda f: strict_load_exporter_keys(f, raw_text_sequences=("tenants",)))
 
 
+# #2981 (ADR-036 §3): the conf.d entries the generator service took from
+# git objects whose tree mode is not a regular file's (100644 / 100755) — a
+# symlink (120000), a gitlink (160000) or anything else — as {path relative
+# to the conf.d root: mode}. The service does not write them into the tree
+# it judges and sets them here instead, so each becomes a dropped file named
+# for what it is (not_regular_file), never whatever its link text happens to
+# parse as. Empty for every read of a real directory: a filesystem reader
+# follows a file symlink (a Kubernetes ConfigMap mount is made of them).
+_GIT_IRREGULAR: dict[str, str] = {}
+
+_GIT_MODE_NAMES = {"120000": "a symlink", "160000": "a gitlink (submodule)"}
+
+
+def set_git_irregular_entries(entries: "dict[str, str] | None") -> None:
+    """Install (or, with None, clear) the git entries described above."""
+    _GIT_IRREGULAR.clear()
+    if entries:
+        _GIT_IRREGULAR.update(entries)
+
+
+def git_irregular_reason(mode: str) -> str:
+    """The reason clause of a not-regular git entry (one wording, here)."""
+    what = _GIT_MODE_NAMES.get(mode, "not a regular file")
+    return (f"is not a regular file (not_regular_file): git tree mode {mode}, "
+            f"{what} — read from git objects, conf.d entries must be "
+            f"100644 / 100755 files")
+
+
 def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
                           warning: str | None = None) -> None:
     """Record content this reader had to drop, then warn — in one place.
@@ -1092,6 +1120,13 @@ def _parse_config_files(config_dir: str) -> dict:
         _drop_unreadable_file(
             rel, unusable_reason(bad),
             f"remove {rel} or replace it with a readable YAML file",
+            result)
+    # #2981: entries the generator service read from git as not regular files.
+    for rel, mode in sorted(_GIT_IRREGULAR.items()):
+        _drop_unreadable_file(
+            rel, git_irregular_reason(mode),
+            f"commit {rel} as a regular file (its content in place of the "
+            f"link), or remove it",
             result)
 
     # #1469: ONE predicate for "what is a config file", shared with
