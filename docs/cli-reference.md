@@ -2562,7 +2562,7 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 - `required`／`forbidden` 只看有沒有值，不收 `value`（沒寫 `operator` 時缺省為 `required`，`value` 會被默默忽略）。
 - 其他運算子都要有 `value`：沒有時原本拿 null 比——`not_equals` 永遠成立、`when` 永遠不成立而跳過規則、主規則的 `gte`／`matches`／`contains` 每個租戶都報違規。
 - `one_of` 的 `value` 必須是非空清單（單一值也寫成 `[mariadb]`），項目為純量；`equals`／`not_equals`／`contains`／`matches` 與 `gte`／`lte`／`gt`／`lt` 的 `value` 是純量，後四者必須是數字或 duration（`5m`）。
-- `matches` 的 `value` 必須能編譯成 regex，且不是空字串、不超過 200 字、沒有 `(a+)+` 這類巢狀量詞（引擎的 ReDoS 防護不會執行它們，規則等於永不匹配）；`contains` 的 `value` 不可為空字串。
+- `matches` 的 `value` 必須能編譯成 regex，且不是空字串、不超過 200 字、沒有 `(a+)+` 這類巢狀量詞（防護把帶量詞的群組裡又有量詞的寫法一律擋下，連可選群組 `^(\d+)?$` 也算，改寫成 `^\d*$` 或改用 `one_of`；引擎的 ReDoS 防護不會執行它們，規則等於永不匹配）；`contains` 的 `value` 不可為空字串。
 - 萬用字元 `target`（含 `*`）只比對頂層鍵：帶 `.` 的（例如 `_metadata.*`）原本被當字面路徑、找不到就跳過，現在拒收——改寫成具體欄位（`_metadata.owner`）。萬用字元 `when` 只收 `required`／`forbidden`。
 
 **規則讀的是哪一個值**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`--config-dir` 讀生效值，不是租戶檔的字面內容；`target` 與 `when` 依 key 種類讀：

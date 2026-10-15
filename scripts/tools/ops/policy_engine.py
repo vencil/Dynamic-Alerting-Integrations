@@ -256,7 +256,9 @@ def _regex_refusal(pattern: str) -> Optional[str]:
     if len(pattern) > _REGEX_MAX_LEN:
         return f"is longer than {_REGEX_MAX_LEN} characters (ReDoS guard)"
     if _NESTED_QUANTIFIER.search(pattern):
-        return "has a nested quantifier such as `(a+)+` (ReDoS guard)"
+        return ("has a nested quantifier: a quantified group that holds a quantifier, "
+                "such as `(a+)+` or an optional `(\\d+)?` (ReDoS guard; it refuses both "
+                "-- drop the group's quantifier, e.g. `^\\d*$`, or use `one_of`)")
     try:
         re.compile(pattern)
     except re.error as exc:
