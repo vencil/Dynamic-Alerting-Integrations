@@ -87,6 +87,21 @@ class TestValidateDir:
         checked, viol, skipped = validate_dir(confd, schema, jsonschema)
         assert (checked, viol, skipped) == (1, [], [])
 
+    @pytest.mark.parametrize("key", ["_routng", "_silense_mode", "_routing_defaults"])
+    def test_an_underscore_key_nothing_reads_is_rejected_readably(self, confd, schema, key):
+        """#3016 R3: the closed `_` namespace. The message names the key and
+        what it should be — not the generated regex."""
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    {key}: "warning"\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert len(viol) == 1, viol
+        assert f"unknown key '{key}': A key starting with '_' must be one" in viol[0]
+        assert "_silent_mode" in viol[0] and "(?!" not in viol[0]
+        assert viol[0].endswith("@ /tenants/db-a")
+
+    def test_an_open_state_prefix_key_is_accepted(self, confd, schema):
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _state_custom_x: "enable"\n')
+        assert validate_dir(confd, schema, jsonschema)[1] == []
+
     def test_key_typo_rejected(self, confd, schema):
         _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      dbType: mariadb\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)

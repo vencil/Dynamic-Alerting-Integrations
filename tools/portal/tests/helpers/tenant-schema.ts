@@ -29,9 +29,11 @@ export type SchemaError = { instancePath: string; keyword: string; message?: str
 
 /**
  * `_`-prefixed tenant keys that tenantConfig does not declare. The schema
- * alone lets them through: tenantConfig.additionalProperties accepts any
- * string as a threshold, which is how `_domain_policy: finance` passed while
- * the exporter reads nothing from it (#2033).
+ * used to let them through as thresholds, which is how `_domain_policy:
+ * finance` passed while the exporter reads nothing from it (#2033). It now
+ * rejects them itself (tenantConfig.propertyNames, #3016 R3); this checker
+ * stays the stricter of the two, because it also flags a `_state_<name>` the
+ * schema leaves open.
  */
 export function undeclaredReservedKeys(tenantBody: Record<string, unknown> | null | undefined): string[] {
   const declared = TENANT_SCHEMA.definitions.tenantConfig.properties;

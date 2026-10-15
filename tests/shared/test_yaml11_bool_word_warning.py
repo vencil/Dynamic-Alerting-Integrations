@@ -77,11 +77,6 @@ FIELDS = {
     "send_resolved": ("t1.yaml", "tenants:\n  t1:\n" + _WEBHOOK,
                       "/tenants/t1/_routing/receiver/send_resolved",
                       ("_routing", "receiver", "send_resolved")),
-    "routing_enforced.enabled": (
-        "t1.yaml",
-        "tenants:\n  t1:\n    _routing_enforced:\n      enabled: {v}\n"
-        "      receiver:\n        type: webhook\n        url: https://noc.example.com/a\n",
-        "/tenants/t1/_routing_enforced/enabled", ("_routing_enforced", "enabled")),
     "state_maintenance.enabled": (
         "t1.yaml", "tenants:\n  t1:\n    _state_maintenance:\n      enabled: {v}\n",
         "/tenants/t1/_state_maintenance/enabled", ("_state_maintenance", "enabled")),
@@ -148,7 +143,10 @@ def test_go_reads_the_word_as_a_string(tmp_path, field):
 
 
 _CASES = [("send_resolved", w) for w in WORDS] + [
-    (f, w) for f in ("routing_enforced.enabled", "state_maintenance.enabled")
+    # `_routing_enforced.enabled` is a platform field: the tenant schema rejects
+    # `_routing_enforced` under a tenant (#3016 R3), and the platform-file case
+    # is `test_platform_defaults_routing_enforced_is_covered`.
+    (f, w) for f in ("state_maintenance.enabled",)
     for w in ("yes", "On", "NO", "off")]
 
 

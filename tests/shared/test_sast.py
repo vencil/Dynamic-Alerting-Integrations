@@ -311,6 +311,11 @@ class TestFileWritePermissions:
             "pre-commit auto-fixer：以 open(path, 'wb') 寫回同一檔案，"
             "應保留原始權限而非強制 0o600（會改變既有檔案的 permission bits）"
         ),
+        "scripts/tools/dx/sync_schema.py": (
+            "--update 以 open(path, 'w') 寫回 repo 內已追蹤的 "
+            "docs/schemas/tenant-config.schema.json，只替換一段 subschema；"
+            "應保留原始權限而非強制 0o600（#3016 R3）"
+        ),
         "scripts/tools/ops/generate_rule_pack_split.py": (
             "寫出 validation-report.json 至使用者指定的 output 目錄，"
             "為 DX 報告檔非敏感資料，沿用目錄預設 umask 即可"
