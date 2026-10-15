@@ -2461,7 +2461,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 | `toggled` | enable ↔ disable | 開啟或關閉 alert |
 | `modified` | 複雜值變更 | 需人工審閱 |
 
-租戶寫了、但 `/metrics` 沒有出列的閾值 key（served-values 的 `unserved`，例如 base 不在任何 defaults carrier 裡），在表裡讀作寫入值加上 `(not served)`，例如 `85 (not served)`；值為 `disable` 的照原文呈現。所以數字沒變、只是開始或停止出列的 key，會以 `modified` 列出——那正是告警開始或停止生效的變更（[#3022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3022)）。
+租戶寫了、但 `/metrics` 沒有出列的閾值 key（served-values 的 `unserved`，例如 base 不在任何 defaults carrier 裡；值為 `disable` 等關掉的不算），在表裡的值後面標 `(not served)`，JSON 該筆另帶 `not_served`（沒出列的那一側，`"old"`／`"new"`）。一側出列、另一側沒出列的 key，開始出列報成 `added`、停止出列報成 `removed`，即使寫的數字沒變——那正是告警開始或停止生效的變更（[#3022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3022)）。
 
 **平台設定（`_` 開頭檔的頂層鍵）**：兩側的 `_` 開頭檔（任何深度）以 `da-guard parse-tree` 讀出的值逐鍵比較，只改註解、縮排、引號或鍵的順序不算變更。值變了的鍵列在「Platform Settings」，依報告能說的分組：渲染結果有差異的列為 Rendered（見下方各區段，不判定哪一筆差異來自這個鍵）；標為完整涵蓋、讀取端就在這個位置讀它（parse-tree 的 `rendered_by`）、而渲染結果沒有差異的，列為「沒有效果」，不影響結束碼（[#2962](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2962)）；部分涵蓋而渲染結果沒有差異的、寫在讀取端不讀的位置的（例如非預設檔裡的 `defaults`、子目錄 `_` 檔裡的 `tenants:`）、兩支渲染程式都不讀的鍵（平台層的 `_custom_alerts`、`instance_tenant_mapping`、`max_metrics_per_tenant`，以及 tenant-api 相關檔裡的 `tenant_orgs`、`groups` 等，這類鍵的非字串值以原文比較）、讀不了的檔、沒有讀取端讀的 `_` 檔（以位元組比較），以及寫在檢查工具不讀的位置的 `_policies`／`domain_policies`，結束碼至少為 1。`_policies` 寫在根目錄的預設檔、`domain_policies` 寫在 `_domain_policy.yaml` 時只列為提示（由 `validate-config` 與產生器的 `--validate --strict` 檢查），不影響結束碼。parse-tree 本身失敗、或它的輸出沒有 `rendered_by`（da-guard 比本工具舊）時結束碼 2。規則見 [ADR-037](adr/037-config-diff-compares-rendered-output.md) 決定 3。
 

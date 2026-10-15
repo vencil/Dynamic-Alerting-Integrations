@@ -347,31 +347,70 @@ _NO_PG = _DEFAULTS
 _WITH_PG = _DEFAULTS.replace("  container_memory: 85\n", "  container_memory: 85\n  pg_connections: 80\n")
 
 
-@pytest.mark.parametrize("base_defaults, pr_defaults, old, new", [
-    (_NO_PG, _WITH_PG, "85 (not served)", 85),   # 補上 base：開始出列
-    (_WITH_PG, _NO_PG, 85, "85 (not served)"),   # 拿掉 base：不再出列
+def _served_metric(b, p):
+    return cd.served_metric_diff(b, p)
+
+
+@pytest.mark.parametrize("base_defaults, pr_defaults, change, not_served", [
+    (_NO_PG, _WITH_PG, "added", ["old"]),     # 補上 base：開始出列
+    (_WITH_PG, _NO_PG, "removed", ["new"]),   # 拿掉 base：不再出列
 ])
 def test_a_key_crossing_unserved_and_served_is_reported_with_the_same_number(
-        tmp_path, da_guard, base_defaults, pr_defaults, old, new):
+        tmp_path, da_guard, base_defaults, pr_defaults, change, not_served):
     """寫入的數字沒變，但 /metrics 有沒有這列變了：告警因此開始或停止生效。
     舊行為把 `'85'`（unserved 原文）與 `85` 比成相同，整列不報。"""
     tenants = {"t": {"pg_connections": "85"}}
     b, p = _served(tmp_path, da_guard, tenants, tenants,
                    base_defaults=base_defaults, pr_defaults=pr_defaults)
-    got = _by_key(_metric(b, p)["t"])["pg_connections"]
-    assert (got["old"], got["new"], got["change"]) == (old, new, "modified")
+    got = _by_key(_served_metric(b, p)["t"])["pg_connections"]
+    assert (got["change"], got["not_served"]) == (change, not_served)
+    # 讀數本身維持 served-values 給的樣子（遮罩與格式化照舊作用在它上面）
+    assert {float(got["old"]), float(got["new"])} == {85.0}
+
+
+def test_a_crossing_with_a_new_number_is_still_added(tmp_path, da_guard):
+    b, p = _served(tmp_path, da_guard, {"t": {"pg_connections": "85"}},
+                   {"t": {"pg_connections": "90"}}, base_defaults=_NO_PG, pr_defaults=_WITH_PG)
+    got = _by_key(_served_metric(b, p)["t"])["pg_connections"]
+    assert (got["change"], got["not_served"]) == ("added", ["old"])
 
 
 def test_an_unserved_key_that_stays_unserved_is_not_a_change(tmp_path, da_guard):
     tenants = {"t": {"pg_connections": "85"}}
     b, p = _served(tmp_path, da_guard, tenants, tenants)
-    assert "t" not in _metric(b, p)
+    assert "t" not in _served_metric(b, p)
+
+
+def test_a_change_on_a_key_served_on_neither_side_is_marked_on_both(tmp_path, da_guard):
+    b, p = _served(tmp_path, da_guard, {"t": {"pg_connections": "85"}},
+                   {"t": {"pg_connections": "90"}})
+    got = _by_key(_served_metric(b, p)["t"])["pg_connections"]
+    assert got["not_served"] == ["old", "new"]
+    assert cd._format_side(got, "old") == "85 (not served)"
 
 
 def test_a_disabled_key_still_reads_as_written(tmp_path, da_guard):
-    """值為 disable 的維度鍵照舊以原文呈現，toggled 的判斷不變。"""
+    """值為 disable 的維度鍵不標 not served，toggled 的判斷不變。"""
     b, p = _served(tmp_path, da_guard,
                    {"t": {'mysql_connections{schema="x"}': "disable"}},
                    {"t": {'mysql_connections{schema="x"}': "70"}})
-    got = _by_key(_metric(b, p)["t"])['mysql_connections{schema="x"}']
+    got = _by_key(_served_metric(b, p)["t"])['mysql_connections{schema="x"}']
     assert (got["old"], got["change"]) == ("disable", "toggled")
+    assert "not_served" not in got
+
+
+def test_the_marker_is_added_after_masking_so_a_short_credential_stays_masked(tmp_path, da_guard):
+    """遮罩比對整個值：標記若寫進值裡，`Ab3x9Q (not served)` 就不再等於秘密本身。"""
+    secret = "Ab3x9Q"
+    report = {"metric": {"t": [{"key": "webhook_url", "old": secret, "new": "Zq7w2K",
+                                 "change": "modified", "not_served": ["old", "new"]}]}}
+    masked, count = cd.mask_values(report, {secret, "Zq7w2K"})
+    c = masked["metric"]["t"][0]
+    assert count == 2 and cd._format_side(c, "old") == f"{cd.REDACTED} (not served)"
+
+
+def test_a_scheduled_value_not_served_still_reads_as_scheduled():
+    c = {"key": "pg_d", "old": "85", "new": {"default": "85", "overrides": []},
+         "change": "modified", "not_served": ["new"]}
+    assert cd._format_side(c, "new") == "(scheduled) (not served)"
+    assert cd._format_side(c, "old") == "85"

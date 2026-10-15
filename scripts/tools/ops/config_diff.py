@@ -666,35 +666,72 @@ def _served_threshold(key, value, severity, schedule):
     return num if severity == natural else f"{num}:{severity}"
 
 
-# How a threshold key written but not served reads in the report (#3022).
-UNSERVED_SUFFIX = " (not served)"
-
-
 def served_metric_configs(tenants):
     """{tenant: {key: reading}} for compute_diff, from served-values tenants.
 
     Threshold keys are what /metrics serves (`_served_threshold`); a key the
-    tenant switched off is its value as written ("disable"). Reserved (`_`)
-    keys are not here.
-
-    ⛔ Any other key the exporter does not serve reads as `UNSERVED_SUFFIX`
-    after the text written (#3022), never as the text alone: `'85'` written
-    but not served and `85` served are different renders — one arms the
-    alert, the other does not — yet `classify_change` compares numbers and
-    would call them the same. A key reaching /metrics with an unchanged
-    number was therefore not reported at all.
+    tenant switched off, or that the exporter cannot serve, is its value as
+    written (`unserved`, e.g. "disable"). Reserved (`_`) keys are not here.
     """
     out = {}
     for tenant, tv in tenants.items():
         flat = {}
         for key, raw in (tv.unserved or {}).items():
             if not str(key).startswith("_"):
-                flat[str(key)] = raw if _is_disabled(raw) else f"{raw}{UNSERVED_SUFFIX}"
+                flat[str(key)] = raw
         for key, severity in tv.severities.items():
             schedule = (tv.schedules or {}).get(key)
             flat[key] = _served_threshold(key, tv.values.get(key), severity, schedule)
         out[tenant] = flat
     return out
+
+
+def _not_served(tv, key):
+    """True when `key` is a threshold key `tv` writes but /metrics does not
+    serve: in `unserved` and not switched off (a "disable" is an intended
+    no-row, and reads as written)."""
+    return key in (tv.unserved or {}) and not _is_disabled(tv.unserved[key])
+
+
+def served_metric_diff(old_tenants, new_tenants):
+    """compute_diff over the served threshold readings, plus whether /metrics
+    serves the key on each side (#3022).
+
+    ⛔ The readings alone cannot say it: a key written as `'85'` that the
+    exporter does not serve (`unserved`) and the same key served as 85 compare
+    as the same number, yet one arms the alert and the other does not. So:
+      * every change on a side that is written but not served carries
+        `not_served` (the sides, `"old"` / `"new"`), which the table prints
+        as "(not served)" after the value — at print time, after masking,
+        so a credential copied into such a value is still masked whole;
+      * a key that starts being served is `added`, one that stops is
+        `removed`, whether or not its number changed (an unchanged number
+        is a change here, and the one that matters).
+    The readings themselves stay as served-values gives them."""
+    old_cfg, new_cfg = served_metric_configs(old_tenants), served_metric_configs(new_tenants)
+    diff = compute_diff(old_cfg, new_cfg)
+    for tenant in set(old_tenants) | set(new_tenants):
+        tvs = {"old": old_tenants.get(tenant), "new": new_tenants.get(tenant)}
+        changes = {c["key"]: c for c in diff.get(tenant, [])}
+        keys = {str(k) for tv in tvs.values() if tv is not None
+                for k in [*(tv.unserved or {}), *tv.severities] if not str(k).startswith("_")}
+        for key in sorted(keys):
+            not_served = [side for side, tv in tvs.items()
+                          if tv is not None and _not_served(tv, key)]
+            if not not_served:
+                continue
+            served = {side: tv is not None and key in tv.severities for side, tv in tvs.items()}
+            c = changes.get(key)
+            if None not in tvs.values() and served["old"] != served["new"]:
+                if c is None:
+                    c = changes[key] = {"key": key, "old": old_cfg[tenant].get(key),
+                                        "new": new_cfg[tenant].get(key)}
+                c["change"] = "added" if served["new"] else "removed"
+            if c is not None:
+                c["not_served"] = not_served
+        if changes:
+            diff[tenant] = [changes[k] for k in sorted(changes)]
+    return diff
 
 
 def served_setting_configs(tenants):
@@ -807,6 +844,13 @@ def estimate_affected_alerts(metric_key):
     return ", ".join(alerts)
 
 
+def _format_side(change, side):
+    """`_format_value` of one side of a threshold change, with "(not served)"
+    when that side is written but not served (`served_metric_diff`)."""
+    text = _format_value(change[side])
+    return f"{text} (not served)" if side in change.get("not_served", ()) else text
+
+
 def _format_value(val):
     """Format a config value for display."""
     if val is None:
@@ -847,8 +891,7 @@ def served_sections(old_tenants, new_tenants):
     """The three served sections from the two sides' served tenants: what
     `_render_diff.compare` keeps of the served renders (masked)."""
     return {
-        "metric": compute_diff(served_metric_configs(old_tenants),
-                               served_metric_configs(new_tenants)),
+        "metric": served_metric_diff(old_tenants, new_tenants),
         "setting": served_setting_diff(old_tenants, new_tenants),
         "custom_alert": served_custom_alert_diff(old_tenants, new_tenants),
     }
@@ -1262,8 +1305,8 @@ def _render_thresholds(metric, lines):
     lines.append("|--------|--------|-------|--------|-----------------|---------|")
     for c, tenants in _group_per_tenant(metric):
         lines.append(
-            f"| {_cell(c['key'])} | {_cell(_format_value(c['old']))} "
-            f"| {_cell(_format_value(c['new']))} | {c['change']} "
+            f"| {_cell(c['key'])} | {_cell(_format_side(c, 'old'))} "
+            f"| {_cell(_format_side(c, 'new'))} | {c['change']} "
             f"| {estimate_affected_alerts(c['key'])} | {_who_cell(tenants)} |")
     lines.append("")
 

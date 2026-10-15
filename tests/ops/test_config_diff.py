@@ -579,13 +579,13 @@ class TestCLI:
         assert "| mysql_connections | 80 | 50 | tighter |" in p.stdout
 
     def test_a_change_to_a_key_served_on_neither_side_says_so(self, tmp_path):
-        """No `_defaults.yaml`: /metrics serves the key on neither side, so
-        the change arms nothing — it is not "tighter" (#3022)."""
+        """No `_defaults.yaml`: /metrics serves the key on neither side, and
+        the table says so on both values (#3022)."""
         _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
         _write_tenant(tmp_path / "new", {"mysql_connections": "50"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
-        assert ("| mysql_connections | 80 (not served) | 50 (not served) | modified |"
+        assert ("| mysql_connections | 80 (not served) | 50 (not served) | tighter |"
                 in p.stdout), p.stdout
 
     def test_old_dir_missing_is_a_first_import(self, tmp_path):
