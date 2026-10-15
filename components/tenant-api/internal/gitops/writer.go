@@ -456,6 +456,12 @@ type Writer struct {
 	// as beforeBaseRestore. Always nil in production.
 	writeTenantFile func(path string, content []byte, perm os.FileMode) error
 
+	// beforeCASAdvance is a TEST-ONLY seam (#2903): gitCommitOnto calls it,
+	// when non-nil, after the commit object is made and before HEAD is
+	// advanced onto it — where a commit from outside the process can still
+	// land. Always nil in production.
+	beforeCASAdvance func()
+
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
 	onBatchStaging func(*stagingTree)
@@ -853,10 +859,15 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	}
 
 	// No-op short-circuit, as WriteMerged's: a body byte-identical to the
-	// file changes nothing — success, nothing committed, the generator not
-	// asked (the tree it would judge is HEAD's own). os.IsNotExist leaves
-	// existing nil: a new file is never a no-op.
-	if existing, rerr := readTenantFile(filePath); rerr == nil && string(existing) == yamlContent {
+	// file AND to HEAD's blob of it changes nothing — success, nothing
+	// committed, the generator not asked (the tree it would judge is HEAD's
+	// own). Both, because the serving file alone can hold bytes HEAD does
+	// not: an uncommitted edit from outside, or a write whose file landed
+	// and whose commit failed (index.lock) — short-circuiting those would
+	// answer success for a body that is never committed. os.IsNotExist
+	// leaves existing nil: a new file is never a no-op.
+	if existing, rerr := readTenantFile(filePath); rerr == nil && string(existing) == yamlContent &&
+		w.headHolds(filePath, existing) {
 		return notices, nil
 	}
 
@@ -1586,25 +1597,28 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		slog.Warn("gitops: could not read HEAD before write",
 			"commit_tag", commitTag, "error", err)
 	}
-	var validated []byte
-	if judgedBase != "" {
+	if judgedBase != "" && headBefore != judgedBase {
 		// The verdict is on judgedBase; committing onto anything else would
-		// publish a tree nobody judged. Nothing is written yet.
-		if headBefore != judgedBase {
-			slog.Warn("gitops: HEAD moved while the generator judged the write",
-				"commit_tag", commitTag, "judged_base", judgedBase, "head", headBefore)
-			return ErrConflict
-		}
-		validated = content
+		// publish a tree nobody judged. Nothing is written yet. (The check
+		// that decides is gitCommitOnto's compare-and-swap; this one only
+		// spares writing the file when HEAD has visibly moved already.)
+		slog.Warn("gitops: HEAD moved while the generator judged the write",
+			"commit_tag", commitTag, "judged_base", judgedBase, "head", headBefore)
+		return ErrConflict
 	}
 
 	if err := writeFileAtomic(filePath, content, 0644); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	committed, err := w.gitCommit(filePath, commitTag, authorEmail, validated, trailer...)
+	var committed bool
+	if judgedBase != "" {
+		committed, err = w.gitCommitOnto(filePath, commitTag, authorEmail, content, judgedBase, trailer...)
+	} else {
+		committed, err = w.gitCommit(filePath, commitTag, authorEmail, nil, trailer...)
+	}
 	if err != nil {
-		if validated != nil && w.stagedRefusal(err) {
+		if judgedBase != "" && (w.stagedRefusal(err) || errors.Is(err, ErrConflict)) {
 			if rerr := w.restoreFromHEAD(filePath); rerr != nil {
 				slog.Error("gitops: could not put back a refused write's file",
 					"commit_tag", commitTag, "error", rerr)
@@ -1628,7 +1642,8 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return nil
 	}
 
-	if headBefore != "" {
+	// The compare-and-swap already bound a judged write to its base.
+	if headBefore != "" && judgedBase == "" {
 		parent, err := w.commitParent()
 		if err == nil && parent != headBefore {
 			slog.Warn("gitops: external commit detected",
@@ -1686,14 +1701,7 @@ func (w *Writer) commitParent() (string, error) {
 // validated is the bytes the generator judged for filePath (nil: none were
 // judged); see gitCommitPaths.
 func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, validated []byte, trailer ...string) (committed bool, err error) {
-	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
-		tenantID, time.Now().UTC().Format(time.RFC3339))
-	// Optional trailer — appended to the message body so an audit
-	// annotation (e.g. an admission-validator --force bypass) is
-	// permanently bound to the commit, not just an ephemeral log line.
-	if len(trailer) > 0 && trailer[0] != "" {
-		msg += "\n\n" + trailer[0]
-	}
+	msg := tenantCommitMessage(tenantID, trailer...)
 	var check map[string][]byte
 	if validated != nil {
 		check = map[string][]byte{filePath: validated}
@@ -1714,46 +1722,12 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, validated []b
 // are unstaged and the write refused (checkStagedAsValidated); nothing is
 // committed. nil checks nothing.
 func (w *Writer) gitCommitPaths(dir string, paths []string, msg, authorEmail string, validated map[string][]byte) (committed bool, err error) {
-	// Stage the files in one `git add`, so the index never holds part of them
-	// for longer than this command.
-	addArgs := append([]string{"-C", dir, "add", "--"}, paths...)
-	addCmd, addCtx, addCancel := w.gitCmd(addArgs...)
-	defer addCancel()
-	if out, err := addCmd.CombinedOutput(); err != nil {
-		return false, w.gitErr(addCtx, "add", err, out)
-	}
-	if err := w.checkStagedAsValidated(dir, validated); err != nil {
-		if uerr := w.gitIn(dir, append([]string{"reset", "-q", "--"}, paths...)...); uerr != nil {
-			slog.Warn("gitops: could not unstage a refused write", "error", uerr)
-		}
+	changed, err := w.stagePaths(dir, paths, validated)
+	if err != nil || !changed {
 		return false, err
 	}
-
-	// Check if there's actually something to commit
-	statusCmd, _, statusCancel := w.gitCmd("-C", dir, "diff", "--cached", "--quiet")
-	defer statusCancel()
-	if err := statusCmd.Run(); err == nil {
-		// Exit 0 means no changes staged — nothing to commit
-		return false, nil
-	}
-
-	// author name defaults to email prefix when no display name is available
-	authorName := authorEmail
-	if at := strings.Index(authorEmail, "@"); at > 0 {
-		authorName = authorEmail[:at]
-	}
+	authorName, committerName, committerEmail := w.commitIdentity(authorEmail)
 	author := fmt.Sprintf("%s <%s>", authorName, authorEmail)
-
-	// Committer identity: cached from env vars injected by K8s Deployment.
-	// Fall back to author identity if not set (dev/local mode).
-	committerName := w.committerName
-	committerEmail := w.committerEmail
-	if committerName == "" {
-		committerName = authorName
-	}
-	if committerEmail == "" {
-		committerEmail = authorEmail
-	}
 
 	commitCmd, commitCtx, commitCancel := w.gitCmd("-C", dir,
 		"-c", "user.name="+committerName,

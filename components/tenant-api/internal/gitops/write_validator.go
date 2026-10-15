@@ -192,10 +192,13 @@ type normalizedRefusal struct{ err error }
 func (e *normalizedRefusal) Error() string { return e.err.Error() }
 func (e *normalizedRefusal) Unwrap() error { return e.err }
 
-// restoreFromHEAD puts filePath in the serving tree back as HEAD has it
-// after a refused write (removed when HEAD has no such file). Caller holds
-// w.mu.
+// restoreFromHEAD puts filePath in the index and the serving tree back as
+// HEAD has it after a refused write (removed when HEAD has no such file).
+// Caller holds w.mu.
 func (w *Writer) restoreFromHEAD(filePath string) error {
+	if err := w.gitIn(w.gitDir, "reset", "-q", "--", filePath); err != nil {
+		return err
+	}
 	out, err := w.gitOutput(w.gitDir, "ls-tree", "--name-only", "HEAD", "--", filePath)
 	if err != nil {
 		return err
@@ -207,4 +210,15 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 		return nil
 	}
 	return w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", filePath)
+}
+
+// headHolds reports whether HEAD's blob of filePath is exactly content
+// (false when HEAD has no such file or it cannot be read).
+func (w *Writer) headHolds(filePath string, content []byte) bool {
+	rel, err := filepath.Rel(w.gitDir, filePath)
+	if err != nil {
+		return false
+	}
+	blob, err := w.gitOutput(w.gitDir, "cat-file", "blob", "HEAD:./"+filepath.ToSlash(rel))
+	return err == nil && bytes.Equal(blob, content)
 }

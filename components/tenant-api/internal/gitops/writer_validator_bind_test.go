@@ -270,3 +270,157 @@ func TestWrite_IdenticalBodyAsksNothing(t *testing.T) {
 		t.Errorf("a changed body asked the validator %d time(s)", len(v.calls))
 	}
 }
+
+// outsideCommit commits outside.txt in dir from outside the Writer and
+// returns the new HEAD. `--only` keeps what the Writer has staged out of
+// it, as a committer working elsewhere would.
+func outsideCommit(t *testing.T, dir, content string) string {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "outside.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "outside.txt"}, {"commit", "-q", "--only", "-m", "outside the writer", "--", "outside.txt"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return gitRevParse(t, dir, "HEAD")
+}
+
+func gitStatus(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	return string(out)
+}
+
+func headBlob(t *testing.T, dir, path string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "cat-file", "blob", "HEAD:"+path).Output()
+	if err != nil {
+		return "<absent>"
+	}
+	return string(out)
+}
+
+// The compare-and-swap: a commit from outside landing after the commit
+// object is made and before HEAD is advanced (the seam) refuses the write
+// with ErrConflict; HEAD is the outside commit, and the index and the
+// serving tree are HEAD's again — for a new file and for an existing one.
+func TestDirectWrite_CASRefusesACommitBeforeTheAdvance(t *testing.T) {
+	t.Parallel()
+	const prior = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"60\"\n"
+	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
+	for _, existing := range []bool{false, true} {
+		dir := initRepoWithDefaults(t)
+		w := NewWriter(dir, dir)
+		if existing {
+			if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {
+				t.Fatal(err)
+			}
+		}
+		v := &recordingValidator{}
+		w.SetValidator(v)
+		base := gitRevParse(t, dir, "HEAD")
+		var outside string
+		w.beforeCASAdvance = func() { outside = outsideCommit(t, dir, "landed in the window") }
+
+		if _, err := w.Write(context.Background(), bindTenant, "op@example.com", body); !errors.Is(err, ErrConflict) {
+			t.Fatalf("existing=%v: err = %v, want ErrConflict", existing, err)
+		}
+		if len(v.calls) != 1 || v.calls[0].base != base {
+			t.Fatalf("existing=%v: calls = %+v", existing, v.calls)
+		}
+		if head := gitRevParse(t, dir, "HEAD"); head != outside || gitRevParse(t, dir, "HEAD~1") != base {
+			t.Errorf("existing=%v: HEAD = %s, want the outside commit %s on the judged base", existing, head, outside)
+		}
+		if log := gitLog(t, dir); strings.Count(log, "tenant/"+bindTenant) != map[bool]int{false: 0, true: 1}[existing] {
+			t.Errorf("existing=%v: the refused write's commit is in the history:\n%s", existing, log)
+		}
+		if st := gitStatus(t, dir); st != "" {
+			t.Errorf("existing=%v: the serving tree or index is not HEAD's:\n%s", existing, st)
+		}
+		want := "<absent>"
+		if existing {
+			want = prior
+		}
+		if got := headBlob(t, dir, bindTenant+".yaml"); got != want {
+			t.Errorf("existing=%v: HEAD's file = %q, want %q", existing, got, want)
+		}
+	}
+}
+
+// F8b: the short-circuit needs the body in the serving file AND in HEAD.
+// An uncommitted edit from outside that already holds the body is not a
+// no-op: the write is judged and committed, and leaves the tree clean.
+func TestWrite_UncommittedEditOfTheSameBodyIsCommitted(t *testing.T) {
+	t.Parallel()
+	dir := initRepoWithDefaults(t)
+	w := NewWriter(dir, dir)
+	const prior = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"60\"\n"
+	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
+	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, bindTenant+".yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := gitStatus(t, dir); !strings.Contains(st, " M "+bindTenant+".yaml") {
+		t.Fatalf("setup: status %q", st)
+	}
+	v := &recordingValidator{}
+	w.SetValidator(v)
+	head := gitRevParse(t, dir, "HEAD")
+	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", body); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.calls) != 1 {
+		t.Errorf("the generator was asked %d time(s), want 1", len(v.calls))
+	}
+	if gitRevParse(t, dir, "HEAD~1") != head || headBlob(t, dir, bindTenant+".yaml") != body {
+		t.Errorf("the body was not committed on HEAD")
+	}
+	if st := gitStatus(t, dir); st != "" {
+		t.Errorf("the tree is left dirty:\n%s", st)
+	}
+}
+
+// F8b: a write whose file landed and whose commit failed (index.lock) is
+// committed when resent with the same body, not answered as a no-op.
+func TestWrite_RetryAfterAFailedCommitCommits(t *testing.T) {
+	t.Parallel()
+	dir := initRepoWithDefaults(t)
+	w := NewWriter(dir, dir)
+	v := &recordingValidator{}
+	w.SetValidator(v)
+	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
+	head := gitRevParse(t, dir, "HEAD")
+	lock := filepath.Join(dir, ".git", "index.lock")
+	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", body); err == nil {
+		t.Fatal("the write succeeded with index.lock held")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, bindTenant+".yaml")); string(got) != body ||
+		gitRevParse(t, dir, "HEAD") != head {
+		t.Fatalf("setup: the file should have landed uncommitted (file %q)", got)
+	}
+	if err := os.Remove(lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", body); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if len(v.calls) != 2 {
+		t.Errorf("the generator was asked %d time(s), want 2 (the retry is judged)", len(v.calls))
+	}
+	if gitRevParse(t, dir, "HEAD~1") != head || headBlob(t, dir, bindTenant+".yaml") != body {
+		t.Error("the retry did not commit the body")
+	}
+	if st := gitStatus(t, dir); st != "" {
+		t.Errorf("the tree is left dirty:\n%s", st)
+	}
+}
