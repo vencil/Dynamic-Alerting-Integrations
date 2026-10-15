@@ -531,6 +531,50 @@ def test_a_symlink_or_gitlink_entry_is_not_a_regular_file(tmp_path, world):
     assert rc == 0 and not [f for f in cli["findings"] if f["kind"] == "tenant_file_unreadable"], cli
 
 
+def test_an_irregular_entry_occupies_its_path_for_writes(tmp_path, world):
+    """#2981 (ADR-036 §3): an entry that is not a regular file is still the
+    tree entry at its path. Writes see it in request order: below it is 400
+    (however deep, a directory symlink too) until a write or delete of that
+    path takes it out; the directory holding it is a directory, so writing
+    a file there is 400 as for a regular file. Any name is judged (a
+    README.md too), unless the path is hidden."""
+    repo = h.init_repo(tmp_path / "r")
+    files = dict(cases.FIXTURES["clean"])
+    files["zz-target.txt"] = "not config\n"
+    files["zz-dir/zz-note.txt"] = "not config\n"
+    commit_files = h.write_tree(repo / "conf.d", files)
+    symlink_or_skip("zz-dir", commit_files / "zz-dirlink")
+    symlink_or_skip("nowhere", commit_files / "zz-a")
+    symlink_or_skip("zz-target.txt", commit_files / "README.md")
+    (commit_files / "zz-d").mkdir()
+    symlink_or_skip("../zz-target.txt", commit_files / "zz-d" / "s.yaml")
+    (commit_files / ".x").mkdir()
+    symlink_or_skip("../zz-target.txt", commit_files / ".x" / "l.yaml")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    tenant = {"content_b64": h.b64(cases._tenant("db-q"))}
+    links = {"zz-dirlink", "zz-a", "README.md", "zz-d/s.yaml"}
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+        assert status == 200 and set(_unreadable(doc)) == links, doc
+        for writes, why in (
+                ([{"path": "zz-dirlink/x.yaml", **tenant}], "not a directory"),
+                ([{"path": "zz-a/b/c/d.yaml", **tenant}], "not a directory"),
+                ([{"path": "zz-a/x.yaml", **tenant}, {"path": "zz-a", "delete": True}],
+                 "not a directory"),
+                ([{"path": "zz-d", **tenant}], "is a directory")):
+            status, doc = svc.validate(commit, writes)
+            assert status == 400 and why in doc["message"], (writes, doc)
+        status, doc = svc.validate(commit, [{"path": "zz-a", "delete": True},
+                                            {"path": "zz-a/x.yaml", **tenant}])
+        assert status == 200 and set(_unreadable(doc)) == links - {"zz-a"}, doc
+        # A hidden path is no tree entry any reader reads: not judged, and
+        # nothing stops a write below it.
+        status, doc = svc.validate(commit, [{"path": ".x/l.yaml/y.yaml", **tenant}])
+        assert status == 200 and set(_unreadable(doc)) == links, doc
+
+
 def test_sha256_repository(tmp_path, world):
     repo = h.init_repo(tmp_path / "r", fmt="sha256")
     commit = h.commit_tree(repo, cases.FIXTURES["clean"])

@@ -13,7 +13,9 @@ forked, and never returns. In order:
    100755) only. Every other entry (a symlink, a gitlink, any other mode)
    is not written: it is handed to the generator as not_regular_file
    (#2981, ADR-036 §3), unless it is hidden (no reader reads those) or the
-   request writes that path. Then apply the request's writes.
+   request writes or deletes that path; its parent directories are made,
+   so it still occupies its path. Then apply the request's writes, in
+   order.
 4. Run the generator in this process — ``generate_alertmanager_routes.main``
    with ``--validate --strict --findings-json`` — with the service's parse
    cache installed (``_lib_parse_cache``), so unchanged files are not parsed
@@ -206,9 +208,11 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
     would follow to. Writing the link back as a symlink made the verdict
     depend on what the text happened to point at (or parse as), so every
     entry that is not a regular file is judged not_regular_file instead
-    (_grar_parse.set_git_irregular_entries). A hidden one (a component
-    starting with `.`) is left out without a word: every reader skips it,
-    whatever its shape."""
+    (_grar_parse.set_git_irregular_entries). Such an entry is still a tree
+    entry at its path: its parent directories are made, so a write of one
+    of them meets a directory there and is refused as for a regular file
+    (apply_writes). A hidden one (a component starting with `.`) is left
+    out without a word: every reader skips it, whatever its shape."""
     if tree:
         os.makedirs(root, mode=0o700, exist_ok=True)
     irregular: dict[str, str] = {}
@@ -218,24 +222,34 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
         if mode in REGULAR_MODES:
             _write_file(root, rel, content, GitReadError)
         elif not any(part.startswith(".") for part in rel.split("/")):
+            _parent_dir(root, rel, GitReadError)
             irregular[rel] = mode
     return irregular
 
 
 def apply_writes(root: str, request: ValidateRequest,
-                 irregular: "Mapping[str, str] | None" = None) -> list[dict]:
-    """Apply the request's writes; the ``validated.files`` records.
-    *irregular* (materialise's answer) is not on disk, so a write below one
-    of those entries is refused here, as one below a file is."""
+                 irregular: "dict[str, str] | None" = None) -> list[dict]:
+    """Apply the request's writes, in order; the ``validated.files`` records.
+
+    *irregular* (materialise's answer, updated in place) holds the entries
+    that occupy a path but are not on disk. Each write sees the tree the
+    writes before it left: one below such an entry is refused, as one below
+    a file is, and one that writes or deletes the entry's own path takes it
+    out — tenant-api writes a regular file there — so a later write may go
+    below it. A write of a directory that holds one meets that directory
+    (materialise made it) and is refused like any other."""
+    if irregular is None:
+        irregular = {}
     files: list[dict] = []
     if request.writes:
         os.makedirs(root, mode=0o700, exist_ok=True)
     for w in request.writes:
         parts = w.path.split("/")
         for i in range(1, len(parts)):
-            if "/".join(parts[:i]) in (irregular or {}):
+            if "/".join(parts[:i]) in irregular:
                 raise BadWrite(f"{w.path}: {parts[i - 1]!r} in its path is not a directory "
                                f"in the base tree")
+        irregular.pop(w.path, None)
         if w.delete:
             parent = _parent_dir(root, w.path, BadWrite)
             target = os.path.join(parent, w.path.split("/")[-1])
@@ -326,10 +340,6 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         files = apply_writes(tree_dir, job.request, irregular)
     except BadWrite as exc:
         return {"outcome": "bad_request", "message": str(exc)}
-    # A write (or delete) of a path that was not a regular file replaces it:
-    # tenant-api writes a regular file there.
-    for w in job.request.writes:
-        irregular.pop(w.path, None)
 
     if job.warm:
         return _warm(job, tree_dir, stream)

@@ -275,6 +275,12 @@ tenant-api pod
   - 為什麼：從 git 物件讀到的 symlink 只是連結文字，不是它指向的檔；gitlink 沒有內容。照連結文字判，結果取決於文字碰巧長什麼樣，例如文字剛好讀得出一個 mapping。
   - 例子：`t1.yaml` 在 repo 裡是指向 `real.yaml` 的 symlink。寫入被拒，finding 是 `tenant_file_unreadable`，原因寫「is not a regular file (not_regular_file): git tree mode 120000, a symlink」，修法是把它換成內容相同的一般檔。tenant-api 寫這個路徑時本來就會寫成一般檔，所以這筆寫入本身不受影響。
   - 例外：路徑中有一段以 `.` 開頭的項目不判，因為所有讀取端都略過隱藏項目。
+  - 不看檔名：除了上面的例外，任何不是一般檔的項目都擋，包括 `README.md` 這類不是設定檔名的項目。這比從檔案系統讀的讀取端嚴：它們依檔名挑設定檔，不是設定檔名的 symlink 直接略過、不報。刻意如此：判定只依 git mode 一條規則，不必跟「哪些檔名算設定檔」的清單保持一致；修法也只有一種，換成一般檔或刪掉。
+  - 這些項目仍佔著自己的路徑，寫入照請求裡的順序逐筆套用，每筆看到的是前面各筆寫完之後的樹：
+    - 寫到它底下的路徑（多深都一樣，例如 `l` 是 symlink 時寫 `l/x.yaml` 或 `l/a/b.yaml`）回 400，與寫到一般檔底下相同。
+    - 本次寫入覆寫或刪除了它的路徑，它就不再判 `not_regular_file`（tenant-api 在那裡寫的是一般檔），之後的寫入也可以寫到它底下。例如同一批先刪 `l` 再寫 `l/x.yaml` 會通過；順序反過來則回 400。
+    - 它所在的目錄是目錄：tree 裡有 `d/s.yaml`（symlink）時把 `d` 寫成檔，與 `d/s.yaml` 是一般檔時一樣回 400。
+  - 產生器容器為了預先填滿快取所做的讀取（啟動時、以及遇到新的 base commit 之後），只讀判定用的樹裡寫在磁碟上的檔，不產生 finding，因此不涉及這些項目。
   - 從檔案系統讀的讀取端（exporter、`da-guard parse-tree` 讀目錄、客戶 CI）照舊跟隨檔案 symlink：Kubernetes ConfigMap 掛載後每個 key 都是一條 symlink，不能禁止。所以同一棵樹，客戶 CI 可能是綠的，而 tenant-api 的寫入被拒。
 - **兩個容器必須用同一個 uid**（程序執行時的 Linux 使用者編號）：git 會拒絕讀別的 uid 擁有的 repo（實測：不同 uid 以 `-C` 讀，報 dubious ownership）。chart 加測試釘住。
 - **repo 關閉 git 的自動垃圾回收（`gc.auto=0`）**。實測：同 uid 下一邊 15 輪 commit 加 `repack -a -d` 加 `gc --prune=now`，另一邊讀固定 commit 1376 次，0 失敗；唯讀掛載可讀。
