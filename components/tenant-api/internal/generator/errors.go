@@ -52,9 +52,15 @@ var RejectionReasons = []string{
 	ReasonTooLarge, ReasonInvalidRequest, ReasonMismatch, ReasonNoTime, ReasonNormalized,
 }
 
-// Reasons of an *UnavailableError raised by tenant-api itself (the service's
-// own are passed through: amtool_missing, generator_too_old, internal_error,
-// policy_unusable).
+// Reasons of an *UnavailableError the service gives (its 503s, ADR-036 §5).
+const (
+	ReasonAmtoolMissing   = "amtool_missing"
+	ReasonGeneratorTooOld = "generator_too_old"
+	ReasonInternalError   = "internal_error"
+	ReasonPolicyUnusable  = "policy_unusable"
+)
+
+// Reasons of an *UnavailableError raised by tenant-api itself.
 const (
 	ReasonUnreachable = "unreachable"  // no connection, or no answer before the deadline
 	ReasonBadResponse = "bad_response" // an answer that cannot be read
@@ -124,4 +130,27 @@ func (e *UnavailableError) Error() string {
 
 func unavailable(reason, message string) *UnavailableError {
 	return &UnavailableError{Code: CodeValidatorUnavailable, Reason: reason, Message: message}
+}
+
+// UnavailableReasons lists every *UnavailableError reason tenant-api knows:
+// the service's and its own.
+var UnavailableReasons = []string{
+	ReasonAmtoolMissing, ReasonGeneratorTooOld, ReasonInternalError, ReasonPolicyUnusable,
+	ReasonUnreachable, ReasonBadResponse, ReasonInternal, ReasonUnknown, ReasonPolicyUnreadable,
+}
+
+// ClientReason is the reason a client is shown: reason itself when it is
+// one tenant-api knows (RejectionReasons, UnavailableReasons), else
+// ReasonUnknown. The service's reason is passed through to tenant-api as
+// it came, so a newer or a broken service can put anything there; the
+// original goes to the log with the error.
+func ClientReason(reason string) string {
+	for _, list := range [][]string{RejectionReasons, UnavailableReasons} {
+		for _, r := range list {
+			if r == reason {
+				return reason
+			}
+		}
+	}
+	return ReasonUnknown
 }

@@ -60,6 +60,9 @@ type aonFixture struct {
 	deps  *Deps
 	tasks *async.Manager
 	prs   int
+	// lastBody is the raw response of the last run (async: the finished
+	// task as JSON), for tests that check what a response must not say.
+	lastBody string
 }
 
 func newAONFixture(t *testing.T, mode WriteMode) *aonFixture {
@@ -147,12 +150,16 @@ func (f *aonFixture) run(t *testing.T, group, body string, async_ bool) (int, []
 			t.Fatalf("202 without task_id: %s", w.Body.String())
 		}
 		task := pollUntilTerminal(t, f.tasks, acc.TaskID, 20*time.Second)
+		if raw, err := json.Marshal(task); err == nil {
+			f.lastBody = string(raw)
+		}
 		res := make([]BatchResult, len(task.Results))
 		for i, r := range task.Results {
 			res[i] = BatchResult{TenantID: r.TenantID, Status: r.Status, Message: r.Message, Code: r.Code}
 		}
 		return w.Code, res, task
 	}
+	f.lastBody = w.Body.String()
 	var resp struct {
 		Results []BatchResult `json:"results"`
 	}

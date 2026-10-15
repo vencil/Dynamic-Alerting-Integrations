@@ -252,9 +252,11 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 |---|---|---|---|
 | 有 finding | 422 | `GENERATOR_FINDINGS` | `findings[]` 是產生器的 finding，與這次寫入的檔或租戶相關的排前面並標 `related: true`；`findings_compared_with_base: true` 時每筆另有 `pre_existing`（寫入前就有）。不相關的 finding 只給對所有租戶有寫入權限的呼叫者看，其他人只拿到 `unrelated_findings_withheld`（數量）。批次則是一般的 422 `status: rejected`，每筆結果都是這個 code，訊息列出與該筆租戶相關的 finding |
 | 產生器這次沒判出結果，可重試 | 429（`Retry-After`） | `GENERATOR_REJECTED` | `reason`：`busy`、`deadline`、`git_read`、`mismatch`、`no_time`（剩下的時間不夠判定） |
-| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request`、`normalized`（`.gitattributes` 的 eol、text 或 filter 在 staging 時改了內容，commit 的不會是判定過的那份） |
+| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request`、`normalized`（`.gitattributes` 的 eol、text 或 filter 在 staging 時改了內容，commit 的不會是判定過的那份）、`unknown`（產生器回了 tenant-api 不認得的 reason） |
 | 產生器容器不可用 | 503（`Retry-After`） | `VALIDATOR_UNAVAILABLE` | `reason`：`unreachable`（連不上或期限內沒回應）、`bad_response`、`amtool_missing`、`generator_too_old`、`internal_error` |
 | 部署端 policy 檔不可用 | 503（`Retry-After`） | `POLICY_UNAVAILABLE` | `reason`：`policy_unusable`（產生器讀不了）、`policy_unreadable`（tenant-api 讀不了自己掛的那份） |
+
+`GENERATOR_REJECTED` 與 503 的回應只帶 code、`reason` 與固定說明，不帶產生器或 tenant-api 的錯誤訊息（可能含路徑、例外內容或其他租戶的檔名）；不認得的 reason 一律顯示 `unknown`。原本的 reason 與訊息只寫進 tenant-api 的 log。`GENERATOR_FINDINGS` 的 `findings[]` 是判定結果本身，依上面的可見性規則揭露。
 
 - **監控**：`tenant_api_policy_available`（產生器容器能否判定，scrape 時讀它的狀態端點）、`tenant_api_generator_rejections_total{reason}`、`tenant_api_generator_scrape_success`，以及附在 tenant-api `/metrics` 之後的產生器 `da_generator_*`；告警 `TenantApiPolicyUnavailable`、`GeneratorJudgementMemoryNearLimit`。
 - **寫入扁平鍵 `_routing_receiver_type`** 一律 400（`PUT` 與批次 patch），receiver type 寫在 `_routing.receiver.type`。

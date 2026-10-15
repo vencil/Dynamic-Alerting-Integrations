@@ -207,7 +207,9 @@ const (
 	// (the files the write produces are too large for one judgement: split
 	// the batch), invalid_request and normalized (git attributes would
 	// commit other bytes than the ones judged: .gitattributes eol, text or a
-	// filter rewrote a file as it was staged). Counted in
+	// filter rewrote a file as it was staged). A reason tenant-api does not
+	// know is shown as unknown (generator.ClientReason). The text never
+	// carries the error's message (see generatorDetailInLog). Counted in
 	// tenant_api_generator_rejections_total{reason}. Nothing was written. Not
 	// a 503: the container itself is fine.
 	CodeGeneratorRejected = "GENERATOR_REJECTED"
@@ -1123,7 +1125,7 @@ func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 		})
 	case errors.As(err, &rej):
 		status, text := http.StatusUnprocessableEntity, generatorRejectedText(rej)
-		env := ErrorResponse{Error: text, Code: CodeGeneratorRejected, Extra: map[string]any{"reason": rej.Reason}}
+		env := ErrorResponse{Error: text, Code: CodeGeneratorRejected, Extra: map[string]any{"reason": generator.ClientReason(rej.Reason)}}
 		if generator.Retryable(rej.Reason) {
 			status = http.StatusTooManyRequests
 			w.Header().Set("Retry-After", strconv.Itoa(generatorRetryAfterS))
@@ -1138,7 +1140,7 @@ func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 			Error:       generatorUnavailableText(unav),
 			Code:        unav.Code,
 			RetryAfterS: generatorRetryAfterS,
-			Extra:       map[string]any{"reason": unav.Reason},
+			Extra:       map[string]any{"reason": generator.ClientReason(unav.Reason)},
 		})
 	default:
 		return false
@@ -1200,34 +1202,40 @@ func nonNilFindings(f []generator.Finding) []generator.Finding {
 	return f
 }
 
+// The client text of the generator's refusals (GENERATOR_REJECTED and the
+// 503s) is one rule: a fixed sentence for the code, the reason as the
+// client may see it (generator.ClientReason) — never the error's Message.
+// Messages carry server and tree detail whatever their reason: tenant-api's
+// own (socket paths, transport errors, an os.ReadFile error naming the
+// policy path, a mismatch naming the file judged otherwise — in a group
+// batch possibly a member the caller can no longer read) and the service's
+// (internal_error is a Python repr; a rejected verdict's or a 400's message
+// is its text as written). They go to the log only, with the original
+// reason (writeGeneratorError, generatorOpResult). A list of reasons whose
+// message is safe to show is a list that misses the next shape. The
+// findings of a GENERATOR_FINDINGS refusal are the judgement itself and are
+// disclosed by disclosedFindings, not here.
+const generatorDetailInLog = " — the server log has the detail"
+
 // generatorRejectedText is the client text of GENERATOR_REJECTED.
 func generatorRejectedText(e *generator.RejectedError) string {
 	if e.Reason == generator.ReasonTooLarge {
 		return msgGeneratorTooLarge
 	}
-	head := "the route generator could not judge this write (" + e.Reason + "); nothing was written"
+	head := "the route generator could not judge this write (" + generator.ClientReason(e.Reason) + "); nothing was written"
 	if generator.Retryable(e.Reason) {
 		head += " — retry"
 	}
-	if e.Message != "" {
-		head += ": " + e.Message
-	}
-	return head
+	return head + generatorDetailInLog
 }
 
-// generatorUnavailableText is the client text of the generator's 503: the
-// code's fixed sentence and the reason, never e.Message. Messages carry
-// server detail whatever their reason — tenant-api's own (socket paths,
-// transport errors, an os.ReadFile error naming the policy path) and the
-// service's (internal_error is the repr of a Python exception) — so they go
-// to the log only (writeGeneratorError logs the error). A list of reasons
-// whose message is safe to show is a list that misses the next shape.
+// generatorUnavailableText is the client text of the generator's 503.
 func generatorUnavailableText(e *generator.UnavailableError) string {
 	what := "the route generator container cannot judge writes"
 	if e.Code == generator.CodePolicyUnavailable {
 		what = "the deployment policy file the route generator judges with is unusable"
 	}
-	return what + " (reason: " + e.Reason + "), so content-changing writes are refused; nothing was written — the server log has the detail"
+	return what + " (reason: " + generator.ClientReason(e.Reason) + "), so content-changing writes are refused; nothing was written" + generatorDetailInLog
 }
 
 // generatorRejectsBatch reports whether err is a refusal by the generator
@@ -1270,6 +1278,7 @@ func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
 		}
 		return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: CodeGeneratorFindings}, true
 	case errors.As(err, &rej):
+		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID, "reason", rej.Reason, "error", err)
 		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorRejectedText(rej), Code: CodeGeneratorRejected}, true
 	case errors.As(err, &unav):
 		// The message is the log's only (generatorUnavailableText); an async

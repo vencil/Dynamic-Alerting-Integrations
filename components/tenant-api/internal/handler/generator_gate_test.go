@@ -16,6 +16,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,6 +78,7 @@ func gatePaths() []gatePath {
 	put := func(header map[string]string) func(t *testing.T, f *aonFixture) (int, []BatchResult) {
 		return func(t *testing.T, f *aonFixture) (int, []BatchResult) {
 			w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", header)
+			f.lastBody = w.Body.String()
 			return w.Code, nil
 		}
 	}
@@ -96,6 +98,8 @@ func gatePaths() []gatePath {
 			body := `{"base_hash":"` + cfg.ComputeSourceHash([]byte(aonTree()["t-a.yaml"])) +
 				`","custom_alerts":[{"recipe":"threshold","name":"queue_high","metric":"queue_depth","threshold":"1000","window":"5m"}]}`
 			resp := putCustomAlerts(t, f.deps, "t-a", body, "alice@example.com", []string{"admins"})
+			raw, _ := io.ReadAll(resp.Body)
+			f.lastBody = string(raw)
 			return resp.StatusCode, nil
 		}},
 		{"direct/tenant batch sync", WriteModeDirect, batch("", tenantOps, false)},
@@ -322,10 +326,15 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 			"policy_unusable": func(int, testutil.FakeValidateRequest) (int, any) {
 				return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": secret}
 			},
+			// A reason tenant-api does not know is shown as "unknown".
+			"unknown": func(int, testutil.FakeValidateRequest) (int, any) {
+				return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": secret, "message": secret}
+			},
 		} {
 			f, _ := generatorDirectFixture(t, answer)
 			w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
-			if m := genEnvelope(t, w); w.Code != 503 || m["reason"] != name || strings.Contains(w.Body.String(), "secret-dir") {
+			if m := genEnvelope(t, w); w.Code != 503 || m["reason"] != name || strings.Contains(w.Body.String(), "secret-dir") ||
+				!strings.Contains(m["error"].(string), "(reason: "+name+")") {
 				t.Errorf("%s: status %d body %s", name, w.Code, w.Body.String())
 			}
 			// The async batch's stored results carry the same text.
@@ -535,7 +544,7 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 		w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
 		m := genEnvelope(t, w)
 		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorRejected || m["reason"] != generator.ReasonNormalized ||
-			w.Header().Get("Retry-After") != "" || !strings.Contains(m["error"].(string), "t-a.yaml") {
+			w.Header().Get("Retry-After") != "" || strings.Contains(m["error"].(string), "t-a.yaml") {
 			t.Errorf("status %d body %s", w.Code, w.Body.String())
 		}
 	})
@@ -600,5 +609,69 @@ func TestGeneratorGate_GroupBatchRefusalShowsOnlyVisibleMembers(t *testing.T) {
 				t.Errorf("findings = %+v, withheld %d; want only the readable member's, 2 withheld", resp.Findings, resp.UnrelatedFindingsWithheld)
 			}
 		})
+	}
+}
+
+// The client text of every generator refusal is one rule
+// (generatorRejectedText / generatorUnavailableText): code, the reason as
+// generator.ClientReason gives it, a fixed sentence — never the error's
+// message. Three shapes whose message carries detail — a mismatch naming
+// the file judged otherwise, a 400 invalid_request whose message is a
+// Python repr, a rejected verdict with a reason tenant-api does not know
+// (shown as "unknown") — on every write path: sync, batch results, async
+// task, PR mode.
+func TestGeneratorGate_RefusalTextNeverEchoesTheMessage(t *testing.T) {
+	t.Parallel()
+	const secret = "srv-secret-dir"
+	for _, tc := range []struct {
+		name   string
+		answer func(int, testutil.FakeValidateRequest) (int, any)
+		absent []string
+		reason string
+	}{
+		{"mismatch", func(_ int, req testutil.FakeValidateRequest) (int, any) {
+			v := testutil.PassVerdict(req, nil)
+			if files := v["validated"].(map[string]any)["files"].([]map[string]any); len(files) > 0 {
+				files[0]["sha256"] = "00"
+			}
+			return 200, v
+		}, []string{"judged with other content", ".yaml"}, "mismatch"},
+		{"invalid_request", func(int, testutil.FakeValidateRequest) (int, any) {
+			return 400, map[string]any{"error": "INVALID_REQUEST", "message": "ValueError('/" + secret + "/x')"}
+		}, []string{secret, "ValueError"}, "invalid_request"},
+		{"unknown reason", func(int, testutil.FakeValidateRequest) (int, any) {
+			v := testutil.RejectedVerdict("/" + secret + "/reason")
+			v["message"] = "detail from /" + secret
+			return 200, v
+		}, []string{secret}, "unknown"},
+	} {
+		for _, p := range gatePaths() {
+			t.Run(tc.name+"/"+p.name, func(t *testing.T) {
+				t.Parallel()
+				f := newAONFixture(t, p.mode)
+				fake := withFakeGenerator(t, f)
+				fake.SetValidate(tc.answer)
+				code, results := p.run(t, f)
+				if len(fake.Requests()) == 0 {
+					t.Fatal("the write never asked the generator")
+				}
+				if code < 400 && !strings.HasSuffix(p.name, "async") {
+					t.Fatalf("status %d", code)
+				}
+				for _, a := range tc.absent {
+					if strings.Contains(f.lastBody, a) {
+						t.Errorf("the response shows %q: %s", a, f.lastBody)
+					}
+				}
+				if !strings.Contains(f.lastBody, tc.reason) {
+					t.Errorf("the response does not name reason %q: %s", tc.reason, f.lastBody)
+				}
+				for _, r := range results {
+					if r.Code != CodeGeneratorRejected {
+						t.Errorf("result %+v, want %s", r, CodeGeneratorRejected)
+					}
+				}
+			})
+		}
 	}
 }
