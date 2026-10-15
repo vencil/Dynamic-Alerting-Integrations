@@ -398,6 +398,41 @@ class TestMainObservationLoop:
         assert len(sleep_calls) == 2
         assert all(s == 2 for s in sleep_calls)
 
+    @pytest.mark.parametrize("extra", [[], ["--dry-run"]], ids=["run", "dry-run"])
+    def test_duration_below_interval_exits_2(self, capsys, monkeypatch, tmp_path,
+                                             cli_argv, extra):
+        """--duration < --interval 一次都採不到 → rc 2，不查詢、不寫檔（#3001）。"""
+        queried = []
+
+        def _query(prometheus_url, expr):
+            queried.append(expr)
+            return [{"metric": {}, "value": [0, "50.0"]}], None
+        out_dir = tmp_path / "out"
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "10", "--interval", "15", "--metrics", "cpu", "-o", str(out_dir), *extra)
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _query)
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        with pytest.raises(SystemExit) as exc_info:
+            baseline_discovery.main()
+        assert exc_info.value.code == 2
+        assert "--duration (10s)" in capsys.readouterr().err
+        assert queried == []
+        assert not out_dir.exists()
+
+    def test_duration_equal_interval_samples_once(self, monkeypatch, tmp_path, cli_argv):
+        """邊界：--duration == --interval 採樣一次，照常執行（#3001）。"""
+        queried = []
+
+        def _query(prometheus_url, expr):
+            queried.append(expr)
+            return [{"metric": {}, "value": [0, "50.0"]}], None
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "15", "--interval", "15", "--metrics", "cpu", "-o", str(tmp_path / "out"))
+        monkeypatch.setattr(baseline_discovery, "query_prometheus", _query)
+        monkeypatch.setattr(baseline_discovery.time, "sleep", lambda s: None)
+
+        baseline_discovery.main()
+        assert len(queried) == 1
+
 
 # ── CSV Output Tests (v2.1.0) ────────────────────────────────────
 
