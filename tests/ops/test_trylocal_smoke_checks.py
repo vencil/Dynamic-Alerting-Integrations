@@ -131,11 +131,28 @@ def _make_handler(preview: dict, seen: list):
     return H
 
 
+def _serve(srv: ThreadingHTTPServer) -> threading.Thread:
+    """Serve srv on a thread that _stop joins. Request threads are not
+    daemons, so server_close joins them too: no thread of this test outlives
+    it into the next test on this worker (a generator-service test refuses
+    to fork while another thread runs — #3015)."""
+    srv.daemon_threads = False
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    return t
+
+
+def _stop(srv: ThreadingHTTPServer, t: threading.Thread) -> None:
+    srv.shutdown()
+    srv.server_close()
+    t.join(timeout=10)
+    assert not t.is_alive(), "the test HTTP server thread did not stop"
+
+
 def _run_smoke(tmp_path: Path, preview: dict):
     seen: list = []
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(preview, seen))
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
-    t.start()
+    t = _serve(srv)
     try:
         # A copy, so a developer's try-local/.env (which smoke.sh sources and
         # which would override the ports below) cannot leak in.
@@ -149,8 +166,7 @@ def _run_smoke(tmp_path: Path, preview: dict):
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
                               encoding="utf-8", env=env, timeout=60)
     finally:
-        srv.shutdown()
-        srv.server_close()
+        _stop(srv, t)
     return proc, seen
 
 
@@ -201,7 +217,7 @@ def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
     dead = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(GOOD_PREVIEW, seen))
     dead_port = str(dead.server_address[1])
     dead.server_close()  # the port is now closed
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    t = _serve(srv)
     try:
         script = tmp_path / "smoke.sh"
         shutil.copy(SMOKE, script)
@@ -213,8 +229,7 @@ def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
                               encoding="utf-8", env=env, timeout=60)
     finally:
-        srv.shutdown()
-        srv.server_close()
+        _stop(srv, t)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "recipe-preview /healthz returned HTTP 000" in proc.stderr, proc.stderr
 
