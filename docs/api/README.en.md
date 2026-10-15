@@ -10,7 +10,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./README.md)
 
-Threshold Exporter is the core component of the Multi-Tenant Dynamic Alerting platform, responsible for converting tenant configurations into Prometheus metrics, state filters, and severity deduplication flags. This document details all API endpoints, request/response formats, examples, and Kubernetes integration methods.
+Threshold Exporter is the core component of the Multi-Tenant Dynamic Alerting platform, responsible for converting tenant configurations into Prometheus metrics, state filters, and severity deduplication flags. This page explains each GET endpoint for people; the machine contract is the [OpenAPI spec](./threshold-exporter-openapi.yaml).
 
 ## Service Specifications
 
@@ -63,178 +63,71 @@ curl -s http://localhost:8080/metrics | grep -E '^(user_|tenant_|da_)'
 
 ## 2. GET /health - Liveness Probe
 
-### Description
-
-Checks if the service is running. Used for Kubernetes `livenessProbe`. This endpoint should respond even if configuration is not yet loaded.
-
-### Request
+For the Kubernetes `livenessProbe`. Answers as soon as the process is up, whether or not a config is loaded.
 
 ```bash
 curl -s http://localhost:8080/health
 ```
 
-### Response
-
-**Status Code**: 200 OK  
-**Content-Type**: `text/plain`
-
-```
-ok
-```
-
-### Kubernetes Configuration Example
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health
-    port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  timeoutSeconds: 3
-  failureThreshold: 3
-```
+| When | Status | Body |
+|------|--------|------|
+| The process is running | 200 | `ok` |
 
 ---
 
 ## 3. GET /ready - Readiness Probe
 
-### Description
-
-Checks if the service is ready to serve traffic by verifying that configuration has been loaded. Returns 200 when ready (configuration loaded), or 503 when not ready (configuration not loaded or being reloaded). Used for Kubernetes `readinessProbe`.
-
-### Request
+For the Kubernetes `readinessProbe`. Answers 503 until the first config load succeeds and 200 from then on; a later failed reload does not turn it back to 503 (the exporter keeps serving the previous config).
 
 ```bash
 curl -s http://localhost:8080/ready
 ```
 
-### Success Response (Ready)
+| When | Status | Body |
+|------|--------|------|
+| A config has been loaded | 200 | `ready` |
+| No config loaded yet | 503 | `config not loaded` |
 
-**Status Code**: 200 OK  
-**Content-Type**: `text/plain`
-
-```
-ready
-```
-
-### Failure Response (Not Ready)
-
-**Status Code**: 503 Service Unavailable  
-**Content-Type**: `text/plain`
-
-```
-config not loaded
-```
-
-### Kubernetes Configuration Example
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /ready
-    port: 8080
-  initialDelaySeconds: 5
-  periodSeconds: 5
-  timeoutSeconds: 3
-  failureThreshold: 2
-```
-
-### Complete Pod Health Probe Configuration
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: threshold-exporter
-spec:
-  containers:
-  - name: threshold-exporter
-    image: ghcr.io/vencil/threshold-exporter:v2.9.0
-    ports:
-    - containerPort: 8080
-      name: metrics
-    
-    # Liveness probe - checks if service is still running
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 8080
-      initialDelaySeconds: 10
-      periodSeconds: 10
-      timeoutSeconds: 3
-      failureThreshold: 3
-    
-    # Readiness probe - checks if configuration is loaded
-    readinessProbe:
-      httpGet:
-        path: /ready
-        port: 8080
-      initialDelaySeconds: 5
-      periodSeconds: 5
-      timeoutSeconds: 3
-      failureThreshold: 2
-    
-    # Resource limits
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
-    
-    # Mount configuration
-    volumeMounts:
-    - name: config
-      mountPath: /etc/threshold-exporter/conf.d
-      readOnly: true
-  
-  volumes:
-  - name: config
-    configMap:
-      name: threshold-config
-```
+A test checks the tables in §2 and §3 against the handlers (`api_readme_examples_parity_test.go`); the Content-Type of both endpoints is in the [OpenAPI spec](./threshold-exporter-openapi.yaml). The Helm chart's probe settings (liveness, readiness, startup) are in [`values.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/helm/threshold-exporter/values.yaml) and are not copied here.
 
 ---
 
-## 4. GET /api/v1/config - Configuration State Debug Endpoint
+## 4. GET /api/v1/config - Config Debug Page
 
-### Description
-
-Debug endpoint exposing the current loaded configuration state in plain text format. Supports RFC3339 timestamp query parameter for inspecting scheduled override state at a specific point in time.
-
-### Request
-
-#### Query Current Configuration
+A plain-text page for people: the loaded defaults, each tenant's values, and the resolved thresholds. The layout is not a contract; programs should read §5.
 
 ```bash
-curl -s http://localhost:8080/api/v1/config | head -50
+curl -s http://localhost:8080/api/v1/config
 ```
 
-#### Query Configuration at Specific Timestamp
+Add `?at=<RFC 3339 time>` to see what scheduled overrides (time windows) resolve to at that moment, without waiting for it.
 
-```bash
-# Check scheduled override state at 2026-03-12T03:30:00Z (the response example below)
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
+### Example
+
+With these two files in conf.d:
+
+```yaml
+# _defaults.yaml
+defaults:
+  container_cpu: 80
+  mysql_connections: 80
 ```
 
-### Query Parameters
-
-| Parameter | Type | Description | Example |
-|-----------|------|-------------|---------|
-| `at` | string (RFC3339) | Check configuration state at this timestamp. Omit to return current state. | `2026-03-12T14:30:00Z` |
-
-### Response
-
-**Status Code**: 200 OK  
-**Content-Type**: `text/plain`
-
-### Response Example
-
-Output (`configViewHandler` in `handlers.go`; one `_defaults.yaml` plus one tenant file, with `?at=`).
-
+```yaml
+# tenant-a.yaml
+tenants:
+  tenant-a:
+    container_cpu:
+      default: "85"
+      overrides:
+        - window: "01:00-09:00"
+          value: "95"
+    mysql_connections: "70"
 ```
+
+the output of `curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z"` is below (03:30 is inside the window, so `container_cpu` resolves to 95; line order within a section is not fixed):
+
+```text
 Config loaded: true
 Last reload:   2026-03-12T10:05:30Z
 Config mode:   directory
@@ -254,25 +147,7 @@ Resolved thresholds:
   tenant=tenant-a metric=connections value=70 severity=warning component=mysql
 ```
 
-### Common Use Cases
-
-#### 1. Verify Tenant Configuration is Loaded Correctly
-
-```bash
-curl -s http://localhost:8080/api/v1/config | grep -A 20 "^Tenants"
-```
-
-#### 2. Check Scheduled Override State at Specific Timestamp
-
-```bash
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 50 "^Resolved thresholds"
-```
-
-#### 3. Check Last Reload Time and Load Mode
-
-```bash
-curl -s http://localhost:8080/api/v1/config | head -3
-```
+A test runs this example: it loads the two yaml files above from an empty directory and compares the output (`api_readme_examples_parity_test.go`).
 
 ---
 
@@ -310,98 +185,39 @@ curl -s http://localhost:8080/api/v1/config/identity
 
 ## Prometheus Scrape Configuration
 
-### Simple Configuration
-
-```yaml
-scrape_configs:
-  - job_name: threshold-exporter
-    static_configs:
-      - targets: ['localhost:8080']
-    scrape_interval: 30s
-    scrape_timeout: 10s
-```
-
-### Kubernetes Service Discovery Configuration
-
-```yaml
-scrape_configs:
-  - job_name: threshold-exporter
-    kubernetes_sd_configs:
-      - role: pod
-        namespaces:
-          names:
-            - monitoring
-    relabel_configs:
-      # Keep only Pods labeled with 'app=threshold-exporter'
-      - source_labels: [__meta_kubernetes_pod_label_app]
-        action: keep
-        regex: threshold-exporter
-      
-      # Use Pod name as instance label
-      - source_labels: [__meta_kubernetes_pod_name]
-        action: replace
-        target_label: instance
-      
-      # Add cluster label
-      - source_labels: [__meta_kubernetes_namespace]
-        action: replace
-        target_label: cluster
-    
-    scrape_interval: 30s
-    scrape_timeout: 10s
-```
+- With `rules.mode: operator` the Helm chart creates a ServiceMonitor ([`servicemonitor.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/helm/threshold-exporter/templates/servicemonitor.yaml)).
+- For a Prometheus you run yourself, follow "Step 2: Scrape threshold-exporter" in the [BYOP integration guide](../integration/byo-prometheus-integration.en.md).
 
 ---
 
 ## Troubleshooting
 
-### Issue: readinessProbe Returns 503, "config not loaded"
+### `/ready` keeps answering 503
 
-**Cause:** Configuration file is not mounted correctly or failed to load.
+The exporter has not loaded a config yet. Look for the error in the log and check that conf.d is mounted (the Helm chart mounts it at `/etc/threshold-exporter/conf.d`):
 
-**Solution:**
 ```bash
-# Check Pod logs
 kubectl logs <pod-name> -n monitoring
-
-# Verify ConfigMap exists
-kubectl get configmap threshold-config -n monitoring
-
-# Check ConfigMap contents
-kubectl get configmap threshold-config -n monitoring -o yaml
-
-# Verify mount path
 kubectl exec <pod-name> -n monitoring -- ls -la /etc/threshold-exporter/conf.d/
 ```
 
-### Issue: /metrics Endpoint Returns Empty Results or Missing Expected Metrics
+### `/metrics` is missing a metric you expect
 
-**Cause:** Tenant configuration not loaded or configuration has syntax errors.
+Check that the tenant and key are in the config:
 
-**Solution:**
 ```bash
-# Check configuration debug endpoint
-curl -s http://<pod-ip>:8080/api/v1/config | head -100
-
-# View Pod event logs
-kubectl describe pod <pod-name> -n monitoring
-
-# Check configuration validation logs
-kubectl logs <pod-name> -n monitoring | grep -i "validation\|error"
+curl -s http://<pod-ip>:8080/api/v1/config | grep -A 20 "^Tenants"
 ```
 
-### Issue: Metrics Not Updated After Configuration Change
+### The config changed but the metrics did not
 
-**Cause:** Configuration reload failed or has not been triggered yet.
+Check which config version the exporter is serving and whether any file was left out because it does not parse (field meanings in §5):
 
-**Solution:**
 ```bash
-# Check ConfigMap update time
-kubectl get configmap threshold-config -n monitoring -o wide
-
-# View configuration reload logs
-kubectl logs <pod-name> -n monitoring | tail -50
+curl -s http://<pod-ip>:8080/api/v1/config/identity
 ```
+
+If `last_reload` has not moved, there has been no reload yet: a ConfigMap change reaches the Pod when kubelet syncs it, and the exporter loads it on its next poll (`-reload-interval`). Files listed in `parse_failed` were not used; the log says why.
 
 ---
 
