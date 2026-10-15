@@ -4,8 +4,8 @@ The gate asserts that every `ghcr.io/vencil/da-tools:vX.Y.Z` pin in the k8s /
 Helm surface points at a `tools/vX.Y.Z` tag whose tree actually contains the
 entry point the workload runs. Each test pins one branch of that contract:
 
-  - the LIVE repo is green, and green for the right reason: exactly the two
-    registered EXEMPTIONS violate, there is no third, and every other da-tools
+  - the LIVE repo is green, and green for the right reason: exactly the
+    registered EXEMPTIONS violate, there is no other, and every other da-tools
     workload passes on its own merits (TestLiveRepoIsClean);
   - counterfactual — de-registering either exemption turns the gate RED, so
     the gate is demonstrably doing the catching, not the registry;
@@ -36,11 +36,15 @@ _spec = importlib.util.spec_from_file_location("check_image_pin_capability", _SC
 gate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gate)
 
-# The two known-incapable workloads, as EXEMPTIONS keys (source, entry, TAG).
+# The known-incapable workloads, as EXEMPTIONS keys (source, entry, TAG).
 _GOVERN_KEY = ("k8s/03-monitoring/cronjob-threshold-govern.yaml",
                "threshold-govern", "v2.9.0")
 _RECONCILER_KEY = ("helm/federation-reconciler",
                    "_federation_revocation_reconciler.py", "v2.9.0")
+# #2902: tenant-api's opt-in generator container (generator.enabled=false by
+# default, because of exactly this).
+_GENERATOR_KEY = ("helm/tenant-api", "generator-service", "v2.9.0")
+_KNOWN_KEYS = (_GOVERN_KEY, _RECONCILER_KEY, _GENERATOR_KEY)
 
 
 @pytest.fixture(scope="module")
@@ -69,13 +73,14 @@ class TestLiveRepoIsClean:
         keys = {w.key for w in workloads}
         assert _GOVERN_KEY in keys
         assert _RECONCILER_KEY in keys
+        assert _GENERATOR_KEY in keys
 
     def test_only_the_registered_two_are_incapable(self, live):
         """No THIRD incapable pin has crept in behind the registry."""
         workloads, _ = live
         violations, _, _, _ = gate.run_check(workloads, exemptions={})
-        assert len(violations) == 2, (
-            "expected exactly the 2 registered incapable pins, got:\n"
+        assert len(violations) == len(_KNOWN_KEYS), (
+            f"expected exactly the {len(_KNOWN_KEYS)} registered incapable pins, got:\n"
             + "\n".join(violations)
         )
 
@@ -88,7 +93,7 @@ class TestLiveRepoIsClean:
         assert stale == []
         # Every registered entry still licenses a workload that resolves to it.
         assert orphaned == []
-        assert len(exempted) == 2
+        assert len(exempted) == len(_KNOWN_KEYS)
 
     def test_a_capable_workload_exists(self, live):
         """At least one da-tools workload passes on its own merits.
@@ -120,14 +125,15 @@ class TestLiveRepoIsClean:
 
 
 # ── counterfactual: the gate, not the registry, does the catching ───────────
-@pytest.mark.parametrize("dropped", [_GOVERN_KEY, _RECONCILER_KEY],
-                         ids=["threshold-govern", "federation-reconciler"])
+@pytest.mark.parametrize("dropped", _KNOWN_KEYS,
+                         ids=["threshold-govern", "federation-reconciler",
+                              "tenant-api-generator"])
 def test_de_registering_an_exemption_turns_the_gate_red(live, dropped):
     workloads, _ = live
     reduced = {k: v for k, v in gate.EXEMPTIONS.items() if k != dropped}
     violations, exempted, stale, orphaned = gate.run_check(workloads, reduced)
     assert len(violations) == 1, violations
-    assert len(exempted) == 1
+    assert len(exempted) == len(_KNOWN_KEYS) - 1
     assert stale == []
     assert orphaned == []
     # The message must name the tag and the mechanism, not just "failed".
@@ -384,6 +390,58 @@ def test_a_container_reading_a_foreign_pin_is_attributed_not_refused(tmp_path, m
         "the da-tools container must still be checked — attribution may only "
         "SUBTRACT the foreign container, never the workload being guarded"
     )
+
+
+def _literal_init_tmpl(image: str) -> str:
+    return _DEPLOYMENT_TMPL + f"""\
+      initContainers:
+        - name: git-clone
+          image: {image}
+          command: ["sh", "-c", "git clone x /conf.d"]
+"""
+
+
+def test_a_literal_foreign_image_is_not_a_da_tools_container(tmp_path, monkeypatch):
+    """#2902: a container whose `image:` is a LITERAL non-da-tools reference
+    (tenant-api's pinned alpine/git init container) names its repository
+    outright, so it is not a da-tools container and owes no da-tools entry
+    point. Before #2902 that chart pinned no da-tools image and was never
+    scanned; its generator pin made this shape reachable."""
+    _write_chart(tmp_path, template=_literal_init_tmpl(
+        "alpine/git:v2.54.0@sha256:" + "0" * 64))
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    workloads = gate.collect_helm_workloads(errors)
+    assert errors == [], errors
+    assert [w.entry for w in workloads] == ["maintenance_scheduler.py"]
+
+
+@pytest.mark.parametrize("image", [
+    # a literal da-tools reference is still a da-tools container
+    "ghcr.io/vencil/da-tools:v2.9.0",
+    # …however its registry host is spelled: case and port normalise away
+    "GHCR.io/vencil/da-tools:v2.9.0",
+    "ghcr.io:443/vencil/da-tools:v2.9.0",
+    # a literal the reference grammar rejects is unreadable, not foreign
+    "ghcr.io/vencil/da-tools:v2.9.0@sha256:short",
+    '"ghcr.io/vencil/da-tools:"',  # quoted: a bare trailing `:` is not YAML
+    # an expression that reads no `.Values` is untraceable, not foreign
+    '{{ include "probe.gitImage" . | quote }}',
+    # …even when the stripped text happens to parse as a reference
+    'reg.example.com/x{{ include "probe.suffix" . }}z:v1',
+], ids=["literal-da-tools", "host-case", "host-port", "short-digest",
+        "empty-tag", "untraceable-expression", "expression-that-parses"])
+def test_only_a_literal_foreign_image_is_skipped(tmp_path, monkeypatch, image):
+    """⛔ The fail-closed half of the literal skip: it may only subtract a
+    container whose literal PARSES as a reference and whose normalised
+    repository is not da-tools."""
+    _write_chart(tmp_path, template=_literal_init_tmpl(image))
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    gate.collect_helm_workloads(errors)
+    assert len(errors) == 1, errors
+    assert "container git-clone" in errors[0]
+    assert "cannot be resolved" in errors[0]
 
 
 def test_an_unclaimed_foreign_pin_is_still_refused(tmp_path, monkeypatch):
@@ -1014,9 +1072,10 @@ def test_missing_subcommand_finding_states_the_exact_exit_code(monkeypatch):
 
 
 def test_v290_lacks_both_entry_points():
-    """Ground truth for the two incidents, read straight off the tag."""
+    """Ground truth for the registered workloads, read straight off the tag."""
     command_map, tool_files = gate.capabilities_for_tag("tools/v2.9.0")
     assert "threshold-govern" not in command_map
+    assert "generator-service" not in command_map
     assert "threshold_govern.py" not in tool_files
     assert "_federation_revocation_reconciler.py" not in tool_files
     # …and the positive control that makes those absences meaningful.
@@ -1050,4 +1109,6 @@ def test_head_would_satisfy_both_workloads():
     tool_files = gate.parse_tool_files_text(build_sh.read_text(encoding="utf-8"))
     assert command_map.get("threshold-govern") == "threshold_govern.py"
     assert "threshold_govern.py" in tool_files
+    assert command_map.get("generator-service") == "generator_service.py"
+    assert "generator_service.py" in tool_files
     assert "_federation_revocation_reconciler.py" in tool_files

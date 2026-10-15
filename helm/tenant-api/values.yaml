@@ -529,6 +529,82 @@ humanSocket:
   # sidecar and nothing else.
   path: /run/ta-human/human.sock
 
+# Generator container (ADR-036 §3, #2902): a da-tools sidecar running
+# `da-tools generator-service`, which judges a conf.d write with
+# `generate-routes --validate --strict` and answers over a pod-internal Unix
+# socket (no network port). It reads the conf.d repository read-only, from git
+# objects only, as the same uid as tenant-api (podSecurityContext below).
+#
+# ⛔ TEMPORARY switch, default false. The newest released da-tools image
+# (tools/v2.9.0, pinned below) has no `generator-service` subcommand: enabling
+# it with that tag crash-loops the container, and a crash-looping container
+# keeps the whole pod — tenant-api included — out of Ready. Enable it only
+# together with an image.tag that ships generator-service. Nothing calls the
+# container yet: #2903 makes tenant-api ask it before every write, and that
+# change removes this switch — the container becomes required.
+#
+# ⚠️ Enabling it sets git's `gc.auto=0` on the conf.d repository (init
+# containers git-clone / git-gc-off). Operational cost: git no longer packs or
+# prunes loose objects on its own, so every tenant-api commit leaves its
+# objects loose and the repository only grows. Reclaim space by hand in a
+# maintenance window: scale the Deployment to 0 so nothing reads or writes the
+# repository, run `git gc` on it (for a pvc / hostPath conf.d, from a one-off
+# pod mounting the same volume as the same uid; an emptyDir conf.d is cloned
+# afresh on every pod start), then scale back to 1. Why it must not run by itself: the
+# generator reads git objects of a base commit WHILE tenant-api commits, and
+# an automatic gc repacking or pruning under that read is the race ADR-036 §3
+# closes by turning it off.
+#
+# Body limits: the generator's --max-body-bytes / --max-inflight-body-bytes
+# are derived from tenantApi.server.maxBodyBytes / maxBatchBodyBytes (raise
+# those, the generator's follow; see _helpers.tpl generatorBodyArgs). The
+# derivation sizes for what tenant-api RECEIVES; the resulting files of a batch
+# can add up to more than that, and the request builder that has to respect
+# it is #2903.
+generator:
+  enabled: false
+  # Same da-tools release line and tag as helm/federation-reconciler.
+  # `bump_docs.py --tools` rewrites this tag at release time (two-line
+  # repository/tag pin). ⚠️ Keep `tag:` explicit: check_image_pin_capability.py
+  # reads it to verify the image contains generator-service, and registers
+  # v2.9.0 (which does not) as an exemption that a capable release turns stale.
+  image:
+    repository: ghcr.io/vencil/da-tools
+    tag: "v2.9.0"
+    # Optional digest pin. Empty = tag only. ⛔ When set, the digest is what
+    # runs: `--set generator.image.tag=…` alone would not change the image.
+    digest: ""
+    pullPolicy: IfNotPresent
+  # ADR-036 §3: request = limit (512Mi, 1 CPU). The memory budget is the
+  # resident service (~80Mi) plus one judgement process and one Go program it
+  # starts (192Mi RLIMIT_DATA each). The render fails when requests and limits
+  # differ; raise both together (and the service's --memory-limit-bytes) when
+  # the parse cache outgrows the judgement budget.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+  # --work-dir: a disk-backed emptyDir (also the container's /tmp) holding the
+  # tree of the one judgement in flight and what the generator writes for it.
+  # Disk, not Memory, because a tmpfs counts against the 512Mi above. 1Gi is
+  # generous for one conf.d copy plus generated config; exceeding it evicts
+  # the pod, so raise it with very large conf.d trees rather than lowering it.
+  workDir:
+    sizeLimit: 1Gi
+  # Deployment-side policy file (ADR-036 §5, #2826): `allowed_domains` (and
+  # optionally `min_generator_version`) kept OUTSIDE the tenant repository, so
+  # a user who can write to the repository cannot loosen it. The chart ships
+  # no policy content: name an existing ConfigMap you manage and its key. Set,
+  # it is mounted read-only into the generator (passed as --policy) and into
+  # tenant-api at the same path (tenant-api checks its hash, #2903). The
+  # ConfigMap must exist: the pod does not start without it.
+  policy:
+    existingConfigMap: ""
+    key: policy.yaml
+
 service:
   type: ClusterIP
   # Port 80 → oauth2-proxy (4180) — external traffic

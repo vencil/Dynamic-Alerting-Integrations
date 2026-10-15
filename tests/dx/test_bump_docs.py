@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import yaml
 from _platform_fs import require_tool  # noqa: E402
 
 # Add scripts/tools to path
@@ -800,10 +801,33 @@ class TestHelmTwoLinePin:
     def test_live_repo_rules_are_not_dead(self):
         """The rules must actually match the files as they are committed today."""
         rules = (self._tools_rules_for("helm/federation-reconciler/values.yaml")
-                 + self._tools_rules_for("helm/federation-reconciler/Chart.yaml"))
+                 + self._tools_rules_for("helm/federation-reconciler/Chart.yaml")
+                 + self._tools_rules_for("helm/tenant-api/values.yaml"))
         version = bump_docs.read_current_versions()["tools"]
         changes = bump_docs.apply_rules(rules, version, check_only=True)
-        assert [c[0] for c in changes] == ["OK", "OK"], changes
+        assert [c[0] for c in changes] == ["OK", "OK", "OK"], changes
+
+    def test_tenant_api_generator_pin_is_bumped_alone(self, tmp_path, monkeypatch):
+        """#2902: tenant-api's values.yaml holds three image pins; the
+        `--tools` rule must move the da-tools one (generator.image) and leave
+        tenant-api's own image and the oauth2-proxy sidecar alone. Its
+        check_image_pin_capability exemption goes stale only through this."""
+        real = bump_docs.REPO_ROOT / "helm" / "tenant-api" / "values.yaml"
+        before = real.read_text(encoding="utf-8")
+        target = tmp_path / "helm" / "tenant-api" / "values.yaml"
+        target.parent.mkdir(parents=True)
+        target.write_text(before, encoding="utf-8")
+        rules = self._tools_rules_for("helm/tenant-api/values.yaml")
+        assert len(rules) == 1 and rules[0].get("require_match")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules(rules, "2.10.0", check_only=False)
+        assert [c[0] for c in changes] == ["UPDATE"], changes
+        after = target.read_text(encoding="utf-8")
+        assert yaml.safe_load(after)["generator"]["image"]["tag"] == "v2.10.0"
+        changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines())
+                   if a != b]
+        assert len(changed) == 1, changed
+        assert len(before.splitlines()) == len(after.splitlines())
 
 
 class TestLiveRepoRuleTargetsExist:
