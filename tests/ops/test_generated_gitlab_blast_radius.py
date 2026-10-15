@@ -246,6 +246,10 @@ def test_gitlab_blast_radius_report_compares_base_with_head(
     _git(work, "config", "user.name", "test")
     conf = work / "conf.d"
     conf.mkdir()
+    # The base declared, so /metrics serves the value on both sides (without
+    # it both read "(not served)", #3022).
+    (conf / "_defaults.yaml").write_text("defaults:\n  container_cpu: 80\n",
+                                         encoding="utf-8", newline="\n")
     tenant = conf / "tenant-x.yaml"
     tenant.write_text('tenants:\n  tenant-x:\n    container_cpu: "70"\n',
                       encoding="utf-8", newline="\n")
