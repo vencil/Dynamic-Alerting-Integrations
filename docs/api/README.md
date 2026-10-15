@@ -217,7 +217,7 @@ curl -s http://<pod-ip>:8080/api/v1/config | grep -A 20 "^Tenants"
 curl -s http://<pod-ip>:8080/api/v1/config/identity
 ```
 
-`last_reload` 沒變就是還沒重新載入：ConfigMap 的變更要等 kubelet 同步進 Pod，exporter 再於下一次輪詢（`-reload-interval`）時載入。`parse_failed` 列出的檔案沒有被採用，原因在 log 裡。
+`last_reload` 沒變表示還沒有新版設定裝上，可能是：ConfigMap 的變更還沒被 kubelet 同步進 Pod、還沒到下一次輪詢（`-reload-interval`），或這次載入失敗（錯誤在 log 裡）。`parse_failed` 列出的檔案沒有被採用，原因在 log 裡。
 
 ---
 

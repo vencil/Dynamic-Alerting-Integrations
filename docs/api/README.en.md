@@ -217,7 +217,7 @@ Check which config version the exporter is serving and whether any file was left
 curl -s http://<pod-ip>:8080/api/v1/config/identity
 ```
 
-If `last_reload` has not moved, there has been no reload yet: a ConfigMap change reaches the Pod when kubelet syncs it, and the exporter loads it on its next poll (`-reload-interval`). Files listed in `parse_failed` were not used; the log says why.
+If `last_reload` has not moved, no new config has been installed yet. Either kubelet has not synced the ConfigMap change into the Pod, the next poll (`-reload-interval`) has not come, or the load failed (the log has the error). Files listed in `parse_failed` were not used; the log says why.
 
 ---
 
