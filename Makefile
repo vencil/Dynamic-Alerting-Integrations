@@ -688,7 +688,7 @@ pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll change
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  playbook-freshness (advisory — read its output above; it never blocks)"
-	@echo "  Changelog fragments assembled ✅  Reader-divergence catalog not expired ✅  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
+	@echo "  Changelog fragments assembled ✅  Reader-divergence catalog not expired ✅  Draft-advisory check ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
@@ -777,7 +777,7 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 	fi
 
 # --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
-# release.yaml builds 5 of these 7 images at tag push; building them locally in
+# release.yaml builds 5 of these 8 images at tag push; building them locally in
 # pre-tag catches #472/#473-class build breaks BEFORE the tag, not after.
 # ⚠️ The last two (federation-audit-sidecar / vector-projection-gate) ship
 # INSIDE Helm charts and are never published, so release.yaml never builds them
@@ -796,7 +796,7 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # test_selfbuilt_matrix_covers_every_dockerfile (#1337) — adding a build here
 # without adding it there (or vice versa) is a hard test failure, by design.
 .PHONY: docker-build-all trivy-scan-all
-docker-build-all: ## 建 7 個 self-built image（local --load，無 push；#474 Layer 2）
+docker-build-all: ## 建 8 個 self-built image（local --load，無 push；#474 Layer 2）
 	@docker buildx build --load -t local-test:threshold-exporter components/threshold-exporter/app
 	@mkdir -p docs/assets/vendor  # da-portal COPYs vendor/（空目錄即可，runtime CDN fallback）
 	@docker buildx build --load -t local-test:da-portal -f components/da-portal/Dockerfile .
@@ -813,6 +813,8 @@ docker-build-all: ## 建 7 個 self-built image（local --load，無 push；#474
 	@# 兩顆隨 chart 出貨、從不發布的自建 image（#1337）——build context 就是各自目錄。
 	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar
 	@docker buildx build --load -t local-test:vector-projection-gate helm/vector/projection-gate
+	@# try-local 的產生器服務 runtime（#2903）：只給 demo compose 用、從不發布。
+	@docker buildx build --load -t local-test:try-local-generator try-local/generator
 
 # Trivy 版本釘：與 .github/workflows/** 每個 trivy-action 的 `version:`、
 # .devcontainer/install-trivy.sh 同版（tests/shared/test_toolchain_pin_parity.py）。
@@ -820,12 +822,12 @@ docker-build-all: ## 建 7 個 self-built image（local --load，無 push；#474
 # 所以版本不符時明講，不靜默用 PATH 上剛好有的那支。
 TRIVY_VERSION := 0.74.0
 
-trivy-scan-all: docker-build-all ## Trivy CVE scan 7 個 image（informational：印出但不擋，#448）
+trivy-scan-all: docker-build-all ## Trivy CVE scan 8 個 image（informational：印出但不擋，#448）
 	@have=$$(trivy --version 2>/dev/null | awk '/^Version:/{print $$2; exit}'); \
 	if [ "$$have" != "$(TRIVY_VERSION)" ]; then \
 	  echo "⚠️  本地 trivy $${have:-<未安裝>} ≠ CI 釘的 $(TRIVY_VERSION)：CVE 結果可能與 CI 不同（bash .devcontainer/install-trivy.sh 裝同版）"; \
 	fi
-	@for img in threshold-exporter da-portal tenant-api da-tools recipe-preview federation-audit-sidecar vector-projection-gate; do \
+	@for img in threshold-exporter da-portal tenant-api da-tools recipe-preview federation-audit-sidecar vector-projection-gate try-local-generator; do \
 	  echo "[trivy] local-test:$$img"; \
 	  trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 local-test:$$img || true; \
 	done

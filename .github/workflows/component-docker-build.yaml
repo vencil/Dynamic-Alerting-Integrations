@@ -66,6 +66,7 @@ on:
       # directory, so the Dockerfile + its siblings are the whole input set.
       - "helm/federation-gateway/audit-sidecar/**"
       - "helm/vector/projection-gate/**"
+      - "try-local/generator/**"     # try-local generator runtime (#2903), self-contained
       - ".github/workflows/component-docker-build.yaml"
 
 concurrency:
@@ -92,8 +93,9 @@ jobs:
         # (tests/ops/test_nightly_scan_matrix_drift.py) pins all three against
         # the repo's Dockerfile inventory (#1337).
         #
-        # All 7 self-built Dockerfiles. The split below covers 5 of them; the
-        # remaining 2 are the chart-shipped pair, and both are self-contained
+        # All 8 self-built Dockerfiles. The split below covers 5 of them; the
+        # remaining 3 are the chart-shipped pair and try-local's generator
+        # runtime (#2903), all self-contained
         # (their build context is their own directory) — see their entries.
         #
         # 4 are self-contained (build from source in
@@ -130,6 +132,12 @@ jobs:
           - name: vector-projection-gate
             context: helm/vector/projection-gate
             dockerfile: helm/vector/projection-gate/Dockerfile
+          # try-local's generator service runtime (#2903): built by the demo
+          # compose stack, never published — like the two above, this is its
+          # only CVE / build coverage.
+          - name: try-local-generator
+            context: try-local/generator
+            dockerfile: try-local/generator/Dockerfile
     steps:
       - uses: actions/checkout@v6
 
