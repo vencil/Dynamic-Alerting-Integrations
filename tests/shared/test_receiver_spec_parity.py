@@ -42,7 +42,11 @@ follows Alertmanager's HTTPClientConfig / ProxyConfig rules — at most one auth
 method (`HTTP_CONFIG_AUTH_FIELDS`), string-only tokens and proxy_url. Whether a
 proxy_url parses as a URL is left to amtool (the generator's --validate gate);
 the Go side checks it itself, so those rows carry `python_differs` (the Python
-verdict and why), as tests/shared/routing_policy_parity_matrix.json does. A row may carry its receiver
+verdict and why), as tests/shared/routing_policy_parity_matrix.json does. What is
+nested inside http_config (tls_config, oauth2, authorization, basic_auth, the
+header mappings; #2984) only the schema and Alertmanager judge: those rows carry
+`python_differs` and `go_differs` (the Go checks' verdict, asserted by
+pkg/receiverspec and the guard). A row may carry its receiver
 as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and, on the Go
 side, with pkg/pyyamlcompat over the yaml.v3 node, which types a plain scalar the
 way PyYAML does (plain `on` a boolean, quoted `"on"` a string; see the
@@ -421,10 +425,16 @@ def test_http_config_keys_python_handles_are_schema_properties():
     assert not missing, f"Python handles http_config keys the schema refuses: {missing}"
 
 
+_NESTED_SAMPLES = {"#/definitions/httpOAuth2": {"client_id": "c", "token_url": "https://t.example/x"}}
+
+
 def _sample(prop: dict):
     """A value of the property's own type that sets nothing another key needs."""
     if prop.get("$ref") == "#/definitions/yamlBool":
         return False
+    if "anyOf" in prop:  # a nested definition or null: its smallest valid mapping
+        ref = next(b["$ref"] for b in prop["anyOf"] if "$ref" in b)
+        return _NESTED_SAMPLES.get(ref, {})
     types = prop["type"] if isinstance(prop["type"], list) else [prop["type"]]
     return {"object": {}, "string": "", "boolean": False}[next(t for t in types if t != "null")]
 

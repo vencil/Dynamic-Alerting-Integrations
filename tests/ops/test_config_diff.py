@@ -877,6 +877,31 @@ class TestCredentialsAreNotPrinted:
         """schema 裡長得像憑證的欄位，每一個都得歸類：要嘛遮、要嘛明列不是。"""
         schema = json.loads((REPO_ROOT / "docs" / "schemas"
                              / "tenant-config.schema.json").read_text(encoding="utf-8"))
+        # http_config 整個值當憑證遮（容器整個遮，見 _lib_redact），所以只有
+        # http_config 會用到的定義（httpConfig 與它引用的 httpOAuth2、
+        # httpTLSConfig…，#2984）裡的欄位已經歸類，不再逐一要求。
+        assert "http_config" in cd._CREDENTIAL_KEYS
+        defs = schema["definitions"]
+
+        def refs(node):
+            return set(re.findall(r'"#/definitions/(\w+)"', json.dumps(node)))
+
+        roots = {"httpConfigOrNull", "httpConfig"}
+        inside, stack = set(), sorted(roots)
+        while stack:
+            name = stack.pop()
+            if name not in inside:
+                inside.add(name)
+                stack.extend(refs(defs[name]))
+        outside = {k: v for k, v in schema.items() if k != "definitions"}
+        outside["definitions"] = {k: v for k, v in defs.items() if k not in inside}
+        # The roots are entered only as the value of an `http_config` key.
+        entries = re.findall(r'"(\w+)": \{"\$ref": "#/definitions/(httpConfig(?:OrNull)?)"',
+                             json.dumps(outside))
+        assert entries and {k for k, _ in entries} == {"http_config"}, entries
+        inside -= refs(outside) - roots  # a definition also used outside http_config is still walked
+        schema = {k: v for k, v in schema.items() if k != "definitions"}
+        schema["definitions"] = {k: v for k, v in defs.items() if k not in inside}
         names = set()
 
         def walk(node):

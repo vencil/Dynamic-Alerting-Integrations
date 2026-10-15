@@ -261,8 +261,8 @@ func TestPresenceCases(t *testing.T) {
 		}
 		t.Run(tc.Name, func(t *testing.T) {
 			problems := Check(tc.Receiver)
-			if valid := len(problems) == 0; valid != tc.Valid {
-				t.Errorf("Check valid=%v, table says %v: %+v", valid, tc.Valid, problems)
+			if valid := len(problems) == 0; valid != tc.goValid() {
+				t.Errorf("Check valid=%v, table says %v: %+v", valid, tc.goValid(), problems)
 			}
 		})
 	}
@@ -294,6 +294,32 @@ type presenceCase struct {
 	Valid    bool           `json:"valid"`
 	AM       string         `json:"am"`
 	Strict   string         `json:"strict"`
+	// GoDiffers (#2984) marks a row the Go checks judge otherwise, with
+	// why: nested http_config, which only the schema and Alertmanager judge.
+	GoDiffers *goDiffers `json:"go_differs"`
+}
+
+type goDiffers struct {
+	Valid  bool   `json:"valid"`
+	Reason string `json:"reason"`
+}
+
+// goValid is the verdict the Go checks must reach on the row.
+func (c presenceCase) goValid() bool {
+	if c.GoDiffers != nil {
+		return c.GoDiffers.Valid
+	}
+	return c.Valid
+}
+
+// TestPresenceCases_GoDiffersSayWhy: a go_differs entry names its reason and
+// actually differs from the row's verdict.
+func TestPresenceCases_GoDiffersSayWhy(t *testing.T) {
+	for _, tc := range loadCases(t) {
+		if d := tc.GoDiffers; d != nil && (d.Reason == "" || d.Valid == tc.Valid) {
+			t.Errorf("%s: go_differs must name a reason and differ from valid=%v: %+v", tc.Name, tc.Valid, *d)
+		}
+	}
 }
 
 // loadCases reads the shared table. A row carries its receiver either as JSON

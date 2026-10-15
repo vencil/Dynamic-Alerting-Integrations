@@ -54,6 +54,7 @@ jobs:
       python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
       portal_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.portal }}
       docs_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.docs }}
+      schema_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.schema }}
     steps:
       # No actions/checkout: REST-API mode queries the changed-file list
       # via the GitHub API (see validate.yaml's identical note).
@@ -97,10 +98,6 @@ jobs:
               - "**/go.sum"
               - "tests/contract/**"
               - "tests/alertmanager-inhibit/**"
-              #   - the tenant schema — the am-inhibit leg pins its
-              #     http_config key set to Alertmanager's (#2984); that leg
-              #     has no `docs` gate, unlike threshold-exporter's.
-              - "docs/schemas/tenant-config.schema.json"
               #   - tests/e2e-bench/receiver/** — the receiver leg (#1280).
               #     `**/go.mod` above already woke the Go legs on a go.mod
               #     edit; this entry makes an edit to main.go / main_test.go
@@ -452,6 +449,15 @@ jobs:
             # Only the threshold-exporter leg consumes docs/.
             docs:
               - "docs/**"
+            # schema: the am-inhibit leg pins the tenant schema's http_config
+            # key sets to the structs Alertmanager decodes into (#2984), so a
+            # schema-only PR must run it. Its own filter for the reason `docs`
+            # is: adding the path to `go` would wake all five Go legs
+            # (tenant-api's schemathesis included), while the only other Go
+            # leg that reads the schema (threshold-exporter) already wakes on
+            # `docs`.
+            schema:
+              - "docs/schemas/tenant-config.schema.json"
 
   lint:
     name: Lint
@@ -2378,9 +2384,13 @@ jobs:
     runs-on: ubuntu-24.04
     # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). The
     # go filter includes k8s/03-monitoring/** + try-local/** because this
-    # leg parses both hand-written Alertmanager configs.
+    # leg parses both hand-written Alertmanager configs. `schema_changed`
+    # joins the condition because this leg reads the tenant schema and its
+    # `go` gate does not cover it (#2984, the `schema` filter); as with threshold-exporter's
+    # `docs_changed`, the aggregate gate needs no change — a leg that runs
+    # reports success/failure.
     needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
+    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.schema_changed == 'true'
     # Evaluates the two HAND-WRITTEN Alertmanager configs against Alertmanager's
     # own matcher implementation (#1132: amtool check-config is green on an
     # inhibit rule that silently eats notifications). Pure file parsing — no
