@@ -445,7 +445,7 @@ _routing_enforced:
     - 'severity="critical"'     # ⚠️ 必須是 matcher 字串的 list
 ```
 
-> ⚠️ **`match` 只接受 list-of-matcher-strings**。寫成 map 形式（`match:` / `  severity: "critical"`）會被 `_grar_routes.py::_build_single_enforced_route` 的 `isinstance(match, list)` 判斷**靜默丟棄**——產生的 route 因此**沒有任何 matcher**，加上 enforced route 固定帶 `continue: true`，結果是一條 **match-all 消防水管**：所有租戶的所有告警（含 severity=info 與其他租戶的）全被雙送進該 receiver。範本見 [`conf.d/_defaults.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/config/conf.d/_defaults.yaml) 的註解區塊。
+> ⚠️ **`match` 只接受 list-of-matcher-strings**。寫成 map 形式（`match:` / `  severity: "critical"`，即 `routes[i].match` 的寫法）、單一字串或數字時，產生器**不產出**這條 enforced route，印 `WARN: _routing_enforced in <檔案>: 'match' must be a list of Alertmanager matcher strings … skipping`，`--validate` 與 `validate-config` 回 1（da-guard 報 `routing_enforced_match_invalid`；[#2989](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2989)）。名稱順序上較早的根目錄 `_` 檔若已啟用 `_routing_enforced`，該區塊照常生效。先前這種寫法會被**靜默丟棄**——route 沒有任何 matcher，加上固定的 `continue: true`，成了一條 **match-all 消防水管**：所有租戶的所有告警全被雙送進該 receiver。⚠️ v2.9.0 映像仍是靜默丟棄、`--validate` 回 0 <!-- image-caveat: v2.9.0 -->。省略 `match`（或寫 null）照舊是不加 matcher。範本見 [`conf.d/_defaults.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/config/conf.d/_defaults.yaml) 的註解區塊。
 
 **模式 B：Per-tenant 獨立通道**
 

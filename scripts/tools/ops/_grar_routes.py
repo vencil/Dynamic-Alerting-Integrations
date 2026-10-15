@@ -106,6 +106,32 @@ def enforced_route_tenants(routing_configs: dict[str, dict],
     return sorted(set(routing_configs) | set(tenants))
 
 
+def enforced_match_invalid(enforced_routing: object) -> bool:
+    """Whether ``_routing_enforced.match`` is written but is not a list (#2989).
+
+    The enforced route takes ``match`` only as a list of Alertmanager matcher
+    strings (``['severity="critical"']``; tenant-config schema
+    ``definitions.routingEnforced.match``, ``type: array``). A mapping — the
+    ``routes[i].match`` spelling ``{severity: critical}`` — a string or a
+    number used to be dropped without a word, so the NOC route received
+    EVERY alert. Absent / null stays "no matcher" (every alert, as
+    documented). Go twin: ``routingpolicy.enforcedFrom``
+    (ProblemRoutingEnforcedMatchInvalid).
+    """
+    if not isinstance(enforced_routing, dict):
+        return False
+    match = enforced_routing.get("match")
+    return match is not None and not isinstance(match, list)
+
+
+def enforced_match_invalid_text(where: str, value: object) -> str:
+    """The refusal line's text for ``enforced_match_invalid`` (no prefix)."""
+    return (f"_routing_enforced{where}: 'match' must be a list of Alertmanager "
+            f"matcher strings (e.g. ['severity=\"critical\"']), got "
+            f"{type(value).__name__} {value!r} — platform-enforced (NOC) routing "
+            f"is NOT rendered (it would otherwise receive every alert), skipping")
+
+
 def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
                                ) -> list[tuple[str, int, str, object]]:
     """``(ctx, index, kind, value)`` per bad group_by element of the
@@ -573,6 +599,16 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
         warnings.append(skipped_entry_warning(
             "  WARN: _routing_enforced: missing 'receiver', skipping enforced route",
             kind="missing_receiver_field", field="_routing_enforced.receiver"))
+        return routes, receivers, warnings
+
+    # #2989: the loader (_grar_parse._parse_platform_config) never enables a
+    # block whose `match` is not a list; refused here too, so no caller of the
+    # builders can render a NOC route that drops its `match` and catches
+    # every alert. Both shapes: substitution never changes the type.
+    if enforced_match_invalid(enforced_routing):
+        warnings.append(skipped_entry_warning(
+            "  WARN: " + enforced_match_invalid_text("", enforced_routing["match"]),
+            kind="routing_enforced_match_invalid", field="_routing_enforced.match"))
         return routes, receivers, warnings
 
     if _contains_tenant_placeholder(enforced_routing):

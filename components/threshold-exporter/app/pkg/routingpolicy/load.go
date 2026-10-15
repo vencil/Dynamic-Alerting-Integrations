@@ -1429,7 +1429,9 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 			continue
 		}
 		probs = append(probs, unknownPlatformKeyProblems(f.Name, top)...) // #2983
-		if e := enforcedFrom(f.Name, top); e != nil {
+		e, enforcedProbs := enforcedFrom(f.Name, top)
+		probs = append(probs, enforcedProbs...) // #2989
+		if e != nil {
 			enforced = e
 		}
 		// #2960: named whatever `enabled` says — `enabeld: true` leaves NOC

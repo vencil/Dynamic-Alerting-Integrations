@@ -56,6 +56,11 @@ func loadRoutingLayers(configDir string) routingpolicy.Layers {
 			// a key the route generator does not read — da-guard and the
 			// generator's --validate name it.
 			continue
+		case p.Kind == routingpolicy.ProblemRoutingEnforcedMatchInvalid:
+			// Not a layer of this check (#2989): `_routing_enforced` takes no
+			// part in resolution or domain policy — da-guard and the
+			// generator's --validate name it.
+			continue
 		case p.Kind == routingpolicy.ProblemRoutingDefaultsRoutes:
 			// Not a layer left out: the rest of _routing_defaults applies;
 			// only its `routes` are dropped, as the route generator drops them.
