@@ -52,7 +52,7 @@ func TestGroupBatch_AbsentMemberSkipped_Direct(t *testing.T) {
 	}
 	assertNoFile(t, f.configDir, "t-gone.yaml")
 	ok, _ := os.ReadFile(filepath.Join(f.configDir, "t-ok.yaml"))
-	if !strings.Contains(string(ok), "_silent_mode: warning") {
+	if !strings.Contains(string(ok), `_silent_mode: "warning"`) {
 		t.Errorf("t-ok.yaml not patched:\n%s", ok)
 	}
 }

@@ -59,8 +59,9 @@
 // parity_test.go here and cmd/da-guard/routing_policy_parity_test.go the Go
 // side. A behaviour change on either side goes into the matrix first.
 //
-// Consumers: cmd/da-guard (through internal/guard) and tenant-api, which
-// cannot import internal/guard. Besides the standard library, yaml.v3,
+// Consumer: cmd/da-guard (through internal/guard); tenant-api stopped
+// importing it with #2903 (its writes are judged by the route generator).
+// Besides the standard library, yaml.v3,
 // pkg/pyyamlcompat (receivers and matcher values as the generator's PyYAML
 // reads them, #2295 / #2431) and pkg/receiverspec (whether an enforced
 // route's receiver is rendered, #2503) it

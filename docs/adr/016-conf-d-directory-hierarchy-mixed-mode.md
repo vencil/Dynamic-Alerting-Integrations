@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-09-28
+updated_at: 2026-10-15
 ---
 # ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
@@ -131,7 +131,7 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 | threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
 | threshold-exporter **實際吐出的 metric** | ✅ 完整遞迴繼承（#1521 修復；在那之前是平面，見下方補記） |
 | `validate_config.py` | ✅ 已改為遞迴 |
-| 路由面：路由生成器（`generate_alertmanager_routes.py`）與 da-guard / tenant-api 的路由層（`pkg/routingpolicy`） | ✅ **階層**（#2326，見下方「Amendment 2026-09-28」）：生成器與 da-guard 讀整棵樹的租戶與路由層。⚠️ tenant-api 只服務根目錄的租戶檔，路由層只讀根目錄那一半（`LoadRoot`） |
+| 路由面：路由生成器（`generate_alertmanager_routes.py`）與 da-guard 的路由層（`pkg/routingpolicy`） | ✅ **階層**（#2326，見下方「Amendment 2026-09-28」）：生成器與 da-guard 讀整棵樹的租戶與路由層。tenant-api 只服務根目錄的租戶檔，不自己讀路由層：寫入由產生器對整棵樹判（[ADR-036](036-single-parser-effective-config.md) §4） |
 | 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
 
 > ⚠️ **補記（2026-08-22 發現 → 2026-08-24 關閉，#1521）**：本表原本只有一列

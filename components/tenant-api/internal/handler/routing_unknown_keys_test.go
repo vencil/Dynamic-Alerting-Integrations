@@ -2,10 +2,12 @@ package handler
 
 // #2983: a `_routing`-prefixed tenant key the route generator does not read —
 // a misspelling (`_routing_profle`), a platform key (`_routing_defaults`) or
-// the flat `_routing_receiver_type` — is refused on write, as the generator's
-// `--validate` refuses it. The `_routing` reserved PREFIX used to let all of
-// them through, and the batch patch wrote `_routing_receiver_type` into the
-// tenant file, where nothing renders it.
+// the flat `_routing_receiver_type` — is refused in a batch patch, as the
+// generator's `--validate` refuses it. The `_routing` reserved PREFIX used to
+// let all of them through, and the batch patch wrote `_routing_receiver_type`
+// into the tenant file, where nothing renders it. (A PUT body carrying one is
+// the generator's to refuse, #2903 — except the flat `_routing_receiver_type`,
+// a 400 on every write: TestGeneratorGate_FlatReceiverTypeIs400.)
 
 import (
 	"bytes"
@@ -17,46 +19,20 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
-func TestPutTenant_UnknownRoutingKeyRefused(t *testing.T) {
-	for _, key := range []string{"_routing_profle", "_routing_receiver_type", "_routing_defaults"} {
-		t.Run(key, func(t *testing.T) {
-			code, resp, written := putReceiverDoc(t, "tenants:\n  rs-t:\n    "+key+": slack\n", false)
-			if code != http.StatusBadRequest || written != "" {
-				t.Fatalf("PUT %s = %d (written %q), want 400: %s", key, code, written, resp)
-			}
-			var bad ErrorResponse
-			if err := json.Unmarshal([]byte(resp), &bad); err != nil {
-				t.Fatal(err)
-			}
-			if bad.Code != CodeInvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != "tenants.rs-t."+key {
-				t.Errorf("response = %+v, want one %s violation on tenants.rs-t.%s", bad, CodeInvalidBody, key)
-			}
-		})
-	}
-	// Control: the keys the generator reads are written.
-	code, resp, written := putReceiverDoc(t, "tenants:\n  rs-t:\n    _routing:\n"+webhookOK, false)
-	if code != http.StatusOK || !strings.Contains(written, "_routing:") {
-		t.Errorf("control PUT = %d (written %q): %s", code, written, resp)
-	}
-}
-
 // A batch patch writing the flat `_routing_receiver_type` (or a misspelled
 // routing key) is refused as a body violation — 400 INVALID_BODY naming the
-// key, before the domain policy is consulted: `slack` is forbidden for t-off
-// (a policy verdict on a value nothing renders), `pagerduty` is not (it used
-// to be written). Nothing is written.
+// key, whatever its value (`pagerduty` used to be written). Nothing is
+// written.
 func TestBatchTenants_UnknownRoutingKeyRefused(t *testing.T) {
 	for _, patch := range []string{
 		`{"_routing_receiver_type":"slack"}`, `{"_routing_receiver_type":"pagerduty"}`, `{"_routing_profle":"domain-ok"}`,
 	} {
 		t.Run(patch, func(t *testing.T) {
 			configDir := seedGitTree(t, offTree(offDisabledOK))
-			d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
-				Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
+			d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect}
 			req := httptest.NewRequest("POST", "/api/v1/tenants/batch",
 				bytes.NewBufferString(`{"operations":[{"tenant_id":"t-off","patch":`+patch+`}]}`))
 			req.Header.Set("Content-Type", "application/json")

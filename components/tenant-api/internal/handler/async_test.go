@@ -27,7 +27,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/groups"
-	"github.com/vencil/tenant-api/internal/policy"
 )
 
 // pollUntilTerminal polls the task manager until the task reaches a terminal
@@ -76,7 +75,6 @@ func TestBatchTenants_Async_ReturnsTaskID(t *testing.T) {
 		ConfigDir: configDir,
 		State:     mustDirState(configDir),
 		RBAC:      rbacMgr,
-		Policy:    policy.NewManager(configDir),
 		WriteMode: WriteModeDirect,
 		Tasks:     taskMgr,
 	}
@@ -131,7 +129,6 @@ func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
 		ConfigDir: configDir,
 		State:     mustDirState(configDir),
 		RBAC:      rbacMgr,
-		Policy:    policy.NewManager(configDir),
 		WriteMode: WriteModeDirect,
 		Tasks:     taskMgr,
 	}

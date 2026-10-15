@@ -3,10 +3,10 @@ package handler
 // Config reload observability (Gemini #1056 external-review disposition 3a +
 // its follow-up: the current-state gauge).
 //
-// Every tenant-api YAML config manager (rbac / groups / views / policy /
-// tenantorg / federation-policy) embeds configwatcher.Watcher, which keeps
-// serving the LAST-GOOD snapshot when a reload parse fails — so an admin's typo
-// in _rbac.yaml / _domain_policy.yaml / etc. silently stops taking effect. Both
+// Every tenant-api YAML config manager (rbac / groups / views / tenantorg /
+// federation-policy) embeds configwatcher.Watcher, which keeps serving the
+// LAST-GOOD snapshot when a reload parse fails — so an admin's typo in
+// _rbac.yaml / _tenant_orgs.yaml / etc. silently stops taking effect. Both
 // reload paths are silent (WatchLoop only WARN-logs; the post-write Reload's
 // error is discarded by every caller before answering 200 OK).
 //
@@ -51,7 +51,7 @@ import (
 // Membership = EVERY config manager, because BOTH reload paths mask a failure
 // silently and the Watcher records both (configwatcher.WatchLoop and
 // configwatcher.Reload):
-//   - rbac / policy / tenantorg / federation-policy run a periodic WatchLoop.
+//   - rbac / tenantorg / federation-policy run a periodic WatchLoop.
 //   - groups / views (and federation-policy again) are Reload()ed after a write,
 //     and every production caller DISCARDS that error — `_ = mgr.Reload()` in
 //     handler/group.go:236,317, handler/view.go:175,239 and
@@ -67,7 +67,6 @@ import (
 // introducing a metric-vs-log drift.
 var configReloadComponents = [...]string{
 	"RBAC",
-	"policy",
 	"tenantorg",
 	"federation-policy",
 	"groups",

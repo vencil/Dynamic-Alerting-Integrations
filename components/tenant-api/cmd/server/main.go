@@ -41,7 +41,6 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statemigrate"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -463,11 +462,9 @@ func main() {
 
 	groupMgr := groups.NewManager(stateStore)
 
-	// v2.5.0: Domain policy enforcement at API layer
-	policyMgr := policy.NewManager(*configDir)
-	// Hub #2486 Q7-2: a policy file that is present but unusable with no last
-	// good version refuses the policy-reading writes in direct mode (503).
-	// #2903: there is no escape hatch (ADR-036 §5).
+	// #2903 (ADR-036 §4): the domain policy (_domain_policy.yaml in conf.d)
+	// is judged by the route generator container on every write; tenant-api
+	// no longer reads it.
 
 	// ADR-027 / LD-6 P4: tenant→organization mapping (_tenant_orgs.yaml) backing
 	// the org-scope authorization axis. Admin-only (no write API) and strict-
@@ -612,7 +609,6 @@ func main() {
 		RBAC:               rbacMgr,
 		ClaimHeaders:       claimHeaders,
 		TenantOrg:          tenantOrgMgr,
-		Policy:             policyMgr,
 		Groups:             groupMgr,
 		Views:              viewMgr,
 		Federation:         federationMgr,
@@ -647,7 +643,6 @@ func main() {
 	// (handlers reach the observer via Reload) — both hold at this point in startup.
 	reloadObs := handler.NewConfigReloadObserver()
 	rbacMgr.SetReloadObserver(reloadObs)
-	policyMgr.SetReloadObserver(reloadObs)
 	tenantOrgMgr.SetReloadObserver(reloadObs)
 	federationPolicyMgr.SetReloadObserver(reloadObs)
 	groupMgr.SetReloadObserver(reloadObs)
@@ -656,7 +651,6 @@ func main() {
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
 	go rbacMgr.WatchLoop(*reloadInterval, stopCh)
-	go policyMgr.WatchLoop(*reloadInterval, stopCh)
 	go tenantOrgMgr.WatchLoop(*reloadInterval, stopCh)
 	go federationPolicyMgr.WatchLoop(*reloadInterval, stopCh)
 	// #2856: a state ConfigMap can be edited out of band (kubectl), so groups

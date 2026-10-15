@@ -30,7 +30,6 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -94,10 +93,6 @@ type Deps struct {
 	// and every tenant then evaluates as unlabeled, which with no org-scoped
 	// rule is byte-identical to the pre-P4 permission/metadata checks.
 	TenantOrg *tenantorg.Manager
-
-	// Policy enforces domain-level write policy. Optional — handlers
-	// that touch it MUST nil-check (`if d.Policy != nil { ... }`).
-	Policy *policy.Manager
 
 	// State holds tenant-api's own records — groups, views, the federation
 	// whitelist and subsets, the AccountID registry — outside the conf.d

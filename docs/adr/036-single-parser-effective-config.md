@@ -25,6 +25,7 @@ updated_at: 2026-10-15
 - **2026-10-12 第三次修訂（已由 owner 核可）**：產生器容器從步驟 1 起就跨請求快取解析結果，每次判定在有記憶體與時間上限的獨立程序裡跑，並訂定逾時與「拒收該筆」和「容器不可用」的分界（§3）；批次改為全有全無，在步驟 1 之前單獨發布，並在暫存的 git worktree 裡判定與 commit（§4、§7）。
 - **2026-10-14 修訂**：解析快取的 key 改用檔案內容的 SHA-256，不再用 git 的 blob SHA（§3）。
 - **2026-10-15 修訂（owner 決定）**：從 git 物件取檔時，不是一般檔的項目（symlink、gitlink 等）一律判為 `not_regular_file`（§3）。
+- **2026-10-15 修訂（owner 核可）**：批次 patch 與 custom-alerts 的合併改以合併後的不變式把關：編輯以外的部分，合併結果的節點寫出來要與原檔逐一相同（§4）。
 - 設計與修訂都經過對抗審查（由不同模型擔任）。
 
 ## 摘要
@@ -302,7 +303,12 @@ tenant-api pod
   - 保證範圍：讀者不會看到從未 commit 的內容；中途失敗或程序崩潰時，半批內容只留在暫存 worktree。更新工作目錄的那段時間，讀者可能短暫看到新舊混合的內容，但兩者都已 commit。這與 §3 產生器容器只從 git 物件取檔、不讀工作目錄是同一個原則。
   - 改動前的批次逐筆判定：違規的那幾筆標為錯誤，其餘照常寫入。改成全有全無是 breaking change，在步驟 1 之前單獨發布：讓 git 寫入支援多檔一次 commit 的前置工作（§7）就改成全有全無，那時判定仍用 Go 端現有的檢查；步驟 1 只把判準換成產生器，全有全無的語意不變。
 - **批次 patch 的合併**：仍由 Go 讀出檔案、套用 patch、再寫回；合併後的內容一定送驗。
-  - 要寫的檔在 base 裡本身讀不了，合併前就拒收。否則 Go 重新輸出時可能吃掉 `---` 之後的文件或重複的鍵，讓合併後的內容反而讀得了，等於靜默改寫。
+  - 合併後要符合一條不變式，否則不寫入：把原檔與合併結果都解析成 yaml.v3 的節點樹，這次編輯取代的部分以外，每個節點寫出來的樣子都要相同，包括種類、style（flow 或 block、純文字或哪一種引號）、寫出的 tag（顯式 tag 的原文，或沒寫 tag）、純量的原文、anchor 名稱，以及別名所指的節點（比對內容，不只比名稱）。文件數要相同，定義的 anchor 也要相同、順序一致。字元相同，對任何讀取端意思都相同，所以這條判準與讀取端無關。被編輯的鍵另外解碼檢查：設定的鍵是新值、刪掉的鍵不在了，因為 `<<` merge key 仍可能帶進已刪掉的鍵。註解與位置不比。
+    - 任何差異都以 `TENANT_CONFIG_NOT_LOADABLE` 拒收（`PUT .../custom-alerts` 回 409；批次是該筆的 code，整批 422），`config_error` 為 `not_round_trippable`，訊息附第一個差異的位置；只有在該租戶自己的 block 裡才寫出路徑，其他位置只說「另一處」，因為那可能是呼叫者讀不到的租戶。
+    - 例子：`k: [1:20]` 在別的租戶 block 裡。yaml.v3 重新輸出時會寫成 `['1:20']`，PyYAML 讀原檔是整數 80、讀新檔是字串；節點的 style 從純文字變成單引號，所以拒收。同一條不變式也擋下 block scalar 開頭空行被改、別名共用的租戶 block 連帶被改、同名 anchor 讓別名改指、`<<` 帶進的值在刪掉明寫的鍵後仍在。
+    - 合併寫出的值一律用雙引號（批次 patch 的值是字串；custom-alerts 由 Go 產生的 `_custom_alerts` 裡每個字串也是），不論內容，避免任何讀取端把它讀成時間、數字或布林；唯一例外是 `_custom_alerts` 裡含換行的字串，寫成 literal block（`|`，對任何讀取端也都是字串），讓 diff 看得到逐行內容——前提是那個 block 讀回來仍是原字串（開頭是換行或 tab 的就不是），否則照樣用雙引號。重新輸出前清掉 yaml.v3 自行補上的隱含 tag，否則 `<<` 會被寫成 `!!merge <<`。
+    - 已知限制：只在節點樹以外的地方不同的寫法擋不到。實測的例子是 `k:` 後面緊接 TAB：PyYAML 讀不了原檔，yaml.v3 讀成空值，重新輸出後兩邊都讀得了，等於把讀不了的檔修好了。差分測試把這一例釘住。
+    - 解碼失敗時回給呼叫端的文字是固定的，只說哪裡失敗、第幾行；parser 的原文只寫進 server log，因為一份檔可能有多個租戶，原文會引用別的租戶的值。
   - 擋不到的是「沒有違規，但意思被 Go 改掉」的改寫，由離線差分測試把關：一邊是 Go 合併後交給產生器讀，另一邊是產生器讀 base 再套同一個 patch，兩邊結果要相同，同一個檔裡的其他租戶也要比。
 - **驗的和寫的必須是同一份**：容器回傳它驗過的「檔案路徑、內容 hash、base commit、部署端 policy 檔的內容 hash」。tenant-api 在寫入鎖之下核對；部署端 policy 檔由 tenant-api 唯讀掛載同一份，自己算 hash 來比。不一致就重驗一次，仍不一致就拒收；寫入的位元組必須和驗過的一模一樣。
 - **PR 模式驗的是分支起點**：驗的是 PR 分支所在的 base commit 加上這筆寫入。PR 合併進主幹後的結果不在 tenant-api 的判定範圍，由客戶 CI 或 merge queue 把關。
@@ -562,13 +568,13 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | 與解析無關、步驟 0 搬出的小工具 | `pkg/routingpolicy` 的 `IsValidTenantID`、`LevelOf`、`IsDomainPolicyFile` |
 | 今天擋下重複鍵、多份文件的程式（刪除前由 `parse-tree` 接手） | Python 的 `RejectDuplicateKeys`；Go 的 `pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go` |
 | Go 端模仿 PyYAML 讀法的程式 | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
-| Go 端模仿產生器語意的程式 | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`；`IsDisabled`（模仿產生器的 `_lib_validation.is_disabled`，由 da-guard 與 tenant-api 的 `validateRoutingPatch` 呼叫） |
+| Go 端模仿產生器語意的程式 | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`；`IsDisabled`（模仿產生器的 `_lib_validation.is_disabled`，由 da-guard 呼叫） |
 | vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（刪除）、非特定 tag（刪除）、大型 mapping 的重複鍵檢查（exporter 使用，保留）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
 | 非特定 tag 影響的 exporter 讀法 | `pkg/config/config_file.go` 的 `isMergeKey`；`custom_alert.go` 的 `validateSloObjective` |
-| Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（da-guard、tenant-api、`pkg/routingpolicy` 用，隨步驟 1、3 刪除） |
-| tenant-api 現在的寫入判定 | `judgePutBody`；PR 模式在 `WritePRChecked` 的閉包內重判 |
-| 批次 patch 由 Go 重新輸出 | `mergePatchYAML` |
-| tenant-api 裡其他的 Go 端路由與 policy 判定（步驟 1 刪除） | 路由 patch 檢查 `validateRoutingPatch`；receiver 檢查 `gitops` 的 `receiverViolations`（同檔的 `placeholderViolations` 是遮罩憑證回寫防護，保留）；`internal/policy` 的 `JudgeTenantBlock`／`CheckTenantRouting`；「讀不了的檔當成空」的 `tenantBlockOnDisk` |
+| Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（da-guard、`pkg/routingpolicy` 用，隨步驟 3 刪除；tenant-api 已在步驟 1 停用） |
+| tenant-api 現在的寫入判定 | 產生器容器的呼叫端 `internal/generator`（`Gate`）；Go 端只剩形狀與保留鍵的檢查（下兩列） |
+| 批次 patch 由 Go 重新輸出 | `mergePatchYAML`；合併後的不變式 `verifyPartialWrite`（`handler/tenant_list.go`）；離線差分測試 `handler/batch_patch_diff_test.go` |
+| tenant-api 裡其他的 Go 端路由與 policy 判定（步驟 1 已刪除） | 路由 patch 檢查 `validateRoutingPatch`；receiver 檢查 `gitops` 的 `receiverViolations`（同檔的 `placeholderViolations` 是遮罩憑證回寫防護，保留）；`internal/policy` 的 `JudgeTenantBlock`／`CheckTenantRouting`；「讀不了的檔當成空」的 `tenantBlockOnDisk` |
 | tenant-api 步驟 1 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（以 yaml.v3 確認 exporter 讀得了）；`handler/body_validator.go` 的保留鍵值檢查（例如 `validateSilentMode`） |
 | da-guard exit 4 要更新的說明 | `cmd/da-guard/main.go` 的 exit code 註解；`scripts/tools/_lib_exitcodes.py`；`docs/cli-reference.md` |
 | 刪除範圍的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go` |

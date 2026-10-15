@@ -31,8 +31,8 @@ func TestConfigReloadComponents_CoversEveryWatcherLabel(t *testing.T) {
 	// `(\[[^]]*\])?` also matches explicit generic instantiation
 	// (`configwatcher.New[T](…)`), so a future call site written that way cannot
 	// slip past the calls==found invariant below with an unchecked label.
-	// NewWithReader (#2486, policy's two files) takes the label in the same
-	// position and is a construction site like New.
+	// NewWithReader (state-store records: groups, views, federation policy)
+	// takes the label in the same position and is a construction site like New.
 	reCall := regexp.MustCompile(`configwatcher\.New(?:WithReader)?(\[[^]]*\])?\(`)
 	reLabel := regexp.MustCompile(`configwatcher\.New(?:WithReader)?(\[[^]]*\])?\(\s*[A-Za-z0-9_.]+\s*,\s*"([^"]+)"`)
 
@@ -91,7 +91,7 @@ func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
 	obs := NewConfigReloadObserver()
 	obs.RecordReload("RBAC", false)              // failure: counter 1, gauge 0
 	obs.RecordReload("RBAC", false)              // failure: counter 2, gauge 0
-	obs.RecordReload("policy", false)            // single failure: counter 1, gauge 0
+	obs.RecordReload("groups", false)            // single failure: counter 1, gauge 0
 	obs.RecordReload("tenantorg", true)          // success: counter 0, gauge stays 1
 	obs.RecordReload("garbage-component", false) // unknown component → no-op
 
@@ -104,15 +104,15 @@ func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
 		// --- failure counter ---
 		`# TYPE tenant_api_config_reload_failures_total counter`,
 		`tenant_api_config_reload_failures_total{component="RBAC"} 2`,
-		`tenant_api_config_reload_failures_total{component="policy"} 1`,
+		`tenant_api_config_reload_failures_total{component="groups"} 1`,
 		`tenant_api_config_reload_failures_total{component="views"} 0`,
 		// --- current-state gauge (default 1; a single failure flips to 0) ---
 		`# TYPE tenant_api_config_last_reload_successful gauge`,
 		`tenant_api_config_last_reload_successful{component="RBAC"} 0`,
-		// policy: ONE failure flips the gauge to 0 even though the counter (1) is
+		// groups: ONE failure flips the gauge to 0 even though the counter (1) is
 		// below any rate threshold — this is exactly the single-shot gap the gauge
 		// closes for groups/views.
-		`tenant_api_config_last_reload_successful{component="policy"} 0`,
+		`tenant_api_config_last_reload_successful{component="groups"} 0`,
 		`tenant_api_config_last_reload_successful{component="tenantorg"} 1`,
 		`tenant_api_config_last_reload_successful{component="views"} 1`,
 	} {
@@ -152,10 +152,10 @@ func TestConfigReloadObserver_GaugeRecovers(t *testing.T) {
 func TestConfigReloadMetrics_Snapshots(t *testing.T) {
 	t.Parallel()
 	var m ConfigReloadMetrics
-	m.RecordReload("policy", false)
-	m.RecordReload("policy", false)
-	if m.Snapshot()["policy"] != 2 {
-		t.Errorf("snapshot[policy] = %d, want 2", m.Snapshot()["policy"])
+	m.RecordReload("views", false)
+	m.RecordReload("views", false)
+	if m.Snapshot()["views"] != 2 {
+		t.Errorf("snapshot[views] = %d, want 2", m.Snapshot()["views"])
 	}
 	for _, snap := range []map[string]int64{m.Snapshot(), m.StateSnapshot()} {
 		if len(snap) != len(configReloadComponents) {
