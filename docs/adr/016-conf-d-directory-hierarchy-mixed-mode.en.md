@@ -127,7 +127,7 @@ State after the PR #1343 fix:
 | threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
 | threshold-exporter **metrics it actually emits** | ✅ full recursive inheritance (fixed by #1521; flat before that — see the note below) |
 | `validate_config.py` | ✅ now recursive |
-| routing plane: the route generator (`generate_alertmanager_routes.py`) and da-guard / tenant-api routing layers (`pkg/routingpolicy`) | ✅ **hierarchical** (#2326, see "Amendment 2026-09-28" below): the generator and da-guard read tenants and routing layers from the whole tree. ⚠️ tenant-api serves tenant files at the root only and reads the root half of the routing layers (`LoadRoot`) |
+| routing plane: the route generator (`generate_alertmanager_routes.py`) and da-guard's routing layer (`pkg/routingpolicy`) | ✅ **hierarchical** (#2326, see "Amendment 2026-09-28" below): the generator and da-guard read tenants and routing layers from the whole tree. tenant-api serves tenant files at the root only and reads no routing layer itself: writes are judged by the generator over the whole tree ([ADR-036](036-single-parser-effective-config.en.md) §4) |
 | remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
 
 > ⚠️ **Note (found 2026-08-22 → closed 2026-08-24, #1521)**: this table used to

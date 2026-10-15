@@ -187,3 +187,8 @@ docs/adr/017-defaults-yaml-inheritance-dual-hash.en.md
 # openapi_spec_parity_test.go decodes it with KnownFields and needs every
 # route buildMux registers, so a truncated file fails to parse or drops paths.
 docs/api/threshold-exporter-openapi.yaml
+
+# #2903: the unreleased fragment's tenant-api domain-policy text no longer
+# holds (tenant-api no longer judges policy); only its config-watcher
+# sentence is left. Checked by generate_changelog.py --fragments.
+changelog.d/2280-tenant-api-routing-policy.md

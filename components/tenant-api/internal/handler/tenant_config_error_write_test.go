@@ -575,3 +575,89 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 		})
 	}
 }
+
+// #2903 (ADR-036 §4): a base threshold-exporter loads (GET reports no
+// config_error) but a partial write could not re-encode unchanged
+// (notRoundTrippable) is refused BEFORE the merge by every partial write,
+// with the reason as config_error, and its bytes stay.
+// batch_patch_diff_test.go holds the rule to the generator itself.
+var roundTripRejFiles = []struct {
+	name, body, reason string
+}{
+	{"multiple_documents", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
+		"---\ntenants:\n  db-z:\n    mysql_connections: \"1\"\n", "multiple_documents"},
+	{"merge_key_in_block", "x_shared: &s\n  mysql_connections: \"60\"\ntenants:\n  db-a:\n    <<: *s\n" +
+		rejExistingAlert, "alias_or_merge_key"},
+	{"alias_key_in_block", "k: &k mysql_connections\ntenants:\n  db-a:\n    *k : \"70\"\n" +
+		rejExistingAlert, "alias_or_merge_key"},
+}
+
+func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, c := range roundTripRejFiles {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := rejDir(t, c.body)
+			path := filepath.Join(dir, "db-a.yaml")
+			before := mustRead(t, path)
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+			// GET still serves it: the exporter loads the file.
+			gw := servePopulatingRBAC(t, GetTenant(deps),
+				newRequestWithChiParam("GET", "/api/v1/tenants/db-a", "id", "db-a", nil), "alice@example.com", []string{"dba"})
+			var got struct {
+				SourceHash   string           `json:"source_hash"`
+				CustomAlerts []map[string]any `json:"custom_alerts"`
+				ConfigError  string           `json:"config_error"`
+			}
+			if err := json.Unmarshal(gw.Body.Bytes(), &got); err != nil || gw.Code != http.StatusOK || got.ConfigError != "" {
+				t.Fatalf("GET = %d %s (%v); want 200 without config_error", gw.Code, gw.Body.String(), err)
+			}
+
+			// PUT .../custom-alerts: 409 with the generator's reason.
+			list := append(got.CustomAlerts, map[string]any{
+				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
+			})
+			body, _ := json.Marshal(map[string]any{"base_hash": got.SourceHash, "custom_alerts": list})
+			resp := putCustomAlerts(t, deps, "db-a", string(body), "alice@example.com", []string{"dba"})
+			rb, _ := readBody(resp)
+			var env map[string]any
+			if err := json.Unmarshal([]byte(rb), &env); err != nil {
+				t.Fatalf("unmarshal %s: %v", rb, err)
+			}
+			if resp.StatusCode != http.StatusConflict || env["code"] != wantNotLoadableCode ||
+				env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
+				t.Errorf("custom-alerts: %d %v; want 409 %s, config_error %s", resp.StatusCode, env, wantNotLoadableCode, c.reason)
+			}
+			if msg, _ := env["error"].(string); !strings.Contains(msg, "would not come back unchanged") {
+				t.Errorf("custom-alerts message does not say the file would not round-trip: %q", msg)
+			}
+
+			// The batch patch (POST /tenants/batch direct mode, the group batch).
+			res := applyPatch(context.Background(), newTestWriter(dir), dir,
+				BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}}, "op@example.com")
+			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "config_error: "+c.reason) {
+				t.Errorf("batch: result = %+v, want %s naming config_error %s", res, wantNotLoadableCode, c.reason)
+			}
+			if after := mustRead(t, path); after != before {
+				t.Errorf("file changed:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+		})
+	}
+}
+
+// PR mode judges the base the PR branches from: the same refusal, no PR.
+func TestBatchTenants_PRMode_RefusesBaseThatCannotRoundTrip(t *testing.T) {
+	for _, c := range roundTripRejFiles {
+		t.Run(c.name, func(t *testing.T) {
+			dir := setupConfigDir(t, map[string]string{"db-a.yaml": c.body, "db-b.yaml": rejHealthyB, "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			runGit(t, dir, "branch", "-M", "main")
+			w, created := prBatchRun(t, dir, rejTwoOps)
+			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
+			if created {
+				t.Error("a PR was created over a base that cannot round-trip")
+			}
+		})
+	}
+}

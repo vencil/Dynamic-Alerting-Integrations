@@ -29,8 +29,9 @@ type ValidateResponse struct {
 // Dry-run validation without writing: the verdict comes from the same gitops
 // validation function PUT runs in the configured write mode (#2124) — the full
 // pre-write sequence in direct mode, the body-only pre-flight in PR mode.
-// Authorization and domain policy are not part of it. Body checks belong in
-// gitops, never here.
+// Authorization is not part of it, nor the route generator's verdict (#2903:
+// routing and the domain policy are judged only when a write is made). Body
+// checks belong in gitops, never here.
 //
 // @Summary     Validate tenant config
 // @Description Dry-run validation of a tenant YAML without writing to disk.

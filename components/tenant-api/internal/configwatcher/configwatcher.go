@@ -11,8 +11,8 @@
 //
 // `Watcher[T]` is the generic core. Each domain-specific Manager
 // embeds `*Watcher[ConfigType]` and contributes only its own
-// per-config methods (Allowed for rbac, CheckWrite for
-// policy, ListGroups for groups, etc.). Get / Reload / WatchLoop
+// per-config methods (Allowed for rbac, OrgsForTenant for
+// tenantorg, ListGroups for groups, etc.). Get / Reload / WatchLoop
 // promote through the embed.
 //
 // Concurrency: reads are lock-free (atomic.Value). Writes are
@@ -43,9 +43,9 @@ type EmptyFunc[T any] func() *T
 // ReadFunc replaces the single-file read of a Watcher built by NewWithReader:
 // it returns the bytes to hash and hand to ParseFunc. exists=false is the
 // missing-file case (empty() is stored, no error); a non-nil err is a read
-// failure (the last-good snapshot is kept). It is how one Watcher follows a
-// config spread over several files (policy: `_domain_policy.yaml` and
-// `.yml`): the bytes encode all of them, so a change to any is a new hash.
+// failure (the last-good snapshot is kept). It is how a Watcher follows a
+// config that is not one file (a state-store record; or several files, whose
+// bytes encode all of them, so a change to any is a new hash).
 //
 // The ParseFunc of such a watcher may return a non-nil snapshot WITH its
 // error: some sources failed and the snapshot is what the others (and the

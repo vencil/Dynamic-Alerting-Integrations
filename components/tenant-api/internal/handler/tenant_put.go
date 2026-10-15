@@ -13,7 +13,6 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
-	"gopkg.in/yaml.v3"
 )
 
 // PutTenantResponse is the response body for PUT /api/v1/tenants/{id}.
@@ -27,9 +26,7 @@ type PutTenantResponse struct {
 	// currently the #1231 deprecated-key alias notices (e.g. a body still
 	// spelling mysql_threads_running as mysql_cpu). The write went through;
 	// these tell the author what to migrate before the transition window
-	// closes. Also the #2325 domain-policy advisories: a non-pagerduty
-	// destination that still catches severity=critical alerts under
-	// `require_critical_escalation`. Never populated on error responses.
+	// closes. Never populated on error responses.
 	Warnings []string `json:"warnings,omitempty"`
 }
 
@@ -45,24 +42,15 @@ type PutTenantResponse struct {
 // inherited defaults — identical to GET /{id} and POST /{id}/validate
 // (ADR-024 PR4 / #704). Writes to configDir/{id}.yaml and commits to git.
 //
-// v2.5.0 Phase C: Domain policy enforcement — writes that violate the
-// tenant's domain policy return 403 with details.
+// #2903 (ADR-036 §4): routing and domain policy are judged by the route
+// generator container alone — the tree with this body written is judged
+// (`generate-routes --validate --strict`), and a refusal is a 422
+// GENERATOR_FINDINGS. tenant-api no longer judges receivers, matcher values,
+// group_by or the domain policy itself.
 //
-// #2295: the receivers the body writes in `_routing` are checked against the
-// receiver contract (pkg/receiverspec, gitops.ReceiverPreflight — the check
-// POST /{id}/validate runs too), so a receiver Alertmanager could not load is
-// a 400 INVALID_BODY with violations, in both write modes. It runs after the
-// policy gate: a receiver type the tenant's domain may not use stays a 403
-// whatever its fields. It is this handler's, not the Writer's, so writes that
-// change only another part of the file (custom alerts, batch) are not refused
-// over a receiver already on disk. #2431: the same check refuses a
-// `routes[i].match` value or `overrides[i].alertname` / `metric_group` the
-// body writes that the route generator's PyYAML does not read as a string
-// (routingpolicy.ValuesNotString) — only what the body writes, never a value
-// inherited from `_routing_defaults` or a routing profile. #2503: so is a
-// `group_by` element the body writes that is not a string as PyYAML reads
-// it, is empty, repeats a label or is `...` beside other labels
-// (routingpolicy.GroupByInvalid).
+// #1560: a value the body writes that is the masked-credential placeholder
+// is a 400 INVALID_BODY with violations (gitops.PlaceholderPreflight — the
+// check POST /{id}/validate runs too), in both write modes.
 //
 // v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
 // creates a feature branch and PR/MR instead of direct commit.
@@ -78,15 +66,15 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it), and a group_by entry the body writes (group_by, overrides[].group_by, routes[].group_by) that is not a string as the route generator reads it (unquoted 8, on), is empty, repeats a label or is ... beside other labels (#2503; quote or remove it), and a _routing the body writes that is neither a mapping nor a disabling string (disable / disabled / off / false), e.g. "slack", a list, null or an unquoted false / off, which the route generator reads as a boolean (#2341; to turn routing off quote it, 'off'). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
-// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions, or the body breaks the domain policy (code POLICY_VIOLATION; nothing written). In PR write-back mode the body is judged again on the latest base branch, which this server's local copy may lag: a violation there, or a base whose _domain_policy.yaml / .yml cannot be loaded, is the same 403 with tenant_id, and no PR/MR or branch is left"
+// @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); so is the flat _routing_receiver_type (#2903; the receiver type is _routing.receiver.type). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
+// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions. In PR write-back mode the write scope is judged again on the latest base branch, which this server's local copy may lag: a refusal there is the same 403 with tenant_id, and no PR/MR or branch is left"
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
 // @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
 // @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -143,46 +131,17 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// #2903: the flat `_routing_receiver_type` is a 400 on every write,
-		// before anything judges its value (the domain policy's 403 below).
+		// #2903: the flat `_routing_receiver_type` is a 400 on every write.
 		if v := flatReceiverTypeViolations(body, tenantID); len(v) > 0 {
 			WriteValidationErrors(rw, r, v)
 			return
 		}
 
-		// v2.5.0: Domain policy enforcement before write. #2280: the body's
-		// routing is judged as the generator renders it — resolved over the
-		// root's `_routing_defaults` and the referenced routing profile, every
-		// receiver (main, overrides, routes) — not just a nested main-receiver
-		// key. A PUT replaces the whole file, so the whole body is judged.
-		// #2325: a `require_critical_escalation` leak does not block; it is
-		// returned with the successful write's warnings (advisories).
-		// #2486: the tenant block is laid over the root platform overlay
-		// first (judgeTenantBlock), and PR mode judges the body again on the
-		// fresh base (putTenantPRMode).
-		var advisories []string
-		if d.Policy != nil {
-			// Hub #2486 Q7-2: in direct mode a policy file that is there but
-			// unusable (no last good content) refuses the write — 503 — rather
-			// than judge it on no policy. PR mode judges the fresh base's
-			// policy itself (LoadSnapshot refuses an unusable one).
-			if !d.prWritePath() {
-				if err := d.Policy.CheckAvailable("PUT /api/v1/tenants/" + tenantID); err != nil {
-					writePolicyUnavailable(rw, r, err)
-					return
-				}
-			}
-			violations, adv := judgePutBody(d.ConfigDir, d.Policy, tenantID, body)
-			advisories = adv
-			if len(violations) > 0 {
-				writePolicyViolation(rw, r, violations)
-				return
-			}
-		}
-
-		// #2295: the receivers the body writes, after the policy gate above.
-		if err := gitops.ReceiverPreflight(tenantID, string(body)); err != nil {
-			writeReceiverShapeError(rw, r, err)
+		// #1560: a masked-credential placeholder written back is a 400.
+		// Routing and the domain policy are the route generator's to judge,
+		// on the tree the write produces (#2903, ADR-036 §4).
+		if err := gitops.PlaceholderPreflight(string(body)); err != nil {
+			writePlaceholderError(rw, r, err)
 			return
 		}
 
@@ -207,7 +166,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 						"tracks the base branch, so it cannot witness a pending PR's change")
 				return
 			}
-			putTenantPRMode(d, rw, r, tenantID, email, string(body), advisories, gatePre, gatePost)
+			putTenantPRMode(d, rw, r, tenantID, email, string(body), gatePre, gatePost)
 			return
 		}
 
@@ -277,7 +236,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		writeJSON(rw, http.StatusOK, PutTenantResponse{
 			Status:   "ok",
 			TenantID: tenantID,
-			Warnings: append(notices, advisories...),
+			Warnings: notices,
 		})
 	}
 }
@@ -290,10 +249,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 // PRTracker != nil. Always writes a response. The deferred ReleaseClaim fires on
 // this function's return, which is immediately before the caller returns — same
 // timing as when the defer lived in the handler.
-//
-// advisories (#2325, non-blocking domain-policy notes) are appended to the
-// response's warnings on every success path.
-func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, advisories []string, gatePre, gatePost writeGate) {
+func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, gatePre, gatePost writeGate) {
 	// Atomically claim the tenant. Returns false if a PR/MR is
 	// already pending OR another request is mid-creation — both map
 	// to 409. The claim (not the async poll cache) is what makes two
@@ -345,8 +301,9 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	// tree, which may lag the base the branch is cut from, so they can only
 	// refuse early (#2857). The authoritative verdict is taken there, under
 	// the writer lock, before anything is written, in the same order as above:
-	// the metadata write scope before and after the write (#1597), then the
-	// domain policy (#2486). A refusal drops the branch.
+	// the metadata write scope before and after the write (#1597). The
+	// generator judges the branch point with the body written (#2903). A
+	// refusal drops the branch.
 	// gatePre/gatePost are the pairs the local gates judged.
 	p := rbac.RequestPrincipal(r)
 	check := func(configDir string) error {
@@ -362,23 +319,10 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		if ok, err := freshScopeAllowed(d, p, configDir, tenantID, gatePost, post, !judged); err != nil || !ok {
 			return orFreshScopeError(err, &freshBaseScopeError{TenantID: tenantID, Put: true})
 		}
-		if d.Policy != nil {
-			v, loadErr := freshBasePutPolicyCheck(configDir, tenantID, []byte(yamlContent))
-			if loadErr != nil || len(v) > 0 {
-				return &freshBasePolicyError{TenantID: tenantID, Put: true, Violations: v, LoadErr: loadErr}
-			}
-		}
 		return nil
 	}
 	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
-		// #2486: the body breaks the domain policy on the fresh base (or
-		// the base's policy file cannot be loaded) — 403, as the pre-check's.
-		var freshPolicy *freshBasePolicyError
-		if errors.As(err, &freshPolicy) {
-			writeFreshBasePolicyViolation(rw, r, freshPolicy)
-			return
-		}
 		// #2857: the write scope refuses it on the fresh base, or the
 		// base's org file cannot be read.
 		var freshScope *freshBaseScopeError
@@ -404,7 +348,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 				Status:   "no_changes",
 				TenantID: tenantID,
 				Message:  "No changes to apply; no PR/MR created.",
-				Warnings: append(warnings, advisories...),
+				Warnings: warnings,
 			})
 			return
 		}
@@ -458,7 +402,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		PRURL:    pr.WebURL,
 		PRNumber: pr.Number,
 		Message:  "PR/MR created. Configuration will take effect after merge.",
-		Warnings: append(result.Notices, advisories...),
+		Warnings: result.Notices,
 	})
 }
 
@@ -518,67 +462,11 @@ func isSourceHash(s string) bool {
 	return true
 }
 
-// extractPatchKeys extracts flat key-value pairs from a tenant YAML body.
-// Converts nested structures like _routing.receiver.type into flat keys.
-// Also preserves the original key names for flat-format patches (e.g.,
-// "_routing_receiver_type" used by batch operations).
-func extractPatchKeys(body []byte, tenantID string) map[string]string {
-	result := make(map[string]string)
-	var raw struct {
-		Tenants map[string]map[string]interface{} `yaml:"tenants"`
-	}
-	if err := yaml.Unmarshal(body, &raw); err != nil {
-		return result
-	}
-	tenant, ok := raw.Tenants[tenantID]
-	if !ok {
-		return result
-	}
-	for k, v := range tenant {
-		switch val := v.(type) {
-		case string:
-			result[k] = val
-		case map[string]interface{}:
-			// Flatten nested maps (e.g., _routing.receiver.type)
-			flattenMap(k, val, result)
-		default:
-			result[k] = fmt.Sprintf("%v", val)
-		}
-	}
-	return result
-}
-
-// flattenMap recursively flattens a nested map into dot-separated keys.
-// maxDepth prevents stack overflow from maliciously nested YAML payloads.
-func flattenMap(prefix string, m map[string]interface{}, out map[string]string) {
-	flattenMapDepth(prefix, m, out, 0)
-}
-
-func flattenMapDepth(prefix string, m map[string]interface{}, out map[string]string, depth int) {
-	if depth > 100 {
-		out[prefix] = fmt.Sprintf("<nested too deep: %d levels>", depth)
-		return
-	}
-	for k, v := range m {
-		key := prefix + "." + k
-		switch val := v.(type) {
-		case string:
-			out[key] = val
-		case map[string]interface{}:
-			flattenMapDepth(key, val, out, depth+1)
-		default:
-			out[key] = fmt.Sprintf("%v", val)
-		}
-	}
-}
-
-// writePolicyViolation lives in errors.go (PR-9/11 unification).
-
-// writeReceiverShapeError answers gitops.ReceiverPreflight's refusal of the
-// body's receivers (#2295) with the canonical 400 INVALID_BODY + violations, and
-// reports whether err was one.
-func writeReceiverShapeError(rw http.ResponseWriter, r *http.Request, err error) bool {
-	var rse *gitops.ReceiverShapeError
+// writePlaceholderError answers gitops.PlaceholderPreflight's refusal of the
+// body (#1560) with the canonical 400 INVALID_BODY + violations, and reports
+// whether err was one.
+func writePlaceholderError(rw http.ResponseWriter, r *http.Request, err error) bool {
+	var rse *gitops.PlaceholderError
 	if !errors.As(err, &rse) {
 		return false
 	}

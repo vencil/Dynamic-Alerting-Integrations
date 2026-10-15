@@ -31,7 +31,6 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
 )
@@ -1862,8 +1861,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
 	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
 	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
-	// caller below parses yamlContent five times (Unmarshal here,
-	// FindDuplicateKeyIn, CheckTenantRootKeys, yamlDocumentShapeErrors,
+	// caller below parses yamlContent four times (Unmarshal here,
+	// CheckTenantRootKeys, yamlDocumentShapeErrors,
 	// TenantWritesStringMetadata).
 	//
 	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
@@ -1879,14 +1878,6 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	}
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return tcfg, []string{"invalid YAML: " + err.Error()}
-	}
-	// A key the route generator counts as written twice and the Unmarshal
-	// above does not (an alias key beside its anchor; two `<<` only in a
-	// mapping that typed decode skips — inside `tenants:` it refuses them
-	// itself): the generator's StrictLoader refuses the whole file (#2295), so
-	// it is refused here as a plain repeated key is by the Unmarshal above.
-	if d := pyyamlcompat.FindDuplicateKeyIn([]byte(yamlContent)); d != nil {
-		return tcfg, []string{"invalid YAML: " + d.Error()}
 	}
 	// Reject any non-`tenants` top-level key before anything else (#705).
 	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {
@@ -1912,8 +1903,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
 	// planes disagree about who the file declares. CheckTenantRootKeys above
 	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
-	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
-	// extractPatchKeys) read the URL id alone and never see it (#1681).
+	// the write gate (RequireOrgWrite) reads the URL id alone and never sees
+	// it (#1681).
 	// This function joins tenantID into a path below, and it is reachable from
 	// callers that have not run the id past guardTenantID (WriteMerged's merge
 	// step, and any future one). Re-asserting it here costs a string compare and

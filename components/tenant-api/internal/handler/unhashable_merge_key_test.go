@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -51,8 +50,8 @@ func failOnPanic(t *testing.T, what string, f func()) {
 }
 
 // The whole-file PUT, in both write modes (putReceiverDoc), and once more in
-// direct mode with a domain policy present, so the policy's own reading of
-// the body (judgePutBody) is on the path too.
+// direct mode with a domain policy file present (#2903: tenant-api no longer
+// reads it; the case is kept so a policy file in conf.d changes nothing).
 func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 	for name, doc := range unhashableMergeKeyDocs {
 		t.Run(name, func(t *testing.T) {
@@ -73,8 +72,7 @@ func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 				"_domain_policy.yaml": policyListing(unhashableTenant),
 			})
 			rb := adminRBAC(t)
-			d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rb, WriteMode: WriteModeDirect,
-				Policy: policy.NewManager(dir)}
+			d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: rb, WriteMode: WriteModeDirect}
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+unhashableTenant, "id", unhashableTenant,
 				bytes.NewBufferString(doc))
 			req.Header.Set("X-Forwarded-Email", "alice@example.com")

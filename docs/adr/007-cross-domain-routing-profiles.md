@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-03-16
-updated_at: 2026-09-28
+updated_at: 2026-10-15
 ---
 # ADR-007: 跨域路由設定檔與域策略
 
@@ -121,7 +121,7 @@ domain_policies:
 
 主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。這個判定只在 tenant route 子樹內、只針對等值 matcher 時精確。有兩處不在它的模型裡：一是排在 tenant route 之前的平台路由（例如 `alertname="Watchdog"` 或 `component="sentinel"` 的路由）沒有納入，match 寫到那些值的子路由其實收不到告警，仍可能被報，所以這部分只會多報。二是 receiver 內容無效、generator 不會 render 的子路由仍被當成存在：它本身可能被多報，也可能讓後面的 N 被當成已攔走而少報。custom 子樹帶著同一批子路由，判定在那裡同樣成立（#2342）。
 
-Go 兩個平面也執行同一個約束，判準相同（#2325，`pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄與產生器對齊）：da-guard 把不合規報成 `critical_escalation_missing`（error）、把上述 WARN 報成 `critical_escalation_leak`（warn）；tenant-api 拒絕不合規的 PUT（403 `POLICY_VIOLATION`）與 batch op（該筆 `status: error`），洩漏只附在成功回應的 `warnings`，不擋寫入。tenant-api 只在寫入某個 tenant 時判定，改 routing profile 或 domain policy 檔本身不會重判既有 tenant。
+da-guard 也執行同一個約束，判準相同（#2325，`pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄與產生器對齊）：把不合規報成 `critical_escalation_missing`（error）、把上述 WARN 報成 `critical_escalation_leak`（warn）。tenant-api 不自己判：每筆寫入由產生器對寫入後的整棵樹判，不合規是 422 `GENERATOR_FINDINGS`（[ADR-036](036-single-parser-effective-config.md) §4），WARN 不擋寫入。因為判的是整棵樹，改 routing profile 或 domain policy 檔之後，任何經 tenant-api 的寫入都會碰到既有租戶的不合規。
 
 ### 為何拒絕三層 Contact Profile 模型
 
@@ -291,7 +291,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 的選項 P2）：路由生成器、`check_routing_profiles` 與 da-guard（`pkg/routingpolicy.LoadTree`）
 在每一層都讀 `_routing_profiles.yaml` 與 `_domain_policy.yaml`。profile 名稱重複定義與其他
 阻擋性的樹形錯誤一起被拒收（生成器 rc 2；保留根目錄優先、依名稱順序先出現的定義，點名後者）。
-⚠️ tenant-api 只服務根目錄的租戶檔，寫入時的 policy 檢查仍只讀根目錄的 `_domain_policy.yaml`。
+tenant-api 只服務根目錄的租戶檔；寫入時的 policy 判定由產生器對整棵樹做，每一層的 `_domain_policy.yaml` 都讀（[ADR-036](036-single-parser-effective-config.md) §4）。
 
 在階層式 conf.d（[ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)）下：
 

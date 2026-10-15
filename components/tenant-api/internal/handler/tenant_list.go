@@ -1,9 +1,14 @@
 package handler
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -207,6 +212,13 @@ type tenantFileNotLoadableError struct {
 }
 
 func (e *tenantFileNotLoadableError) Error() string {
+	switch e.Reason {
+	case configErrorMultipleDocuments, configErrorAliasOrMergeKey:
+		return fmt.Sprintf("tenant %s: a partial update re-encodes the config file, and this file would not "+
+			"come back unchanged (config_error: %s: %s); the update is refused before any change. Rewrite the "+
+			"tenant file without it (a whole-file PUT /api/v1/tenants/{id} replaces it)",
+			e.TenantID, e.Reason, roundTripLoss[e.Reason])
+	}
 	return fmt.Sprintf("tenant %s: its config file cannot be loaded as a tenant config (config_error: %s), "+
 		"so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first "+
 		"(a whole-file PUT /api/v1/tenants/{id} replaces it)",
@@ -217,12 +229,89 @@ func (e *tenantFileNotLoadableError) Error() string {
 // importing this package: WritePRBatch's pre-flight tolerates it.
 func (e *tenantFileNotLoadableError) Unwrap() error { return gitops.ErrMergeBaseNotLoadable }
 
+// The config_error of a partial write's base that tenant-api cannot rewrite
+// without changing it (#2903, ADR-036 §4). A partial write (a batch patch,
+// PUT .../custom-alerts) decodes the file into yaml.v3 nodes, edits
+// tenants.<id> and re-encodes the whole file, so tenant-api only does that
+// to a file the round trip keeps whole:
+//
+//   - multiple_documents: the re-encode writes the first document only;
+//     the others would be dropped.
+//   - alias_or_merge_key: the edit finds keys by their written text, at the
+//     top level (`tenants`), in `tenants` (the tenant id) and in the tenant's
+//     block. A key written there as an alias (`*k`), or values brought in by
+//     a `<<` merge key, are not where the edit looks: removing a key would
+//     leave the value a `<<` supplies, and a key added beside an alias of
+//     the same text would be a second one.
+//
+// This is tenant-api's own round-trip limit, not a reading of the file as
+// the route generator reads it: everything else the generator cannot read
+// survives the round trip unchanged and the generator refuses the merged
+// file. A repeated plain key in the tenant's block is already refused by
+// tenantConfigError (the typed decode, cfg.ParseTenantFile). Being stricter
+// than needed only refuses more; a shape this misses that a merge would
+// change is what batch_patch_diff_test.go is for (it compares the merged
+// file with the base as the generator reads it, patch applied).
+const (
+	configErrorMultipleDocuments = "multiple_documents"
+	configErrorAliasOrMergeKey   = "alias_or_merge_key"
+)
+
+// roundTripLoss says, per config_error above, what the re-encode would lose.
+var roundTripLoss = map[string]string{
+	configErrorMultipleDocuments: "it holds more than one YAML document and only the first would be written back",
+	configErrorAliasOrMergeKey: "a key in the edited mappings is an alias or a `<<` merge key, which the edit " +
+		"cannot see through",
+}
+
+// notRoundTrippable is a config_error above for data (a file tenantConfigError
+// accepts) when a partial write to tenantID could not rewrite it unchanged,
+// else "".
+func notRoundTrippable(data []byte, tenantID string) string {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	var doc yaml.Node
+	if err := dec.Decode(&doc); err != nil {
+		return "" // empty, or not YAML: tenantConfigError's to report
+	}
+	var next yaml.Node
+	if err := dec.Decode(&next); !errors.Is(err, io.EOF) {
+		return configErrorMultipleDocuments
+	}
+	if len(doc.Content) == 0 {
+		return ""
+	}
+	// The mappings the edit walks: the top level, `tenants`, the block.
+	edited := []*yaml.Node{doc.Content[0]}
+	if tenants := yamlMapValue(doc.Content[0], "tenants"); tenants != nil {
+		edited = append(edited, tenants)
+		if block := yamlMapValue(tenants, tenantID); block != nil {
+			edited = append(edited, block)
+		}
+	}
+	for _, m := range edited {
+		if m.Kind != yaml.MappingNode {
+			continue // a shape error mergePatchYAML reports itself
+		}
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			k := m.Content[i]
+			if k.Kind == yaml.AliasNode || k.Tag == "!!merge" || (k.Kind == yaml.ScalarNode && k.Value == "<<" && k.Style == 0) {
+				return configErrorAliasOrMergeKey
+			}
+		}
+	}
+	return ""
+}
+
 // checkPartialWriteBase returns a *tenantFileNotLoadableError when existing —
 // tenantID's file that a partial write would merge into — is not a usable
-// tenant config. Empty bytes (no file yet) are not refused: that is a new
-// tenant.
+// tenant config, or (#2903) is one the merge could not re-encode unchanged
+// (notRoundTrippable): such a base is refused BEFORE any merge. Empty bytes
+// (no file yet) are not refused: that is a new tenant.
 func checkPartialWriteBase(tenantID string, existing []byte) error {
 	if reason := tenantConfigError(existing); reason != "" {
+		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason}
+	}
+	if reason := notRoundTrippable(existing, tenantID); reason != "" {
 		return &tenantFileNotLoadableError{TenantID: tenantID, Reason: reason}
 	}
 	return nil

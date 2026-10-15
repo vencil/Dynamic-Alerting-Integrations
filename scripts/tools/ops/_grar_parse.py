@@ -167,18 +167,16 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     that is a behaviour change rather than a fail-open fix, and it is
     tracked separately — see the follow-up on #1448.
 
-    ⚠️ Two more readers disagree with this one, both measured, neither
-    closed here:
+    ⚠️ Two more readers used to disagree with this one; both are closed:
 
     * **Nested files** — closed by #2326: this loop walks the tree now, so
       ``conf.d/team-a/beta.yaml`` with a list at its top level is booked here
       too (it used to be ``validate-config`` rc=1 against
       ``generate-routes --validate --strict`` rc=0).
-    * **The write plane.** ``tenant-api``'s ``internal/policy`` unmarshals a
-      null ``domain_policies:`` to a nil map, replaces it with an empty one
-      and returns no error, so ``CheckWrite`` permits every write for the
-      exact shape this function has just promoted to a blocking ``--strict``
-      ERROR. Read from source; not exercised here.
+    * **The write plane** — closed by #2903: ``tenant-api`` no longer reads
+      the policy file itself (its ``internal/policy`` let every write
+      through for a null ``domain_policies:``); a write is judged by this
+      generator, so this function's ``--strict`` ERROR is its verdict too.
 
     ⛔ "Nothing" means exactly those two. It did NOT for one round: the
     caller's ``if not data: continue`` ran *before* the shape check, so

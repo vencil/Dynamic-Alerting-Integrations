@@ -5,7 +5,6 @@ import (
 	"context"
 	"net"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/testutil"
 )
 
@@ -159,35 +157,5 @@ func TestMetrics_HangingGeneratorIsBoundedByScrapeTimeout(t *testing.T) {
 		}
 	case <-time.After(bound):
 		t.Fatalf("/metrics did not answer within %v with a generator that never responds", bound)
-	}
-}
-
-// The per-op gate executeBatchOps runs at execution time (an async batch
-// runs after the request's own check): only an op the policy judges is
-// refused, with POLICY_UNAVAILABLE.
-func TestBatchOpPolicyUnavailable(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	if err := os.Mkdir(filepath.Join(dir, "_domain_policy.yaml"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	m := policy.NewManager(dir)
-	for _, tc := range []struct {
-		op      BatchOperation
-		refused bool
-	}{
-		{BatchOperation{TenantID: "t1", Patch: map[string]string{"_routing_profile": "p"}}, true},
-		{BatchOperation{TenantID: "t1", Patch: map[string]string{"_routing_receiver_type": "slack"}}, true},
-		{BatchOperation{TenantID: "t1", Unset: []string{"_routing"}}, true},
-		{BatchOperation{TenantID: "t1", Patch: map[string]string{"cpu_usage_percent": "90"}}, false},
-	} {
-		res, refused := batchOpPolicyUnavailable(m, tc.op)
-		if refused != tc.refused || (refused && (res.Code != CodePolicyUnavailable || res.Status != "error")) {
-			t.Errorf("%+v: refused = %v (%+v), want %v", tc.op, refused, res, tc.refused)
-		}
-	}
-	if _, refused := batchOpPolicyUnavailable(policy.NewManager(t.TempDir()), BatchOperation{TenantID: "t1",
-		Patch: map[string]string{"_routing_profile": "p"}}); refused {
-		t.Error("no policy file: the op is refused")
 	}
 }
