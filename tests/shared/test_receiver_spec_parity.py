@@ -48,7 +48,7 @@ side, with pkg/pyyamlcompat over the yaml.v3 node, which types a plain scalar th
 way PyYAML does (plain `on` a boolean, quoted `"on"` a string; see the
 plain-scalar table below). `schema_valid`
 records a row where the schema cannot judge like the pipeline (proxy_url parsing,
-http_config keys its additionalProperties refuses); `strict` names each row
+a yaml row's plain-string `to`); `strict` names each row
 Alertmanager accepts but the platform refuses on purpose.
 
 It also pins the ACCEPTED field set (schema `properties` vs Python
@@ -61,6 +61,9 @@ does not model, so an unmodelled constraint cannot read as "no constraint".
 """
 from __future__ import annotations
 
+import ast
+import importlib
+import inspect
 import json
 import os
 
@@ -354,3 +357,109 @@ def test_generator_refuses_what_pyyaml_retypes(key):
             hc["proxy_url"] = "http://p.example:1"
         assert _http_config_problem(hc), f"{key}: {row['text']!r} ({row['pyyaml']}) is not refused"
     assert checked > 50
+
+
+# --- The http_config key set (#2984) ----------------------------------------
+#
+# definitions.httpConfig is additionalProperties: false; its `properties` is
+# Alertmanager's http_config key set (tests/alertmanager-inhibit
+# TestSchemaHTTPConfigKeys_MatchAlertmanager pins it by reflection). The route
+# generator passes http_config through whole, so a key it handles but the
+# schema lacks makes validate-config refuse a config the generator emits and
+# Alertmanager loads — the #2984 bug (proxy_from_environment, oauth2, ...).
+
+def _http_config_schema() -> dict:
+    with open(_SCHEMA, encoding="utf-8") as f:
+        return json.load(f)["definitions"]["httpConfig"]
+
+
+_HTTP_CONFIG_KEYS = sorted(_http_config_schema()["properties"])
+
+
+def _keys_read_from(module: str, function: str, var: str) -> set[str]:
+    """String keys *function* in *module* reads from the mapping named *var*:
+    ``var.get("k")``, ``var["k"]`` and ``"k" in var``."""
+    tree = ast.parse(inspect.getsource(importlib.import_module(module)))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == function)
+
+    def is_var(node):
+        return isinstance(node, ast.Name) and node.id == var
+
+    def const(node):
+        return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+    keys = set()
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and is_var(node.func.value) and node.args):
+            keys.add(const(node.args[0]))
+        elif isinstance(node, ast.Subscript) and is_var(node.value):
+            keys.add(const(node.slice))
+        elif (isinstance(node, ast.Compare) and len(node.ops) == 1
+              and isinstance(node.ops[0], (ast.In, ast.NotIn)) and is_var(node.comparators[0])):
+            keys.add(const(node.left))
+    keys.discard(None)
+    return keys
+
+
+def test_http_config_keys_python_handles_are_schema_properties():
+    """Every http_config key the Python side handles by name — the auth keys
+    and the keys _http_config_problem / build_receiver_config read — is a
+    schema property, so the schema never refuses a key the generator
+    validates and emits."""
+    from _lib_constants import HTTP_CONFIG_AUTH_FIELDS
+
+    validated = _keys_read_from("_lib_validation", "_http_config_problem", "value")
+    emitted = _keys_read_from("_grar_merge", "build_receiver_config", "http_config")
+    # The extractor must see the reads it is there to see, or an empty set
+    # would pass the subset check below vacuously.
+    assert {"proxy_url", "no_proxy", "proxy_from_environment", "proxy_connect_header"} <= validated
+    assert "proxy_from_environment" in emitted
+    handled = set(HTTP_CONFIG_AUTH_FIELDS) | validated | emitted
+    missing = sorted(handled - set(_HTTP_CONFIG_KEYS))
+    assert not missing, f"Python handles http_config keys the schema refuses: {missing}"
+
+
+def _sample(prop: dict):
+    """A value of the property's own type that sets nothing another key needs."""
+    if prop.get("$ref") == "#/definitions/yamlBool":
+        return False
+    types = prop["type"] if isinstance(prop["type"], list) else [prop["type"]]
+    return {"object": {}, "string": "", "boolean": False}[next(t for t in types if t != "null")]
+
+
+@pytest.mark.parametrize("key", _HTTP_CONFIG_KEYS)
+def test_http_config_schema_key_passes_schema_and_generator(key):
+    """Each schema key, alone, is accepted by the schema and the generator,
+    and the generator emits it unchanged — over every key, the set the
+    generator passes through is the schema's whole key set."""
+    value = _sample(_http_config_schema()["properties"][key])
+    receiver = {"type": "webhook", "url": "https://h.example/a", "http_config": {key: value}}
+    doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
+    assert not [e.message for e in _VALIDATOR.iter_errors(doc)]
+    cfg, warnings = build_receiver_config(json.loads(json.dumps(receiver)), "t1")
+    assert cfg is not None, warnings
+    assert cfg["webhook_configs"][0]["http_config"] == {key: value}
+
+
+def test_http_config_schema_refuses_an_unknown_key():
+    """additionalProperties: false stays: Alertmanager refuses an unknown
+    http_config key ("field ... not found") and the whole config with it."""
+    assert _http_config_schema().get("additionalProperties") is False
+    receiver = {"type": "webhook", "url": "https://h.example/a",
+                "http_config": {"proxy_urls": "http://p.example:1"}}
+    doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
+    assert [e.message for e in _VALIDATOR.iter_errors(doc)]
+
+
+def test_yaml_true_is_the_true_half_of_yaml_bool():
+    """definitions.yamlTrue (the proxy rules' "proxy_from_environment: true")
+    is exactly the yamlBool values _yaml_bool_true reads as true."""
+    from _lib_validation import _yaml_bool_true, yaml_bool_literals
+
+    with open(_SCHEMA, encoding="utf-8") as f:
+        enum = json.load(f)["definitions"]["yamlTrue"]["enum"]
+    candidates = [True, False, None, *yaml_bool_literals()]
+    want = [v for v in candidates if _yaml_bool_true(v)]
+    assert sorted(enum, key=repr) == sorted(want, key=repr)

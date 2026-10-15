@@ -818,26 +818,102 @@
             }
           }
         },
+        "oauth2": {
+          "type": ["object", "null"],
+          "title": "OAuth 2.0",
+          "description": "OAuth 2.0 client credentials (client_id, client_secret / client_secret_file, token_url, scopes, ...). The fields inside are left to Alertmanager."
+        },
+        "authorization": {
+          "type": ["object", "null"],
+          "title": "Authorization Header",
+          "description": "Authorization header (type, credentials / credentials_file). The fields inside are left to Alertmanager."
+        },
         "bearer_token": {
           "type": ["string", "null"],
           "title": "Bearer Token",
           "description": "HTTP Bearer token for authentication. A string: quote a token YAML would read as a number or date."
         },
+        "bearer_token_file": {
+          "type": ["string", "null"],
+          "title": "Bearer Token File",
+          "description": "Path of a file holding the Bearer token. A string: quote a path YAML would read as a number or date."
+        },
+        "tls_config": {
+          "type": ["object", "null"],
+          "title": "TLS Configuration",
+          "description": "TLS settings (ca_file, cert_file, key_file, server_name, insecure_skip_verify, ...). The fields inside are left to Alertmanager."
+        },
+        "follow_redirects": {
+          "type": ["boolean", "null"],
+          "title": "Follow Redirects",
+          "description": "Whether to follow HTTP 3xx redirects (Alertmanager's default: true). The route generator passes it through as written, so write a YAML boolean, not a quoted word."
+        },
+        "enable_http2": {
+          "type": ["boolean", "null"],
+          "title": "Enable HTTP/2",
+          "description": "Whether to enable HTTP/2 (Alertmanager's default: true). The route generator passes it through as written, so write a YAML boolean, not a quoted word."
+        },
+        "http_headers": {
+          "type": ["object", "null"],
+          "title": "HTTP Headers",
+          "description": "Extra headers to send, by header name. The values inside are left to Alertmanager."
+        },
         "proxy_url": {
           "type": ["string", "null"],
           "title": "Proxy URL",
           "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here. da-guard and tenant-api check it (pkg/receiverspec ProxyURLProblem); the route generator leaves it to its amtool gate."
+        },
+        "no_proxy": {
+          "type": ["string", "null"],
+          "title": "No Proxy",
+          "description": "Comma-separated hosts, IPs or CIDRs that bypass proxy_url. Needs proxy_url; not together with proxy_from_environment: true."
+        },
+        "proxy_from_environment": {
+          "$ref": "#/definitions/yamlBool",
+          "title": "Proxy From Environment",
+          "description": "Use the proxy from HTTP_PROXY / HTTPS_PROXY / NO_PROXY. Not together with a non-empty proxy_url or a no_proxy."
+        },
+        "proxy_connect_header": {
+          "type": ["object", "null"],
+          "title": "Proxy CONNECT Headers",
+          "description": "Headers sent to the proxy on CONNECT. Needs a non-empty proxy_url or proxy_from_environment: true."
         }
       },
-      "not": {
-        "required": ["basic_auth", "bearer_token"],
-        "properties": {
-          "basic_auth": { "type": "object" },
-          "bearer_token": { "type": "string", "minLength": 1 }
+      "allOf": [
+        { "not": { "required": ["basic_auth", "oauth2"], "properties": { "basic_auth": { "type": "object" }, "oauth2": { "type": "object" } } } },
+        { "not": { "required": ["basic_auth", "authorization"], "properties": { "basic_auth": { "type": "object" }, "authorization": { "type": "object" } } } },
+        { "not": { "required": ["basic_auth", "bearer_token"], "properties": { "basic_auth": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["basic_auth", "bearer_token_file"], "properties": { "basic_auth": { "type": "object" }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["oauth2", "authorization"], "properties": { "oauth2": { "type": "object" }, "authorization": { "type": "object" } } } },
+        { "not": { "required": ["oauth2", "bearer_token"], "properties": { "oauth2": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["oauth2", "bearer_token_file"], "properties": { "oauth2": { "type": "object" }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["authorization", "bearer_token"], "properties": { "authorization": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["authorization", "bearer_token_file"], "properties": { "authorization": { "type": "object" }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["bearer_token", "bearer_token_file"], "properties": { "bearer_token": { "type": "string", "minLength": 1 }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["proxy_from_environment", "proxy_url"], "properties": { "proxy_from_environment": { "$ref": "#/definitions/yamlTrue" }, "proxy_url": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["proxy_from_environment", "no_proxy"], "properties": { "proxy_from_environment": { "$ref": "#/definitions/yamlTrue" }, "no_proxy": { "type": "string", "minLength": 1 } } } },
+        {
+          "if": { "required": ["no_proxy"], "properties": { "no_proxy": { "type": "string", "minLength": 1 } } },
+          "then": { "required": ["proxy_url"], "properties": { "proxy_url": { "type": "string" } } }
+        },
+        {
+          "if": { "required": ["proxy_connect_header"], "properties": { "proxy_connect_header": { "type": "object", "minProperties": 1 } } },
+          "then": {
+            "anyOf": [
+              { "required": ["proxy_url"], "properties": { "proxy_url": { "type": "string", "minLength": 1 } } },
+              { "required": ["proxy_from_environment"], "properties": { "proxy_from_environment": { "$ref": "#/definitions/yamlTrue" } } }
+            ]
+          }
         }
-      },
-      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; null and an empty bearer_token count as unset. The `not` covers the two auth keys listed here, additionalProperties: false the rest (and every other http_config key: a known limitation, the schema is stricter than Alertmanager there). The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
+      ],
+      "$comment": "#2295 / #2984: `properties` is the http_config key set Alertmanager accepts (prometheus/common HTTPClientConfig with its inline ProxyConfig; tests/alertmanager-inhibit TestSchemaHTTPConfigKeys_MatchAlertmanager pins the set by reflection), so additionalProperties: false refuses only what Alertmanager refuses (an unknown key fails the whole config). The route generator passes http_config through whole. The first ten `allOf` entries are every pair of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file: Alertmanager (HTTPClientConfig.Validate) refuses more than one, null and an empty bearer_token / bearer_token_file count as unset, an empty mapping counts as set. The last four are ProxyConfig.Validate. The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by tests/shared/test_receiver_spec_parity.py and the rows of receiver_presence_cases.json.",
       "additionalProperties": false
+    },
+    "yamlTrue": {
+      "title": "YAML boolean true",
+      "description": "The values of definitions.yamlBool that mean true.",
+      "$comment": "#2984: the subset of yamlBool that _lib_validation._yaml_bool_true reads as true; tests/shared/test_receiver_spec_parity.py pins it to that function over the yamlBool enum.",
+      "enum": [true, "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"]
     },
     "httpConfigOrNull": {
       "title": "HTTP client configuration or null",

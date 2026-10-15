@@ -97,6 +97,10 @@ jobs:
               - "**/go.sum"
               - "tests/contract/**"
               - "tests/alertmanager-inhibit/**"
+              #   - the tenant schema — the am-inhibit leg pins its
+              #     http_config key set to Alertmanager's (#2984); that leg
+              #     has no `docs` gate, unlike threshold-exporter's.
+              - "docs/schemas/tenant-config.schema.json"
               #   - tests/e2e-bench/receiver/** — the receiver leg (#1280).
               #     `**/go.mod` above already woke the Go legs on a go.mod
               #     edit; this entry makes an edit to main.go / main_test.go
