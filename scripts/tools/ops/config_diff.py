@@ -666,19 +666,30 @@ def _served_threshold(key, value, severity, schedule):
     return num if severity == natural else f"{num}:{severity}"
 
 
+# How a threshold key written but not served reads in the report (#3022).
+UNSERVED_SUFFIX = " (not served)"
+
+
 def served_metric_configs(tenants):
     """{tenant: {key: reading}} for compute_diff, from served-values tenants.
 
     Threshold keys are what /metrics serves (`_served_threshold`); a key the
-    tenant switched off, or that the exporter cannot serve, is its value as
-    written (`unserved`, e.g. "disable"). Reserved (`_`) keys are not here.
+    tenant switched off is its value as written ("disable"). Reserved (`_`)
+    keys are not here.
+
+    ⛔ Any other key the exporter does not serve reads as `UNSERVED_SUFFIX`
+    after the text written (#3022), never as the text alone: `'85'` written
+    but not served and `85` served are different renders — one arms the
+    alert, the other does not — yet `classify_change` compares numbers and
+    would call them the same. A key reaching /metrics with an unchanged
+    number was therefore not reported at all.
     """
     out = {}
     for tenant, tv in tenants.items():
         flat = {}
         for key, raw in (tv.unserved or {}).items():
             if not str(key).startswith("_"):
-                flat[str(key)] = raw
+                flat[str(key)] = raw if _is_disabled(raw) else f"{raw}{UNSERVED_SUFFIX}"
         for key, severity in tv.severities.items():
             schedule = (tv.schedules or {}).get(key)
             flat[key] = _served_threshold(key, tv.values.get(key), severity, schedule)

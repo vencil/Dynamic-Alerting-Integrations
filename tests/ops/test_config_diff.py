@@ -566,11 +566,27 @@ class TestCLI:
         assert p.stdout.rstrip().endswith("No changes detected.")
 
     def test_exit_1_changes_detected(self, tmp_path):
+        # The base must be declared for the value to be served: without a
+        # `_defaults.yaml` both sides read "(not served)" (#3022).
+        for side in ("old", "new"):
+            (tmp_path / side).mkdir()
+            (tmp_path / side / "_defaults.yaml").write_text(
+                "defaults:\n  mysql_connections: 80\n", encoding="utf-8", newline="\n")
         _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
         _write_tenant(tmp_path / "new", {"mysql_connections": "50"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
         assert "| mysql_connections | 80 | 50 | tighter |" in p.stdout
+
+    def test_a_change_to_a_key_served_on_neither_side_says_so(self, tmp_path):
+        """No `_defaults.yaml`: /metrics serves the key on neither side, so
+        the change arms nothing — it is not "tighter" (#3022)."""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": "50"})
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 1, p.stderr
+        assert ("| mysql_connections | 80 (not served) | 50 (not served) | modified |"
+                in p.stdout), p.stdout
 
     def test_old_dir_missing_is_a_first_import(self, tmp_path):
         """base 側沒有 conf.d（第一次匯入）：所有租戶算新增，rc 1，不是呼叫錯誤（ADR-037 決定 4）。"""

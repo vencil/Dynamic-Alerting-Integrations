@@ -338,3 +338,40 @@ def test_every_row_of_a_recipe_counts_not_only_the_first():
                                      {}, {}, {}, None, {}, {}, {})}
     old, new = cd.served_custom_alerts(tenants("page")), cd.served_custom_alerts(tenants("silent"))
     assert old["t"]["x"]["mode"] == "page" and new["t"]["x"]["mode"] == "page, silent"
+
+
+# ── unserved ↔ 出列（#3022）───────────────────────────────────────────────
+
+
+_NO_PG = _DEFAULTS
+_WITH_PG = _DEFAULTS.replace("  container_memory: 85\n", "  container_memory: 85\n  pg_connections: 80\n")
+
+
+@pytest.mark.parametrize("base_defaults, pr_defaults, old, new", [
+    (_NO_PG, _WITH_PG, "85 (not served)", 85),   # 補上 base：開始出列
+    (_WITH_PG, _NO_PG, 85, "85 (not served)"),   # 拿掉 base：不再出列
+])
+def test_a_key_crossing_unserved_and_served_is_reported_with_the_same_number(
+        tmp_path, da_guard, base_defaults, pr_defaults, old, new):
+    """寫入的數字沒變，但 /metrics 有沒有這列變了：告警因此開始或停止生效。
+    舊行為把 `'85'`（unserved 原文）與 `85` 比成相同，整列不報。"""
+    tenants = {"t": {"pg_connections": "85"}}
+    b, p = _served(tmp_path, da_guard, tenants, tenants,
+                   base_defaults=base_defaults, pr_defaults=pr_defaults)
+    got = _by_key(_metric(b, p)["t"])["pg_connections"]
+    assert (got["old"], got["new"], got["change"]) == (old, new, "modified")
+
+
+def test_an_unserved_key_that_stays_unserved_is_not_a_change(tmp_path, da_guard):
+    tenants = {"t": {"pg_connections": "85"}}
+    b, p = _served(tmp_path, da_guard, tenants, tenants)
+    assert "t" not in _metric(b, p)
+
+
+def test_a_disabled_key_still_reads_as_written(tmp_path, da_guard):
+    """值為 disable 的維度鍵照舊以原文呈現，toggled 的判斷不變。"""
+    b, p = _served(tmp_path, da_guard,
+                   {"t": {'mysql_connections{schema="x"}': "disable"}},
+                   {"t": {'mysql_connections{schema="x"}': "70"}})
+    got = _by_key(_metric(b, p)["t"])['mysql_connections{schema="x"}']
+    assert (got["old"], got["change"]) == ("disable", "toggled")
