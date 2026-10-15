@@ -44,6 +44,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
@@ -180,6 +181,44 @@ const (
 	// documents, an anchor, alias or merge key). Falling back to the raw
 	// diff would show the credentials the mask exists to hide.
 	CodeMaskedPreviewUnavailable = "MASKED_PREVIEW_UNAVAILABLE"
+	// CodeGeneratorFindings marks a 422 from a write the generator container
+	// judged and refused (#2903, ADR-036 §4): the conf.d tree at the commit
+	// the write lands on, with the write applied, does not pass
+	// `generate-routes --validate --strict`. The envelope carries findings[]
+	// — the generator's --findings-json entries, the ones naming a file or a
+	// tenant of this write first and marked related — and
+	// findings_compared_with_base: when true every finding carries
+	// pre_existing (it is also reported without this write); when false the
+	// base was not judged (too little time left) and pre_existing is absent.
+	// A finding unrelated to this write is shown only to a caller with write
+	// permission on all tenants; others get unrelated_findings_withheld (a
+	// count). Nothing was written. A batch is refused whole (one envelope);
+	// an async batch's results carry the code and the related findings'
+	// text.
+	CodeGeneratorFindings = "GENERATOR_FINDINGS"
+	// CodeGeneratorRejected marks a write the generator container gave no
+	// verdict on this time (#2903, ADR-036 §3 "拒收該筆"); reason says why.
+	// 429 with Retry-After — the same write may pass when resent — for busy,
+	// deadline, git_read, mismatch (what was judged is still not what would
+	// be written after one re-judgement) and no_time (too little of the
+	// request's time left to judge); 422 for memory, incomplete, too_large
+	// (the files the write produces are too large for one judgement: split
+	// the batch) and invalid_request. Counted in
+	// tenant_api_generator_rejections_total{reason}. Nothing was written. Not
+	// a 503: the container itself is fine.
+	CodeGeneratorRejected = "GENERATOR_REJECTED"
+	// CodeValidatorUnavailable marks an HTTP 503 from a content-changing
+	// write while the generator container cannot judge at all (#2903,
+	// ADR-036 §5): no answer (unreachable — not running, or no answer within
+	// the request's time), an unreadable answer (bad_response), amtool
+	// missing (amtool_missing), a generator older than the deployment
+	// policy's min_generator_version (generator_too_old), or the service's
+	// own error (internal_error). reason names which; the message says more.
+	// Retry-After. Nothing was written. The generator's POLICY_UNAVAILABLE
+	// (the deployment policy file is unusable; reason policy_unusable, or
+	// policy_unreadable when tenant-api's own copy cannot be read) is passed
+	// through the same way with that code.
+	CodeValidatorUnavailable = "VALIDATOR_UNAVAILABLE"
 )
 
 // policyUnavailableRetryAfterS is the Retry-After hint (seconds) on the
@@ -924,6 +963,9 @@ func WriteTreeNotOnBase(w http.ResponseWriter, r *http.Request, err error) {
 //   - gitops.ErrInvalidTenantID   → 400 (ADR-035: the writer's own copy of the
 //     tenant-id rule; ValidateWritableTenantID normally refuses first)
 func writeWriteFlowError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
+	if writeGeneratorError(w, r, d, err) {
+		return true
+	}
 	if writeTenantPlacementError(w, r, d, err) {
 		return true
 	}
@@ -1034,4 +1076,203 @@ func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider stri
 		WriteJSONError(w, r, http.StatusServiceUnavailable,
 			fmt.Sprintf("%s PR/MR creation failed — please retry shortly", provider))
 	}
+}
+
+// generatorRetryAfterS is the Retry-After hint (seconds) on a retryable
+// GENERATOR_REJECTED 429 and on the generator's 503s: the container judges
+// one write at a time, each in at most its judgement deadline, so a few
+// seconds paces a retry without promising anything.
+const generatorRetryAfterS = 5
+
+// msgGeneratorTooLarge is the text of GENERATOR_REJECTED reason too_large.
+const msgGeneratorTooLarge = "the files this write produces are too large for the generator to judge in one request; " +
+	"nothing was written — split the batch into smaller ones"
+
+// writeGeneratorError renders the three refusals of the generator container
+// (#2903; codes GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE
+// / POLICY_UNAVAILABLE) and reports whether err was one.
+func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
+	var (
+		found *generator.FindingsError
+		rej   *generator.RejectedError
+		unav  *generator.UnavailableError
+	)
+	switch {
+	case errors.As(err, &found):
+		visible := false
+		if d != nil && r != nil {
+			visible = treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
+		}
+		findings, withheld := disclosedFindings(found.Findings, visible)
+		extra := map[string]any{
+			"findings":                    findings,
+			"findings_compared_with_base": found.ComparedWithBase,
+		}
+		if withheld > 0 {
+			extra["unrelated_findings_withheld"] = withheld
+		}
+		msg := "the route generator refuses the configuration this write would produce; nothing was written"
+		if !found.ComparedWithBase {
+			msg += " (not compared with the configuration before the write: pre_existing is not set)"
+		}
+		WriteErrorEnvelope(w, r, http.StatusUnprocessableEntity, ErrorResponse{
+			Error: msg,
+			Code:  CodeGeneratorFindings,
+			Extra: extra,
+		})
+	case errors.As(err, &rej):
+		status, text := http.StatusUnprocessableEntity, generatorRejectedText(rej)
+		env := ErrorResponse{Error: text, Code: CodeGeneratorRejected, Extra: map[string]any{"reason": rej.Reason}}
+		if generator.Retryable(rej.Reason) {
+			status = http.StatusTooManyRequests
+			w.Header().Set("Retry-After", strconv.Itoa(generatorRetryAfterS))
+			env.RetryAfterS = generatorRetryAfterS
+		}
+		slog.Warn("write refused: the generator gave no verdict", "reason", rej.Reason, "error", err)
+		WriteErrorEnvelope(w, r, status, env)
+	case errors.As(err, &unav):
+		slog.Error("write refused: the generator container cannot judge", "code", unav.Code, "reason", unav.Reason, "error", err)
+		w.Header().Set("Retry-After", strconv.Itoa(generatorRetryAfterS))
+		WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
+			Error:       generatorUnavailableText(unav),
+			Code:        unav.Code,
+			RetryAfterS: generatorRetryAfterS,
+			Extra:       map[string]any{"reason": unav.Reason},
+		})
+	default:
+		return false
+	}
+	return true
+}
+
+// disclosedFindings is what a caller is shown of a GENERATOR_FINDINGS
+// refusal: every finding when visible (treePathsVisible), else only the
+// ones related to the write, plus how many others were withheld — a finding
+// elsewhere in the tree names other tenants and files (the disclosure rule
+// of TENANT_TREE_UNREADABLE, #2939 D3a).
+func disclosedFindings(all []generator.Finding, visible bool) ([]generator.Finding, int) {
+	if visible {
+		return nonNilFindings(all), 0
+	}
+	shown := make([]generator.Finding, 0, len(all))
+	for _, f := range all {
+		if f.Related {
+			shown = append(shown, f)
+		}
+	}
+	return shown, len(all) - len(shown)
+}
+
+func nonNilFindings(f []generator.Finding) []generator.Finding {
+	if f == nil {
+		return []generator.Finding{}
+	}
+	return f
+}
+
+// generatorRejectedText is the client text of GENERATOR_REJECTED.
+func generatorRejectedText(e *generator.RejectedError) string {
+	if e.Reason == generator.ReasonTooLarge {
+		return msgGeneratorTooLarge
+	}
+	head := "the route generator could not judge this write (" + e.Reason + "); nothing was written"
+	if generator.Retryable(e.Reason) {
+		head += " — retry"
+	}
+	if e.Message != "" {
+		head += ": " + e.Message
+	}
+	return head
+}
+
+// generatorUnavailableText is the client text of the generator's 503. The
+// reasons tenant-api raises itself (no answer, an unreadable answer) carry
+// the socket path and transport detail, which go to the log only.
+func generatorUnavailableText(e *generator.UnavailableError) string {
+	what := "the route generator container cannot judge writes"
+	if e.Code == generator.CodePolicyUnavailable {
+		what = "the deployment policy file the route generator judges with is unusable"
+	}
+	text := what + " (reason: " + e.Reason + "), so content-changing writes are refused; nothing was written"
+	switch e.Reason {
+	case generator.ReasonUnreachable, generator.ReasonBadResponse, generator.ReasonInternal:
+		return text
+	}
+	if e.Message != "" {
+		text += ": " + e.Message
+	}
+	return text
+}
+
+// generatorRejectsBatch reports whether err is a refusal by the generator
+// that a batch answers as a REJECTED batch — 422 with the BatchResponse /
+// GroupBatchResponse shape every rejected batch has (#2900): findings, or a
+// rejection that is not retryable. The retryable ones (429) and the
+// container's 503s are ErrorResponse envelopes (writeGeneratorError).
+func generatorRejectsBatch(err error) bool {
+	var (
+		found *generator.FindingsError
+		rej   *generator.RejectedError
+	)
+	return errors.As(err, &found) || (errors.As(err, &rej) && !generator.Retryable(rej.Reason))
+}
+
+// generatorOpResult is op tenantID's result when the generator refused the
+// whole batch (err): every op is refused with the same code; for findings,
+// the message lists the ones that name this op's tenant — the rest are in
+// the response's findings (generatorBatchFindings), or, in an async task's
+// stored results, only counted. ok is false when err is not the
+// generator's.
+func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
+	var (
+		found *generator.FindingsError
+		rej   *generator.RejectedError
+		unav  *generator.UnavailableError
+	)
+	switch {
+	case errors.As(err, &found):
+		var mine []string
+		for _, f := range found.Findings {
+			if f.Tenant != nil && *f.Tenant == tenantID {
+				mine = append(mine, f.Message)
+			}
+		}
+		msg := fmt.Sprintf("the route generator refuses the configuration this batch would produce; nothing was written "+
+			"(%d finding(s) in all, %d naming this tenant)", len(found.Findings), len(mine))
+		if len(mine) > 0 {
+			msg += ": " + strings.Join(mine, "; ")
+		}
+		return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: CodeGeneratorFindings}, true
+	case errors.As(err, &rej):
+		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorRejectedText(rej), Code: CodeGeneratorRejected}, true
+	case errors.As(err, &unav):
+		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorUnavailableText(unav), Code: unav.Code}, true
+	}
+	return BatchResult{}, false
+}
+
+// generatorBatchFindings is the batch-level findings of a GENERATOR_FINDINGS
+// rejection, as the caller may see them (disclosedFindings): nil when err
+// is not one.
+func generatorBatchFindings(d *Deps, r *http.Request, err error) (findings []generator.Finding, compared *bool, withheld int) {
+	var found *generator.FindingsError
+	if !errors.As(err, &found) {
+		return nil, nil, 0
+	}
+	visible := false
+	if d != nil && r != nil {
+		visible = treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
+	}
+	findings, withheld = disclosedFindings(found.Findings, visible)
+	c := found.ComparedWithBase
+	return findings, &c, withheld
+}
+
+// rejectedByGenerator is the 422 rejected-batch body of a batch the
+// generator refused (generatorRejectsBatch): results as given (every op
+// refused with the generator's code), and for findings the batch-level list.
+func rejectedByGenerator(d *Deps, r *http.Request, taskID string, results []BatchResult, err error) BatchResponse {
+	resp := rejectedBatchResponse(taskID, results)
+	resp.Findings, resp.FindingsComparedWithBase, resp.UnrelatedFindingsWithheld = generatorBatchFindings(d, r, err)
+	return resp
 }

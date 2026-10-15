@@ -212,40 +212,6 @@ func TestDirectMode_BrokenYmlAtStartupRefusesPolicyWrites(t *testing.T) {
 			t.Errorf("results = %+v, want the non-routing op written", resp.Results)
 		}
 	})
-	t.Run("escape hatch", func(t *testing.T) {
-		configDir := seedGitTree(t, files)
-		mgr := policy.NewManager(configDir)
-		mgr.SetOpenOnUnavailable(true)
-		d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
-			Policy: mgr, WriteMode: WriteModeDirect}
-		resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-		if len(resp.Results) != 1 || !strings.Contains(resp.Results[0].Message, "domain policy violation") {
-			t.Errorf("results = %+v, want the op judged by the .yaml policy (let through the gate)", resp.Results)
-		}
-		if mgr.OpenPasses() == 0 {
-			t.Error("OpenPasses = 0, want the write let through counted")
-		}
-	})
-	// N2 (hub #2486 PR-7c round 2): tenant_api_policy_unavailable_open_total
-	// counts writes — one per op the policy judges — never the batch request
-	// on top: two routing ops and one the policy does not judge count 2 (the
-	// batch-level gate used to count once more).
-	t.Run("escape hatch counts each write once", func(t *testing.T) {
-		configDir := seedGitTree(t, files)
-		mgr := policy.NewManager(configDir)
-		mgr.SetOpenOnUnavailable(true)
-		d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
-			Policy: mgr, WriteMode: WriteModeDirect}
-		resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":{"_routing_profile":"domain-ok"}},`+
-			`{"tenant_id":"t-other","patch":{"_routing_profile":"domain-ok"}},`+
-			`{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}}]`)
-		if len(resp.Results) != 3 {
-			t.Fatalf("results = %+v, want 3", resp.Results)
-		}
-		if got := mgr.OpenPasses(); got != 2 {
-			t.Errorf("OpenPasses = %d, want 2 (one per routing op, none for the batch)", got)
-		}
-	})
 }
 
 // Item 2, batch half: the in-lock batch check reads the base's

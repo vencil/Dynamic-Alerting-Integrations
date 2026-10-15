@@ -258,6 +258,14 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
+	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
+	// judges the branch point — the feature branch's HEAD, nothing committed
+	// on it yet — with the body written over the file.
+	if err := w.validateTenantFile(ctx, filePath, tenantID, []byte(yamlContent)); err != nil {
+		w.abortFeatureBranch(base, branchName)
+		return nil, err
+	}
+
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
 	// its spelling, never a second file beside it. Replaced by rename, as a
 	// direct write (writeFileAtomic): a tenant file that is a symlink —
@@ -478,6 +486,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	before, err := w.gitOutput(st.root, "rev-parse", "HEAD")
 	if err != nil {
 		return nil, fmt.Errorf("read batch base: %w", err)
+	}
+	// #2903 (ADR-036 §4): the generator judges the branch point with every
+	// file the batch changed written over it, once for the whole batch.
+	if err := w.validateStaging(ctx, st, strings.TrimSpace(string(before))); err != nil {
+		return nil, err
 	}
 	commit, err := w.commitStaging(st, strings.TrimSpace(string(before)), authorEmail)
 	if err != nil {

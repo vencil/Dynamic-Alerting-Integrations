@@ -100,11 +100,8 @@ func readsPolicy(op BatchOperation) bool {
 
 // batchPolicyUnavailable is the direct-mode batch gate (hub #2486 Q7-2): the
 // error policy.Manager.RefusesWrites returns when some op reads the policy
-// and the policy is unavailable (and --policy-unavailable-open is off), else
-// nil. It lets nothing through on its own account and counts nothing: under
-// --policy-unavailable-open each op is let through, logged and counted once
-// by executeBatchOps' per-op gate (batchOpPolicyUnavailable), so
-// tenant_api_policy_unavailable_open_total counts writes, not requests.
+// and the policy is unavailable, else nil. An async batch is judged again
+// per op when it runs (batchOpPolicyUnavailable).
 func batchPolicyUnavailable(mgr *policy.Manager, ops []BatchOperation) error {
 	if mgr == nil {
 		return nil

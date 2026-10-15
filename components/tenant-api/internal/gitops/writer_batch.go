@@ -624,6 +624,12 @@ func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail stri
 	if err != nil {
 		return nil, err
 	}
+	// #2903 (ADR-036 §4): the generator judges HEAD with every file the
+	// batch changed written over it, once for the whole batch; the staging
+	// tree is thrown away on a refusal.
+	if err := w.validateStaging(ctx, st, headBefore); err != nil {
+		return nil, err
+	}
 	commit, err := w.commitStaging(st, headBefore, authorEmail)
 	if err != nil || commit == "" {
 		return outcomes, err

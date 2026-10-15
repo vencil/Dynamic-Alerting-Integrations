@@ -389,6 +389,10 @@ type Writer struct {
 	baseBranch     string        // PR-mode base to branch from / return to (#638); "" → defaultBaseBranch
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 
+	// validator is the generator's verdict every content-changing write asks
+	// for before it commits (#2903, write_validator.go); nil asks nothing.
+	validator WriteValidator
+
 	// #2078 conf.d walk bound (see scanTree): 0 → defaultTreeScanTimeout.
 	// stuckTreeScans counts write-path walks that outlived it and are still
 	// running; stuckReadTreeScans does the same for the read path (#2153,
@@ -846,6 +850,14 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx))
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
+	}
+
+	// #2903 (ADR-036 §4): the generator judges HEAD with this body written
+	// over the file, still under the lock — nothing is written before it
+	// passes. Asked even when the body equals the file: a single write is
+	// not told apart from a no-op before its commit.
+	if err := w.validateTenantFile(ctx, filePath, tenantID, []byte(yamlContent)); err != nil {
+		return nil, err
 	}
 
 	if err := w.commitFileChange(
@@ -1371,6 +1383,10 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	// tenant) never matches non-empty content, so it still commits the new file.
 	if existing != nil && content == string(existing) {
 		return notices, nil
+	}
+	// #2903: the generator's verdict, under the lock, before the commit.
+	if err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content)); err != nil {
+		return nil, err
 	}
 	if err := w.commitFileChange(
 		filePath,
