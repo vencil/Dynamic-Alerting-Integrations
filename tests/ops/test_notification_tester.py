@@ -491,7 +491,12 @@ class TestReadTimeoutClassification:
 
 @contextlib.contextmanager
 def _raw_server(reply):
-    """收下請求後回 ``reply`` 原始位元組並關線；回傳 URL。"""
+    """收下整個請求後回 ``reply`` 原始位元組並關線；回傳 URL。
+
+    請求 body 必須讀完、關線前先 shutdown 寫端：接收緩衝區還有沒讀的位元組
+    時 close 會送 RST 而不是 FIN，client 偶爾讀到 Connection reset 而不是
+    reply 本身。
+    """
     srv = socket.create_server(("127.0.0.1", 0))
     srv.settimeout(5)
 
@@ -506,7 +511,21 @@ def _raw_server(reply):
                     if not chunk:
                         break
                     buf += chunk
+                head, _, body = buf.partition(b"\r\n\r\n")
+                length = 0
+                for line in head.split(b"\r\n")[1:]:
+                    name, _, value = line.partition(b":")
+                    if name.strip().lower() == b"content-length":
+                        length = int(value.strip())
+                while len(body) < length:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    body += chunk
                 conn.sendall(reply)
+                conn.shutdown(socket.SHUT_WR)
+                while conn.recv(4096):
+                    pass
 
     thread = threading.Thread(target=_serve, daemon=True)
     thread.start()
