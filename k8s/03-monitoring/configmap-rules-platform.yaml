@@ -1035,38 +1035,6 @@ data:
                 hatch, not a fix.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
-          # --- generator container: judgement memory near its limit (#2901, ADR-036 §3) ---
-          # Every tenant-api write is judged in a process the generator
-          # container forks, under RLIMIT_DATA. The process inherits the parse
-          # cache of the latest base tree, which grows with the tenant count
-          # and has no cap of its own, so once cache + one judgement no longer
-          # fit, EVERY write is rejected (reason "memory"). The ratio, not a
-          # byte count, so it holds for any configured limit; 0.8 leaves room
-          # to raise the limit and the container's memory before that point.
-          # The peak is the latest judgement's (a gauge until the next one),
-          # so `for: 5m` only rides out a single scrape.
-          # ⚠️ No data until the metric is scraped: tenant-api / the chart wire
-          # the container's /metrics in #2902 / #2903.
-          - alert: GeneratorJudgementMemoryNearLimit
-            expr: da_generator_judgement_peak_rss_bytes / da_generator_judgement_memory_limit_bytes > 0.8
-            for: 5m
-            labels:
-              severity: warning
-              alert_source: platform
-            annotations:
-              summary: "generator container: a write judgement used over 80% of its memory limit"
-              description: |
-                The latest judgement in the generator container (tenant-api's
-                write check) peaked at {{ $value | humanizePercentage }} of the
-                judgement process's memory limit (RLIMIT_DATA). The parse cache of
-                the latest base tree counts against that limit and grows with the
-                number of tenants; when cache plus one judgement exceed it, every
-                write is rejected with reason "memory". Raise the judgement memory
-                limit (`--memory-limit-bytes`) together with the container's memory
-                limit, before writes start failing. da_generator_cache_bytes shows
-                how much of it is the cache.
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/036-single-parser-effective-config.md"
-
           # --- tenant-api async task PANICKED (#2913) ---
           # The async batch worker (`?async=true`) recovers a panicking task
           # instead of letting it end the process: the task is marked failed, the
