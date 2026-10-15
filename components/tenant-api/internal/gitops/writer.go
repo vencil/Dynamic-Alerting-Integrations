@@ -858,16 +858,10 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
-	// No-op short-circuit, as WriteMerged's: a body byte-identical to the
-	// file AND to HEAD's blob of it changes nothing — success, nothing
-	// committed, the generator not asked (the tree it would judge is HEAD's
-	// own). Both, because the serving file alone can hold bytes HEAD does
-	// not: an uncommitted edit from outside, or a write whose file landed
-	// and whose commit failed (index.lock) — short-circuiting those would
-	// answer success for a body that is never committed. os.IsNotExist
-	// leaves existing nil: a new file is never a no-op.
-	if existing, rerr := readTenantFile(filePath); rerr == nil && string(existing) == yamlContent &&
-		w.headHolds(filePath, existing) {
+	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
+	// A read error leaves existing nil: never a no-op.
+	existing, _ := readTenantFile(filePath)
+	if w.unchangedFile(filePath, existing, yamlContent) {
 		return notices, nil
 	}
 
@@ -1393,15 +1387,15 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	if err != nil {
 		return nil, err
 	}
-	// No-op short-circuit: when the
+	// No-op short-circuit (unchangedFile, the rule Write shares): when the
 	// merge changed nothing — an idempotent patch, or a client retry after a
-	// write whose response was lost — the content is byte-identical to disk, so
-	// gitCommit would stage nothing and NOT advance HEAD. commitFileChange's
-	// parent-based conflict check then misfires (HEAD~1 != unmoved HEAD) and
-	// returns a spurious, permanently-unrecoverable ErrConflict. Treat an
+	// write whose response was lost — there is nothing to commit, and
+	// gitCommit would stage nothing and NOT advance HEAD; commitFileChange's
+	// parent-based conflict check would then misfire (HEAD~1 != unmoved
+	// HEAD) with a spurious, permanently-unrecoverable ErrConflict. Treat an
 	// unchanged merge as success (#1097 self-review). `existing == nil` (a new
-	// tenant) never matches non-empty content, so it still commits the new file.
-	if existing != nil && content == string(existing) {
+	// tenant) never matches, so it still commits the new file.
+	if w.unchangedFile(filePath, existing, content) {
 		return notices, nil
 	}
 	// #2903: the generator's verdict, under the lock, before the commit.

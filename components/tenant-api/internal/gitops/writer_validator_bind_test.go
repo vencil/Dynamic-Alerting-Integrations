@@ -424,3 +424,44 @@ func TestWrite_RetryAfterAFailedCommitCommits(t *testing.T) {
 		t.Errorf("the tree is left dirty:\n%s", st)
 	}
 }
+
+// WriteMerged shares Write's no-op rule (unchangedFile): an uncommitted
+// edit from outside that already holds the merged content is judged and
+// committed, not answered as a no-op.
+func TestWriteMerged_UncommittedEditOfTheSameContentIsCommitted(t *testing.T) {
+	t.Parallel()
+	dir := initRepoWithDefaults(t)
+	w := NewWriter(dir, dir)
+	const prior = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"60\"\n"
+	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
+	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, bindTenant+".yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if st := gitStatus(t, dir); !strings.Contains(st, " M "+bindTenant+".yaml") {
+		t.Fatalf("setup: status %q", st)
+	}
+	v := &recordingValidator{}
+	w.SetValidator(v)
+	head := gitRevParse(t, dir, "HEAD")
+	if _, err := w.WriteMerged(context.Background(), bindTenant, "op@example.com",
+		func([]byte) (string, error) { return body, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.calls) != 1 {
+		t.Errorf("the generator was asked %d time(s), want 1", len(v.calls))
+	}
+	if gitRevParse(t, dir, "HEAD~1") != head || headBlob(t, dir, bindTenant+".yaml") != body {
+		t.Error("the merged content was not committed on HEAD")
+	}
+	if st := gitStatus(t, dir); st != "" {
+		t.Errorf("the tree is left dirty:\n%s", st)
+	}
+	// Now file and HEAD both hold it: a no-op, nothing asked.
+	if _, err := w.WriteMerged(context.Background(), bindTenant, "op@example.com",
+		func([]byte) (string, error) { return body, nil }); err != nil || len(v.calls) != 1 {
+		t.Errorf("unchanged merge: err %v, calls %d (want a no-op)", err, len(v.calls))
+	}
+}

@@ -212,6 +212,19 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 	return w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", filePath)
 }
 
+// unchangedFile is the no-op rule of the single-file writes (Write and
+// WriteMerged, #2903): content changes nothing only when it is
+// byte-identical both to the serving file (existing; nil when there is
+// none) and to HEAD's blob of it. The serving file alone can hold bytes
+// HEAD does not — an uncommitted edit from outside, or a write whose file
+// landed and whose commit failed (index.lock) — and answering success for
+// those would report a body that is never committed. When it holds, the
+// write is a success with nothing committed and the generator not asked
+// (the tree it would judge is HEAD's own).
+func (w *Writer) unchangedFile(filePath string, existing []byte, content string) bool {
+	return existing != nil && string(existing) == content && w.headHolds(filePath, existing)
+}
+
 // headHolds reports whether HEAD's blob of filePath is exactly content
 // (false when HEAD has no such file or it cannot be read).
 func (w *Writer) headHolds(filePath string, content []byte) bool {
