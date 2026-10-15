@@ -38,6 +38,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -215,7 +217,8 @@ const (
 	// the request's time), an unreadable answer (bad_response), amtool
 	// missing (amtool_missing), a generator older than the deployment
 	// policy's min_generator_version (generator_too_old), or the service's
-	// own error (internal_error). reason names which; the message says more.
+	// own error (internal_error). reason names which; the detail (the
+	// service's or tenant-api's message) is in the server log only.
 	// Retry-After. Nothing was written. The generator's POLICY_UNAVAILABLE
 	// (the deployment policy file is unusable; reason policy_unusable, or
 	// policy_unreadable when tenant-api's own copy cannot be read) is passed
@@ -1101,11 +1104,7 @@ func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 	)
 	switch {
 	case errors.As(err, &found):
-		visible := false
-		if d != nil && r != nil {
-			visible = treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
-		}
-		findings, withheld := disclosedFindings(found.Findings, visible)
+		findings, withheld := disclosedFindings(d, r, found.Findings)
 		extra := map[string]any{
 			"findings":                    findings,
 			"findings_compared_with_base": found.ComparedWithBase,
@@ -1147,22 +1146,51 @@ func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 	return true
 }
 
-// disclosedFindings is what a caller is shown of a GENERATOR_FINDINGS
-// refusal: every finding when visible (treePathsVisible), else only the
-// ones related to the write, plus how many others were withheld — a finding
+// disclosedFindings is what the caller of r is shown of a GENERATOR_FINDINGS
+// refusal — the one visibility rule of the single write, the tenant batch
+// and the group batch (sync and PR): every finding to a caller with write
+// permission on all tenants (treePathsVisible); to anyone else only the
+// findings related to the write that name nothing the caller cannot read
+// (findingReadable), plus how many others were withheld. A finding
 // elsewhere in the tree names other tenants and files (the disclosure rule
-// of TENANT_TREE_UNREADABLE, #2939 D3a).
-func disclosedFindings(all []generator.Finding, visible bool) ([]generator.Finding, int) {
-	if visible {
-		return nonNilFindings(all), 0
+// of TENANT_TREE_UNREADABLE, #2939 D3a); a related one can still name a
+// tenant the caller may not read — a group member reassigned to another
+// org while the batch ran.
+func disclosedFindings(d *Deps, r *http.Request, all []generator.Finding) ([]generator.Finding, int) {
+	var p *rbac.VerifiedPrincipal
+	if d != nil && r != nil {
+		p = rbac.RequestPrincipal(r)
+		if treePathsVisible(d.RBAC, p) {
+			return nonNilFindings(all), 0
+		}
 	}
 	shown := make([]generator.Finding, 0, len(all))
 	for _, f := range all {
-		if f.Related {
+		if f.Related && d != nil && findingReadable(d, p, f) {
 			shown = append(shown, f)
 		}
 	}
 	return shown, len(all) - len(shown)
+}
+
+// findingReadable reports whether f names nothing p may not read: its
+// tenant, and the tenant its file is named after (<id>.yaml / <id>.yml —
+// a file-only finding names its tenant that way).
+func findingReadable(d *Deps, p *rbac.VerifiedPrincipal, f generator.Finding) bool {
+	if d.RBAC == nil {
+		return true // no RBAC configured: nothing is scoped
+	}
+	readable := func(id string) bool { return OrgAllowedRead(d.RBAC, d.TenantOrg, p, id, rbac.PermRead) }
+	if f.Tenant != nil && *f.Tenant != "" && !readable(*f.Tenant) {
+		return false
+	}
+	if f.File != nil {
+		base := path.Base(filepath.ToSlash(*f.File))
+		if id := strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml"); id != base && !strings.HasPrefix(id, "_") && !readable(id) {
+			return false
+		}
+	}
+	return true
 }
 
 func nonNilFindings(f []generator.Finding) []generator.Finding {
@@ -1187,23 +1215,19 @@ func generatorRejectedText(e *generator.RejectedError) string {
 	return head
 }
 
-// generatorUnavailableText is the client text of the generator's 503. The
-// reasons tenant-api raises itself (no answer, an unreadable answer) carry
-// the socket path and transport detail, which go to the log only.
+// generatorUnavailableText is the client text of the generator's 503: the
+// code's fixed sentence and the reason, never e.Message. Messages carry
+// server detail whatever their reason — tenant-api's own (socket paths,
+// transport errors, an os.ReadFile error naming the policy path) and the
+// service's (internal_error is the repr of a Python exception) — so they go
+// to the log only (writeGeneratorError logs the error). A list of reasons
+// whose message is safe to show is a list that misses the next shape.
 func generatorUnavailableText(e *generator.UnavailableError) string {
 	what := "the route generator container cannot judge writes"
 	if e.Code == generator.CodePolicyUnavailable {
 		what = "the deployment policy file the route generator judges with is unusable"
 	}
-	text := what + " (reason: " + e.Reason + "), so content-changing writes are refused; nothing was written"
-	switch e.Reason {
-	case generator.ReasonUnreachable, generator.ReasonBadResponse, generator.ReasonInternal:
-		return text
-	}
-	if e.Message != "" {
-		text += ": " + e.Message
-	}
-	return text
+	return what + " (reason: " + e.Reason + "), so content-changing writes are refused; nothing was written — the server log has the detail"
 }
 
 // generatorRejectsBatch reports whether err is a refusal by the generator
@@ -1248,6 +1272,9 @@ func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
 	case errors.As(err, &rej):
 		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorRejectedText(rej), Code: CodeGeneratorRejected}, true
 	case errors.As(err, &unav):
+		// The message is the log's only (generatorUnavailableText); an async
+		// task's results have no other path to it.
+		slog.Error("batch op refused: the generator container cannot judge", "tenant", tenantID, "code", unav.Code, "reason", unav.Reason, "error", err)
 		return BatchResult{TenantID: tenantID, Status: "error", Message: generatorUnavailableText(unav), Code: unav.Code}, true
 	}
 	return BatchResult{}, false
@@ -1261,11 +1288,7 @@ func generatorBatchFindings(d *Deps, r *http.Request, err error) (findings []gen
 	if !errors.As(err, &found) {
 		return nil, nil, 0
 	}
-	visible := false
-	if d != nil && r != nil {
-		visible = treePathsVisible(d.RBAC, rbac.RequestPrincipal(r))
-	}
-	findings, withheld = disclosedFindings(found.Findings, visible)
+	findings, withheld = disclosedFindings(d, r, found.Findings)
 	c := found.ComparedWithBase
 	return findings, &c, withheld
 }

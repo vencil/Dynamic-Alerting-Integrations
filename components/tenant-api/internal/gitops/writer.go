@@ -1612,12 +1612,17 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		committed, err = w.gitCommit(filePath, commitTag, authorEmail, nil, trailer...)
 	}
 	if err != nil {
-		if judgedBase != "" && (w.stagedRefusal(err) || errors.Is(err, ErrConflict)) {
+		// A judged write that did not commit leaves nothing behind (ADR-036
+		// §4: only a pass is written) — whatever stopped it: the refusals
+		// below, or git failing (index.lock, a timeout, update-ref).
+		if judgedBase != "" {
 			if rerr := w.restoreFromHEAD(filePath); rerr != nil {
-				slog.Error("gitops: could not put back a refused write's file",
+				slog.Error("gitops: could not put back a write that did not commit",
 					"commit_tag", commitTag, "error", rerr)
 			}
-			return err
+			if w.stagedRefusal(err) || errors.Is(err, ErrConflict) {
+				return err
+			}
 		}
 		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)

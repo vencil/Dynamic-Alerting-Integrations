@@ -192,24 +192,47 @@ type normalizedRefusal struct{ err error }
 func (e *normalizedRefusal) Error() string { return e.err.Error() }
 func (e *normalizedRefusal) Unwrap() error { return e.err }
 
-// restoreFromHEAD puts filePath in the index and the serving tree back as
-// HEAD has it after a refused write (removed when HEAD has no such file).
-// Caller holds w.mu.
+// restoreFromHEAD puts filePath back as HEAD has it after a write that did
+// not commit (removed when HEAD has no such file): the serving file first,
+// then the index. The serving file is what the exporter and every later
+// read see, so it is restored even when the index cannot be touched — a
+// held index.lock is one reason a commit fails: then the file is written
+// from HEAD's blob, which needs no lock, and the index error is returned
+// for the log. Caller holds w.mu.
 func (w *Writer) restoreFromHEAD(filePath string) error {
-	if err := w.gitIn(w.gitDir, "reset", "-q", "--", filePath); err != nil {
-		return err
-	}
 	out, err := w.gitOutput(w.gitDir, "ls-tree", "--name-only", "HEAD", "--", filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("read HEAD's entry: %w", err)
+	}
+	var idxErr error
+	if uerr := w.gitIn(w.gitDir, "reset", "-q", "--", filePath); uerr != nil {
+		idxErr = fmt.Errorf("unstage: %w", uerr)
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-			return err
+			return errors.Join(err, idxErr)
 		}
-		return nil
+		return idxErr
 	}
-	return w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", filePath)
+	if idxErr == nil {
+		cerr := w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", filePath)
+		if cerr == nil {
+			return nil
+		}
+		idxErr = fmt.Errorf("checkout: %w", cerr)
+	}
+	rel, err := filepath.Rel(w.gitDir, filePath)
+	if err != nil {
+		return errors.Join(err, idxErr)
+	}
+	blob, err := w.gitOutput(w.gitDir, "cat-file", "blob", "HEAD:./"+filepath.ToSlash(rel))
+	if err != nil {
+		return errors.Join(fmt.Errorf("read HEAD's blob: %w", err), idxErr)
+	}
+	if err := writeFileAtomic(filePath, blob, 0644); err != nil {
+		return errors.Join(err, idxErr)
+	}
+	return idxErr
 }
 
 // unchangedFile is the no-op rule of the single-file writes (Write and

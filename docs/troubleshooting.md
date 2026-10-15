@@ -232,7 +232,7 @@ da-tools validate-config --config-dir ./conf.d/
 - 422 `GENERATOR_FINDINGS`：寫入後的整棵 conf.d 過不了 `generate-routes --validate --strict`。看回應的 `findings[]`：`related: true` 的是這筆寫入造成或碰到的；`pre_existing: true` 的是寫入前就有的。樹上別處已有會擋的問題時，所有寫入都會被拒——問題在某個租戶檔、修好它就能讓整棵樹通過時可以經 tenant-api 修，其他情況（平台檔、子目錄的檔、多個租戶同時違規）走 git 修。要在本機重現，用容器那一版 da-tools（版本在 `da_generator_build_info`）帶同一份部署端 policy 檔跑 `da-tools generate-routes --validate --strict`。
 - 429 `GENERATOR_REJECTED`（`reason` 為 `busy`、`deadline`、`git_read`、`mismatch`、`no_time`）：這次沒判出結果，照 `Retry-After` 重送。持續出現看 `tenant_api_generator_rejections_total` 與產生器容器的 log。
 - 422 `GENERATOR_REJECTED`：`too_large` 拆小批次重送；`memory` 看告警 `GeneratorJudgementMemoryNearLimit`，一起調高產生器的 `--memory-limit-bytes` 與容器的記憶體上限；`normalized` 是 `.gitattributes`（eol、text、filter）會把送來的內容改掉再 commit——照 git 存的樣子送（例如 `eol=lf` 就用 LF），或改屬性。
-- 503 `VALIDATOR_UNAVAILABLE`／`POLICY_UNAVAILABLE`：`tenant_api_policy_available` 為 0、告警 `TenantApiPolicyUnavailable`。依 `reason` 處理：`unreachable` 看產生器容器是否在跑（映像要含 `generator-service`，chart 預設的 `tools/v2.9.0` 沒有）、與 tenant-api 是否同 uid；`amtool_missing`、`generator_too_old` 換映像；`policy_unusable`／`policy_unreadable` 修部署端 policy 的 ConfigMap。
+- 503 `VALIDATOR_UNAVAILABLE`／`POLICY_UNAVAILABLE`：`tenant_api_policy_available` 為 0、告警 `TenantApiPolicyUnavailable`。依 `reason` 處理：`unreachable` 看產生器容器是否在跑（映像要含 `generator-service`，chart 預設的 `tools/v2.9.0` 沒有）、與 tenant-api 是否同 uid；`amtool_missing`、`generator_too_old` 換映像；`policy_unusable`／`policy_unreadable` 修部署端 policy 的 ConfigMap。回應只帶 `reason`，細節（路徑、例外內容）在 tenant-api 的 log（`write refused: the generator container cannot judge`）。
 
 各回應碼的完整說明見 [Tenant API 硬化 §3.9](api/tenant-api-hardening.md#39-每筆寫入先問產生器容器2903)。
 

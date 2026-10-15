@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/generator"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
@@ -284,10 +285,10 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 		}, 429, CodeGeneratorRejected, "mismatch", true, ""},
 		{"validator unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "amtool_missing", "message": "amtool is not on PATH"}
-		}, 503, CodeValidatorUnavailable, "amtool_missing", true, "amtool is not on PATH"},
+		}, 503, CodeValidatorUnavailable, "amtool_missing", true, "server log"},
 		{"policy unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "--policy: bad"}
-		}, 503, CodePolicyUnavailable, "policy_unusable", true, "--policy: bad"},
+		}, 503, CodePolicyUnavailable, "policy_unusable", true, "server log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -304,6 +305,48 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 			}
 		})
 	}
+	// A 503's message is never shown to the client, whatever its reason:
+	// the service's internal_error is a Python repr, tenant-api's
+	// policy_unreadable an os.ReadFile error with the policy path.
+	t.Run("503 messages stay in the log", func(t *testing.T) {
+		t.Parallel()
+		const secret = "/srv/secret-dir/generator_service.py line 577"
+		for name, answer := range map[string]func(int, testutil.FakeValidateRequest) (int, any){
+			"internal_error": func(int, testutil.FakeValidateRequest) (int, any) {
+				return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "internal_error",
+					"message": "generator service error: OSError(2, '" + secret + "')"}
+			},
+			"amtool_missing": func(int, testutil.FakeValidateRequest) (int, any) {
+				return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "amtool_missing", "message": secret}
+			},
+			"policy_unusable": func(int, testutil.FakeValidateRequest) (int, any) {
+				return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": secret}
+			},
+		} {
+			f, _ := generatorDirectFixture(t, answer)
+			w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
+			if m := genEnvelope(t, w); w.Code != 503 || m["reason"] != name || strings.Contains(w.Body.String(), "secret-dir") {
+				t.Errorf("%s: status %d body %s", name, w.Code, w.Body.String())
+			}
+			// The async batch's stored results carry the same text.
+			code, results, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}}]}`, true)
+			for _, r := range results {
+				if strings.Contains(r.Message, "secret-dir") {
+					t.Errorf("%s: async result (status %d) shows the message: %+v", name, code, r)
+				}
+			}
+		}
+		// tenant-api's own copy of the policy file unreadable.
+		f := newAONFixture(t, WriteModeDirect)
+		fake := testutil.StartFakeGenerator(t)
+		missing := filepath.Join(t.TempDir(), "secret-dir", "policy.yaml")
+		f.deps.Writer.SetValidator(generator.NewGate(generator.NewClient(fake.Socket), missing))
+		w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
+		if m := genEnvelope(t, w); w.Code != 503 || m["reason"] != "policy_unreadable" ||
+			strings.Contains(w.Body.String(), "secret-dir") || strings.Contains(w.Body.String(), "no such file") {
+			t.Errorf("policy_unreadable: status %d body %s", w.Code, w.Body.String())
+		}
+	})
 	t.Run("unreachable", func(t *testing.T) {
 		t.Parallel()
 		f := newAONFixture(t, WriteModeDirect)
@@ -498,39 +541,64 @@ func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
 	})
 }
 
-// #1530 on the generator's refusal of a direct group batch: the rejected
-// batch names only the members the caller may read when it is answered. Here
-// a member's org is reassigned while the generator judges (the caller could
-// write both members when the batch was authorized); the response must not
-// name it, nor count it.
+// #1530 on the generator's refusal of a group batch, direct and PR mode:
+// the rejected batch names only the members the caller may read when it is
+// answered — in its results and in its findings[] (disclosedFindings: a
+// finding naming such a member by tenant, or by file only, is withheld and
+// counted). Here a member's org is reassigned while the generator judges
+// (the caller could write both members when the batch was authorized).
 func TestGeneratorGate_GroupBatchRefusalShowsOnlyVisibleMembers(t *testing.T) {
 	t.Parallel()
-	orgs := "tenant_orgs:\n  " + orgEnfTenantIn + ": [" + orgEnfMemberOrg + "]\n  " + orgEnfTenantOut + ": [" + orgEnfMemberOrg + "]\n"
-	files := orgEnfGroupMemberFiles(visGroupsYAML)
-	files["_tenant_orgs.yaml"] = orgs
-	f := newOrgEnfFixture(t, files)
-	f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
-		orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
-	d := f.deps()
-	fake := testutil.StartFakeGenerator(t)
-	d.Writer.SetValidator(generator.NewGate(generator.NewClient(fake.Socket), ""))
-	fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
-		f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
-			orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfOutsiderOrg}}})
-		return 200, testutil.FindingsVerdict(req, "/w", testutil.Finding("k", orgEnfTenantIn, "", "refused by the fake"))
-	})
-	w := visCall(t, f, d, GroupBatch(d), rbac.PermRead, "POST+batch", "g-mixed", `{"patch":{"_silent_mode":"warning"}}`)
-	if len(fake.Requests()) == 0 {
-		t.Fatalf("the generator was never asked; status %d %s", w.Code, w.Body.String())
-	}
-	var resp GroupBatchResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), orgEnfTenantOut) {
-		t.Errorf("status %d; the response names a member the caller cannot read: %s", w.Code, w.Body.String())
-	}
-	if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Code != CodeGeneratorFindings {
-		t.Errorf("results = %+v, want only %s refused with %s", resp.Results, orgEnfTenantIn, CodeGeneratorFindings)
+	for _, mode := range []WriteMode{WriteModeDirect, WriteModePR} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			orgs := "tenant_orgs:\n  " + orgEnfTenantIn + ": [" + orgEnfMemberOrg + "]\n  " + orgEnfTenantOut + ": [" + orgEnfMemberOrg + "]\n"
+			files := orgEnfGroupMemberFiles(visGroupsYAML)
+			files["_tenant_orgs.yaml"] = orgs
+			f := newOrgEnfFixture(t, files)
+			f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+				orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+			d := f.deps()
+			if mode == WriteModePR {
+				d.WriteMode = WriteModePR
+				d.PRClient = &mockPlatformClient{
+					createPRFunc: func(title, body, headBranch string, labels []string) (*platform.PRInfo, error) {
+						return &platform.PRInfo{Number: 5, WebURL: "https://gh/5", State: "open", HeadRef: headBranch}, nil
+					},
+				}
+				d.PRTracker = &mockPlatformTracker{}
+			}
+			fake := testutil.StartFakeGenerator(t)
+			d.Writer.SetValidator(generator.NewGate(generator.NewClient(fake.Socket), ""))
+			fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
+				f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+					orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfOutsiderOrg}}})
+				if len(req.Writes) == 0 {
+					return 200, testutil.PassVerdict(req, nil)
+				}
+				return 200, testutil.FindingsVerdict(req, "/w",
+					testutil.Finding("k", orgEnfTenantIn, "", "refused by the fake"),
+					testutil.Finding("k", orgEnfTenantOut, "", "hidden-tenant-detail"),
+					testutil.Finding("k", "", orgEnfTenantOut+".yaml", "hidden-file-detail"))
+			})
+			w := visCall(t, f, d, GroupBatch(d), rbac.PermRead, "POST+batch", "g-mixed", `{"patch":{"_silent_mode":"warning"}}`)
+			if len(fake.Requests()) == 0 {
+				t.Fatalf("the generator was never asked; status %d %s", w.Code, w.Body.String())
+			}
+			var resp GroupBatchResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			body := w.Body.String()
+			if w.Code != http.StatusUnprocessableEntity || strings.Contains(body, orgEnfTenantOut) || strings.Contains(body, "hidden-") {
+				t.Errorf("status %d; the response names a member the caller cannot read: %s", w.Code, body)
+			}
+			if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Code != CodeGeneratorFindings {
+				t.Errorf("results = %+v, want only %s refused with %s", resp.Results, orgEnfTenantIn, CodeGeneratorFindings)
+			}
+			if len(resp.Findings) != 1 || resp.Findings[0].Message != "refused by the fake" || resp.UnrelatedFindingsWithheld != 2 {
+				t.Errorf("findings = %+v, withheld %d; want only the readable member's, 2 withheld", resp.Findings, resp.UnrelatedFindingsWithheld)
+			}
+		})
 	}
 }

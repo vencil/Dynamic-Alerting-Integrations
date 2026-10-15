@@ -20,6 +20,10 @@
 ### 1) 準備一個 demo config 目錄(RBAC 規則 + 一個租戶)
 
 ```sh
+# REPO：這個 repo checkout 的絕對路徑（專案根）。第 2 步的 build 與產生器服務都用它
+REPO="/absolute/path/to/Dynamic-Alerting-Integrations"   # 改成你的 checkout
+test -f "$REPO/scripts/tools/ops/generator_service.py" || echo "REPO 不是這個 repo 的根目錄"
+
 mkdir -p demo/conf.d && cd demo
 
 cat > conf.d/_rbac.yaml <<'EOF'
@@ -45,7 +49,7 @@ tenant-api 每筆會改變 conf.d 內容的寫入,commit 前都問產生器服�
 git -C conf.d init -q && git -C conf.d add -A && \
   git -C conf.d -c user.email=dev@local -c user.name=dev commit -qm init
 
-# 產生器服務(REPO = 這個 repo 的 checkout)。PATH 上要有 amtool,
+# 產生器服務($REPO 見第 1 步)。PATH 上要有 amtool,
 # 否則每筆寫入都回 503 amtool_missing。
 mkdir -p gen state
 python3 "$REPO/scripts/tools/ops/generator_service.py" --socket "$(pwd)/gen/generator.sock" \
