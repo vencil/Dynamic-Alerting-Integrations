@@ -38,3 +38,17 @@ NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some manage
   sending a packet that SHOULD be denied — do not trust a successful install. The
   CNI-independent root-cause fix is L7 identity verification (roadmap #5); this
   policy is L4 defense-in-depth.
+{{- if .Values.generator.enabled }}
+
+GENERATOR CONTAINER (ADR-036 §3) — ENABLED, image {{ .Values.generator.image.repository }}:{{ .Values.generator.image.tag }}.
+  `da-tools generator-service` listens on a pod-internal Unix socket and reads
+  /conf.d read-only. That image tag MUST ship generator-service (tools/v2.9.0
+  does not): otherwise the container crash-loops and keeps tenant-api out of
+  Ready. tenant-api does not call it yet (#2903).
+  {{- if .Values.generator.policy.existingConfigMap }}
+  Deployment policy: ConfigMap {{ .Values.generator.policy.existingConfigMap }}, key {{ .Values.generator.policy.key }} (must exist).
+  {{- else }}
+  Deployment policy: none (generator.policy.existingConfigMap is empty, so no
+  allowed_domains check applies to webhook hosts).
+  {{- end }}
+{{- end }}

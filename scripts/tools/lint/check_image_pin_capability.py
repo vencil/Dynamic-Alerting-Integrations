@@ -214,6 +214,15 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "on-call within 10 minutes. EXIT: bump image.tag (and Chart "
         "appVersion) in the next tools/v* release; then delete this entry "
         "(the gate will demand it).",
+    ("helm/tenant-api", "generator-service", "v2.9.0"):
+        "#2901 added `generator-service` to entrypoint.py COMMAND_MAP after "
+        "tools/v2.9.0 was cut, so the pinned image cannot run the tenant-api "
+        "chart's generator container (#2902). It renders only with "
+        "generator.enabled=true, which defaults to false for exactly this "
+        "reason (values.yaml): enabled with this tag the container "
+        "crash-loops and keeps tenant-api out of Ready. EXIT: bump "
+        "generator.image.tag in the next tools/v* release (bump_docs.py "
+        "--tools does it); then delete this entry (the gate will demand it).",
 }
 
 # --- YAML loading -----------------------------------------------------------
@@ -785,6 +794,18 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
             for doc in docs:
                 for container in iter_containers(doc):
                     name = container.get("name", "<unnamed>")
+                    # #2902: an `image:` written as a LITERAL (no template
+                    # action left in it) names its repository outright; one
+                    # that is not da-tools is not a da-tools container. The
+                    # tenant-api chart's alpine/git init containers sit next to
+                    # its da-tools generator pin. ⛔ Only a literal: an
+                    # expression with any action in it (an `include` that reads
+                    # no `.Values`, say) is untraceable and stays counted.
+                    literal = container.get("image")
+                    if (isinstance(literal, str) and literal.strip()
+                            and not _INDEXED_PLACEHOLDER_RE.search(literal)
+                            and parse_image_ref(literal)[0] != DA_TOOLS_REPO):
+                        continue
                     # #1316: a container whose image expression reads a
                     # NON-da-tools pin is not a da-tools container, so its entry
                     # point is none of this gate's business. Untraceable ones
