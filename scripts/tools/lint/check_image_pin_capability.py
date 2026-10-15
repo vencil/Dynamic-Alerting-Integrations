@@ -291,6 +291,39 @@ _IMAGE_RE = re.compile(
 _TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 
 
+# #2902: the docker reference grammar (distribution/reference), strict. Used
+# ONLY to decide that a literal `image:` names a repository other than
+# da-tools; anything it cannot parse stays a da-tools candidate (fail-closed).
+_DOMAIN_COMPONENT = r"(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9])"
+_PATH_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+_STRICT_REF_RE = re.compile(
+    r"^(?:(?P<domain>" + _DOMAIN_COMPONENT + r"(?:\." + _DOMAIN_COMPONENT
+    + r")*(?::[0-9]+)?)/)?"
+    r"(?P<path>" + _PATH_COMPONENT + r"(?:/" + _PATH_COMPONENT + r")*)"
+    r"(?::(?P<tag>[\w][\w.-]{0,127}))?"
+    r"(?:@(?P<digest>[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,}))?$"
+)
+
+
+def normalized_literal_repo(image: str) -> str | None:
+    """The repository a literal image reference names, normalised (registry
+    host lower-cased, port dropped), or None when it does not parse as a
+    reference. A first component is a registry only when it has a `.` or a
+    `:` or is `localhost` (docker's rule); otherwise it is part of the path."""
+    match = _STRICT_REF_RE.match(image.strip())
+    if not match:
+        return None
+    domain, path = match.group("domain"), match.group("path")
+    if domain is not None and not ("." in domain or ":" in domain
+                                   or domain == "localhost"):
+        if not re.fullmatch(_PATH_COMPONENT, domain):
+            return None
+        return f"{domain}/{path}"
+    if domain is None:
+        return path
+    return f"{domain.split(':', 1)[0].lower()}/{path}"
+
+
 def strip_helm_actions(text: str) -> str:
     """Return *text* with Go-template actions removed, parseable as YAML."""
     collapsed = _TEMPLATE_ACTION_RE.sub(_SENTINEL, text)
@@ -796,16 +829,19 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
                     name = container.get("name", "<unnamed>")
                     # #2902: an `image:` written as a LITERAL (no template
                     # action left in it) names its repository outright; one
-                    # that is not da-tools is not a da-tools container. The
+                    # that PARSES as a reference and normalises to something
+                    # other than da-tools is not a da-tools container. The
                     # tenant-api chart's alpine/git init containers sit next to
-                    # its da-tools generator pin. ⛔ Only a literal: an
+                    # its da-tools generator pin. ⛔ Fail-closed both ways: an
                     # expression with any action in it (an `include` that reads
-                    # no `.Values`, say) is untraceable and stays counted.
+                    # no `.Values`, say) is untraceable, and a literal the
+                    # strict grammar rejects is unreadable — both stay counted.
                     literal = container.get("image")
-                    if (isinstance(literal, str) and literal.strip()
-                            and not _INDEXED_PLACEHOLDER_RE.search(literal)
-                            and parse_image_ref(literal)[0] != DA_TOOLS_REPO):
-                        continue
+                    if (isinstance(literal, str)
+                            and not _INDEXED_PLACEHOLDER_RE.search(literal)):
+                        named = normalized_literal_repo(literal)
+                        if named is not None and named != DA_TOOLS_REPO:
+                            continue
                     # #1316: a container whose image expression reads a
                     # NON-da-tools pin is not a da-tools container, so its entry
                     # point is none of this gate's business. Untraceable ones

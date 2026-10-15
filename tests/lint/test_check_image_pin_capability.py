@@ -419,12 +419,22 @@ def test_a_literal_foreign_image_is_not_a_da_tools_container(tmp_path, monkeypat
 @pytest.mark.parametrize("image", [
     # a literal da-tools reference is still a da-tools container
     "ghcr.io/vencil/da-tools:v2.9.0",
+    # …however its registry host is spelled: case and port normalise away
+    "GHCR.io/vencil/da-tools:v2.9.0",
+    "ghcr.io:443/vencil/da-tools:v2.9.0",
+    # a literal the reference grammar rejects is unreadable, not foreign
+    "ghcr.io/vencil/da-tools:v2.9.0@sha256:short",
+    '"ghcr.io/vencil/da-tools:"',  # quoted: a bare trailing `:` is not YAML
     # an expression that reads no `.Values` is untraceable, not foreign
     '{{ include "probe.gitImage" . | quote }}',
-], ids=["literal-da-tools", "untraceable-expression"])
+    # …even when the stripped text happens to parse as a reference
+    'reg.example.com/x{{ include "probe.suffix" . }}z:v1',
+], ids=["literal-da-tools", "host-case", "host-port", "short-digest",
+        "empty-tag", "untraceable-expression", "expression-that-parses"])
 def test_only_a_literal_foreign_image_is_skipped(tmp_path, monkeypatch, image):
     """⛔ The fail-closed half of the literal skip: it may only subtract a
-    container whose repository is READ OFF the literal and is not da-tools."""
+    container whose literal PARSES as a reference and whose normalised
+    repository is not da-tools."""
     _write_chart(tmp_path, template=_literal_init_tmpl(image))
     monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
     errors: list[str] = []

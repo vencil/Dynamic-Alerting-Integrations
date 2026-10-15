@@ -452,11 +452,12 @@ spec:
             - name: generator-work
               mountPath: {{ include "tenant-api.generatorWorkDir" . }}
             # Python's tempfile (the amtool check writes its config there)
-            # needs a writable /tmp; the root filesystem is read-only. Same
-            # disk-backed volume, so it counts against the same sizeLimit.
-            - name: generator-work
+            # needs a writable /tmp; the root filesystem is read-only. A volume
+            # of its own, not a subPath of generator-work: kubelet creates a
+            # missing subPath directory itself, possibly root-owned and not
+            # writable by the pod's uid.
+            - name: generator-tmp
               mountPath: /tmp
-              subPath: tmp
             {{- if .Values.generator.policy.existingConfigMap }}
             - name: generator-policy
               mountPath: {{ include "tenant-api.generatorPolicyDir" . }}
@@ -618,12 +619,16 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        # The generator's --work-dir (and TMPDIR): the tree being judged and
+        # The generator's --work-dir: the tree being judged and
         # the generated config. DISK, not Memory — a tmpfs counts against the
         # container's memory limit, which ADR-036 §3 budgets for processes.
         - name: generator-work
           emptyDir:
             sizeLimit: {{ .Values.generator.workDir.sizeLimit }}
+        # The generator's /tmp (disk-backed for the same reason).
+        - name: generator-tmp
+          emptyDir:
+            sizeLimit: {{ include "tenant-api.generatorTmpSizeLimit" . }}
         - name: generator-no-sa-token
           emptyDir:
             medium: Memory

@@ -542,6 +542,25 @@ humanSocket:
 # together with an image.tag that ships generator-service. Nothing calls the
 # container yet: #2903 makes tenant-api ask it before every write, and that
 # change removes this switch — the container becomes required.
+#
+# ⚠️ Enabling it sets git's `gc.auto=0` on the conf.d repository (init
+# containers git-clone / git-gc-off). Operational cost: git no longer packs or
+# prunes loose objects on its own, so every tenant-api commit leaves its
+# objects loose and the repository only grows. Reclaim space by hand in a
+# maintenance window: scale the Deployment to 0 so nothing reads or writes the
+# repository, run `git gc` on it (for a pvc / hostPath conf.d, from a one-off
+# pod mounting the same volume as the same uid; an emptyDir conf.d is cloned
+# afresh on every pod start), then scale back to 1. Why it must not run by itself: the
+# generator reads git objects of a base commit WHILE tenant-api commits, and
+# an automatic gc repacking or pruning under that read is the race ADR-036 §3
+# closes by turning it off.
+#
+# Body limits: the generator's --max-body-bytes / --max-inflight-body-bytes
+# are derived from tenantApi.server.maxBodyBytes / maxBatchBodyBytes (raise
+# those, the generator's follow; see _helpers.tpl generatorBodyArgs). The
+# derivation sizes for what tenant-api RECEIVES; the resulting files of a batch
+# can add up to more than that, and the request builder that has to respect
+# it is #2903.
 generator:
   enabled: false
   # Same da-tools release line and tag as helm/federation-reconciler.

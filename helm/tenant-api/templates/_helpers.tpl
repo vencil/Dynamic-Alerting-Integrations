@@ -184,12 +184,19 @@ from a second copy.
 {{- define "tenant-api.generatorWorkDir" -}}/var/lib/da-generator{{- end }}
 {{- define "tenant-api.generatorPolicyDir" -}}/etc/da-generator-policy{{- end }}
 {{- define "tenant-api.generatorPolicyPath" -}}{{ include "tenant-api.generatorPolicyDir" . }}/policy.yaml{{- end }}
+{{- /* The generator's /tmp emptyDir. It holds what one judgement hands
+     amtool (the generated Alertmanager config) and nothing else long-lived;
+     the conf.d tree is in workDir. Exceeding it evicts the pod. */ -}}
+{{- define "tenant-api.generatorTmpSizeLimit" -}}256Mi{{- end }}
 
 {{/*
-A byte limit as tenant-api's binary resolves it (#2902 body-limit coupling):
-a positive whole number, or a string of digits that is one, is that number;
-anything else — unset, empty, 0, malformed — is the binary's default, which
-is what MaxBodyBytesFromEnv / MaxBatchBodyBytesFromEnv fall back to.
+A byte limit as tenant-api's binary resolves it (#2902 body-limit coupling).
+A number from values is that number. A string is read the way
+MaxBodyBytesFromEnv / MaxBatchBodyBytesFromEnv read the env var:
+strings.TrimSpace, then strconv.ParseInt(v, 10, 64) — DECIMAL, so an optional
+`+` and leading zeros are accepted and `010` is ten, never octal (sprig's
+int64 would read it as octal; the zeros are stripped first). Not positive,
+not parseable, or past int64 → the binary's default, as the binary does.
 Call with (list <value> <binary default>). Prints an integer.
 */}}
 {{- define "tenant-api.effectiveBytes" -}}
@@ -198,8 +205,14 @@ Call with (list <value> <binary default>). Prints an integer.
 {{- $n := 0 | int64 -}}
 {{- if or (kindIs "float64" $v) (kindIs "int" $v) (kindIs "int64" $v) -}}
 {{- $n = int64 $v -}}
-{{- else if and (kindIs "string" $v) (regexMatch "^[0-9]+$" (trim $v)) -}}
-{{- $n = int64 (trim $v) -}}
+{{- else if and (kindIs "string" $v) (regexMatch "^[+]?[0-9]+$" (trim $v)) -}}
+{{- $digits := regexReplaceAll "^0+" (trimPrefix "+" (trim $v)) "" -}}
+{{- /* Past int64, Go's ParseInt fails (→ default) and so does sprig's
+     int64, which then yields 0 (→ default below): pinned by the
+     too-long / past-int64 cases in test_generator_container.py. */ -}}
+{{- if $digits -}}
+{{- $n = int64 $digits -}}
+{{- end -}}
 {{- end -}}
 {{- if gt $n 0 -}}{{ $n }}{{- else -}}{{ $default }}{{- end -}}
 {{- end }}
@@ -239,7 +252,8 @@ body be read; erring small turns a write tenant-api accepted into a 413.
 ⚠️ The derivation sizes the generator for what tenant-api RECEIVED. A write
 whose resulting files are larger than its request (a small patch merged into
 a large existing file) is not covered by it; the generator's own default is
-the floor for that case.
+the floor for that case. The caller that builds those requests is #2903; a
+batch's resulting files can add up to more than this derivation.
 */ -}}
 {{- define "tenant-api.generatorJsonEnvelopeBytes" -}}65536{{- end }}
 

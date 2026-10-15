@@ -30,7 +30,12 @@ import os
 import posixpath
 import re
 import shutil
+import socket
 import subprocess
+import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -243,7 +248,19 @@ def test_work_dir_is_disk_and_tmp_is_writable() -> None:
     assert "medium" not in work, "Memory would count against the container's limit"
     assert work["sizeLimit"] == "3Gi"
     paths = {m["mountPath"] for m in _mounts(gen, "generator-work")}
-    assert paths == {_flag(gen, "work-dir"), "/tmp"}
+    assert paths == {_flag(gen, "work-dir")}
+    # /tmp is a volume of its own, never a subPath (kubelet may create a
+    # missing subPath directory root-owned, unwritable by the pod's uid)
+    (tmp,) = [m for m in gen["volumeMounts"] if m["mountPath"] == "/tmp"]
+    assert "subPath" not in tmp and "subPathExpr" not in tmp
+    assert tmp["name"] not in {m["name"] for m in gen["volumeMounts"]
+                               if m["mountPath"] != "/tmp"}
+    tmp_volume = _volume(pod, tmp["name"])["emptyDir"]
+    assert "medium" not in tmp_volume
+    assert tmp_volume["sizeLimit"] == re.search(
+        r'define "tenant-api\.generatorTmpSizeLimit" -\}\}([^{]+)\{\{',
+        (_CHART / "templates/_helpers.tpl").read_text(encoding="utf-8")).group(1)
+    assert all("subPath" not in m for m in gen["volumeMounts"])
     assert gen["securityContext"]["readOnlyRootFilesystem"] is True
     assert gen["securityContext"]["allowPrivilegeEscalation"] is False
     assert gen["securityContext"]["capabilities"]["drop"] == ["ALL"]
@@ -451,6 +468,36 @@ def test_raised_tenant_api_limit_raises_the_generators(tmp_path: Path, body, bat
     assert inflight >= max_body
 
 
+def _go_parse_int(raw: str, default: int) -> int:
+    """MaxBodyBytesFromEnv: strings.TrimSpace + strconv.ParseInt(v, 10, 64);
+    an error, 0 or a negative value → default."""
+    v = raw.strip()
+    if not re.fullmatch(r"[+-]?[0-9]+", v):
+        return default
+    n = int(v, 10)
+    return n if 0 < n <= 2**63 - 1 else default
+
+
+@_needs_helm
+@pytest.mark.parametrize("raw", [
+    "0010485760", "+8388608", "010000000", " 8388608 ",
+    "99999999999999999999", "9223372036854775808", "-8388608",
+], ids=["leading-zeros", "plus", "not-octal", "spaces", "too-long",
+        "past-int64", "negative"])
+def test_string_limit_is_parsed_like_go(tmp_path: Path, raw: str) -> None:
+    """The chart reads a string limit the way tenant-api does: DECIMAL (a
+    leading 0 is not octal), `+` and leading zeros accepted, out of range or
+    not positive → the default."""
+    vf = _values_file(tmp_path, {"tenantApi": {"server": {"maxBodyBytes": raw}}})
+    gen = _container(_pod(_render(*_ON, values=vf)), "generator")
+    n = _go_parse_int(raw, _chart_const("taDefaultMaxBodyBytes"))
+    expected = _needed(n)
+    if expected <= _chart_const("generatorDefaultMaxBodyBytes"):
+        assert _flag(gen, "max-body-bytes") is None
+    else:
+        assert int(_flag(gen, "max-body-bytes")) == expected
+
+
 @_needs_helm
 @pytest.mark.parametrize("value", ["", "0", "garbage", None], ids=["empty", "zero", "malformed", "null"])
 def test_unusable_tenant_api_limit_is_read_as_its_default(tmp_path: Path, value) -> None:
@@ -458,3 +505,106 @@ def test_unusable_tenant_api_limit_is_read_as_its_default(tmp_path: Path, value)
     vf = _values_file(tmp_path, {"tenantApi": {"server": {"maxBodyBytes": value}}})
     gen = _container(_pod(_render(*_ON, values=vf)), "generator")
     assert _flag(gen, "max-body-bytes") is None
+
+
+# ── probes ───────────────────────────────────────────────────────────────────
+_PROBES = {  # (periodSeconds, timeoutSeconds, failureThreshold)
+    "startupProbe": (2, 5, 60),
+    "readinessProbe": (10, 5, 3),
+    "livenessProbe": (20, 5, 3),
+}
+
+
+def _probe_script(gen: dict) -> str:
+    commands = [gen[name]["exec"]["command"] for name in _PROBES]
+    assert commands[0] == commands[1] == commands[2], "the three probes drifted apart"
+    assert commands[0][:2] == ["python3", "-c"]
+    return commands[0][2]
+
+
+@_needs_helm
+def test_probe_timings() -> None:
+    gen = _container(_pod(_render(*_ON)), "generator")
+    for name, (period, timeout, failures) in _PROBES.items():
+        probe = gen[name]
+        assert (probe["periodSeconds"], probe["timeoutSeconds"],
+                probe["failureThreshold"]) == (period, timeout, failures), name
+
+
+@_needs_helm
+def test_probe_dials_the_generator_socket() -> None:
+    gen = _container(_pod(_render(*_ON)), "generator")
+    connects = re.findall(r'connect\("([^"]+)"\)', _probe_script(gen))
+    assert connects == [_flag(gen, "socket")]
+
+
+def _run_probe(script: str, socket_path: str) -> int:
+    rendered = re.findall(r'connect\("([^"]+)"\)', script)
+    assert len(rendered) == 1
+    local = script.replace(f'connect("{rendered[0]}")', f'connect("{socket_path}")')
+    return subprocess.run([sys.executable, "-c", local], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
+                          timeout=30).returncode
+
+
+def _short_dir() -> str:
+    # AF_UNIX paths are limited to ~107 bytes; a test tmp_path can exceed it.
+    return tempfile.mkdtemp(prefix="g2902-", dir="/tmp" if os.path.isdir("/tmp") else None)
+
+
+@_needs_helm
+@_needs_sh_git
+def test_probe_passes_on_the_real_service_and_fails_without_it(tmp_path: Path) -> None:
+    script = _probe_script(_container(_pod(_render(*_ON)), "generator"))
+    repo = _repo(tmp_path / "conf")
+    (repo / "t1.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    subprocess.run([_GIT, "-C", str(repo), "add", "."], check=True, timeout=60)
+    subprocess.run([_GIT, "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-qm", "init"], check=True, timeout=60)
+    sock_dir = _short_dir()
+    sock = os.path.join(sock_dir, "generator.sock")
+    service = subprocess.Popen(
+        [sys.executable, str(_GENERATOR_SERVICE), "--socket", sock, "--repo", str(repo),
+         "--config-subdir=", "--work-dir", str(tmp_path / "work")],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        deadline = time.monotonic() + 30
+        while not os.path.exists(sock):
+            assert service.poll() is None, service.stderr.read()
+            assert time.monotonic() < deadline, "the service never created its socket"
+            time.sleep(0.1)
+        assert _run_probe(script, sock) == 0
+    finally:
+        service.terminate()
+        service.wait(timeout=30)
+        service.stderr.close()
+    assert _run_probe(script, sock) != 0, "no service listening must fail the probe"
+    shutil.rmtree(sock_dir, ignore_errors=True)
+
+
+@_needs_helm
+@pytest.mark.parametrize("status_line", [
+    b"HTTP/1.1 503 Service Unavailable", b"HTTP/1.1 2000 Odd", b"HTTP/1.0 200 OK",
+], ids=["503", "2000", "http-1.0"])
+def test_probe_fails_on_anything_but_a_200_status_line(status_line: bytes) -> None:
+    script = _probe_script(_container(_pod(_render(*_ON)), "generator"))
+    sock_dir = _short_dir()
+    sock = os.path.join(sock_dir, "generator.sock")
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(sock)
+    server.listen(1)
+
+    def answer() -> None:
+        conn, _ = server.accept()
+        with conn:
+            conn.recv(4096)
+            conn.sendall(status_line + b"\r\nContent-Length: 0\r\n\r\n")
+
+    worker = threading.Thread(target=answer, daemon=True)
+    worker.start()
+    try:
+        assert _run_probe(script, sock) != 0, status_line
+    finally:
+        worker.join(timeout=10)
+        server.close()
+        shutil.rmtree(sock_dir, ignore_errors=True)
