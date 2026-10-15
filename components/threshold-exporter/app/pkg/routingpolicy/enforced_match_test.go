@@ -19,6 +19,12 @@ func TestEnforcedFrom_MatchShape(t *testing.T) {
 		"''":                        true,
 		"42":                        true,
 		"yes":                       true, // a YAML boolean to PyYAML
+		"[1]":                       true, // list elements must be non-empty strings
+		"[~]":                       true,
+		"[yes]":                     true, // a boolean to PyYAML
+		"['']":                      true,
+		"[{severity: critical}]":    true,
+		"['a=\"b\"', 1]":            true,
 		"~":                         false,
 		"":                          false, // `match:` alone is null
 		"[]":                        false,

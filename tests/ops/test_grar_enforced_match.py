@@ -70,7 +70,10 @@ def _enforced_routes(d: Path) -> list[dict]:
 
 
 # Written and not a list: refused. Absent / null / a list: accepted.
-_REFUSED = ["{severity: critical}", "{}", "'severity=\"critical\"'", "''", "42", "yes"]
+_REFUSED = ["{severity: critical}", "{}", "'severity=\"critical\"'", "''", "42", "0", "yes",
+            # a list element that is not a non-empty string (as PyYAML reads it):
+            # the render used to crash on these (TypeError in re.match)
+            "[1]", "[~]", "[yes]", "[{severity: critical}]", "['severity=\"critical\"', '']"]
 _ACCEPTED = ["~", "[]", "['severity=\"critical\"']"]
 
 
@@ -131,7 +134,7 @@ class TestRefused:
 
     def test_the_builder_refuses_it_for_any_caller(self):
         """`_build_enforced_routes` itself never renders a route without its `match`."""
-        for match in ({"severity": "critical"}, 'severity="critical"'):
+        for match in ({"severity": "critical"}, 'severity="critical"', [1], [None]):
             for url in ("https://noc.example.com/h", "https://noc.example.com/{{tenant}}"):
                 block = {"enabled": True, "match": match,
                          "receiver": {"type": "webhook", "url": url}}
@@ -143,6 +146,19 @@ class TestRefused:
 
 
 class TestAccepted:
+    def test_a_disabled_block_is_not_judged(self, tmp_path):
+        """`enabled: false` with a mapping `match`: nothing is rendered and nothing
+        is said — the shape of a block that is off does not matter."""
+        noc = _enforced("{severity: critical}").replace("enabled: true", "enabled: false")
+        d = _tree(tmp_path, noc)
+        assert _enforced_routes(d) == []
+        p = _gar(d, "--validate", "--strict")
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "'match' must be" not in p.stdout + p.stderr
+        got = load_tenant_tree(str(d))
+        assert not [w for w in got.schema_warnings
+                    if getattr(w, "kind", None) == "routing_enforced_match_invalid"]
+
     @pytest.mark.parametrize("match", _ACCEPTED)
     def test_rendered_without_a_line(self, tmp_path, match):
         d = _tree(tmp_path, _enforced(match))
@@ -162,7 +178,10 @@ class TestAccepted:
 
 @pytest.mark.parametrize("value,want", [
     ({"severity": "critical"}, True), ({}, True), ("x", True), (0, True), (False, True),
+    ([1], True), ([None], True), ([""], True), ([{"severity": "critical"}], True),
+    (['a="b"', True], True),
     (None, False), ([], False), (['severity="critical"'], False),
+    (['severity="critical"', 'team="x"'], False),
 ])
 def test_enforced_match_invalid(value, want):
     assert enforced_match_invalid({"match": value}) is want

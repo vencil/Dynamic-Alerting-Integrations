@@ -26,11 +26,13 @@ import (
 const EnforcedContext = "_routing_enforced"
 
 // ProblemRoutingEnforcedMatchInvalid (#2989): a root `_routing_enforced` that
-// is enabled but whose `match` is written and is not a list — the
-// `routes[i].match` spelling `{severity: critical}`, a string, a number. The
-// route generator takes `match` only as a list of matcher strings and used to
-// drop anything else, so the NOC route received every alert; it now renders
-// no enforced route from that block (a blocking `WARN … skipping`,
+// is enabled but whose `match` is written and is not a list of non-empty
+// strings — the `routes[i].match` spelling `{severity: critical}`, a string, a
+// number, or a list holding 1, ~, a mapping or an empty string. The route
+// generator takes `match` only as a list of matcher strings and used to drop
+// a non-list (the NOC route received every alert) and crash on a bad
+// element; it now renders no enforced route from that block (a blocking
+// `WARN … skipping`,
 // --validate fails) and an earlier root file's block stays, as for a
 // non-boolean `enabled`. Not one of IsBlocking's kinds.
 const ProblemRoutingEnforcedMatchInvalid = "routing_enforced_match_invalid"
@@ -70,21 +72,40 @@ func enforcedFrom(name string, top *yaml.Node) (*Enforced, []Problem) {
 		return nil, []Problem{{Kind: ProblemRoutingEnforcedMatchInvalid, File: name,
 			Field: EnforcedContext + ".match",
 			Message: fmt.Sprintf("%s: _routing_enforced.match must be a list of Alertmanager matcher "+
-				"strings (e.g. ['severity=\"critical\"']), got %s; the route generator renders no "+
-				"platform-enforced (NOC) route from this block (it used to receive every alert)",
-				name, typeName(m))}}
+				"strings, each non-empty (e.g. ['severity=\"critical\"']), got %s; the route generator "+
+				"renders no platform-enforced (NOC) route from this block",
+				name, enforcedMatchShape(m))}}
 	}
 	return &Enforced{File: name, Value: v}, nil
 }
 
 // enforcedMatchInvalid is _grar_routes.enforced_match_invalid on the value of
-// `match`: written (absent and null both mean "no matcher") and not a list.
+// `match` (as PyYAML reads it): written (absent and null both mean "no
+// matcher", and so does `[]`) and not a list of non-empty strings — a
+// mapping, a scalar, or a list with an element such as `1`, `~`, `yes` (a
+// boolean to PyYAML), `{severity: critical}` or an empty string.
 func enforcedMatchInvalid(m any) bool {
 	if m == nil {
 		return false
 	}
-	_, isList := m.([]any)
-	return !isList
+	list, isList := m.([]any)
+	if !isList {
+		return true
+	}
+	for _, e := range list {
+		if s, ok := e.(string); !ok || s == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// enforcedMatchShape names what `match` is, for the refusal message.
+func enforcedMatchShape(m any) string {
+	if _, isList := m.([]any); isList {
+		return "a list with an element that is not a non-empty string"
+	}
+	return typeName(m)
 }
 
 // EnforcedGroupByProblem is one bad group_by element of a rendered enforced

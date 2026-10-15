@@ -107,29 +107,38 @@ def enforced_route_tenants(routing_configs: dict[str, dict],
 
 
 def enforced_match_invalid(enforced_routing: object) -> bool:
-    """Whether ``_routing_enforced.match`` is written but is not a list (#2989).
+    """Whether ``_routing_enforced.match`` is written but is not a list of
+    non-empty strings (#2989).
 
     The enforced route takes ``match`` only as a list of Alertmanager matcher
     strings (``['severity="critical"']``; tenant-config schema
-    ``definitions.routingEnforced.match``, ``type: array``). A mapping — the
-    ``routes[i].match`` spelling ``{severity: critical}`` — a string or a
-    number used to be dropped without a word, so the NOC route received
-    EVERY alert. Absent / null stays "no matcher" (every alert, as
-    documented). Go twin: ``routingpolicy.enforcedFrom``
-    (ProblemRoutingEnforcedMatchInvalid).
+    ``definitions.routingEnforced.match``, ``type: array`` of strings). A
+    mapping — the ``routes[i].match`` spelling ``{severity: critical}`` — a
+    string or a number used to be dropped without a word, so the NOC route
+    received EVERY alert; a list element that is not a non-empty string
+    (``1``, ``~``, ``{severity: critical}``, ``''``) was copied into
+    ``matchers`` as is, which the render crashed on (``re.match`` on a
+    non-string) or Alertmanager refuses. Absent / null and ``[]`` stay "no
+    matcher" (every alert, as documented). Elements are judged as PyYAML
+    reads them (an unquoted ``yes`` is a boolean). Go twin:
+    ``routingpolicy.enforcedFrom`` (ProblemRoutingEnforcedMatchInvalid).
     """
     if not isinstance(enforced_routing, dict):
         return False
     match = enforced_routing.get("match")
-    return match is not None and not isinstance(match, list)
+    if match is None:
+        return False
+    if not isinstance(match, list):
+        return True
+    return any(not (isinstance(m, str) and m) for m in match)
 
 
 def enforced_match_invalid_text(where: str, value: object) -> str:
     """The refusal line's text for ``enforced_match_invalid`` (no prefix)."""
     return (f"_routing_enforced{where}: 'match' must be a list of Alertmanager "
-            f"matcher strings (e.g. ['severity=\"critical\"']), got "
+            f"matcher strings, each non-empty (e.g. ['severity=\"critical\"']), got "
             f"{type(value).__name__} {value!r} — platform-enforced (NOC) routing "
-            f"is NOT rendered (it would otherwise receive every alert), skipping")
+            f"is NOT rendered (no NOC route exists at all), skipping")
 
 
 def enforced_group_by_problems(enforced_routing: object, tenants: list[str]

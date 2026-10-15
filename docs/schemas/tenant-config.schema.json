@@ -957,11 +957,12 @@
         "match": {
           "type": "array",
           "title": "Match Conditions",
-          "description": "List of Alertmanager label matchers (e.g., 'severity=\"critical\"'). Alerts matching ANY condition are routed here.",
+          "description": "List of Alertmanager matcher strings (e.g., 'severity=\"critical\"'), rendered as the enforced route's `matchers`. An alert is routed here only when it matches ALL of them (AND, as Alertmanager reads `matchers`); for OR use one regex matcher such as 'severity=~\"critical|warning\"'. Omitted, null or [] = no matcher (every alert). Anything else — a mapping such as {severity: critical} (the routes[i].match spelling), a scalar, or an element that is not a non-empty string — makes the generator render no enforced route from this block (#2989).",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
-          "examples": [["severity=\"critical\""], ["severity=\"critical\"", "severity=\"warning\""]]
+          "examples": [["severity=\"critical\""], ["severity=~\"critical|warning\""], ["severity=\"critical\"", "alert_source=\"platform\""]]
         },
         "group_by": {
           "type": "array",

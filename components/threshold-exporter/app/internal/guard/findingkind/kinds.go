@@ -134,8 +134,8 @@ var (
 		"judges the shape of `_routing_defaults`")
 	// FindingRoutingEnforcedMatchInvalid (error, TenantID ""; #2989): an
 	// enabled root `_routing_enforced` whose `match` is written but is not a
-	// list of matcher strings (`{severity: critical}`, the `routes[i].match`
-	// spelling). The generator renders no enforced route from that block and
+	// list of non-empty matcher strings (`{severity: critical}`, the
+	// `routes[i].match` spelling; `[1]`, `[~]`). The generator renders no enforced route from that block and
 	// blocks `--validate` on it; before, it dropped the `match` and the NOC
 	// route received every alert. Field `<file>:_routing_enforced.match`.
 	FindingRoutingEnforcedMatchInvalid = register("routing_enforced_match_invalid", PlaneRouting,
