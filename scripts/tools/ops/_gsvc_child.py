@@ -235,8 +235,9 @@ def apply_writes(root: str, request: ValidateRequest,
     that occupy a path but are not on disk. Each write sees the tree the
     writes before it left: one below such an entry is refused, as one below
     a file is, and one that writes or deletes the entry's own path takes it
-    out — tenant-api writes a regular file there — so a later write may go
-    below it. A write of a directory that holds one meets that directory
+    out (tenant-api writes a regular file there, or leaves nothing). Only
+    after a delete may a later write go below it: once written, the path is
+    a regular file, and a write below it is refused as above. A write of a directory that holds one meets that directory
     (materialise made it) and is refused like any other."""
     if irregular is None:
         irregular = {}

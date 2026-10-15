@@ -260,7 +260,7 @@ A `GENERATOR_REJECTED` or 503 response carries the code, `reason` and a fixed se
 
 - **Monitoring**: `tenant_api_policy_available` (whether the generator container can judge; its status endpoint is read at scrape time), `tenant_api_generator_rejections_total{reason}`, `tenant_api_generator_scrape_success`, and the generator's own `da_generator_*` appended to tenant-api's `/metrics`; alerts `TenantApiPolicyUnavailable`, `GeneratorJudgementMemoryNearLimit`.
 - **The flat key `_routing_receiver_type`** is a 400 on every write (`PUT` and batch patches); the receiver type is `_routing.receiver.type`.
-- **Entries in the repo that are not regular files**: the generator reads git objects, and every entry whose mode is not 100644 / 100755 — a symlink (120000), a gitlink (160000), … — is `not_regular_file`, refusing the write with a `tenant_file_unreadable` finding; replace it with a regular file. tenant-api writes a regular file whenever it writes that path ([#2981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2981)).
+- **Entries in the repo that are not regular files**: the generator reads git objects, and every entry whose mode is not 100644 / 100755 — a symlink (120000), a gitlink (160000), … — is `not_regular_file` (except one with a path component starting with `.`, as every reader skips hidden entries), refusing the write with a finding: `domain_policy_unusable` for a domain policy file name (`_domain_policy.yaml` / `.yml`), `tenant_file_unreadable` for any other, the same classification as any other file that cannot be read; replace it with a regular file. tenant-api writes a regular file whenever it writes that path ([#2981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2981)).
 
 ---
 

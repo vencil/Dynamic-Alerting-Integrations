@@ -569,10 +569,39 @@ def test_an_irregular_entry_occupies_its_path_for_writes(tmp_path, world):
         status, doc = svc.validate(commit, [{"path": "zz-a", "delete": True},
                                             {"path": "zz-a/x.yaml", **tenant}])
         assert status == 200 and set(_unreadable(doc)) == links - {"zz-a"}, doc
+        # Writing a file over it does not make it a directory: below it is
+        # still a 400 — only deleting it does.
+        status, doc = svc.validate(commit, [{"path": "zz-a", **tenant},
+                                            {"path": "zz-a/x.yaml", **tenant}])
+        assert status == 400 and "not a directory" in doc["message"], doc
         # A hidden path is no tree entry any reader reads: not judged, and
         # nothing stops a write below it.
         status, doc = svc.validate(commit, [{"path": ".x/l.yaml/y.yaml", **tenant}])
         assert status == 200 and set(_unreadable(doc)) == links, doc
+
+
+def test_an_irregular_policy_file_is_an_unusable_policy(tmp_path, world):
+    """#2981 (ADR-036 §3): an irregular entry is classified as any other
+    file that cannot be read — by its name. A `_domain_policy.yaml` symlink
+    is domain_policy_unusable (not tenant_file_unreadable), and it refuses
+    the write all the same."""
+    repo = h.init_repo(tmp_path / "r")
+    files = dict(cases.FIXTURES["clean"])
+    files["zz-target.txt"] = "not config\n"
+    commit_files = h.write_tree(repo / "conf.d", files)
+    symlink_or_skip("zz-target.txt", commit_files / "_domain_policy.yaml")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+    assert status == 200 and doc["result"] == "findings" and doc["rc"] == 1, doc
+    found = doc["findings"]["findings"]
+    assert not _unreadable(doc), doc
+    policy = [f for f in found if f["kind"] == "domain_policy_unusable"]
+    assert len(policy) == 1, found
+    assert "is not a regular file (not_regular_file): git tree mode 120000" \
+        in json.dumps(policy[0]), policy
 
 
 def test_sha256_repository(tmp_path, world):
