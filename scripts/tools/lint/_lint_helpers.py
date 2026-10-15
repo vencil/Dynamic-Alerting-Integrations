@@ -121,6 +121,13 @@ BUILD_EXEMPT = frozenset({
     # REPO_DATA_FILES). Library imported by config_diff.py and
     # patch_config.py for their affected-alerts output, not a CLI command.
     "_threshold_alerts.py",
+    # #2901 — the conf.d parse entry point + content-addressed cache; imported
+    # by _lib_confd and _grar_parse. Library, not CLI.
+    "_lib_parse_cache.py",
+    # #2901 — generator_service's judgement process and its request checks /
+    # result frames / cache store. Libraries of `da-tools generator-service`.
+    "_gsvc_child.py",
+    "_gsvc_proto.py",
 })
 
 

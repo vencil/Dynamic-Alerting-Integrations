@@ -131,6 +131,9 @@ ENGLISH_ONLY: dict[str, str] = {
     "federation_check.py": _R_OPS,
     "federation_keygen.py": _R_OPS,
     "generate_alertmanager_routes.py": _R_OPS,
+    # #2901: a long-running service the chart starts with fixed flags, never
+    # run by hand; its answers are HTTP JSON, not prose.
+    "generator_service.py": "container service started by the chart, not an operator CLI; English-only help",
     "grafana_import.py": _R_OPS,
     "inject_metadata_join.py": _R_OPS,
     "lint_custom_rules.py": _R_OPS,

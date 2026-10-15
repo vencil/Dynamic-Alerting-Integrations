@@ -32,6 +32,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `grafana-import` | Grafana Dashboard 匯入工具（透過 ConfigMap sidecar 自動掛載） | --dashboard <FILE>, --dashboard-dir <DIR>, --name <NAME> | `da-tools grafana-import --help` |
 | `generate-routes` | 從 tenant YAML 產出 Alertmanager route + receiver + i... | --config-dir <PATH>, --output <FILE>, --output-configmap | `da-tools generate-routes --help` |
 | `patch-config` | ConfigMap 局部更新工具，支援 preview（--diff）和直接應用 | --diff, --json, --exporter-namespace <NS> | `da-tools patch-config --help` |
+| `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d（ADR-036 §3） | --socket <PATH>, --repo <DIR>, --config-subdir <PATH>, --work-dir <DIR>, --policy <FILE> | `da-tools generator-service --help` |
 | `scaffold` | 產生新 tenant 配置（互動式或非互動式） | --non-interactive, --tenant <NAME>, --db <LIST> | `da-tools scaffold --help` |
 | `migrate` | 將傳統 Prometheus 規則轉換為動態格式（AST 引擎） | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
@@ -86,6 +87,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 - **配置生成工具**
   - `generate-routes` — Tenant YAML → Alertmanager fragment
   - `patch-config` — ConfigMap 快速更新
+  - `generator-service` — 產生器容器的服務（tenant-api 寫入前的判定）
 
 - **檔案系統工具**（離線可用）
   - `scaffold` — 產生 tenant 配置

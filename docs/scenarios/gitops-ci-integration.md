@@ -302,6 +302,8 @@ workflow 經由 step 的 `env:` 讀它（不會把值直接展開進 `run:` 腳�
 
 ⚠️ 內容是空的、不是 mapping（例如誤把路徑字串當內容貼進 GitHub variable），或沒有 `allowed_domains` 這個鍵，`generate-routes` 會結束碼 2，job 失敗。`allowed_domains: []` 的意思是「不限制」，不是「全部擋掉」。清單項目是 fnmatch 樣式，所以可以寫 `*.chat.example.com`。
 
+**最低產生器版本（選填）**：policy 檔可以加 `min_generator_version: "X.Y.Z"`（加引號的三段數字），宣告這份 policy 至少要哪一版 da-tools 的產生器來判（[ADR-036](../adr/036-single-parser-effective-config.md) §6，[#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)）。執行的 da-tools 比它舊（或讀不到自己的版本）時，`generate-routes` 結束碼 2 並說明修法：把 da-tools 映像版本調到它以上。值不是 `X.Y.Z` 形式時，整份 policy 視為不可用（同樣結束碼 2）。這個鍵只從 `--policy` 指定的部署端 policy 檔讀；寫在 conf.d 裡的 policy 檔不會生效，否則任何能寫 repo 的人都能讓 tenant-api 的產生器容器拒收所有寫入。
+
 ## 3. 部署模式
 
 ### 3.1 Kustomize（推薦入門）

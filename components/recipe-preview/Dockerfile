@@ -84,11 +84,13 @@ COPY scripts/tools/lint/check_rulepack_sync.py  ./core/lint/check_rulepack_sync.
 COPY scripts/tools/_lib_exitcodes.py            ./core/_lib_exitcodes.py
 COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
 # The compiler's own imports (#2873): compile_custom_alerts → _lib_io;
-# custom_alerts.loader → _lib_confd → _lib_constants, _lib_yaml_keys. Missing
+# custom_alerts.loader → _lib_confd → _lib_constants, _lib_yaml_keys,
+# _lib_parse_cache (#2901). Missing
 # any of them fails app.py at import — and `docker build` still succeeds.
 # tests/ops/test_recipe_preview_image_layout.py imports app.py in this layout.
 COPY scripts/tools/_lib_io.py                   ./core/_lib_io.py
 COPY scripts/tools/_lib_confd.py                ./core/_lib_confd.py
+COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py
 COPY scripts/tools/_lib_constants.py            ./core/_lib_constants.py
 COPY scripts/tools/_lib_yaml_keys.py            ./core/_lib_yaml_keys.py
 ENV PREVIEW_CORE_DIR=/opt/recipe-preview/core/dx
