@@ -221,7 +221,7 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_forge_circuit_state{provider}` | Gauge | PR／MR 寫回模式 | forge 斷路器狀態:0 = closed、1 = half-open、2 = open(forge 故障,寫入回 503) |
 | `tenant_api_forge_pr_conflicts{provider}` | Gauge | PR／MR 寫回模式,tracker 同步過一次後 | 上次同步時處於 merge conflict 的 PR／MR 數 |
 | `tenant_api_generator_rejections_total{reason}` | Counter | 恆有 | 產生器容器沒能判定而拒收的寫入數(`GENERATOR_REJECTED`,#2903);全部未寫入。值:`deadline` / `memory` / `incomplete` / `git_read` / `busy` / `too_large` / `invalid_request` / `mismatch` / `no_time` / `normalized` |
-| `tenant_api_generator_scrape_success` | Gauge | 恆有 | 1 = 這次 scrape 讀到產生器容器自己的 `/metrics` 並附在輸出最後(它只有 Unix socket,由 tenant-api 轉出:`da_generator_*`,含版本 `da_generator_build_info`、判定峰值記憶體 `da_generator_judgement_peak_rss_bytes`,告警 `GeneratorJudgementMemoryNearLimit` 讀它);0 = 沒讀到(逾時 2 秒),不附 |
+| `tenant_api_generator_scrape_success` | Gauge | 恆有 | 1 = 這次 scrape 讀到產生器容器自己的 `/metrics` 並附在輸出最後(它只有 Unix socket,由 tenant-api 轉出:`da_generator_*`,含版本 `da_generator_build_info`、判定峰值記憶體 `da_generator_judgement_peak_rss_bytes`,告警 `GeneratorJudgementMemoryNearLimit` 讀它);0 = 這次讀取失敗(逾時 2 秒、連不上或讀取錯誤皆是),不附 |
 
 ### Request 對應
 
