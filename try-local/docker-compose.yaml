@@ -5,6 +5,8 @@
 # What you get (full stack):
 #   - da-portal      :8081  live Tenant Manager (2 demo tenants + a saved view)
 #   - tenant-api     :8080  file-based config API (commit-on-write, dev-bypass auth)
+#   - generator             the generator container's service: tenant-api asks
+#                           it before every write (#2903; built from source)
 #   - recipe-preview :8082  would-fire preview API (POST /preview; #657)
 #   - prometheus     :9090  /alerts shows the headline critical FIRING
 #   - alertmanager   :9093  the firing alert, routed to a null receiver
@@ -15,7 +17,8 @@
 #
 # Mode 0 (core twins) — just the live Tenant Manager, no monitoring:
 #   docker compose up da-portal tenant-api
-# (pulls in only the fast seed-git one-shot; pushgateway/prometheus/etc. stay down)
+# (pulls in only the fast seed-git one-shot and the generator service, which
+# tenant-api needs to write; pushgateway/prometheus/etc. stay down)
 #
 # Ports are overridable via .env (see .env.example). Component image tags are
 # per-line (EXPORTER_TAG/TENANT_API_TAG/PORTAL_TAG), default v2.8.0.
@@ -59,6 +62,10 @@ services:
     # clears the image's CMD; TA_ADDR / TA_CONFIG_DIR below carry the same
     # settings.
     entrypoint: ["/bin/sh", "/seed/state-seed.sh"]
+    # #2903: the generator's uid (10001, try-local/generator/Dockerfile) — the
+    # generator service answers only a peer of its own uid. seed-git hands
+    # the state volume to this uid.
+    user: "10001:10001"
     environment:
       TA_CONFIG_DIR: /conf.d
       TA_RBAC_PATH: /conf.d/_rbac.yaml
@@ -82,9 +89,13 @@ services:
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: "*"
+      # #2903 (ADR-036 §3): every write that changes conf.d asks the generator
+      # service below first; tenant-api refuses to start without its socket.
+      TA_GENERATOR_SOCKET: /run/da-generator/generator.sock
     volumes:
       - ./seed/conf.d:/conf.d:rw
       - tenant-api-state:/state
+      - generator-sock:/run/da-generator
       # Demo state records + state-seed.sh (#2885). Directory mount, not
       # single-file (the WSL2 single-file bind-mount landmine).
       - ./seed:/seed:ro
@@ -96,6 +107,11 @@ services:
     depends_on:
       seed-git:
         condition: service_completed_successfully
+      # healthy = the generator's socket answers (the image's HEALTHCHECK);
+      # the generator also mounts the socket volume first, so it is created
+      # with the generator image's ownership (uid 10001).
+      generator:
+        condition: service_healthy
     networks:
       default:
         # da-portal's nginx has a baked-in upstream of this exact FQDN
@@ -109,6 +125,39 @@ services:
         aliases:
           - tenant-api.tenant-api.svc.cluster.local
           - tenant-api.monitoring.svc.cluster.local
+    restart: unless-stopped
+
+  generator:
+    # #2903 (ADR-036 §3): the generator container's service. tenant-api asks it
+    # before every write that changes conf.d, over a Unix socket on the shared
+    # `generator-sock` volume, and refuses to start without it. Built from
+    # ./generator (Python + PyYAML, git, amtool, uid 10001 — the runtime the
+    # da-tools image gives it); the service itself is the CHECKOUT's
+    # scripts/tools, mounted read-only (tools/v2.9.0 has no generator-service
+    # yet). tenant-api runs as the same uid (`user:` there) — the service
+    # answers only its own uid. It reads the config repo from git objects
+    # only, read-only.
+    build:
+      context: ./generator
+    image: da-try-local/generator:source
+    command:
+      - --socket=/run/da-generator/generator.sock
+      - --repo=/conf.d
+      - --config-subdir=.
+      - --work-dir=/tmp/da-generator
+    environment:
+      # The bind-mounted repo is owned by the host's uid (see tenant-api).
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
+    volumes:
+      - ./seed/conf.d:/conf.d:ro
+      - ../scripts/tools:/opt/da-tools:ro
+      - generator-sock:/run/da-generator
+    depends_on:
+      # seed-git turns off git's automatic gc on the repo this reads.
+      seed-git:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   da-portal:
@@ -293,8 +342,14 @@ services:
     command: ["/seed/git-init.sh"]
     environment:
       CONF_DIR: /seed/conf.d
+      # #2903: tenant-api runs as the generator's uid; the state volume it
+      # writes (created owned by the tenant-api image's own user) is handed
+      # to that uid here (as root).
+      APP_UID: "10001"
+      CHOWN_DIRS: /state
     volumes:
       - ./seed:/seed:rw
+      - tenant-api-state:/state
     restart: "no"
 
   seed-metrics:
@@ -338,3 +393,5 @@ services:
 volumes:
   # tenant-api state store (#2856); see the tenant-api service above.
   tenant-api-state:
+  # The generator's socket directory (#2903); see the generator service.
+  generator-sock:

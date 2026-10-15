@@ -113,6 +113,9 @@ DOCKERFILE_CONTEXTS: dict[str, str] = {
     "tests/e2e-bench/receiver/Dockerfile": "tests/e2e-bench/receiver",
     "helm/federation-gateway/audit-sidecar/Dockerfile": "helm/federation-gateway/audit-sidecar",
     "helm/vector/projection-gate/Dockerfile": "helm/vector/projection-gate",
+    # try-local's generator service runtime (#2903): built by the demo
+    # compose stack, never published; the service code is bind-mounted.
+    "try-local/generator/Dockerfile": "try-local/generator",
 }
 
 # Mandated .dockerignore baseline (epic #448 AC 1). Each is (label, probe):

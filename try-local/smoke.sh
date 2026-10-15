@@ -11,6 +11,10 @@
 #      tenant-api — the /me gate needs tenants:["*"], which makes
 #      accessible_tenants==["*"]. The "2 tenants" the portal shows come from
 #      /api/v1/tenants, so that is what we assert. See README.
+#   3b. tenant-api :8080/metrics — tenant_api_policy_available 1: the
+#      generator container answers tenant-api's status read (#2903), so the
+#      two run as one uid and share the socket; without it every write the
+#      portal makes answers 503.
 #   4. da-portal :8081/ — Tenant Manager UI served (HTTP 200).
 #   5. recipe-preview :8082 — GET /healthz → 200 with promtool present, then
 #      two POST /preview for one threshold recipe on a tenant from check 3: a
@@ -87,6 +91,23 @@ tenants="$(curl -sf \
 count="$(printf '%s' "$tenants" | jq 'length')"
 [ "$count" = "2" ] || fail "/api/v1/tenants listed '${count}' tenants (want 2: db-demo, cache-demo)"
 echo "[smoke] OK: /api/v1/tenants lists 2 tenants"
+
+# 3b. The generator container can judge writes (#2903): tenant-api reads its
+#     status at scrape time. Polled — the service warms its cache at start.
+GENERATOR_TIMEOUT="${SMOKE_GENERATOR_TIMEOUT:-60}"
+ok=""
+for _ in $(seq 1 $(( (GENERATOR_TIMEOUT + 1) / 2 ))); do
+  # Captured first, no pipe: `curl | grep -q` under pipefail reads the
+  # writer's SIGPIPE (grep stops at the match) as a failure.
+  metrics="$(curl -sf "http://${HOST}:${API_PORT}/metrics" || true)"
+  if grep -qx 'tenant_api_policy_available 1' <<<"$metrics"; then
+    ok=1
+    break
+  fi
+  sleep 2
+done
+[ -n "$ok" ] || fail "tenant_api_policy_available is not 1 after ${GENERATOR_TIMEOUT}s: tenant-api cannot have writes judged by the generator container (check \`docker compose logs generator\`)"
+echo "[smoke] OK: the generator container can judge writes"
 
 # 4. portal UI → 200.
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PORTAL_PORT}/")"

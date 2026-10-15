@@ -23,6 +23,13 @@ Fixture design (full-method fuzz):
     authz layer passes and fuzzing exercises handler/validation logic,
     not just 401/403 short-circuits. Requests carry X-Forwarded-Email +
     X-Forwarded-Groups, matching the oauth2-proxy-fronted contract.
+  - The generator container's service runs beside tenant-api (#2903,
+    ADR-036 §3): tenant-api refuses to start without --generator-socket, and
+    every write asks it before committing. It is the REAL service
+    (scripts/tools/ops/generator_service.py, the da-tools image's code) over
+    the same repo, as the same uid; only amtool is a stub on its PATH (the
+    CI leg has no Alertmanager binary), so the generator's own checks all run
+    and only the final Alertmanager-parser pass is skipped.
   - TA_RATE_LIMIT_PER_MIN=0 disables the per-caller rate limiter
     (cmd/server/main.go); hundreds of fuzz requests/minute from one
     caller identity would otherwise trip 429s unrelated to the spec.
@@ -99,6 +106,7 @@ def _find_repo_root() -> Path:
 REPO_ROOT = _find_repo_root()
 TENANT_API_DIR = REPO_ROOT / "components" / "tenant-api"
 SWAGGER_JSON = TENANT_API_DIR / "docs" / "swagger.json"
+GENERATOR_SERVICE = REPO_ROOT / "scripts" / "tools" / "ops" / "generator_service.py"
 
 
 def find_free_port() -> int:
@@ -321,6 +329,51 @@ def run_policy_gate_smoke(base_url: str) -> bool:
     return ok
 
 
+def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess.Popen, str]:
+    """Start the generator service over config_dir (the repository root, as
+    the chart mounts it) and wait until its status endpoint answers ready.
+
+    The socket lives in a short temp dir (a Unix socket path is limited to
+    ~107 bytes). amtool is a stub (exit 0) on the service's PATH: without
+    one the service answers every write 503 amtool_missing (ADR-036 §3).
+    Returns the process and the socket path; the caller stops the process.
+    """
+    bin_dir = workdir / "bin"
+    bin_dir.mkdir()
+    amtool = bin_dir / "amtool"
+    amtool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    amtool.chmod(0o755)
+    sock_dir = Path(tempfile.mkdtemp(prefix="cg"))
+    sock = str(sock_dir / "g.sock")
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    proc = subprocess.Popen(
+        [sys.executable, str(GENERATOR_SERVICE), "--socket", sock, "--repo", str(config_dir),
+         "--config-subdir", ".", "--work-dir", str(workdir / "generator-work")],
+        env=env, stdout=log_fh, stderr=subprocess.STDOUT,
+    )
+    deadline = time.time() + 30.0
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"generator service exited with code {proc.returncode}")
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+                c.settimeout(2.0)
+                c.connect(sock)
+                c.sendall(b"GET /v1/status HTTP/1.1\r\nHost: g\r\n\r\n")
+                raw = b""
+                while chunk := c.recv(65536):
+                    raw += chunk
+            head, _, body = raw.partition(b"\r\n\r\n")
+            if head.startswith(b"HTTP/1.1 200 ") and json.loads(body).get("ready"):
+                return proc, sock
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.2)
+    proc.kill()
+    proc.wait()
+    raise TimeoutError("generator service not ready after 30s")
+
+
 def build_tenant_api(workdir: Path) -> Path:
     """Build the tenant-api binary into workdir/tenant-api. Returns path."""
     binary = workdir / "tenant-api"
@@ -364,8 +417,12 @@ def main() -> int:
     init_git_repo(config_dir)
     rbac_path = write_rbac_fixture(workdir)
 
+    generator, generator_sock = None, None
+    gen_log_fh = (workdir / "generator.log").open("w", encoding="utf-8")
     try:
         binary = build_tenant_api(workdir)
+        generator, generator_sock = start_generator(config_dir, workdir, gen_log_fh)
+        print(f"[contract] generator service ready on {generator_sock}")
         port = find_free_port()
         addr = f"127.0.0.1:{port}"
         base_url = f"http://{addr}"
@@ -381,6 +438,8 @@ def main() -> int:
             # Disable the per-caller rate limiter: all fuzz traffic shares one
             # X-Forwarded-Email, so the default 100 req/min would 429 the run.
             "TA_RATE_LIMIT_PER_MIN": "0",
+            # #2903: every write asks the generator started above.
+            "TA_GENERATOR_SOCKET": generator_sock,
         }
         print(f"[contract] starting tenant-api on {addr} (config={config_dir})")
         # Server output goes to a FILE, not subprocess.PIPE: nothing drains a
@@ -490,6 +549,16 @@ def main() -> int:
                 print(f"[contract] tenant-api exited with code {proc.returncode}; log tail:")
                 print("\n".join(tail))
     finally:
+        if generator is not None:
+            generator.send_signal(signal.SIGTERM)
+            try:
+                generator.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                generator.kill()
+                generator.wait()
+        gen_log_fh.close()
+        if generator_sock is not None:
+            shutil.rmtree(Path(generator_sock).parent, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
 
 

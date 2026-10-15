@@ -1,8 +1,16 @@
 # Render baseline for helm/tenant-api in tests that are not about writeBack.
 # The chart refuses to render without writeBack.mode (#2855); these tests
 # check other parts of the Deployment, so they render the acknowledged
-# direct mode, which adds no init container, Secret reference or forge flag.
+# direct mode, which adds no Secret reference or forge flag.
 # Tests about writeBack itself are in test_write_back_guard.py.
+#
+# The chart also refuses to render without a git repository in conf.d: the
+# generator container is required (#2903) and reads only git objects. A
+# hostPath conf.d stands for "a repository already there" — no clone, no
+# PVC; it adds the git-gc-off init container.
+confDir:
+  type: hostPath
+  hostPath: /srv/conf.d
 writeBack:
   mode: direct
   directAcknowledgeNotDelivered: true

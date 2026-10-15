@@ -84,8 +84,8 @@ func SplitCarrier(base string) (stem string, ok bool) {
 // IsDefaults reports whether `base` is the inheritance-chain carrier.
 //
 // ⛔ The comparison is against the two whole literals, not a `_defaults`
-// PREFIX. `_defaults-multidb.yaml` is a real file in this repo
-// (`conf.d/examples/`) that is NOT the chain carrier; a prefix implementation
+// PREFIX. `_defaults-multidb.yaml` was a real file in this repo
+// (`conf.d/examples/`, until #3014) that is NOT the chain carrier; a prefix implementation
 // passes every other name and was measured (#1588) to make `describe_tenant`
 // reproduce the exporter's merged hash on only three of five shipped tenants.
 //

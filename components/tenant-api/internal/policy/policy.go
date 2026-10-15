@@ -33,7 +33,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
@@ -201,11 +200,6 @@ type Manager struct {
 	// files is the watcher's per-file parser (NewManager); nil for a
 	// LoadSnapshot / NewForTest Manager, which is never unavailable.
 	files *fileWiseParser
-	// openOnUnavailable is the --policy-unavailable-open escape hatch
-	// (SetOpenOnUnavailable): CheckAvailable then lets a write through an
-	// unavailable policy, logging and counting each one (openPasses).
-	openOnUnavailable atomic.Bool
-	openPasses        atomic.Int64
 }
 
 // ErrUnavailable is CheckAvailable's error (wrapped): a policy file is there
@@ -233,54 +227,27 @@ func (m *Manager) Unavailable() error {
 	return fmt.Errorf("%w: %s", ErrUnavailable, strings.Join(bad, "; "))
 }
 
-// SetOpenOnUnavailable installs the --policy-unavailable-open escape hatch:
-// CheckAvailable then lets a write through an unavailable policy (each one
-// logged and counted in OpenPasses) instead of refusing it.
-func (m *Manager) SetOpenOnUnavailable(on bool) { m.openOnUnavailable.Store(on) }
-
-// OpenPasses is how many writes CheckAvailable let through an unavailable
-// policy under --policy-unavailable-open (tenant_api_policy_unavailable_open_total).
-func (m *Manager) OpenPasses() int64 {
-	if m == nil {
-		return 0
-	}
-	return m.openPasses.Load()
-}
-
 // CheckAvailable is the one gate the direct-mode writes that read the
 // domain policy call before judging ONE write — a PUT /tenants/{id}, or one
 // routing-touching op of POST /tenants/batch or /groups/{id}/batch (at
 // execution time, sync or async): nil when the policy is available, else
-// an error wrapping ErrUnavailable (the handler answers 503). Under
-// --policy-unavailable-open it returns nil instead and logs and counts the
-// write it let through — once per write: a batch counts each op it lets
-// through, never the batch itself (RefusesWrites is the batch-level gate).
-// what names the write in that log line.
+// an error wrapping ErrUnavailable (the handler answers 503 and logs it,
+// what naming the write there).
+//
+// #2903: there is no escape hatch any more (--policy-unavailable-open is
+// removed, ADR-036 §5). Whether a write may be judged at all is the
+// generator container's to say; this gate stays until the Go policy checks
+// it guards are removed (ADR-036 §11), so a write is never judged more
+// loosely than before.
 func (m *Manager) CheckAvailable(what string) error {
-	err := m.Unavailable()
-	if err == nil {
-		return nil
-	}
-	if m.openOnUnavailable.Load() {
-		m.openPasses.Add(1)
-		slog.Warn("policy: domain policy unavailable, write let through (--policy-unavailable-open)",
-			"write", what, "reason", err.Error())
-		return nil
-	}
-	return err
+	_ = what // named by the caller's log line
+	return m.Unavailable()
 }
 
-// RefusesWrites is CheckAvailable's verdict without letting anything
-// through: the ErrUnavailable error when the policy is unavailable and
-// --policy-unavailable-open is off, else nil — nothing logged, nothing
-// counted. A batch request is gated with it before its ops run; each op
-// then goes through CheckAvailable, which counts the op it lets through.
+// RefusesWrites is CheckAvailable for a batch request, gated before its ops
+// run: the ErrUnavailable error when the policy is unavailable, else nil.
 func (m *Manager) RefusesWrites() error {
-	err := m.Unavailable()
-	if err == nil || m.openOnUnavailable.Load() {
-		return nil
-	}
-	return err
+	return m.Unavailable()
 }
 
 // FileNames are the conf.d root files the domain policies are read from, in

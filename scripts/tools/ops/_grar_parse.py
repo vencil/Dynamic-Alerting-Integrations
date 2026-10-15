@@ -31,6 +31,9 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
 from _lib_io import strict_load_exporter_keys  # noqa: E402
 from _lib_yaml_keys import ExporterKeyLoader  # noqa: E402  (#2504)
+# #2901: every conf.d parse on this path goes through `read_confd_yaml`, so the
+# generator container can answer it from a content-addressed cache.
+from _lib_parse_cache import ParseMode, read_confd_yaml  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     duplicate_declarations,
@@ -86,6 +89,13 @@ from _grar_routes import enforced_group_by_problems, enforced_route_tenants  # n
 # block sits in a differently named file, the policies silently vanish —
 # strict mode must surface that instead of staying green.
 _POLICY_FILENAMES = ("_domain_policy.yaml", "_domain_policy.yml")
+
+# #2901 (ADR-036 §3): the routing reader's read of a conf.d file — tenant ids
+# as text (#2114), a domain policy's `tenants:` list as text, a repeated key
+# an error (#2123). One mode for every file this reader opens.
+ROUTING_READ = ParseMode(
+    "_lib_io.strict_load_exporter_keys(raw_text_sequences=('tenants',))",
+    lambda f: strict_load_exporter_keys(f, raw_text_sequences=("tenants",)))
 
 
 def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
@@ -456,8 +466,7 @@ def _enforced_in_unread_file(path: Path, fname: str, result: dict) -> None:
     spelling below the root). A file that does not parse, or is not a
     mapping, carries nothing here — Go's LoadTree skips it the same way."""
     try:
-        with open(path, encoding="utf-8") as f:
-            data = strict_load_exporter_keys(f, raw_text_sequences=("tenants",))
+        data = read_confd_yaml(path, ROUTING_READ)
     except Exception:  # noqa: BLE001 — see docstring
         return
     if isinstance(data, dict) and "_routing_enforced" in data:
@@ -865,6 +874,19 @@ class _NullKeyAsTextLoader(ExporterKeyLoader):
         return super().construct_document(node)
 
 
+def _null_key_probe_parse(stream) -> object:
+    loader = _NullKeyAsTextLoader(stream)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
+# #2901: the probe's own parse mode — a different result from ROUTING_READ
+# for the same bytes, so a different cache key.
+NULL_KEY_PROBE = ParseMode("_grar_parse._NullKeyAsTextLoader", _null_key_probe_parse)
+
+
 def _probe_null_keys(path: str) -> object:
     """*path* read by ``_NullKeyAsTextLoader``; None when that read fails.
 
@@ -874,12 +896,7 @@ def _probe_null_keys(path: str) -> object:
     keeps the normal read as it is.
     """
     try:
-        with open(path, encoding="utf-8") as f:
-            loader = _NullKeyAsTextLoader(f)
-            try:
-                return loader.get_single_data()
-            finally:
-                loader.dispose()
+        return read_confd_yaml(path, NULL_KEY_PROBE)
     except Exception:  # noqa: BLE001 — see docstring
         return None
 
@@ -1130,12 +1147,11 @@ def _parse_config_files(config_dir: str) -> dict:
         # tenant keys. Same pure parser `yaml.safe_load` used, so every
         # branch below still sees the errors it was written for.
         try:
-            with open(path, encoding="utf-8") as f:
-                # Strict (#2123): a key written twice in one mapping is a
-                # YAMLError naming the line — the exporter's yaml.v3 rejects
-                # the file, so it must not route on PyYAML's last value.
-                data = strict_load_exporter_keys(
-                    f, raw_text_sequences=("tenants",))
+            # Strict (#2123): a key written twice in one mapping is a
+            # YAMLError naming the line — the exporter's yaml.v3 rejects
+            # the file, so it must not route on PyYAML's last value.
+            # #2901: `read_confd_yaml` opens the file itself, inside this try.
+            data = read_confd_yaml(path, ROUTING_READ)
         except yaml.YAMLError as e:
             _drop_unreadable_file(
                 fname, f"failed to parse: {e}",

@@ -357,6 +357,21 @@ def _build_tools_rules():
         "replacement": lambda v: f'appVersion: "v{v}"',
         "require_match": True,
     })
+    # helm/tenant-api's generator container (#2902) runs the da-tools image
+    # too, pinned the same two-line way under `generator.image`. Same reason as
+    # above: check_image_pin_capability.py exempts it at v2.9.0 (no
+    # generator-service), and this rule bumping the pin is what makes that
+    # exemption go stale. Only the pin: the chart's own `version:` /
+    # `appVersion` are on the tenant-api line, not this one.
+    rules.append({
+        "file": "helm/tenant-api/values.yaml",
+        "desc": "da-tools image tag in helm/tenant-api/values.yaml (generator.image, two-line repository/tag pin)",
+        "pair_anchor": r"^[ \t]*repository:[ \t]*ghcr\.io/vencil/da-tools[ \t]*$",
+        "pair_key": "tag",
+        "pattern": r'"v?' + _SEMVER + r'"',
+        "replacement": lambda v: f'"v{v}"',
+        "require_match": True,
+    })
 
     # mkdocs.yml tools_version
     rules.append({

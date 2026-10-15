@@ -32,7 +32,10 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 _needs_helm = pytest.mark.skipif(shutil.which("helm") is None, reason="helm CLI not on PATH")
 
 _DIRECT_ACK = ["--set", "writeBack.mode=direct",
-               "--set", "writeBack.directAcknowledgeNotDelivered=true"]
+               "--set", "writeBack.directAcknowledgeNotDelivered=true",
+               # #2903: the required generator container needs a git
+               # repository in conf.d; a hostPath conf.d stands for one.
+               "--set", "confDir.type=hostPath", "--set", "confDir.hostPath=/srv/conf.d"]
 
 # values path -> env var. Every numeric key the deployment template writes as
 # an env value; a new one belongs here.

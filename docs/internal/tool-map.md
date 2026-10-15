@@ -42,6 +42,7 @@ lang: zh
 | `generate_alertmanager_routes.py` | Generate Alertmanager route + receiver + inhibit config from tenant YAML. |
 | `generate_rule_pack_split.py` | Split Rule Packs into edge (Part 1) and central (Parts 2+3) YAML files. |
 | `generate_tenant_mapping_rules.py` | Generate Prometheus Recording Rules for 1:N tenant mapping. |
+| `generator_service.py` | `da-tools generator-service`: judges conf.d writes for tenant-api (ADR-036 §3). |
 | `gitops_check.py` | GitOps Native Mode readiness validator. |
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
 | `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
@@ -248,6 +249,7 @@ lang: zh
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
+- `scripts/tools/_lib_parse_cache.py`：conf.d parse entry point with a content-addressed cache.
 - `scripts/tools/_lib_parse_tree.py`：read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
@@ -266,6 +268,8 @@ lang: zh
 - `scripts/tools/ops/_grar_render.py`：Output rendering + Alertmanager ConfigMap operations.
 - `scripts/tools/ops/_grar_routes.py`：Route generation: tenant routes, override expansion, enforced routes, inhibit rules.
 - `scripts/tools/ops/_grar_validate.py`：URL / domain / schema validation for generate_alertmanager_routes.
+- `scripts/tools/ops/_gsvc_child.py`：The judgement process of ``generator_service`` (#2901, ADR-036 §3).
+- `scripts/tools/ops/_gsvc_proto.py`：Request checks, result frames and the parse-cache store of generator_service.
 - `scripts/tools/ops/_observed_map_lib.py`：Shared SoT extractor for the threshold observed-map (#719).
 - `scripts/tools/ops/_registry_lib.py`：threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200).
 - `scripts/tools/ops/_render_diff.py`：Render both sides of a config change and compare what they render to (ADR-037).

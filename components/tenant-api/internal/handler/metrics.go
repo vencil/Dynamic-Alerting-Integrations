@@ -155,9 +155,9 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// counter's rate threshold cannot; alert on == 0.
 	writeConfigReloadStateMetrics(w)
 
-	// Hub #2486 Q7-2: domain policy availability (direct-mode writes the policy
-	// judges answer 503 while it is 0) and the escape hatch's pass-throughs.
-	writePolicyAvailabilityMetrics(w)
+	// ADR-036 §5 (#2903): whether the generator container can judge writes
+	// (every content-changing write answers 503 while it is 0).
+	writePolicyAvailabilityMetrics(r.Context(), w)
 
 	// #2913: async batch tasks whose work panicked (recovered, marked failed).
 	writeAsyncTaskMetrics(w)
@@ -238,6 +238,11 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, "# TYPE tenant_api_sse_clients gauge\n")
 		_, _ = fmt.Fprintf(w, "tenant_api_sse_clients %d\n", sseClients)
 	}
+
+	// #2903 (ADR-036 §3, §6): the generator container's refusals, and its own
+	// /metrics appended — it has no port, tenant-api is its scrape path.
+	// LAST, because the appended text is the container's.
+	writeGeneratorMetrics(r.Context(), w)
 }
 
 // circuitStateValue maps the gobreaker state string to the gauge encoding.

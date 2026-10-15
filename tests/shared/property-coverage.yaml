@@ -286,6 +286,8 @@ modules:
       - drop_shadowed_spellings
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
+      load_policy_document: "#2901 I/O-bound policy reader (load_policy is its wrapper); every accepted and refused min_generator_version shape example-pinned by test_grar_min_generator_version.py"
+      generator_version_problem: "#2901 three-number comparison plus the pre-release rule; table-pinned (numeric not string order, pre-release, unreadable own version) by test_grar_min_generator_version.py::test_version_comparison"
       ignored_routing_keys: "#2960 closed walk (block / receiver / overrides[i] / routes[i] receiver) against fixed key sets; every block and position example-pinned by the shared table routing_ignored_keys_cases.json, which the Go copy routingpolicy.IgnoredKeys reads too"
       receiver_keys: "#2960 set union over RECEIVER_TYPES (pinned to the schema by test_receiver_spec_parity.py); example-pinned per type by test_routing_ignored_keys.py"
       _ignored_hint: "#2960 message wording only (AM field / did-you-mean / read set); example-pinned by test_routing_ignored_keys.py"

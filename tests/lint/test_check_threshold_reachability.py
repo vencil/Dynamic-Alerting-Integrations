@@ -854,7 +854,7 @@ def test_the_reader_supplies_the_path_that_the_parser_does_not(tmp_path):
     assert rel not in str(wrapped.value.__cause__), wrapped.value.__cause__
 
 
-def test_the_artifact_face_is_derived_not_enumerated():
+def test_the_artifact_face_is_derived_not_enumerated(tmp_path, monkeypatch):
     """⛔ The three ways the hardcoded-path version was walked past (blind
     review, round 3 — each demonstrated by injecting `mysql_connections_critical`
     and watching this gate exit 0):
@@ -866,13 +866,29 @@ def test_the_artifact_face_is_derived_not_enumerated():
 
     Pinned by naming members no enumeration would have guessed, rather than by a
     count alone — a count is satisfied by any ten files.
+
+    ⚠️ Case 1's real instance, `examples/_defaults-multidb.yaml`, was deleted
+    by #3014 (the loader never read it), and no other tracked file has that
+    shape. So case 1 recreates that file under a scratch root and feeds it
+    through the `paths` seam beside a carrier at the root of the same tree.
     """
     found = {p.relative_to(gate.PROJECT_ROOT).as_posix()
              for p in gate._defaults_artifacts()}
 
+    # 1 — sibling in the same tree
+    tree = "components/threshold-exporter/config/conf.d"
+    sibling = f"{tree}/examples/_defaults-multidb.yaml"
+    for rel in (f"{tree}/_defaults.yaml", sibling):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("defaults:\n  mysql_connections: 80\n",
+                                    encoding="utf-8")
+    with monkeypatch.context() as m:
+        m.setattr(gate, "PROJECT_ROOT", tmp_path)
+        assert gate._tracked_defaults_artifacts(
+            [f"{tree}/_defaults.yaml", sibling, f"{tree}/db-a.yaml"]) == sorted(
+                [f"{tree}/_defaults.yaml", sibling])
+
     for missed in (
-        # 1 — sibling in the same tree
-        "components/threshold-exporter/config/conf.d/examples/_defaults-multidb.yaml",
         # 2 — depth: the loader reads L1..L3 too
         "tests/golden/fixtures/full-l0-l3/conf.d/db/_defaults.yaml",
         "tests/golden/fixtures/full-l0-l3/conf.d/db/mariadb/prod/_defaults.yaml",
@@ -5907,51 +5923,91 @@ def test_the_two_loader_floors_are_bracketed_by_what_the_sibling_cannot_see():
         "every root in the table must be measurable or this passes vacuously",
         {"table": sorted(gate._LOADER_READABLE_FLOORS), "measured": sorted(narrow)})
 
-    mirrored, owned = [], []
-    for root, (min_a, min_k, _why) in sorted(gate._LOADER_READABLE_FLOORS.items()):
-        wide_a, wide_k = wide[root]
-        narrow_a, narrow_k = narrow[root]
-        sib_a, sib_k, _sw = gate._SHIPPED_CONFD_ROOTS[root]
-        if (wide_a, wide_k) == (narrow_a, narrow_k):
-            mirrored.append(root)
-            assert (min_a, min_k) == (sib_a, sib_k), (
-                f"{root} is entirely loader-readable, so the table's own "
-                f"reason for its numbers is that they mirror the sibling "
-                f"entry {(sib_a, sib_k)} — this floor owns no band of its "
-                f"own here. Got {(min_a, min_k)}; change both or neither")
-            continue
-        owned.append(root)
-        sib_slack = wide_k - sib_k
-        blind_band = narrow_k - sib_slack
-        assert blind_band < min_k <= narrow_k, (
-            f"{root}: key floor {min_k} must sit strictly above {blind_band} "
-            f"and at or below today's {narrow_k}.\n"
-            f"  Where {blind_band} comes from: {narrow_k} loader-readable "
-            f"key(s) minus the sibling floor's slack of {sib_slack} "
-            f"({wide_k} wide key(s) against its floor of {sib_k}). Erosion "
-            f"that stops at {blind_band} leaves the wide count at exactly "
-            f"{sib_k}, so the sibling stays silent — this floor is the only "
-            f"one left, and a floor at or below {blind_band} is silent too.\n"
-            f"  ⛔ TWO EDITS MOVE THIS BOUND, and only one of them is about "
-            f"this floor's subject:\n"
-            f"    (a) ADDING loader-readable keys raises {narrow_k}, so the "
-            f"bound rises. Expected; raise {min_k} in the same commit.\n"
-            f"    (b) REMOVING keys from the part of this root the loader "
-            f"does NOT read shrinks the sibling's slack, which ALSO raises "
-            f"the bound. ⚠️ That looks unrelated and is not: a smaller "
-            f"blind band means the sibling tolerates less, so the window "
-            f"where BOTH floors are silent moves up. The hole is real, and "
-            f"the remedy is to raise {min_k} — not to relax this test.\n"
-            f"  ⛔ LOWERING {min_k} IS NEVER THE REMEDY. A floor inside the "
-            f"band still catches a RENAME (which takes the count to 0) and "
-            f"stops catching keys draining out of a file that stays put, "
-            f"which is the half of this floor's job the wide one cannot do")
-        assert 1 <= min_a <= narrow_a, (
-            f"{root}: artifact floor {min_a} against {narrow_a} measured")
+    kinds = {
+        root: _loader_floor_kind(
+            root, (min_a, min_k), wide[root], narrow[root],
+            gate._SHIPPED_CONFD_ROOTS[root][:2])
+        for root, (min_a, min_k, _why) in sorted(gate._LOADER_READABLE_FLOORS.items())}
+    # ⚠️ Since #3014 every shipped root is "mirrored": the one root that owned
+    # a band (the exporter's, through `examples/_defaults-multidb.yaml`) lost
+    # the file the loader skipped. The "owned" arithmetic is still what fires
+    # the day a root regains such a file, so it is pinned on its own below,
+    # against the numbers that root had — rather than going unexercised.
+    assert kinds, "no root measured — this passes vacuously"
 
-    assert mirrored and owned, (
-        "this test needs at least one root of each kind, or half of it is "
-        "vacuous", {"mirrored": mirrored, "owned": owned})
+
+def _loader_floor_kind(root, floor, wide, narrow, sibling) -> str:
+    """Check one `_LOADER_READABLE_FLOORS` row against its measurements.
+
+    `floor` = (min_a, min_k), `wide` / `narrow` = (artifacts, keys) the prefix
+    scan and the loader-exact scan count for `root`, `sibling` = its
+    `_SHIPPED_CONFD_ROOTS` (min_a, min_k). Returns the row's kind:
+    "mirrored" (entirely loader-readable) or "owned" (it owns a blind band).
+    """
+    min_a, min_k = floor
+    wide_a, wide_k = wide
+    narrow_a, narrow_k = narrow
+    sib_a, sib_k = sibling
+    if (wide_a, wide_k) == (narrow_a, narrow_k):
+        assert (min_a, min_k) == (sib_a, sib_k), (
+            f"{root} is entirely loader-readable, so the table's own "
+            f"reason for its numbers is that they mirror the sibling "
+            f"entry {(sib_a, sib_k)} — this floor owns no band of its "
+            f"own here. Got {(min_a, min_k)}; change both or neither")
+        return "mirrored"
+    sib_slack = wide_k - sib_k
+    blind_band = narrow_k - sib_slack
+    assert blind_band < min_k <= narrow_k, (
+        f"{root}: key floor {min_k} must sit strictly above {blind_band} "
+        f"and at or below today's {narrow_k}.\n"
+        f"  Where {blind_band} comes from: {narrow_k} loader-readable "
+        f"key(s) minus the sibling floor's slack of {sib_slack} "
+        f"({wide_k} wide key(s) against its floor of {sib_k}). Erosion "
+        f"that stops at {blind_band} leaves the wide count at exactly "
+        f"{sib_k}, so the sibling stays silent — this floor is the only "
+        f"one left, and a floor at or below {blind_band} is silent too.\n"
+        f"  ⛔ TWO EDITS MOVE THIS BOUND, and only one of them is about "
+        f"this floor's subject:\n"
+        f"    (a) ADDING loader-readable keys raises {narrow_k}, so the "
+        f"bound rises. Expected; raise {min_k} in the same commit.\n"
+        f"    (b) REMOVING keys from the part of this root the loader "
+        f"does NOT read shrinks the sibling's slack, which ALSO raises "
+        f"the bound. ⚠️ That looks unrelated and is not: a smaller "
+        f"blind band means the sibling tolerates less, so the window "
+        f"where BOTH floors are silent moves up. The hole is real, and "
+        f"the remedy is to raise {min_k} — not to relax this test.\n"
+        f"  ⛔ LOWERING {min_k} IS NEVER THE REMEDY. A floor inside the "
+        f"band still catches a RENAME (which takes the count to 0) and "
+        f"stops catching keys draining out of a file that stays put, "
+        f"which is the half of this floor's job the wide one cannot do")
+    assert 1 <= min_a <= narrow_a, (
+        f"{root}: artifact floor {min_a} against {narrow_a} measured")
+    return "owned"
+
+
+@pytest.mark.parametrize("floor,ok", [
+    ((1, 6), True),    # the exporter root's row before #3014
+    ((1, 5), True),    # just above the blind band
+    ((1, 4), False),   # inside the blind band: 8 − (19 − 15) = 4
+    ((1, 9), False),   # above what the loader reads today
+    ((2, 6), False),   # more artifacts than the loader reads
+])
+def test_an_owned_loader_floor_must_sit_above_the_blind_band(floor, ok):
+    """The "owned" half of the bracket, on the exporter root's pre-#3014
+    measurements: wide (2 artifacts, 19 keys), loader-readable (1, 8),
+    sibling floor (2, 15)."""
+    run = lambda: _loader_floor_kind("r", floor, (2, 19), (1, 8), (2, 15))  # noqa: E731
+    if ok:
+        assert run() == "owned"
+    else:
+        with pytest.raises(AssertionError):
+            run()
+
+
+def test_a_fully_loader_readable_floor_must_mirror_its_sibling():
+    assert _loader_floor_kind("r", (1, 15), (1, 19), (1, 19), (1, 15)) == "mirrored"
+    with pytest.raises(AssertionError):
+        _loader_floor_kind("r", (1, 6), (1, 19), (1, 19), (1, 15))
 
 
 # ── the witness runs after every floor ───────────────────────────────────────

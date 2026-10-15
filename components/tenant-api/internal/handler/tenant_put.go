@@ -82,9 +82,11 @@ type PutTenantResponse struct {
 // @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions, or the body breaks the domain policy (code POLICY_VIOLATION; nothing written). In PR write-back mode the body is judged again on the latest base branch, which this server's local copy may lag: a violation there, or a base whose _domain_policy.yaml / .yml cannot be loaded, is the same 403 with tenant_id, and no PR/MR or branch is left"
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
+// @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
+// @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written)"
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -138,6 +140,13 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// the axis is enforced.
 		gatePost, ok := requireOrgWriteProposedAt(rw, r, d, tenantID, rbac.PermWrite, string(body))
 		if !ok {
+			return
+		}
+
+		// #2903: the flat `_routing_receiver_type` is a 400 on every write,
+		// before anything judges its value (the domain policy's 403 below).
+		if v := flatReceiverTypeViolations(body, tenantID); len(v) > 0 {
+			WriteValidationErrors(rw, r, v)
 			return
 		}
 
@@ -211,6 +220,10 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			notices, err = d.Writer.Write(r.Context(), tenantID, email, string(body))
 		}
 		if err != nil {
+			// #2903: the generator container refused it (422 / 429 / 503).
+			if writeGeneratorError(rw, r, d, err) {
+				return
+			}
 			if errors.Is(err, gitops.ErrWriteOverloaded) {
 				WriteOverloaded(rw, r)
 				return

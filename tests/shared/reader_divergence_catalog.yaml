@@ -19,9 +19,9 @@
 #     反過來是嚴，其餘的值不同（例如 targets 不同）是 value_differs。
 #   - tenant-api 拒收產生器照讀（且 --strict 不擋）的 policy 檔是
 #     go_refuses，不算嚴：拒收後 watcher 沿用該檔上一份可用內容（可能是舊
-#     policy），從未成功過則 policy 不可用——寫入回 503，但開了
-#     --policy-unavailable-open 就一律放行。所以每筆 go_refuses 的簽核必須
-#     交代這兩種情況。產生器也擋（丟檔或 --strict 擋）的檔被拒收，是兩邊
+#     policy），從未成功過則 policy 不可用——寫入回 503（#2903 起沒有放行
+#     開關）。所以每筆 go_refuses 的簽核必須交代這兩種情況。產生器也擋
+#     （丟檔或 --strict 擋）的檔被拒收，是兩邊
 #     同判，不是差異。路由層同理：tenant-api 因 policy 檔不可用對 PUT 回 503，
 #     而產生器會接受那筆寫入，是 go_refuses；產生器也擋（403）則是同判。
 #   - 路由對照表的 tenant_api 格只有在 tenant-api 的判定確實量不到時才能是
@@ -314,9 +314,8 @@ entries:
   #     policy：新版的收緊不生效，tenant-api 照舊版放行寫入。
   #   - 從未成功解析過（例如啟動時就是這份）：該檔不可用。direct 模式下，
   #     policy 判定的寫入（PUT /tenants/{id}、批次的路由 op）回 503
-  #     POLICY_UNAVAILABLE；若設了 --policy-unavailable-open（或
-  #     TA_POLICY_UNAVAILABLE_OPEN），這些寫入一律放行、完全不判 policy，只記
-  #     log 與 tenant_api_policy_unavailable_open_total。
+  #     POLICY_UNAVAILABLE；沒有放行開關（#2903 移除
+  #     --policy-unavailable-open）。
   #   - PR 模式（LoadSnapshot）：整份拒收，寫入被拒。
   # TODO(owner): 以下五筆的 sign_off 是佔位（#2759 本身，不是簽核留言）。請在
   # #2759 留下「以產生器為準、接受」並交代上面兩種情況的簽核，再把 sign_off
@@ -330,8 +329,7 @@ entries:
       以 alias `*k` 當 key 指向 `<<`）。tenant-api 的 DomainPoliciesShapeError
       整份拒收（yaml.v3 自己的 merge 與產生器不同，#2663、#2677 R1），產生器
       照讀並執行。後果：watcher 改用該檔上一份可用內容（可能是舊 policy）；
-      從未成功過則 policy 不可用，direct 模式寫入回 503，設了
-      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+      從未成功過則 policy 不可用，direct 模式寫入回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -349,8 +347,7 @@ entries:
       tag 寫成的 null key（`! "null"`，產生器讀成 null 後丟掉該 key，tenant-api
       無法照產生器的讀法讀），另有 merge-tagged mapping 與 `!!null x` 各一列。
       後果：watcher 改用該檔上一份可用內容（可能是舊 policy）；從未成功過則
-      policy 不可用，direct 模式寫入回 503，設了 --policy-unavailable-open 則
-      一律放行、不判 policy；PR 模式拒絕寫入。
+      policy 不可用，direct 模式寫入回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -367,8 +364,7 @@ entries:
       與 da-guard-omap-pairs-item-model 同源：模擬 PyYAML 建構 `!!omap` /
       `!!pairs` 項目時不照它的建構順序，判為「PyYAML 建不出來」而整份拒收，
       產生器其實照讀。後果：watcher 改用該檔上一份可用內容（可能是舊
-      policy）；從未成功過則 policy 不可用，direct 模式寫入回 503，設了
-      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+      policy）；從未成功過則 policy 不可用，direct 模式寫入回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -385,8 +381,7 @@ entries:
       domain_policies 下有 non-specific tag 寫成的 null key（`! "null": ...`）。
       產生器讀成 null key 並丟掉，照常執行其餘 domain；tenant-api 無法照這個
       讀法讀，整份拒收。後果：watcher 改用該檔上一份可用內容（可能是舊
-      policy）；從未成功過則 policy 不可用，direct 模式寫入回 503，設了
-      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+      policy）；從未成功過則 policy 不可用，direct 模式寫入回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -404,8 +399,7 @@ entries:
       （`fin: ! '~'`、`constraints: ! "null"`）。PyYAML 讀成字串，產生器跳過該
       domain（或不執行其 constraints），其餘照常；yaml.v3 無法把它 decode 進
       struct，tenant-api 整份拒收。後果：watcher 改用該檔上一份可用內容（可能
-      是舊 policy）；從未成功過則 policy 不可用，direct 模式寫入回 503，設了
-      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+      是舊 policy）；從未成功過則 policy 不可用，direct 模式寫入回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -550,8 +544,7 @@ entries:
       所以 PUT 回 503 POLICY_UNAVAILABLE。產生器照讀（或把整份丟掉，那是
       platform finding、不屬於這筆寫入），這些租戶的路由不違反 policy，會接受
       寫入。後果：熱重載時 watcher 改用該檔上一份可用內容（可能是舊 policy）；
-      從未成功過則如此處回 503，但設了 --policy-unavailable-open 就一律放行、
-      不判 policy；PR 模式拒絕寫入。
+      從未成功過則如此處回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -570,8 +563,7 @@ entries:
       可用內容，PUT 回 503 POLICY_UNAVAILABLE。產生器以 --strict 丟掉這個
       block（platform finding，不屬於這筆寫入），在沒有 policy 下判這筆 PUT，
       會接受。後果：熱重載時 watcher 改用該檔上一份可用內容（可能是舊
-      policy）；從未成功過則如此處回 503，但設了 --policy-unavailable-open 就
-      一律放行、不判 policy；PR 模式拒絕寫入。
+      policy）；從未成功過則如此處回 503；PR 模式拒絕寫入。
     direction: go_refuses
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759

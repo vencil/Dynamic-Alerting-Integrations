@@ -158,6 +158,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 |---------|---------|-------------------|
 | `generate-routes` | Tenant YAML → Alertmanager route + receiver + inhibit fragment | `--config-dir <dir>` |
 | `patch-config` | ConfigMap partial update with `--diff` preview | `<tenant> <metric> <value>` or `--diff` |
+| `generator-service` | Generator container service: judges whether conf.d with writes applied passes `generate-routes --validate --strict`, over a Unix socket (ADR-036 §3) | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
 
 ### Filesystem Tools (Offline Available)
 
@@ -1824,7 +1825,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--namespace <NS>` | Namespace of the ConfigMap. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `monitoring` |
 | `--configmap <NAME>` | ConfigMap name. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `alertmanager-config` |
 | `--yes` | Skip confirmation prompt with --apply. **Read only by `--apply`**; exit 2 in any other mode | false |
-| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556); so does a file with no `allowed_domains` key (empty, comments only, misspelled key) or a list with a non-string entry — write `allowed_domains: []` to say "no constraint" explicitly (#1649). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556); so does a file with no `allowed_domains` key (empty, comments only, misspelled key) or a list with a non-string entry — write `allowed_domains: []` to say "no constraint" explicitly (#1649). Optional `min_generator_version: "X.Y.Z"`: exit 2 when the da-tools that runs is older (or cannot read its own version) — raise the da-tools version; a value not of the form `X.Y.Z` is exit 2 too (#2901). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
 | `--findings-json <PATH>` | Also write the findings this run **prints** (each warning-stream and refusal line) as JSON to PATH; the shape is under "Structured findings" below. Read in every mode; written on every exit (refusals, caller errors, usage errors and exceptions included), to a temp file renamed into place, so PATH never keeps a previous run's document. stdout, stderr and the exit code are unchanged; a PATH that cannot be written exits 2 (#2766). ⚠️ The v2.9.0 image has no such flag <!-- image-caveat: v2.9.0 --> | (not written) |
 
 **Output**
@@ -1935,6 +1936,45 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 | `5` | The rollback itself failed: the ConfigMap may still hold the new bytes; fix it by hand |
 | `6` | Ctrl-C / SIGTERM or an unexpected error after the write; rolled back (interrupted before the write, it ends as it normally would, nothing written) |
 | `7` | What the ConfigMap now holds cannot be told (not readable, or neither version), or another writer changed the patched key after this write (not rolled back); check it by hand |
+
+#### generator-service
+
+The generator container's service ([ADR-036](adr/036-single-parser-effective-config.en.md) §3, §5, §6, [#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)). It runs continuously, and tenant-api asks it before every write whether the whole conf.d, with those writes applied to that base commit, passes `generate-routes --validate --strict`. HTTP/1.1 over a Unix socket only, no network port. The tenant-api chart deploys it as a required sidecar, and tenant-api asks it before committing every write that changes conf.d; how its answers map to tenant-api responses is in [Tenant API hardening §3.9](api/tenant-api-hardening.en.md#39-every-write-asks-the-generator-container-first-2903) ([#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)).
+
+```bash
+da-tools generator-service --socket <path> --repo <git repo> --config-subdir conf.d --work-dir <dir> [--policy <FILE>]
+```
+
+**Main parameters**
+
+| Parameter | Purpose |
+|------|------|
+| `--socket <path>` | Unix socket to listen on (created with mode 0600; a peer whose uid differs from the service's is closed unanswered; the threat model is in the `generator_service.py` module docstring). An old socket file at the path is replaced; any other kind of file refuses the start (exit 2) |
+| `--repo <dir>` | The git repository (a read-only mount is enough). Files always come from git objects (`git ls-tree` plus `git cat-file`), never from the working tree and never through `git archive` |
+| `--config-subdir <path>` | conf.d's path inside the repository (`.` is the root; an absolute path or a `..` segment refuses to start, exit 2) |
+| `--work-dir <dir>` | Scratch directory for the tree of each judgement; removed when the judgement ends (also when it is killed) |
+| `--policy <FILE>` | Deployment policy file (`allowed_domains`, `min_generator_version`), read again for every judgement |
+| `--warm-ref <ref>` | The commit warmed at start (default `HEAD`; an empty value turns it off). One that does not resolve is logged and counted, and the service stays usable |
+| Others | The judgement time limit, the time left to the caller, the judgement process's `RLIMIT_DATA`, the cache limit, the queue length, open connections, the body bytes being read or queued, one request's size and number of writes: defaults in `--help` |
+
+**Endpoints**
+
+| Endpoint | Response |
+|------|------|
+| `POST /v1/validate` | Body: `base_commit` (a full hex commit id), `writes` (`{path, content_b64}` or `{path, delete: true}`, paths relative to conf.d), `deadline_ms` (the caller's remaining time). Always 200 when there is a verdict: `result` is `pass` (generator exit 0), `findings` (non-zero) or `rejected` (this request only; `reason` is `deadline`, `memory`, `incomplete`, `git_read` or `busy`; `busy` is also the answer when the open connections or the body bytes being read or queued are at their limit, and the body is then not read), with `rc`, `findings` (the generator's `--findings-json` document), `stderr_tail` and `validated` (`base_commit`, the sha256 of each written file, the sha256 of the deployment policy file). A malformed request is 400, and so is a write path that conflicts with the base tree (a parent that is a file or symlink there, a path that is a directory). When the container cannot judge at all, 503: `VALIDATOR_UNAVAILABLE` (`reason`: `amtool_missing`, `generator_too_old`, `internal_error`) or `POLICY_UNAVAILABLE` (the deployment policy file is unusable) |
+| `GET /v1/status` | Whether the deployment policy file is usable (with its sha256, error and `min_generator_version`), the generator and da-guard versions, whether amtool is present, `ready` |
+| `GET /metrics` | Prometheus text format: cache size (`pinned` marks files in the latest base tree), the latest judgement's peak memory and the judgement process's memory limit, counts by result and by rejection reason, queue depth, versions |
+
+Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` set, the whole group ended when the deadline passes), one at a time; the others queue, and queue time counts against the deadline. Parse results of conf.d files are cached across requests by (SHA-256 of the file's content, parse mode), so when one file of a tree changes only that file is parsed again. The judgement process hands back each parse the moment it finishes, so a judgement ended by its deadline still leaves its completed parses in the cache, and the next request carries on from there.
+
+**Warming**: at start (`--warm-ref`), and after a request whose `base_commit` differs from the current base, the service reads that commit's whole tree in the same kind of process outside any request, only to fill the cache — no verdict, no amtool — with its own time limit (`--warm-seconds`). A request arriving ends the warming run at once and goes first; what it already read is kept. `da_generator_warm_runs_total{outcome}` (`completed`, `preempted`, `deadline`, `failed`) and `da_generator_cache_base_coverage_ratio` (the share of the latest base tree's files already cached; also on the status endpoint) in `/metrics` show how warming goes.
+
+**Exit codes**
+
+| Code | Meaning |
+|------|------|
+| 0 | Stopped normally after SIGTERM / SIGINT |
+| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created, the `RLIMIT_NOFILE` hard limit cannot hold `--max-connections` plus the reserved descriptors, `--max-inflight-body-bytes` below `--max-body-bytes` |
 
 ---
 
@@ -2472,6 +2512,8 @@ Both need da-guard (bundled in the image; in a checkout run `make da-guard-build
 | `removed` | Metric key removed | Lost alert coverage |
 | `toggled` | enable ↔ disable | Enable or disable alert |
 | `modified` | Complex value change | Manual review needed |
+
+A threshold key the tenant writes but `/metrics` does not serve (served-values' `unserved`, e.g. its base is in no defaults carrier; a value switched off such as `disable` does not count) is printed in the table with `(not served)` after the value, and its JSON entry carries `not_served` (the sides it is not served on, `"old"` / `"new"`). A key served on one side and written but not served on the other is `added` when it starts being served and `removed` when it stops, even with the same number — that is the change that arms or disarms its alert ([#3022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3022)).
 
 **Platform settings (top-level keys of `_`-prefixed files)**: the `_`-prefixed files on both sides (at any depth) are compared key by key as `da-guard parse-tree` reads them; a change only to comments, indentation, quoting or key order is no change. Each key whose value changed is listed under "Platform Settings", grouped by what the report can say: Rendered when the renders show differences (see the sections below; which of them come from this key is not told apart). A fully covered key that its renderer reads right where it is written (parse-tree's `rendered_by`) and whose renders show no difference is listed as "no effect" and does not affect the exit code ([#2962](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2962)). A partly covered key whose renders show no difference, a key written where its renderer does not read it (such as `defaults` outside a defaults file, or `tenants:` in a `_` file below the root), a key neither render reads (a platform `_custom_alerts` recipe, `instance_tenant_mapping`, `max_metrics_per_tenant`, and keys such as `tenant_orgs` and `groups` in tenant-api's files; for these a value that is not a string is compared by its source text), a file that cannot be read, a `_` file no reader reads (compared byte for byte), and a `_policies` / `domain_policies` written where its check does not read it each raise the exit code to at least 1. `_policies` in the root defaults file and `domain_policies` in `_domain_policy.yaml` are listed as a note only (`validate-config` and the generator's `--validate --strict` check them) and do not affect the exit code. parse-tree itself failing, or its output carrying no `rendered_by` (a da-guard older than this tool), exits 2. The rules are [ADR-037](adr/037-config-diff-compares-rendered-output.en.md) decision 3.
 

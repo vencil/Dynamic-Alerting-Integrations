@@ -173,6 +173,9 @@ from _grar_validate import (  # noqa: E402
 )
 # #2766: structured findings (the refusal lines are built as them here).
 from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
+# #2901 (ADR-036 §6): the policy's min_generator_version, read in the same
+# parse as allowed_domains, and the comparison the generator container shares.
+from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -1060,20 +1063,23 @@ def _exit_code_of(exc: SystemExit) -> int:
     return 1  # a message: Python prints it and exits 1
 
 
-def main() -> None:
-    """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML.
+
+    *argv* defaults to ``sys.argv[1:]``; the generator container (#2901)
+    passes its own, in the judgement process."""
     parser = _build_parser()
     # #2766: every finding the run prints, in the order it was determined.
     # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller
     # error, a usage error, an exception — so a document a previous run left
     # at PATH is never read as this run's. Its path is read before the full
     # parse for exactly that: a usage error (rc 2) still replaces it.
-    early = _early_findings_args()
+    early = _early_findings_args(argv)
     findings: list[str] = []
     args: argparse.Namespace | None = None
     code = 1  # what an exception other than SystemExit ends the process with
     try:
-        args = parser.parse_args()
+        args = parser.parse_args(argv)
         _run(args, findings)
         code = EXIT_OK
     except SystemExit as exc:
@@ -1209,9 +1215,16 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
     # is the whole point — the previous behaviour generated routes with SSRF
     # domain checking off and said nothing.
     try:
-        allowed_domains = load_policy(args.policy)
+        policy = load_policy_document(args.policy)
     except PolicyInputError as exc:
         die_caller_error(str(exc))
+    allowed_domains = policy.allowed_domains
+    # #2901 (ADR-036 §6): a policy may name the oldest generator it accepts;
+    # an older one would judge by rules the policy's author did not mean.
+    too_old = generator_version_problem(da_tools_version(),
+                                        policy.min_generator_version)
+    if too_old is not None:
+        die_caller_error(f"--policy: {too_old}")
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
 

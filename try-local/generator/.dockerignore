@@ -1,0 +1,11 @@
+# try-local/generator build context (#2903): the Dockerfile copies nothing
+# from it (the service code is bind-mounted). The epic #448 baseline, so
+# nothing stray can ever be sent.
+.git/
+tests/
+scripts/
+docs/
+*.md
+.github/
+*.log
+.env*

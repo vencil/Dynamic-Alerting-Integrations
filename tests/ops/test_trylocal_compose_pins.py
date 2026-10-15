@@ -65,7 +65,9 @@ ENV_EXAMPLE = os.path.join(TRY_LOCAL, ".env.example")
 # parametrized checks below — measured: without this, adding `build:` to
 # `seed-metrics` while leaving `image: curlimages/curl:latest` produced one
 # fewer test case and zero failures.
-BUILT_FROM_SOURCE = frozenset({"tenant-api", "recipe-preview"})
+# generator (#2903): try-local/generator/Dockerfile, scanned with the other
+# self-built images (test_nightly_scan_matrix_drift.py).
+BUILT_FROM_SOURCE = frozenset({"tenant-api", "recipe-preview", "generator"})
 
 # A pinned release: MAJOR.MINOR.PATCH, optional `v`, optional suffix
 # (`-alpine`, `-distroless-libc`, …). Rejects `latest`, `v2`, `8`, `12.4`,

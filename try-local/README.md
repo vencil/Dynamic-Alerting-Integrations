@@ -18,6 +18,7 @@ Give it ~1 minute, then open:
 |---|---|---|
 | **Tenant Manager**（da-portal） | <http://localhost:8081> | 2 個 demo 租戶 + 一個預存的 Saved View；改租戶閾值按 Save 會落一個**真實 git commit** |
 | **Tenant API**（tenant-api） | <http://localhost:8080/api/v1/me> | file-based 設定 API（commit-on-write），oauth2-proxy 身分模型 |
+| **產生器容器**（generator） | （無對外 port） | tenant-api 每筆寫入 commit 前問它整棵 conf.d 是否過得了 `generate-routes --validate --strict`（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）；從 `generator/Dockerfile` build（Python + PyYAML、git、amtool），跑本 checkout 的 `scripts/tools`；與 tenant-api 同 uid（10001）、共用 socket volume |
 | **Prometheus** | <http://localhost:9090/alerts> | `MariaDBHighConnectionsCritical` **正在 firing**（紅燈） |
 | **Alertmanager** | <http://localhost:9093> | 同一個 firing 告警，路由到 null receiver |
 
@@ -73,7 +74,7 @@ graph LR
 docker compose up da-portal tenant-api
 ```
 
-只起 portal + tenant-api（外加一個秒退的 git-init one-shot）。打開 <http://localhost:8081>，瀏覽 2 個租戶、改一個租戶的閾值按 **Save** —— 然後在 host 上看 seed 設定 repo 多了一個真實 commit：
+只起 portal + tenant-api（外加一個秒退的 git-init one-shot，與 tenant-api 寫入要問的產生器服務）。打開 <http://localhost:8081>，瀏覽 2 個租戶、改一個租戶的閾值按 **Save** —— 然後在 host 上看 seed 設定 repo 多了一個真實 commit：
 
 ```bash
 git -C try-local/seed/conf.d log --oneline

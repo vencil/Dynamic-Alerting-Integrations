@@ -10,6 +10,9 @@ Functions:
   load_policy(path)             → list of allowed_domains from policy YAML
                                   (raises PolicyInputError when a path IS
                                   supplied but cannot serve as a policy)
+  load_policy_document(path)    → the same read, plus min_generator_version
+  generator_version_problem(..) → why this generator is older than a policy
+                                  asks for, or None (#2901)
   validate_tenant_keys(...)      → schema-key typo / unknown-key warnings
   _validate_profile_refs(parsed) → ADR-007 profile-reference existence check
   check_domain_policies(...)    → ADR-007 domain-policy constraint validation
@@ -883,8 +886,59 @@ class PolicyInputError(ValueError):
     """
 
 
+class PolicyDocument(NamedTuple):
+    """What the generator reads from a ``--policy`` file."""
+
+    allowed_domains: list[str]
+    #: ``X.Y.Z`` or None (key absent). #2901, ADR-036 §6: the oldest
+    #: generator this deployment accepts. Read from the ``--policy`` file
+    #: only — never from a policy file inside conf.d, which anyone who can
+    #: write to the repo could use to make the generator container unusable.
+    min_generator_version: str | None
+
+
+# #2901: exactly three dot-separated numbers — no `v`, no pre-release.
+_MIN_GENERATOR_VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+_OWN_VERSION_RE = re.compile(r"([0-9]+)\.([0-9]+)\.([0-9]+)(-.+)?")
+
+
+def generator_version_problem(own: str | None, minimum: str | None) -> str | None:
+    """Why a generator of version *own* must not judge under a policy whose
+    ``min_generator_version`` is *minimum*, or None when it may.
+
+    *own* is ``da_tools_version()`` (None when unreadable). A pre-release
+    (``3.0.0-rc1``) is older than its release, as in semver. An unreadable
+    own version cannot be shown to be new enough, so it refuses.
+    """
+    if minimum is None:
+        return None
+    want = tuple(int(x) for x in minimum.split("."))
+    remedy = (f"raise the da-tools version this generator runs from (the "
+              f"image tag) to {minimum} or later")
+    m = _OWN_VERSION_RE.fullmatch(own or "")
+    if m is None:
+        return (f"the policy requires generator version {minimum} or later "
+                f"(min_generator_version), and this generator's own version "
+                f"could not be read ({own!r}) — {remedy}")
+    have = tuple(int(x) for x in m.group(1, 2, 3))
+    if have > want or (have == want and m.group(4) is None):
+        return None
+    return (f"this generator is da-tools {own}, older than the policy's "
+            f"min_generator_version {minimum} — {remedy}")
+
+
 def load_policy(policy_path: str | None) -> list[str]:
-    """Load policy YAML and return allowed_domains list (may be empty).
+    """``load_policy_document(policy_path).allowed_domains``."""
+    return load_policy_document(policy_path).allowed_domains
+
+
+def load_policy_document(policy_path: str | None) -> PolicyDocument:
+    """Load policy YAML: allowed_domains list (may be empty) and the
+    optional ``min_generator_version`` (#2901), from ONE parse.
+
+    ``min_generator_version`` must be a string ``X.Y.Z``; anything else (a
+    number, ``v1.2.3``, a pre-release, an empty value) makes the file
+    unusable — a PolicyInputError, like every other unusable shape below.
 
     ⛔ Omitting ``--policy`` and supplying an unusable one are DIFFERENT
     outcomes. Until #1556 both returned ``[]``, so a customer following the
@@ -928,7 +982,7 @@ def load_policy(policy_path: str | None) -> list[str]:
     # byte-identical to omitting the flag. The flag's argparse default is None,
     # so nothing else reaches this branch. Same split as #1616's --base-config.
     if policy_path is None:
-        return []
+        return PolicyDocument([], None)
     if not Path(policy_path).is_file():
         raise PolicyInputError(
             f"--policy: not a file: {policy_path!r}\n"
@@ -1005,7 +1059,15 @@ def load_policy(policy_path: str | None) -> list[str]:
         raise PolicyInputError(
             f"--policy: `allowed_domains` in {policy_path!r} holds non-string "
             f"entries {bad!r}; quote each domain pattern")
-    return list(domains)
+    minimum = data.get("min_generator_version")
+    if "min_generator_version" in data and not (
+            isinstance(minimum, str)
+            and _MIN_GENERATOR_VERSION_RE.fullmatch(minimum)):
+        raise PolicyInputError(
+            f"--policy: `min_generator_version` in {policy_path!r} is "
+            f"{minimum!r}, expected a quoted version \"X.Y.Z\" (for example "
+            f"\"2.9.0\"); remove the key to accept any generator version")
+    return PolicyDocument(list(domains), minimum)
 
 
 # --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---

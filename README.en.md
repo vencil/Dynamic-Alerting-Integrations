@@ -14,7 +14,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 > **Managing 100 tenants: from 5,000 hand-written rules → 237 fixed rules.**
 > Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New-tenant **setup** in minutes (for rule-pack-covered metrics), changes in seconds; migrating an existing complex estate (custom exporters / topology metrics) depends on the metric shape — see the [Migration Guide](docs/migration-guide.en.md).
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-168-red) ![Bilingual](https://img.shields.io/badge/bilingual-98%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-169-red) ![Bilingual](https://img.shields.io/badge/bilingual-98%20pairs-blue)
 
 ---
 
@@ -127,7 +127,7 @@ Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/
 | [`rule-packs/`](rule-packs/) | Rule-pack source YAMLs, one per pack (`rule-pack-<tech>.yaml`) + [ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.en.md) | Add / modify alerting rules |
 | [`policies/`](policies/) | OPA Rego policy samples (naming, routing, threshold-bounds) | Governance rules |
 | [`environments/`](environments/) | CI / local environment profiles | Cross-environment config |
-| [`scripts/`](scripts/) | Shell entrypoints + 213 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
+| [`scripts/`](scripts/) | Shell entrypoints + 214 Python tools under `scripts/tools/{ops,dx,lint}` | Run tools, linting, DX |
 | [`tests/`](tests/) | Python pytest (`test_*.py`), manual shell scripts (`scenarios/`), `e2e/` Playwright, `snapshots/` | Run / add tests |
 | [`docs/`](docs/) | Public documents and their zh/en bilingual pairs. Per-document lookup table: [doc-map](docs/internal/doc-map.en.md) | Design / integration / ops docs |
 | [`operator-manifests/`](operator-manifests/) | `operator_generate.py` output samples (16 PrometheusRule rule-packs) | Reference output for operator mode |

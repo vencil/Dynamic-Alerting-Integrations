@@ -159,6 +159,7 @@ da-tools <command> --help
 |------|------|----------|
 | `generate-routes` | Tenant YAML → Alertmanager route + receiver + inhibit fragment | `--config-dir <dir>` |
 | `patch-config` | ConfigMap 局部更新（含 `--diff` preview） | `<tenant> <metric> <value>` 或 `--diff` |
+| `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 `generate-routes --validate --strict`（ADR-036 §3） | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
 
 ### 檔案系統工具（離線可用）
 
@@ -1812,7 +1813,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。可選填 `min_generator_version: "X.Y.Z"`：執行的 da-tools 比它舊（或讀不到自己的版本）時 exit 2，修法是調高 da-tools 版本；值不是 `X.Y.Z` 形式也是 exit 2（#2901）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，先寫暫存檔再改名，所以 PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**
@@ -1923,6 +1924,45 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 | `5` | 回滾本身失敗：ConfigMap 可能仍是新位元組，需人工處理 |
 | `6` | 寫入後被 Ctrl-C／SIGTERM 中斷，或發生意外錯誤；已回滾（寫入前被中斷則照一般方式結束，什麼都沒寫） |
 | `7` | 無法判定 ConfigMap 現在的內容（讀不到，或新舊皆非），或寫入後另一個寫者改了同一個 key（不回滾）：需人工確認 |
+
+#### generator-service
+
+產生器容器的服務程式（[ADR-036](adr/036-single-parser-effective-config.md) §3、§5、§6，[#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)）。常駐執行，tenant-api 在每次寫入前問它：這個 base commit 加上這些寫入之後，整棵 conf.d 能不能通過 `generate-routes --validate --strict`。只走 Unix socket 上的 HTTP/1.1，不開網路埠。tenant-api chart 把它當成必備的 sidecar 部署，tenant-api 每筆會改變 conf.d 內容的寫入 commit 前都問它，回應碼的對應見 [Tenant API 硬化 §3.9](api/tenant-api-hardening.md#39-每筆寫入先問產生器容器2903)（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）。
+
+```bash
+da-tools generator-service --socket <path> --repo <git repo> --config-subdir conf.d --work-dir <dir> [--policy <FILE>]
+```
+
+**主要參數**
+
+| 參數 | 用途 |
+|------|------|
+| `--socket <path>` | 監聽的 Unix socket（建立時權限 0600；對端程序的 uid 必須與服務相同，否則不回應直接關閉；威脅模型見 `generator_service.py` 模組說明）。路徑上若是舊的 socket 檔就換掉；是其他種類的檔則拒絕啟動（exit 2） |
+| `--repo <dir>` | git repo（唯讀掛載即可）。檔案一律從 git 物件取（`git ls-tree` 加 `git cat-file`），不讀工作目錄、不用 `git archive` |
+| `--config-subdir <path>` | conf.d 在 repo 內的相對路徑（`.` 為 repo 根；絕對路徑或含 `..` 時拒絕啟動，exit 2） |
+| `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹；判定結束（含被終止）後刪除 |
+| `--policy <FILE>` | 部署端 policy 檔（`allowed_domains`、`min_generator_version`），每次判定都重讀 |
+| `--warm-ref <ref>` | 啟動時預熱的 commit（預設 `HEAD`；空字串關閉）。解析不到只記 log 與 metric，不影響可用性 |
+| 其他 | 判定期限上限、保留給呼叫端的時間、子程序的 `RLIMIT_DATA`、快取上限、佇列長度、同時連線數、讀取中與排隊中的 body 總量、單一請求大小與寫入筆數等，預設值見 `--help` |
+
+**端點**
+
+| 端點 | 回應 |
+|------|------|
+| `POST /v1/validate` | body：`base_commit`（完整 hex commit id）、`writes`（`{path, content_b64}` 或 `{path, delete: true}`，路徑相對 conf.d）、`deadline_ms`（呼叫端剩餘時間）。有判定結果時一律 200：`result` 為 `pass`（產生器結束碼 0）、`findings`（非 0）或 `rejected`（只拒收這一筆，`reason` 為 `deadline`、`memory`、`incomplete`、`git_read`、`busy`；`busy` 也用在同時連線或讀取中、排隊中的 body 總量已滿時，此時 body 不會被讀）；另帶 `rc`、`findings`（產生器 `--findings-json` 的文件）、`stderr_tail`、`validated`（`base_commit`、每個寫入檔的 sha256、部署端 policy 檔的 sha256）。請求格式錯誤 400，寫入路徑與 base 樹衝突（上層在 base 樹裡是檔案或 symlink、要寫的路徑是目錄）也是 400。容器無法判定時 503：`VALIDATOR_UNAVAILABLE`（`reason`：`amtool_missing`、`generator_too_old`、`internal_error`）、`POLICY_UNAVAILABLE`（部署端 policy 檔不可用） |
+| `GET /v1/status` | 部署端 policy 檔是否可用（含 sha256、錯誤、`min_generator_version`）、產生器與 da-guard 版本、amtool 是否存在、`ready` |
+| `GET /metrics` | Prometheus 文字格式：快取大小（`pinned` 區分最新 base 樹裡的檔）、最近一次判定的峰值記憶體與子程序記憶體上限、各結果與各拒收原因的計數、佇列長度、版本 |
+
+每次判定在 fork 出的子程序裡做（自成 process group、設 `RLIMIT_DATA`，期限到時整組結束），一次只跑一個，其餘排隊；排隊時間算在期限內。conf.d 檔的解析結果以（檔案內容的 SHA-256, 解析模式）為 key 跨請求快取，同一棵樹只改一個檔時只重新解析那個檔。子程序每解析完一份檔就把結果交回，所以期限到被結束的判定，已完成的解析仍留在快取裡，下一筆接著做。
+
+**預熱**：啟動時（`--warm-ref`）以及收到與目前 base 不同的 `base_commit` 之後，服務在請求之外以同樣的子程序讀一次該 commit 的整棵樹，只為了填快取，不給判定、不跑 amtool；有自己的期限（`--warm-seconds`）。有請求進來時預熱立刻結束、讓請求先跑，已讀完的部分保留。`/metrics` 的 `da_generator_warm_runs_total{outcome}`（`completed`、`preempted`、`deadline`、`failed`）與 `da_generator_cache_base_coverage_ratio`（最新 base 樹的檔有多少比例已在快取裡；狀態端點同樣回報）可看預熱的狀況。
+
+**Exit codes**
+
+| Code | 含義 |
+|------|------|
+| 0 | 收到 SIGTERM／SIGINT 後正常結束 |
+| 2 | caller error：`--repo` 不是 git repo、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd、`--max-inflight-body-bytes` 小於 `--max-body-bytes` |
 
 ---
 
@@ -2460,6 +2500,8 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 | `removed` | 移除 metric key | 失去 alert 覆蓋 |
 | `toggled` | enable ↔ disable | 開啟或關閉 alert |
 | `modified` | 複雜值變更 | 需人工審閱 |
+
+租戶寫了、但 `/metrics` 沒有出列的閾值 key（served-values 的 `unserved`，例如 base 不在任何 defaults carrier 裡；值為 `disable` 等關掉的不算），在表裡的值後面標 `(not served)`，JSON 該筆另帶 `not_served`（沒出列的那一側，`"old"`／`"new"`）。一側出列、另一側寫了但沒出列的 key，開始出列報成 `added`、停止出列報成 `removed`，即使寫的數字沒變——那正是告警開始或停止生效的變更（[#3022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3022)）。
 
 **平台設定（`_` 開頭檔的頂層鍵）**：兩側的 `_` 開頭檔（任何深度）以 `da-guard parse-tree` 讀出的值逐鍵比較，只改註解、縮排、引號或鍵的順序不算變更。值變了的鍵列在「Platform Settings」，依報告能說的分組：渲染結果有差異的列為 Rendered（見下方各區段，不判定哪一筆差異來自這個鍵）；標為完整涵蓋、讀取端就在這個位置讀它（parse-tree 的 `rendered_by`）、而渲染結果沒有差異的，列為「沒有效果」，不影響結束碼（[#2962](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2962)）；部分涵蓋而渲染結果沒有差異的、寫在讀取端不讀的位置的（例如非預設檔裡的 `defaults`、子目錄 `_` 檔裡的 `tenants:`）、兩支渲染程式都不讀的鍵（平台層的 `_custom_alerts`、`instance_tenant_mapping`、`max_metrics_per_tenant`，以及 tenant-api 相關檔裡的 `tenant_orgs`、`groups` 等，這類鍵的非字串值以原文比較）、讀不了的檔、沒有讀取端讀的 `_` 檔（以位元組比較），以及寫在檢查工具不讀的位置的 `_policies`／`domain_policies`，結束碼至少為 1。`_policies` 寫在根目錄的預設檔、`domain_policies` 寫在 `_domain_policy.yaml` 時只列為提示（由 `validate-config` 與產生器的 `--validate --strict` 檢查），不影響結束碼。parse-tree 本身失敗、或它的輸出沒有 `rendered_by`（da-guard 比本工具舊）時結束碼 2。規則見 [ADR-037](adr/037-config-diff-compares-rendered-output.md) 決定 3。
 

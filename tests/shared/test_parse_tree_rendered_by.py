@@ -146,7 +146,9 @@ CASES = [
                           "    container_memory: \"60\"\n"),
      lambda d: _sub(d / NESTED_CARRIER, 'container_memory: "60"', 'container_memory: "61"'), True),
     # another `_` file below the root
-    ("nested-other.defaults", "examples/_defaults-multidb.yaml", "defaults", None,
+    # (#3014 deleted the real file of this name; the row builds its own)
+    ("nested-other.defaults", "examples/_defaults-multidb.yaml", "defaults",
+     _put("examples/_defaults-multidb.yaml", "defaults:\n  mysql_connections: 80\n"),
      lambda d: _sub(d / "examples/_defaults-multidb.yaml", "  mysql_connections: 80\n",
                     "  mysql_connections: 81\n"), True),
     ("nested-other.tenants", "examples/_platform.yaml", "tenants",

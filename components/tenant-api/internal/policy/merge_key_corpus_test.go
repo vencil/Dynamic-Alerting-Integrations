@@ -15,8 +15,8 @@ package policy
 // (`pyyaml_strict_blocks`), is PyYAML's own verdict and is not recorded;
 // refusing a file the generator reads is recorded "unusable", which the
 // Python side ranks `go_refuses` — not go_stricter: the watcher then serves
-// that file's last good content (or none), and with none
-// --policy-unavailable-open lets writes through. Every row parseConfig reads
+// that file's last good content (or none), and with none the writes the
+// policy judges are refused (503). Every row parseConfig reads
 // or refuses differently from PyYAML is recorded, and which way it leans and
 // which catalog entry accepts it is decided once, in Python:
 // tests/shared/test_reader_divergence_catalog.py against

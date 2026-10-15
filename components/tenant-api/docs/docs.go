@@ -787,9 +787,15 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index. Codes TENANT_TREE_UNREADABLE and TENANT_CONFIG_NOT_LOADABLE as on POST /api/v1/tenants/batch (#2939).",
+                        "description": "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index. Codes TENANT_TREE_UNREADABLE and TENANT_CONFIG_NOT_LOADABLE as on POST /api/v1/tenants/batch (#2939). Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results.",
                         "schema": {
                             "$ref": "#/definitions/internal_handler.GroupBatchResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
                         }
                     },
                     "500": {
@@ -799,7 +805,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected).",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -959,9 +965,15 @@ const docTemplate = `{
                         }
                     },
                     "422": {
-                        "description": "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them.",
+                        "description": "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them. Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results.",
                         "schema": {
                             "$ref": "#/definitions/internal_handler.BatchResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
                         }
                     },
                     "500": {
@@ -971,7 +983,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE); or, in direct mode, an operation touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected).",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE); or, in direct mode, an operation touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1198,6 +1210,18 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "422": {
+                        "description": "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass ` + "`" + `generate-routes --validate --strict` + "`" + `; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE",
                         "schema": {
@@ -1211,7 +1235,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written)",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1334,6 +1358,18 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "422": {
+                        "description": "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass ` + "`" + `generate-routes --validate --strict` + "`" + `; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE",
                         "schema": {
@@ -1347,7 +1383,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service Unavailable",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -2072,6 +2108,43 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_vencil_tenant-api_internal_generator.Finding": {
+            "type": "object",
+            "properties": {
+                "blocks": {
+                    "type": "string"
+                },
+                "field": {
+                    "type": "string"
+                },
+                "file": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "policy": {
+                    "type": "string"
+                },
+                "pre_existing": {
+                    "description": "PreExisting: the same finding is reported on the base commit without\nthis write. nil when the base was not judged (see\nFindingsError.ComparedWithBase).",
+                    "type": "boolean"
+                },
+                "related": {
+                    "description": "Related: the finding names a file or a tenant this write changes.",
+                    "type": "boolean"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "tenant": {
+                    "type": "string"
+                }
+            }
+        },
         "github_com_vencil_tenant-api_internal_platform.MergeableState": {
             "type": "string",
             "enum": [
@@ -2485,6 +2558,16 @@ const docTemplate = `{
         "internal_handler.BatchResponse": {
             "type": "object",
             "properties": {
+                "findings": {
+                    "description": "Findings is set on a batch the generator container refused with\nfindings (#2903, ADR-036 §4; every result then has code\nGENERATOR_FINDINGS): its --findings-json entries for the tree the\nbatch would produce, the ones naming a file or tenant of the batch\nfirst and marked related; pre_existing when the base was judged too\n(FindingsComparedWithBase). Unrelated findings only for a caller with\nwrite permission on all tenants; others get UnrelatedFindingsWithheld.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_generator.Finding"
+                    }
+                },
+                "findings_compared_with_base": {
+                    "type": "boolean"
+                },
                 "message": {
                     "description": "v2.6.0: human-readable message",
                     "type": "string"
@@ -2514,6 +2597,9 @@ const docTemplate = `{
                 "task_id": {
                     "description": "async task ID",
                     "type": "string"
+                },
+                "unrelated_findings_withheld": {
+                    "type": "integer"
                 },
                 "warnings": {
                     "description": "Warnings is the batch-level advisory list for PR mode (#1231): the\nper-op notices aggregated by WritePRBatch. Batch-level (not per-result)\nbecause PR-mode Results are frozen at \"included\" BEFORE the write runs;\neach notice self-identifies its tenant (` + "`" + `tenant=\u003cid\u003e` + "`" + ` in the wording).",
@@ -2819,6 +2905,16 @@ const docTemplate = `{
         "internal_handler.GroupBatchResponse": {
             "type": "object",
             "properties": {
+                "findings": {
+                    "description": "Findings, FindingsComparedWithBase, UnrelatedFindingsWithheld: as in\nBatchResponse — a batch the generator container refused with\nfindings (#2903).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/github_com_vencil_tenant-api_internal_generator.Finding"
+                    }
+                },
+                "findings_compared_with_base": {
+                    "type": "boolean"
+                },
                 "group_id": {
                     "type": "string"
                 },
@@ -2850,6 +2946,9 @@ const docTemplate = `{
                 },
                 "task_id": {
                     "type": "string"
+                },
+                "unrelated_findings_withheld": {
+                    "type": "integer"
                 },
                 "warnings": {
                     "description": "Warnings is the batch-level advisory list for PR mode, as in\nBatchResponse.Warnings; each notice names its tenant.",

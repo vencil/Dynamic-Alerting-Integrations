@@ -165,3 +165,163 @@ Call with (list "<values path for the error>" <value>).
 {{- $v | quote -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Generator container (ADR-036 §3, #2902): fixed in-pod paths. Defined once
+here; deployment.yaml and the chart tests read them from the render, never
+from a second copy.
+
+  socketDir   the emptyDir holding generator.sock. Mounted ONLY by the
+              generator (which binds the socket) and tenant-api (which dials
+              it, --generator-socket, #2903): the service's trust boundary is that mount plus
+              the socket's 0600 mode plus a same-uid peer (SO_PEERCRED).
+  workDir     the generator's --work-dir (disk-backed emptyDir).
+  policyDir   where the deployment policy ConfigMap key is projected, at the
+              SAME path in both containers (tenant-api hashes it,
+              --deploy-policy, #2903).
+*/}}
+{{- define "tenant-api.generatorSocketDir" -}}/run/da-generator{{- end }}
+{{- define "tenant-api.generatorSocketPath" -}}{{ include "tenant-api.generatorSocketDir" . }}/generator.sock{{- end }}
+{{- define "tenant-api.generatorWorkDir" -}}/var/lib/da-generator{{- end }}
+{{- define "tenant-api.generatorPolicyDir" -}}/etc/da-generator-policy{{- end }}
+{{- define "tenant-api.generatorPolicyPath" -}}{{ include "tenant-api.generatorPolicyDir" . }}/policy.yaml{{- end }}
+{{- /* The generator's /tmp emptyDir. It holds what one judgement hands
+     amtool (the generated Alertmanager config) and nothing else long-lived;
+     the conf.d tree is in workDir. Exceeding it evicts the pod. */ -}}
+{{- define "tenant-api.generatorTmpSizeLimit" -}}256Mi{{- end }}
+
+{{/*
+A byte limit as tenant-api's binary resolves it (#2902 body-limit coupling).
+A number from values is that number. A string is read the way
+MaxBodyBytesFromEnv / MaxBatchBodyBytesFromEnv read the env var:
+strings.TrimSpace, then strconv.ParseInt(v, 10, 64) — DECIMAL, so an optional
+`+` and leading zeros are accepted and `010` is ten, never octal (sprig's
+int64 would read it as octal; the zeros are stripped first). Not positive,
+not parseable, or past int64 → the binary's default, as the binary does.
+Call with (list <value> <binary default>). Prints an integer.
+*/}}
+{{- define "tenant-api.effectiveBytes" -}}
+{{- $v := index . 0 -}}
+{{- $default := index . 1 | int64 -}}
+{{- $n := 0 | int64 -}}
+{{- if or (kindIs "float64" $v) (kindIs "int" $v) (kindIs "int64" $v) -}}
+{{- $n = int64 $v -}}
+{{- else if and (kindIs "string" $v) (regexMatch "^[+]?[0-9]+$" (trim $v)) -}}
+{{- $digits := regexReplaceAll "^0+" (trimPrefix "+" (trim $v)) "" -}}
+{{- /* Past int64, Go's ParseInt fails (→ default) and so does sprig's
+     int64, which then yields 0 (→ default below): pinned by the
+     too-long / past-int64 cases in test_generator_container.py. */ -}}
+{{- if $digits -}}
+{{- $n = int64 $digits -}}
+{{- end -}}
+{{- end -}}
+{{- if gt $n 0 -}}{{ $n }}{{- else -}}{{ $default }}{{- end -}}
+{{- end }}
+
+{{/*
+Generator body limits derived from tenant-api's (#2901 → #2902).
+
+tenant-api sends the generator the files a write produces, base64-encoded in
+a JSON envelope. base64 turns n bytes into 4·ceil(n/3), so a request tenant-api
+accepted at its own cap can arrive at the generator about 4/3 as large; past
+the generator's --max-body-bytes that write is answered 413, not judged.
+
+  needed = 4·ceil(max(TA_MAX_BODY_BYTES, TA_MAX_BATCH_BODY_BYTES) / 3)
+           + generatorJsonEnvelopeBytes
+
+When `needed` exceeds the generator's own default, both --max-body-bytes and
+--max-inflight-body-bytes are passed as `needed` (the service refuses to start
+with an in-flight budget below the largest body). Otherwise neither is passed
+and the generator keeps its defaults. Prints the args, one per line, or
+nothing.
+
+⛔ The two binary defaults below are copies, pinned by
+tests/helm/test_generator_container.py against
+components/tenant-api/internal/handler/middleware.go and
+scripts/tools/ops/generator_service.py. Edit one side and the test goes red.
+*/}}
+{{- define "tenant-api.taDefaultMaxBodyBytes" -}}1048576{{- end }}
+{{- define "tenant-api.taDefaultMaxBatchBodyBytes" -}}262144{{- end }}
+{{- define "tenant-api.generatorDefaultMaxBodyBytes" -}}4194304{{- end }}
+{{- define "tenant-api.generatorDefaultMaxInflightBodyBytes" -}}4194304{{- end }}
+{{- /*
+JSON envelope allowance, the ONE place it is written: what wraps the base64
+content in a validate request — the base commit, the deadline, and per write
+a path with its JSON keys and quoting (on the order of 100 bytes), so 64 KiB
+is room for several hundred writes. Erring large only lets a slightly bigger
+body be read; erring small turns a write tenant-api accepted into a 413.
+⚠️ The derivation sizes the generator for what tenant-api RECEIVED. A write
+whose resulting files are larger than its request (a small patch merged into
+a large existing file) is not covered by it; the generator's own default is
+the floor for that case, and a batch's resulting files can add up to more
+than this derivation: tenant-api then refuses the write with 422
+GENERATOR_REJECTED, reason too_large ("split the batch"; #2903).
+*/ -}}
+{{- define "tenant-api.generatorJsonEnvelopeBytes" -}}65536{{- end }}
+
+{{- define "tenant-api.generatorBodyArgs" -}}
+{{- $srv := .Values.tenantApi.server | default dict -}}
+{{- $body := include "tenant-api.effectiveBytes" (list $srv.maxBodyBytes (include "tenant-api.taDefaultMaxBodyBytes" .)) | int64 -}}
+{{- $batch := include "tenant-api.effectiveBytes" (list $srv.maxBatchBodyBytes (include "tenant-api.taDefaultMaxBatchBodyBytes" .)) | int64 -}}
+{{- $largest := max $body $batch | int64 -}}
+{{- $needed := add (mul 4 (div (add $largest 2) 3)) (include "tenant-api.generatorJsonEnvelopeBytes" . | int64) | int64 -}}
+{{- if gt $needed (include "tenant-api.generatorDefaultMaxBodyBytes" . | int64) }}
+- --max-body-bytes={{ $needed }}
+{{- if gt $needed (include "tenant-api.generatorDefaultMaxInflightBodyBytes" . | int64) }}
+- --max-inflight-body-bytes={{ $needed }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Generator guard (#2902). Renders nothing; fails the render on a
+configuration the generator container cannot run in. The container is
+required since #2903, so this always applies.
+*/}}
+{{- define "tenant-api.generatorGuard" -}}
+{{- $g := .Values.generator -}}
+{{- /* ADR-036 §3: git refuses a repository another uid owns ("dubious
+     ownership"), so tenant-api and the generator must run as ONE uid. Both
+     inherit it from the pod; without a pod-level runAsUser each container
+     runs as its image's USER (da-tools: 10001), and the two differ. */ -}}
+{{- if not (.Values.podSecurityContext | default dict).runAsUser -}}
+{{- fail "the generator container (required, #2903) needs podSecurityContext.runAsUser: tenant-api and the generator container must run as the same uid (git refuses a repository another uid owns, ADR-036 §3), and without a pod-level uid each runs as its own image's user (#2902)." -}}
+{{- end -}}
+{{- /* ADR-036 §3: the generator reads only git objects; "git 為必要". An
+     emptyDir conf.d with no gitRepoUrl never holds a repository, so the
+     container could only crash-loop (and keep the pod out of Ready). */ -}}
+{{- if and (not .Values.gitRepoUrl) (not (has .Values.confDir.type (list "pvc" "hostPath"))) -}}
+{{- fail "the generator container (required, #2903) needs a git repository in conf.d: set gitRepoUrl, or confDir.type=pvc / hostPath holding an existing repository. An emptyDir conf.d without gitRepoUrl is never a repository, and the generator reads only git objects (ADR-036 §3, #2902)." -}}
+{{- end -}}
+{{- /* ADR-036 §3: the container's request equals its limit. */ -}}
+{{- $req := ($g.resources | default dict).requests | default dict -}}
+{{- $lim := ($g.resources | default dict).limits | default dict -}}
+{{- if or (not $req.cpu) (not $req.memory) (not $lim.cpu) (not $lim.memory) -}}
+{{- fail "generator.resources must set requests and limits for both cpu and memory (ADR-036 §3: request = limit, 512Mi / 1 CPU by default) (#2902)." -}}
+{{- end -}}
+{{- if or (ne (toString $req.cpu) (toString $lim.cpu)) (ne (toString $req.memory) (toString $lim.memory)) -}}
+{{- fail (printf "generator.resources.requests must equal generator.resources.limits (ADR-036 §3: request = limit), written the same way; got requests cpu=%v memory=%v, limits cpu=%v memory=%v (#2902)." $req.cpu $req.memory $lim.cpu $lim.memory) -}}
+{{- end -}}
+{{- if and $g.policy.existingConfigMap (not $g.policy.key) -}}
+{{- fail "generator.policy.existingConfigMap is set but generator.policy.key is empty: name the ConfigMap key that holds the deployment policy file (#2902)." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+The generator container's exec probe (#2902): GET /v1/status over the Unix
+socket with the image's own python3, passing on a 200. Shared by the startup,
+readiness and liveness probes so the three cannot drift.
+*/}}
+{{- define "tenant-api.generatorProbe" -}}
+exec:
+  command:
+    - python3
+    - -c
+    - |
+      import socket, sys
+      s = socket.socket(socket.AF_UNIX)
+      s.settimeout(4)
+      s.connect("{{ include "tenant-api.generatorSocketPath" . }}")
+      s.sendall(b"GET /v1/status HTTP/1.1\r\nHost: probe\r\n\r\n")
+      sys.exit(0 if s.recv(64).startswith(b"HTTP/1.1 200 ") else 1)
+{{- end }}

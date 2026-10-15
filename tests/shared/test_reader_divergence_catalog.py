@@ -17,7 +17,7 @@ tests/shared/merge_key_go_verdicts.json (per reader, keyed by corpus row
   neither refuses it nor reports a blocking problem is looser;
 - classify(): tenant-api refusing a file the generator reads is `go_refuses`,
   not go_stricter — the watcher then serves that file's last good content
-  (or none), and with none --policy-unavailable-open lets writes through;
+  (or none), and with none the writes the policy judges are refused (503);
 - each entry pins its exact row count and an example row.
 
 Routing layer. tests/shared/routing_policy_parity_matrix.json carries, per
@@ -291,8 +291,8 @@ def classify(reader: str, row: dict, go: object) -> str:
     tenant-api refusing ("unusable") a file the generator reads — and does
     not block on under --strict — is `go_refuses`, not go_stricter: the
     watcher keeps serving that file's last good content, which may be a
-    stale policy, and with none --policy-unavailable-open (if set) lets the
-    writes the policy judges through with no policy at all. Everything else
+    stale policy, and with none the writes the policy judges are refused
+    (503; #2903 removed the escape hatch). Everything else
     is direction(). Equal verdicts (both blocking included) raise."""
     if reader == "tenant-api" and go == "unusable":
         if effective_pyyaml(row) == "unusable":
@@ -344,7 +344,7 @@ def _verdict_direction(py: str, go: str, ok: str = "ok") -> str | None:
     """One tenant_api verdict (put or batch): None when equal. tenant-api
     refusing for an unusable policy file (503 POLICY_UNAVAILABLE) where the
     generator accepts is go_refuses, as for the policy layer: it hangs on
-    tenant-api's last good policy and on --policy-unavailable-open."""
+    tenant-api's last good policy (#2903 removed the escape hatch)."""
     if py == go:
         return None
     if go == "503" and py == ok:

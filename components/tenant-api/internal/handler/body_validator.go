@@ -434,3 +434,19 @@ func validateFilterMap(filters map[string]string, fieldPrefix string) []Violatio
 
 // WriteValidationErrors and the canonical error envelope live in
 // errors.go (PR-9/11 unification).
+
+// flatReceiverTypeViolations refuses a PUT body whose tenant block writes
+// the flat `_routing_receiver_type` (#2903): nothing reads it — the
+// receiver type is `_routing.receiver.type` — and the generator refuses a
+// tree that carries it. A batch patch is refused for it by validatePatchMap.
+// A body that does not parse is left to the checks that own it.
+func flatReceiverTypeViolations(body []byte, tenantID string) []Violation {
+	const key = "_routing_receiver_type"
+	if _, has := extractTenantBlock(body, tenantID)[key]; !has {
+		return nil
+	}
+	return []Violation{{
+		Field:  fmt.Sprintf("tenants.%s.%s", tenantID, key),
+		Reason: "not a key the route generator reads (" + cfg.UnknownRoutingKeyHint(key, false) + "); it has no effect",
+	}}
+}

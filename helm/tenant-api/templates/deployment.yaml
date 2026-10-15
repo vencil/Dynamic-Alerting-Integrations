@@ -8,6 +8,7 @@
   (leader-election) — ADR-023 Deferred option A3, not a replicaCount bump.
 */ -}}
 {{- include "tenant-api.writeBackGuard" . }}
+{{- include "tenant-api.generatorGuard" . }}
 {{- if gt (int .Values.replicaCount) 1 }}
 {{- fail (printf "ADR-023 single-writer invariant violated: tenant-api replicaCount=%d but MUST be 1. The write plane has no cross-pod coordination; multi-replica writes corrupt the shared git tree. To scale writes, implement a K8s Lease (ADR-023 Deferred option A3) — do not raise replicaCount." (int .Values.replicaCount)) }}
 {{- end }}
@@ -61,8 +62,12 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
       # ── Init: clone git repository (skipped if gitRepoUrl is empty) ──────────
-      {{- if .Values.gitRepoUrl }}
+      {{- /* #2903: the generator container is required, so gc.auto=0 is
+           always set — by git-clone, or by git-gc-off when there is no
+           gitRepoUrl. One of the two always runs. */}}
+      {{- $gcOffInit := not .Values.gitRepoUrl }}
       initContainers:
+      {{- if .Values.gitRepoUrl }}
         - name: git-clone
           image: alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f
           imagePullPolicy: IfNotPresent
@@ -80,6 +85,13 @@ spec:
               else
                 git clone "$GIT_REPO_URL" /conf.d
               fi
+              # ADR-036 §3 (#2902): the generator reads git objects of this
+              # repository while tenant-api commits to it; automatic gc could
+              # prune or repack them under its reads. The clone/pull status is
+              # kept: a failed pull must still fail this init container.
+              status=$?
+              [ "$status" -eq 0 ] || exit "$status"
+              git -C /conf.d config gc.auto 0
           env:
             - name: GIT_REPO_URL
               valueFrom:
@@ -87,6 +99,36 @@ spec:
                   name: {{ include "tenant-api.name" . }}-config
                   key: GIT_REPO_URL
             {{- include "tenant-api.gitCredentialEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: conf-dir
+              mountPath: /conf.d
+          resources:
+            {{- toYaml .Values.resources.gitClone | nindent 12 }}
+      {{- end }}
+      {{- if $gcOffInit }}
+        # ADR-036 §3 (#2902): gc.auto=0 on a repository that is already in a
+        # pvc / hostPath conf.d (no gitRepoUrl, so git-clone above does not run
+        # and cannot set it). No repository yet = nothing to set: skipped, not
+        # failed. Same pinned alpine/git image as git-clone — tools/v2.9.0's
+        # da-tools image has no git, and a da-tools container running git is
+        # an entry point check_image_pin_capability.py cannot verify.
+        - name: git-gc-off
+          image: alpine/git:v2.54.0@sha256:832b1cd1a271509f3d5272a1a62d4cb2ab1a53426ebde1f6c2cb7349f907dc6f
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - sh
+            - -c
+            - |
+              if [ -e /conf.d/.git ]; then
+                git -C /conf.d config gc.auto 0
+              else
+                echo "git-gc-off: /conf.d holds no git repository; gc.auto not set (the generator container needs one, ADR-036 §3)"
+              fi
           volumeMounts:
             - name: conf-dir
               mountPath: /conf.d
@@ -166,11 +208,14 @@ spec:
             # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
             - --rbac-org-scope-enforce
             {{- end }}
-            {{- if .Values.policy.unavailableOpen }}
-            # Hub #2486 Q7-2 escape hatch: direct-mode writes the domain policy
-            # judges go through while the policy file is unusable (logged,
-            # counted in tenant_api_policy_unavailable_open_total).
-            - --policy-unavailable-open
+            # ADR-036 §3–§5 (#2903): every content-changing write asks the
+            # generator container on this socket before it commits; with a
+            # deployment policy file, tenant-api reads the same file (same
+            # path in both containers) to check that the generator judged
+            # with it.
+            - --generator-socket={{ include "tenant-api.generatorSocketPath" . }}
+            {{- if .Values.generator.policy.existingConfigMap }}
+            - --deploy-policy={{ include "tenant-api.generatorPolicyPath" . }}
             {{- end }}
             {{- if .Values.identity.claimHeaders }}
             # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
@@ -339,6 +384,19 @@ spec:
             - name: human-sock
               mountPath: {{ dir .Values.humanSocket.path }}
             {{- end }}
+            # ADR-036 §3 (#2902): the generator's socket directory. tenant-api
+            # only dials the socket (--generator-socket, #2903), so read-only.
+            - name: generator-sock
+              mountPath: {{ include "tenant-api.generatorSocketDir" . }}
+              readOnly: true
+            {{- if .Values.generator.policy.existingConfigMap }}
+            # ADR-036 §4/§5: the same deployment policy file the generator
+            # judges with, at the same path; tenant-api hashes it
+            # (--deploy-policy, #2903).
+            - name: generator-policy
+              mountPath: {{ include "tenant-api.generatorPolicyDir" . }}
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.tenantApi | nindent 12 }}
           readinessProbe:
@@ -354,6 +412,89 @@ spec:
               port: 8080
             initialDelaySeconds: 10
             periodSeconds: 15
+            failureThreshold: 3
+
+        # ── Sidecar: generator (ADR-036 §3, #2902; required since #2903) ─────
+        # `da-tools generator-service` judges conf.d writes with
+        # generate-routes --validate --strict over a Unix socket. No network
+        # port. Runs as the pod's uid (no runAsUser here): git refuses a
+        # repository another uid owns, so it must equal tenant-api's.
+        - name: generator
+          image: "{{ .Values.generator.image.repository }}:{{ .Values.generator.image.tag }}{{ with .Values.generator.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.generator.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # The image's ENTRYPOINT dispatches `da-tools <subcommand>`.
+          args:
+            - generator-service
+            - --socket={{ include "tenant-api.generatorSocketPath" . }}
+            # tenant-api runs with --config-dir=/conf.d and --git-dir=/conf.d:
+            # conf.d IS the repository root, so the config subdirectory inside
+            # the repository is "" (the root). Change tenant-api's two flags
+            # and these two must follow (pinned by
+            # tests/helm/test_generator_container.py).
+            - --repo=/conf.d
+            - --config-subdir=
+            - --work-dir={{ include "tenant-api.generatorWorkDir" . }}
+            {{- if .Values.generator.policy.existingConfigMap }}
+            - --policy={{ include "tenant-api.generatorPolicyPath" . }}
+            {{- end }}
+            {{- include "tenant-api.generatorBodyArgs" . | nindent 12 }}
+          volumeMounts:
+            - name: generator-sock
+              mountPath: {{ include "tenant-api.generatorSocketDir" . }}
+            - name: conf-dir
+              mountPath: /conf.d
+              readOnly: true
+            - name: generator-work
+              mountPath: {{ include "tenant-api.generatorWorkDir" . }}
+            # Python's tempfile (the amtool check writes its config there)
+            # needs a writable /tmp; the root filesystem is read-only. A volume
+            # of its own, not a subPath of generator-work: kubelet creates a
+            # missing subPath directory itself, possibly root-owned and not
+            # writable by the pod's uid.
+            - name: generator-tmp
+              mountPath: /tmp
+            {{- if .Values.generator.policy.existingConfigMap }}
+            - name: generator-policy
+              mountPath: {{ include "tenant-api.generatorPolicyDir" . }}
+              readOnly: true
+            {{- end }}
+            # The pod mounts its ServiceAccount token into every container
+            # (automountServiceAccountToken above). This container parses
+            # content API users write and needs no Kubernetes API access, so
+            # an empty directory shadows the token path: code execution here
+            # does not become the tenant-api ServiceAccount.
+            - name: generator-no-sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          resources:
+            {{- toYaml .Values.generator.resources | nindent 12 }}
+          # The socket has no HTTP port, so the probes run a short python3
+          # snippet (the image's interpreter; nothing added to the image) that
+          # asks GET /v1/status over the socket and passes on a 200. It runs as
+          # the container's uid, which the service's SO_PEERCRED check admits.
+          # ⚠️ 200 means the service is up and answering; it does NOT require
+          # status.ready (policy usable, amtool present): an unusable policy
+          # must reject writes with 503 (ADR-036 §5), not take the whole pod —
+          # reads included — out of the Service.
+          startupProbe:
+            {{- include "tenant-api.generatorProbe" . | nindent 12 }}
+            periodSeconds: 2
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            {{- include "tenant-api.generatorProbe" . | nindent 12 }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            {{- include "tenant-api.generatorProbe" . | nindent 12 }}
+            periodSeconds: 20
+            timeoutSeconds: 5
             failureThreshold: 3
 
         # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
@@ -466,6 +607,41 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- end }}
+
+        # ADR-036 §3 (#2902): the generator's socket directory. Memory-backed
+        # and tiny (one socket inode). Mounted ONLY by the generator and
+        # tenant-api — that mount is part of the service's trust boundary,
+        # pinned by tests/helm/test_generator_container.py.
+        - name: generator-sock
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # The generator's --work-dir: the tree being judged and
+        # the generated config. DISK, not Memory — a tmpfs counts against the
+        # container's memory limit, which ADR-036 §3 budgets for processes.
+        - name: generator-work
+          emptyDir:
+            sizeLimit: {{ .Values.generator.workDir.sizeLimit }}
+        # The generator's /tmp (disk-backed for the same reason).
+        - name: generator-tmp
+          emptyDir:
+            sizeLimit: {{ include "tenant-api.generatorTmpSizeLimit" . }}
+        - name: generator-no-sa-token
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- if .Values.generator.policy.existingConfigMap }}
+        # ADR-036 §5: the deployment policy file, from a ConfigMap the operator
+        # owns (the chart ships no policy content). Not optional: a missing
+        # ConfigMap keeps the pod from starting rather than judging without
+        # the allowlist.
+        - name: generator-policy
+          configMap:
+            name: {{ .Values.generator.policy.existingConfigMap }}
+            items:
+              - key: {{ .Values.generator.policy.key }}
+                path: policy.yaml
         {{- end }}
 
         {{- if .Values.federation.enabled }}

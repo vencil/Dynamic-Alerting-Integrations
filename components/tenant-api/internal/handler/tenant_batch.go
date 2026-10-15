@@ -14,6 +14,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -97,6 +98,16 @@ type BatchResponse struct {
 	// because PR-mode Results are frozen at "included" BEFORE the write runs;
 	// each notice self-identifies its tenant (`tenant=<id>` in the wording).
 	Warnings []string `json:"warnings,omitempty"`
+	// Findings is set on a batch the generator container refused with
+	// findings (#2903, ADR-036 §4; every result then has code
+	// GENERATOR_FINDINGS): its --findings-json entries for the tree the
+	// batch would produce, the ones naming a file or tenant of the batch
+	// first and marked related; pre_existing when the base was judged too
+	// (FindingsComparedWithBase). Unrelated findings only for a caller with
+	// write permission on all tenants; others get UnrelatedFindingsWithheld.
+	Findings                  []generator.Finding `json:"findings,omitempty"`
+	FindingsComparedWithBase  *bool               `json:"findings_compared_with_base,omitempty"`
+	UnrelatedFindingsWithheld int                 `json:"unrelated_findings_withheld,omitempty"`
 }
 
 // BatchTenants handles POST /api/v1/tenants/batch
@@ -134,9 +145,10 @@ type BatchResponse struct {
 // @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (An operation refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     409  {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413  {object} ErrorResponse
-// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them."
+// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. POLICY_VIOLATION, FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them. Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results."
+// @Failure     429  {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500  {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them"
-// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE); or, in direct mode, an operation touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected)."
+// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE); or, in direct mode, an operation touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -212,6 +224,9 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// Synchronous mode (default). #2900: all or nothing.
 		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, d.Policy, batchResultsAnswer)
 		switch {
+		case run.Err != nil && generatorRejectsBatch(run.Err):
+			// #2903: refused by the generator — a rejected batch, as any.
+			writeJSON(rw, http.StatusUnprocessableEntity, rejectedByGenerator(d, r, taskID, run.Results, run.Err))
 		case run.Err != nil:
 			writeBatchFailure(rw, r, d, run.Err)
 		case run.Rejected:
@@ -458,6 +473,19 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				}
 			}
 			return rejectedBatchResponse("", batchResults), http.StatusUnprocessableEntity, true
+		}
+		// #2903: the generator container refused the batch as a whole — a
+		// rejected batch (422, every op carrying the refusal), as above.
+		if generatorRejectsBatch(err) {
+			for i, s := range skipped {
+				id := batchOps[i].TenantID
+				if *s.absent {
+					batchResults[s.result] = BatchResult{TenantID: id, Status: "skipped", Message: msgTenantAbsent}
+					continue
+				}
+				batchResults[s.result], _ = generatorOpResult(id, err)
+			}
+			return rejectedByGenerator(d, r, "", batchResults, err), http.StatusUnprocessableEntity, true
 		}
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the single-write path).
@@ -735,6 +763,14 @@ func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, 
 		}
 		return directBatchRun{Results: results, Rejected: true}
 	case err != nil:
+		// #2903: the generator refused the batch as a whole — each op's
+		// result names the findings about its own tenant.
+		if _, ok := generatorOpResult(ops[0].TenantID, err); ok {
+			for i, op := range ops {
+				results[i], _ = generatorOpResult(op.TenantID, err)
+			}
+			return directBatchRun{Results: results, Err: err}
+		}
 		// The batch failed as a whole: every op gets the same verdict
 		// (rendered and logged once).
 		first := batchErrorResult(ops[0].TenantID, err, treeVisible)
@@ -796,6 +832,10 @@ func applyPatch(ctx context.Context, w *gitops.Writer, _ string, op BatchOperati
 // (treePathsVisible) decides whether a TENANT_TREE_UNREADABLE result names
 // the entries; the log always does.
 func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult {
+	// #2903: the generator refused the batch as a whole.
+	if res, ok := generatorOpResult(tenantID, err); ok {
+		return res
+	}
 	msg := err.Error()
 	code := ""
 	var notLoadable *tenantFileNotLoadableError
@@ -947,6 +987,10 @@ var errBatchRejectedTask = errors.New("batch rejected: an operation was refused,
 // refused.
 func batchTaskFunc(d *Deps, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal) async.TaskFunc {
 	return func(ctx context.Context) ([]async.TaskResult, error) {
+		// #2903 (ADR-036 §3): the task's own deadline, from when it starts —
+		// the generator is given what is left of it, as a request's.
+		ctx, cancel := context.WithTimeout(ctx, d.WriteTimeout())
+		defer cancel()
 		run := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy, batchResultsStored)
 		return toTaskResults(run.Results), batchTaskError(run)
 	}
