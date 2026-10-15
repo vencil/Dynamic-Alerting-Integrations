@@ -141,6 +141,118 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  cpu_critical: 90\n"},
 		finding: findingkind.FindingRootDefaultsCriticalKey,
 	},
+	// #2031: one series two keys share fails the whole tree's scrape,
+	// whatever the scope; the tenant is outside it.
+	"/metrics not gatherable": {
+		files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+			"team/tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70:critical\"\n" +
+				"    mysql_connections_critical: 95\n",
+			"empty/": "",
+		},
+		scope:   "empty",
+		finding: findingkind.FindingMetricsNotGatherable,
+	},
+}
+
+// zeroTenantKindClass sorts every registered finding kind: kindNeedsTenant
+// when every finding of it judges a tenant in scope (none can come out of a
+// scope with no tenant), kindTreeLevel when some finding of it is judged
+// without one. TestGuard_EveryFindingKindIsClassifiedForZeroTenants holds
+// it to findingkind.All() and holds every kindTreeLevel kind to a row of
+// zeroTenantPlatformCases / zeroTenantTreeLevelCases — so a new kind is red
+// until someone says which it is, and a tree-level one until a zero-tenant
+// run is shown to report it.
+const (
+	kindNeedsTenant = "needs a tenant"
+	kindTreeLevel   = "tree level"
+)
+
+var zeroTenantKindClass = map[string]string{
+	// Judged per tenant in EffectiveConfigs / RoutingByTenant / the
+	// per-tenant maps buildCheckInput fills from scoped.Tenants.
+	"missing_required":              kindNeedsTenant,
+	"redundant_override":            kindNeedsTenant,
+	"unknown_receiver_type":         kindNeedsTenant,
+	"missing_receiver_field":        kindNeedsTenant,
+	"conflicting_receiver_field":    kindNeedsTenant,
+	"invalid_receiver_field":        kindNeedsTenant,
+	"empty_override_matcher":        kindNeedsTenant,
+	"conflicting_override_matcher":  kindNeedsTenant,
+	"duplicate_override_matcher":    kindNeedsTenant,
+	"redundant_override_receiver":   kindNeedsTenant,
+	"invalid_route_entry":           kindNeedsTenant,
+	"routing_value_not_string":      kindNeedsTenant,
+	"domain_policy_violation":       kindNeedsTenant,
+	"critical_escalation_missing":   kindNeedsTenant,
+	"critical_escalation_leak":      kindNeedsTenant,
+	"unknown_routing_profile":       kindNeedsTenant,
+	"routing_not_mapping":           kindNeedsTenant,
+	"invalid_tenant_id":             kindNeedsTenant,
+	"cardinality_exceeded":          kindNeedsTenant,
+	"cardinality_warning":           kindNeedsTenant,
+	"root_default_null_undeclared":  kindNeedsTenant,
+	"subtree_default_undeliverable": kindNeedsTenant,
+	"subtree_default_reserved_key":  kindNeedsTenant,
+	// config.ScopedTenants.ScheduleNulls is collected along the in-scope
+	// tenants' defaults chains: a subtree defaults file no tenant inherits
+	// yields none, in the exporter's input, not in the guard.
+	"schedule_null_value":           kindNeedsTenant,
+	"value_not_served":              kindNeedsTenant,
+	"custom_alert_duplicate_series": kindNeedsTenant,
+
+	// PlatformProblems (whole tree at --config-dir).
+	"domain_policy_unusable":           kindTreeLevel,
+	"routing_profiles_unusable":        kindTreeLevel,
+	"routing_defaults_routes_ignored":  kindTreeLevel,
+	"routing_in_unread_location":       kindTreeLevel,
+	"routing_key_ignored":              kindTreeLevel, // also per tenant
+	"routing_defaults_not_mapping":     kindTreeLevel,
+	"routing_enforced_below_root":      kindTreeLevel,
+	"routing_defaults_null_below_root": kindTreeLevel,
+	"routing_profile_duplicate":        kindTreeLevel,
+	"duplicate_tenant":                 kindTreeLevel,
+	"domain_policy_out_of_scope":       kindTreeLevel,
+	// The single-shape `_routing_enforced` route (also per tenant).
+	"routing_group_by_invalid": kindTreeLevel,
+	// The defaults carriers (DefaultsFiles).
+	"root_defaults_unwrapped":    kindTreeLevel,
+	"defaults_toplevel_ignored":  kindTreeLevel,
+	"root_defaults_critical_key": kindTreeLevel,
+	// The whole tree's /metrics.
+	"metrics_not_gatherable": kindTreeLevel,
+}
+
+func TestGuard_EveryFindingKindIsClassifiedForZeroTenants(t *testing.T) {
+	t.Parallel()
+	covered := map[string]bool{}
+	for _, table := range []map[string]zeroTenantPlatformCase{zeroTenantPlatformCases, zeroTenantTreeLevelCases} {
+		for name, tc := range table {
+			covered[tc.finding.String()] = true
+			if zeroTenantKindClass[tc.finding.String()] != kindTreeLevel {
+				t.Errorf("row %q reports %q, which zeroTenantKindClass does not call %q", name, tc.finding, kindTreeLevel)
+			}
+		}
+	}
+	registered := map[string]bool{}
+	for _, e := range findingkind.All() {
+		name := e.Kind.String()
+		registered[name] = true
+		switch zeroTenantKindClass[name] {
+		case kindNeedsTenant:
+		case kindTreeLevel:
+			if !covered[name] {
+				t.Errorf("%q is %s but no zero-tenant row reports it: add one to zeroTenantTreeLevelCases", name, kindTreeLevel)
+			}
+		default:
+			t.Errorf("finding kind %q is not in zeroTenantKindClass: say whether a scope with no tenant can report it", name)
+		}
+	}
+	for name := range zeroTenantKindClass {
+		if !registered[name] {
+			t.Errorf("zeroTenantKindClass names %q, which findingkind does not register", name)
+		}
+	}
 }
 
 // scopeArgs is the --scope of tc, if any.

@@ -416,6 +416,21 @@ class TestProfilesCheck:
             assert any(detail.startswith("_profiles.yaml: profiles.bad-profile._routing is not rendered")
                        for detail in result["details"]), result
 
+    def test_routing_in_profile_fails_in_a_tree_with_no_tenant(self):
+        """#2991: da-guard runs every check with no tenant in the tree, so the
+        profile's `_routing` is named and the row FAILs there too (it was an
+        empty, vacuously safe da-guard report, and the row did not see it)."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, {
+                "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connections: 80\n"
+                                  "    _routing: {receiver: {type: webhook}}\n",
+                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+            })
+            result = vc.check_profiles(d)
+            assert result["status"] == vc.FAIL, result
+            assert any(detail.startswith("_profiles.yaml: profiles.bad-profile._routing is not rendered")
+                       for detail in result["details"]), result
+
     def test_severity_dedup_in_another_root_file_and_unbound_profile_fails(self):
         """#2914: every profile source the exporter reads, not only
         `_profiles.yaml`, and a profile no tenant elects."""
