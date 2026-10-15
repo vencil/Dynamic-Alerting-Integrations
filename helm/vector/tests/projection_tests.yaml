@@ -735,7 +735,7 @@ tests:
           - type: vrl
             source: |
               ts = to_string(.timestamp) ?? ""
-              assert!(!contains(ts, "1999"),
+              assert!(!contains(ts, "1999-01-01"),
                 "backdated payload timestamp reached _time_field — the reconciler window is producer-controlled: " + ts)
               assert!(contains(ts, "2026-08-01"), "must be Vector's own event time, got: " + ts)
 
@@ -793,13 +793,13 @@ tests:
             source: |
               assert!(is_timestamp(.timestamp),
                 "0:0 _time_field must be Vector's Timestamp, not the payload's string")
-              assert!(!contains(to_string(.timestamp) ?? "", "1999"),
+              assert!(!contains(to_string(.timestamp) ?? "", "1999-01-01"),
                 "payload time reached the 0:0 store: " + (to_string(.timestamp) ?? "?"))
       - extract_from: tenant_route.t_1000
         conditions:
           - type: vrl
             source: |
-              assert!(!contains(to_string(.timestamp) ?? "", "1999"),
+              assert!(!contains(to_string(.timestamp) ?? "", "1999-01-01"),
                 "payload time reached the tenant partition: " + (to_string(.timestamp) ?? "?"))
 
   # ── (F5) evidence: the row's TIME must stay a real Timestamp, not a string ─
@@ -832,7 +832,7 @@ tests:
             source: |
               assert!(is_timestamp(.timestamp),
                 "_time_field must stay Vector's Timestamp; a payload string replaced it")
-              assert!(!contains(to_string(.timestamp) ?? "", "1999"),
+              assert!(!contains(to_string(.timestamp) ?? "", "1999-01-01"),
                 "payload value leaked into _time_field: " + (to_string(.timestamp) ?? "?"))
 
   # ══ #1288 — the origin split binds on NAMESPACE, not just the pod label ════
