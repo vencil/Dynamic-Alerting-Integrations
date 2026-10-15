@@ -263,26 +263,26 @@ def _has_nested_repeat(pattern: str) -> bool:
         return False
     repeats = (parser.MAX_REPEAT, parser.MIN_REPEAT, parser.POSSESSIVE_REPEAT)
 
-    def walk(items, under_repeat):
+    def _repeat_in(items, under_repeat):
         for op, av in items:
             if op in repeats:
                 lo, hi, sub = av
                 if hi != lo and under_repeat:  # a fixed count (`a{2}`) cannot backtrack
                     return True
-                if walk(sub, under_repeat or hi > 1):
+                if _repeat_in(sub, under_repeat or hi > 1):
                     return True
             elif op is parser.SUBPATTERN:
-                if walk(av[-1], under_repeat):
+                if _repeat_in(av[-1], under_repeat):
                     return True
             elif op is parser.BRANCH:
-                if any(walk(alt, under_repeat) for alt in av[1]):
+                if any(_repeat_in(alt, under_repeat) for alt in av[1]):
                     return True
             elif op in (parser.ASSERT, parser.ASSERT_NOT):
-                if walk(av[1], under_repeat):
+                if _repeat_in(av[1], under_repeat):
                     return True
         return False
 
-    return walk(tree, False)
+    return _repeat_in(tree, False)
 
 
 def _regex_refusal(pattern: str) -> Optional[str]:
