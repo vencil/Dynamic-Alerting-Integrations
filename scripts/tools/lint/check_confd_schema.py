@@ -264,6 +264,11 @@ def _explain(exc, validator) -> str:
     the original message.
     """
     err = exc
+    if (err.validator == "pattern" and "propertyNames" in err.schema_path
+            and isinstance(err.schema, dict) and err.schema.get("patternErrorMessage")):
+        # The closed `_` namespace (#3016 R3): jsonschema's own message would
+        # print the whole generated regex, not what the key should be.
+        return f"unknown key '{err.instance}': {err.schema['patternErrorMessage']}"
     while err.validator == "oneOf" and err.context:
         branches: dict = {}
         for sub in err.context:

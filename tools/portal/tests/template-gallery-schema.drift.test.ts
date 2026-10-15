@@ -38,9 +38,11 @@ describe('template-data.json gallery templates pass tenant-config.schema.json', 
     });
   }
 
-  it('checker positive control: an undeclared _ key is caught even though the schema accepts it', () => {
+  it('checker positive control: an undeclared _ key is caught by the checker and by the schema', () => {
     const body = { _domain_policy: 'finance' };
-    expect(validateTenantDoc({ tenants: { t: body } })).toEqual([]);
+    // The schema closed the `_` namespace (#3016 R3); before that it accepted
+    // this as a threshold and only the checker caught it.
+    expect(validateTenantDoc({ tenants: { t: body } }).map(e => e.keyword)).toContain('propertyNames');
     expect(undeclaredReservedKeys(body)).toEqual(['_domain_policy']);
   });
 });
