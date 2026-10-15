@@ -340,25 +340,30 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		fmt.Fprintf(errOut, "%s: NOTICE: %s\n", programName, n)
 	}
 
-	// No tenants in scope: this is "vacuously safe". Print a friendly
-	// message in the chosen format and exit clean. We deliberately
-	// don't return exitCallerErr here because GitHub Actions wrappers
-	// run the guard on every _defaults.yaml change — and a defaults
-	// file under a directory with no tenants yet (e.g. brand-new
+	// The checks run whether or not the scope has tenants (#2991): what is
+	// judged on the whole tree or on the scope's own files — platform-file
+	// problems, the `_routing_enforced` route, the defaults carriers, the
+	// /metrics gather verdict (#2031) — is reported with no tenant exactly
+	// as with some. The per-tenant checks find nothing on zero tenants.
+	input := buildCheckInput(scoped, f)
+	report, err := check(input)
+	if err != nil {
+		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
+		return exitCallerErr
+	}
+
+	// No tenants in scope and nothing found: this is "vacuously safe".
+	// Print a friendly message in the chosen format and exit clean. We
+	// deliberately don't return exitCallerErr here because GitHub Actions
+	// wrappers run the guard on every _defaults.yaml change — and a
+	// defaults file under a directory with no tenants yet (e.g. brand-new
 	// domain skeleton) is a real, valid scenario.
 	//
 	// ⛔ Unless a file in scope failed the exporter's decode (#2123) or
 	// could not be read at all (#2588): the walker skipped it, so "no
 	// tenants" may be exactly the tenants that file declares. That is exit
 	// 3, never the vacuous 0.
-	// #2031: not when the whole tree's /metrics cannot be gathered — that
-	// fails every tenant's scrape, whatever the scope (the report below).
-	// #2991: nor when a platform file has a problem (PlatformProblems, read
-	// from the whole tree at --config-dir): reported with tenants in scope,
-	// it must not turn into a 0 without them. guard.HasWholeTreeInput is
-	// also what lets CheckDefaultsImpact run on zero tenants.
-	input := buildCheckInput(scoped, f)
-	if len(scoped.Tenants) == 0 && !guard.HasWholeTreeInput(input) {
+	if len(scoped.Tenants) == 0 && len(report.Findings) == 0 {
 		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
@@ -366,11 +371,6 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		return reportDroppedFiles(errOut, scoped, exitOK)
 	}
 
-	report, err := check(input)
-	if err != nil {
-		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
-		return exitCallerErr
-	}
 	spellFindingsAsWritten(report, scoped)
 	// #2904: the report comes sealed (internal/guard/seal.go); its summary,
 	// and so the exit code below, already counts these as errors.

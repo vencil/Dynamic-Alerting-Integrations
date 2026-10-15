@@ -407,11 +407,16 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_TenantMissingFromBoth(t *te
 
 // --- run.go integration tests --------------------------------------
 
-func TestCheckDefaultsImpact_ErrorsOnEmptyConfigs(t *testing.T) {
+// #2991: zero tenants is a valid input — the caller reads "vacuously safe"
+// off a report with no finding, so the empty input is a clean report.
+func TestCheckDefaultsImpact_EmptyConfigsIsACleanReport(t *testing.T) {
 	t.Parallel()
-	_, err := CheckDefaultsImpact(CheckInput{})
-	if err == nil {
-		t.Fatal("err = nil for empty EffectiveConfigs, want error")
+	r, err := CheckDefaultsImpact(CheckInput{})
+	if err != nil {
+		t.Fatalf("CheckDefaultsImpact: %v", err)
+	}
+	if len(r.Findings) != 0 || r.Summary != (GuardSummary{}) {
+		t.Errorf("findings %+v, summary %+v: want none, all zero", r.Findings, r.Summary)
 	}
 }
 

@@ -1,12 +1,16 @@
 package main
 
-// #2991: a platform-file problem (guard.CheckInput.PlatformProblems, read
-// from the whole tree at --config-dir) is reported when the scope has no
-// tenant, as it is when the scope has some — the "no tenants → vacuously
-// safe" exit 0 holds only when there is nothing whole-tree to report.
+// #2991: what the guard judges without a tenant — platform-file problems
+// (guard.CheckInput.PlatformProblems, read from the whole tree at
+// --config-dir), the `_routing_enforced` route, the defaults carriers — is
+// reported when the scope has no tenant, as it is when the scope has some.
+// The "no tenants → vacuously safe" exit 0 holds only for a run with no
+// finding.
 
 import (
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -113,40 +117,159 @@ func TestGuard_ZeroTenantPlatformCasesCoverEveryKind(t *testing.T) {
 	}
 }
 
+// zeroTenantTreeLevelCases: the other findings judged without a tenant —
+// the `_routing_enforced` route the generator renders whatever the tenants
+// (#2503) and the defaults carriers (#2386). Not a list the code reads:
+// the guard runs every check on zero tenants, these rows only pin that.
+var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
+	// generate_alertmanager_routes.py --validate --strict on this tree:
+	// "ERROR: _routing_enforced: group_by[1] is int 5, not a string", rc 1.
+	"enforced group_by, single shape": {
+		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
+			"\n  group_by: [\"alertname\", 5]\n"},
+		finding: findingkind.FindingRoutingGroupByInvalid,
+	},
+	"root defaults without the defaults: mapping": {
+		files:   map[string]string{"_defaults.yaml": "cpu: 80\n"},
+		finding: findingkind.FindingRootDefaultsUnwrapped,
+	},
+	"top-level key beside defaults:": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\nmem: 70\n"},
+		finding: findingkind.FindingDefaultsTopLevelIgnored,
+	},
+	"_critical key in the root defaults": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  cpu_critical: 90\n"},
+		finding: findingkind.FindingRootDefaultsCriticalKey,
+	},
+}
+
+// scopeArgs is the --scope of tc, if any.
+func (tc zeroTenantPlatformCase) scopeArgs() []string {
+	if tc.scope == "" {
+		return nil
+	}
+	return []string{"--scope", tc.scope}
+}
+
+// withCleanTenant is tc's tree plus one clean tenant inside its scope.
+func (tc zeroTenantPlatformCase) withCleanTenant() map[string]string {
+	files := map[string]string{}
+	for k, v := range tc.files {
+		files[k] = v
+	}
+	files[filepath.ToSlash(filepath.Join(tc.scope, "t-extra.yaml"))] = "tenants:\n  t-extra:\n    cpu: 1\n"
+	return files
+}
+
+// assertZeroTenantFinding: the run over tc (no tenant in scope) carries
+// tc.finding and exits as that finding decides — 1 for an error; 0 for a
+// warning, 1 under --warn-as-error, as with tenants.
+func assertZeroTenantFinding(t *testing.T, tc zeroTenantPlatformCase) {
+	t.Helper()
+	args := tc.scopeArgs()
+	code, fs := guardFindingsOf(t, tc.files, args...)
+	var got []reportedFinding
+	for _, f := range fs {
+		if f.Kind == tc.finding.String() {
+			got = append(got, f)
+		}
+		if f.TenantID != "" {
+			t.Errorf("finding %+v names a tenant: the scope has none", f)
+		}
+	}
+	if len(got) == 0 {
+		t.Fatalf("exit %d, findings %+v: want a %s finding", code, fs, tc.finding)
+	}
+	want := exitFindings
+	if got[0].Severity == guard.SeverityWarn {
+		want = exitOK
+		if c, _ := guardFindingsOf(t, tc.files, append(args, "--warn-as-error")...); c != exitFindings {
+			t.Errorf("--warn-as-error: exit %d, want %d", c, exitFindings)
+		}
+	}
+	if code != want {
+		t.Errorf("exit %d, want %d (findings %+v)", code, want, fs)
+	}
+}
+
 func TestGuard_PlatformProblemOnZeroTenantScopeFails(t *testing.T) {
 	t.Parallel()
 	for kind, tc := range zeroTenantPlatformCases {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
-			var args []string
-			if tc.scope != "" {
-				args = append(args, "--scope", tc.scope)
+			assertZeroTenantFinding(t, tc)
+		})
+	}
+}
+
+func TestGuard_TreeLevelFindingOnZeroTenantScopeFails(t *testing.T) {
+	t.Parallel()
+	for name, tc := range zeroTenantTreeLevelCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertZeroTenantFinding(t, tc)
+		})
+	}
+}
+
+// Every row above, run again with one clean tenant added to the scope: the
+// findings that name no tenant are the same — the zero-tenant run drops
+// nothing a run with tenants reports.
+func TestGuard_ZeroTenantRunReportsWhatATenantRunDoes(t *testing.T) {
+	t.Parallel()
+	all := map[string]zeroTenantPlatformCase{}
+	for k, v := range zeroTenantPlatformCases {
+		all["platform/"+k] = v
+	}
+	for k, v := range zeroTenantTreeLevelCases {
+		all["tree/"+k] = v
+	}
+	untenanted := func(fs []reportedFinding) []string {
+		var out []string
+		for _, f := range fs {
+			if f.TenantID == "" {
+				out = append(out, f.Kind+" "+f.Field)
 			}
-			code, fs := guardFindingsOf(t, tc.files, args...)
-			var got []reportedFinding
-			for _, f := range fs {
-				if f.Kind == tc.finding.String() {
-					got = append(got, f)
-				}
-				if f.TenantID != "" {
-					t.Errorf("finding %+v names a tenant: the scope has none", f)
-				}
-			}
-			if len(got) == 0 {
-				t.Fatalf("exit %d, findings %+v: want a %s finding", code, fs, tc.finding)
-			}
-			want := exitFindings
-			if got[0].Severity == guard.SeverityWarn {
-				// A warning fails the run under --warn-as-error, as with tenants.
-				want = exitOK
-				if c, _ := guardFindingsOf(t, tc.files, append(args, "--warn-as-error")...); c != exitFindings {
-					t.Errorf("--warn-as-error: exit %d, want %d", c, exitFindings)
-				}
-			}
-			if code != want {
-				t.Errorf("exit %d, want %d (findings %+v)", code, want, fs)
+		}
+		sort.Strings(out)
+		return out
+	}
+	for name, tc := range all {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, zero := guardFindingsOf(t, tc.files, tc.scopeArgs()...)
+			_, one := guardFindingsOf(t, tc.withCleanTenant(), tc.scopeArgs()...)
+			if z, o := untenanted(zero), untenanted(one); !reflect.DeepEqual(z, o) {
+				t.Errorf("findings naming no tenant differ:\nzero tenants: %v\none tenant:   %v", z, o)
 			}
 		})
+	}
+}
+
+// The `{{tenant}}` shape of `_routing_enforced` renders one route per
+// tenant, so with no tenant there is no route to judge: the generator
+// (--validate --strict) prints no group_by error for it, and neither does
+// da-guard — the vacuous 0. With a tenant, both report it.
+func TestGuard_EnforcedTenantShapeGroupBy_FollowsTheTenants(t *testing.T) {
+	t.Parallel()
+	tc := zeroTenantPlatformCase{
+		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n" +
+			"  receiver: {type: webhook, url: \"https://noc.example.com/{{tenant}}\"}\n" +
+			"  group_by: [\"alertname\", 5]\n"},
+	}
+	code, fs := guardFindingsOf(t, tc.files)
+	if code != exitOK || len(fs) != 0 {
+		t.Errorf("no tenant: exit %d, findings %+v; want 0 and none", code, fs)
+	}
+	code, fs = guardFindingsOf(t, tc.withCleanTenant())
+	n := 0
+	for _, f := range fs {
+		if f.Kind == findingkind.FindingRoutingGroupByInvalid.String() {
+			n++
+		}
+	}
+	if code != exitFindings || n != 1 {
+		t.Errorf("one tenant: exit %d, findings %+v; want 1 and one %s", code, fs, findingkind.FindingRoutingGroupByInvalid)
 	}
 }
 
