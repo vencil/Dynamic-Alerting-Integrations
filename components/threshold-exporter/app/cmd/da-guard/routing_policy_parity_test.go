@@ -35,7 +35,6 @@ type daGuardParityExpect struct {
 	NotString      []string        `json:"values_not_string"`
 	GroupByInvalid [][2]string     `json:"group_by_invalid"`
 	UnknownProfile *string         `json:"unknown_profile"`
-	TenantAPI      json.RawMessage `json:"tenant_api"`
 	PythonDiffers  json.RawMessage `json:"python_differs"`
 	Escalation     *struct {
 		Verdict string   `json:"verdict"`
@@ -90,12 +89,10 @@ func loadRoutingPolicyMatrixFull(t *testing.T) daGuardParityMatrix {
 		Comment       []string        `json:"_comment"`
 		BlockingKinds json.RawMessage `json:"blocking_kinds"`
 		// #2904
-		RouteFindingKinds []string          `json:"route_finding_kinds"`
-		GoSeverity        map[string]string `json:"go_severity"`
-		TenantIDs         json.RawMessage   `json:"tenant_ids"` // pinned by pkg/routingpolicy
-		// Why a tenant_api cell is null: the Python half asserts it.
-		TenantAPIUnmeasured json.RawMessage     `json:"tenant_api_unmeasured"`
-		Trees               []daGuardParityTree `json:"trees"`
+		RouteFindingKinds []string            `json:"route_finding_kinds"`
+		GoSeverity        map[string]string   `json:"go_severity"`
+		TenantIDs         json.RawMessage     `json:"tenant_ids"` // pinned by pkg/routingpolicy
+		Trees             []daGuardParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

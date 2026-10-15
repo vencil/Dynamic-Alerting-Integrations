@@ -39,8 +39,7 @@
       "importers": [
         {"dir": "components/threshold-exporter/app/internal/guard", "test": false},
         {"dir": "components/threshold-exporter/app/pkg/config", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": true}
+        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false}
       ]
     },
     {
