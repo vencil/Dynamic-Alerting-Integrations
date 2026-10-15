@@ -155,6 +155,12 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 	},
 }
 
+// kindNeedsTenant / kindTreeLevel are the two classes of zeroTenantKindClass.
+const (
+	kindNeedsTenant = "needs a tenant"
+	kindTreeLevel   = "tree level"
+)
+
 // zeroTenantKindClass sorts every registered finding kind: kindNeedsTenant
 // when every finding of it judges a tenant in scope (none can come out of a
 // scope with no tenant), kindTreeLevel when some finding of it is judged
@@ -163,11 +169,6 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 // zeroTenantPlatformCases / zeroTenantTreeLevelCases — so a new kind is red
 // until someone says which it is, and a tree-level one until a zero-tenant
 // run is shown to report it.
-const (
-	kindNeedsTenant = "needs a tenant"
-	kindTreeLevel   = "tree level"
-)
-
 var zeroTenantKindClass = map[string]string{
 	// Judged per tenant in EffectiveConfigs / RoutingByTenant / the
 	// per-tenant maps buildCheckInput fills from scoped.Tenants.
