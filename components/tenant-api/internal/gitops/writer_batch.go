@@ -172,6 +172,10 @@ type stagingTree struct {
 	// branchUnneeded (PR mode): the staging branch may be deleted with the
 	// worktree — it carries nothing worth keeping.
 	branchUnneeded bool
+	// validated: the bytes the generator judged, by path in order
+	// (validateStaging); commitStaging commits only those bytes. nil when no
+	// validator is installed.
+	validated map[string][]byte
 }
 
 // stagingBatchMtime is the modification time a fresh staging checkout gets:
@@ -553,7 +557,7 @@ func (w *Writer) commitStaging(st *stagingTree, before, authorEmail string) (str
 	if len(st.order) == 0 {
 		return "", nil
 	}
-	committed, err := w.gitCommitPaths(st.root, st.order, batchCommitMessage(st.changed), authorEmail)
+	committed, err := w.gitCommitPaths(st.root, st.order, batchCommitMessage(st.changed), authorEmail, st.validated)
 	head, herr := w.gitOutput(st.root, "rev-parse", "HEAD")
 	if herr != nil {
 		if err == nil {

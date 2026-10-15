@@ -203,7 +203,9 @@ const (
 	// be written after one re-judgement) and no_time (too little of the
 	// request's time left to judge); 422 for memory, incomplete, too_large
 	// (the files the write produces are too large for one judgement: split
-	// the batch) and invalid_request. Counted in
+	// the batch), invalid_request and normalized (git attributes would
+	// commit other bytes than the ones judged: .gitattributes eol, text or a
+	// filter rewrote a file as it was staged). Counted in
 	// tenant_api_generator_rejections_total{reason}. Nothing was written. Not
 	// a 503: the container itself is fine.
 	CodeGeneratorRejected = "GENERATOR_REJECTED"

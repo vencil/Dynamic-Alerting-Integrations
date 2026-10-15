@@ -78,6 +78,7 @@ tenant_api_generator_rejections_total{reason="too_large"} 0
 tenant_api_generator_rejections_total{reason="invalid_request"} 0
 tenant_api_generator_rejections_total{reason="mismatch"} 0
 tenant_api_generator_rejections_total{reason="no_time"} 0
+tenant_api_generator_rejections_total{reason="normalized"} 0
 # HELP tenant_api_generator_scrape_success Whether the generator container's /metrics was read on this scrape and appended (its da_generator_* families). 0: not appended.
 # TYPE tenant_api_generator_scrape_success gauge
 tenant_api_generator_scrape_success 0

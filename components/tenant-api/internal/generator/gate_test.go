@@ -71,6 +71,11 @@ func TestValidateWrites_MismatchJudgedAgainOnce(t *testing.T) {
 		"content": func(v map[string]any) {
 			v["validated"].(map[string]any)["files"].([]map[string]any)[0]["sha256"] = "00"
 		},
+		// The right bytes, judged as a deleted file: a write is never a
+		// deletion, so the verdict is on another tree.
+		"deleted": func(v map[string]any) {
+			v["validated"].(map[string]any)["files"].([]map[string]any)[0]["deleted"] = true
+		},
 		"file count":   func(v map[string]any) { v["validated"].(map[string]any)["files"] = []map[string]any{} },
 		"policy":       func(v map[string]any) { v["validated"].(map[string]any)["policy_sha256"] = "11" },
 		"no validated": func(v map[string]any) { v["validated"] = nil },
@@ -418,5 +423,26 @@ func TestValidateWrites_NoDeadlineUsesFallback(t *testing.T) {
 	}
 	if ms := fake.Requests()[0].DeadlineMS; ms > FallbackDeadline.Milliseconds() || ms < FallbackDeadline.Milliseconds()-1000 {
 		t.Errorf("deadline_ms = %d, want ~%v", ms, FallbackDeadline)
+	}
+}
+
+// ADR-036 §4: git would commit other bytes than the ones judged (the
+// Writer's staged-blob check) — a non-retryable rejection naming the files,
+// counted under normalized.
+func TestRefuseNormalized(t *testing.T) {
+	t.Parallel()
+	fake := testutil.StartFakeGenerator(t)
+	g := fastGate(t, fake, "")
+	err := g.RefuseNormalized([]string{"team/a.yaml", "b.yaml"})
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Reason != ReasonNormalized || Retryable(rej.Reason) ||
+		!strings.Contains(rej.Message, "team/a.yaml, b.yaml") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := g.Rejections()[ReasonNormalized]; n != 1 {
+		t.Errorf("rejections[normalized] = %d, want 1", n)
+	}
+	if len(fake.Requests()) != 0 {
+		t.Error("refusing asked the generator")
 	}
 }

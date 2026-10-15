@@ -27,6 +27,7 @@ import (
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/testutil"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -431,4 +432,105 @@ func TestGeneratorGate_BatchRefusalShape(t *testing.T) {
 			t.Errorf("status %d body %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// ADR-036 §4 "驗的和寫的必須是同一份": a .gitattributes clean filter that
+// rewrites a tenant file as it is staged makes the commit other bytes than
+// the ones judged — every path refuses it (422 GENERATOR_REJECTED reason
+// normalized, async: the task's results) and leaves the repository as it
+// was. (Package gitops covers `text eol=lf` with a CRLF body.)
+func TestGeneratorGate_NormalizedByGitAttributesIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, p := range gatePaths() {
+		t.Run(p.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAONFixture(t, p.mode)
+			fake := withFakeGenerator(t, f)
+			// Rewrites exactly what each path's request writes, nothing the
+			// seeded files hold (their checkout stays clean).
+			f.git(t, "config", "filter.shout.clean", `sed -e s/warning/WARNING/ -e s/critical/CRITICAL/ -e s/queue_high/QUEUE_HIGH/ -e s/72/73/`)
+			if err := os.WriteFile(filepath.Join(f.dir, ".gitattributes"), []byte("t-*.yaml filter=shout\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			f.git(t, "add", ".gitattributes")
+			f.git(t, "commit", "-q", "-m", "attributes")
+			before := repoState(t, f)
+			code, results := p.run(t, f)
+			if len(fake.Requests()) != 1 {
+				t.Fatalf("the generator was asked %d time(s), want 1 (it passes)", len(fake.Requests()))
+			}
+			if strings.HasSuffix(p.name, "async") || len(results) > 0 {
+				if len(results) == 0 {
+					t.Fatalf("status %d, no results", code)
+				}
+				for _, r := range results {
+					if r.Status != "error" || r.Code != CodeGeneratorRejected || !strings.Contains(r.Message, "(normalized)") {
+						t.Errorf("result %+v, want GENERATOR_REJECTED normalized", r)
+					}
+				}
+			}
+			if !strings.HasSuffix(p.name, "async") && code != http.StatusUnprocessableEntity {
+				t.Errorf("status = %d, want 422", code)
+			}
+			if after := repoState(t, f); after != before {
+				t.Errorf("the repository changed:\nbefore %s\nafter  %s", before, after)
+			}
+			if f.prs != 0 {
+				t.Errorf("%d PR/MR opened", f.prs)
+			}
+		})
+	}
+	t.Run("PUT envelope", func(t *testing.T) {
+		t.Parallel()
+		f, _ := generatorDirectFixture(t, nil)
+		f.git(t, "config", "filter.shout.clean", "sed -e s/72/73/")
+		if err := os.WriteFile(filepath.Join(f.dir, ".gitattributes"), []byte("t-*.yaml filter=shout\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		f.git(t, "add", ".gitattributes")
+		f.git(t, "commit", "-q", "-m", "attributes")
+		w := putTenantAs(t, f.deps, "t-a", tAPut, "admins", nil)
+		m := genEnvelope(t, w)
+		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorRejected || m["reason"] != generator.ReasonNormalized ||
+			w.Header().Get("Retry-After") != "" || !strings.Contains(m["error"].(string), "t-a.yaml") {
+			t.Errorf("status %d body %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+// #1530 on the generator's refusal of a direct group batch: the rejected
+// batch names only the members the caller may read when it is answered. Here
+// a member's org is reassigned while the generator judges (the caller could
+// write both members when the batch was authorized); the response must not
+// name it, nor count it.
+func TestGeneratorGate_GroupBatchRefusalShowsOnlyVisibleMembers(t *testing.T) {
+	t.Parallel()
+	orgs := "tenant_orgs:\n  " + orgEnfTenantIn + ": [" + orgEnfMemberOrg + "]\n  " + orgEnfTenantOut + ": [" + orgEnfMemberOrg + "]\n"
+	files := orgEnfGroupMemberFiles(visGroupsYAML)
+	files["_tenant_orgs.yaml"] = orgs
+	f := newOrgEnfFixture(t, files)
+	f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+		orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+	d := f.deps()
+	fake := testutil.StartFakeGenerator(t)
+	d.Writer.SetValidator(generator.NewGate(generator.NewClient(fake.Socket), ""))
+	fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
+		f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+			orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfOutsiderOrg}}})
+		return 200, testutil.FindingsVerdict(req, "/w", testutil.Finding("k", orgEnfTenantIn, "", "refused by the fake"))
+	})
+	w := visCall(t, f, d, GroupBatch(d), rbac.PermRead, "POST+batch", "g-mixed", `{"patch":{"_silent_mode":"warning"}}`)
+	if len(fake.Requests()) == 0 {
+		t.Fatalf("the generator was never asked; status %d %s", w.Code, w.Body.String())
+	}
+	var resp GroupBatchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if w.Code != http.StatusUnprocessableEntity || strings.Contains(w.Body.String(), orgEnfTenantOut) {
+		t.Errorf("status %d; the response names a member the caller cannot read: %s", w.Code, w.Body.String())
+	}
+	if len(resp.Results) != 1 || resp.Results[0].TenantID != orgEnfTenantIn || resp.Results[0].Code != CodeGeneratorFindings {
+		t.Errorf("results = %+v, want only %s refused with %s", resp.Results, orgEnfTenantIn, CodeGeneratorFindings)
+	}
 }

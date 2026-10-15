@@ -38,13 +38,18 @@ const (
 	ReasonMismatch = "mismatch"
 	// ReasonNoTime: too little of the request's time is left to (re)judge.
 	ReasonNoTime = "no_time"
+	// ReasonNormalized: git would commit other bytes than the ones judged —
+	// a .gitattributes rule (eol, text, a clean filter…) rewrote a file as
+	// it was staged (ADR-036 §4 "驗的和寫的必須是同一份"). Not retryable:
+	// the same body is rewritten the same way.
+	ReasonNormalized = "normalized"
 )
 
 // RejectionReasons lists every *RejectedError reason, in the order
 // tenant_api_generator_rejections_total renders them.
 var RejectionReasons = []string{
 	ReasonDeadline, ReasonMemory, ReasonIncomplete, ReasonGitRead, ReasonBusy,
-	ReasonTooLarge, ReasonInvalidRequest, ReasonMismatch, ReasonNoTime,
+	ReasonTooLarge, ReasonInvalidRequest, ReasonMismatch, ReasonNoTime, ReasonNormalized,
 }
 
 // Reasons of an *UnavailableError raised by tenant-api itself (the service's

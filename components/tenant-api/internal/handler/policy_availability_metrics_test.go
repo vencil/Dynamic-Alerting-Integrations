@@ -3,9 +3,12 @@ package handler
 import (
 	"bytes"
 	"context"
+	"net"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,6 +103,62 @@ func TestGeneratorMetrics_AppendedAndScrapeSuccess(t *testing.T) {
 	}
 	if got := render(); !strings.Contains(got, `tenant_api_generator_rejections_total{reason="busy"} 1`) {
 		t.Errorf("busy not counted: %s", got)
+	}
+}
+
+// NOT t.Parallel (the generator source, as above). A generator container
+// that accepts the connection and never answers must not hold /metrics:
+// both reads are bounded by generator.ScrapeTimeout, and the scrape answers
+// with tenant_api_policy_available 0 and tenant_api_generator_scrape_success 0.
+func TestMetrics_HangingGeneratorIsBoundedByScrapeTimeout(t *testing.T) {
+	t.Cleanup(func() { SetGeneratorSource(nil) })
+	sock := filepath.Join(t.TempDir(), "hang.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Skipf("unix socket: %v", err)
+	}
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c) // held open, never read or answered
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close()
+		}
+	})
+	SetGeneratorSource(generator.NewGate(generator.NewClient(sock), ""))
+
+	done := make(chan string, 1)
+	start := time.Now()
+	go func() {
+		rec := httptest.NewRecorder()
+		MetricsHandler(rec, httptest.NewRequest("GET", "/metrics", nil))
+		done <- rec.Body.String()
+	}()
+	// Two reads, each within ScrapeTimeout; one more as slack.
+	bound := 3 * generator.ScrapeTimeout
+	select {
+	case got := <-done:
+		if !strings.Contains(got, "\ntenant_api_policy_available 0\n") ||
+			!strings.Contains(got, "\ntenant_api_generator_scrape_success 0\n") {
+			t.Errorf("hanging generator after %v:\n%s", time.Since(start), got)
+		}
+	case <-time.After(bound):
+		t.Fatalf("/metrics did not answer within %v with a generator that never responds", bound)
 	}
 }
 

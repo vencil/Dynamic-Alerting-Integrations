@@ -244,14 +244,15 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 凡是會改變 conf.d 檔案內容的寫入——`PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts`、`POST /tenants/batch`、`POST /groups/{id}/batch`，直寫與 PR 模式、同步與非同步——在寫入鎖之下、所有既有檢查之後、commit 之前，tenant-api 把「這次落在哪個 commit 上（直寫是鎖下的 HEAD，PR 模式是分支起點）＋每個要寫的檔的完整新內容」送給同 pod 的產生器容器，由它對寫入後的整棵樹跑 `generate-routes --validate --strict`（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。批次整批判一次。通過才 commit；其他任何結果都不寫入、不 commit、不留暫存。
 
-- **期限**：給產生器的時間是請求剩下的時間（非同步批次從 task 開始起算 `--write-timeout`）；產生器自己保留 5 秒給 tenant-api 核對與 commit。
-- **驗的和寫的是同一份**：產生器回報它判的 base commit、每個檔的 sha256 與部署端 policy 檔（`--deploy-policy`，chart 掛同一份）的 sha256，都要和 tenant-api 要寫的一致；不一致就重判一次，仍不一致回 429 `mismatch`。
+- **期限**：給產生器的時間是請求剩下的時間（非同步批次從 task 開始起算 `--write-timeout`）；其中產生器保留的時間（產生器服務的 `--deadline-reserve-seconds`）留給 tenant-api 核對與 commit；剩下的時間不足以判定時直接回 429 `no_time`，不送出。tenant-api 這邊的對應常數與產生器的預設值由 `tests/ops/test_generator_deadline_reserve_parity.py` 對帳。
+- **驗的和寫的是同一份**：產生器回報它判的 base commit、每個檔的 sha256 與部署端 policy 檔（`--deploy-policy`，chart 掛同一份）的 sha256，都要和 tenant-api 要寫的一致；不一致就重判一次，仍不一致回 429 `mismatch`。commit 也綁在判定上：直寫時判定期間 HEAD 被 tenant-api 以外的 commit 移動，回 409（重新整理後重送），不 commit；staging 之後 index 裡的內容與判定的位元組逐一比對，`.gitattributes` 改了內容就回 422 `normalized`，檔案還原成 HEAD 的樣子。
+- **沒有變更的單檔寫入**：`PUT` 的內容與現有檔案逐位元組相同時直接回成功，不問產生器、不 commit（與合併式寫入相同）。
 
 | 結果 | HTTP | `code` | 說明 |
 |---|---|---|---|
 | 有 finding | 422 | `GENERATOR_FINDINGS` | `findings[]` 是產生器的 finding，與這次寫入的檔或租戶相關的排前面並標 `related: true`；`findings_compared_with_base: true` 時每筆另有 `pre_existing`（寫入前就有）。不相關的 finding 只給對所有租戶有寫入權限的呼叫者看，其他人只拿到 `unrelated_findings_withheld`（數量）。批次則是一般的 422 `status: rejected`，每筆結果都是這個 code，訊息列出與該筆租戶相關的 finding |
 | 產生器這次沒判出結果，可重試 | 429（`Retry-After`） | `GENERATOR_REJECTED` | `reason`：`busy`、`deadline`、`git_read`、`mismatch`、`no_time`（剩下的時間不夠判定） |
-| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request` |
+| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request`、`normalized`（`.gitattributes` 的 eol、text 或 filter 在 staging 時改了內容，commit 的不會是判定過的那份） |
 | 產生器容器不可用 | 503（`Retry-After`） | `VALIDATOR_UNAVAILABLE` | `reason`：`unreachable`（連不上或期限內沒回應）、`bad_response`、`amtool_missing`、`generator_too_old`、`internal_error` |
 | 部署端 policy 檔不可用 | 503（`Retry-After`） | `POLICY_UNAVAILABLE` | `reason`：`policy_unusable`（產生器讀不了）、`policy_unreadable`（tenant-api 讀不了自己掛的那份） |
 

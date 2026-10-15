@@ -852,11 +852,19 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
+	// No-op short-circuit, as WriteMerged's: a body byte-identical to the
+	// file changes nothing — success, nothing committed, the generator not
+	// asked (the tree it would judge is HEAD's own). os.IsNotExist leaves
+	// existing nil: a new file is never a no-op.
+	if existing, rerr := readTenantFile(filePath); rerr == nil && string(existing) == yamlContent {
+		return notices, nil
+	}
+
 	// #2903 (ADR-036 §4): the generator judges HEAD with this body written
 	// over the file, still under the lock — nothing is written before it
-	// passes. Asked even when the body equals the file: a single write is
-	// not told apart from a no-op before its commit.
-	if err := w.validateTenantFile(ctx, filePath, tenantID, []byte(yamlContent)); err != nil {
+	// passes.
+	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(yamlContent))
+	if err != nil {
 		return nil, err
 	}
 
@@ -865,6 +873,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		tenantID,
 		authorEmail,
 		[]byte(yamlContent),
+		judgedBase,
 	); err != nil {
 		return nil, err
 	}
@@ -1385,7 +1394,8 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 		return notices, nil
 	}
 	// #2903: the generator's verdict, under the lock, before the commit.
-	if err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content)); err != nil {
+	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
+	if err != nil {
 		return nil, err
 	}
 	if err := w.commitFileChange(
@@ -1393,6 +1403,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 		tenantID,
 		authorEmail,
 		[]byte(content),
+		judgedBase,
 	); err != nil {
 		return nil, err
 	}
@@ -1552,7 +1563,15 @@ func (w *Writer) writeTenant(path string, content []byte, perm os.FileMode) erro
 //
 // Callers take the lock with lockTreeOnBase (#1723), which is where the
 // branch check that matters runs — before the caller's first read.
-func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, trailer ...string) error {
+//
+// judgedBase (#2903) is the commit the generator judged this write on
+// (validateTenantFile; "" when no validator is installed). The write
+// commits only onto it: when HEAD is no longer judgedBase — a commit made
+// from outside this process while the generator judged — it returns
+// ErrConflict before writing anything. The staged blob must also be
+// exactly content (gitCommitPaths' validated check); when git attributes
+// rewrote it, the file is put back as it was and the write refused.
+func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, judgedBase string, trailer ...string) error {
 	// #1723 backstop only. Every current caller already ran this check in
 	// lockTreeOnBase, so here it is one symbolic-ref that finds base. It
 	// stays so a future caller that takes plain lockTree still cannot commit
@@ -1567,13 +1586,31 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		slog.Warn("gitops: could not read HEAD before write",
 			"commit_tag", commitTag, "error", err)
 	}
+	var validated []byte
+	if judgedBase != "" {
+		// The verdict is on judgedBase; committing onto anything else would
+		// publish a tree nobody judged. Nothing is written yet.
+		if headBefore != judgedBase {
+			slog.Warn("gitops: HEAD moved while the generator judged the write",
+				"commit_tag", commitTag, "judged_base", judgedBase, "head", headBefore)
+			return ErrConflict
+		}
+		validated = content
+	}
 
 	if err := writeFileAtomic(filePath, content, 0644); err != nil {
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	committed, err := w.gitCommit(filePath, commitTag, authorEmail, trailer...)
+	committed, err := w.gitCommit(filePath, commitTag, authorEmail, validated, trailer...)
 	if err != nil {
+		if validated != nil && w.stagedRefusal(err) {
+			if rerr := w.restoreFromHEAD(filePath); rerr != nil {
+				slog.Error("gitops: could not put back a refused write's file",
+					"commit_tag", commitTag, "error", rerr)
+			}
+			return err
+		}
 		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)
 	}
@@ -1645,7 +1682,10 @@ func (w *Writer) commitParent() (string, error) {
 // environment variables (set in the K8s Deployment). This keeps the audit trail clean:
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
-func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...string) (committed bool, err error) {
+//
+// validated is the bytes the generator judged for filePath (nil: none were
+// judged); see gitCommitPaths.
+func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, validated []byte, trailer ...string) (committed bool, err error) {
 	msg := fmt.Sprintf("tenant/%s: update via portal\n\nTimestamp: %s\nSource: da-portal/tenant-manager",
 		tenantID, time.Now().UTC().Format(time.RFC3339))
 	// Optional trailer — appended to the message body so an audit
@@ -1654,7 +1694,11 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 	if len(trailer) > 0 && trailer[0] != "" {
 		msg += "\n\n" + trailer[0]
 	}
-	return w.gitCommitPaths(w.gitDir, []string{filePath}, msg, authorEmail)
+	var check map[string][]byte
+	if validated != nil {
+		check = map[string][]byte{filePath: validated}
+	}
+	return w.gitCommitPaths(w.gitDir, []string{filePath}, msg, authorEmail, check)
 }
 
 // gitCommitPaths stages every path in paths and creates ONE commit with msg,
@@ -1663,7 +1707,13 @@ func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, trailer ...st
 //
 // dir is the worktree the commit is made in: w.gitDir, or a batch staging
 // worktree (#2900).
-func (w *Writer) gitCommitPaths(dir string, paths []string, msg, authorEmail string) (committed bool, err error) {
+//
+// validated (#2903) is the bytes the generator judged, by path as in paths:
+// after staging, every such path's index blob must be exactly those bytes —
+// a .gitattributes rule can rewrite a file as it is staged — or the paths
+// are unstaged and the write refused (checkStagedAsValidated); nothing is
+// committed. nil checks nothing.
+func (w *Writer) gitCommitPaths(dir string, paths []string, msg, authorEmail string, validated map[string][]byte) (committed bool, err error) {
 	// Stage the files in one `git add`, so the index never holds part of them
 	// for longer than this command.
 	addArgs := append([]string{"-C", dir, "add", "--"}, paths...)
@@ -1671,6 +1721,12 @@ func (w *Writer) gitCommitPaths(dir string, paths []string, msg, authorEmail str
 	defer addCancel()
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return false, w.gitErr(addCtx, "add", err, out)
+	}
+	if err := w.checkStagedAsValidated(dir, validated); err != nil {
+		if uerr := w.gitIn(dir, append([]string{"reset", "-q", "--"}, paths...)...); uerr != nil {
+			slog.Warn("gitops: could not unstage a refused write", "error", uerr)
+		}
+		return false, err
 	}
 
 	// Check if there's actually something to commit

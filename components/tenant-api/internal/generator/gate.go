@@ -69,7 +69,18 @@ func (g *Gate) Rejections() map[string]int64 {
 	return out
 }
 
-var _ gitops.WriteValidator = (*Gate)(nil)
+var (
+	_ gitops.WriteValidator       = (*Gate)(nil)
+	_ gitops.NormalizationRefuser = (*Gate)(nil)
+)
+
+// RefuseNormalized is the refusal of a write whose staged bytes are not the
+// ones judged (gitops.NormalizationRefuser): GENERATOR_REJECTED reason
+// normalized, counted.
+func (g *Gate) RefuseNormalized(paths []string) error {
+	return g.reject(ReasonNormalized, "git attributes (.gitattributes: eol, text or a filter) would commit other bytes than the ones the generator judged for "+
+		strings.Join(paths, ", ")+"; nothing was written — send the content as git stores it, or change the attributes")
+}
 
 // ValidateWrites asks the service about files over base and returns nil only
 // for a `pass` whose `validated` names exactly base, every file's bytes and

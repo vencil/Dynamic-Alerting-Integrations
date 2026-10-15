@@ -24,11 +24,13 @@ package gitops
 // direct mode, the commit the feature branch is cut from in PR mode.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -72,27 +74,37 @@ func (w *Writer) validateProposed(ctx context.Context, base string, files []Prop
 // w.configDir, against the serving HEAD (direct mode) or the checked-out
 // feature branch's HEAD — its branch point (PR mode, before anything is
 // committed on it). Caller holds w.mu.
-func (w *Writer) validateTenantFile(ctx context.Context, filePath, tenantID string, content []byte) error {
+//
+// base is the commit the verdict is on ("" when no validator is installed).
+// The direct-mode caller hands it to commitFileChange, which commits only
+// while HEAD is still base: w.mu keeps every in-process write out, but not a
+// commit made from outside the process while the generator judged.
+func (w *Writer) validateTenantFile(ctx context.Context, filePath, tenantID string, content []byte) (base string, err error) {
 	if w.validator == nil {
-		return nil
+		return "", nil
 	}
-	base, err := w.currentHEAD()
+	base, err = w.currentHEAD()
 	if err != nil {
-		return fmt.Errorf("%w: %v", errValidatorBase, err)
+		return "", fmt.Errorf("%w: %v", errValidatorBase, err)
 	}
-	return w.validateProposed(ctx, base, []ProposedFile{{
+	if err := w.validateProposed(ctx, base, []ProposedFile{{
 		Path: confRelKey(w.configDir, filePath), Content: content, Tenants: []string{tenantID},
-	}})
+	}}); err != nil {
+		return "", err
+	}
+	return base, nil
 }
 
 // validateStaging is validateProposed for every file a batch changed in its
 // staging tree, read back from there — the bytes commitStaging commits.
-// Caller holds w.mu.
+// On a pass it records them in st.validated, which commitStaging holds the
+// staged blobs to (checkStagedAsValidated). Caller holds w.mu.
 func (w *Writer) validateStaging(ctx context.Context, st *stagingTree, base string) error {
 	if w.validator == nil || len(st.order) == 0 {
 		return nil
 	}
 	files := make([]ProposedFile, 0, len(st.order))
+	validated := make(map[string][]byte, len(st.order))
 	for _, rel := range st.order {
 		content, err := os.ReadFile(filepath.Join(st.root, rel))
 		if err != nil {
@@ -104,6 +116,95 @@ func (w *Writer) validateStaging(ctx context.Context, st *stagingTree, base stri
 		}
 		files = append(files, ProposedFile{Path: path, Content: content,
 			Tenants: append([]string(nil), st.changed[rel]...)})
+		validated[rel] = content
 	}
-	return w.validateProposed(ctx, base, files)
+	if err := w.validateProposed(ctx, base, files); err != nil {
+		return err
+	}
+	st.validated = validated
+	return nil
+}
+
+// ErrContentNormalized is what a write is refused with (errors.Is) when git
+// would commit other bytes than the ones the generator judged: a
+// .gitattributes rule (eol, text, a clean filter…) rewrote a file as it was
+// staged (ADR-036 §4 "驗的和寫的必須是同一份"). Nothing is committed. A
+// validator that implements NormalizationRefuser answers it in its own
+// terms instead; this is the fallback.
+var ErrContentNormalized = errors.New("git attributes would commit other bytes than the ones the generator judged")
+
+// NormalizationRefuser is implemented by a WriteValidator that renders the
+// refusal of a write whose staged bytes differ from the judged ones itself
+// (the generator gate: a non-retryable GENERATOR_REJECTED, counted). paths
+// are the files concerned, as the caller staged them.
+type NormalizationRefuser interface {
+	RefuseNormalized(paths []string) error
+}
+
+// checkStagedAsValidated compares the blob staged in dir's index for every
+// path in validated (a path as given to `git add` in dir) with the bytes
+// the generator judged, and refuses the write (see ErrContentNormalized)
+// when one differs. nil validated checks nothing. Caller holds w.mu.
+func (w *Writer) checkStagedAsValidated(dir string, validated map[string][]byte) error {
+	if len(validated) == 0 {
+		return nil
+	}
+	var changed []string
+	for p, want := range validated {
+		rel := p
+		if filepath.IsAbs(p) {
+			r, err := filepath.Rel(dir, p)
+			if err != nil {
+				return fmt.Errorf("locate a staged file: %w", err)
+			}
+			rel = r
+		}
+		got, err := w.gitOutput(dir, "cat-file", "blob", ":./"+filepath.ToSlash(rel))
+		if err != nil {
+			return fmt.Errorf("read a staged file back: %w", err)
+		}
+		if !bytes.Equal(got, want) {
+			changed = append(changed, filepath.ToSlash(rel))
+		}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	sort.Strings(changed)
+	if r, ok := w.validator.(NormalizationRefuser); ok {
+		return &normalizedRefusal{err: r.RefuseNormalized(changed)}
+	}
+	return fmt.Errorf("%w: %s", ErrContentNormalized, strings.Join(changed, ", "))
+}
+
+// stagedRefusal reports whether err is checkStagedAsValidated's refusal:
+// ErrContentNormalized, or what the validator's RefuseNormalized returned
+// (it is marked by normalizedRefusal).
+func (w *Writer) stagedRefusal(err error) bool {
+	var n *normalizedRefusal
+	return errors.Is(err, ErrContentNormalized) || errors.As(err, &n)
+}
+
+// normalizedRefusal carries a NormalizationRefuser's error through the
+// commit path unchanged (Unwrap), marked as the staged-bytes refusal.
+type normalizedRefusal struct{ err error }
+
+func (e *normalizedRefusal) Error() string { return e.err.Error() }
+func (e *normalizedRefusal) Unwrap() error { return e.err }
+
+// restoreFromHEAD puts filePath in the serving tree back as HEAD has it
+// after a refused write (removed when HEAD has no such file). Caller holds
+// w.mu.
+func (w *Writer) restoreFromHEAD(filePath string) error {
+	out, err := w.gitOutput(w.gitDir, "ls-tree", "--name-only", "HEAD", "--", filePath)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", filePath)
 }

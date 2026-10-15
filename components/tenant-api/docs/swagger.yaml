@@ -1915,7 +1915,8 @@ paths:
             result''s tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld
             carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED
             (memory, incomplete, too_large: the files the batch produces are too large
-            to judge in one request — split the batch, invalid_request). An async
+            to judge in one request — split the batch, invalid_request, normalized:
+            git attributes would commit other bytes than the ones judged). An async
             batch''s task carries the same per-op results.'
           schema:
             $ref: '#/definitions/internal_handler.GroupBatchResponse'
@@ -2177,7 +2178,9 @@ paths:
             get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
             memory / incomplete / too_large (the files the write produces are too
             large to judge in one request) / invalid_request: the generator gave no
-            verdict. Nothing written'
+            verdict; or normalized: git attributes (.gitattributes eol, text or a
+            filter) would commit other bytes than the ones the generator judged. Nothing
+            written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2340,7 +2343,9 @@ paths:
             get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
             memory / incomplete / too_large (the files the write produces are too
             large to judge in one request) / invalid_request: the generator gave no
-            verdict. Nothing written'
+            verdict; or normalized: git attributes (.gitattributes eol, text or a
+            filter) would commit other bytes than the ones the generator judged. Nothing
+            written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2773,7 +2778,8 @@ paths:
             / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
             or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the
             batch produces are too large to judge in one request — split the batch,
-            invalid_request). An async batch''s task carries the same per-op results.'
+            invalid_request, normalized: git attributes would commit other bytes than
+            the ones judged). An async batch''s task carries the same per-op results.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "429":
