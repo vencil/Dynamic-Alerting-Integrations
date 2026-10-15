@@ -444,7 +444,7 @@ def _written_faces() -> dict[str, set[str]]:
 # blind review walked straight past them three different ways: an `examples/`
 # sibling inside the very conf.d tree they named
 # (`conf.d/examples/_defaults-multidb.yaml`, a copy-me file whose own header
-# teaches this rule), a NESTED `_defaults.yaml` (the loader enters one at every
+# taught this rule; #3014 deleted it), a NESTED `_defaults.yaml` (the loader enters one at every
 # depth — `config_hierarchy.go` — while the constants named depth 0 only), and a
 # whole second conf.d root (`rule-packs/recipes/examples/conf.d/`). All three
 # were demonstrated: inject `mysql_connections_critical` into any of them and
@@ -784,9 +784,10 @@ _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS: frozenset[str] = frozenset({
 # from the confd-schema hooks' scope without a test going red.
 _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
     "components/threshold-exporter/config/conf.d": (
-        2, 15,
-        "the exporter's own conf.d: the dev/template tree every doc points at, "
-        "plus its examples/ sibling. Both carry real threshold keys."),
+        1, 15,
+        "the exporter's own conf.d: the dev/template tree every doc points at. "
+        "Its one `_defaults.yaml` also carries the base of every key the "
+        "examples/ tenants write (#3014)."),
     "try-local/seed/conf.d": (
         1, 3,
         "the one-command demo stack a reader runs first; its _defaults.yaml is "
@@ -1168,9 +1169,10 @@ def _is_loader_readable_defaults(name: str) -> bool:
 
 # ── SIXTH floor: the loader-readable half of each shipped root (#1458) ──────
 #
-# ⛔ THE GAP THIS CLOSES, in one measurement. `_SHIPPED_CONFD_ROOTS` floors the
-# exporter's own root at `(2 artifacts, 15 keys)`. Split that by whether the Go
-# loader will actually read the file:
+# ⛔ THE GAP THIS CLOSES, in one measurement (as the tree stood before #3014,
+# which deleted the skipped file and moved its keys into `_defaults.yaml`).
+# `_SHIPPED_CONFD_ROOTS` floored the exporter's own root at `(2 artifacts, 15
+# keys)`. Split that by whether the Go loader will actually read the file:
 #
 #     _defaults.yaml                 8 keys   loader reads it
 #     examples/_defaults-multidb.yaml 11 keys  loader SKIPS it (name is not
@@ -1197,24 +1199,25 @@ def _is_loader_readable_defaults(name: str) -> bool:
 #
 # — so they get two floors instead of one compromise.
 #
-# The numbers are the loader-readable subset measured today, with the same kind
-# of slack the sibling table carries (exporter 19 vs 15). Measured per root:
+# The numbers are the loader-readable subset, with the same kind of slack the
+# sibling table carries (exporter 19 vs 15). Measured per root after #3014:
 #
-#     components/threshold-exporter/config/conf.d   1 artifact /  8 keys
+#     components/threshold-exporter/config/conf.d   1 artifact / 19 keys
 #     try-local/seed/conf.d                         1 artifact /  4 keys
 #     rule-packs/recipes/examples/conf.d            2 artifacts / 0 keys
 #
-# ⇒ two of the three roots are 100% loader-readable, so this floor costs them
-# nothing and needs no exemption. Only the exporter root differs, which is the
-# whole finding.
+# ⇒ all three roots are 100% loader-readable, so each row mirrors its sibling.
+# Before #3014 the exporter root read 1 artifact / 8 keys here — it was the
+# whole finding. The floor still earns its place: #1458's rename attack takes
+# the loader-readable count to 0 while the wide count stays put.
 #
 # ⛔ Same rule as the sibling table: LOWERING A NUMBER HERE IS NOT A REMEDY.
 _LOADER_READABLE_FLOORS: dict[str, tuple[int, int, str]] = {
     "components/threshold-exporter/config/conf.d": (
-        1, 6,
-        "the exporter's own conf.d. Its `_defaults.yaml` is the only file in "
-        "this tree the running exporter reads as platform defaults; the "
-        "`examples/` sibling is documentation the loader skips by name."),
+        1, 15,
+        "the exporter's own conf.d. Entirely loader-readable since #3014 "
+        "deleted the `examples/_defaults-multidb.yaml` the loader skipped, so "
+        "this floor mirrors its sibling entry."),
     "try-local/seed/conf.d": (
         1, 3,
         "the one-command demo stack. Entirely loader-readable today, so this "

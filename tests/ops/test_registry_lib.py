@@ -681,15 +681,18 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     # the mappings above (#1310), plus the try-local seed, which stopped being
     # a hand-maintained third copy in #1176/#1344 (its only gate compared the
     # PARSED list, so it never saw the per-key counter-example comments).
-    assert ids[:5] == [
-        "helm-defaults", "dev-defaults", "helm-optional", "dev-optional",
-        "try-local-optional"]
+    # `dev-example-defaults` (#3014) is the dev template's second `defaults`
+    # block — the example tenants' packs — on the same file as `dev-defaults`.
+    assert ids[:6] == [
+        "helm-defaults", "dev-defaults", "dev-example-defaults", "helm-optional",
+        "dev-optional", "try-local-optional"]
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
-    assert len(ids) == 5 + 13  # 13 threshold packs, non-threshold packs none
+    assert len(ids) == 6 + 13  # 13 threshold packs, non-threshold packs none
     # the two surfaces per file must target the same path but distinct blocks
     by_id = {s["id"]: s for s in specs}
     assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]
     assert by_id["dev-defaults"]["path"] == by_id["dev-optional"]["path"]
+    assert by_id["dev-example-defaults"]["path"] == by_id["dev-defaults"]["path"]
     assert by_id["try-local-optional"]["path"] not in {
         by_id["helm-optional"]["path"], by_id["dev-optional"]["path"]}
     assert len({s["id"] for s in specs}) == len(specs)

@@ -7,8 +7,7 @@
 tenants:
   es-prod:
     # --- 基本閾值 (全域) ---
-    es_cluster_health_status: "1"                           # 1=yellow warning
-    es_cluster_health_status_critical: "2"                  # 2=red critical
+    # 叢集健康（yellow/red）不是閾值鍵：rule pack 直接比對 health 狀態，租戶無從調整（#3014）
     es_heap_usage_percent: "85"                             # #1196 C 由 es_jvm_memory_used_percent 改名
     es_disk_usage_percent: "85"                             # 已用率超過 85% 警告（#1196 C 語意反向：原 free% 15）
     es_pending_tasks: "50"

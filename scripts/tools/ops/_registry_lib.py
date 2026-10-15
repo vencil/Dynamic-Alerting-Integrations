@@ -1157,6 +1157,42 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     suggested value) is appended so the hand-written hints the old copies
     carried are reproduced mechanically.
     """
+    return _render_defaults_lines(
+        doc, indent, lambda pack, entry: bool(entry.get("chart_default")))
+
+
+# The packs whose `defaults`-tier keys the dev template's SECOND defaults block
+# arms (#3014). They are exactly the packs the shipped `conf.d/examples/`
+# tenants are written against. ⛔ Not "every non-chart pack": the dev tree is
+# what every doc points at, and arming kafka/oracle/... for db-a would add
+# series nothing in the tree asks for. ⛔ Not a subtree `_defaults.yaml` either
+# — that is where these keys used to sit (as `_defaults-multidb.yaml`, a name
+# the loader skips), and moving them to `examples/_defaults.yaml` does not work
+# today: a key that only a SUBTREE carrier declares never reaches /metrics
+# (#1976). The guard that this tuple is wide enough is
+# `test_shipped_example_tree_serves_every_tenant_key`, which fails the day an
+# example tenant uses a pack listed nowhere here.
+DEV_EXAMPLE_PACKS: tuple[str, ...] = ("redis", "elasticsearch", "mongodb")
+
+
+def render_dev_example_defaults_lines(doc: dict, indent: int) -> list[str]:
+    """The dev template's ``defaults`` keys for the example tenants' packs.
+
+    Every ``defaults``-tier key of ``DEV_EXAMPLE_PACKS`` that is not already a
+    chart default (those render in the block above). Same layout as
+    ``render_chart_defaults_lines``, so the counter-example and ``_critical``
+    hints come out of one code path.
+    """
+    return _render_defaults_lines(
+        doc, indent,
+        lambda pack, entry: (pack in DEV_EXAMPLE_PACKS
+                             and entry.get("tier") == "defaults"
+                             and not entry.get("chart_default")))
+
+
+def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
+    """A ``defaults`` mapping body: the keys ``keep(pack, entry)`` admits,
+    grouped by pack in registry order."""
     ind = " " * indent
     lines: list[str] = []
     grouped = keys_by_pack(doc)
@@ -1164,7 +1200,7 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
         chart_keys = [
             (k, e)
             for k, e in grouped.get(pack_name, {}).items()
-            if e.get("chart_default")
+            if keep(pack_name, e)
         ]
         if not chart_keys:
             continue
@@ -1704,7 +1740,8 @@ def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> st
 def surface_specs(doc: dict) -> list[dict]:
     """Every generated surface: id, absolute path, indent, rendered block.
 
-    Order: the two ``defaults`` mappings (helm values, dev template), the two
+    Order: the two ``defaults`` mappings (helm values, dev template), the dev
+    template's example-pack ``defaults`` block (#3014), the two
     ``optional_overrides`` lists on the SAME two files (#1310), then one per
     threshold pack (packs without threshold keys —
     liveness/operational/custom-alerts — carry no generated block).
@@ -1725,6 +1762,15 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_chart_defaults_lines(doc, 2),
+        },
+        {
+            # The example tenants' packs (#3014): a second block in the same
+            # `defaults:` mapping, so the chart-default block above stays
+            # byte-identical to helm's.
+            "id": "dev-example-defaults",
+            "path": DEV_DEFAULTS_PATH,
+            "indent": " " * 2,
+            "body": render_dev_example_defaults_lines(doc, 2),
         },
         {
             # thresholdConfig.optional_overrides — key at indent 2, list items
