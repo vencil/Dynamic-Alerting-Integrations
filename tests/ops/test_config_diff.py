@@ -883,23 +883,48 @@ class TestCredentialsAreNotPrinted:
         assert "http_config" in cd._CREDENTIAL_KEYS
         defs = schema["definitions"]
 
-        def refs(node):
-            return set(re.findall(r'"#/definitions/(\w+)"', json.dumps(node)))
+        prefix = "#/definitions/"
+
+        def ref_sites(node, prop=None):
+            """(definition, enclosing property name or None) for every `$ref`
+            in node, read from the JSON structure: a `$ref` nested in
+            anyOf / oneOf / allOf / items / not … belongs to the property
+            whose value contains it."""
+            if isinstance(node, dict):
+                ref = node.get("$ref")
+                if isinstance(ref, str) and ref.startswith(prefix):
+                    yield ref[len(prefix):], prop
+                for k, v in node.items():
+                    if k in ("properties", "patternProperties", "definitions") and isinstance(v, dict):
+                        for name, sub in v.items():
+                            yield from ref_sites(sub, None if k == "definitions" else name)
+                    else:
+                        yield from ref_sites(v, prop)
+            elif isinstance(node, list):
+                for x in node:
+                    yield from ref_sites(x, prop)
+
+        def closure(start):
+            seen, stack = set(), list(start)
+            while stack:
+                name = stack.pop()
+                if name not in seen:
+                    seen.add(name)
+                    stack.extend(d for d, _ in ref_sites(defs[name]))
+            return seen
 
         roots = {"httpConfigOrNull", "httpConfig"}
-        inside, stack = set(), sorted(roots)
-        while stack:
-            name = stack.pop()
-            if name not in inside:
-                inside.add(name)
-                stack.extend(refs(defs[name]))
+        inside = closure(roots)
         outside = {k: v for k, v in schema.items() if k != "definitions"}
         outside["definitions"] = {k: v for k, v in defs.items() if k not in inside}
-        # The roots are entered only as the value of an `http_config` key.
-        entries = re.findall(r'"(\w+)": \{"\$ref": "#/definitions/(httpConfig(?:OrNull)?)"',
-                             json.dumps(outside))
-        assert entries and {k for k, _ in entries} == {"http_config"}, entries
-        inside -= refs(outside) - roots  # a definition also used outside http_config is still walked
+        sites = list(ref_sites(outside))
+        # The roots are entered only as the value of an `http_config` key —
+        # however that value wraps the $ref (anyOf, oneOf, allOf …).
+        entries = [(d, p) for d, p in sites if d in roots]
+        assert entries and {p for _, p in entries} == {"http_config"}, entries
+        # A definition under http_config that is also used elsewhere is walked,
+        # and so is everything it references.
+        inside -= closure({d for d, _ in sites if d in inside - roots})
         schema = {k: v for k, v in schema.items() if k != "definitions"}
         schema["definitions"] = {k: v for k, v in defs.items() if k not in inside}
         names = set()
