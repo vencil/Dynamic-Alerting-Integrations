@@ -509,7 +509,7 @@ Check in order: (1) is `container_fs_*` in the cadvisor scrape keep AND does tha
 
 ## Advanced: Integration with Thanos / VictoriaMetrics
 
-The platform's rule packs are based purely on standard PromQL, making them fully compatible with Thanos and VictoriaMetrics:
+The platform's rule packs use only standard PromQL, so Thanos Ruler and vmalert load them as is. VictoriaMetrics evaluates a few cases differently from Prometheus (the recorded differences are in §3.1 and §3.2 of the [VictoriaMetrics integration guide](victoriametrics-integration.en.md)):
 
 **Thanos**: Rule packs can be loaded into Thanos Ruler. Ensure Thanos Querier can query both tenant metrics and `threshold-exporter` metrics (both StoreAPIs must be registered).
 

@@ -107,8 +107,11 @@ victorialogs:
   # purpose (ADR-021 §Blast radius Layer 3). `/tail` is intentionally
   # ABSENT — a live long-lived connection bypasses -search.maxQueryDuration
   # and squats a concurrency slot; audit-log queries do not need it.
-  # Matched as path-segment prefixes (a trailing slash / sub-path is
-  # covered, a sibling like `_other` is not over-matched).
+  # Matched exactly, with an optional trailing slash: a sub-path
+  # (`/select/logsql/query/foo`) and a sibling (`/select/logsql/query_other`)
+  # both get the 403. docs/integration/tenant-log-query.md §4.1 lists the
+  # same endpoints; tests/helm/test_tenant_log_query_allowlist_doc.py
+  # compares the two.
   allowedEndpoints:
     - /select/logsql/query
     - /select/logsql/hits
