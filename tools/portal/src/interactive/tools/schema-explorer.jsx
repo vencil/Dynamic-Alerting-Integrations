@@ -138,17 +138,6 @@ const SCHEMA = [
     example: '"team-sre-apac"',
   },
   {
-    key: '_routing_enforced',
-    type: 'object',
-    desc: t('平台強制雙軌路由（NOC + tenant）', 'Platform enforced dual routing (NOC + tenant)'),
-    rulePack: 'all',
-    children: [
-      { key: 'enabled', type: 'boolean', desc: t('是否啟用', 'Whether it is enabled'), rulePack: 'all', example: 'true' },
-      { key: 'receiver', type: 'object', desc: t('NOC 接收器，形狀同 _routing.receiver', 'NOC receiver, same shape as _routing.receiver'), rulePack: 'all', range: RECEIVER_RANGE },
-      { key: 'match', type: 'array', desc: t('Alertmanager label matcher 清單，符合任一即送 NOC', 'Alertmanager label matchers; alerts matching any go to the NOC'), rulePack: 'all' },
-    ],
-  },
-  {
     key: '_metadata',
     type: 'object',
     desc: t('Tenant metadata，透過 info metric 注入 Runbook 等', 'Tenant metadata injected via info metric for Runbook etc.'),
@@ -157,18 +146,6 @@ const SCHEMA = [
       { key: 'runbook_url', type: 'string', desc: t('Runbook 基底 URL', 'Runbook base URL'), rulePack: 'all' },
       { key: 'owner', type: 'string', desc: t('負責團隊或人', 'Owning team or person'), rulePack: 'all', example: '"dba-team"' },
       { key: 'tier', type: 'string', desc: t('服務等級', 'Service tier'), rulePack: 'all', example: '"tier-1"' },
-    ],
-  },
-  {
-    key: '_routing_defaults',
-    type: 'object',
-    desc: t('路由預設值（四層合併第一層，ADR-007；通常寫在 _defaults.yaml）', 'Routing defaults (four-layer merge layer 1, ADR-007; usually set in _defaults.yaml)'),
-    rulePack: 'all',
-    children: [
-      { key: 'receiver', type: 'object', desc: t('預設接收器，形狀同 _routing.receiver', 'Default receiver, same shape as _routing.receiver'), rulePack: 'all', range: RECEIVER_RANGE },
-      { key: 'group_wait', type: 'string', desc: t('預設分組等待', 'Default group wait'), rulePack: 'all', example: '"30s"' },
-      { key: 'group_interval', type: 'string', desc: t('預設分組間隔', 'Default group interval'), rulePack: 'all', example: '"5m"' },
-      { key: 'repeat_interval', type: 'string', desc: t('預設重複間隔', 'Default repeat interval'), rulePack: 'all', example: '"4h"' },
     ],
   },
 ];

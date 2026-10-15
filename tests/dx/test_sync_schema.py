@@ -204,3 +204,112 @@ class TestPrintDriftReport:
         assert "not defined in Go source" in out    # extra_in_schema
         assert "Reserved KEYS differ between Go and Python" in out
         assert "Reserved PREFIXES differ between Go and Python" in out
+
+
+_ROUTING_SRC = os.path.join(_REPO, "scripts", "tools", "ops", "_grar_validate.py")
+
+
+def _real_expected():
+    keys, prefixes = ss.extract_python_keys(_PY_SRC)
+    return ss.expected_property_names(
+        keys, prefixes, ss.extract_tenant_routing_keys(_ROUTING_SRC))
+
+
+def _committed():
+    with open(_SCHEMA, encoding="utf-8") as f:
+        return f.read()
+
+
+def _without_property_names(text):
+    """`text` with tenantConfig's own propertyNames line block removed."""
+    import json
+    marker = '\n      "propertyNames": '
+    start = text.index(marker, text.index('"tenantConfig": {'))
+    _, end = json.JSONDecoder().raw_decode(text, start + len(marker))
+    out = text[:start] + text[end + len(","):]
+    assert out.count('"propertyNames"') == text.count('"propertyNames"') - 1
+    return out
+
+
+class TestClosedUnderscoreNamespace:
+    """#3016 R3: tenantConfig.propertyNames closes the `_` namespace, and it is
+    generated from the Python SSOT rather than written by hand."""
+
+    def test_reads_the_real_tenant_routing_keys(self):
+        assert ss.extract_tenant_routing_keys(_ROUTING_SRC) == {"_routing", "_routing_profile"}
+
+    def test_reads_a_frozenset_literal_and_nothing_else(self, tmp_path):
+        src = tmp_path / "m.py"
+        src.write_text('def f():\n    TENANT_ROUTING_KEYS = frozenset({"_decoy"})\n'
+                       'TENANT_ROUTING_KEYS = frozenset({"_a", "_b"})\n', encoding="utf-8")
+        assert ss.extract_tenant_routing_keys(src) == {"_a", "_b"}
+        src.write_text("TENANT_ROUTING_KEYS = make()\n", encoding="utf-8")
+        assert ss.extract_tenant_routing_keys(src) == set()
+
+    def test_committed_schema_is_in_sync(self):
+        import json
+        schema = json.loads(_committed())
+        assert ss.check_property_names(schema, _real_expected()) == []
+
+    @pytest.mark.parametrize("key", [
+        "cpu", "mysql_connections", 'redis_db_keys{db="db2"}', "_silent_mode",
+        "_routing", "_routing_profile", "_custom_alerts", "_metadata", "_profile",
+        "_namespaces", "_severity_dedup", "_state_maintenance", "_state_custom_x",
+    ])
+    def test_the_pattern_accepts_what_a_reader_reads(self, key):
+        import re
+        assert re.search(_real_expected()["pattern"], key), key
+
+    @pytest.mark.parametrize("key", [
+        "_routng", "_silense_mode", "_routing_profle", "_routing_defaults",
+        "_routing_enforced", "_domain_policy", "_", "_silent_mode_x", "_metadata2",
+    ])
+    def test_the_pattern_rejects_what_nothing_reads(self, key):
+        import re
+        assert not re.search(_real_expected()["pattern"], key), key
+
+    def test_a_defined_property_the_pattern_rejects_is_drift(self):
+        import json
+        schema = json.loads(_committed())
+        schema["definitions"]["tenantConfig"]["properties"]["_routing_defaults"] = {}
+        assert ss.check_property_names(schema, _real_expected()) == [
+            "tenantConfig.properties._routing_defaults is a key propertyNames rejects"]
+
+    def test_a_stale_subschema_is_drift(self):
+        import json
+        schema = json.loads(_committed())
+        schema["definitions"]["tenantConfig"]["propertyNames"]["pattern"] = "^"
+        assert any("stale" in line for line in ss.check_property_names(schema, _real_expected()))
+
+    def test_splice_is_byte_preserving_and_idempotent(self):
+        text = _committed()
+        expected = _real_expected()
+        assert ss.splice_property_names(text, expected) == text
+        # Remove the subschema, splice it back: the whole file round-trips.
+        assert ss.splice_property_names(_without_property_names(text), expected) == text
+
+    def test_splice_never_touches_a_nested_property_names(self):
+        text = _committed().replace(
+            '"tenantConfig": {',
+            '"tenantConfig": {\n      "x": {"propertyNames": {"pattern": "^k"}},', 1)
+        out = ss.splice_property_names(text, _real_expected())
+        assert '"x": {"propertyNames": {"pattern": "^k"}}' in out
+
+    def test_update_writes_and_check_passes(self, tmp_path):
+        import subprocess
+        import sys
+        schema = tmp_path / "s.json"
+        text = _committed()
+        schema.write_text(_without_property_names(text), encoding="utf-8")
+        tool = os.path.join(_REPO, "scripts", "tools", "dx", "sync_schema.py")
+        base = [sys.executable, tool, "--schema", str(schema)]
+        check = subprocess.run([*base, "--check"], cwd=_REPO, capture_output=True,
+                               text=True, encoding="utf-8", timeout=120)
+        assert check.returncode == 1 and "propertyNames is stale" in check.stdout
+        upd = subprocess.run([*base, "--update"], cwd=_REPO, capture_output=True,
+                             text=True, encoding="utf-8", timeout=120)
+        assert upd.returncode == 0, upd.stdout + upd.stderr
+        assert schema.read_text(encoding="utf-8") == text
+        again = subprocess.run([*base, "--check"], cwd=_REPO, capture_output=True,
+                               text=True, encoding="utf-8", timeout=120)
+        assert again.returncode == 0, again.stdout
