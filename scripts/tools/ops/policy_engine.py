@@ -251,13 +251,47 @@ _REGEX_MAX_LEN = 200
 _NESTED_QUANTIFIER = re.compile(r'\([^)]*[+*][^)]*\)[+*?]')
 
 
+def _has_nested_repeat(pattern: str) -> bool:
+    """A variable repeat (`+`, `*`, `?`, `{n,}`, …) inside another repeat that
+    can run more than once, read off the parsed pattern — the textual heuristic above
+    misses `((a+))+` and `(a+){2,}` (#2987 review). Unparseable → False; the
+    compile check reports it."""
+    try:
+        import re._parser as parser  # Python ≥ 3.11 (CI and images pin 3.13)
+        tree = parser.parse(pattern)
+    except Exception:  # noqa: BLE001 — a pattern re cannot parse is not nested
+        return False
+    repeats = (parser.MAX_REPEAT, parser.MIN_REPEAT, parser.POSSESSIVE_REPEAT)
+
+    def walk(items, under_repeat):
+        for op, av in items:
+            if op in repeats:
+                lo, hi, sub = av
+                if hi != lo and under_repeat:  # a fixed count (`a{2}`) cannot backtrack
+                    return True
+                if walk(sub, under_repeat or hi > 1):
+                    return True
+            elif op is parser.SUBPATTERN:
+                if walk(av[-1], under_repeat):
+                    return True
+            elif op is parser.BRANCH:
+                if any(walk(alt, under_repeat) for alt in av[1]):
+                    return True
+            elif op in (parser.ASSERT, parser.ASSERT_NOT):
+                if walk(av[1], under_repeat):
+                    return True
+        return False
+
+    return walk(tree, False)
+
+
 def _regex_refusal(pattern: str) -> Optional[str]:
     """Why `matches` will not run *pattern* (it then never matches), or None."""
     if len(pattern) > _REGEX_MAX_LEN:
         return f"is longer than {_REGEX_MAX_LEN} characters (ReDoS guard)"
-    if _NESTED_QUANTIFIER.search(pattern):
+    if _NESTED_QUANTIFIER.search(pattern) or _has_nested_repeat(pattern):
         return ("has a nested quantifier: a quantified group that holds a quantifier, "
-                "such as `(a+)+` or an optional `(\\d+)?` (ReDoS guard; it refuses both "
+                "such as `(a+)+`, `((a+))+`, `(a+){2,}` or an optional `(\\d+)?` (ReDoS guard; it refuses all "
                 "-- drop the group's quantifier, e.g. `^\\d*$`, or use `one_of`)")
     try:
         re.compile(pattern)
@@ -308,7 +342,7 @@ def _value_problem(op: str, has_value: bool, value: Any, prefix: str) -> Optiona
         return f"{field_op} needs {field_val} to be a scalar, got {type(value).__name__} {value!r}"
     if op in _ORDER_OPERATORS:
         cmp = None if isinstance(value, bool) else _to_comparable(value)
-        if not isinstance(cmp, float) or math.isnan(cmp):
+        if not isinstance(cmp, float) or not math.isfinite(cmp):
             return (f"{field_op} needs {field_val} to be a number or a duration (`5m`), "
                     f"got {value!r} (every comparison would fail)")
         return None
@@ -668,7 +702,10 @@ def _to_comparable(value: Any) -> Union[float, str]:
     支援 Prometheus duration 字串（如 ``5m`` → ``300``）。
     """
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            return float(value)
+        except OverflowError:  # an int past float range (#2987 review)
+            return math.inf if value > 0 else -math.inf
     if isinstance(value, str):
         # Try numeric
         try:
