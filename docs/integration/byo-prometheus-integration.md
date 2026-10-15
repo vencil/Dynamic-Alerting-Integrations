@@ -509,7 +509,7 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 
 ## 進階：與 Thanos / VictoriaMetrics 整合
 
-本平台的規則包純粹基於標準 PromQL，因此與 Thanos 和 VictoriaMetrics 完全相容：
+本平台的規則包只用標準 PromQL，可以直接載入 Thanos Ruler 與 vmalert。VictoriaMetrics 的評估結果在少數情況與 Prometheus 不同（已登記的差異見 [VictoriaMetrics 整合指南](victoriametrics-integration.md) §3.1、§3.2）：
 
 **Thanos**：規則包可載入 Thanos Ruler。確保 Thanos Querier 能同時查詢到 tenant 指標和 `threshold-exporter` 指標（兩個 StoreAPI 都要註冊）。
 
