@@ -25,6 +25,18 @@ if [ ! -d .git ]; then
 else
   echo "[git-init] repo already present at ${CONF_DIR} (idempotent skip)"
 fi
+# #2903 (ADR-036 §3): the generator service reads this repo's git objects
+# while tenant-api commits; automatic gc could repack or prune them under it.
+git config gc.auto 0
+
+# #2903: tenant-api runs as the generator service's uid (APP_UID; the service
+# answers only its own uid). Hand it the named volume it writes — the state
+# store, created owned by the tenant-api image's own user.
+if [ -n "${APP_UID:-}" ]; then
+  for d in ${CHOWN_DIRS:-}; do
+    [ -d "$d" ] && chown -R "${APP_UID}:${APP_UID}" "$d"
+  done
+fi
 
 # This seed runs as root, but tenant-api (commit-on-write) runs as a non-root
 # user and shares this .git via the bind mount. Make .git group/world-writable

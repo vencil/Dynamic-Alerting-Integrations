@@ -23,6 +23,7 @@ lang: zh
 | 平台自監控告警在 Prometheus 有 firing，卻沒人收到 | Platform / SRE | [平台告警沒有收到通知](#平台告警沒有收到通知) |
 | Operator 環境規則沒載入 | Platform Engineer | [Operator 環境常見問題](#prometheus-operator-環境常見問題) |
 | 經 tenant-api 的寫入都回 409 `TENANT_TREE_UNREADABLE` 或 500 `TENANT_STORE_FAULT` | Platform Engineer | [tenant-api 寫入全部被拒](#tenant-api-寫入全部被拒tenant_tree_unreadabletenant_store_fault) |
+| 經 tenant-api 的寫入回 422 `GENERATOR_FINDINGS`、429／422 `GENERATOR_REJECTED` 或 503 `VALIDATOR_UNAVAILABLE`／`POLICY_UNAVAILABLE` | Platform Engineer | [tenant-api 寫入被產生器容器拒收](#tenant-api-寫入被產生器容器拒收generator_findingsvalidator_unavailable) |
 
 ## SHA-256 熱重新加載延遲
 
@@ -221,6 +222,19 @@ da-tools validate-config --config-dir ./conf.d/
 與 exporter 的 `ConfigFilesUnreadable`（見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)）不同，這裡指的是 tenant-api 掛載的那份 conf.d。
 
 原因與修法見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md#38-confd-有讀不了的項目時寫入整個拒收2939)。
+
+## tenant-api 寫入被產生器容器拒收（`GENERATOR_FINDINGS`／`VALIDATOR_UNAVAILABLE`）
+
+> 👤 **適用：** Platform Engineer / 呼叫 tenant-api 的工具維護者
+
+**症狀**：會改變 conf.d 內容的寫入被拒（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)），什麼都沒寫入：
+
+- 422 `GENERATOR_FINDINGS`：寫入後的整棵 conf.d 過不了 `generate-routes --validate --strict`。看回應的 `findings[]`：`related: true` 的是這筆寫入造成或碰到的；`pre_existing: true` 的是寫入前就有的。樹上別處已有會擋的問題時，所有寫入都會被拒——問題在某個租戶檔、修好它就能讓整棵樹通過時可以經 tenant-api 修，其他情況（平台檔、子目錄的檔、多個租戶同時違規）走 git 修。要在本機重現，用容器那一版 da-tools（版本在 `da_generator_build_info`）帶同一份部署端 policy 檔跑 `da-tools generate-routes --validate --strict`。
+- 429 `GENERATOR_REJECTED`（`reason` 為 `busy`、`deadline`、`git_read`、`mismatch`、`no_time`）：這次沒判出結果，照 `Retry-After` 重送。持續出現看 `tenant_api_generator_rejections_total` 與產生器容器的 log。
+- 422 `GENERATOR_REJECTED`：`too_large` 拆小批次重送；`memory` 看告警 `GeneratorJudgementMemoryNearLimit`，一起調高產生器的 `--memory-limit-bytes` 與容器的記憶體上限；`normalized` 是 `.gitattributes`（eol、text、filter）會把送來的內容改掉再 commit——照 git 存的樣子送（例如 `eol=lf` 就用 LF），或改屬性。
+- 503 `VALIDATOR_UNAVAILABLE`／`POLICY_UNAVAILABLE`：`tenant_api_policy_available` 為 0、告警 `TenantApiPolicyUnavailable`。依 `reason` 處理：`unreachable` 看產生器容器是否在跑（映像要含 `generator-service`，chart 預設的 `tools/v2.9.0` 沒有）、與 tenant-api 是否同 uid；`amtool_missing`、`generator_too_old` 換映像；`policy_unusable`／`policy_unreadable` 修部署端 policy 的 ConfigMap。`GENERATOR_REJECTED` 與這些 503 的回應都只帶 `reason`（不認得的顯示 `unknown`），細節（路徑、例外內容、原本的 reason）在 tenant-api 的 log（`write refused: the generator …`、批次為 `batch op refused: …`）。
+
+各回應碼的完整說明見 [Tenant API 硬化 §3.9](api/tenant-api-hardening.md#39-每筆寫入先問產生器容器2903)。
 
 ## 相關資源
 

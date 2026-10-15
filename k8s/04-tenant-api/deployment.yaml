@@ -114,6 +114,17 @@ spec:
             readOnlyRootFilesystem: false
             capabilities:
               drop: ["ALL"]
+          # ⛔ #2903 (ADR-036 §3): tenant-api images built after #2903 refuse to
+          # start without --generator-socket — every write that changes conf.d
+          # asks the generator container (`da-tools generator-service`) first.
+          # This manifest pins tenant-api v2.7.0, which predates that flag (and
+          # would refuse it), so it carries no generator yet. When you raise the
+          # image past #2903, add what helm/tenant-api renders: the `generator`
+          # sidecar (same pod uid, conf.d read-only, a da-tools image that ships
+          # generator-service), the shared Memory emptyDir for its socket, git
+          # `gc.auto=0` on the repository, and here
+          # --generator-socket=/run/da-generator/generator.sock (plus
+          # --deploy-policy when a deployment policy file is mounted).
           args:
             - --addr=:8080
             - --config-dir=/conf.d

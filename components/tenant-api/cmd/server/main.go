@@ -37,6 +37,7 @@ import (
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/orphan"
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
@@ -107,8 +108,6 @@ func main() {
 		"Path to _rbac.yaml (omit it and TA_RBAC_PATH for open-read mode; an empty value is refused, #2491)")
 	rbacEmptyOpen := flag.Bool("rbac-empty-open", envBool("TA_RBAC_EMPTY_OPEN"),
 		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
-	policyUnavailableOpen := flag.Bool("policy-unavailable-open", envBool("TA_POLICY_UNAVAILABLE_OPEN"),
-		"Hub #2486 Q7-2 escape hatch: in direct write mode, let the writes the domain policy judges (PUT /tenants/{id}, routing ops of tenant/group batches) through while a _domain_policy.yaml / .yml is present but unusable with no last good version, instead of answering 503 POLICY_UNAVAILABLE. Each write let through is logged and counted (tenant_api_policy_unavailable_open_total). Default false = fail closed")
 	rbacMetadataScopeEnforce := flag.Bool("rbac-metadata-scope-enforce", envBool("TA_RBAC_METADATA_SCOPE_ENFORCE"),
 		"ADR-027/LD-6 P1: DENY an unlabeled tenant on an env/domain-restricted rule (fail-closed). Default false = shadow (still allow, but count tenant_api_scope_would_deny_total{axis=\"metadata\"}); flip only after that counter stops incrementing over the soak window (increase()==0 — it is a monotonic counter, not a gauge)")
 	rbacMetadataWriteScopeEnforce := flag.Bool("rbac-metadata-write-scope-enforce", envBool("TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE"),
@@ -257,9 +256,19 @@ func main() {
 	humanSocket := flag.String("human-socket", envOrDefault("TA_HUMAN_SOCKET", ""),
 		"ADR-027 D2-B: path to a pod-internal Unix domain socket for the human (oauth2-proxy) plane. When set, the same router is ALSO served here and this listener is tagged as the trusted human hop (excluded from the machine-identity audit). Empty (default) = TCP-only, unchanged behavior.")
 
+	// #2903 (ADR-036 §3–§5): the generator container. Every content-changing
+	// conf.d write asks it first, so it is required: no socket, no start.
+	generatorSocket := flag.String("generator-socket", envOrDefault("TA_GENERATOR_SOCKET", ""),
+		"#2903 (ADR-036 §3): Unix socket of the generator container (`da-tools generator-service`), which judges every content-changing conf.d write before it is committed. Required: tenant-api refuses to start without it")
+	deployPolicy := flag.String("deploy-policy", envOrDefault("TA_DEPLOY_POLICY", ""),
+		"#2903 (ADR-036 §4/§5): read-only path of the deployment policy file the generator container judges with (its --policy). tenant-api hashes it to check that the generator judged with the same file. Empty = the generator runs without one (both sides must agree)")
+
 	flag.Parse()
 	if err := checkRBACFlag(flagExplicit(flag.CommandLine, "rbac"), *rbacPath); err != nil {
 		log.Fatalf("FATAL: %v (#2491)", err)
+	}
+	if err := checkGeneratorSocketFlag(*generatorSocket); err != nil {
+		log.Fatalf("FATAL: %v", err)
 	}
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
@@ -378,6 +387,13 @@ func main() {
 
 	writer := gitops.NewWriter(*configDir, *gitDir)
 	writer.SetBaseBranch(*gitBaseBranch) // #638: explicit PR-mode base (forge-neutral)
+	// #2903 (ADR-036 §4): every content-changing write asks the generator
+	// container before it commits; /metrics reads its state and appends its
+	// own metrics.
+	generatorGate := generator.NewGate(generator.NewClient(*generatorSocket), strings.TrimSpace(*deployPolicy))
+	writer.SetValidator(generatorGate)
+	handler.SetGeneratorSource(generatorGate)
+	slog.Info("generator container configured (ADR-036 §3)", "socket", *generatorSocket, "deploy_policy", *deployPolicy)
 	// #2900: a batch runs in a staging worktree; one a killed process left
 	// behind is removed here, before serving and outside the writer lock. A
 	// publish the process was killed in (branch advanced, worktree not yet)
@@ -450,13 +466,8 @@ func main() {
 	// v2.5.0: Domain policy enforcement at API layer
 	policyMgr := policy.NewManager(*configDir)
 	// Hub #2486 Q7-2: a policy file that is present but unusable with no last
-	// good version refuses the policy-reading writes in direct mode (503);
-	// --policy-unavailable-open lets them through, logged and counted.
-	if *policyUnavailableOpen {
-		policyMgr.SetOpenOnUnavailable(true)
-		log.Printf("WARN: --policy-unavailable-open set: writes the domain policy judges are let through while the policy file is unusable (fail-closed disabled)")
-	}
-	handler.SetPolicyAvailabilitySource(policyMgr)
+	// good version refuses the policy-reading writes in direct mode (503).
+	// #2903: there is no escape hatch (ADR-036 §5).
 
 	// ADR-027 / LD-6 P4: tenant→organization mapping (_tenant_orgs.yaml) backing
 	// the org-scope authorization axis. Admin-only (no write API) and strict-
@@ -620,6 +631,8 @@ func main() {
 		// middleware — the handler detaches from the request deadline and uses
 		// this instead (see federation.BackfillAccounts).
 		BackfillTimeoutDur: *writeTimeout,
+		// #2903: an async batch's deadline (the generator gets what is left).
+		WriteTimeoutDur: *writeTimeout,
 	}
 
 	// Gemini #1056 disposition 3a (+ current-state gauge follow-up): one shared
@@ -928,6 +941,21 @@ var errRBACFlagEmpty = errors.New("--rbac was given an empty path; omit --rbac a
 func checkRBACFlag(explicit bool, v string) error {
 	if explicit && strings.TrimSpace(v) == "" {
 		return errRBACFlagEmpty
+	}
+	return nil
+}
+
+// errGeneratorSocketMissing is checkGeneratorSocketFlag's rejection.
+var errGeneratorSocketMissing = errors.New("--generator-socket (TA_GENERATOR_SOCKET) is required: every content-changing conf.d write " +
+	"is judged by the generator container (`da-tools generator-service`, ADR-036 §3) on that Unix socket, and without it " +
+	"no write could be judged (#2903)")
+
+// checkGeneratorSocketFlag refuses to start without a generator socket
+// (#2903): writes are never committed unjudged, so there is no mode without
+// the generator container.
+func checkGeneratorSocketFlag(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return errGeneratorSocketMissing
 	}
 	return nil
 }

@@ -21,6 +21,7 @@ lang: en
 | Platform self-monitoring alerts are Firing in Prometheus but nobody is notified | Platform / SRE | [Platform Alerts Never Reach Anyone](#platform-alerts-never-reach-anyone) |
 | Rules not loaded in an Operator environment | Platform Engineer | [Prometheus Operator Common Issues](#prometheus-operator-common-issues) |
 | Every write through tenant-api answers 409 `TENANT_TREE_UNREADABLE` or 500 `TENANT_STORE_FAULT` | Platform Engineer | [Every tenant-api Write Is Refused](#every-tenant-api-write-is-refused-tenant_tree_unreadable--tenant_store_fault) |
+| A write through tenant-api answers 422 `GENERATOR_FINDINGS`, 429 / 422 `GENERATOR_REJECTED` or 503 `VALIDATOR_UNAVAILABLE` / `POLICY_UNAVAILABLE` | Platform Engineer | [tenant-api Writes Refused by the Generator Container](#tenant-api-writes-refused-by-the-generator-container-generator_findings--validator_unavailable) |
 
 ## SHA-256 Hot-Reload Delay
 
@@ -219,6 +220,19 @@ da-tools validate-config --config-dir ./conf.d/
 Unlike the exporter's `ConfigFilesUnreadable` (see [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay)), this is about the copy of conf.d tenant-api mounts.
 
 Causes and fixes: [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md#38-a-write-is-refused-while-confd-holds-an-entry-that-cannot-be-read-2939).
+
+## tenant-api Writes Refused by the Generator Container (`GENERATOR_FINDINGS` / `VALIDATOR_UNAVAILABLE`)
+
+> 👤 **For:** Platform Engineers / maintainers of tools that call tenant-api
+
+**Symptom**: a write that changes conf.d is refused ([#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)) and nothing is written:
+
+- 422 `GENERATOR_FINDINGS`: the whole conf.d with the write applied does not pass `generate-routes --validate --strict`. Read the response's `findings[]`: `related: true` ones come from or touch this write; `pre_existing: true` ones were there before it. While a blocking problem sits elsewhere in the tree, every write is refused — fix it through tenant-api when it is in one tenant file whose repair makes the tree pass, otherwise (platform files, files in subdirectories, several tenants at once) in git. To reproduce locally, run `da-tools generate-routes --validate --strict` with the container's da-tools version (in `da_generator_build_info`) and the same deployment policy file.
+- 429 `GENERATOR_REJECTED` (`reason` `busy`, `deadline`, `git_read`, `mismatch`, `no_time`): no verdict this time; resend after `Retry-After`. If it persists, check `tenant_api_generator_rejections_total` and the generator container's log.
+- 422 `GENERATOR_REJECTED`: `too_large` — split the batch; `memory` — see the `GeneratorJudgementMemoryNearLimit` alert and raise the generator's `--memory-limit-bytes` together with the container's memory limit; `normalized` — a `.gitattributes` rule (eol, text, a filter) would rewrite the content before committing it: send it as git stores it (LF under `eol=lf`, say), or change the attributes.
+- 503 `VALIDATOR_UNAVAILABLE` / `POLICY_UNAVAILABLE`: `tenant_api_policy_available` is 0 and `TenantApiPolicyUnavailable` fires. By `reason`: `unreachable` — is the generator container running (its image must ship `generator-service`; the chart's default `tools/v2.9.0` does not), under tenant-api's uid; `amtool_missing`, `generator_too_old` — change the image; `policy_unusable` / `policy_unreadable` — repair the deployment policy ConfigMap. `GENERATOR_REJECTED` and these 503s carry only `reason` (one tenant-api does not know is shown as `unknown`); the detail (paths, exception text, the original reason) is in tenant-api's log (`write refused: the generator …`, for batches `batch op refused: …`).
+
+Every response code is described in [Tenant API hardening §3.9](api/tenant-api-hardening.en.md#39-every-write-asks-the-generator-container-first-2903).
 
 ---
 

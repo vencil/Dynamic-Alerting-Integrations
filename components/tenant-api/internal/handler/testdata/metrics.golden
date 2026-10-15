@@ -55,12 +55,9 @@ tenant_api_config_last_reload_successful{component="groups"} 1
 tenant_api_config_last_reload_successful{component="policy"} 1
 tenant_api_config_last_reload_successful{component="tenantorg"} 1
 tenant_api_config_last_reload_successful{component="views"} 1
-# HELP tenant_api_policy_available Whether every present domain policy file (_domain_policy.yaml / .yml) is usable or served from its last good version (1), or one is present but unusable with no last good version (0): direct-mode writes the policy judges then answer 503 POLICY_UNAVAILABLE. Alert on == 0.
+# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool present and the generator not older than the policy requires. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.
 # TYPE tenant_api_policy_available gauge
-tenant_api_policy_available 1
-# HELP tenant_api_policy_unavailable_open_total Writes let through an unavailable domain policy under --policy-unavailable-open (fail-closed disabled). Should stay 0.
-# TYPE tenant_api_policy_unavailable_open_total counter
-tenant_api_policy_unavailable_open_total 0
+tenant_api_policy_available 0
 # HELP tenant_api_async_task_panics_total Async batch tasks whose work panicked; each was marked failed and the worker went on. Should stay 0 (the tenant-api log has the panic and stack per task id).
 # TYPE tenant_api_async_task_panics_total counter
 tenant_api_async_task_panics_total 0
@@ -70,3 +67,18 @@ tenant_api_dev_auth_bypass_active 0
 # HELP tenant_api_human_socket_up 1 if the human-plane Unix socket answered the readiness self-dial (ADR-027 D2-B; only present when --human-socket is set).
 # TYPE tenant_api_human_socket_up gauge
 tenant_api_human_socket_up 1
+# HELP tenant_api_generator_rejections_total Writes the generator container gave no verdict on (GENERATOR_REJECTED), by reason; nothing of them was written.
+# TYPE tenant_api_generator_rejections_total counter
+tenant_api_generator_rejections_total{reason="deadline"} 0
+tenant_api_generator_rejections_total{reason="memory"} 0
+tenant_api_generator_rejections_total{reason="incomplete"} 0
+tenant_api_generator_rejections_total{reason="git_read"} 0
+tenant_api_generator_rejections_total{reason="busy"} 0
+tenant_api_generator_rejections_total{reason="too_large"} 0
+tenant_api_generator_rejections_total{reason="invalid_request"} 0
+tenant_api_generator_rejections_total{reason="mismatch"} 0
+tenant_api_generator_rejections_total{reason="no_time"} 0
+tenant_api_generator_rejections_total{reason="normalized"} 0
+# HELP tenant_api_generator_scrape_success Whether the generator container's /metrics was read on this scrape and appended (its da_generator_* families). 0: not appended.
+# TYPE tenant_api_generator_scrape_success gauge
+tenant_api_generator_scrape_success 0

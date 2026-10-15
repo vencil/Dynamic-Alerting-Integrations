@@ -2,7 +2,7 @@ package policy
 
 // availability_test.go — Manager.Unavailable / CheckAvailable (hub #2486
 // Q7-2 甲軸): which file states make the policy unavailable, and the
-// --policy-unavailable-open escape hatch. watcher_unavailable_test.go pins the
+// removed --policy-unavailable-open escape hatch (#2903). watcher_unavailable_test.go pins the
 // shapes that must not let a forbidden write through; this file pins the
 // other direction — the states that must NOT be reported unavailable.
 
@@ -84,37 +84,21 @@ func TestUnavailable_FileStates(t *testing.T) {
 	})
 }
 
-func TestCheckAvailable_EscapeHatch(t *testing.T) {
+// #2903 (ADR-036 §5): --policy-unavailable-open is gone, so an unavailable
+// policy refuses through both gates, every time.
+func TestCheckAvailable_NoEscapeHatch(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	if err := os.Mkdir(policyPath(dir, "_domain_policy.yml"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	m := NewManager(dir)
-	if err := m.CheckAvailable("test"); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("CheckAvailable = %v, want ErrUnavailable", err)
-	}
-	if err := m.RefusesWrites(); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("RefusesWrites = %v, want ErrUnavailable", err)
-	}
-	if m.OpenPasses() != 0 {
-		t.Fatalf("OpenPasses = %d before the hatch is open", m.OpenPasses())
-	}
-	m.SetOpenOnUnavailable(true)
-	// The batch-level gate lets nothing through on its own account (N2,
-	// hub #2486 PR-7c round 2): only CheckAvailable, once per write, counts.
-	if err := m.RefusesWrites(); err != nil {
-		t.Fatalf("RefusesWrites with --policy-unavailable-open = %v, want nil", err)
-	}
 	for i := 0; i < 2; i++ {
-		if err := m.CheckAvailable("test"); err != nil {
-			t.Fatalf("CheckAvailable with --policy-unavailable-open = %v, want nil", err)
+		if err := m.CheckAvailable("test"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("CheckAvailable = %v, want ErrUnavailable", err)
 		}
-	}
-	if got := m.OpenPasses(); got != 2 {
-		t.Errorf("OpenPasses = %d, want 2", got)
-	}
-	if m.Unavailable() == nil {
-		t.Error("the escape hatch must not hide the state: Unavailable = nil")
+		if err := m.RefusesWrites(); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("RefusesWrites = %v, want ErrUnavailable", err)
+		}
 	}
 }

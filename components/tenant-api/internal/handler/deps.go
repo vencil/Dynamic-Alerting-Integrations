@@ -222,6 +222,25 @@ type Deps struct {
 	// the backfill prose to THIS field and leave BackfillTimeoutDur undocumented
 	// — the same defect #1730 had just fixed one commit earlier.
 	MaxBatchBodyBytes int64
+
+	// WriteTimeoutDur is the server's --write-timeout. An async batch has no
+	// request to take a deadline from, so it runs under this one, counted
+	// from when its task starts (#2903, ADR-036 §3: the generator is given
+	// what is left of it). Read via d.WriteTimeout().
+	WriteTimeoutDur time.Duration
+}
+
+// DefaultWriteTimeout is the fallback of WriteTimeout: the server's default
+// --write-timeout.
+const DefaultWriteTimeout = 30 * time.Second
+
+// WriteTimeout returns WriteTimeoutDur with a fallback to
+// DefaultWriteTimeout when unset (zero / negative).
+func (d *Deps) WriteTimeout() time.Duration {
+	if d.WriteTimeoutDur <= 0 {
+		return DefaultWriteTimeout
+	}
+	return d.WriteTimeoutDur
 }
 
 // prWritePath reports whether tenant writes take the PR/MR path — the one

@@ -110,10 +110,20 @@ resources:
 // staging / production get a PR mode on the config repo, the only mode whose
 // writes reach threshold-exporter. replicaCount is always 1: tenant-api is a
 // single writer and the chart refuses more (ADR-023).
+//
+// #2903: every environment carries gitRepoUrl. The chart's generator
+// container (required) judges each write from git objects, so conf.d must
+// be a repository: the chart refuses an emptyDir conf.d without gitRepoUrl.
+// The trial install clones the same config repo the PR modes write to.
+const GIT_REPO_URL_LINE =
+  'gitRepoUrl: "https://github.com/your-org/your-config-repo.git"  # replace (no credentials in the URL)';
+
 function writeBackBlock(environment) {
   if (environment === 'local') {
-    return `# Trial install: writes stay in this pod's /conf.d — never pushed, never
-# delivered to threshold-exporter, lost on restart. Use a PR mode for real use.
+    return `# Trial install: conf.d is cloned from your config repo; writes are commits
+# in this pod's /conf.d only — never pushed, never delivered to
+# threshold-exporter, lost on restart. Use a PR mode for real use.
+${GIT_REPO_URL_LINE}
 writeBack:
   mode: direct
   directAcknowledgeNotDelivered: true`;
@@ -121,7 +131,7 @@ writeBack:
   return `# Each write opens a PR on your config repo; after merge your GitOps
 # pipeline builds the threshold-config ConfigMap threshold-exporter reads.
 # For GitLab: mode: pr-gitlab and gitlab.project instead of github.repo.
-gitRepoUrl: "https://github.com/your-org/your-config-repo.git"  # replace (no credentials in the URL)
+${GIT_REPO_URL_LINE}
 writeBack:
   mode: pr-github
   github:

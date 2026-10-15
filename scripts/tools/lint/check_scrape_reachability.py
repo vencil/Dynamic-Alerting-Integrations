@@ -205,6 +205,13 @@ _FAMILY_TABLE: list[tuple[str, str, object]] = [
     # like everything else it registers — see the module docstring.
     ("da_", "helm-service", THRESHOLD_EXPORTER_NAMESPACE),
     ("user_", "helm-service", THRESHOLD_EXPORTER_NAMESPACE),
+    # NOTE `da_generator_` is NOT threshold-exporter's: it is the generator
+    # container's (`da-tools generator-service`, ADR-036 §3), which has only a
+    # Unix socket — tenant-api appends its /metrics to its own (#2903), so the
+    # series come from the tenant-api target. Longest-prefix matching routes
+    # it here before `da_` above; da_generator_build_info is the generator /
+    # da-guard version metric (ADR-036 §6).
+    ("da_generator_", "service", ("tenant-api", "tenant-api")),
 ]
 
 # ── EXACT-NAME families (checked before _FAMILY_TABLE) ─────────────────────

@@ -15,4 +15,4 @@ groups:
           severity: warning
           alert_source: platform
         annotations:
-          summary: "tenant-api domain policy is unavailable — policy-judged writes answer 503"
+          summary: "tenant-api writes cannot be judged — the generator container or its deployment policy is unavailable; writes answer 503"

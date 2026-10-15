@@ -1939,7 +1939,7 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 
 #### generator-service
 
-The generator container's service ([ADR-036](adr/036-single-parser-effective-config.en.md) §3, §5, §6, [#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)). It runs continuously, and tenant-api asks it before every write whether the whole conf.d, with those writes applied to that base commit, passes `generate-routes --validate --strict`. HTTP/1.1 over a Unix socket only, no network port. Deployment (the chart) and tenant-api's calls come in later releases.
+The generator container's service ([ADR-036](adr/036-single-parser-effective-config.en.md) §3, §5, §6, [#2901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2901)). It runs continuously, and tenant-api asks it before every write whether the whole conf.d, with those writes applied to that base commit, passes `generate-routes --validate --strict`. HTTP/1.1 over a Unix socket only, no network port. The tenant-api chart deploys it as a required sidecar, and tenant-api asks it before committing every write that changes conf.d; how its answers map to tenant-api responses is in [Tenant API hardening §3.9](api/tenant-api-hardening.en.md#39-every-write-asks-the-generator-container-first-2903) ([#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)).
 
 ```bash
 da-tools generator-service --socket <path> --repo <git repo> --config-subdir conf.d --work-dir <dir> [--policy <FILE>]

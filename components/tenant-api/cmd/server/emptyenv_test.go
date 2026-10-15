@@ -111,6 +111,9 @@ func TestServerRefusesEmptyValuesAtStartup(t *testing.T) {
 		{name: "TA_WRITE_MODE whitespace", env: []string{"TA_WRITE_MODE=  "}, want: []string{"TA_WRITE_MODE", "#2491"}},
 		{name: "TA_RBAC_PATH empty", env: []string{"TA_RBAC_PATH="}, want: []string{"TA_RBAC_PATH", "#2491"}},
 		{name: "--rbac= on the command line", args: "--rbac=", want: []string{"--rbac", "#2491"}},
+		// #2903: no generator socket, no start.
+		{name: "no generator socket", want: []string{"--generator-socket", "TA_GENERATOR_SOCKET", "#2903"}},
+		{name: "TA_GENERATOR_SOCKET blank", env: []string{"TA_GENERATOR_SOCKET=  "}, want: []string{"--generator-socket", "#2903"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Bounded: if the check is gone, main() goes on to serve and

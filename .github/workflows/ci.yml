@@ -107,6 +107,13 @@ jobs:
               #     scripts/tools/ops/bench-canary underneath is its own module,
               #     which this leg does not run.
               - "scripts/tools/ops/*.go"
+              #   - scripts/tools/ops/*.py + scripts/tools/*.py — the generator
+              #     container's service (generator_service.py and what it
+              #     imports, #2903): the tenant-api leg runs the REAL service
+              #     (generator_real_test.go, and tests/contract's runner), as a
+              #     child process go_test_reads.py cannot see.
+              - "scripts/tools/ops/*.py"
+              - "scripts/tools/*.py"
               - "tests/shared/**"
               #   - tests/golden/**, tests/rulepacks/** and tests/dx/fixtures/**
               #     — same asymmetry as tests/shared/** above, in three sibling

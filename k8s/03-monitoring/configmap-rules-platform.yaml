@@ -1003,15 +1003,16 @@ data:
                 TenantApiConfigReloadFailing (a rate alert) cannot.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
-          # --- tenant-api domain policy UNAVAILABLE (hub #2486 Q7-2) ---
-          # A _domain_policy.yaml / .yml that is present but unusable (a
-          # directory, an unresolvable symlink, unreadable, or refused by the parse)
-          # and has no last good version of its own makes tenant-api refuse, in
-          # direct write mode, every write the domain policy judges (503
-          # POLICY_UNAVAILABLE) instead of judging it on no policy. /ready stays
-          # 200 on purpose (one replica, `strategy: Recreate`: NotReady would
-          # take reads down too), so this gauge is the signal. `for: 2m` rides
-          # out a non-atomic write caught mid-way by one watcher tick.
+          # --- tenant-api cannot have writes judged (ADR-036 §5, #2903) ---
+          # tenant_api_policy_available is the generator container's `ready`,
+          # read by tenant-api at scrape time: its deployment policy file is
+          # usable, amtool is present and the generator is not older than the
+          # policy requires. 0 — or the container unreachable — means every
+          # content-changing write answers 503 (POLICY_UNAVAILABLE /
+          # VALIDATOR_UNAVAILABLE); there is no escape hatch. /ready stays 200
+          # on purpose (one replica, `strategy: Recreate`: NotReady would take
+          # reads down too), so this gauge is the signal. `for: 2m` rides out a
+          # restart of the container and a ConfigMap update caught mid-way.
           - alert: TenantApiPolicyUnavailable
             expr: tenant_api_policy_available{job="tenant-api"} == 0
             for: 2m
@@ -1019,21 +1020,58 @@ data:
               severity: warning
               alert_source: platform
             annotations:
-              summary: "tenant-api domain policy is unavailable — policy-judged writes answer 503"
+              summary: "tenant-api writes cannot be judged — the generator container or its deployment policy is unavailable; writes answer 503"
               description: |
-                A `_domain_policy.yaml` / `.yml` in the tenant-api conf.d is present
-                but cannot be read or parsed, and has no last good version, so in
-                direct write mode tenant-api refuses every write the domain policy
-                judges (PUT /tenants/{id}; tenant and group batch ops that write
-                `_routing_receiver_type` or touch `_routing` / `_routing_profile`)
-                with 503 POLICY_UNAVAILABLE. Other writes and all reads are
-                unaffected. The tenant-api WARN log ("policy: file cannot be read
-                or does not parse") names the file and the reason; repair (or
-                remove) the file and the alert clears on the next watcher tick.
-                `--policy-unavailable-open` lets such writes through (logged,
-                counted in tenant_api_policy_unavailable_open_total) — an escape
-                hatch, not a fix.
+                The generator container in the tenant-api pod cannot judge writes,
+                so tenant-api refuses every write that changes a conf.d file
+                (PUT /tenants/{id}, custom alerts, tenant and group batches, in
+                every write mode) with 503: POLICY_UNAVAILABLE when the deployment
+                policy file (generator.policy.existingConfigMap) cannot be read or
+                parsed, VALIDATOR_UNAVAILABLE when the container does not answer,
+                has no amtool, or is older than the policy's
+                min_generator_version. Reads are unaffected. The 503 body's
+                `reason` and the generator container's log say which; GET
+                /v1/status on its socket (the container's probe) shows the
+                policy error. Repair the policy ConfigMap, or fix the container
+                (image with generator-service, amtool), and the alert clears on
+                the next scrape. There is no escape hatch (ADR-036 §5): the
+                previous --policy-unavailable-open is removed, and this gauge no
+                longer reflects a _domain_policy.yaml in conf.d or "its last good
+                version".
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
+
+          # --- generator container: judgement memory near its limit (ADR-036 §3, #2901, #2903) ---
+          # Every tenant-api write is judged in a process the generator
+          # container forks, under RLIMIT_DATA. The process inherits the parse
+          # cache of the latest base tree, which grows with the tenant count
+          # and has no cap of its own, so once cache + one judgement no longer
+          # fit, EVERY write is rejected (reason "memory"). The ratio, not a
+          # byte count, so it holds for any configured limit; 0.8 leaves room
+          # to raise the limit and the container's memory before that point.
+          # The peak is the latest judgement's (a gauge until the next one),
+          # so `for: 5m` only rides out a single scrape. The container has no
+          # port: tenant-api appends its /metrics to its own (#2903), so the
+          # series carry job="tenant-api".
+          - alert: GeneratorJudgementMemoryNearLimit
+            expr: da_generator_judgement_peak_rss_bytes{job="tenant-api"} / da_generator_judgement_memory_limit_bytes{job="tenant-api"} > 0.8
+            for: 5m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "generator container: a write judgement used over 80% of its memory limit"
+              description: |
+                The latest judgement in the generator container (tenant-api's
+                write check) peaked at {{ $value | humanizePercentage }} of the
+                judgement process's memory limit (RLIMIT_DATA). The parse cache of
+                the latest base tree counts against that limit and grows with the
+                number of tenants; when cache plus one judgement exceed it, every
+                write is rejected with reason "memory" (422 GENERATOR_REJECTED).
+                Raise the judgement memory limit (`--memory-limit-bytes`) together
+                with the container's memory limit (generator.resources), before
+                writes start failing. da_generator_cache_bytes shows how much of
+                it is the cache.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/036-single-parser-effective-config.md"
 
           # --- tenant-api async task PANICKED (#2913) ---
           # The async batch worker (`?async=true`) recovers a panicking task

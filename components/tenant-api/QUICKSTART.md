@@ -1,14 +1,14 @@
 # tenant-api — 5 分鐘跑起來
 
-> 零資料庫的租戶配置 API:身分走 RBAC、寫入落成 git commit / 可審查 PR。一行 `docker run` 就跑。
+> 零資料庫的租戶配置 API:身分走 RBAC、寫入落成 git commit / 可審查 PR;每筆寫入 commit 前先由產生器容器判定([#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903))。
 >
-> *Zero-DB tenant config API — identity via RBAC, writes via Git. One `docker run`.*
+> *Zero-DB tenant config API — identity via RBAC, writes via Git, each write judged by the generator container first.*
 
 | | |
 |---|---|
 | **是什麼** | GitOps 原生、RBAC-scoped 的租戶配置 API(commit-on-write / PR 寫回) |
 | **給誰** | **平台工程師 / 維運**(部署)與 **API 整合 / 自動化**(直接呼叫)。<br>**人類租戶**改告警請用 **Tenant Manager portal**,不需碰這個 API。 |
-| **前置** | Docker 20.10+、`curl` |
+| **前置** | Docker 20.10+、`curl`;Linux 主機另需 `git`、`python3` + PyYAML(本機跑產生器服務)。macOS／Windows 請改用 [try-local](../../try-local/README.md)(compose 已含產生器容器) |
 | **你會看到** | `curl /api/v1/me` 從零 DB 回你的身分與 RBAC 權限(HTTP 200) |
 
 > 版本:範例用本機 build 的 image。要拉 published image 時版本見 [Releases / CHANGELOG](../../CHANGELOG.md)。
@@ -20,6 +20,10 @@
 ### 1) 準備一個 demo config 目錄(RBAC 規則 + 一個租戶)
 
 ```sh
+# REPO：這個 repo checkout 的絕對路徑（專案根）。第 2 步的 build 與產生器服務都用它
+REPO="/absolute/path/to/Dynamic-Alerting-Integrations"   # 改成你的 checkout
+test -f "$REPO/scripts/tools/ops/generator_service.py" || echo "REPO 不是這個 repo 的根目錄"
+
 mkdir -p demo/conf.d && cd demo
 
 cat > conf.d/_rbac.yaml <<'EOF'
@@ -36,17 +40,30 @@ tenants:
 EOF
 ```
 
-### 2) 跑 tenant-api(零 DB;`TA_RBAC_PATH` 啟用 RBAC,不設則為 open-read;設成空字串會拒絕啟動)
+### 2) 跑產生器服務與 tenant-api(零 DB;`TA_RBAC_PATH` 啟用 RBAC,不設則為 open-read;設成空字串會拒絕啟動)
+
+tenant-api 每筆會改變 conf.d 內容的寫入,commit 前都問產生器服務(`da-tools generator-service`,經 Unix socket;[ADR-036](../../docs/adr/036-single-parser-effective-config.md)),沒給 `TA_GENERATOR_SOCKET` 就拒絕啟動。產生器只讀 git 物件,所以 conf.d 要是 git repo;兩邊必須同一個 uid(服務只回應同 uid 的對端)。
 
 ```sh
-# 從 repo root build 一個本機 image（go.mod 需 threshold-exporter 模組）
-docker build -t tenant-api -f components/tenant-api/Dockerfile .
+# conf.d 要是 git repo
+git -C conf.d init -q && git -C conf.d add -A && \
+  git -C conf.d -c user.email=dev@local -c user.name=dev commit -qm init
 
-# TA_STATE_*：tenant-api 自己的紀錄（群組、views…）存在 conf.d 之外，必填
-docker run --rm -d --name tenant-api -p 8080:8080 \
+# 產生器服務($REPO 見第 1 步)。PATH 上要有 amtool,
+# 否則每筆寫入都回 503 amtool_missing。
+mkdir -p gen state
+python3 "$REPO/scripts/tools/ops/generator_service.py" --socket "$(pwd)/gen/generator.sock" \
+  --repo "$(pwd)/conf.d" --config-subdir . --work-dir "$(pwd)/gen/work" &
+
+# 從 repo root build 一個本機 image（go.mod 需 threshold-exporter 模組）
+docker build -t tenant-api -f "$REPO/components/tenant-api/Dockerfile" "$REPO"
+
+# 以你的 uid 跑(與產生器同 uid);TA_STATE_*：tenant-api 自己的紀錄（群組、views…）存在 conf.d 之外，必填
+docker run --rm -d --name tenant-api -p 8080:8080 --user "$(id -u):$(id -g)" \
   -e TA_RBAC_PATH=/conf.d/_rbac.yaml \
   -e TA_STATE_STORE=dir -e TA_STATE_DIR=/state \
-  -v "$(pwd)/conf.d:/conf.d" -v tenant-api-state:/state tenant-api
+  -e TA_GENERATOR_SOCKET=/run/da-generator/generator.sock \
+  -v "$(pwd)/conf.d:/conf.d" -v "$(pwd)/gen:/run/da-generator" -v "$(pwd)/state:/state" tenant-api
 ```
 
 ### 3) 我是誰、能管哪些租戶(零 DB 直接回)
@@ -63,7 +80,7 @@ curl -s -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
  "accessible_tenants":["*"],"permissions":{"demo-admins":["admin","read","write"]}}
 ```
 
-全程**沒有任何資料庫**——身分來自 RBAC 規則、租戶 config 是檔案。清理:`docker rm -f tenant-api`。
+全程**沒有任何資料庫**——身分來自 RBAC 規則、租戶 config 是檔案。清理:`docker rm -f tenant-api`,再停掉背景的產生器服務(`kill %1`)。
 
 > ⚠️ **僅限 localhost dev**:production 由 oauth2-proxy 在前面注入 `X-Forwarded-*` 身分 header,本服務**信任**它們。手動帶 header 只適用本機;切勿把這個無 proxy 的接法搬上 production。
 

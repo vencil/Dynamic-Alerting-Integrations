@@ -391,7 +391,10 @@ def test_threshold_exporter_family_is_exhaustive_on_the_real_repo():
     `da_`/`user_` leaf must fail here and be triaged by a human.
     """
     classes = gate.run_check()["classes"]
-    seen = {m for m in classes if m.startswith(("da_", "user_"))}
+    # `da_generator_` is the generator container's, routed to tenant-api by
+    # its own (longer) prefix row (#2903) — pinned by the next test.
+    seen = {m for m in classes if m.startswith(("da_", "user_"))
+            and not m.startswith("da_generator_")}
     seen |= {m for m in ("tenant_metadata_info", "tenant_expected_exporter")
              if m in classes}
     assert seen == set(_THRESHOLD_EXPORTER_METRICS), (
@@ -401,6 +404,19 @@ def test_threshold_exporter_family_is_exhaustive_on_the_real_repo():
         "before adding it here; if it comes "
         f"from another component the prefix routing is wrong. Diff: "
         f"{seen ^ set(_THRESHOLD_EXPORTER_METRICS)}")
+
+
+def test_generator_family_is_tenant_apis_not_threshold_exporters():
+    """#2903: the generator container has only a Unix socket; tenant-api
+    appends its /metrics, so every `da_generator_*` series comes from the
+    tenant-api target. Longest-prefix matching must route the family there,
+    never through `da_` to threshold-exporter — and the rules that read it
+    (GeneratorJudgementMemoryNearLimit) must find it reachable."""
+    key, kind, spec = gate._resolve_family("da_generator_judgement_peak_rss_bytes")
+    assert (key, kind, spec) == ("da_generator_", "service", ("tenant-api", "tenant-api"))
+    classes = gate.run_check()["classes"]
+    gen = {m for m in classes if m.startswith("da_generator_")}
+    assert gen >= {"da_generator_judgement_peak_rss_bytes", "da_generator_judgement_memory_limit_bytes"}, gen
 
 
 def test_threshold_exporter_series_die_if_a_name_filter_rejects_them():

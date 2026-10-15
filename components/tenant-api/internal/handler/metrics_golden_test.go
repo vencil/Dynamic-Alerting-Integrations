@@ -57,6 +57,7 @@ func TestMetricsHandler_Golden(t *testing.T) {
 	prevScope := activeScopeWouldDeny.Swap(nil)
 	prevReload := activeConfigReloadMetrics.Swap(nil)
 	prevTasks := activeTaskManager.Swap(nil)
+	prevGen := activeGenerator.Swap(nil)
 	t.Cleanup(func() {
 		Metrics.requestsTotal.Store(prevReq)
 		Metrics.errorsTotal.Store(prevErr)
@@ -69,6 +70,7 @@ func TestMetricsHandler_Golden(t *testing.T) {
 		activeScopeWouldDeny.Store(prevScope)
 		activeConfigReloadMetrics.Store(prevReload)
 		activeTaskManager.Store(prevTasks)
+		activeGenerator.Store(prevGen)
 	})
 
 	// Globals in OTHER packages have no seam this test can pin, so require the
