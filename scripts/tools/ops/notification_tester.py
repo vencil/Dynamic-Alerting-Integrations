@@ -44,6 +44,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -612,6 +613,32 @@ def _send_test_request(
             status=STATUS_CONNECTION_REFUSED,
             latency_ms=latency,
             detail=str(exc)[:80],
+            url_tested=target_url,
+        )
+
+    except http.client.InvalidURL as exc:
+        # Also an HTTPException, but raised before anything is sent: the URL
+        # itself is bad (non-numeric port, control characters), not a reply.
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_INVALID_URL,
+            detail=f"invalid URL: {exc}"[:80],
+            url_tested=target_url,
+        )
+
+    except http.client.HTTPException as exc:
+        # The receiver answered, but not with a well-formed HTTP response
+        # (BadStatusLine, IncompleteRead, ...). Not an OSError, so nothing above
+        # caught it and the whole run crashed (#2995). After `except OSError`
+        # on purpose: RemoteDisconnected is both, and stays a connection error.
+        latency = int((time.monotonic() - start) * 1000)
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_HTTP_ERROR,
+            latency_ms=latency,
+            detail=f"malformed response: {type(exc).__name__}: {exc}"[:80],
             url_tested=target_url,
         )
 

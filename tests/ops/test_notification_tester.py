@@ -489,6 +489,90 @@ class TestReadTimeoutClassification:
         assert result.status == nt.STATUS_CONNECTION_REFUSED
 
 
+@contextlib.contextmanager
+def _raw_server(reply):
+    """收下整個請求後回 ``reply`` 原始位元組並關線；回傳 URL。
+
+    請求 body 必須讀完、關線前先 shutdown 寫端：接收緩衝區還有沒讀的位元組
+    時 close 會送 RST 而不是 FIN，client 偶爾讀到 Connection reset 而不是
+    reply 本身。
+    """
+    srv = socket.create_server(("127.0.0.1", 0))
+    srv.settimeout(5)
+
+    def _serve():
+        with contextlib.suppress(OSError):
+            conn, _ = srv.accept()
+            with conn:
+                conn.settimeout(5)
+                buf = b""
+                while b"\r\n\r\n" not in buf:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                head, _, body = buf.partition(b"\r\n\r\n")
+                length = 0
+                for line in head.split(b"\r\n")[1:]:
+                    name, _, value = line.partition(b":")
+                    if name.strip().lower() == b"content-length":
+                        length = int(value.strip())
+                while len(body) < length:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    body += chunk
+                conn.sendall(reply)
+                conn.shutdown(socket.SHUT_WR)
+                while conn.recv(4096):
+                    pass
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{srv.getsockname()[1]}/hook"
+    finally:
+        thread.join(timeout=5)
+        srv.close()
+
+
+@pytest.mark.usefixtures("_no_proxy")
+class TestMalformedResponse:
+    """receiver 回了東西但不是合格的 HTTP 回應：http.client.HTTPException
+    不是 OSError，先前沒人接住，整支工具 traceback（#2995 第 2 類）。"""
+
+    def _recv(self, url):
+        return {"type": "webhook", "url": url, "_label": "broken"}
+
+    @pytest.mark.parametrize("reply, exc_name", [
+        (b"GARBAGE\r\n\r\n", "BadStatusLine"),
+        (b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort", "IncompleteRead"),
+    ], ids=["bad-status-line", "truncated-body"])
+    def test_malformed_response_is_http_error(self, reply, exc_name):
+        with _raw_server(reply) as url:
+            result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_HTTP_ERROR, result.detail
+        assert result.detail.startswith(f"malformed response: {exc_name}")
+
+    @pytest.mark.parametrize("url", [
+        "http://127.0.0.1:abc/hook",
+        "http://127.0.0.1:9/ho ok",
+    ], ids=["non-numeric-port", "space-in-path"])
+    def test_invalid_url_is_not_a_malformed_response(self, url):
+        """InvalidURL 也是 HTTPException，但在送出請求前就丟出：是 URL 錯，
+        不是 receiver 回了壞回應。"""
+        result = nt.test_receiver(self._recv(url), timeout=2)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert result.detail.startswith("invalid URL:")
+
+    def test_close_without_response_stays_connection_error(self):
+        """RemoteDisconnected 同時是 OSError 與 BadStatusLine：維持連線錯誤的
+        標籤，不被新的 HTTPException 分支搶走（第 1 類的分類另票處理）。"""
+        with _raw_server(b"") as url:
+            result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_CONNECTION_REFUSED, result.detail
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # test_receiver — edge cases
 # ═══════════════════════════════════════════════════════════════════════
