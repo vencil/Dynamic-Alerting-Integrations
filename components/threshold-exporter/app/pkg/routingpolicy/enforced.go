@@ -5,7 +5,7 @@ package routingpolicy
 // renders (#2503). Python twin: _grar_parse._parse_platform_config (which
 // block is read) and _grar_routes.enforced_group_by_problems (what is judged).
 // Of `match` only its shape is read (#2989): an enabled block whose `match`
-// is not a list is not enabled (ProblemRoutingEnforcedMatchInvalid), as
+// is not a list of non-empty strings is not enabled (ProblemRoutingEnforcedMatchInvalid), as
 // _grar_parse._parse_platform_config refuses it
 // (_grar_routes.enforced_match_invalid). Nothing else of the block — the
 // matchers themselves, timing, the `--policy` domain allowlist — is read
@@ -54,7 +54,8 @@ type Enforced struct {
 
 // enforcedFrom is the root file top's `_routing_enforced` when the generator
 // enables it (merge keys expanded, as safe_load expands them), else nil. An
-// enabled block whose `match` is not a list is not enabled; it is reported
+// enabled block whose `match` is not a list of non-empty strings is not
+// enabled; it is reported
 // instead (ProblemRoutingEnforcedMatchInvalid, #2989).
 func enforcedFrom(name string, top *yaml.Node) (*Enforced, []Problem) {
 	n := lookup(top, "_routing_enforced")
@@ -83,7 +84,9 @@ func enforcedFrom(name string, top *yaml.Node) (*Enforced, []Problem) {
 // `match` (as PyYAML reads it): written (absent and null both mean "no
 // matcher", and so does `[]`) and not a list of non-empty strings — a
 // mapping, a scalar, or a list with an element such as `1`, `~`, `yes` (a
-// boolean to PyYAML), `{severity: critical}` or an empty string.
+// boolean to PyYAML), `{severity: critical}`, or a string that is empty or
+// only whitespace (Python's str.strip(): unicode.IsSpace plus U+001C–U+001F,
+// which str.isspace() also counts).
 func enforcedMatchInvalid(m any) bool {
 	if m == nil {
 		return false
@@ -93,7 +96,7 @@ func enforcedMatchInvalid(m any) bool {
 		return true
 	}
 	for _, e := range list {
-		if s, ok := e.(string); !ok || s == "" {
+		if s, ok := e.(string); !ok || strings.TrimFunc(s, pyIsSpace) == "" {
 			return true
 		}
 	}

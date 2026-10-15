@@ -130,7 +130,8 @@ def enforced_match_invalid(enforced_routing: object) -> bool:
         return False
     if not isinstance(match, list):
         return True
-    return any(not (isinstance(m, str) and m) for m in match)
+    # Whitespace-only counts as empty: `' '` would reach `matchers` verbatim.
+    return any(not (isinstance(m, str) and m.strip()) for m in match)
 
 
 def enforced_match_invalid_text(where: str, value: object) -> str:

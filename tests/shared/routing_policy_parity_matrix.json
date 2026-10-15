@@ -125,7 +125,7 @@
     "#2412 / #2341 - a `_routing_defaults` that is neither a mapping nor null (list, string, number, an unquoted boolean) contributes nothing, at the root and below; it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides. It is a platform row, routing_defaults_not_mapping [kind, file, '_routing_defaults']: the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's error with an empty tenant.",
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
-    "#2989 - an enabled `_routing_enforced` whose `match` is written but is not a list of non-empty strings as PyYAML reads them (a mapping `{severity: critical}`, the routes[i].match spelling, or `{}`; a string; a number; a list holding 1, ~, yes, a mapping or '') is not enabled in any reader: a platform row [routing_enforced_match_invalid, file, '_routing_enforced.match'] - the generator's blocking `WARN ... skipping` (--validate fails), da-guard's error with an empty tenant. An earlier root file's enabled block stays in force (its group_by is still judged); the refused block's own group_by is not judged (no route is rendered from it). A null match or [] means no matcher, as an absent one; a disabled block is not judged. Before, the generator dropped such a match and the NOC route received every alert.",
+    "#2989 - an enabled `_routing_enforced` whose `match` is written but is not a list of non-empty strings as PyYAML reads them (a mapping `{severity: critical}`, the routes[i].match spelling, or `{}`; a string; a number; a list holding 1, ~, yes, a mapping, '' or a string that is only whitespace as Python's str.strip() reads it, U+001C-U+001F included) is not enabled in any reader: a platform row [routing_enforced_match_invalid, file, '_routing_enforced.match'] - the generator's blocking `WARN ... skipping` (--validate fails), da-guard's error with an empty tenant. An earlier root file's enabled block stays in force (its group_by is still judged); the refused block's own group_by is not judged (no route is rendered from it). A null match or [] means no matcher, as an absent one; a disabled block is not judged. Before, the generator dropped such a match and the NOC route received every alert.",
     "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
     "#2341 - tenant_api.batch verdict '400' = the whole batch request is refused with INVALID_BODY before any write: a `_routing` patch value that is no disabling string (`on`, `slack`, '', a JSON null) - a flat patch cannot write a `_routing` mapping, so a batch re-enables routing with `unset`.",
     "B2 (#2341) - tenant_api.batch may carry `unset` (a list; only '_routing'): the keys the op removes from the tenant's block on disk after its patch is laid over it. Removing `_routing` turns routing back on for a disabled tenant, so the op is judged like one that writes `_routing`: 'policy_violation' when the routing it re-enables breaks the domain policy, 'ok' otherwise.",
@@ -6320,6 +6320,52 @@
         [
           "routing_enforced_match_invalid",
           "_e5.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-whitespace-element-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: [' ']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_w2.yaml": "_routing_enforced:\n  enabled: true\n  match: [\"\\t\\x1c \"]\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_noc.yaml",
+          "_routing_enforced.match"
+        ],
+        [
+          "routing_enforced_match_invalid",
+          "_w2.yaml",
           "_routing_enforced.match"
         ]
       ],

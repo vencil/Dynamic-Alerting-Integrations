@@ -23,6 +23,9 @@ func TestEnforcedFrom_MatchShape(t *testing.T) {
 		"[~]":                       true,
 		"[yes]":                     true, // a boolean to PyYAML
 		"['']":                      true,
+		"[' ']":                     true, // whitespace only, as Python's strip() reads it
+		"[\"\\t\\x1c \"]":           true, // U+001C is whitespace to str.strip(), not to TrimSpace
+		"['  a=\"b\"  ']":           false,
 		"[{severity: critical}]":    true,
 		"['a=\"b\"', 1]":            true,
 		"~":                         false,

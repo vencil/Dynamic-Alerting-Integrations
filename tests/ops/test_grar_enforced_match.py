@@ -14,10 +14,12 @@ tests/shared/routing_policy_parity_matrix.json 的 `routing-enforced-match-*-298
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
+import jsonschema
 import pytest
 import yaml
 
@@ -73,7 +75,10 @@ def _enforced_routes(d: Path) -> list[dict]:
 _REFUSED = ["{severity: critical}", "{}", "'severity=\"critical\"'", "''", "42", "0", "yes",
             # a list element that is not a non-empty string (as PyYAML reads it):
             # the render used to crash on these (TypeError in re.match)
-            "[1]", "[~]", "[yes]", "[{severity: critical}]", "['severity=\"critical\"', '']"]
+            "[1]", "[~]", "[yes]", "[{severity: critical}]", "['severity=\"critical\"', '']",
+            # whitespace only (str.strip(); U+001C counts there): copied into
+            # `matchers` verbatim before
+            "[' ']", "[\"\\t\\x1c \"]"]
 _ACCEPTED = ["~", "[]", "['severity=\"critical\"']"]
 
 
@@ -176,10 +181,36 @@ class TestAccepted:
         assert [r.get("matchers") for r in warn] == [['severity="warning"']]
 
 
+_SCHEMA = json.loads((REPO / "docs" / "schemas" / "tenant-config.schema.json")
+                     .read_text(encoding="utf-8"))
+_ENFORCED_SCHEMA = jsonschema.Draft7Validator(
+    {"$ref": "#/definitions/routingEnforced", "definitions": _SCHEMA["definitions"]})
+
+# (match value, the generator's verdict) — the schema must give the same one.
+_SHAPES = [
+    ({"severity": "critical"}, True), ({}, True), ("x", True), (0, True), (False, True),
+    ([1], True), ([None], True), ([""], True), ([" "], True), (["\t\x1c\n"], True),
+    ([{"severity": "critical"}], True), (['a="b"', True], True),
+    (None, False), ([], False), (['severity="critical"'], False),
+    (['severity="critical"', 'team="x"'], False), (['  a="b"  '], False),
+]
+
+
+@pytest.mark.parametrize("value,refused", _SHAPES, ids=repr)
+def test_schema_agrees_with_the_generator(value, refused):
+    """tenant-config schema `definitions.routingEnforced.match`: null passes (as the
+    generator reads it: no matcher), a whitespace-only element is refused (#2989)."""
+    block = {"enabled": True, "match": value,
+             "receiver": {"type": "webhook", "url": "https://noc.example.com/h"}}
+    assert _ENFORCED_SCHEMA.is_valid(block) is not refused, list(_ENFORCED_SCHEMA.iter_errors(block))
+    assert enforced_match_invalid(block) is refused
+
+
 @pytest.mark.parametrize("value,want", [
     ({"severity": "critical"}, True), ({}, True), ("x", True), (0, True), (False, True),
     ([1], True), ([None], True), ([""], True), ([{"severity": "critical"}], True),
-    (['a="b"', True], True),
+    (['a="b"', True], True), ([" "], True), (["\t\x1c\n"], True),
+    (['  a="b"  '], False),
     (None, False), ([], False), (['severity="critical"'], False),
     (['severity="critical"', 'team="x"'], False),
 ])
