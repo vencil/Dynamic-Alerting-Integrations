@@ -1080,18 +1080,24 @@ _COMPARED_SEVERITIES = ("warning", "critical")
 def parse_threshold_value(key, raw):
     """`(value, severity)` as the exporter reads one threshold value written
     for `key`, or None when it is switched off; raises ValueError for a value
-    the exporter does not serve as written (#3017).
+    this backtest cannot read the way the exporter does (#3017).
 
     Mirrors `pkg/config/resolve.go`: a disabled value (`is_disabled`) serves
     nothing; a `<base>_critical` key's whole value is the number and its row
     is critical (`resolveCriticalRows`); any other key's value is split once
     at `:` into number and severity (`"70:critical"`; no suffix is
-    `warning`), each trimmed. Go's `ParseFloat` is the number's grammar, so
-    an underscore or a non-ASCII digit — which Python's `float` takes and Go
-    refuses — is refused here too; a Go-only spelling (a hex float) is
-    refused as well, which only costs a backtest. An unreadable value is
-    one the exporter replaces with the default or drops, which this tool
-    cannot see from the value alone."""
+    `warning`), each trimmed. The number is read with Python's `float`
+    only where it agrees with Go's `ParseFloat` (measured, go1.x):
+
+    * refused, Go refuses too: a non-ASCII digit; a signed NaN (`+nan`);
+      an overflow (`1e400` — Go returns ErrRange, so the exporter treats the
+      value as unreadable, while `float` answers inf);
+    * refused although Go accepts — conservative, it only costs a backtest:
+      an underscore (`1_000`), a hex float (`0x1p4`);
+    * accepted, both agree: decimals, `NaN`, `Inf` / `-inf` / `infinity`.
+
+    A value the exporter itself cannot read is replaced with the default or
+    dropped, which this tool cannot see from the value alone."""
     if raw is None or is_disabled(str(raw)):
         return None
     text = str(raw)
@@ -1103,7 +1109,13 @@ def parse_threshold_value(key, raw):
     number = number.strip()
     if not number.isascii() or "_" in number:
         raise ValueError(raw)
-    return float(number), severity
+    value = float(number)
+    spelled = number.lower().lstrip("+-")
+    if math.isnan(value) and number.lower() != "nan":
+        raise ValueError(raw)  # `+nan` / `-nan`: Go refuses a signed NaN
+    if math.isinf(value) and spelled not in ("inf", "infinity"):
+        raise ValueError(raw)  # overflow: Go's ErrRange
+    return value, severity
 
 
 def _written_alert_key(change):
@@ -1121,8 +1133,7 @@ def _written_alert_key(change):
         try:
             parsed = parse_threshold_value(key, raw)
         except ValueError:
-            return None, (f"value {str(raw)!r} is not one the exporter serves as written "
-                          "(it falls back to the default or is dropped)")
+            return None, f"value {str(raw)!r}: this backtest cannot read it the way the exporter does"
         if parsed is not None and parsed[1] not in severities:
             severities.append(parsed[1])
     if len(severities) > 1:
@@ -1142,8 +1153,11 @@ def _alert_keys(change):
 
     A change read from two trees names them by its /metrics series (#2750):
     a critical row is compared by the `<metric_key>_critical` alert (a window
-    overridden to `N:critical` too), any other row by `metric_key`'s. A
-    legacy twin is the same row under a retired name and is never read.
+    overridden to `N:critical` too), a warning row by `metric_key`'s; a row
+    of any other severity (`60:high`, `60:Critical` — the rules select
+    `severity="warning"` / `"critical"` exactly) by none, the same reason
+    `_written_alert_key` gives. A legacy twin is the same row under a
+    retired name and is never read.
     ⛔ A non-critical row whose `metric_key` itself ends in `_critical` is a
     `<base>_critical` key served on its own (its base is not declared in the
     root `defaults:`): its metric label is `<x>_critical`, which no threshold
@@ -1156,7 +1170,10 @@ def _alert_keys(change):
     for s in change["series"]:
         if s.legacy_twin:
             continue
-        critical = s.labels.get("severity") == "critical"
+        severity = s.labels.get("severity")
+        if severity not in _COMPARED_SEVERITIES:
+            return None, f"severity {severity!r} is selected by no threshold rule"
+        critical = severity == "critical"
         if not critical and s.metric_key.endswith("_critical"):
             return None, (f"served as a non-critical row of {s.metric_key} (its base is not "
                           "declared in the root defaults:), which no alert compares")

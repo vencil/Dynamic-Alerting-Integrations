@@ -395,6 +395,50 @@ def test_a_critical_key_without_its_base_is_not_backtested(
     assert (rc, asked) == (0, [])
 
 
+@pytest.mark.parametrize("old,new", [
+    ("70", "60:high"),               # one side standard, one not
+    ("70:high", "60:high"),
+    ("70:Critical", "60:Critical"),  # the rules select "critical" exactly
+], ids=["warning-to-high", "high", "capital-Critical"])
+def test_a_severity_no_rule_selects_is_not_backtested(
+        tmp_path: Path, monkeypatch, capsys, cli_argv, old: str, new: str) -> None:
+    """The exporter serves `60:high` as severity="high"; the threshold rules
+    select severity="warning" / "critical" exactly, so no alert compares that
+    row. It used to be replayed against the warning alert (#3017 review);
+    `--git-diff` / `--tenant` give the same reason."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(old)})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(new)})
+    sev = new.partition(":")[2]
+    assert sev in {s.labels["severity"] for s in _backtest(monkeypatch, b, c)[0]["series"]}
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [(
+        "mysql_connections", "not_backtested",
+        f"skipped: severity {sev!r} is selected by no threshold rule")]
+    assert (rc, asked) == (0, [])
+
+
+@pytest.mark.parametrize("side", ["baseline", "current"])
+def test_a_sibling_in_one_tree_only_shares_the_threshold(
+        tmp_path: Path, monkeypatch, capsys, cli_argv, side: str) -> None:
+    """A dimensioned row served in either tree shares the threshold on that
+    side, so the base change is not what the alert compares there."""
+    def files(v: str, dim: bool) -> dict[str, str]:
+        extra = "    'mysql_connections{db=\"a\"}': \"200\"\n" if dim else ""
+        return {"_defaults.yaml": _DEFAULTS,
+                "tx.yaml": f"tenants:\n  tx:\n    mysql_connections: \"{v}\"\n" + extra}
+    b = _tree(tmp_path / "base", files("70", side == "baseline"))
+    c = _tree(tmp_path / "cur", files("85", side == "current"))
+    changes = [ch for ch in _backtest(monkeypatch, b, c) if ch["metric"] == "mysql_connections"]
+    assert [ch.get("dimensioned_siblings") for ch in changes] == [['mysql_connections{db="a"}']]
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = {r["metric"]: r for r in json.loads(out.out)["changes"]}
+    assert rows["mysql_connections"]["status"] == "not_backtested"
+    assert rows["mysql_connections"]["backtest"].startswith(
+        "skipped: dimensioned rows share this alert's threshold")
+    assert (rc, asked) == (0, [])
+
+
 def test_dimensioned_siblings_share_the_threshold(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
     """The alert's threshold is `max by(tenant)` over the base row and the
@@ -508,7 +552,10 @@ def x_mapped(monkeypatch):
     # The reason is served-values' fields, never the key's name.
     ("plain", [tv.Series("user_threshold", {}, "plain", False, {"db": "a"}, {})], "dimensioned key"),
     ("plain", [tv.Series("user_threshold", {}, "plain", False, {}, {"ts": "SYS.*"})], "dimensioned key"),
-    ('x{db="a"}', [tv.Series("user_threshold", {}, "x", False, {}, {})], None),
+    ('x{db="a"}', [tv.Series("user_threshold", {"severity": "warning"}, "x", False, {}, {})], None),
+    # #3017: a row of a severity no threshold rule selects (`60:high`).
+    ("x", [tv.Series("user_threshold", {"severity": "high"}, "x", False, {}, {})],
+     "severity 'high' is selected by no threshold rule"),
     ("x_critical", [tv.Series("user_threshold", {"severity": "critical"}, "x", False, {}, {})], None),
     # Nothing to ask Prometheus about is not "no data" (fail closed, #2750 N2).
     ("x", [], "served-values gave no non-twin /metrics series"),

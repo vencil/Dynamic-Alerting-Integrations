@@ -1374,6 +1374,12 @@ class TestWrittenValues:
         ("mysql_connections", "disable", None),
         ("mysql_connections", None, None),
         ("mysql_connections", "NaN", (float("nan"), "warning")),
+        # Spellings Go's ParseFloat accepts too (measured).
+        ("mysql_connections", "Inf", (float("inf"), "warning")),
+        ("mysql_connections", "-inf:critical", (float("-inf"), "critical")),
+        ("mysql_connections_critical", "+Inf", (float("inf"), "critical")),
+        ("mysql_connections", "infinity", (float("inf"), "warning")),
+        ("mysql_connections", "1e-400", (0.0, "warning")),
     ])
     def test_parse_threshold_value(self, key, raw, want):
         got = bt.parse_threshold_value(key, raw)
@@ -1385,8 +1391,14 @@ class TestWrittenValues:
     @pytest.mark.parametrize("key,raw", [
         ("mysql_connections", "7O"), ("mysql_connections", "1_000"),
         ("mysql_connections", "١٢"), ("mysql_connections_critical", "95:critical"),
-    ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key"])
-    def test_values_go_does_not_read_are_refused(self, key, raw):
+        ("mysql_connections", "+nan"), ("mysql_connections", "-nan:critical"),
+        ("mysql_connections", "1e400"), ("mysql_connections_critical", "-1e400"),
+        ("mysql_connections", "0x1p4"),
+    ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key",
+            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "hex-float"])
+    def test_values_this_backtest_cannot_read_are_refused(self, key, raw):
+        """Go 也拒絕：typo、非 ASCII 數字、帶號 NaN、溢位（ErrRange）。Go 接受但
+        這裡保守拒絕：`1_000`、`0x1p4`（實測 go run strconv.ParseFloat）。"""
         with pytest.raises(ValueError):
             bt.parse_threshold_value(key, raw)
 
@@ -1422,7 +1434,7 @@ class TestWrittenValues:
             "skipped: mongodb_connections_current_critical: no shipped alert compares")
 
     @pytest.mark.parametrize("old,new,why", [
-        ("70", "7O", "value '7O' is not one the exporter serves as written"),
+        ("70", "7O", "value '7O': this backtest cannot read it the way the exporter does"),
         ("70:info", "80:info", "severity 'info' is selected by no threshold rule"),
     ])
     def test_unreadable_values_are_not_backtested(self, monkeypatch, capsys, cli_argv,
