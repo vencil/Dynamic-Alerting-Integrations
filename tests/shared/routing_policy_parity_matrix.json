@@ -30,7 +30,7 @@
     "other labels); a quoted \"8\" is a label name (Alertmanager v0.34.1 validates UTF-8 names). The",
     "generator's --strict ERROR, da-guard's routing_group_by_invalid",
     "(a repeated '...' alone is not a duplicate: Alertmanager loads ['...', '...']).",
-    "The non-specific `!` tag (`! 'yes'`) is read as PyYAML reads it in every reader (#2730 §6).",
+    "The non-specific `!` tag (`! 'yes'`) is read as PyYAML reads it in every reader (#2730 \u00a76).",
     "group_by is judged after {{tenant}} substitution in every reader (tenant `alertname`: [alertname, \"{{tenant}}\"] repeats).",
     "The {{tenant}} shape of _routing_enforced expands over EVERY valid tenant id, routed or not (#2519): a threshold-only or _silent_mode-only tenant is judged too, so every tenant of a tree with one is listed in expect. A tenant whose file body PyYAML does not read as a mapping (a null body) is not loaded by the generator unless a root platform file's entry gives it one, so it is not in that set and not listed.",
     "unknown_profile: the referenced routing profile no profile file defines (WARN), else null.",
@@ -71,8 +71,8 @@
     "pagerduty receiver (main receiver not pagerduty, and no rendered routes entry matching severity: critical",
     "sends to one) - the generator's strict ERROR, da-guard's critical_escalation_missing;",
     "'compliant' = they do, and leaks lists, in render order (overrides, routes, then 'receiver' = the main",
-    "receiver), every non-pagerduty destination that still receives some of them first (#2312: its match ∪",
-    "{severity: critical} ∪ {tenant: <id>} is not a superset of an earlier sub-route's match, and its match",
+    "receiver), every non-pagerduty destination that still receives some of them first (#2312: its match \u222a",
+    "{severity: critical} \u222a {tenant: <id>} is not a superset of an earlier sub-route's match, and its match",
     "names neither a non-critical severity nor another tenant) - the generator's WARN, da-guard's",
     "critical_escalation_leak (Field <ref>.receiver.type). The value is the same for",
     "every requiring domain that lists the tenant. No row's YAML readers disagree on it, so",
@@ -104,6 +104,7 @@
     "#2412 / #2341 - a `_routing_defaults` that is neither a mapping nor null (list, string, number, an unquoted boolean) contributes nothing, at the root and below; it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides. It is a platform row, routing_defaults_not_mapping [kind, file, '_routing_defaults']: the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's error with an empty tenant.",
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
+    "#2989 - an enabled `_routing_enforced` whose `match` is written but is not a list of non-empty strings as PyYAML reads them (a mapping `{severity: critical}`, the routes[i].match spelling, or `{}`; a string; a number; a list holding 1, ~, yes, a mapping, '' or a string that is only whitespace as Python's str.strip() reads it, U+001C-U+001F included) is not enabled in any reader: a platform row [routing_enforced_match_invalid, file, '_routing_enforced.match'] - the generator's blocking `WARN ... skipping` (--validate fails), da-guard's error with an empty tenant. An earlier root file's enabled block stays in force (its group_by is still judged); the refused block's own group_by is not judged (no route is rendered from it). A null match or [] means no matcher, as an absent one; a disabled block is not judged. Before, the generator dropped such a match and the NOC route received every alert.",
     "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping.",
     "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go tenantid.Valid) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 D3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>). schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 D2 names; Python asserts both halves, Go the refusal.",
     "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping.",
@@ -168,7 +169,7 @@
       "t\n",
       " t-a",
       "t-a ",
-      "tenänt",
+      "ten\u00e4nt",
       "a:b",
       "{{tenant}}",
       "1.5e3",
@@ -350,7 +351,7 @@
       "files": {
         "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
         "_domain_policy.yaml": "domain_policies:\n  finance:\n    description: ADR-007 finance example\n    tenants:\n    - t-sre\n    - t-dba\n    - t-fin\n    - t-ovr\n    - t-livedbb\n    constraints:\n      allowed_receiver_types:\n      - pagerduty\n      - email\n      - opsgenie\n      forbidden_receiver_types:\n      - slack\n      - webhook\n      enforce_group_by:\n      - tenant\n      - alertname\n      - severity\n      max_repeat_interval: 1h\n      min_group_wait: 30s\n      require_critical_escalation: true\n",
-        "_routing_profiles.yaml": "# _routing_profiles.yaml — Named Routing Configurations (ADR-007)\n#\n# Define reusable routing profiles that multiple tenants can reference\n# via _routing_profile: \"<name>\" in their tenant YAML.\n#\n# Merge order: _routing_defaults → routing_profiles[ref] → tenant _routing → _routing_enforced\n#\n# Naming convention: team-{team}-{region} or domain-{domain}-{tier}\n#\n# Each profile has the same shape as a tenant's _routing\n# (routing-profiles.schema.json $refs tenant-config.schema.json#/definitions/routing).\n# The merge is shallow: a key the tenant's _routing sets replaces the\n# profile's value wholesale — including `routes` (write `routes: []` to drop\n# the profile's routes for one tenant).\n#\n# `routes` (ADR-007): label-equality sub-routes. Each entry becomes a child of\n# the tenant's main route, AFTER the tenant's `overrides`:\n#   overrides → routes → the main receiver (first match wins)\n# `match` is label: value equality only (no regex, no `continue`); the\n# tenant=\"<id>\" matcher stays on the parent route. Timing / group_by not set on\n# an entry are inherited from the tenant's main route. Domain policies and the\n# --policy webhook allowlist check these receivers too.\n\nrouting_profiles:\n  # SRE team in APAC region\n  team-sre-apac:\n    receiver:\n      type: slack\n      api_url: \"https://hooks.slack.com/services/T00/B00/sre-apac\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 4h\n    routes:\n      # severity=\"critical\" → PagerDuty, re-notify every 15m; other alerts\n      # stay on the Slack receiver above.\n      - match: { severity: critical }\n        receiver:\n          type: pagerduty\n          service_key: \"sre-apac-critical-key\"\n        repeat_interval: 15m\n\n  # Global DBA team\n  team-dba-global:\n    receiver:\n      type: webhook\n      url: \"https://alerting.internal/dba-global\"\n    group_by: [tenant, alertname, db_type]\n    group_wait: 1m\n    group_interval: 10m\n    repeat_interval: 8h\n\n  # Finance domain — strict compliance\n  domain-finance-tier1:\n    receiver:\n      type: pagerduty\n      service_key: \"finance-tier1-key\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 1h\n",
+        "_routing_profiles.yaml": "# _routing_profiles.yaml \u2014 Named Routing Configurations (ADR-007)\n#\n# Define reusable routing profiles that multiple tenants can reference\n# via _routing_profile: \"<name>\" in their tenant YAML.\n#\n# Merge order: _routing_defaults \u2192 routing_profiles[ref] \u2192 tenant _routing \u2192 _routing_enforced\n#\n# Naming convention: team-{team}-{region} or domain-{domain}-{tier}\n#\n# Each profile has the same shape as a tenant's _routing\n# (routing-profiles.schema.json $refs tenant-config.schema.json#/definitions/routing).\n# The merge is shallow: a key the tenant's _routing sets replaces the\n# profile's value wholesale \u2014 including `routes` (write `routes: []` to drop\n# the profile's routes for one tenant).\n#\n# `routes` (ADR-007): label-equality sub-routes. Each entry becomes a child of\n# the tenant's main route, AFTER the tenant's `overrides`:\n#   overrides \u2192 routes \u2192 the main receiver (first match wins)\n# `match` is label: value equality only (no regex, no `continue`); the\n# tenant=\"<id>\" matcher stays on the parent route. Timing / group_by not set on\n# an entry are inherited from the tenant's main route. Domain policies and the\n# --policy webhook allowlist check these receivers too.\n\nrouting_profiles:\n  # SRE team in APAC region\n  team-sre-apac:\n    receiver:\n      type: slack\n      api_url: \"https://hooks.slack.com/services/T00/B00/sre-apac\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 4h\n    routes:\n      # severity=\"critical\" \u2192 PagerDuty, re-notify every 15m; other alerts\n      # stay on the Slack receiver above.\n      - match: { severity: critical }\n        receiver:\n          type: pagerduty\n          service_key: \"sre-apac-critical-key\"\n        repeat_interval: 15m\n\n  # Global DBA team\n  team-dba-global:\n    receiver:\n      type: webhook\n      url: \"https://alerting.internal/dba-global\"\n    group_by: [tenant, alertname, db_type]\n    group_wait: 1m\n    group_interval: 10m\n    repeat_interval: 8h\n\n  # Finance domain \u2014 strict compliance\n  domain-finance-tier1:\n    receiver:\n      type: pagerduty\n      service_key: \"finance-tier1-key\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 1h\n",
         "t-dba.yaml": "tenants:\n  t-dba:\n    _routing_profile: team-dba-global\n    cpu_usage_percent: '85'\n",
         "t-fin.yaml": "tenants:\n  t-fin:\n    _routing_profile: domain-finance-tier1\n    cpu_usage_percent: '85'\n",
         "t-livedbb.yaml": "tenants:\n  t-livedbb:\n    _routing:\n      receiver:\n        type: webhook\n        url: https://webhook.db-b.example.com/alerts\n      group_by:\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 4h\n    cpu_usage_percent: '85'\n",
@@ -4725,6 +4726,377 @@
           "not_string"
         ]
       ],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-mapping-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: {severity: critical}\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_noc.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-mapping-keeps-earlier-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  match: ['severity=\"critical\"']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on]\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: {severity: critical}\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_noc.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_defaults.yaml",
+          "_routing_enforced.group_by[1]",
+          "not_string"
+        ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-string-per-tenant-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "_routing_enforced:\n  enabled: true\n  match: 'tenant=\"{{tenant}}\"'\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, \"{{tenant}}\"]\n",
+        "alertname.yaml": "tenants:\n  alertname:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_platform.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "alertname": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-b": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-null-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: ~\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_noc.yaml",
+          "_routing_enforced.group_by[1]",
+          "duplicate"
+        ]
+      ],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-mapping-disabled-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: false\n  match: {severity: critical}\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-empty-mapping-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: {}\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_noc.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-zero-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: 0\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_noc.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-list-elements-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_e1.yaml": "_routing_enforced:\n  enabled: true\n  match: [1]\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_e2.yaml": "_routing_enforced:\n  enabled: true\n  match: [~]\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_e3.yaml": "_routing_enforced:\n  enabled: true\n  match: [{severity: critical}]\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_e4.yaml": "_routing_enforced:\n  enabled: true\n  match: ['severity=\"critical\"', '']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_e5.yaml": "_routing_enforced:\n  enabled: true\n  match: [yes]\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_e1.yaml",
+          "_routing_enforced.match"
+        ],
+        [
+          "routing_enforced_match_invalid",
+          "_e2.yaml",
+          "_routing_enforced.match"
+        ],
+        [
+          "routing_enforced_match_invalid",
+          "_e3.yaml",
+          "_routing_enforced.match"
+        ],
+        [
+          "routing_enforced_match_invalid",
+          "_e4.yaml",
+          "_routing_enforced.match"
+        ],
+        [
+          "routing_enforced_match_invalid",
+          "_e5.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "routing-enforced-match-whitespace-element-2989",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: [' ']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_w2.yaml": "_routing_enforced:\n  enabled: true\n  match: [\"\\t\\x1c \"]\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n"
+      },
+      "platform": [
+        [
+          "routing_enforced_match_invalid",
+          "_noc.yaml",
+          "_routing_enforced.match"
+        ],
+        [
+          "routing_enforced_match_invalid",
+          "_w2.yaml",
+          "_routing_enforced.match"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
       "route_findings": [],
       "route_findings_python_differs": null
     },

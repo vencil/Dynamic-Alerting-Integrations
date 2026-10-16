@@ -96,8 +96,11 @@ package guard
 //     routingpolicy.GroupByInvalid. The same for the `_routing_enforced`
 //     route(s) the generator renders (TenantID "", Field
 //     `<file>:_routing_enforced[ (<tenant>)].group_by[i]`):
-//     routingpolicy.EnforcedGroupByInvalid — the only part of the NOC layer
-//     da-guard reads.
+//     routingpolicy.EnforcedGroupByInvalid. Besides it, da-guard reads only
+//     the shape of the NOC layer's `match` (#2989,
+//     routing_enforced_match_invalid, TenantID "", Field
+//     `<file>:_routing_enforced.match`): not a list, so the generator
+//     renders no enforced route from that block.
 // 12. Routing that cannot be read (error, #2341): a tenant `_routing` that
 //     is neither a mapping nor a disabling string (routing_not_mapping,
 //     routingpolicy.RoutingNotMapping — the tenant renders no route), and a
@@ -461,6 +464,8 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 			f.Kind = findingkind.FindingRoutingDefaultsNotMapping
 		case routingpolicy.ProblemRoutingKeyIgnored:
 			f.Kind = findingkind.FindingRoutingKeyIgnored
+		case routingpolicy.ProblemRoutingEnforcedMatchInvalid:
+			f.Kind = findingkind.FindingRoutingEnforcedMatchInvalid
 		default:
 			// No kind: see above. Left zero on purpose.
 		}

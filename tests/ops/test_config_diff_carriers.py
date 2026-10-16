@@ -90,6 +90,11 @@ CASES = [
     ("_routing_enforced.receiver", "_routing_enforced", {ROUTES},
      lambda d: _append(d / "_defaults.yaml", ENFORCED),
      lambda d: _sub(d / "_defaults.yaml", "https://noc.example.com/hook", "https://noc.example.com/h2")),
+    # #2989: `match` (a list; any other shape refuses the block)
+    ("_routing_enforced.match", "_routing_enforced", {ROUTES},
+     lambda d: _append(d / "_defaults.yaml", ENFORCED),
+     lambda d: _sub(d / "_defaults.yaml", "  group_by: [alertname]\n",
+                    "  group_by: [alertname]\n  match: ['severity=\"critical\"']\n")),
     ("_routing_enforced.group_by", "_routing_enforced", {ROUTES},
      lambda d: _append(d / "_defaults.yaml", ENFORCED),
      lambda d: _sub(d / "_defaults.yaml", "group_by: [alertname]", "group_by: [alertname, tenant]")),

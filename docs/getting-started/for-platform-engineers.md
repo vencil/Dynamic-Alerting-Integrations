@@ -185,7 +185,8 @@ _routing_enforced:
     channel: "#noc-alerts"
   # ⚠️ match 必須是「matcher 字串的 list」。省略它會產生一條沒有任何 matcher
   #    的 route，加上固定帶的 continue: true ＝ 所有租戶的所有告警都被雙送到
-  #    這個 receiver（match-all 消防水管）。寫成 map 形式也會被靜默丟棄。
+  #    這個 receiver（match-all 消防水管）。寫成 map 形式（或單一字串）時，
+  #    產生器不產出這條 route，`--validate` 回 1（#2989）。
   match:
     - 'severity="critical"'
   group_wait: "10s"
