@@ -62,6 +62,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load  # noqa: E402
 from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 # #2119: `--config-dir` / `--baseline` are read by the exporter, not here.
 from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
@@ -1715,6 +1716,15 @@ def main():
             if args.json:
                 print(format_json_report(empty_report(
                     args.lookback, "caller_error", "tenant_args_missing")))
+            sys.exit(EXIT_CALLER_ERROR)
+        # #3066: the id goes into `{tenant="..."}` as written; one the tenant
+        # id rule refuses (`a"b`, `a\b`) would make the query invalid PromQL.
+        if not is_valid_tenant_id(args.tenant):
+            print(f"ERROR: --tenant '{safe_label(args.tenant)}' is not a valid tenant id. "
+                  f"{tenant_id_rule()[1]}", file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "caller_error", "invalid_tenant_id")))
             sys.exit(EXIT_CALLER_ERROR)
     elif not (args.git_diff or args.config_dir):
         print("ERROR: Specify --git-diff, --config-dir, or --tenant", file=sys.stderr)

@@ -1706,6 +1706,35 @@ class TestCallerErrorEnvelopes:
         assert rc == 2
         self._envelope(out, "tenant_args_missing")
 
+    @pytest.mark.parametrize("tenant", ['a"b', "a\\b", "Upper", "a" * 64, "a-", "a\x1b[2Jb"])
+    @pytest.mark.parametrize("skip", [False, True], ids=["plain", "skip-if-unavailable"])
+    def test_invalid_tenant_id(self, monkeypatch, cli_argv, capsys, skip, tenant):
+        """#3066: `--tenant` is the tenant id rule's (`is_valid_tenant_id`), not
+        only "encodes as UTF-8": `a"b` used to go into `{tenant="a"b"}`, an
+        invalid query, with rc 0. Refused before Prometheus is asked: with
+        `--skip-if-unavailable` Prometheus is unreachable, which used to be rc 0."""
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: not skip)
+        monkeypatch.setattr(bt, "query_range", _boom)
+        rc, out = _run_main(cli_argv, capsys, "--tenant", tenant, "--metric", "mysql_connections",
+                            "--old-value", "70", "--new-value", "50",
+                            "--prometheus", "http://prom:9090", "--json",
+                            *(["--skip-if-unavailable"] if skip else []))
+        assert rc == 2
+        self._envelope(out, "invalid_tenant_id")
+        assert "is not a valid tenant id" in out.err
+        assert "\x1b" not in out.err  # the id is printed through safe_label
+
+    def test_a_valid_tenant_id_is_queried(self, monkeypatch, cli_argv, capsys):
+        """CONTROL for the above: a DNS-1123 label reaches the query as written."""
+        asked = []
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", lambda url, q, *a, **kw: asked.append(q) or [])
+        rc, _ = _run_main(cli_argv, capsys, "--tenant", "ok-1", "--metric", "mysql_connections",
+                          "--old-value", "70", "--new-value", "50",
+                          "--prometheus", "http://prom:9090", "--json")
+        assert rc == 0
+        assert asked and all('{tenant="ok-1"}' in q for q in asked)
+
     @pytest.mark.parametrize("skip", [False, True], ids=["plain", "skip-if-unavailable"])
     def test_no_change_source(self, monkeypatch, cli_argv, capsys, skip):
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
