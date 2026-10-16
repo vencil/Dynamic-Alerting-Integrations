@@ -750,7 +750,7 @@ func servedKeys(tv servedTenantValues,
 	overrides map[string]config.ScheduledValue, undeliverable map[string]config.ScheduledValue,
 	at time.Time,
 ) map[string]servedKey {
-	out := make(map[string]servedKey, len(overrides)+len(tv.Unserved))
+	out := map[string]servedKey{}
 	add := func(k string) {
 		if _, done := out[k]; done {
 			return
