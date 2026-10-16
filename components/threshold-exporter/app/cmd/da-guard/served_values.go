@@ -204,8 +204,11 @@ type servedSchedule struct {
 // scheduleSegment is [From, To) of the UTC day ("HH:MM"; To of the last is
 // "24:00"). Value is the served number (as in Values), or null (jsonNull):
 // the key has no /metrics row in that segment (switched off, dropped, or
-// nothing to serve). Severity is the row's severity label; absent when Value
-// is null. Series (#2750) is the key's series in that segment, as in
+// nothing to serve). Severity is the row's severity label, written whenever
+// Value is a number — also when it is empty (`"70:"` serves severity="", as
+// Severities says; #3060) — and absent when Value is null. It is a pointer
+// for that reason: nil is "absent", a pointer to "" is the empty label.
+// Series (#2750) is the key's series in that segment, as in
 // servedTenantValues.Series — read from that segment's own Gather, since a
 // window's `N:critical` serves another series; absent when Value is null.
 // Error, set only on a segment in which the exporter's /metrics cannot be
@@ -215,7 +218,7 @@ type scheduleSegment struct {
 	From     string          `json:"from"`
 	To       string          `json:"to"`
 	Value    any             `json:"value,omitempty"`
-	Severity string          `json:"severity,omitempty"`
+	Severity *string         `json:"severity,omitempty"`
 	Series   []metricsSeries `json:"series,omitempty"`
 	Error    string          `json:"error,omitempty"`
 }

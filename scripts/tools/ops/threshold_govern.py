@@ -115,11 +115,12 @@ DEFAULT_IDENTITY_EMAIL = "threshold-governance@platform.local"
 # Circuit-break: stop attempting after this many CONSECUTIVE errors so a degraded
 # write plane (503 / git contention) isn't hammered once per remaining tenant.
 MAX_CONSECUTIVE_ERRORS = 5
-# #656 dead-man's-switch: a no-PR-opened run whose failure share (errors + breaker
+# #656 dead-man's-switch: an --apply run whose failure share (errors + breaker
 # skips) reaches this fraction of the attempted set is a SYSTEMIC write failure and
-# exits non-zero. < 1.0 so a single surviving already_pending can't mask a near-total
-# outage (Gemini adversarial review); high enough that ordinary partial degradation
-# (a few flaky tenants among many successes) does NOT trip it.
+# exits non-zero (#3054: whether or not a PR was opened). < 1.0 so a single surviving
+# already_pending can't mask a near-total outage (Gemini adversarial review); high
+# enough that ordinary partial degradation (a few flaky tenants among many successes)
+# does NOT trip it.
 _SYSTEMIC_FAILURE_RATIO = 0.90
 
 
@@ -155,9 +156,13 @@ class TenantOutcome:
     """The result of attempting (or simulating) a governance PR for one tenant."""
 
     tenant: str
-    # planned | pr_opened | already_pending | no_changes | error | skipped |
-    # skipped_nested (#2116: the tenant's file is in a sub-directory, which
-    # tenant-api's tenant read does not cover — no request was sent)
+    # pr_opened | already_pending | no_changes | error | skipped |
+    # skipped_breaker | skipped_nested.
+    #   skipped: --max-prs reached this run (no request was sent)
+    #   skipped_breaker (#3054): not attempted because the circuit breaker
+    #     tripped after MAX_CONSECUTIVE_ERRORS consecutive errors
+    #   skipped_nested (#2116): the tenant's file is in a sub-directory, which
+    #     tenant-api's tenant read does not cover — no request was sent
     status: str
     keys: list[str] = field(default_factory=list)
     pr_url: str = ""
@@ -942,6 +947,7 @@ def format_text_report(
                 "already_pending": "• skip (already open)",
                 "no_changes": "• no-op (already at base)",
                 "error": "✗ error",
+                "skipped_breaker": "✗ skip (circuit breaker)",
                 "skipped_nested": "• skip (file in a sub-directory)",
             }.get(o.status, o.status)
             detail = o.pr_url or o.message
@@ -956,6 +962,8 @@ def format_text_report(
     pending = sum(1 for o in outcomes if o.status == "already_pending")
     nochange = sum(1 for o in outcomes if o.status == "no_changes")
     errors = sum(1 for o in outcomes if o.status == "error")
+    capped = sum(1 for o in outcomes if o.status == "skipped")
+    breaker = sum(1 for o in outcomes if o.status == "skipped_breaker")
     prable, nested = _split_nested(plans)
     nested_note = (f" {len(nested)} tenant(s) with a file in a sub-directory get no PR "
                    "(change by hand)." if nested else "")
@@ -963,7 +971,8 @@ def format_text_report(
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{nochange} no-op, {errors} error(s); {len(prable)} tenant(s) actionable."
+            f"{nochange} no-op, {errors} error(s), {capped} skipped (--max-prs), "
+            f"{breaker} skipped (circuit breaker); {len(prable)} tenant(s) actionable."
             + nested_note + _deferred_note()
         )
     else:
@@ -1014,6 +1023,10 @@ def format_json_report(
             "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
             "no_changes": sum(1 for o in outcomes if o.status == "no_changes"),
             "errors": sum(1 for o in outcomes if o.status == "error"),
+            # --max-prs reached (no request sent) vs circuit breaker tripped
+            # (#3054); the same split as outcomes[].status.
+            "skipped": sum(1 for o in outcomes if o.status == "skipped"),
+            "skipped_breaker": sum(1 for o in outcomes if o.status == "skipped_breaker"),
             "skipped_nested": len(nested),
             "ungoverned_lower_bound": len(ung),
             "not_applicable": len(na),
@@ -1077,7 +1090,7 @@ def run(args: argparse.Namespace) -> GovernanceResult:
             continue
         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
             outcomes.append(TenantOutcome(
-                plan.tenant, "skipped", [c.key for c in plan.changes],
+                plan.tenant, "skipped_breaker", [c.key for c in plan.changes],
                 message=(f"aborted after {consecutive_errors} consecutive errors "
                          "(tenant-api likely degraded)"),
             ))
@@ -1104,12 +1117,12 @@ def run(args: argparse.Namespace) -> GovernanceResult:
 
 
 def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
-    """Whether an ``--apply`` run made NO governance progress because writes failed.
+    """Whether an ``--apply`` run's writes failed overwhelmingly (#656, #3054).
 
     #656 dead-man's-switch honesty: a run where the write plane is broken still
     *executed*, so without a non-zero exit the process returns 0, K8s marks the Job
     Successful, and ``kube_cronjob_status_last_successful_time`` advances even though
-    ZERO PRs were opened — the staleness alert would stay green during exactly the
+    the writes failed — the staleness alert would stay green during exactly the
     silent degradation it exists to catch (did-it-run != did-it-work). Exiting
     non-zero makes it honest: the Job is marked Failed AND last_successful_time is not
     advanced, so ``ThresholdGovernanceStale`` can fire.
@@ -1119,33 +1132,42 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
     run legitimately has per-tenant errors amid successes, so a single flaky tenant
     must not fail the whole run.
 
-    Trip condition = NO new PR opened (``opened == 0`` = no forward progress) AND the
-    failure share of the attempted set is overwhelming (>= ``_SYSTEMIC_FAILURE_RATIO``).
-    Two non-obvious choices (both from adversarial review):
-      * The share is ``(errors + skipped) / total``, NOT ``errors / total``. The run's
-        own circuit breaker caps consecutive errors at ``MAX_CONSECUTIVE_ERRORS`` then
-        emits ``skipped`` for the rest, so a TOTAL outage shows up as ~5 errors + N
-        skips — a bare error ratio would dilute that to ~5% and miss it. (With
-        ``opened == 0`` a ``skipped`` can only be a breaker skip, never the --max-prs
-        cap, which needs ``opened >= max_prs``.)
-      * It is a RATIO, NOT ``pending == 0``. A single surviving ``already_pending``
-        (tenant-api happened to answer 409 for ONE tenant) must not mask a 99%-error
-        outage (Gemini review). A genuinely half-degraded run (errors ~= pending) and
-        an all-already-pending run (healthy, nothing new to do) both stay exit 0;
-        dry-run never fails -- it issues no writes.
+    Trip condition: the attempted set is non-empty AND
+    ``(errors + skipped_breaker) / attempted >= _SYSTEMIC_FAILURE_RATIO``.
+      * attempted = every outcome that sent a write or was going to: ``pr_opened``,
+        ``already_pending`` (409), ``no_changes``, ``error`` and ``skipped_breaker``.
+        A ``skipped`` (--max-prs reached) or ``skipped_nested`` (#2116) outcome sent
+        no request and would not have sent one this run, so it says nothing about
+        the write plane and is left out of the attempted set altogether.
+      * ``error`` is not only a write-plane fault (PUT failed / HTTP 5xx / not in
+        PR write-mode): it also covers a failed read (``GET failed`` / ``GET
+        returned no raw_yaml``) and the local checks that refuse to write
+        (``keys not found in live config``, ``refused to PUT (verify failed)``).
+        All of them count as failures here.
+      * Breaker skips count as failures. The run's own circuit breaker caps
+        consecutive errors at ``MAX_CONSECUTIVE_ERRORS`` then skips the rest, so a
+        TOTAL outage shows up as ~5 errors + N breaker skips — a bare error ratio
+        would dilute that to ~5% and miss it.
+      * There is no "a PR was opened, so the run is healthy" short-circuit (#3054):
+        one PR opened before the write plane died no longer hides the outage. Nor
+        does one surviving ``already_pending`` (Gemini review). A genuinely
+        half-degraded run and an all-already-pending run both stay exit 0; dry-run
+        never fails — it issues no writes; an empty plan has nothing to judge.
 
-    A ``skipped_nested`` outcome (#2116) sent no request: it says nothing about
-    the write plane, so it is left out of the attempted set altogether.
+    What the rc measures: it still depends on the plan — the same write-plane fault
+    fails a run of 3 tenants sooner than a run of 300, and an empty plan is rc 0 no
+    matter how the write plane is. But for a fixed plan it is monotone in write-plane
+    health: turning any one successful write into an error never takes the rc from
+    1 to 0. For a signal that does not depend on the plan, watch tenant-api itself:
+    ``tenant_api_writes_total{result}`` and the ``TenantApiWriteErrorsHigh`` alert.
     """
-    outcomes = [o for o in outcomes if o.status != "skipped_nested"]
-    if not applied or not outcomes:
+    if not applied:
         return False
-    opened = sum(1 for o in outcomes if o.status == "pr_opened")
-    errors = sum(1 for o in outcomes if o.status == "error")
-    if opened > 0 or errors == 0:
+    attempted = [o for o in outcomes if o.status not in ("skipped", "skipped_nested")]
+    if not attempted:
         return False
-    skipped = sum(1 for o in outcomes if o.status == "skipped")
-    return (errors + skipped) / len(outcomes) >= _SYSTEMIC_FAILURE_RATIO
+    failed = sum(1 for o in attempted if o.status in ("error", "skipped_breaker"))
+    return failed / len(attempted) >= _SYSTEMIC_FAILURE_RATIO
 
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
@@ -1289,9 +1311,9 @@ def main() -> None:
             result.not_applicable, result.force_manual, result.inherited,
             max_prs=args.max_prs))
 
-    # #656: surface a governance run where EVERY write failed as a non-zero exit
-    # (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale can
-    # fire). A clean / partial-success / dry-run run stays exit 0. See
+    # #656: surface a governance run whose writes overwhelmingly failed as a non-zero
+    # exit (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale
+    # can fire). A clean / partly degraded / dry-run run stays exit 0. See
     # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
     sys.exit(EXIT_VIOLATION if _is_systemic_failure(result.outcomes, args.apply) else EXIT_OK)
 

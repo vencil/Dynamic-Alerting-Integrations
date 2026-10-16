@@ -969,6 +969,9 @@ func writeMergeFailed(w http.ResponseWriter, r *http.Request, prefix string, err
 func writeForgeCreateError(w http.ResponseWriter, r *http.Request, provider string, err error) {
 	switch {
 	case errors.Is(err, platform.ErrForbidden):
+		// #3054: tenant-api's own token, not the caller, lacks the scope —
+		// the write attempt failed on the server's side.
+		markWriteFault(w)
 		WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
 			fmt.Sprintf("insufficient %s permissions to open PR/MR — the configured token lacks write scope", provider))
 	case errors.Is(err, platform.ErrCircuitOpen):

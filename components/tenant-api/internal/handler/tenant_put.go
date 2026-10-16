@@ -168,6 +168,10 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		}
 
 		// Default: direct commit-on-write (ADR-009)
+		// #3054: one write attempt, counted by the answer it gets.
+		attempt := d.startWriteAttempt(rw, r)
+		defer attempt.end()
+		rw = attempt
 		var notices []string
 		var err error
 		if baseHash != "" {
@@ -229,6 +233,10 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			}
 			// #1700: the text is the caller's only when it is about the
 			// request; a file / git failure keeps its path in the log.
+			// #3054: such a failure is the server's, whatever the status.
+			if !writeErrorIsForClient(err) {
+				attempt.fault = true
+			}
 			WriteJSONError(rw, r, http.StatusBadRequest, writeErrorText(r, err))
 			return
 		}
@@ -296,6 +304,12 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	// this deferred release then no-ops; on failure/panic it frees the
 	// tenant for retry instead of leaving a zombie 409-until-pod-restart.
 	defer d.PRTracker.ReleaseClaim(tenantID)
+
+	// #3054: from here on, one write attempt (the branch and the PR/MR),
+	// counted by the answer it gets.
+	attempt := d.startWriteAttempt(rw, r)
+	defer attempt.end()
+	rw = attempt
 
 	// Create feature branch + commit. The checks above read the pod's local
 	// tree, which may lag the base the branch is cut from, so they can only

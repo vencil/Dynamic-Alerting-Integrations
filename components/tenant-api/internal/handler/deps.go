@@ -154,6 +154,13 @@ type Deps struct {
 	//   pr-gitlab   — GitLab MR (ADR-011)
 	WriteMode WriteMode
 
+	// WriteResults counts this Deps' conf.d write attempts for
+	// tenant_api_writes_total{result} (#3054; see write_metrics.go). nil —
+	// the server, and tests that build Deps literally — counts into the
+	// process-wide counters /metrics renders. A test asserting on the counts
+	// passes its own, so parallel tests never share one.
+	WriteResults *WriteResults
+
 	// SearchCache is the snapshot cache used by ListTenants and
 	// SearchTenants (it also holds the config.LoadDir the tenants'
 	// config_derived states are read from, #1988). Shared across

@@ -230,7 +230,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		// Synchronous mode (default). #2900: all or nothing, as
 		// POST /tenants/batch.
-		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, batchResultsAnswer)
+		run := d.executeBatch(r.Context(), r.Context(), ops, email, p, batchResultsAnswer)
 		if run.Err != nil && generatorRejectsBatch(run.Err) {
 			// #2903: refused by the generator — a rejected batch, as any.
 			results := visibleGroupBatchResults(d, p, run.Results)
