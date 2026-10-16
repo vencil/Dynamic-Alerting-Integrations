@@ -539,7 +539,8 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     assert not loose, (tree["name"], loose)
 
     # #2503: the enforced route(s)' group_by, in the generator's order (tenants
-    # in name order, element index order). The file column is Go's alone.
+    # in name order, element index order). The file column is not compared:
+    # the generator's line names no file.
     enforced = [[f"{m['ctx']}.{m['field']}", _GROUP_BY_WHY.get(m["why"], "not_string")]
                 for m in map(_ENFORCED_GROUP_BY.search, got.schema_warnings) if m]
     assert enforced == [[f, k] for _file, f, k in tree["enforced_group_by_invalid"]], (

@@ -438,8 +438,7 @@ def test_routing_profiles_lint_reads_the_tree(tmp_path):
 
 def test_f1_enforced_in_the_unselected_carrier_spelling_is_refused(tmp_path):
     """(b) is about ANY file below the root: the carrier spelling the chain
-    does not read is still refused for `_routing_enforced` (Go's LoadTree
-    refuses it too). Its other keys stay unread — a `receiver: null` there is
+    does not read is still refused for `_routing_enforced`. Its other keys stay unread — a `receiver: null` there is
     not the (a) finding."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
@@ -480,7 +479,7 @@ def test_f2_a_null_body_still_declares_the_tenant(tmp_path):
     assert "tenant 't-x' is declared in 2 files: a/t-x.yaml, b/t-x.yaml" in res.stderr
     tree = load_tenant_tree(str(d))
     assert tree.duplicate_tenants == {"t-x": ["a/t-x.yaml", "b/t-x.yaml"]}
-    # The routing plane's own record agrees (parity with Go LoadTree).
+    # The routing-tree record agrees.
     assert [p[:3] for p in tree.routing_tree_problems] == [
         ("duplicate_tenant", "b/t-x.yaml", "tenants.t-x")]
 
@@ -550,8 +549,8 @@ def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, s
 
 
 def test_an_unparseable_unselected_carrier_spelling_is_not_refused(tmp_path):
-    """F1's reader carries nothing from a file that does not parse — Go's
-    LoadTree skips it the same way — so only the multi-carrier WARN."""
+    """F1's reader carries nothing from a file that does not parse, so only
+    the multi-carrier WARN."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "team/_defaults.yaml": _SLACK_RD,
@@ -593,8 +592,8 @@ def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
     traceback (generate-routes `--validate --strict` and explain-route at rc
     1; validate-config's routing rows too). #2341: the line is blocking, so
     `--validate --strict` and validate-config fail on it (rc 1, no traceback).
-    Go's `routingDefaultsFromNode` agrees (parity matrix
-    `hier-a-root-routing-defaults-not-a-mapping`); a level below still
+    The parity matrix row `hier-a-root-routing-defaults-not-a-mapping` pins
+    the same; a level below still
     contributes its own."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": f"_routing_defaults: {value}\n",
@@ -645,7 +644,7 @@ def test_a_later_root_file_replaces_the_root_defaults_whole(tmp_path, first,
                                                             second, want):
     """#2412: among root `_` files (name order) the later
     `_routing_defaults` replaces the earlier WHOLE, even when it is not a
-    mapping — Go's "defaults then become nil" (parity matrix
+    mapping (parity matrix
     `hier-a-root-later-file-*` / `-earlier-file-*`). #2341: the non-mapping
     one is still named, and blocking."""
     d = _write(tmp_path / "conf.d", {

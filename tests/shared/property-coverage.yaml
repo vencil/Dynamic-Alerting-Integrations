@@ -72,7 +72,7 @@ modules:
       non_negative_seconds: "#2966 argparse type: accepts a value iff float() parses it to a finite number from 0 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestNonNegativeSeconds"
       positive_int: "#2966 argparse type: accepts a value iff int() parses it to a number >= 1; boundary and message table in tests/shared/test_lib_python.py::TestPositiveInt"
       positive_int_seconds: "#2966 argparse type: accepts a value iff int() parses it to a number from 1 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestPositiveIntSeconds"
-      is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned against the Go copy by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
+      is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
 
   scripts/tools/_lib_io.py:
     covered:
@@ -257,7 +257,7 @@ modules:
       build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
       ignored_key_warning: "#2960 one-line constructor of the IgnoredKeyWarning mark (same shape as skipped_entry_warning / replaced_value_warning); its blocking effect pinned by test_routing_ignored_keys.py"
       receiver_type: "#2780 two-branch accessor (mapping receiver with a str type → that type, else ''); closed shape list (dict / list / int / bool / null type × main / overrides / routes × every check that reads a type) pinned by test_grar_strict_hardening.py::TestTenantReceiverTypeNotString"
-      chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json, which pin it against Go's ChainLevels"
+      chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json"
       level_contains: "#2326 subtree membership (root contains all; prefix + '/' so `team` does not contain `team-b`); example-covered by test_generate_routes_nested_tree.py"
       domain_policy_levels: "#2435 list assembly (root's domain_policies first, then domain_policies_by_dir in name order) shared by load_tenant_tree and explain_route --trace; example-covered by test_explain_route_trace.py::TestSubtreePolicyScopeNoAmtool and the nested-tree policy tests"
       policy_reaches: "#2435 one-line composition of level_contains with the tenant's directory (unplaced tenant = root); example-covered by test_explain_route_trace.py::TestSubtreePolicyScopeNoAmtool (in-scope / out-of-scope rows)"

@@ -653,8 +653,7 @@ def test_exactly_one_kind_walks_every_group(receiver, kind):
     assert gm._exactly_one_kind(spec, receiver) == kind
 
 
-# #2904: the field an exactly-one finding names is da-guard's
-# (receiverspec.exactlyOneProblem): the first non-string field of the group,
+# #2904: the field an exactly-one finding names: the first non-string field of the group,
 # the group's first field when none is set, the LAST set field otherwise.
 @pytest.mark.parametrize("receiver,field", [
     ({"a": "x"}, "c"),                       # group 2: none set

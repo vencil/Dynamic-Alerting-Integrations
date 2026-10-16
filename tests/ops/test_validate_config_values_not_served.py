@@ -82,7 +82,7 @@ def test_values_served_as_written_pass(tmp_path, body):
 
 def test_reserved_subtree_key_is_not_this_rows(tmp_path):
     """子目錄 `_defaults.yaml` 的保留鍵（mapping 值）同樣被 overlay 拒收、effective 也標
-    value_rejected，但那是 subtree_default_reserved_key／routing 檢查的事：本列不報。"""
+    value_rejected，但那是 subtree_default_reserved_key（routing 鍵則是 route generator）的事：本列不報。"""
     d = _tree(tmp_path, "defaults:\n  _routing_defaults:\n    receiver: {type: webhook}\n",
               '    mysql_connections: "70"\n')
     eff = tv.load_effective(d)
