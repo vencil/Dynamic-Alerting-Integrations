@@ -580,7 +580,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | da-guard exit 4 要更新的說明 | `cmd/da-guard/main.go` 的 exit code 註解；`scripts/tools/_lib_exitcodes.py`；`docs/cli-reference.md` |
 | 刪除範圍的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go` |
 | 只有 Go 有的 da-guard 檢查 | `internal/guard/types.go` 減去 `tests/shared/routing_policy_parity_matrix.json` |
-| 差異清單（步驟 3 刪除） | `tests/shared/reader_divergence_catalog.yaml`；Go 端判讀快照 `tests/shared/merge_key_go_verdicts.json`；`tests/shared/test_reader_divergence_catalog.py`；`make pre-tag` 的 `reader-divergence-expiry` |
+| 差異清單（已在步驟 3 刪除，下列檔案與指令已不存在） | `tests/shared/reader_divergence_catalog.yaml`；Go 端判讀快照 `tests/shared/merge_key_go_verdicts.json`；`tests/shared/test_reader_divergence_catalog.py`；`make pre-tag` 的 `reader-divergence-expiry` |
 
 ## 參考
 

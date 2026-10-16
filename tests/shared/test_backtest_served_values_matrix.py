@@ -241,6 +241,19 @@ def _ident(metric_key: str, severity: str, component: str = "mysql",
                                         "severity": severity}, metric_key, twin, {}, {})
 
 
+def test_an_empty_severity_is_read_from_the_schedule(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3060: `"70:"` is served with severity "". da-guard used to leave
+    `severity` out of such a segment, so the reader (strict: a served segment
+    carries it) raised and backtest exited 2. Only "no longer raises" and the
+    "" are pinned here: whether a severity-only change is listed is not."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:")})
+    segs = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"].schedules["mysql_connections"].segments
+    assert [s[:4] for s in segs] == [("00:00", "24:00", 70.0, "")]
+    _backtest(monkeypatch, b, c)  # raised ServedValuesError before #3060
+
+
 def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Severity is read only over the parts of the day the changed pair holds

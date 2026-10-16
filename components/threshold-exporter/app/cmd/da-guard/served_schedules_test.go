@@ -415,6 +415,61 @@ func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 	}
 }
 
+// TestServedSchedules_EmptySeverityIsWritten (#3060): `"70:"` serves its row
+// with severity "" — `severities` says "", and so must every segment that
+// serves it: a served segment always carries `severity`, even an empty one.
+// A null segment (redis_memory switched off) and an error segment (the
+// 15:00–16:00 Gather failure of ungatherableTree) carry none.
+func TestServedSchedules_EmptySeverityIsWritten(t *testing.T) {
+	t.Parallel()
+	tree := map[string]string{}
+	for k, v := range ungatherableTree {
+		tree[k] = v
+	}
+	tree["tenant-b.yaml"] = "tenants:\n  tenant-b:\n    mysql_connections: \"70:\"\n"
+	code, doc, dir, stderr := servedS(t, tree, scheduleAt)
+	mustOK(t, code, stderr)
+	if sev, ok := doc.Tenants["tenant-b"].Severities["mysql_connections"]; !ok || sev != "" {
+		t.Fatalf("severities[mysql_connections] = %q (present %v), want \"\"", sev, ok)
+	}
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", scheduleAt, "--schedules")
+	mustOK(t, code, stderr)
+	var raw struct {
+		Tenants map[string]struct {
+			Schedules map[string]struct {
+				Segments []map[string]any `json:"segments"`
+			} `json:"schedules"`
+		} `json:"tenants"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		t.Fatal(err)
+	}
+	segs := raw.Tenants["tenant-b"].Schedules["mysql_connections"].Segments
+	if len(segs) != 3 {
+		t.Fatalf("tenant-b mysql_connections: %d segments, want 3: %v", len(segs), segs)
+	}
+	for _, i := range []int{0, 2} {
+		if sev, has := segs[i]["severity"]; !has || sev != "" {
+			t.Errorf("served segment %v: severity = %v (present %v), want \"\"", segs[i], sev, has)
+		}
+	}
+	if _, has := segs[1]["severity"]; has || segs[1]["error"] == nil {
+		t.Errorf("error segment %v: want an error and no severity", segs[1])
+	}
+	nullSeen := false
+	for _, s := range raw.Tenants["tenant-a"].Schedules["redis_memory"].Segments {
+		if v, has := s["value"]; has && v == nil {
+			nullSeen = true
+			if _, has := s["severity"]; has {
+				t.Errorf("null segment %v carries a severity", s)
+			}
+		}
+	}
+	if !nullSeen {
+		t.Fatal("tenant-a redis_memory: no null segment to check")
+	}
+}
+
 // TestServedValues_SchedulesAreOptIn: without --schedules there is no
 // `schedules` field at all and the rest of the document is what it is with
 // the flag (aliases included); with it, every tenant carries one.

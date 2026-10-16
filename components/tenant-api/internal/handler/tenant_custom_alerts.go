@@ -341,6 +341,10 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// Commit via the shared writer (re-validates schema + custom alerts,
 		// attributes the commit to the operator).
 		email := rbac.RequestEmail(r)
+		// #3054: one write attempt, counted by the answer it gets.
+		attempt := d.startWriteAttempt(w, r)
+		defer attempt.end()
+		w = attempt
 		notices, err := d.Writer.WriteIfUnchanged(r.Context(), tenantID, email, merged, req.BaseHash)
 		if err != nil {
 			// #2903: the generator container refused it (422 / 429 / 503).
@@ -392,7 +396,11 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 				return
 			}
 			// #1700: as PutTenant's fallback — the error's own text only
-			// when it is about the request.
+			// when it is about the request. #3054: otherwise the failure is
+			// the server's, whatever the status.
+			if !writeErrorIsForClient(err) {
+				attempt.fault = true
+			}
 			WriteJSONError(w, r, http.StatusBadRequest, writeErrorText(r, err))
 			return
 		}
