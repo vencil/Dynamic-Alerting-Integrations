@@ -3132,6 +3132,26 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 
 `webhook`、`slack`、`teams`、`pagerduty`、`rocketchat`、`email`（SMTP 連通性檢查）
 
+**狀態**
+
+每個 receiver 的測試結果標成下列其中一種（文字輸出的狀態欄、`--json` 的 `status`）。只有 `OK` 與 `DRY_RUN` 算通過、`SKIPPED` 另計，其餘都算失敗。連線階段的錯誤依例外型別分類，不比對錯誤訊息（[#2995](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2995)）。
+
+| 狀態 | 意義 |
+|------|------|
+| `OK` | receiver 回了成功的 HTTP 回應 |
+| `DRY_RUN` | `--dry-run`：設定與 URL 合格，未實際連線 |
+| `SKIPPED` | 沒有可測的 URL（例如 `email`） |
+| `TIMEOUT` | 連線或等待回應超過 `--timeout` |
+| `CONNECTION_REFUSED` | 對端拒絕連線（埠上沒有服務，或被防火牆以 RST 拒絕） |
+| `CONNECTION_ERROR` | 其他連線錯誤：DNS 解析失敗、連線被重置、收下請求後不回應就關線、網路不可達。經 HTTPS proxy 時 CONNECT 失敗，detail 前綴 `via proxy: `，表示失敗的是 proxy 這一段 |
+| `TLS_ERROR` | TLS 錯誤：憑證驗證失敗、https 連到純 http 埠、握手失敗 |
+| `AUTH_ERROR` | HTTP `401`／`403` |
+| `HTTP_ERROR` | 其他 HTTP 錯誤狀態碼，或回應格式錯誤、被截斷（detail 以 `malformed response:` 開頭） |
+| `INVALID_URL` | URL 不合法或 scheme 不是 `http`／`https` |
+| `INVALID_CONFIG` | receiver 設定不合法（例如缺必填欄位、`type` 不認得） |
+
+`TIMEOUT`、`CONNECTION_REFUSED`、`CONNECTION_ERROR`、`TLS_ERROR` 的 detail 截在 80 字元（含 `via proxy: ` 前綴），較長的錯誤訊息會被切掉。設了 `https_proxy`／`http_proxy` 時，這些狀態可能描述的是到 proxy 的那一段：proxy 的埠沒開是 `CONNECTION_REFUSED`、proxy 主機名解析失敗是 `CONNECTION_ERROR`，http receiver 經 proxy 收到的 `HTTP 502` 是 `HTTP_ERROR`；只有 HTTPS 的 CONNECT 失敗會帶 `via proxy: ` 前綴（含 proxy 回 `504 Connection Timed Out`，這時不標 `TIMEOUT`）。
+
 **範例**
 
 ```bash

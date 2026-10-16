@@ -3146,6 +3146,26 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 
 `webhook`, `slack`, `teams`, `pagerduty`, `rocketchat`, `email` (SMTP connectivity check)
 
+**Statuses**
+
+Each receiver's result is one of the following (the status column of the text output, `status` in `--json`). Only `OK` and `DRY_RUN` count as passed, `SKIPPED` is counted apart, and everything else counts as failed. Connection-phase errors are classified by exception type, not by matching the error message ([#2995](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2995)).
+
+| Status | Meaning |
+|--------|---------|
+| `OK` | The receiver returned a successful HTTP response |
+| `DRY_RUN` | `--dry-run`: config and URL are valid; nothing was sent |
+| `SKIPPED` | No testable URL (for example `email`) |
+| `TIMEOUT` | Connecting or waiting for the response took longer than `--timeout` |
+| `CONNECTION_REFUSED` | The peer refused the connection (nothing listening on the port, or a firewall rejecting with RST) |
+| `CONNECTION_ERROR` | Any other connection error: DNS resolution failure, connection reset, connection closed after the request without a response, network unreachable. When an HTTPS proxy's CONNECT fails, the detail is prefixed with `via proxy: `: the proxy hop failed |
+| `TLS_ERROR` | TLS error: certificate verification failed, https to a plain-http port, handshake failure |
+| `AUTH_ERROR` | HTTP `401` / `403` |
+| `HTTP_ERROR` | Any other HTTP error status, or a malformed or truncated response (detail starts with `malformed response:`) |
+| `INVALID_URL` | The URL is invalid or its scheme is not `http` / `https` |
+| `INVALID_CONFIG` | The receiver config is invalid (for example a missing required field or an unknown `type`) |
+
+For `TIMEOUT`, `CONNECTION_REFUSED`, `CONNECTION_ERROR` and `TLS_ERROR` the detail is cut at 80 characters (the `via proxy: ` prefix included); longer error messages are truncated. With `https_proxy` / `http_proxy` set, these statuses may describe the hop to the proxy: a closed proxy port is `CONNECTION_REFUSED`, an unresolvable proxy host is `CONNECTION_ERROR`, and an `HTTP 502` an http receiver gets through the proxy is `HTTP_ERROR`. Only a failed HTTPS CONNECT carries the `via proxy: ` prefix (including a proxy answering `504 Connection Timed Out`, which is then not `TIMEOUT`).
+
 **Examples**
 
 ```bash
