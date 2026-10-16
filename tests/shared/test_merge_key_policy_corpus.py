@@ -58,18 +58,14 @@ file the generator reads but blocks on as production runs it (`--validate
 --strict`) carries `pyyaml_strict_blocks`: the generator's own blocking
 findings for the file (kind, policy, field), taken from the structured
 findings load_tenant_tree returns — the verdict alone (what it enforces)
-cannot tell a blocked file from one that enforces nothing. The Go halves
-hold such a row to "unusable": a Go reader that neither refuses it nor
-reports a blocking problem is looser.
+cannot tell a blocked file from one that enforces nothing.
 
-The Go half reads the same rows:
-components/threshold-exporter/app/pkg/routingpolicy/merge_key_corpus_test.go:
-da-guard's ParseDomainPolicies says what PyYAML says, or what
-tests/shared/merge_key_go_verdicts.json records for that row. (tenant-api's
-half went with its policy reader in #2903: every write is the generator's
-to judge.) The snapshot holds only the rows where a Go reader differs; each is matched
-to an entry of tests/shared/reader_divergence_catalog.yaml, and its direction
-computed, by tests/shared/test_reader_divergence_catalog.py.
+No Go reader's verdict on these rows is recorded any more (ADR-036 step 3
+deleted that half with the reader-divergence catalog). The rows are still
+read by parse-tree's fixed corpus: tests/shared/parse_tree_corpus.json lists
+every row by `id` under `merge_key_rows`, and
+components/threshold-exporter/app/internal/parsetree/corpus_test.go
+categorises each one.
 
 The rows are generated from a fixed seed, never hand-edited:
 
@@ -356,8 +352,8 @@ def _documents():
 # One `_domain_policy.yaml` per shape, each tagged with the section of the
 # ticket it pins (`shape`). The verdict is the same `_verdict()`: these rows
 # are not hand-judged. Every shape is a single-file divergence measured on
-# main (#2730, #2715); the Go halves hold them to the generator like any
-# other row.
+# main (#2730, #2715); parse-tree's corpus categorises them like any other
+# row.
 
 _POLICY = ("domain_policies:\n  fin:\n    tenants: [t1]\n"
            "    constraints:\n      forbidden_receiver_types: [slack]\n")
@@ -677,10 +673,8 @@ def _known_stricter_2759() -> list[str]:
     """Known stricter (#2759): the generator reads these, da-guard refuses.
 
     da-guard's load.go is the 2eb4181b1 version: hand-modelling how PyYAML
-    builds `!!omap` / `!!pairs` items kept opening new divergences, so
-    da-guard's refusals of these rows stay recorded in
-    merge_key_go_verdicts.json and catalogued in
-    reader_divergence_catalog.yaml (#2759) until the root fix (#2766) lands.
+    builds `!!omap` / `!!pairs` items kept opening new divergences, so these
+    rows pin what the generator reads instead (#2759).
     """
     return [
         # An `!!omap` / `!!pairs` item is taken apart, not built by
@@ -889,10 +883,7 @@ def _many_aliases() -> list[tuple[str, str]]:
 # Documents mixing the features the shapes above are about — null keys,
 # `!!omap` / `!!pairs` / `!!set`, merge keys, `tenants` nested in those,
 # explicit tags, `=` values, anchors and aliases across them — from a fixed
-# seed. Each row where a Go reader differs is recorded in
-# merge_key_go_verdicts.json, and reader_divergence_catalog.yaml accepts only
-# refusals here (go_stricter): a read of a file the generator drops, or of
-# other values, has no entry and is red (#2759).
+# seed (#2759). Each row holds the generator's verdict like any other.
 
 _FUZZ_SEED = 2759
 _FUZZ_DOCS = 400
@@ -1012,9 +1003,8 @@ def _fuzz_looser_only() -> list[str]:
 # --- #2759's Go-looser classes (ADR-036 step 2) -------------------------------
 #
 # Measured on main (2026-10-09) and listed in #2759 as Go reading what the
-# generator drops or missing what it enforces; no row held them before. They
-# are here so the Go halves record them and the catalog pins them as still
-# looser, row by row: each is a blocker for ADR-036's phase 2.
+# generator drops or missing what it enforces; no row held them before. Each
+# row holds the generator's verdict like any other.
 
 def _2759_a_depth() -> list[str]:
     """A: a nesting depth of 600 — PyYAML's recursive constructor gives up
@@ -1190,7 +1180,8 @@ def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
 
 def row_id(doc: str, encoding: str | None = None) -> str:
     """A row's stable id: the first 16 hex digits of the sha256 of the file
-    it stands for. The Go halves compute the same from their own bytes."""
+    it stands for. parse-tree's Go corpus test computes the same from its own
+    bytes."""
     return hashlib.sha256(_encode(doc, encoding)).hexdigest()[:16]
 
 
@@ -1268,16 +1259,12 @@ def _render(rows: list[dict]) -> str:
         "has), `allowed` (its string entries, sorted) when the allowed list is",
         "non-empty, and `escalation: true` when require_critical_escalation",
         "is True.",
-        "Go: da-guard's ParseDomainPolicies must say the same, or what",
-        "merge_key_go_verdicts.json records for the row; tenant-api's",
-        "parseConfig the same (a refusal being \"unusable\"), or what it records.",
         "`id`: the first 16 hex digits of the sha256 of the file the row",
-        "stands for (the key of merge_key_go_verdicts.json and of",
-        "reader_divergence_catalog.yaml). `pyyaml_strict_blocks`: the file is",
+        "stands for (the key parse_tree_corpus.json's `merge_key_rows` use).",
+        "`pyyaml_strict_blocks`: the file is",
         "read, but the generator run as in production (--validate --strict)",
-        "blocks on it — its own blocking findings (kind, policy, field); the",
-        "Go halves hold such a row to \"unusable\" (refused, or a blocking",
-        "problem). `nonspecific_tag`: the row",
+        "blocks on it — its own blocking findings (kind, policy, field).",
+        "`nonspecific_tag`: the row",
         "carries the non-specific tag `!` on a quoted scalar, which Go reads",
         "through the vendored yaml.v3's patch (#2730 §6). `encoding`: the",
         "file is `doc` written in that encoding (utf-16-le-bom, utf-16-be-bom:",

@@ -34,8 +34,7 @@ type parityDiffers struct {
 	GroupByInvalid [][2]string     `json:"group_by_invalid"` // #2503: the Python value only
 	// Refused (ADR-036 step 2, PR-C): the generator's value — a refusal no
 	// Go reader knows (tenant_file_unreadable). Parsed only: this half
-	// asserts the Go columns, tests/shared/test_reader_divergence_catalog.py
-	// ranks the difference.
+	// asserts the Go columns; the Python half asserts this one.
 	Refused *string `json:"refused"`
 }
 
