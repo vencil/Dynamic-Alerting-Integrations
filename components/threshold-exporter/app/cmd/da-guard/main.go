@@ -36,9 +36,7 @@
 //	3  config files the exporter drops (#2123, #2179; the one definition
 //	   of which files: docs/cli-reference.md §guard): the files
 //	   ScopeEffective reports in ParseFailed — the exporter's own load's
-//	   parse-failure list, kept when the file bears on --scope — plus the
-//	   files the route generator refuses whole for a repeated key yaml.v3
-//	   lets through (#2295, withGeneratorDuplicates) — or a
+//	   parse-failure list, kept when the file bears on --scope — or a
 //	   config.DecodeError met while resolving — plus the paths the walk
 //	   cannot stat, read or list that bear on --scope
 //	   (ScopedTenants.Unreadable, #2588: the tenants and defaults in them
@@ -46,7 +44,11 @@
 //	   --cardinality-limit. The report names them (relative to
 //	   --config-dir). A DecodeError stops the run before any tenant is
 //	   checked, so only that first undecodable file is named (the
-//	   unreadable paths still are).
+//	   unreadable paths still are). Only files the exporter drops or the
+//	   walk cannot read: a file only the route generator refuses (a key it
+//	   counts twice that yaml.v3 lets through, a merge value it will not
+//	   merge) is not exit 3 since ADR-036 step 3 (#2905) — parse-tree names
+//	   it unreadable, so it is undetermined evidence (4, below).
 //	4  undetermined (#2904, ADR-036 §9 step 2): the tree — the whole of
 //	   --config-dir, whatever --scope says — holds what only the route
 //	   generator judges (undetermined.go: a routing key at any depth, a
@@ -334,7 +336,6 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s: %v\n", programName, scoped.RootListErr)
 	}
-	withGeneratorDuplicates(f.configDir, scoped, errOut)
 	undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadableEntries(scoped.Unreadable)), errOut)
 
 	// #2043: without an explicit --cardinality-limit, predict against the cap
@@ -485,12 +486,10 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 //   - TenantOverrides[id]       ← ec.TenantOverridesRaw (PR-5)
 //   - NewDefaultsByTenant[id]   ← ec.MergedDefaults      (PR-5)
 //
-// ⛔ No routing-plane input (#2904, ADR-036 §9 step 2): RoutingByTenant,
-// the domain policies, the routing tree's problems, the invalid / unloaded
-// tenant ids and `_routing_enforced` are left unset, so the CLI never reports
-// a findingkind.PlaneRouting finding. What only the route generator judges
-// is named as undetermined instead (undetermined.go, exit 4). The routing
-// checks of internal/guard stay until ADR-036 step 3 (#2905) deletes them.
+// ⛔ No routing input (#2904, ADR-036 §9 step 2): the CLI reports no routing
+// or domain-policy finding. What only the route generator judges
+// is named as undetermined instead (undetermined.go, exit 4). ADR-036 step 3
+// (#2905) deleted the routing checks of internal/guard and those fields.
 //
 // We deliberately use NewDefaultsByTenant rather than NewDefaults: a
 // scope spanning multiple cascading _defaults.yaml levels means

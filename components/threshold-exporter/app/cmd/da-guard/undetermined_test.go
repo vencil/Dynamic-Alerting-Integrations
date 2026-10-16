@@ -75,15 +75,43 @@ func runJudged(t *testing.T, files map[string]string, scope string, args ...stri
 	return j
 }
 
-// routingPlaneKinds are the registered kinds of findingkind.PlaneRouting.
+// retiredRoutingKinds are the routing and domain-policy finding kinds
+// da-guard registered until ADR-036 step 3 (#2905) deleted its routing
+// checks with them. The pre-#2904 expectations assertRoutingNotJudged takes
+// still name them; TestUndetermined_NoRoutingKindIsRegistered keeps them out
+// of the registry.
+var retiredRoutingKinds = []string{
+	"unknown_receiver_type", "missing_receiver_field", "conflicting_receiver_field",
+	"invalid_receiver_field", "empty_override_matcher", "conflicting_override_matcher",
+	"duplicate_override_matcher", "redundant_override_receiver", "invalid_route_entry",
+	"routing_value_not_string", "routing_group_by_invalid", "domain_policy_violation",
+	"critical_escalation_missing", "critical_escalation_leak", "unknown_routing_profile",
+	"domain_policy_unusable", "routing_profiles_unusable", "routing_defaults_routes_ignored",
+	"routing_in_unread_location", "routing_key_ignored", "routing_not_mapping",
+	"routing_defaults_not_mapping", "routing_enforced_match_invalid", "invalid_tenant_id",
+	"routing_enforced_below_root", "routing_defaults_null_below_root",
+	"routing_profile_duplicate", "duplicate_tenant", "domain_policy_out_of_scope",
+}
+
 func routingPlaneKinds() map[string]bool {
-	out := map[string]bool{}
-	for _, e := range findingkind.All() {
-		if e.Kind.Plane() == findingkind.PlaneRouting {
-			out[e.Kind.String()] = true
-		}
+	out := make(map[string]bool, len(retiredRoutingKinds))
+	for _, k := range retiredRoutingKinds {
+		out[k] = true
 	}
 	return out
+}
+
+// ADR-036 §7: from step 3 on, no Go program makes a routing or domain-policy
+// finding. A retired kind registered again would be a second judge of
+// routing; that check belongs in the route generator.
+func TestUndetermined_NoRoutingKindIsRegistered(t *testing.T) {
+	t.Parallel()
+	retired := routingPlaneKinds()
+	for _, e := range findingkind.All() {
+		if retired[e.Kind.String()] {
+			t.Errorf("%q is registered again: routing and domain policy are the route generator's to judge (ADR-036 §7, §9)", e.Kind)
+		}
+	}
 }
 
 // findingKind is the kind of a "severity kind tenant field" line.
@@ -98,7 +126,7 @@ func findingKind(line string) string {
 // assertRoutingNotJudged holds one run to the #2904 contract, given what the
 // pre-#2904 CLI expected of the same tree (oldCode, oldWant as "severity kind
 // tenant field"):
-//   - no finding of a routing-plane kind;
+//   - no finding of a retired routing kind;
 //   - every other expected finding, and nothing else;
 //   - a tree on which the old CLI reported a routing finding is undetermined
 //     (the routing did not silently vanish);
@@ -459,28 +487,25 @@ func TestUndetermined_MarkdownListIsCapped(t *testing.T) {
 }
 
 // Every tree of the routing-policy parity matrix, run through the CLI: no
-// routing-plane finding, and every tree on which the Go routing checks
-// (routingGuardFindings) report anything is undetermined.
+// finding of a retired routing kind, and every tree is undetermined (each
+// one holds routing, which only the generator judges) unless the exporter
+// refuses it outright (exit 2). Until #2905 this was asked of the trees the
+// Go routing checks reported on; those checks are gone, and every tree of the
+// matrix is one the generator has a routing verdict on.
 func TestUndetermined_ParityMatrixTreesAreNotJudged(t *testing.T) {
 	t.Parallel()
 	routing := routingPlaneKinds()
 	for _, tree := range loadRoutingPolicyMatrix(t) {
 		t.Run(tree.Name, func(t *testing.T) {
 			t.Parallel()
-			goFindings, _, stop := routingGuardFindings(t, writeParityTree(t, tree.Files))
 			got := runJudged(t, tree.Files, "")
 			for _, f := range got.findings {
 				if routing[findingKind(f)] {
-					t.Errorf("routing-plane finding %q", f)
+					t.Errorf("routing finding %q", f)
 				}
 			}
-			goRouting := stop != nil
-			for _, f := range goFindings {
-				goRouting = goRouting || routing[f.Kind]
-			}
-			if goRouting && got.code != exitCallerErr && len(got.undetermined) == 0 {
-				t.Errorf("the Go routing checks report on this tree (%v, %v) but the CLI run is not undetermined (exit %d)",
-					goFindings, stop, got.code)
+			if got.code != exitCallerErr && len(got.undetermined) == 0 {
+				t.Errorf("the tree holds routing but the CLI run is not undetermined (exit %d)", got.code)
 			}
 		})
 	}

@@ -9,9 +9,10 @@ package main
 //   - every importer of <exporter module>/pkg/routingpolicy,
 //     <exporter module>/pkg/pyyamlcompat and <exporter module>/pkg/receiverspec,
 //     as (repo-relative directory, whether the importing file is a _test.go
-//     file);
-//   - every `.SpacesOnly` selector (a call or a method value) outside
-//     third_party/, the vendored yaml.v3 option phase 2 deletes;
+//     file) — a package the table calls deleted must be gone from disk and
+//     have none (ADR-036 step 3, #2905, deleted pyyamlcompat and
+//     routingpolicy; a new import of either is red here before it fails to
+//     build);
 //   - the set of third_party/*.patch files on disk vs the table's patches.
 //
 // Package level, not per symbol (owner decision on #2766, 2026-10-10):
@@ -33,13 +34,17 @@ package main
 // <pkg>); the binding name (alias, `.`, `_`) is ignored, so every spelling
 // of an import is the same use.
 //
-// ⚠️ NOT GUARDED: a use that does not go through an import or a `SpacesOnly`
-// selector — reflection, a copy of the code pasted elsewhere, a generated file
-// written at build time; and whether code relies on yaml.v3 keeping Tag "!"
-// (the nonspecific-tag patch): the table records which packages are believed
-// reliant, nothing here proves it. A row is a directory × test-or-not, so a
-// listed user that adds another file importing the package, or another
-// `SpacesOnly` call, stays green: this lists users, not how much each uses.
+// ⚠️ NOT GUARDED: a use that does not go through an import — reflection, a
+// copy of the code pasted elsewhere, a generated file written at build time;
+// and whether code relies on yaml.v3 keeping Tag "!" (the nonspecific-tag
+// patch): the table records which packages are believed reliant, nothing here
+// proves it. A row is a directory × test-or-not, so a listed user that adds
+// another file importing the package stays green: this lists users, not how
+// much each uses.
+//
+// Until #2905 the table also listed every `.SpacesOnly` call, the option of
+// the vendored yaml.v3 spaces-only patch; the patch and its one caller
+// (pkg/routingpolicy) are deleted, so that list went with them.
 
 import (
 	"bufio"
@@ -47,7 +52,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -69,17 +73,12 @@ var phase2Modules = []string{"components/threshold-exporter/app", "components/te
 // phase2Packages are the module-relative packages whose importers are listed.
 var phase2Packages = []string{"pkg/pyyamlcompat", "pkg/receiverspec", "pkg/routingpolicy"}
 
-// phase2Selector is the vendored yaml.v3 option whose uses are listed.
-const phase2Selector = "SpacesOnly"
-
-// Allowed dispositions. A package is deleted outright or split (part
-// deleted, part kept or moved); a patch is kept, goes with routingpolicy, or
-// goes once nothing relies on its behaviour.
+// Allowed dispositions. A package is to be deleted outright, split (part
+// deleted, part kept or moved), or already deleted (gone from disk, no
+// importer); a patch is kept, or goes once nothing relies on its behaviour.
 var (
-	phase2PackageDispositions = map[string]bool{"delete": true, "split": true}
-	phase2PatchDispositions   = map[string]bool{
-		"keep": true, "delete-with-routingpolicy": true, "delete-when-unrelied": true,
-	}
+	phase2PackageDispositions = map[string]bool{"delete": true, "split": true, "deleted": true}
+	phase2PatchDispositions   = map[string]bool{"keep": true, "delete-when-unrelied": true}
 )
 
 type phase2Site struct {
@@ -110,10 +109,9 @@ type phase2Patch struct {
 }
 
 type phase2Table struct {
-	Comment           []string        `json:"_comment"`
-	Packages          []phase2Package `json:"packages"`
-	SpacesOnlyCallers []phase2Site    `json:"spaces_only_callers"`
-	Patches           []phase2Patch   `json:"patches"`
+	Comment  []string        `json:"_comment"`
+	Packages []phase2Package `json:"packages"`
+	Patches  []phase2Patch   `json:"patches"`
 }
 
 func TestPhase2DeletionScopeMatchesTable(t *testing.T) {
@@ -140,14 +138,27 @@ func TestPhase2DeletionScopeMatchesTable(t *testing.T) {
 		t.Fatalf("%s is malformed:\n  %s", phase2TablePath, strings.Join(problems, "\n  "))
 	}
 	// A renamed package would otherwise have no importers and every row would
-	// read as stale — red, but for the wrong reason. Say the right one.
-	for _, pkg := range phase2Packages {
-		if fi, err := os.Stat(filepath.Join(exporterRoot, filepath.FromSlash(pkg))); err != nil || !fi.IsDir() {
-			t.Fatalf("%s/%s is gone; update phase2Packages and %s together", phase2Modules[0], pkg, phase2TablePath)
+	// read as stale — red, but for the wrong reason. Say the right one. A
+	// package the table calls deleted must be gone.
+	for _, p := range table.Packages {
+		fi, err := os.Stat(filepath.Join(exporterRoot, filepath.FromSlash(p.Package)))
+		exists := err == nil && fi.IsDir()
+		switch {
+		case p.Disposition == "deleted" && exists:
+			t.Errorf("%s/%s is marked deleted in %s but is still on disk", phase2Modules[0], p.Package, phase2TablePath)
+		case p.Disposition != "deleted" && !exists:
+			t.Fatalf("%s/%s is gone; mark it deleted in %s, or update phase2Packages", phase2Modules[0], p.Package, phase2TablePath)
+		}
+	}
+	for _, p := range table.Patches {
+		for _, r := range p.BelievedReliant {
+			if fi, err := os.Stat(filepath.Join(exporterRoot, filepath.FromSlash(r))); err != nil || !fi.IsDir() {
+				t.Errorf("patches[%s].believed_reliant: %s/%s is not a directory", p.File, phase2Modules[0], r)
+			}
 		}
 	}
 
-	scan, err := scanPhase2Scope(repoRoot, phase2Modules, modulePath, phase2Packages, phase2Selector)
+	scan, err := scanPhase2Scope(repoRoot, phase2Modules, modulePath, phase2Packages)
 	if err != nil {
 		t.Fatalf("scanning: %v", err)
 	}
@@ -259,6 +270,9 @@ func validatePhase2Table(table *phase2Table) []string {
 		if strings.TrimSpace(p.Notes) == "" {
 			bad("packages[%s].notes is empty: say what goes and what stays", p.Package)
 		}
+		if p.Disposition == "deleted" && len(p.Importers) > 0 {
+			bad("packages[%s] is deleted but declares importers", p.Package)
+		}
 		problems = append(problems, validatePhase2Sites("packages["+p.Package+"].importers", p.Importers)...)
 	}
 	for _, want := range phase2Packages {
@@ -267,10 +281,7 @@ func validatePhase2Table(table *phase2Table) []string {
 		}
 	}
 
-	problems = append(problems, validatePhase2Sites("spaces_only_callers", table.SpacesOnlyCallers)...)
-
 	seen := map[string]bool{}
-	withRoutingpolicy := false
 	for _, p := range table.Patches {
 		if p.File == "" || strings.ContainsAny(p.File, `/\`) || !strings.HasSuffix(p.File, ".patch") {
 			bad("patches: %q is not a bare *.patch file name under third_party/", p.File)
@@ -291,25 +302,18 @@ func validatePhase2Table(table *phase2Table) []string {
 				bad("patches[%s]: delete-when-unrelied needs believed_reliant (the packages thought to rely on it)", p.File)
 			}
 			for _, r := range p.BelievedReliant {
-				if !declared[r] {
-					bad("patches[%s].believed_reliant: %q is not a declared package", p.File, r)
+				if r == "" || strings.Contains(r, `\`) || path.Clean(r) != r || strings.HasPrefix(r, "/") || strings.HasPrefix(r, "..") {
+					bad("patches[%s].believed_reliant: %q is not a clean module-relative slash path", p.File, r)
+				}
+				for _, pkg := range table.Packages {
+					if pkg.Package == r && pkg.Disposition == "deleted" {
+						bad("patches[%s].believed_reliant: %q is a deleted package", p.File, r)
+					}
 				}
 			}
 		default:
 			if len(p.BelievedReliant) > 0 {
 				bad("patches[%s]: believed_reliant only applies to delete-when-unrelied", p.File)
-			}
-		}
-		withRoutingpolicy = withRoutingpolicy || p.Disposition == "delete-with-routingpolicy"
-	}
-
-	// A patch deleted together with routingpolicy must have no user outside it.
-	if withRoutingpolicy {
-		home := phase2Modules[0] + "/pkg/routingpolicy"
-		for _, s := range table.SpacesOnlyCallers {
-			if s.Dir != home && !strings.HasPrefix(s.Dir, home+"/") {
-				bad("spaces_only_callers: %s is outside %s, but a patch is marked delete-with-routingpolicy; "+
-					"deleting it with routingpolicy would break this caller", s, home)
 			}
 		}
 	}
@@ -342,17 +346,14 @@ func validatePhase2Sites(field string, sites []phase2Site) []string {
 
 type phase2Scan struct {
 	importers map[string]map[phase2Site]bool // module-relative package -> sites
-	selectors map[phase2Site]bool
-	files     map[string]int // module -> .go files read
+	files     map[string]int                 // module -> .go files read
 }
 
 // scanPhase2Scope parses every .go file of each module (repo-relative) and
-// records the importers of modulePath/<pkg> for each pkg and the sites of the
-// selector `.<selector>`.
-func scanPhase2Scope(repoRoot string, modules []string, modulePath string, packages []string, selector string) (*phase2Scan, error) {
+// records the importers of modulePath/<pkg> for each pkg.
+func scanPhase2Scope(repoRoot string, modules []string, modulePath string, packages []string) (*phase2Scan, error) {
 	scan := &phase2Scan{
 		importers: map[string]map[phase2Site]bool{},
-		selectors: map[phase2Site]bool{},
 		files:     map[string]int{},
 	}
 	for _, pkg := range packages {
@@ -400,12 +401,6 @@ func scanPhase2Scope(repoRoot string, modules []string, modulePath string, packa
 					}
 				}
 			}
-			ast.Inspect(file, func(n ast.Node) bool {
-				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == selector {
-					scan.selectors[site] = true
-				}
-				return true
-			})
 			return nil
 		})
 		if err != nil {
@@ -420,7 +415,6 @@ func comparePhase2Scope(table *phase2Table, scan *phase2Scan) []string {
 	for _, p := range table.Packages {
 		problems = append(problems, diffPhase2Sites("importer of "+p.Package, p.Importers, scan.importers[p.Package])...)
 	}
-	problems = append(problems, diffPhase2Sites("."+phase2Selector+" use", table.SpacesOnlyCallers, scan.selectors)...)
 	return problems
 }
 
@@ -531,49 +525,41 @@ func TestPhase2ScanFindsEverySpellingOfAUse(t *testing.T) {
 		name      string
 		files     map[string]string
 		importers map[string][]phase2Site // package -> sites
-		selectors []phase2Site
 	}{
 		{"plain import", map[string]string{h + "/h.go": imp("package h", "", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"aliased import", map[string]string{h + "/h.go": imp("package h", "pol", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"dot import", map[string]string{h + "/h.go": imp("package h", ".", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"blank import", map[string]string{h + "/h.go": imp("package h", "_", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"file excluded by //go:build ignore", map[string]string{h + "/h.go": imp("//go:build ignore\n\npackage h", "", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"file excluded by its GOOS suffix", map[string]string{h + "/h_plan9.go": imp("package h", "", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"external _test package", map[string]string{"exp/pkg/routingpolicy/x_test.go": imp("package routingpolicy_test", "", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{"exp/pkg/routingpolicy", true}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{"exp/pkg/routingpolicy", true}}}},
 		{"test and non-test file in one directory are two sites", map[string]string{
 			h + "/h.go": imp("package h", "", rp), h + "/h_test.go": imp("package h", "", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}, {h, true}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}, {h, true}}}},
 		{"a package below it counts for it", map[string]string{h + "/h.go": imp("package h", "", rp+"/sub")},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h, false}}}},
 		{"pyyamlcompat is listed under its own package", map[string]string{h + "/h.go": imp("package h", "", pc)},
-			map[string][]phase2Site{"pkg/pyyamlcompat": {{h, false}}}, nil},
+			map[string][]phase2Site{"pkg/pyyamlcompat": {{h, false}}}},
 		{"a raw-prefix sibling is another package", map[string]string{h + "/h.go": imp("package h", "", rp+"x")},
-			nil, nil},
+			nil},
 		{"testdata is not read", map[string]string{h + "/testdata/h.go": imp("package h", "", rp)},
-			nil, nil},
+			nil},
 		{"a third_party/ below the module root is read", map[string]string{h + "/third_party/x/x.go": imp("package x", "_", rp)},
-			map[string][]phase2Site{"pkg/routingpolicy": {{h + "/third_party/x", false}}}, nil},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h + "/third_party/x", false}}}},
 		{"third_party is not read", map[string]string{
-			"exp/third_party/yaml.v3/y.go": "package yaml\n\nimport _ " + strconv.Quote(rp) + "\n\nfunc f(d *D) { d.SpacesOnly(true) }\n"},
-			nil, nil},
-		{"SpacesOnly call", map[string]string{h + "/h.go": "package h\n\nfunc f(d interface{ SpacesOnly(bool) }) { d.SpacesOnly(true) }\n"},
-			nil, []phase2Site{{h, false}}},
-		{"SpacesOnly method value", map[string]string{h + "/h_test.go": "package h\n\nfunc f(d interface{ SpacesOnly(bool) }) { g := d.SpacesOnly; _ = g }\n"},
-			nil, []phase2Site{{h, true}}},
-		{"SpacesOnly as a bare name or in a comment is not a use", map[string]string{
-			h + "/h.go": "package h\n\n// d.SpacesOnly(true)\nvar SpacesOnly = 1\n"},
-			nil, nil},
+			"exp/third_party/yaml.v3/y.go": "package yaml\n\nimport _ " + strconv.Quote(rp) + "\n"},
+			nil},
 	}
 	for _, tc := range cases {
 		root := writeSynthTree(t, tc.files)
-		scan, err := scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages, phase2Selector)
+		scan, err := scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -582,15 +568,12 @@ func TestPhase2ScanFindsEverySpellingOfAUse(t *testing.T) {
 				t.Errorf("%s: importers of %s = %v, want %v", tc.name, pkg, got, want)
 			}
 		}
-		if got, want := siteList(scan.selectors), sortSites(tc.selectors); !equalSites(got, want) {
-			t.Errorf("%s: SpacesOnly sites = %v, want %v", tc.name, got, want)
-		}
 
 		// Red path: against a table declaring nothing, every found site is
 		// reported as new, naming its directory.
 		empty := &phase2Table{Packages: []phase2Package{{Package: "pkg/pyyamlcompat"}, {Package: "pkg/routingpolicy"}}}
 		problems := comparePhase2Scope(empty, scan)
-		wantN := len(tc.importers["pkg/routingpolicy"]) + len(tc.importers["pkg/pyyamlcompat"]) + len(tc.selectors)
+		wantN := len(tc.importers["pkg/routingpolicy"]) + len(tc.importers["pkg/pyyamlcompat"])
 		if len(problems) != wantN {
 			t.Errorf("%s: %d problems against an empty table, want %d: %v", tc.name, len(problems), wantN, problems)
 		}
@@ -600,7 +583,7 @@ func TestPhase2ScanFindsEverySpellingOfAUse(t *testing.T) {
 				t.Errorf("%s: not reported as new: %s", tc.name, p)
 			}
 		}
-		for _, sites := range [][]phase2Site{tc.importers["pkg/routingpolicy"], tc.importers["pkg/pyyamlcompat"], tc.selectors} {
+		for _, sites := range [][]phase2Site{tc.importers["pkg/routingpolicy"], tc.importers["pkg/pyyamlcompat"]} {
 			for _, s := range sites {
 				if !strings.Contains(joined, " at "+s.String()+":") {
 					t.Errorf("%s: no problem names %s: %v", tc.name, s, problems)
@@ -614,16 +597,15 @@ func TestPhase2CompareReportsStaleRows(t *testing.T) {
 	t.Parallel()
 
 	root := writeSynthTree(t, map[string]string{"api/internal/h/h.go": "package h\n"})
-	scan, err := scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages, phase2Selector)
+	scan, err := scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages)
 	if err != nil {
 		t.Fatal(err)
 	}
 	table := &phase2Table{
 		Packages: []phase2Package{
 			{Package: "pkg/pyyamlcompat"},
-			{Package: "pkg/routingpolicy", Importers: []phase2Site{{"api/internal/h", false}}},
+			{Package: "pkg/routingpolicy", Importers: []phase2Site{{"api/internal/h", false}, {"exp/cmd/x", true}}},
 		},
-		SpacesOnlyCallers: []phase2Site{{"exp/pkg/routingpolicy", false}},
 	}
 	problems := comparePhase2Scope(table, scan)
 	if len(problems) != 2 {
@@ -637,10 +619,10 @@ func TestPhase2CompareReportsStaleRows(t *testing.T) {
 	// The same table matches once the uses exist: the stale verdict came from
 	// their absence, not from the rows.
 	root = writeSynthTree(t, map[string]string{
-		"api/internal/h/h.go":           "package h\n\nimport _ " + strconv.Quote(synthModulePath+"/pkg/routingpolicy") + "\n",
-		"exp/pkg/routingpolicy/load.go": "package routingpolicy\n\nfunc f(d interface{ SpacesOnly(bool) }) { d.SpacesOnly(true) }\n",
+		"api/internal/h/h.go": "package h\n\nimport _ " + strconv.Quote(synthModulePath+"/pkg/routingpolicy") + "\n",
+		"exp/cmd/x/x_test.go": "package x\n\nimport _ " + strconv.Quote(synthModulePath+"/pkg/routingpolicy") + "\n",
 	})
-	if scan, err = scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages, phase2Selector); err != nil {
+	if scan, err = scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages); err != nil {
 		t.Fatal(err)
 	}
 	if problems := comparePhase2Scope(table, scan); len(problems) != 0 {
@@ -652,12 +634,12 @@ func TestPhase2ScanFailsLoudly(t *testing.T) {
 	t.Parallel()
 
 	root := writeSynthTree(t, map[string]string{"api/internal/h/h.go": "package h\n\nfunc {\n"})
-	if _, err := scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages, phase2Selector); err == nil ||
+	if _, err := scanPhase2Scope(root, synthModules, synthModulePath, phase2Packages); err == nil ||
 		!strings.Contains(err.Error(), "cannot parse") {
 		t.Errorf("unparseable file: err = %v, want a parse failure", err)
 	}
 	root = writeSynthTree(t, nil)
-	if _, err := scanPhase2Scope(root, []string{"exp", "api", "missing"}, synthModulePath, phase2Packages, phase2Selector); err == nil {
+	if _, err := scanPhase2Scope(root, []string{"exp", "api", "missing"}, synthModulePath, phase2Packages); err == nil {
 		t.Error("missing module directory scanned without error")
 	}
 
@@ -694,14 +676,12 @@ func validPhase2Table() *phase2Table {
 		Packages: []phase2Package{
 			{Package: "pkg/pyyamlcompat", Category: "c", Disposition: "delete", Notes: "n",
 				Importers: []phase2Site{{"components/tenant-api/internal/policy", false}}},
-			{Package: "pkg/routingpolicy", Category: "c", Disposition: "split", Notes: "n"},
+			{Package: "pkg/routingpolicy", Category: "c", Disposition: "deleted", Notes: "n"},
 			{Package: "pkg/receiverspec", Category: "c", Disposition: "split", Notes: "n"},
 		},
-		SpacesOnlyCallers: []phase2Site{{"components/threshold-exporter/app/pkg/routingpolicy", false}},
 		Patches: []phase2Patch{
 			{File: "a.patch", Disposition: "keep", Reason: "r"},
-			{File: "b.patch", Disposition: "delete-when-unrelied", Reason: "r", BelievedReliant: []string{"pkg/pyyamlcompat"}},
-			{File: "c.patch", Disposition: "delete-with-routingpolicy", Reason: "r"},
+			{File: "b.patch", Disposition: "delete-when-unrelied", Reason: "r", BelievedReliant: []string{"pkg/config"}},
 		},
 	}
 }
@@ -736,11 +716,12 @@ func TestPhase2TableValidation(t *testing.T) {
 		{"bad patch disposition", func(tb *phase2Table) { tb.Patches[0].Disposition = "delete" }, "disposition"},
 		{"empty reason", func(tb *phase2Table) { tb.Patches[0].Reason = "" }, "reason is empty"},
 		{"unrelied without reliant", func(tb *phase2Table) { tb.Patches[1].BelievedReliant = nil }, "needs believed_reliant"},
-		{"reliant not a package", func(tb *phase2Table) { tb.Patches[1].BelievedReliant = []string{"pkg/x"} }, "not a declared package"},
-		{"reliant on a kept patch", func(tb *phase2Table) { tb.Patches[0].BelievedReliant = []string{"pkg/pyyamlcompat"} }, "only applies"},
-		{"SpacesOnly caller outside routingpolicy", func(tb *phase2Table) {
-			tb.SpacesOnlyCallers = append(tb.SpacesOnlyCallers, phase2Site{"components/tenant-api/internal/h", false})
-		}, "delete-with-routingpolicy"},
+		{"reliant not a clean path", func(tb *phase2Table) { tb.Patches[1].BelievedReliant = []string{"pkg/x/"} }, "not a clean module-relative"},
+		{"reliant on a deleted package", func(tb *phase2Table) { tb.Patches[1].BelievedReliant = []string{"pkg/routingpolicy"} }, "is a deleted package"},
+		{"reliant on a kept patch", func(tb *phase2Table) { tb.Patches[0].BelievedReliant = []string{"pkg/config"} }, "only applies"},
+		{"deleted package with importers", func(tb *phase2Table) {
+			tb.Packages[1].Importers = []phase2Site{{"components/tenant-api/internal/h", false}}
+		}, "is deleted but declares importers"},
 	}
 	for _, tc := range cases {
 		tb := validPhase2Table()
@@ -752,15 +733,16 @@ func TestPhase2TableValidation(t *testing.T) {
 	}
 
 	for name, src := range map[string]string{
-		"unknown field": `{"packages": [], "spaces_only_callers": [], "patches": [], "extra": 1}`,
-		"trailing data": `{"packages": []} {}`,
-		"wrong type":    `{"packages": {}}`,
+		"unknown field":               `{"packages": [], "patches": [], "extra": 1}`,
+		"the retired SpacesOnly list": `{"packages": [], "spaces_only_callers": [], "patches": []}`,
+		"trailing data":               `{"packages": []} {}`,
+		"wrong type":                  `{"packages": {}}`,
 	} {
 		if _, err := parsePhase2Table([]byte(src)); err == nil {
 			t.Errorf("%s: parsed without error", name)
 		}
 	}
-	if _, err := parsePhase2Table([]byte(`{"_comment": ["x"], "packages": [], "spaces_only_callers": [], "patches": []}`)); err != nil {
+	if _, err := parsePhase2Table([]byte(`{"_comment": ["x"], "packages": [], "patches": []}`)); err != nil {
 		t.Errorf("well-formed table rejected: %v", err)
 	}
 }

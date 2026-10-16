@@ -1091,7 +1091,7 @@
     "yamlBool": {
       "title": "YAML boolean",
       "description": "true / false, null (not given), or a YAML 1.1 boolean word (yes / no / on / off in three spellings each) that PyYAML and Alertmanager read as a boolean but a YAML 1.2 editor reads as a string. `y` / `n` are refused on purpose: Alertmanager reads them as booleans, the Python route generator does not.",
-      "$comment": "#2295: the enum is the one authored list; Python reads it from here at run time, the Go copy (pkg/receiverspec YAML11BoolLiterals) is pinned by TestSpecs_MatchSchema.",
+      "$comment": "#2295: the enum is the one authored list; Python reads it from here at run time (ADR-036: no Go copy remains).",
       "anyOf": [{ "type": ["boolean", "null"] }, { "enum": ["true", "True", "TRUE", "false", "False", "FALSE", "yes", "Yes", "YES", "no", "No", "NO", "on", "On", "ON", "off", "Off", "OFF"] }]
     },
     "routingOverride": {

@@ -484,7 +484,7 @@ def yaml_bool_literals() -> dict[str, bool]:
     """``{literal: value}`` of the YAML 1.1 boolean words (#2295).
 
     Read from tenant-config.schema.json ``definitions.yamlBool`` (the one
-    authored list; the Go copy is pkg/receiverspec YAML11BoolLiterals). PyYAML
+    authored list). PyYAML
     already reads these plain words as booleans; the strings reach here only
     when quoted, or from JSON, and Go's yaml.v3 reads yes / no / on / off as
     strings, so both sides take them and the generator writes a boolean.

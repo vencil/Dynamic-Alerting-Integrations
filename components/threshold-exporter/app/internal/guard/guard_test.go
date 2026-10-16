@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // --- path.go tests --------------------------------------------------
@@ -149,66 +148,6 @@ func TestCheckRequiredFields_FlagsExplicitNull(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Message, "null") {
 		t.Errorf("message %q should mention `null`", got[0].Message)
-	}
-}
-
-// #2291: a `_routing[.<path>]` required field reads the RESOLVED routing
-// (RoutingByTenant), never the effective config — which carries a `_routing`
-// the route generator never renders and lacks the one `_routing_defaults`
-// supplies.
-func TestCheckRequiredFields_RoutingFieldsReadTheResolvedRouting(t *testing.T) {
-	t.Parallel()
-	rendered := map[string]any{"receiver": map[string]any{"type": "webhook"}}
-	got := checkRequiredFields(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{
-			// effective config has no _routing, resolved routing does
-			"routed": {"cpu": 1},
-			// effective config has a _routing nothing renders, no resolved routing
-			"shadowed": {"_routing": rendered},
-			"nulled":   {},
-		},
-		RoutingByTenant: map[string]map[string]any{
-			"routed": rendered,
-			"nulled": {"receiver": map[string]any{"type": nil}},
-		},
-		RequiredFields: []string{"_routing.receiver.type", "_routing", "cpu"},
-	})
-	var rows []string
-	for _, f := range got {
-		rows = append(rows, f.TenantID+" "+f.Field)
-		if f.Kind != findingkind.FindingMissingRequired || f.Severity != SeverityError {
-			t.Errorf("finding %+v: want error missing_required", f)
-		}
-		if !strings.Contains(f.Message, "resolved routing") && f.Field != "cpu" {
-			t.Errorf("message %q should say it judged the resolved routing", f.Message)
-		}
-	}
-	want := []string{
-		"nulled _routing.receiver.type", "nulled cpu",
-		"shadowed _routing.receiver.type", "shadowed _routing", "shadowed cpu",
-	}
-	if strings.Join(rows, "|") != strings.Join(want, "|") {
-		t.Errorf("findings %q\nwant %q", rows, want)
-	}
-}
-
-// A tenant that opted out (`_routing: disable`) is still missing a required
-// routing field, but the message says it is an opt-out, not an omission.
-func TestCheckRequiredFields_DisabledRoutingIsNamedAsSuch(t *testing.T) {
-	t.Parallel()
-	got := checkRequiredFields(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{"off": {}, "absent": {}},
-		RoutingDisabled:  map[string]bool{"off": true},
-		RequiredFields:   []string{"_routing.receiver.type"},
-	})
-	if len(got) != 2 {
-		t.Fatalf("got %d findings, want 2: %+v", len(got), got)
-	}
-	for _, f := range got {
-		named := strings.Contains(f.Message, "disabled by `_routing: disable`")
-		if named != (f.TenantID == "off") {
-			t.Errorf("tenant %q: message %q (names the opt-out = %v)", f.TenantID, f.Message, named)
-		}
 	}
 }
 
@@ -420,27 +359,6 @@ func TestCheckDefaultsImpact_EmptyConfigsIsACleanReport(t *testing.T) {
 	}
 }
 
-// #2991: a platform-file problem is judged on the whole tree, so zero
-// tenants is not a caller bug then — the report carries it, 0 tenants.
-func TestCheckDefaultsImpact_PlatformProblemWithZeroTenants(t *testing.T) {
-	t.Parallel()
-	r, err := CheckDefaultsImpact(CheckInput{
-		PlatformProblems: []routingpolicy.Problem{{
-			Kind: routingpolicy.ProblemRoutingDefaultsNotMapping, File: "_defaults.yaml",
-			Field: "_routing_defaults", Message: "m",
-		}},
-	})
-	if err != nil {
-		t.Fatalf("CheckDefaultsImpact: %v", err)
-	}
-	if len(r.Findings) != 1 || r.Findings[0].Kind != findingkind.FindingRoutingDefaultsNotMapping {
-		t.Fatalf("findings = %+v, want one routing_defaults_not_mapping", r.Findings)
-	}
-	if s := r.Summary; s.TotalTenants != 0 || s.Errors != 1 || s.PassedTenantCount != 0 {
-		t.Errorf("summary = %+v, want 0 tenants, 1 error, 0 passing", s)
-	}
-}
-
 func TestCheckDefaultsImpact_HappyPathZeroFindings(t *testing.T) {
 	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{
@@ -486,26 +404,6 @@ func TestCheckDefaultsImpact_PassedCountExcludesErroringTenants(t *testing.T) {
 	}
 	if r.Summary.Errors != 5 {
 		t.Errorf("Errors = %d, want 5", r.Summary.Errors)
-	}
-}
-
-// #2341 R8: a tenant with the EMPTY id fails on its invalid_tenant_id
-// finding like any other erroring tenant — its TenantID "" must not read as
-// a platform finding in the roll-up.
-func TestCheckDefaultsImpact_EmptyTenantIDFails(t *testing.T) {
-	t.Parallel()
-	r, err := CheckDefaultsImpact(CheckInput{
-		EffectiveConfigs: map[string]map[string]any{
-			"":     {"thresholds": map[string]any{}},
-			"t-ok": {"thresholds": map[string]any{}},
-		},
-		InvalidTenantIDs: map[string]string{"": "bad.yaml"},
-	})
-	if err != nil {
-		t.Fatalf("CheckDefaultsImpact: %v", err)
-	}
-	if r.Summary.Errors != 1 || r.Summary.PassedTenantCount != 1 {
-		t.Errorf("Errors = %d, PassedTenantCount = %d; want 1 and 1", r.Summary.Errors, r.Summary.PassedTenantCount)
 	}
 }
 

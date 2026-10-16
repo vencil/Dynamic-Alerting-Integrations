@@ -803,15 +803,15 @@ def _walk_misread_scalars(root: Optional["yaml.Node"], schema: dict,
 # PyYAML (YAML 1.1), so the schema passes it; yaml.v3 alone reads the STRING
 # "on" / "yes". ⛔ The message states only that, and no consequence: each
 # file kind is read by a different Go reader — the generic decode keeps the
-# string, pkg/routingpolicy (pyyamlcompat) and receiverspec take the word as
-# a boolean, and some readers never read the field at all (#2509 blind
+# string, and the route generator (PyYAML) takes the word as a boolean;
+# some readers never read the field at all (#2509 blind
 # review 2: a per-plane claim was wrong for at least one kind every round).
 # Nothing on the READ side changes (#2509 owner decision ②) — the author is
 # told to write true / false. A WARN, never an ERROR.
 #
 # ⛔ As for #2164, no word list here: a word counts when PyYAML's resolver
 # tagged the plain scalar `bool` (exactly the YAML 1.1 words, the schema's
-# `yamlBool` enum and Go's receiverspec.YAML11BoolLiterals — pinned by
+# `yamlBool` enum — pinned by
 # tests/shared/test_yaml11_bool_word_warning.py) and yaml.v3 does NOT read it
 # as a boolean (only true / True / TRUE / false / False / FALSE). A field
 # takes a boolean when any schema branch that can describe it allows one.

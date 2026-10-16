@@ -23,16 +23,15 @@ func forgeKind(name string) findingkind.Kind {
 	return k
 }
 
-// A kind forged under a registered name is that kind: equal to the var,
-// on the same plane. What can go wrong there is a finding given the wrong
-// kind, not an unclassified one.
+// A kind forged under a registered name is that kind: equal to the var and
+// registered. What can go wrong there is a finding given the wrong kind, not
+// an unregistered one.
 func TestForgedKind_RegisteredNameIsThatKind(t *testing.T) {
 	t.Parallel()
 	want := findingkind.FindingMissingRequired
 	got := forgeKind(want.String())
-	if got != want || got.Plane() != want.Plane() || !got.IsRegistered() {
-		t.Errorf("forged %q: equal %v, plane %q (want %q), registered %v",
-			want, got == want, got.Plane(), want.Plane(), got.IsRegistered())
+	if got != want || !got.IsRegistered() {
+		t.Errorf("forged %q: equal %v, registered %v", want, got == want, got.IsRegistered())
 	}
 }
 
