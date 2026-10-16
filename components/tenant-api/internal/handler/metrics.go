@@ -19,7 +19,6 @@ var Metrics = &metricsState{}
 type metricsState struct {
 	requestsTotal atomic.Int64
 	errorsTotal   atomic.Int64
-	writesTotal   atomic.Int64
 	startTime     time.Time
 }
 
@@ -32,9 +31,6 @@ func (m *metricsState) IncRequests() { m.requestsTotal.Add(1) }
 
 // IncErrors increments the total error counter.
 func (m *metricsState) IncErrors() { m.errorsTotal.Add(1) }
-
-// IncWrites increments the total write counter.
-func (m *metricsState) IncWrites() { m.writesTotal.Add(1) }
 
 // devBypassActive records whether --dev-bypass-auth is enabled, surfaced at
 // /metrics as the Layer-2 tripwire gauge so the dangerous local-dev mode is
@@ -109,9 +105,8 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_errors_total Total API errors.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_errors_total counter\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_errors_total %d\n", Metrics.errorsTotal.Load())
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_writes_total Total write operations (git commits).\n")
-	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_writes_total counter\n")
-	_, _ = fmt.Fprintf(w, "tenant_api_writes_total %d\n", Metrics.writesTotal.Load())
+	// #3054: conf.d write attempts by result (write_metrics.go).
+	writeWriteResultMetrics(w)
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_rate_limit_rejections_total Total requests denied by the per-caller rate limiter.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_rate_limit_rejections_total counter\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_rate_limit_rejections_total %d\n", rejections)

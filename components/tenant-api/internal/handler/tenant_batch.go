@@ -214,7 +214,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default). #2900: all or nothing.
-		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, req.Operations, email, p, d.RBAC, d.TenantOrg, batchResultsAnswer)
+		run := d.executeBatch(r.Context(), r.Context(), req.Operations, email, p, batchResultsAnswer)
 		switch {
 		case run.Err != nil && generatorRejectsBatch(run.Err):
 			// #2903: refused by the generator — a rejected batch, as any.
@@ -390,6 +390,17 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		return rejectedBatchResponse("", batchResults), http.StatusUnprocessableEntity, true
 	}
 
+	// #3054: one write attempt for the whole batch (the branch and the
+	// PR/MR), counted by the answer it gets — written here on an error, or
+	// returned to the caller (answered).
+	attempt := d.startWriteAttempt(rw, r)
+	defer attempt.end()
+	rw = attempt
+	answer := func(resp BatchResponse, status int) (BatchResponse, int, bool) {
+		attempt.answered(status)
+		return resp, status, true
+	}
+
 	result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
 	// #2882: the members found absent on the fresh base were not written;
 	// their results and the PR's tenant list say so. Meaningful only when
@@ -420,7 +431,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 					batchResults[s.result] = BatchResult{TenantID: id, Status: resultNotApplied, Message: msgNotApplied}
 				}
 			}
-			return rejectedBatchResponse("", batchResults), http.StatusUnprocessableEntity, true
+			return answer(rejectedBatchResponse("", batchResults), http.StatusUnprocessableEntity)
 		}
 		// #2903: the generator container refused the batch as a whole — a
 		// rejected batch (422, every op carrying the refusal), as above.
@@ -433,7 +444,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				}
 				batchResults[s.result], _ = generatorOpResult(id, err)
 			}
-			return rejectedByGenerator(d, r, "", batchResults, err), http.StatusUnprocessableEntity, true
+			return answer(rejectedByGenerator(d, r, "", batchResults, err), http.StatusUnprocessableEntity)
 		}
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the single-write path).
@@ -452,13 +463,13 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			if result != nil {
 				warnings = result.Notices
 			}
-			return BatchResponse{
+			return answer(BatchResponse{
 				Status:   "completed",
 				Results:  batchResults,
 				Summary:  prBatchSummary("completed", batchResults),
 				Message:  "No changes to apply; no PR/MR created.",
 				Warnings: warnings,
-			}, http.StatusOK, true
+			}, http.StatusOK)
 		}
 		// Anything else is an unexpected git failure → generic 500 (its text
 		// stays in the log — WriteErrorEnvelope, #1700).
@@ -490,7 +501,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		return BatchResponse{}, 0, false
 	}
 
-	return BatchResponse{
+	return answer(BatchResponse{
 		Status:   "pending_review",
 		PRURL:    pr.WebURL,
 		PRNumber: pr.Number,
@@ -498,7 +509,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		Summary:  prBatchSummary("pending_review", batchResults),
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(written)),
 		Warnings: result.Notices,
-	}, http.StatusOK, true
+	}, http.StatusOK)
 }
 
 // prBatchSummary renders runBatchPR's summary line from its status and the
@@ -605,6 +616,73 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 	}
 	ctx = gitops.WithTenantNames(ctx, names)
 	return executeBatchOpsShown(ctx, w, configDir, ops, email, p, rbacMgr, tenantOrg, treeVisible)
+}
+
+// executeBatch is executeBatchOps for an endpoint or an async task, counting
+// the run as one write attempt (#3054, batchRunResult): a direct-mode batch is
+// one commit, so one attempt however many tenants it names. Every direct
+// batch — sync and async, /tenants/batch and /groups/{id}/batch — runs
+// through here. client is the request's own context for a sync batch (a run
+// that failed because the client went away is not counted, clientGone) and
+// nil for an async task, which no client's leaving cancels.
+func (d *Deps) executeBatch(ctx, client context.Context, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, results batchResultsUse) directBatchRun {
+	run := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, results)
+	if res, counted := batchRunResult(run); counted && (res == writeResultOK || !clientGone(client)) {
+		d.writeResults().record(res)
+	}
+	return run
+}
+
+// batchRunResult is the write result of a direct-mode batch run (#3054), or
+// false when it is not counted. It gives the result the answer of the sync
+// endpoint has (writeResultOfStatus over writeBatchFailure's status), so an
+// async task — which has no HTTP answer — is counted the same:
+//
+//   - rejected (422: an op refused, or the generator's findings): not counted
+//   - written: ok
+//   - committed but not finished cleanly (409 committed: true): error
+//   - otherwise batchFailureResult
+func batchRunResult(run directBatchRun) (writeResult, bool) {
+	switch {
+	case run.Rejected:
+		return 0, false
+	case run.Err == nil:
+		return writeResultOK, true
+	case run.Committed != "":
+		return writeResultError, true
+	case generatorRejectsBatch(run.Err):
+		return 0, false
+	}
+	return batchFailureResult(run.Err)
+}
+
+// batchFailureResult is the result of the status writeBatchFailure answers
+// err with; TestBatchFailureResult_MatchesTheSyncAnswer holds the two
+// together. 409 — the serving branch moved (gitops.ErrConflict), two files
+// claim the tenant, another file declares it, an unresolvable link in the
+// tree, the tenant's own file unreadable — is conflict; an invalid tenant id
+// (400) is not counted; everything else (busy, cancelled, store fault, git) is
+// error.
+func batchFailureResult(err error) (writeResult, bool) {
+	var (
+		tree   *gitops.TreeUnreadableError
+		target *gitops.TargetUnreadableError
+	)
+	switch {
+	case errors.As(err, &tree):
+		if _, _, status := treeRefusal(tree); status == http.StatusConflict {
+			return writeResultConflict, true
+		}
+		return writeResultError, true
+	case errors.As(err, &target),
+		errors.Is(err, gitops.ErrTenantDeclaredElsewhere),
+		errors.Is(err, confd.ErrAmbiguousTenantFile),
+		errors.Is(err, gitops.ErrConflict):
+		return writeResultConflict, true
+	case errors.Is(err, gitops.ErrInvalidTenantID):
+		return 0, false
+	}
+	return writeResultError, true
 }
 
 // batchResultsUse says who reads a direct-mode batch's results (see
@@ -891,7 +969,7 @@ func batchTaskFunc(d *Deps, ops []BatchOperation, email string, p *rbac.Verified
 		// the generator is given what is left of it, as a request's.
 		ctx, cancel := context.WithTimeout(ctx, d.WriteTimeout())
 		defer cancel()
-		run := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, batchResultsStored)
+		run := d.executeBatch(ctx, nil, ops, email, p, batchResultsStored)
 		return toTaskResults(run.Results), batchTaskError(run)
 	}
 }
