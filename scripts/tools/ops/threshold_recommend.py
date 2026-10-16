@@ -212,9 +212,11 @@ class KeyRecommendation:
     sample_count: int = 0
     reason: str = ""
     promql: str = ""
-    # #916 Item A (lower-bound engine): a guardrail tripped so this key needs a
-    # human (relaxation / out-of-domain / thin sample). recommended stays None;
-    # _exportable / is_governance_actionable exclude it; govern surfaces it in a
+    # This key needs a human; set by the lower-bound engine's guardrails (#916
+    # Item A: relaxation / out-of-domain / thin sample), for an upper-bound key
+    # whose current is 0 (#2997), and for any key whose recommendation raised
+    # (_recommend_key). recommended stays None; _exportable /
+    # is_governance_actionable exclude it; govern surfaces it in a
     # manual-review section keyed on guardrail_reason.
     force_manual: bool = False
     guardrail_reason: str = ""
@@ -406,7 +408,10 @@ def recommend_threshold(
       - Rounding keeps current's style: an int for a whole number (``"1e3"``
         too), else current's own decimal places, at least 2 (``_decimals``).
       - noise_grade == BAD: P99 instead of P95 (relax a noisy alert).
-      - current == 0: unchanged (P95, delta 100% / 0%).
+      - current == 0 with P95 > 0 (#2997): no recommendation; ``force_manual``
+        with ``delta_pct`` None (a change from 0 has no relative size). The
+        reason names the observed P99 (and its round-up to current's
+        precision when that differs) and the window max.
       - Delta < 5%: no change recommended (within noise margin).
 
     Args:
@@ -476,18 +481,40 @@ def recommend_threshold(
 
     places = _decimals(current_value)
 
+    if current_float == 0:
+        # #2997: a 0 threshold fires on any positive value and is often meant
+        # (kafka_under_replicated_partitions "should be 0"). A change relative
+        # to 0 is undefined, so no value is proposed: the key goes to govern's
+        # manual-review section rather than vanishing into "skipped".
+        # delta_pct stays None — govern tags a number with the lower-bound
+        # "% miss". P99 is also shown rounded UP in current's format, as a
+        # relax would be — named as such, since it can exceed the max. The
+        # confidence stays the sample-count grade (not used for gating here).
+        raw, up = f"{p99:.6g}", _format_threshold_value(_ceil_to(p99, places))
+        shown = raw if raw == up else f"{raw} (rounded up to current's precision: {up})"
+        seen = f", max {_format_threshold_value(clean[-1])}" if clean else ""
+        why = ("current threshold is 0 (fires on any positive value) — manual "
+               f"review; observed P99 {shown}{seen}")
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            p50=pcts.get("p50"),
+            p95=pcts.get("p95"),
+            p99=pcts.get("p99"),
+            confidence=confidence,
+            sample_count=sample_count,
+            reason=why,
+            force_manual=True,
+            guardrail_reason=why,
+        )
+
     def _round(x: float) -> Any:
         return round(x) if places == 0 else round(x, places)
 
     noisy = noise_grade == "BAD"
     base = p99 if noisy else p95
     floored = ""
-    if current_float == 0:
-        # Not in #2964's scope: kept as it was (the shown 2-dp percentile).
-        target = pcts.get("p99" if noisy else "p95", base)
-        reason_prefix = ("noisy alert (BAD noise grade) → relaxed to P99" if noisy
-                         else "recommended at P95")
-    elif base > current_float:
+    if base > current_float:
         # Up, never to the nearest: rounding P99 to current's precision could
         # land at or under current (0.001 → 0.0 was a "-100% relax").
         target = _ceil_to(p99, places)
@@ -519,7 +546,7 @@ def recommend_threshold(
                                  f"P{99 if noisy else 95} {base:.6g}")
                 floored = ": " + "; ".join(w for w, v in holds.items() if v == floor)
 
-    if current_float != 0 and target <= 0:
+    if target <= 0:
         # Defence only: every branch above keeps target > 0 once P95 > 0.
         return KeyRecommendation(
             key=key, current_value=current_value, p50=pcts.get("p50"),
@@ -529,11 +556,8 @@ def recommend_threshold(
                     "is non-positive — no recommendation"),
         )
 
-    # Calculate delta
-    if current_float != 0:
-        delta_pct = round(((target - current_float) / current_float) * 100, 1)
-    else:
-        delta_pct = 0.0 if target == 0 else 100.0
+    # Calculate delta (current is non-zero here: 0 returned above)
+    delta_pct = round(((target - current_float) / current_float) * 100, 1)
 
     # Skip if delta is within noise margin
     if abs(delta_pct) < 5.0:
@@ -1058,9 +1082,12 @@ def _recommend_key(
                 values=values,
             )
             hours = len({int(ts // 3600) for ts, _ in pairs})
-            if hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW:
+            if (hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW
+                    and not rec.force_manual):
                 # #2941: too little history for any recommendation to be
                 # trusted; LOW keeps threshold_govern from opening a PR.
+                # #2997: a force_manual key has no recommendation to downgrade,
+                # and its reason is the manual-review text govern shows.
                 rec.confidence = CONFIDENCE_LOW
                 rec.reason = (f"{rec.reason}; data in {hours} distinct hour(s) "
                               f"< {MIN_UPPER_COVERAGE_HOURS} → LOW")
@@ -1292,7 +1319,8 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     """(label, detail) for a non-exportable key's transparency comment.
 
     A ``force_manual`` key (a lower-bound guardrail tripped — relaxation / thin
-    sample / out-of-domain) is labelled ``manual`` and carries its
+    sample / out-of-domain; an upper-bound current of 0, #2997; or a
+    recommender exception) is labelled ``manual`` and carries its
     ``guardrail_reason`` so a floor rotting toward relaxation is never invisible;
     every other non-exportable key stays ``skipped``. #2969: a key past the
     margin but graded LOW is labelled ``low confidence`` and carries the value
@@ -1329,7 +1357,8 @@ def _exportable(r: KeyRecommendation) -> bool:
     recommendation — i.e. a numeric ``recommended`` AND a delta past the 5%
     noise margin. Keys that were skipped (unmapped / lower-bound N/A / unsupported
     scope / no data — ``recommended is None``), within-margin (no change needed),
-    or routed to manual review by a lower-bound guardrail (#916 ``force_manual``)
+    or routed to manual review (``force_manual``: a lower-bound guardrail, #916;
+    an upper-bound current of 0, #2997; a recommender exception)
     are intentionally NOT patched, mirroring the analyze_tenant skip.
 
     #2969: nor is one graded LOW (or never graded): the same confidence floor
