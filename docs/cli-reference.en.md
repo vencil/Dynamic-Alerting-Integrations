@@ -1029,7 +1029,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|-------------|
 | `0` | Success (CI mode: all alerts meet quality threshold) |
 | `1` | CI mode: BAD alerts found or score below threshold |
-| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects. ⚠️ An unreachable Prometheus is **not** 2 — failed queries count as no data and the report is still printed (rc 0; under `--ci` the score / BAD count decide 1) |
+| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects; and a failed Prometheus `ALERTS` query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; with or without `--ci`, #3065 — it used to count as no data, rc 0). No report is printed then and stderr carries the raw error; `--json` prints `{"status": "caller_error", "reason": "prometheus_query_error", "error": "<raw>", ...}` (the remaining keys follow the normal report, zeroed). Tell them apart with `da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` |
 
 ---
 
@@ -1167,6 +1167,14 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `critical` | Predicted to hit limit within `--warn-days` |
 | `warning` | Growing trend but not yet reaching warning threshold |
 | `safe` | Stable or declining trend |
+
+**Exit Codes**
+
+| Code | Description |
+|------|-------------|
+| `0` | Success (CI mode: no critical risk) |
+| `1` | CI mode: critical risk found |
+| `2` | Caller error: bad arguments, or no cardinality data obtained. The `--json` `reason` separates the two cases: a failed Prometheus query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML) ⇒ `"status": "caller_error"`, `"reason": "prometheus_query_error"`, plus `"error": "<raw>"` (#3065; it used to be `"status": "no_data"`, `no_cardinality_data` like the next case); a successful query with no `tenant_threshold_*` series ⇒ `"status": "no_data"`, `"reason": "no_cardinality_data"`. `da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
 
 #### config-history
 
