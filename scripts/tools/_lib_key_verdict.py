@@ -169,6 +169,18 @@ def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
     return pe.load_policies(str(path)) if path.is_file() else []
 
 
+def note_root_only_policies(conf_d: str | os.PathLike[str]) -> None:
+    """Print, once, Policy-as-Code's own note naming the subdirectory
+    `_defaults.yaml` files whose `_policies` it does not read — and so this
+    verdict does not count — for a caller with no Policy-as-Code row of its
+    own to say it (explain-keys). Nothing when there is none."""
+    ops = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops")
+    if ops not in sys.path:
+        sys.path.insert(0, ops)
+    import policy_engine as pe
+    _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE)
+
+
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
                disable_effects: bool = True, rules: Iterable[Any] | None = None,
                timeout: float = tv.DEFAULT_TIMEOUT,

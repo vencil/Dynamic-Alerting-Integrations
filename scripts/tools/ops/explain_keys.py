@@ -89,6 +89,9 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
             timeout: float) -> dict[str, Any]:
     if not conf_d.is_dir():
         raise ExplainError(f"--config-dir is not a directory: {conf_d}")
+    # The verdict takes `_policies` from the root `_defaults.yaml` only, as
+    # Policy-as-Code does; say which subdirectory ones it does not count.
+    kv.note_root_only_policies(conf_d)
     try:
         verdict = kv.judge_tree(conf_d, at=at, binary=binary, timeout=timeout)
     except (tv.DaGuardNotFoundError, tv.DaGuardError, tv.ParseFailedError) as e:
