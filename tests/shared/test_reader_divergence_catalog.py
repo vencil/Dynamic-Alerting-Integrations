@@ -771,7 +771,7 @@ def _healed(**cell_over) -> dict:
 
 @pytest.mark.parametrize("entries, matrix, needle", [
     # An uncatalogued cell: per reader, per field.
-    (_ROUTING_ENTRIES[:2] + _ROUTING_ENTRIES[3:], _ROUTING_MATRIX,
+    (_ROUTING_ENTRIES[:2], _ROUTING_MATRIX,
      "da-guard ['t', 't1', 'policy']: uncatalogued go_looser routing difference"),
     (_ROUTING_ENTRIES[1:], _ROUTING_MATRIX, "routingpolicy ['t', 't1', 'targets']: uncatalogued value_differs"),
     # A tree's entry does not swallow another field of the same tree.

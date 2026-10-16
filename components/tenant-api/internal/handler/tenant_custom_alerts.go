@@ -266,7 +266,8 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		}
 		// #2903: the re-encode must change nothing but `_custom_alerts`.
 		edit := partialEdit{key: "_custom_alerts", set: len(*req.CustomAlerts) > 0}
-		if err := verifyPartialWrite(raw, []byte(merged), tenantID, []partialEdit{edit}); errors.As(err, &notLoadable) {
+		r = withTenantNames(r, d) // #3039: which other tenants the refusals below may name
+		if err := verifyPartialWrite(raw, []byte(merged), tenantID, []partialEdit{edit}, gitops.TenantNamesOf(r.Context())); errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(w, r, notLoadable)
 			return
 		}

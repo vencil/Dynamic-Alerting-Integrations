@@ -423,7 +423,9 @@ type partialEdit struct {
 // configErrorNotRoundTrippable) unless merged keeps base's written YAML
 // everywhere outside the edits to tenants.<tenantID>, and the edited keys
 // read as the edits say. An empty base (a new file) has nothing to keep.
-func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdit) error {
+// names is the caller's tenantNamesFor: which other tenants' paths the
+// refusal may name (describePath).
+func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdit, names gitops.TenantNames) error {
 	if len(bytes.TrimSpace(base)) == 0 {
 		return nil
 	}
@@ -450,7 +452,7 @@ func verifyPartialWrite(base, merged []byte, tenantID string, edits []partialEdi
 	c := &nodeCompare{tenantID: tenantID, edits: edits, seen: map[[2]*yaml.Node]bool{}}
 	for i := range bDocs {
 		if path, ok := c.equal(bDocs[i], mDocs[i], nil, i == 0); !ok {
-			return refuse(describePath(path, tenantID))
+			return refuse(describePath(path, tenantID, names))
 		}
 	}
 	if detail := c.checkEdits(); detail != "" {
@@ -692,10 +694,11 @@ func anchorsOf(docs []*yaml.Node) []string {
 }
 
 // describePath names a difference for the refusal message: a path in the
-// written tenant's own block in full, anything else only as "another place
-// in the file" — another tenant's block may be one the caller cannot read.
-func describePath(path []string, tenantID string) string {
-	if len(path) >= 2 && path[0] == "tenants" && path[1] == tenantID {
+// written tenant's own block, or in the block of a tenant names shows
+// (tenantNamesFor: one the caller may read), in full; anything else only as
+// "another place in the file".
+func describePath(path []string, tenantID string, names gitops.TenantNames) string {
+	if len(path) >= 2 && path[0] == "tenants" && (path[1] == tenantID || names.Shown(path[1])) {
 		return strings.Join(path, ".")
 	}
 	return "another place in the file"

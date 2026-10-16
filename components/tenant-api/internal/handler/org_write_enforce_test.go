@@ -58,6 +58,7 @@ import (
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 const (
@@ -796,5 +797,281 @@ func TestOrgWriteEnforce_StarSemantics_ViewsWriteUnchanged(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// #3039 (#1530): a file can declare several tenants, and validation reads the
+// whole file — a batch PATCH merges into it, GET and the dry-run judge it,
+// PUT writes it. A message about a tenant the caller may not read names
+// neither the tenant nor its keys: it says only "another place in the
+// file" (the details go to the log). A tenant the caller may read is named.
+// The rule is tenantNamesFor, the one describePath and disclosedFindings use.
+func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
+	t.Parallel()
+	const flat = "tenants:\n" +
+		"  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
+		"  " + orgEnfTenantOut + ":\n    _routing_receiver_type: webhook\n    secret_key_b: \"1\"\n    mysql_cpu: \"3\"\n"
+	// The routing key and secret_key_b are errors; mysql_cpu is a renamed-key
+	// notice, which only the dry-run and GET carry.
+	hidden := []string{orgEnfTenantOut, "_routing_receiver_type", "secret_key_b", "mysql_cpu"}
+	files := map[string]string{
+		"_defaults.yaml":         "defaults:\n  mysql_threads_running: 5\n",
+		orgEnfTenantIn + ".yaml": flat,
+	}
+	batchBody := func(t *testing.T) *bytes.Buffer {
+		b, err := json.Marshal(BatchRequest{Operations: []BatchOperation{
+			{TenantID: orgEnfTenantIn, Patch: map[string]string{"_silent_mode": "warning"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes.NewBuffer(b)
+	}
+	calls := []struct {
+		name string
+		call func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder
+		code int
+		// notices: the answer carries notices as well as errors.
+		notices bool
+	}{
+		{"batch PATCH", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := httptest.NewRequest("POST", "/api/v1/tenants/batch", batchBody(t))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(BatchTenants(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusUnprocessableEntity, false},
+		{"PUT", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(flat))
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(PutTenant(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusBadRequest, false},
+		{"custom alerts", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			b, err := json.Marshal(PutCustomAlertsRequest{CustomAlerts: &[]map[string]any{}, BaseHash: cfg.ComputeSourceHash([]byte(flat))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn+"/custom-alerts", "id", orgEnfTenantIn, bytes.NewBuffer(b))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(PutTenantCustomAlerts(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusBadRequest, false},
+		{"dry-run", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+orgEnfTenantIn+"/validate", "id", orgEnfTenantIn, bytes.NewBufferString(flat))
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(ValidateTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusOK, true},
+		{"GET", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("GET", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, nil)
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(GetTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusOK, true},
+	}
+	// answer is the text checked: the whole body, except GET's, whose
+	// raw_yaml is the file itself (every reader of a tenant reads its whole
+	// file) — there only the validation fields.
+	answer := func(t *testing.T, name string, w *httptest.ResponseRecorder) string {
+		if name != "GET" {
+			return w.Body.String()
+		}
+		var d TenantDetail
+		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+			t.Fatalf("unmarshal: %v: %s", err, w.Body.String())
+		}
+		return strings.Join(append(append([]string(nil), d.Warnings...), d.Notices...), "\n")
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newOrgEnfFixture(t, files)
+			w := c.call(t, f)
+			body := answer(t, c.name, w)
+			if w.Code != c.code || !strings.Contains(body, "another place in the file") {
+				t.Fatalf("status %d (want %d), want the other tenant said to be another place: %s", w.Code, c.code, body)
+			}
+			for _, h := range hidden {
+				if strings.Contains(body, h) {
+					t.Errorf("the answer names %q, which only a reader of %s may see: %s", h, orgEnfTenantOut, body)
+				}
+			}
+			if n := f.writes.Load(); n != 0 {
+				t.Errorf("writer commits = %d, want 0", n)
+			}
+
+			// Must fire: once the caller may read the other tenant, its
+			// messages are named in full.
+			f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+				orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+			w = c.call(t, f)
+			body = answer(t, c.name, w)
+			if strings.Contains(body, "another place in the file") {
+				t.Errorf("readable: still said to be another place: %s", body)
+			}
+			for _, h := range hidden {
+				if h == "mysql_cpu" && !c.notices {
+					continue
+				}
+				if !strings.Contains(body, h) {
+					t.Errorf("readable: the answer does not name %q: %s", h, body)
+				}
+			}
+		})
+	}
+}
+
+// #3039, the two PR-mode paths: WritePR validates the file the PUT writes with
+// the caller's TenantNames off ctx (writer_pr.go), and a PR batch's merge
+// refuses a partial write naming a path in another tenant's block only when
+// the caller may read it (mergePatchYAML → describePath). Neither was pinned
+// by TestValidationMessagesNameOnlyReadableTenants, which drives direct mode.
+func TestValidationMessagesNameOnlyReadableTenants_PRMode(t *testing.T) {
+	t.Parallel()
+	// PUT: the other tenant's block carries a key-validation error.
+	const flatKeys = "tenants:\n" +
+		"  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
+		"  " + orgEnfTenantOut + ":\n    secret_key_b: \"1\"\n"
+	// batch: the other tenant's block does not survive a re-encode, so the
+	// merge refuses and names the first difference — tenants.<out>.d.
+	const flatRoundTrip = "tenants:\n" +
+		"  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
+		"  " + orgEnfTenantOut + ":\n    d: |-\n\n      a\n"
+	prDeps := func(f *orgEnfFixture) *Deps {
+		d := f.deps()
+		d.WriteMode = WriteModePR
+		d.PRClient = &mockPlatformClient{}
+		d.PRTracker = &mockPlatformTracker{}
+		return d
+	}
+	for _, c := range []struct {
+		name, file string
+		call       func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder
+		code       int
+		// hidden: what only a reader of orgEnfTenantOut may see; readable:
+		// what that reader is shown in its place.
+		hidden, readable []string
+	}{
+		{"PUT", flatKeys, func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(flatKeys))
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(PutTenant(prDeps(f)), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusBadRequest,
+			[]string{orgEnfTenantOut, "secret_key_b"}, []string{"tenant=" + orgEnfTenantOut, "secret_key_b"}},
+		{"batch PATCH", flatRoundTrip, func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			b, err := json.Marshal(BatchRequest{Operations: []BatchOperation{
+				{TenantID: orgEnfTenantIn, Patch: map[string]string{"_silent_mode": "warning"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBuffer(b))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(BatchTenants(prDeps(f)), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusUnprocessableEntity,
+			[]string{orgEnfTenantOut}, []string{"tenants." + orgEnfTenantOut + ".d"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newOrgEnfFixture(t, map[string]string{orgEnfTenantIn + ".yaml": c.file})
+			w := c.call(t, f)
+			body := w.Body.String()
+			if w.Code != c.code || !strings.Contains(body, "another place in the file") {
+				t.Fatalf("status %d (want %d), want the other tenant said to be another place: %s", w.Code, c.code, body)
+			}
+			for _, h := range c.hidden {
+				if strings.Contains(body, h) {
+					t.Errorf("the answer names %q, which only a reader of %s may see: %s", h, orgEnfTenantOut, body)
+				}
+			}
+			if n := f.writes.Load(); n != 0 {
+				t.Errorf("writer commits = %d, want 0", n)
+			}
+
+			// Must fire: once the caller may read the other tenant, the
+			// answer names it in full.
+			f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+				orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+			w = c.call(t, f)
+			body = w.Body.String()
+			if w.Code != c.code || strings.Contains(body, "another place in the file") {
+				t.Errorf("readable: status %d (want %d), still said to be another place: %s", w.Code, c.code, body)
+			}
+			for _, r := range c.readable {
+				if !strings.Contains(body, r) {
+					t.Errorf("readable: the answer does not name %q: %s", r, body)
+				}
+			}
+		})
+	}
+}
+
+// #3039: an async batch's results are stored in the task manager and served
+// to whoever polls the task, not only to the submitter — so they name no
+// other tenant even when the submitter may read it (executeBatchOps,
+// batchResultsStored). The sync arm is the control: the same caller, the
+// same file, named in full.
+func TestValidationMessagesAsyncBatchNamesNoOtherTenant(t *testing.T) {
+	t.Parallel()
+	const flat = "tenants:\n" +
+		"  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
+		"  " + orgEnfTenantOut + ":\n    secret_key_b: \"1\"\n"
+	f := newOrgEnfFixture(t, map[string]string{orgEnfTenantIn + ".yaml": flat})
+	// The submitter may read the other tenant.
+	f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+		orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+	taskMgr := async.NewManager(2)
+	defer taskMgr.Close()
+	d := f.deps()
+	d.Tasks = taskMgr
+	submit := func(t *testing.T, target string) *httptest.ResponseRecorder {
+		b, err := json.Marshal(BatchRequest{Operations: []BatchOperation{
+			{TenantID: orgEnfTenantIn, Patch: map[string]string{"_silent_mode": "warning"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("POST", target, bytes.NewBuffer(b))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		wrapWithRBACMiddleware(BatchTenants(d), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+		return w
+	}
+
+	// Control: the synchronous answer names it.
+	if w := submit(t, "/api/v1/tenants/batch"); !strings.Contains(w.Body.String(), "secret_key_b") {
+		t.Fatalf("sync control: status %d, want the other tenant's message named: %s", w.Code, w.Body.String())
+	}
+
+	w := submit(t, "/api/v1/tenants/batch?async=true")
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	taskID, _ := resp["task_id"].(string)
+	if taskID == "" {
+		t.Fatal("task_id empty in async response")
+	}
+	final := pollUntilTerminal(t, taskMgr, taskID, 5*time.Second)
+	raw, err := json.Marshal(final)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := string(raw)
+	if !strings.Contains(stored, "another place in the file") {
+		t.Fatalf("stored results: want the other tenant said to be another place: %s", stored)
+	}
+	for _, h := range []string{orgEnfTenantOut, "secret_key_b"} {
+		if strings.Contains(stored, h) {
+			t.Errorf("stored results name %q, which every poller would read: %s", h, stored)
+		}
+	}
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("writer commits = %d, want 0", n)
 	}
 }

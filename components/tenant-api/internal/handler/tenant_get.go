@@ -17,6 +17,8 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/credmask"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // TenantDetail is the full tenant representation returned by GET /api/v1/tenants/{id}.
@@ -228,7 +230,10 @@ func GetTenant(d *Deps) http.HandlerFunc {
 
 		// #1231 1b: two-channel split — validation_warnings stays Errors-only
 		// (the blocking set), deprecation notices get their own field.
-		kv := merged.ValidateTenantKeys()
+		// #3039: the file may declare other tenants; messages about those the
+		// caller may not read are counted, not shown.
+		warnings, notices := gitops.DiscloseKeyValidation(tenantID, merged.ValidateTenantKeysByTenant(),
+			tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 		resolved := merged.ResolveAt(time.Now())
 
 		// Filter to only this tenant's thresholds. Initialized non-nil so a
@@ -272,8 +277,8 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			ID:              tenantID,
 			RawYAML:         raw,
 			Resolved:        tenantResolved,
-			Warnings:        kv.Errors,
-			Notices:         kv.Notices,
+			Warnings:        warnings,
+			Notices:         notices,
 			SourceHash:      sourceHashFor(data, masked || withheld),
 			CustomAlerts:    customAlerts,
 			Masked:          masked,

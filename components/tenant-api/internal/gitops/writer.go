@@ -107,6 +107,92 @@ func replaceUnparseableAllowed(ctx context.Context) bool {
 	return ok
 }
 
+// TenantNames answers, for one caller, whether a message may name a tenant
+// other than the one being written: a file can declare several tenants, and
+// a validation message about one of them names it and its keys (#3039). The
+// handler builds it (the one rule it shares with the partial-write refusal
+// and the generator findings, #1530); the Writer reads it off the context
+// (WithTenantNames).
+type TenantNames func(tenantID string) bool
+
+// Shown reports whether a message may name tenantID. A nil TenantNames names
+// none: a path that forgets to set it withholds rather than discloses.
+func (n TenantNames) Shown(tenantID string) bool {
+	return n != nil && n(tenantID)
+}
+
+// tenantNamesKey is the context key WithTenantNames sets.
+type tenantNamesKey struct{}
+
+// WithTenantNames marks ctx with the caller's TenantNames, read by every
+// validation the Writer runs for the request (Write / WriteIfUnchanged /
+// WriteMerged / WriteBatch / WritePR / WritePRBatch / DryRunValidate).
+func WithTenantNames(ctx context.Context, n TenantNames) context.Context {
+	return context.WithValue(ctx, tenantNamesKey{}, n)
+}
+
+// TenantNamesOf is the TenantNames WithTenantNames set on ctx, or nil.
+func TenantNamesOf(ctx context.Context) TenantNames {
+	n, _ := ctx.Value(tenantNamesKey{}).(TenantNames)
+	return n
+}
+
+// The texts standing in for validation messages about a tenant the caller
+// may not be told about (DiscloseKeyValidation); the messages stay in the
+// server log. No count: like the group endpoints' "another member you cannot
+// view" (#1530), they say only that there is something.
+const (
+	msgOtherPlaceErrors  = "another place in the file has problems (the details are in the server log)"
+	msgOtherPlaceNotices = "another place in the file has notices (the details are in the server log)"
+)
+
+// DiscloseKeyValidation flattens kv for the writer or reader of tenantID:
+// the platform's and tenantID's messages, then those of each other tenant
+// names shows, in tenant order. The messages about any other tenant are
+// replaced by one line per channel, and logged — they still block a write
+// as before; only the text changes (#3039).
+func DiscloseKeyValidation(tenantID string, kv cfg.KeyValidationByTenant, names TenantNames) (errs, notices []string) {
+	errs = append(errs, kv.Platform.Errors...)
+	notices = append(notices, kv.Platform.Notices...)
+	errs = append(errs, kv.Tenants[tenantID].Errors...)
+	notices = append(notices, kv.Tenants[tenantID].Notices...)
+	others := make([]string, 0, len(kv.Tenants))
+	for tid := range kv.Tenants {
+		if tid != tenantID {
+			others = append(others, tid)
+		}
+	}
+	sort.Strings(others)
+	var hiddenErrs, hiddenNotices bool
+	for _, tid := range others {
+		v := kv.Tenants[tid]
+		// Before Shown, not after: each Shown is an RBAC org-read check that
+		// logs and counts a deny (the scope_would_deny soak count the enforce
+		// flip reads), so asking about a tenant with nothing to say would
+		// count a deny no message depended on — O(tenants) of them, under
+		// the writer lock, for a large flat file.
+		if len(v.Errors)+len(v.Notices) == 0 {
+			continue
+		}
+		if names.Shown(tid) {
+			errs = append(errs, v.Errors...)
+			notices = append(notices, v.Notices...)
+			continue
+		}
+		hiddenErrs = hiddenErrs || len(v.Errors) > 0
+		hiddenNotices = hiddenNotices || len(v.Notices) > 0
+		slog.Warn("tenant config validation: messages about another tenant in the file withheld from the caller",
+			"tenant", tenantID, "about", tid, "errors", v.Errors, "notices", v.Notices)
+	}
+	if hiddenErrs {
+		errs = append(errs, msgOtherPlaceErrors)
+	}
+	if hiddenNotices {
+		notices = append(notices, msgOtherPlaceNotices)
+	}
+	return errs, notices
+}
+
 // ErrValidation wraps a schema/structural validation failure of the incoming
 // YAML. It lets handlers distinguish a CLIENT error (malformed body → HTTP 400)
 // from a server-side write failure (500): the direct-write path already returned
@@ -868,7 +954,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 	}
 
-	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx))
+	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
@@ -1330,13 +1416,14 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 // key-loss this path exists to prevent). The raw existing bytes are returned so
 // the caller can detect a byte-identical (no-op) merge. notices is validate()'s
 // advisory deprecation channel (#1231 1b), meaningful only when err is nil.
-func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
-	return w.readMergeValidateIn(w.configDir, tenantID, filePath, merge)
+func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc, names TenantNames) (content string, existing []byte, notices []string, err error) {
+	return w.readMergeValidateIn(w.configDir, tenantID, filePath, merge, names)
 }
 
 // readMergeValidateIn is readMergeValidate judged against the conf.d tree at
-// configDir — the batch staging tree's (#2900), or w.configDir.
-func (w *Writer) readMergeValidateIn(configDir, tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
+// configDir — the batch staging tree's (#2900), or w.configDir. names is the
+// caller's TenantNames (validateReplacing).
+func (w *Writer) readMergeValidateIn(configDir, tenantID, filePath string, merge MergeFunc, names TenantNames) (content string, existing []byte, notices []string, err error) {
 	content, existing, err = w.readMerge(tenantID, filePath, merge)
 	if errors.Is(err, ErrMergeNoOp) && len(bytes.TrimSpace(existing)) > 0 {
 		// The file stays as it is: nothing is written, so nothing is refused
@@ -1345,13 +1432,13 @@ func (w *Writer) readMergeValidateIn(configDir, tenantID, filePath string, merge
 		// a successful no-op into a 400). Only the file's notices are taken
 		// from validate (#1231 F5); its errors are deliberately dropped. The
 		// caller sees ErrMergeNoOp with the notices.
-		_, notices := validate(configDir, tenantID, filePath, string(existing))
+		_, notices := validateReplacing(configDir, tenantID, filePath, string(existing), false, names)
 		return "", existing, notices, err
 	}
 	if err != nil {
 		return "", existing, nil, err
 	}
-	errs, notices := validate(configDir, tenantID, filePath, content)
+	errs, notices := validateReplacing(configDir, tenantID, filePath, content, false, names)
 	if len(errs) > 0 {
 		return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
 	}
@@ -1395,7 +1482,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	if err != nil {
 		return nil, err
 	}
-	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge)
+	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge, TenantNamesOf(ctx))
 	if errors.Is(err, ErrMergeNoOp) {
 		return notices, nil // B2: the merge changes nothing — success, nothing written, notices kept
 	}
@@ -2018,7 +2105,7 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 // POST /validate. Structural failures (bad YAML / root keys / missing tenant
 // section) return nil notices: key validation never ran.
 func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, notices []string) {
-	return validateReplacing(configDir, tenantID, tenantFilePath, yamlContent, false)
+	return validateReplacing(configDir, tenantID, tenantFilePath, yamlContent, false, nil)
 }
 
 // validateReplacing is validate with the #2405 permission bit for replacing a
@@ -2026,7 +2113,11 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 // paths' entry — passes false: a merge needs a base it can read, so the bit
 // only means something to the whole-file write paths, which pass
 // replaceUnparseableAllowed(ctx).
-func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, replaceUnparseable bool) (errs, notices []string) {
+//
+// names is the caller's TenantNames (TenantNamesOf(ctx)): which other
+// tenants the file declares a key-validation message may name (#3039,
+// DiscloseKeyValidation). validate passes nil, naming none.
+func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, replaceUnparseable bool, names TenantNames) (errs, notices []string) {
 	// ⛔ THE ORDER OF THE REMAINING CHECKS IS UNCHANGED, DELIBERATELY. Hoisting
 	// ValidateTenantCustomAlerts up into validateShape would have let a recipe
 	// violation short-circuit ahead of addedTenantKeys — i.e. a body that both
@@ -2070,9 +2161,9 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
 	// (deprecated-key alias advisories) must never block a write; they ride
 	// the second return value instead (1b author-facing wiring).
-	var kv cfg.KeyValidation
+	var kv cfg.KeyValidationByTenant
 	if configDir == "" {
-		kv = tcfg.ValidateTenantKeys()
+		kv = tcfg.ValidateTenantKeysByTenant()
 	} else {
 		// Reuse the body we already decoded into tcfg above instead of handing
 		// raw bytes to MergeTenantWithRootDefaults, which would Unmarshal the
@@ -2080,10 +2171,12 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 		// present by the check above, so the byte variant's flat-KV fallback —
 		// the only behavior the parsed sibling omits — is unreachable here.
 		merged := cfg.MergeParsedTenantWithRootDefaults(configDir, tcfg)
-		kv = merged.ValidateTenantKeys()
+		kv = merged.ValidateTenantKeysByTenant()
 	}
-	keyErrs := kv.Errors
-	notices = kv.Notices
+	// #3039: the body may declare other tenants (a flat file, or the whole
+	// file a PATCH merges into); what is said about them depends on whether
+	// the caller may read them.
+	keyErrs, notices := DiscloseKeyValidation(tenantID, kv, names)
 	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
 	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
 	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
