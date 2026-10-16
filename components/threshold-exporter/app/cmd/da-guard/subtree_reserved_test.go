@@ -298,9 +298,11 @@ func allFindings(t *testing.T, args ...string) []string {
 // #2388 r2 (F1): the routing exclusion is the routing checks' own predicate
 // (config.IsRoutingKey: `_routing`, `_routing_<…>`), not the `_routing`
 // reserved prefix. `_routingProfile` is a reserved key no routing check names:
-// reported here. `_routing_xyz` inside `defaults:` is routing_in_unread_location
-// (an error) and not repeated here. A top-level `_routing_defaults` in an
-// unwrapped subtree file is the generator's spelling (#2326): neither reports.
+// reported here. `_routing_xyz` inside `defaults:` was routing_in_unread_location
+// (an error) and is not repeated here; since #2904 the default check judges
+// no routing, so it is undetermined, no finding. A top-level
+// `_routing_defaults` in an unwrapped subtree file is the generator's
+// spelling (#2326): neither reports.
 func TestGuard_SubtreeReservedRoutingKeys(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -310,7 +312,7 @@ func TestGuard_SubtreeReservedRoutingKeys(t *testing.T) {
 		{name: "routingProfile", subtree: "defaults:\n  _routingProfile: p1\n",
 			want: []string{"warn subtree_default_reserved_key t1 _routingProfile"}},
 		{name: "routing-key-in-defaults", subtree: "defaults:\n  _routing_xyz: p1\n",
-			want: []string{"error routing_in_unread_location  finance/_defaults.yaml:defaults._routing_xyz"}},
+			want: nil},
 		{name: "top-level-routing-defaults", subtree: "_routing_defaults:\n  receiver:\n    type: webhook\n" +
 			"    url: https://hooks.example.com/a\n",
 			want: nil},
@@ -404,9 +406,11 @@ func TestGuard_SubtreeReservedAdviceIsAFix(t *testing.T) {
 		"a/b/t.yaml":       "tenants:\n  t1:\n    _silent_mode: warning\n    _severity_dedup: disable\n",
 		"c/t.yaml":         "tenants:\n  t2: {}\n",
 	}
+	// Exit 4, not 0: t1's `_severity_dedup` is a routing-layer key the
+	// default check does not judge (#2904).
 	code, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files), "--warn-as-error")
-	if code != exitOK || len(got) != 0 {
-		t.Errorf("exit = %d, findings = %+v; want 0 and none", code, got)
+	if code != exitUndetermined || len(got) != 0 {
+		t.Errorf("exit = %d, findings = %+v; want 4 and none", code, got)
 	}
 	code, doc, _, stderr := served(t, files, "2026-10-01T00:00:00Z")
 	mustOK(t, code, stderr)

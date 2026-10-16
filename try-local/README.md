@@ -171,7 +171,7 @@ make clean-local && docker compose up -d
 
 ## 想試 da-tools（CLI）？
 
-對 seed 設定跑一次護欄檢查（cardinality / schema / routing）：
+對 seed 設定跑一次護欄檢查（cardinality / schema；seed 樹上有路由時 da-guard 回 exit 4——自 #2904 起路由交給 `generate-routes --validate --strict`）：
 
 ```bash
 docker run --rm -v "$PWD/seed/conf.d:/conf.d:ro" \

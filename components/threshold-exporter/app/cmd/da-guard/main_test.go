@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
 
@@ -123,7 +122,11 @@ func TestRun_NullThreshold_IsNotMissing(t *testing.T) {
 
 // --- routing: unknown receiver type --------------------------------
 
-func TestRun_UnknownReceiverType_ExitsOne(t *testing.T) {
+// Before #2904 an unknown receiver type was exit 1 here; the default check
+// now judges no routing (ADR-036 §9 step 2): exit 4, the tenant's `_routing`
+// named as undetermined, and no routing finding. The generator's
+// --validate --strict reports the receiver.
+func TestRun_UnknownReceiverType_IsUndetermined(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
@@ -140,11 +143,11 @@ func TestRun_UnknownReceiverType_ExitsOne(t *testing.T) {
 	code, stdout, _ := runOnce(t,
 		"--config-dir", filepath.Join(tmp, "conf.d"),
 	)
-	if code != exitFindings {
-		t.Errorf("exit = %d, want %d. stdout=%q", code, exitFindings, stdout)
+	if code != exitUndetermined {
+		t.Errorf("exit = %d, want %d. stdout=%q", code, exitUndetermined, stdout)
 	}
-	if !strings.Contains(stdout, "unknown_receiver_type") {
-		t.Errorf("stdout should surface routing finding: %q", stdout)
+	if strings.Contains(stdout, "unknown_receiver_type") || !strings.Contains(stdout, "`tenants.tenant-a._routing` (routing_key)") {
+		t.Errorf("stdout should name the routing as not judged, with no routing finding: %q", stdout)
 	}
 }
 
@@ -410,8 +413,10 @@ func TestRun_DecodeFailureWhileResolving_ExitsThree(t *testing.T) {
 }
 
 // Paired control: the broken file is OUTSIDE --scope, so it is not this
-// run's business — the empty scope stays the vacuous exit 0.
-func TestRun_ParseFailedFileOutsideScope_DoesNotCount(t *testing.T) {
+// run's exit 3 — but the route generator refuses it whole and judges the
+// whole tree, so since #2904 the empty scope is undetermined (exit 4), never
+// the vacuous 0.
+func TestRun_ParseFailedFileOutsideScope_IsNotExitThree(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
@@ -423,8 +428,8 @@ func TestRun_ParseFailedFileOutsideScope_DoesNotCount(t *testing.T) {
 		"--config-dir", filepath.Join(tmp, "conf.d"),
 		"--scope", filepath.Join(tmp, "conf.d", "empty"),
 	)
-	if code != exitOK {
-		t.Errorf("exit = %d, want %d. stdout=%q stderr=%q", code, exitOK, stdout, stderr)
+	if code != exitUndetermined || !strings.Contains(stdout, "`other/tenant-b.yaml` `duplicate_key` (generator_unreadable)") {
+		t.Errorf("exit = %d, want %d naming the file. stdout=%q stderr=%q", code, exitUndetermined, stdout, stderr)
 	}
 }
 
@@ -839,120 +844,6 @@ func adr007Tree(t *testing.T) map[string]string {
 	return nil
 }
 
-// Before #2280 da-guard read the tenant's raw `_routing` only: t-ovr (a
-// profile tenant with its own overrides) was missing_receiver_field, and the
-// profile-only tenants and the domain policy were never looked at. The exit 1
-// must now come from the policy, and from nothing else.
-func TestRun_ADR007_ExitOneComesFromDomainPolicy(t *testing.T) {
-	t.Parallel()
-	files := adr007Tree(t)
-	code, findings, _ := runTreeJSON(t, files)
-	if code != exitFindings {
-		t.Fatalf("exit = %d, want %d", code, exitFindings)
-	}
-	perTenant := map[string]int{}
-	var noEscalation []string
-	for _, f := range findings {
-		if f.Kind == "missing_receiver_field" {
-			t.Errorf("profile routing not resolved: %+v", f)
-		}
-		if f.Severity == "error" && f.Kind != "domain_policy_violation" && f.Kind != "critical_escalation_missing" {
-			t.Errorf("error that is not a policy violation: %+v", f)
-		}
-		if f.Kind == "domain_policy_violation" {
-			perTenant[f.TenantID]++
-		}
-		if f.Kind == "critical_escalation_missing" {
-			noEscalation = append(noEscalation, f.TenantID)
-		}
-	}
-	// #2325: the example policy also sets require_critical_escalation; the
-	// two tenants with no pagerduty path break it.
-	sort.Strings(noEscalation)
-	if !equalStrings(noEscalation, []string{"t-dba", "t-livedbb"}) {
-		t.Errorf("critical_escalation_missing tenants = %v, want [t-dba t-livedbb]", noEscalation)
-	}
-	// slack / webhook main receivers break both forbidden and allowed.
-	want := map[string]int{"t-sre": 2, "t-dba": 2, "t-ovr": 2, "t-livedbb": 2}
-	if len(perTenant) != len(want) {
-		t.Errorf("violations per tenant = %v, want %v", perTenant, want)
-	}
-	for tenant, n := range want {
-		if perTenant[tenant] != n {
-			t.Errorf("violations per tenant = %v, want %v", perTenant, want)
-			break
-		}
-	}
-
-	// Control: the same tree without the policy file is clean — so the
-	// exit 1 above is the policy's.
-	delete(files, "_domain_policy.yaml")
-	if code, findings, _ := runTreeJSON(t, files); code != exitOK {
-		t.Errorf("without _domain_policy.yaml: exit = %d, want 0; findings %+v", code, findings)
-	}
-}
-
-// A policy file whose structure cannot be used is ONE finding (TenantID "")
-// and the other checks still run: exit 1, never 3, and parse_failed stays the
-// exporter's own list (#1654).
-func TestRun_UnusablePolicyStructure_NamedAndOtherChecksRun(t *testing.T) {
-	t.Parallel()
-	code, findings, parseFailed := runTreeJSON(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  cpu: 70\n",
-		"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: t-pol\n" +
-			"    constraints:\n      forbidden_receiver_types: [slack]\n",
-		"_routing_profiles.yaml": "routing_profiles: [not, a, mapping]\n",
-		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
-			"      receiver: {type: telegram, url: 'https://x.example/h'}\n",
-	})
-	if code != exitFindings || len(parseFailed) != 0 {
-		t.Fatalf("exit = %d parse_failed = %v, want exit 1 and no parse_failed", code, parseFailed)
-	}
-	var got []string
-	for _, f := range findings {
-		got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
-	}
-	sort.Strings(got)
-	want := []string{
-		"error/domain_policy_unusable//_domain_policy.yaml:domain_policies.finance.tenants",
-		"error/unknown_receiver_type/t-pol/receiver.type",
-		"warn/routing_profiles_unusable//_routing_profiles.yaml:routing_profiles",
-	}
-	if !equalStrings(got, want) {
-		t.Errorf("findings %v\nwant %v", got, want)
-	}
-}
-
-// A `!!null`-tagged require_critical_escalation (#2325) is judged as the
-// generator's PyYAML reads it: a scalar is None — the constraint is off and
-// forbidden_receiver_types still refuses slack — and a collection is refused
-// with the whole file (the generator drops every domain policy in it).
-func TestRun_TaggedNullEscalation_AsTheGenerator(t *testing.T) {
-	t.Parallel()
-	for v, want := range map[string]string{
-		"!!null x":                    "error/domain_policy_violation/t-pol/receiver.type",
-		"!<tag:yaml.org,2002:null> x": "error/domain_policy_violation/t-pol/receiver.type",
-		`!!null ""`:                   "error/domain_policy_violation/t-pol/receiver.type",
-		"!!null {}":                   "error/domain_policy_unusable//_domain_policy.yaml",
-		"!!null [1]":                  "error/domain_policy_unusable//_domain_policy.yaml",
-	} {
-		code, findings, _ := runTreeJSON(t, map[string]string{
-			"_defaults.yaml": "defaults:\n  cpu: 70\n",
-			"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
-				"      require_critical_escalation: " + v + "\n      forbidden_receiver_types: [slack]\n",
-			"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
-				"      receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n",
-		})
-		var got []string
-		for _, f := range findings {
-			got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
-		}
-		if code != exitFindings || !equalStrings(got, []string{want}) {
-			t.Errorf("%s: exit = %d, findings %v; want exit %d and [%s]", v, code, got, exitFindings, want)
-		}
-	}
-}
-
 // taggedNullOutsidePolicyTrees carry `require_critical_escalation: !!null {}`
 // in a platform file that is NOT the domain policy (#2325): the PyYAML
 // reading of that key is the policy file's only, so the profiles / defaults
@@ -986,31 +877,6 @@ var taggedNullOutsidePolicyTrees = map[string]map[string]string{
 const taggedNullOutsidePolicyDomain = "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
 	"      require_critical_escalation: true\n      forbidden_receiver_types: [slack]\n"
 
-func TestRun_TaggedNullEscalationOutsidePolicyFile_StillEnforced(t *testing.T) {
-	t.Parallel()
-	for name, tree := range taggedNullOutsidePolicyTrees {
-		files := map[string]string{"_defaults.yaml": "defaults:\n  cpu: 70\n", "_domain_policy.yaml": taggedNullOutsidePolicyDomain}
-		for k, v := range tree {
-			files[k] = v
-		}
-		code, findings, _ := runTreeJSON(t, files)
-		var got []string
-		for _, f := range findings {
-			got = append(got, f.Severity+"/"+f.Kind+"/"+f.TenantID+"/"+f.Field)
-		}
-		sort.Strings(got)
-		want := []string{"error/critical_escalation_missing/t-pol/receiver.type", "error/domain_policy_violation/t-pol/receiver.type"}
-		if name == "profiles file, inside a profile" {
-			// #2960: a profile key the generator does not read.
-			want = append(want, "error/routing_key_ignored//_routing_profiles.yaml:routing_profiles.p1.require_critical_escalation")
-			sort.Strings(want)
-		}
-		if code != exitFindings || !equalStrings(got, want) {
-			t.Errorf("%s: exit = %d, findings %v; want exit %d and %v", name, code, got, exitFindings, want)
-		}
-	}
-}
-
 // A profiles / policy file that fails YAML syntax is a file the exporter
 // drops: exit 3 names it, and the routing loader skips it rather than naming
 // it a second time as an unusable structure.
@@ -1036,38 +902,75 @@ func TestRun_SyntaxBrokenPlatformFile_ExitThreeNamedOnce(t *testing.T) {
 	}
 }
 
-// `{{tenant}}` is substituted before the receiver shape is judged, as the
-// generator renders it; before #2280 the placeholder in a URL host was an
-// invalid_receiver_field.
-func TestRun_TenantPlaceholderSubstitutedBeforeShapeCheck(t *testing.T) {
-	t.Parallel()
-	code, findings, _ := runTreeJSON(t, map[string]string{
+// routingOnlyTrees are the pre-#2904 fixtures of the #2280 routing checks —
+// the ADR-007 worked example and its control without the policy file, an
+// unusable policy / profiles structure, a `!!null`-tagged
+// require_critical_escalation in and outside the policy file, `{{tenant}}`
+// in a receiver URL, `_routing_defaults.routes` — each a tree whose findings
+// were all routing-plane.
+func routingOnlyTrees(t *testing.T) map[string]map[string]string {
+	t.Helper()
+	trees := map[string]map[string]string{}
+	adr := adr007Tree(t)
+	trees["adr007"] = adr
+	noPolicy := map[string]string{}
+	for k, v := range adr {
+		if k != "_domain_policy.yaml" {
+			noPolicy[k] = v
+		}
+	}
+	trees["adr007 without the policy file"] = noPolicy
+	trees["unusable policy structure"] = map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 70\n",
+		"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: t-pol\n" +
+			"    constraints:\n      forbidden_receiver_types: [slack]\n",
+		"_routing_profiles.yaml": "routing_profiles: [not, a, mapping]\n",
+		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
+			"      receiver: {type: telegram, url: 'https://x.example/h'}\n",
+	}
+	for _, v := range []string{"!!null x", "!<tag:yaml.org,2002:null> x", `!!null ""`, "!!null {}", "!!null [1]"} {
+		trees["tagged null escalation "+v] = map[string]string{
+			"_defaults.yaml": "defaults:\n  cpu: 70\n",
+			"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-pol]\n    constraints:\n" +
+				"      require_critical_escalation: " + v + "\n      forbidden_receiver_types: [slack]\n",
+			"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n" +
+				"      receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n",
+		}
+	}
+	for name, tree := range taggedNullOutsidePolicyTrees {
+		files := map[string]string{"_defaults.yaml": "defaults:\n  cpu: 70\n", "_domain_policy.yaml": taggedNullOutsidePolicyDomain}
+		for k, v := range tree {
+			files[k] = v
+		}
+		trees["tagged null outside the policy file, "+name] = files
+	}
+	trees["tenant placeholder in a receiver URL"] = map[string]string{
 		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n  receiver:\n    type: slack\n" +
 			"    api_url: 'https://{{tenant}}.hooks.slack.example/services/x'\n",
 		"t-a.yaml": "tenants:\n  t-a:\n    cpu: 80\n",
-	})
-	if code != exitOK || len(findings) != 0 {
-		t.Errorf("exit = %d findings %+v, want a clean run", code, findings)
 	}
-}
-
-// `_routing_defaults.routes` is dropped before any merge (ADR-007 routes
-// belong to a profile or the tenant). The route generator's --validate fails
-// on it, so da-guard blocks too: exit 1 from one TenantID "" finding, the
-// dropped route is not judged, and parse_failed stays the exporter's.
-func TestRun_RoutingDefaultsRoutes_BlockAndAreNotRendered(t *testing.T) {
-	t.Parallel()
-	code, findings, parseFailed := runTreeJSON(t, map[string]string{
+	trees["_routing_defaults.routes"] = map[string]string{
 		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n" +
 			"  receiver: {type: pagerduty, service_key: k}\n" +
 			"  routes: [{match: {severity: critical}, receiver: {type: bogus}}]\n",
 		"t-a.yaml": "tenants:\n  t-a:\n    cpu: 80\n",
-	})
-	if code != exitFindings || len(parseFailed) != 0 {
-		t.Fatalf("exit = %d parse_failed = %v, want 1 and none", code, parseFailed)
 	}
-	if len(findings) != 1 || findings[0].Kind != "routing_defaults_routes_ignored" ||
-		findings[0].TenantID != "" || findings[0].Field != "_defaults.yaml:_routing_defaults.routes" {
-		t.Errorf("findings %+v, want only routing_defaults_routes_ignored on _defaults.yaml", findings)
+	return trees
+}
+
+// #2904: the default check judges none of them — exit 4, no finding, the
+// evidence listed; the route generator judges them
+// (tests/ops/test_generate_alertmanager_routes.py and the parity matrix).
+func TestRun_RoutingOnlyTreesAreUndetermined(t *testing.T) {
+	t.Parallel()
+	for name, files := range routingOnlyTrees(t) {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runJudged(t, files, "")
+			if got.code != exitUndetermined || len(got.findings) != 0 || len(got.undetermined) == 0 {
+				t.Errorf("exit %d, findings %v, undetermined %v; want 4, none, some\nstderr=%s",
+					got.code, got.findings, got.undetermined, got.stderr)
+			}
+		})
 	}
 }

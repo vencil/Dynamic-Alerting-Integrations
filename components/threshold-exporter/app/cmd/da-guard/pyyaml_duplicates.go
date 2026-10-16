@@ -3,11 +3,9 @@ package main
 import (
 	"fmt"
 	"io"
-	"path"
 	"path/filepath"
 	"sort"
 
-	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
@@ -31,12 +29,10 @@ import (
 // Files: the tenant files that declared in-scope tenants, the defaults
 // carriers bearing on the scope, the root platform files and the other `_`
 // files below the root bearing on the scope (#2439: the exporter reads
-// none of those, so its decode no longer rejects them for us). Not the root
-// `_domain_policy` / `_routing_profiles` files, nor a nested
-// `_domain_policy`: the routing loader names one it cannot parse as a
-// Problem, a repeated key included (routingpolicy.ReportsUnusable). A
-// nested `_routing_profiles` stays here: its Problem is only a warning,
-// and before #2439 the exporter's decode made its repeated key exit 3.
+// none of those, so its decode no longer rejects them for us). The
+// `_domain_policy` / `_routing_profiles` files included (#2904): the routing
+// loader that named one it could not parse as a Problem no longer runs in
+// da-guard, so a repeated key there is exit 3 like anywhere else.
 //
 // Each file found is named on errOut with the key, since the report's
 // parse-failure block is worded for the exporter's decode.
@@ -71,18 +67,14 @@ func withGeneratorDuplicates(configDir string, scoped *config.ScopedTenants, err
 		check(f.Name, f.Data)
 	}
 	if files, err := config.RootPlatformFiles(configDir); err == nil {
-		// An error here is reported by routingpolicy.LoadRoot, which reads
-		// the same list.
+		// An error here is the walk's own (scanRootPlatform), which
+		// ScopeEffective and undeterminedEvidence meet and report too.
 		for _, f := range files {
-			if !routingpolicy.ReportsUnusable(f.Name) {
-				check(f.Name, f.Data)
-			}
+			check(f.Name, f.Data)
 		}
 	}
 	for _, f := range scoped.NestedPlatformFiles {
-		if !confdlayout.IsDomainPolicyFile(path.Base(f.Name)) {
-			check(f.Name, f.Data)
-		}
+		check(f.Name, f.Data)
 	}
 	if len(dup) == 0 {
 		return

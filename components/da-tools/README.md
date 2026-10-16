@@ -124,7 +124,7 @@ docker run --rm \
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `validate-config` | 一站式配置驗證（YAML + schema + routes + policy） | `--config-dir <dir>` |
-| `guard` ✨v2.8.0 | 子命令 `defaults-impact`：schema + routing + cardinality 三層檢查 | `defaults-impact --config-dir <dir>` |
+| `guard` ✨v2.8.0 | 子命令 `defaults-impact`：schema + cardinality 檢查；路由與 domain policy 自 #2904 起交給 `generate-routes --validate --strict`（樹上有這類內容時 exit 4） | `defaults-impact --config-dir <dir>` |
 | `evaluate-policy` | Policy-as-Code 宣告式 DSL（10 運算子） | `--config-dir <dir>` |
 | `opa-evaluate` | OPA Rego 政策評估橋接 | `--config-dir <dir> --policy-path <file>`（或 `--opa-url <url>`） |
 | `lint` | Custom Rule 治理合規檢查 | `<path...>` |
@@ -279,7 +279,9 @@ docker run --rm \
     --config-dir /data/conf.d \
     --required-fields cpu,memory \
     --warn-as-error
-# exit 0 = clean, 1 = guard found errors, 2 = caller error
+# exit 0 = clean, 1 = guard found errors, 2 = caller error,
+#      3 = files the exporter cannot decode or read, 4 = routing / domain policy not judged here
+#      (run `da-tools generate-routes --validate --strict` too)
 ```
 
 ### 5.5 Hierarchy-aware Batch PR（v2.8.0）

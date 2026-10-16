@@ -134,7 +134,7 @@ tenants:
 ```
 
 > ✅ **路由面也走同一套目錄階層**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：
-> `generate-routes` 與 da-guard 讀整棵樹，任何深度的租戶都有路由。各層 `_defaults.yaml`
+> `generate-routes` 讀整棵樹，任何深度的租戶都有路由（da-guard 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起不判路由，樹上有路由時回 exit 4）。各層 `_defaults.yaml`
 > **頂層**的 `_routing_defaults` 逐鍵淺合併（深層勝，`null` 沿用 ADR-017 既有的逐欄位規則；
 > 子目錄把 `receiver` / `overrides` 寫成 `null` 是阻擋錯誤）；`_routing_enforced` 只認根目錄；
 > `_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於所在子樹；同一個
