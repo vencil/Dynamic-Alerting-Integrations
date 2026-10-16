@@ -742,7 +742,11 @@ func TestRun_Determinism_TwoRunsByteIdentical(t *testing.T) {
 // --- version flag --------------------------------------------------
 
 func TestRun_VersionFlag(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): it writes the process-global Version, which every
+	// run() reads (newParseTreeDoc, via undeterminedEvidence since #2904).
+	// A serial top-level test finishes before any parallel one resumes, so
+	// the swap cannot overlap another test's read; save-then-restore under
+	// t.Parallel() raced (-race, TestRun_ReceiverReadBesideNonStringKeys).
 	prev := Version
 	Version = "0.0.0-test"
 	defer func() { Version = prev }()
