@@ -889,10 +889,15 @@ RECIPES: list[Recipe] = [
       doc_check=_caller_error_doc("manifest_without_sources")),
 
     # ── backtest_threshold  (⚠ known multi-mode trap) ──────────────────────
+    # #3017: a key a shipped alert compares, so Prometheus is really asked
+    # (an unmapped key is listed not_backtested without a query).
     R("backtest_threshold", "single-tenant",
-      lambda t, s: ["--tenant", "tenant-one", "--metric", "max_connections",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
                     "--old-value", "100", "--new-value", "150",
-                    "--prometheus", s, "--json"]),
+                    "--prometheus", s, "--json"],
+      doc_check=lambda d: None if [(c["status"], c.get("query")) for c in d["changes"]] == [
+          ("no_data", 'tenant:mysql_threads_connected:max{tenant="tenant-one"}')]
+      else f"expected one queried no_data change, got {d['changes']!r}"),
     R("backtest_threshold", "skip-if-unavailable",
       lambda t, s: ["--tenant", "tenant-one", "--metric", "max_connections",
                     "--old-value", "100", "--new-value", "150",

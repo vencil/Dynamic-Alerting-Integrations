@@ -342,10 +342,10 @@ def test_dimensioned_keys_are_listed_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
     """A dimensioned key (served-values' `dimensions`, #2750) is not narrowed
     by the selector asked: listed, marked, never queried, and counted in the
-    text report. A `_critical` key is an ordinary
-    threshold to /metrics (declared in defaults with no base key, it is
-    served as a warning row) and is backtested as one (round-2 review):
-    its warning row is compared by its own key's alert (made up here)."""
+    text report. A `_critical` key declared in defaults with no base key is
+    served as a warning row of metric `<x>_critical`, which no threshold rule
+    selects (#3017 review): not backtested either, even with a map entry
+    for the key."""
     _map_with(monkeypatch, other_critical=_upper("tenant:other_critical:max"))
     def files(v: int) -> dict[str, str]:
         return {"_defaults.yaml": _DEFAULTS + "  other_critical: 80\n",
@@ -359,12 +359,72 @@ def test_dimensioned_keys_are_listed_not_backtested(
     assert set(rows) == {"other_critical", 'mysql_connections{db="a"}'}, rows
     assert rows['mysql_connections{db="a"}']["backtest"] == "skipped: dimensioned key"
     assert rows['mysql_connections{db="a"}']["status"] == "not_backtested"
-    assert rows["other_critical"]["status"] == "analyzed" and "backtest" not in rows["other_critical"]
-    assert asked == ['tenant:other_critical:max{tenant="tx"}']
+    assert rows["other_critical"]["status"] == "not_backtested"
+    assert rows["other_critical"]["backtest"] == _NO_BASE.format("other_critical")
+    assert asked == []
     md = tmp_path / "out.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert "Not backtested: 1 (dimensioned key)" in out.out
-    assert "**Not backtested:** 1 (dimensioned key)" in md.read_text(encoding="utf-8")
+    assert "Not backtested: 1 (dimensioned key), 1 (" + _NO_BASE.format("other_critical")[9:] + ")" in out.out
+    text = md.read_text(encoding="utf-8")
+    assert "**Not backtested:** 1 (" in text and "1 (dimensioned key)" in text
+    # #3002 B: a change no query was sent for has "—" in the Query column.
+    assert "| Not backtested: dimensioned key | — |" in text
+
+
+_NO_BASE = ("skipped: served as a non-critical row of {} (its base is not declared in "
+            "the root defaults:), which no alert compares")
+
+
+def test_a_critical_key_without_its_base_is_not_backtested(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """`mysql_connections_critical` with no `mysql_connections` in the root
+    `defaults:` is served as a warning row of metric `connections_critical`
+    (da-guard warns it skips the critical row): the `_critical` alert selects
+    metric="connections", severity="critical", so nothing compares it — it
+    used to be replayed against the critical alert's series (HIGH, rc 1)."""
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": "defaults:\n  mysql_connections_critical: 95\n",
+                "tx.yaml": f"tenants:\n  tx:\n    mysql_connections_critical: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("90")), _tree(tmp_path / "cur", files("50"))
+    served = tv.load_served_values(c, at=AT)["tx"]
+    assert served.series["mysql_connections_critical"][0].labels["severity"] == "warning"
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
+        ("mysql_connections_critical", "not_backtested", _NO_BASE.format("mysql_connections_critical"))]
+    assert (rc, asked) == (0, [])
+
+
+def test_dimensioned_siblings_share_the_threshold(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """The alert's threshold is `max by(tenant)` over the base row and the
+    dimensioned rows of the same metric and severity: a base change beside a
+    higher `{db="a"}` row is not what the alert compares, so it is not
+    backtested (#3017 review). A dimensioned row of the OTHER severity does
+    not share it (control: the base change is analyzed)."""
+    def files(v: str, dim: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "tx.yaml": (f"tenants:\n  tx:\n    mysql_connections: \"{v}\"\n"
+                            f"    'mysql_connections{{db=\"a\"}}': \"{dim}\"\n")}
+    b, c = _tree(tmp_path / "base", files("70", "200")), _tree(tmp_path / "cur", files("85", "200"))
+    changes = _backtest(monkeypatch, b, c)
+    assert [(ch["metric"], ch.get("dimensioned_siblings")) for ch in changes] == [
+        ("mysql_connections", ['mysql_connections{db="a"}'])]
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [(
+        "mysql_connections", "not_backtested",
+        "skipped: dimensioned rows share this alert's threshold (max by tenant): "
+        'mysql_connections{db="a"}')]
+    assert (rc, asked) == (0, [])
+    b = _tree(tmp_path / "base2", files("70", "200:critical"))
+    c = _tree(tmp_path / "cur2", files("85", "200:critical"))
+    changes = _backtest(monkeypatch, b, c)
+    assert [(ch["metric"], ch.get("dimensioned_siblings")) for ch in changes] == [
+        ("mysql_connections", None)]
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    assert [r["status"] for r in json.loads(out.out)["changes"]] == ["analyzed"]
+    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
 
 
 def test_a_key_served_as_critical_is_backtested_on_its_critical_alert(
@@ -485,10 +545,13 @@ def test_alert_keys_read_the_series_never_the_twin() -> None:
     change = {"tenant": "tx", "metric": "mysql_threads_running_critical", "series": [
         tv.Series("user_threshold", {"severity": "critical"}, "mysql_threads_running", False, {}, {}),
         tv.Series("user_threshold", {"severity": "critical"}, "mysql_cpu", True, {}, {})]}
-    assert bt._alert_keys(change) == ["mysql_threads_running_critical"]
-    assert bt._alert_keys({"tenant": "tx", "metric": "k"}) == ["k"]
-    assert bt._alert_keys({"tenant": "tx", "metric": "mysql_cpu"}) == ["mysql_threads_running"]
-    assert bt._alert_keys({"tenant": "tx", "metric": 'k{db="a"}'}) == ["k"]
+    assert bt._alert_keys(change) == (["mysql_threads_running_critical"], None)
+
+    def written(metric: str) -> dict:
+        return {"tenant": "tx", "metric": metric, "old_value": "1", "new_value": "2"}
+    assert bt._alert_keys(written("k")) == (["k"], None)
+    assert bt._alert_keys(written("mysql_cpu")) == (["mysql_threads_running"], None)
+    assert bt._alert_keys(written('k{db="a"}')) == (["k"], None)
 
 
 def test_a_retired_name_with_data_is_not_backtested_against(

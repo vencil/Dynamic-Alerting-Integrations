@@ -1165,7 +1165,8 @@ class TestAlertComparison:
         assert r["status"] == "analyzed" and r["query"] == asked[0]
 
     def test_dimensioned_key_resolves_to_its_base(self):
-        assert bt.alert_comparison({"tenant": "t", "metric": 'db2_bufferpool_hit_ratio{db="a"}'}) \
+        assert bt.alert_comparison({"tenant": "t", "metric": 'db2_bufferpool_hit_ratio{db="a"}',
+                                    "old_value": "90", "new_value": "95"}) \
             == ("tenant:db2_bufferpool_hit_ratio:min", "below", None)
 
     # ── 不回測（#3017）──
@@ -1241,7 +1242,7 @@ class TestAlertComparison:
         change = self._served("mysql_threads_running",
                               ("mysql_threads_running", "warning", False),
                               ("mysql_cpu", "warning", True))
-        assert bt._alert_keys(change) == ["mysql_threads_running"]
+        assert bt._alert_keys(change) == (["mysql_threads_running"], None)
 
 
 class TestAlertComparisonCli:
@@ -1334,3 +1335,133 @@ class TestObservedMapMissing:
         with pytest.raises(SystemExit) as ei:
             bt.main()
         assert ei.value.code == 2 and "ERROR: gone" in capsys.readouterr().err
+
+
+# ── 寫在檔裡的值：`N:critical`、讀不懂的值（#3017 review）────────────
+
+
+class TestWrittenValues:
+    """`--git-diff`／`--tenant` 給的是檔裡寫的值。exporter 對 `70:critical` 的
+    讀法（`pkg/config/resolve.go`：切第一個 `:`，前段是數字、後段是 severity）
+    在這裡照抄；以前 `float("95:critical")` 失敗被當成 0 個越界點，判出假的
+    HIGH（rc 1）或假的 LOW。"""
+
+    _VALS = [60, 80, 90, 100]
+
+    def _main(self, monkeypatch, capsys, cli_argv, argv):
+        asked = []
+
+        def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+            asked.append(q)
+            return [{"values": [(i, str(v)) for i, v in enumerate(self._VALS)]}]
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", query_range)
+        cli_argv("backtest_threshold", *argv, "--prometheus", "http://prom:9090", "--json")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        return ei.value.code, json.loads(capsys.readouterr().out)["changes"], asked
+
+    def _tenant(self, monkeypatch, capsys, cli_argv, metric, old, new):
+        return self._main(monkeypatch, capsys, cli_argv,
+                          ["--tenant", "t-x", "--metric", metric,
+                           "--old-value", old, "--new-value", new])
+
+    @pytest.mark.parametrize("key,raw,want", [
+        ("mysql_connections", "70", (70.0, "warning")),
+        ("mysql_connections", " 70 : critical ", (70.0, "critical")),
+        ("mysql_connections", "70:info", (70.0, "info")),
+        ("mysql_connections_critical", "95", (95.0, "critical")),
+        ("mysql_connections", "disable", None),
+        ("mysql_connections", None, None),
+        ("mysql_connections", "NaN", (float("nan"), "warning")),
+    ])
+    def test_parse_threshold_value(self, key, raw, want):
+        got = bt.parse_threshold_value(key, raw)
+        if want is None or want[0] == want[0]:
+            assert got == want
+        else:
+            assert got[0] != got[0] and got[1] == want[1]
+
+    @pytest.mark.parametrize("key,raw", [
+        ("mysql_connections", "7O"), ("mysql_connections", "1_000"),
+        ("mysql_connections", "١٢"), ("mysql_connections_critical", "95:critical"),
+    ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key"])
+    def test_values_go_does_not_read_are_refused(self, key, raw):
+        with pytest.raises(ValueError):
+            bt.parse_threshold_value(key, raw)
+
+    def test_severity_change_is_not_backtested(self, monkeypatch, capsys, cli_argv):
+        """審查的重現：70 → 95:critical 以前判 HIGH「3 fewer」、rc 1。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", "95:critical")
+        assert (rc, asked) == (0, [])
+        assert rows[0]["status"] == "not_backtested"
+        assert rows[0]["backtest"] == ("skipped: severity changes (warning -> critical): "
+                                       "the two values are compared by different alerts")
+
+    def test_both_critical_compare_the_numbers_on_the_critical_alert(
+            self, monkeypatch, capsys, cli_argv):
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70:critical", "95:critical")
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 1)
+
+    def test_enable_as_critical(self, monkeypatch, capsys, cli_argv):
+        """停用 → 啟用：只有一邊有值，severity 取那一邊的。"""
+        _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                      "mysql_connections", "disable", "95:critical")
+        assert rows[0]["status"] == "analyzed" and rows[0]["new_breach_count"] == 1
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+
+    def test_critical_value_with_no_critical_alert(self, monkeypatch, capsys, cli_argv):
+        """mongodb 的門檻只正規化 warning：`N:critical` 沒有 alert 在比。"""
+        _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                      "mongodb_connections_current", "70:critical", "80:critical")
+        assert asked == []
+        assert rows[0]["backtest"].startswith(
+            "skipped: mongodb_connections_current_critical: no shipped alert compares")
+
+    @pytest.mark.parametrize("old,new,why", [
+        ("70", "7O", "value '7O' is not one the exporter serves as written"),
+        ("70:info", "80:info", "severity 'info' is selected by no threshold rule"),
+    ])
+    def test_unreadable_values_are_not_backtested(self, monkeypatch, capsys, cli_argv,
+                                                   old, new, why):
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv, "mysql_connections", old, new)
+        assert (rc, asked) == (0, [])
+        assert rows[0]["backtest"].startswith("skipped: " + why)
+
+    def test_git_diff_reads_the_critical_suffix(self, monkeypatch, capsys, cli_argv):
+        """`--git-diff` 這條路一樣：diff 裡的 `"95:critical"` 不是 0 個越界點。"""
+        diff = (b"+++ b/conf.d/t-x.yaml\n"
+                b"-    mysql_connections: '70:critical'\n"
+                b"+    mysql_connections: '95:critical'\n"
+                b"-    pg_connections: '70'\n"
+                b"+    pg_connections: '95:critical'\n")
+        monkeypatch.setattr(bt, "_git_bytes",
+                            lambda args, quotepath_off=False: diff if "--unified=0" in args else b"")
+        rc, rows, asked = self._main(monkeypatch, capsys, cli_argv, ["--git-diff"])
+        got = {r["metric"]: r for r in rows}
+        assert (got["mysql_connections"]["old_breach_count"],
+                got["mysql_connections"]["new_breach_count"]) == (3, 1)
+        assert got["pg_connections"]["status"] == "not_backtested"
+        assert "severity changes" in got["pg_connections"]["backtest"]
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+
+
+class TestMalformedObservedMap:
+    def test_malformed_map_exits_2(self, monkeypatch, tmp_path, capsys, cli_argv):
+        """#3017 review：`keys: {mysql_connections: 5}` 以前是 AttributeError
+        traceback（rc 1，讀起來像 HIGH）；現在是 rc 2、一行指名 key。"""
+        bad = tmp_path / "metric_observed_map.yaml"
+        bad.write_text("keys:\n  mysql_connections: 5\n", encoding="utf-8")
+        monkeypatch.setattr(bt, "_OBSERVED_MAP", None)
+        monkeypatch.setattr(bt.observed_map_lib, "DEFAULT_MAP_PATH", str(bad))
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+                 "--old-value", "70", "--new-value", "85", "--prometheus", "http://prom:9090")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        assert ei.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and "'mysql_connections'" in err and "not a mapping" in err

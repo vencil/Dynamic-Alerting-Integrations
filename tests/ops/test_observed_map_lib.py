@@ -296,6 +296,36 @@ class TestLoadFailsClosed:
             L.write_observed_map(out_path=str(out))
         assert out.read_text(encoding="utf-8") == "keys: [\n"
 
+    @pytest.mark.parametrize("body,why", [
+        ("keys:\n  k: 5\n", "is a int, not a mapping"),
+        ("keys:\n  k:\n    observed_series: [a, b]\n", "non-string 'observed_series'"),
+        ("keys:\n  k:\n    direction: 1\n", "non-string 'direction'"),
+        ("keys:\n  k:\n    scope: [tenant]\n", "non-string 'scope'"),
+        ("keys:\n  k:\n    candidates: tenant:a:max\n", "'candidates' that is not a list"),
+        ("keys:\n  k:\n    candidates: [1]\n", "'candidates' that is not a list"),
+        ("keys:\n  1:\n    direction: '>'\n", "is not keyed by a string"),
+    ], ids=["int-entry", "list-series", "int-direction", "list-scope", "str-candidates",
+            "int-candidate", "int-key"])
+    def test_malformed_entry_is_unreadable(self, tmp_path, body, why):
+        """#3017 review：型別不對的條目以前會在消費端變成 traceback（`.get`
+        打在 int 上）或拼出假的 PromQL（list 當 series 名）。一行、指名 key。"""
+        p = tmp_path / "metric_observed_map.yaml"
+        p.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError) as ei:
+            L.load_observed_map(str(p))
+        assert ei.value.kind == "unreadable"
+        assert why in str(ei.value) and "entry " in str(ei.value)
+        assert "\n" not in str(ei.value)
+
+    def test_generator_refuses_a_malformed_map(self, tmp_path):
+        """型別壞掉的 map 一樣是 unreadable：生成器拒絕覆寫（可能還有人工 pick）。"""
+        out = tmp_path / "metric_observed_map.yaml"
+        body = "keys:\n  k:\n    observed_series: [a, b]\n"
+        out.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError, match="fix or delete"):
+            L.write_observed_map(out_path=str(out))
+        assert out.read_text(encoding="utf-8") == body
+
     def test_usable_map_returns_keys(self, tmp_path):
         p = tmp_path / "metric_observed_map.yaml"
         p.write_text("keys:\n  k:\n    direction: '>'\n", encoding="utf-8")
