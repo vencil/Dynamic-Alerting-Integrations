@@ -83,7 +83,7 @@ def _build_help_text(lang):
     fed-key           產生 / 輪替 federation JWT 簽章金鑰 (ADR-020 IV-2l)
 
 命令 (Guard — Dangling Defaults Guard, v2.8.0):
-    guard             驗證 conf.d/ 樹是否安全 (schema + routing + cardinality)
+    guard             驗證 conf.d/ 樹是否安全 (schema + cardinality；路由交給 generate-routes)
                       子命令: defaults-impact
 
 命令 (Tenant Verify — rollback verification, v2.8.0):
@@ -173,7 +173,7 @@ Commands (Federation — multi-cluster):
     fed-key           Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l)
 
 Commands (Guard — Dangling Defaults Guard, v2.8.0):
-    guard             Validate a conf.d/ tree (schema + routing + cardinality)
+    guard             Validate a conf.d/ tree (schema + cardinality; routing: generate-routes)
                       Subcommands: defaults-impact
 
 Commands (Tenant Verify — rollback verification, v2.8.0):

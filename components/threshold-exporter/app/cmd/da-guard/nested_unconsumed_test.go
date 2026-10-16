@@ -2,11 +2,11 @@ package main
 
 // nested_unconsumed_test.go — #2439: a `!!null x` (a tag yaml.v3's decode
 // into `any` refuses; PyYAML and the route generator read it) in a nested
-// `_` file the exporter never reads is not exit 3. A subtree domain policy
-// or routing-profiles file is judged as the root one is — by the routing
-// loader: a routing-profiles file as `_unusable`, a domain policy read as
-// the generator reads it (None; hub #2486 PR-7c round 2: before, it too was
-// `_unusable`) — and a file no reader consumes is not reported.
+// `_` file the exporter never reads is not exit 3. Since #2904 every such
+// file is undetermined (exit 4): parse-tree refuses the tag, so the route
+// generator's verdict is the one that counts (before, the routing loader
+// judged a subtree domain policy or routing-profiles file as the root one,
+// and a file no reader consumed was not reported).
 // The subtree defaults carrier, which the exporter does read, stays exit 3;
 // syntax damage stays exit 3 whatever the file. served-values takes the
 // same parse_failed list.
@@ -27,16 +27,16 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 		failed           []string
 		finding          string // a "kind field" prefix that must be present; "" = no finding at all
 	}{
-		{"subtree domain policy", "team/_domain_policy.yaml", policy, exitOK, nil, ""},
-		{"subtree routing profiles", "team/_routing_profiles.yaml", profiles, exitOK, nil, "routing_profiles_unusable team/_routing_profiles.yaml"},
-		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n" + tag, exitOK, nil, ""},
-		{"subtree notes", "team/_notes.yaml", "note: !!null x\n", exitOK, nil, ""},
+		{"subtree domain policy", "team/_domain_policy.yaml", policy, exitUndetermined, nil, ""},
+		{"subtree routing profiles", "team/_routing_profiles.yaml", profiles, exitUndetermined, nil, ""},
+		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n" + tag, exitUndetermined, nil, ""},
+		{"subtree notes", "team/_notes.yaml", "note: !!null x\n", exitUndetermined, nil, ""},
 		{"subtree defaults carrier", "team/_defaults.yaml", "defaults:\n  mysql_connections: 60\nnote: !!null x\n", exitParseFailed, []string{"team/_defaults.yaml"}, ""},
 		{"subtree notes, syntax", "team/_notes.yaml", "note: [1,\n", exitParseFailed, []string{"team/_notes.yaml"}, ""},
 		{"subtree domain policy, syntax", "team/_domain_policy.yaml", "domain_policies: [1,\n", exitParseFailed, []string{"team/_domain_policy.yaml"}, ""},
 		// The root controls this file's behaviour is measured against.
-		{"root domain policy", "_domain_policy.yaml", policy, exitOK, nil, ""},
-		{"root routing profiles", "_routing_profiles.yaml", profiles, exitOK, nil, "routing_profiles_unusable _routing_profiles.yaml"},
+		{"root domain policy", "_domain_policy.yaml", policy, exitUndetermined, nil, ""},
+		{"root routing profiles", "_routing_profiles.yaml", profiles, exitUndetermined, nil, ""},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -88,8 +88,9 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 // exporter no longer rejects those, withGeneratorDuplicates names them:
 // exit 3. served-values follows the exporter's load, which does not read
 // them, so it lists none — except the root control, which the exporter does
-// read and drops. A nested `_domain_policy` stays the routing loader's
-// domain_policy_unusable (exit 1), as at the root.
+// read and drops. A nested `_domain_policy` too since #2904 (it was the
+// routing loader's domain_policy_unusable, exit 1, which da-guard no longer
+// runs).
 func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsExitThree(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -106,7 +107,7 @@ func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsExitThree(t *testing.
 			"routing_profiles:\n  p1:\n    receiver: {type: webhook, url: 'https://t.example/p'}\n  p1:\n    receiver: {type: webhook, url: 'https://t.example/q'}\n",
 			exitParseFailed, []string{"team/_routing_profiles.yaml"}, nil, ""},
 		{"subtree domain policy", "team/_domain_policy.yaml", "domain_policies:\n  d1:\n    tenants: [ty]\n    tenants: [ty]\n",
-			exitFindings, nil, nil, "domain_policy_unusable team/_domain_policy.yaml"},
+			exitParseFailed, []string{"team/_domain_policy.yaml"}, nil, ""},
 		{"root notes control", "_notes.yaml", "note: 1\nnote: 2\n", exitParseFailed, []string{"_notes.yaml"}, []string{"_notes.yaml"}, ""},
 	}
 	for _, tc := range cases {

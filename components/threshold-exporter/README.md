@@ -249,16 +249,16 @@ tenants:
 
 ### `da-guard` — `_defaults.yaml` 的 pre-merge 守門員
 
-在 CI / pre-commit 階段攔 schema / routing / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
+在 CI / pre-commit 階段攔 schema / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
 
-routing 檢查的是租戶**解析後**的 routing（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）：根目錄 `_routing_defaults` → `_routing_profile` 指向的 profile → 租戶 `_routing`，與 route generator 同一套合併（共用 `app/pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 與 Python 端對齊）。主 receiver、`overrides`、ADR-007 `routes` 都做形狀檢查（規則在 `app/pkg/receiverspec`；[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295) 起也查 `send_resolved`／`require_tls` 的布林值與 `http_config`），並依 `_domain_policy.yaml` 判 receiver type（forbidden 與 allowed 分開判）。租戶那一層只讀租戶檔與根目錄平台檔 `tenants.<id>` 的 `_routing` / `_routing_profile`（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)），寫在 defaults 區塊或 threshold profile 裡的 routing 由 `routing_in_unread_location` 點名；profile 裡連 `_severity_dedup` 與任何以 `_routing` 開頭的鍵都點名（exporter 也不套用，[#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)）。新增的 finding kind 與嚴重度見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（ADR-036 §9）起不再判路由與 domain policy：樹上有路由鍵、`_domain_policy`、`_routing_profiles`、產生器讀不了的檔等只能由 route generator 判的內容時，報告列為「未判定」（JSON 的 `undetermined`）並回 **exit 4**（優先序 3 > 1 > 4 > 0）；判定交給 `da-tools generate-routes --validate --strict`，CI 裡兩步一起跑。`app/pkg/routingpolicy` 與 `internal/guard` 的路由檢查留到 ADR-036 步驟 3（[#2905](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2905)）刪除，在那之前只由 `tests/shared/routing_policy_parity_matrix.json` 對齊產生器。exit code 與證據格式見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 
 ```bash
 da-guard --config-dir conf.d/ --required-fields cpu,memory   # 上限取根 _defaults.yaml 的 max_metrics_per_tenant（未設 = 500）
 da-guard --config-dir conf.d/ --format json --output guard-report.json
 ```
 
-GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml)——客戶可整份 copy，於 `**/_defaults.yaml` 變更時自動跑並貼 PR comment。
+GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml)——客戶可整份 copy，於 `**/_defaults.yaml` 變更時自動跑 da-guard 與 route generator 並貼 PR comment。
 
 子命令 `served-values`（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）以 JSON 印出 `/metrics` 對每個租戶實際發出的值，值由 exporter 自己的載入與解析算出；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫。輸出欄位與 exit code 見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 

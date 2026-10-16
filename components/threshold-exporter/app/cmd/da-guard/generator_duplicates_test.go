@@ -44,10 +44,11 @@ func runDupTree(t *testing.T, files map[string]string) (int, []string, []string)
 // StrictLoader counts as written twice — here an alias key beside its anchor,
 // which yaml.v3 does not count — makes the generator refuse the WHOLE file,
 // wherever the repeat sits and whichever copy is the bad one. da-guard takes
-// the path a plain repeated key takes in the same file: a tenant, platform
-// or defaults file is named in parse_failed (exit 3); a `_routing_profiles`
-// / `_domain_policy` file is an `_unusable` finding (exit 1). Positions:
-// every place revS10 measured da-guard letting one through.
+// the path a plain repeated key takes in the same file: it is named in
+// parse_failed (exit 3) — since #2904 a `_routing_profiles` / `_domain_policy`
+// file too, which the routing loader used to name as an `_unusable` finding
+// (exit 1) and da-guard no longer runs. Positions: every place revS10
+// measured da-guard letting one through.
 func TestRun_GeneratorRefusesTheFileWhole(t *testing.T) {
 	t.Parallel()
 	const (
@@ -140,14 +141,7 @@ func TestRun_GeneratorRefusesTheFileWhole(t *testing.T) {
 	for _, p := range positions {
 		for order, xy := range map[string][2]string{"bad first": {bad, good}, "good first": {good, bad}} {
 			name := p.name + ", " + order
-			code, failed, findings := runDupTree(t, p.tree(xy[0], xy[1]))
-			if p.file == "_routing_profiles.yaml" {
-				if code != exitFindings || !containsPrefix(findings, "routing_profiles_unusable "+p.file) || len(failed) != 0 {
-					t.Errorf("%s: exit %d, parse_failed %v, findings %v; want exit 1 with routing_profiles_unusable",
-						name, code, failed, findings)
-				}
-				continue
-			}
+			code, failed, _ := runDupTree(t, p.tree(xy[0], xy[1]))
 			if code != exitParseFailed || !reflect.DeepEqual(failed, []string{p.file}) {
 				t.Errorf("%s: exit %d, parse_failed %v; want exit 3 naming %s", name, code, failed, p.file)
 			}
@@ -155,12 +149,13 @@ func TestRun_GeneratorRefusesTheFileWhole(t *testing.T) {
 	}
 }
 
-// TestRun_DomainPolicyRepeatedKeyIsUnusable (#2295, revS10 e2eC): an alias
+// TestRun_DomainPolicyRepeatedKeyIsExitThree (#2295, revS10 e2eC): an alias
 // key beside its anchor anywhere in `_domain_policy.yaml` makes the
-// generator (--strict) refuse the file; da-guard names it
-// domain_policy_unusable, as it names a plain repeated key there — never a
-// policy silently read as yaml.v3 reads it (2e89719c: exit 0).
-func TestRun_DomainPolicyRepeatedKeyIsUnusable(t *testing.T) {
+// generator (--strict) refuse the file; da-guard names it in parse_failed
+// (exit 3), as it names a plain repeated key there — never a policy silently
+// read as yaml.v3 reads it (2e89719c: exit 0). Before #2904 it was the
+// routing loader's domain_policy_unusable (exit 1).
+func TestRun_DomainPolicyRepeatedKeyIsExitThree(t *testing.T) {
 	t.Parallel()
 	tenant := map[string]string{"tx.yaml": rsTenant + "    _routing:\n      receiver: {type: webhook, url: 'https://t.example/g'}\n"}
 	const c = "      forbidden_receiver_types: [webhook]\n"
@@ -178,8 +173,8 @@ func TestRun_DomainPolicyRepeatedKeyIsUnusable(t *testing.T) {
 			files[k] = v
 		}
 		code, failed, findings := runDupTree(t, files)
-		if code != exitFindings || len(failed) != 0 || !containsPrefix(findings, "domain_policy_unusable _domain_policy.yaml") {
-			t.Errorf("%s: exit %d, parse_failed %v, findings %v; want exit 1 with domain_policy_unusable",
+		if code != exitParseFailed || !reflect.DeepEqual(failed, []string{"_domain_policy.yaml"}) {
+			t.Errorf("%s: exit %d, parse_failed %v, findings %v; want exit 3 naming _domain_policy.yaml",
 				name, code, failed, findings)
 		}
 	}
@@ -187,7 +182,8 @@ func TestRun_DomainPolicyRepeatedKeyIsUnusable(t *testing.T) {
 
 // TestRun_GeneratorAcceptsTheseRepeats: what the generator accepts stays
 // accepted — a merge key overridden by an explicit key, one name in two
-// mappings, an alias used as a value, a merge list.
+// mappings, an alias used as a value, a merge list: not exit 3, no finding.
+// The routing in them is undetermined since #2904 (exit 4).
 func TestRun_GeneratorAcceptsTheseRepeats(t *testing.T) {
 	t.Parallel()
 	const g = "{type: webhook, url: 'https://t.example/g'}"
@@ -201,8 +197,8 @@ func TestRun_GeneratorAcceptsTheseRepeats(t *testing.T) {
 			"\n  tx:\n    <<: [*ba, *bb]\n"},
 		"platform merge": {"tx.yaml": rsTenant, "_platform.yaml": "base: &b\n  _routing:\n    receiver: " + g + "\ntenants:\n  tx:\n    <<: *b\n"},
 	} {
-		if code, failed, findings := runDupTree(t, files); code != exitOK || len(failed) != 0 {
-			t.Errorf("%s: exit %d, parse_failed %v, findings %v; want exit 0", name, code, failed, findings)
+		if code, failed, findings := runDupTree(t, files); code != exitUndetermined || len(failed) != 0 || len(findings) != 0 {
+			t.Errorf("%s: exit %d, parse_failed %v, findings %v; want exit 4 and nothing else", name, code, failed, findings)
 		}
 	}
 }

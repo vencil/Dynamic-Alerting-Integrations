@@ -1478,22 +1478,24 @@ da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds
 cat docs/schemas/tenant-config.schema.json
 # 對照修 yaml，補欄位 / 改拼字
 
-# 重跑（一次跑完 schema + routing + cardinality）
+# 重跑（一次跑完 schema + cardinality；routing 見 2.2.2）
 da-tools guard defaults-impact --config-dir conf.d/
 ```
 
 #### 2.2.2 Routing 層失敗
 
-**Symptom**：`Domain X has no matching tenant` 或 `Tenant Y has no domain anchor`
+⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起 da-guard **不判路由與 domain policy**：樹上有這類內容時，報告列出「Routing and domain policy: not judged」並回 **exit 4**，判定交給 route generator。
+
+**Symptom**：da-guard exit 4；或 `generate-routes --validate --strict` 回報 domain policy 違反、receiver 錯誤
 
 **最常見原因**：新增 tenant yaml 但沒在 `_defaults.yaml` 或上層 directory 定義 domain；或 domain rename 沒同步 tenant 端。
 
 **Fix**：
 
 ```bash
-# 重跑守衛，看報告的 Routing 段落
-da-tools guard defaults-impact --config-dir conf.d/
-# 找出孤立節點，補對應 domain entry 或 tenant assignment
+# 路由與 domain policy 由產生器判
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+# 依它列出的 finding 補對應 domain entry 或 tenant assignment
 ```
 
 #### 2.2.3 Cardinality 層失敗

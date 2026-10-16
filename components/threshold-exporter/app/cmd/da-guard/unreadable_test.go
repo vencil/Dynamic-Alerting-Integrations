@@ -163,7 +163,9 @@ type guardUnreadableOut struct {
 	SourceFiles []string      `json:"source_files"`
 	ParseFailed []string      `json:"parse_failed"`
 	Unreadable  []skippedFile `json:"unreadable"`
-	Report      *struct {
+	// #2904
+	Undetermined []undeterminedItem `json:"undetermined"`
+	Report       *struct {
 		Summary struct {
 			TotalTenants int `json:"total_tenants"`
 		} `json:"summary"`
@@ -391,7 +393,9 @@ func TestUnreadable_GuardScope_UnlistableDirBelowScopeBesideReadableTenant(t *te
 // below the scope, or a `_` file in a directory above it. A tenant file
 // outside the scope does not; the root `_defaults.yaml` does. A directory the
 // walk cannot list follows the directory rule only: a `_`-named directory
-// beside the scope does not bear on it.
+// beside the scope does not bear on it. Neither is exit 3 — but the route
+// generator reads the whole tree and cannot read either, so since #2904 the
+// scoped run is undetermined (exit 4, generator_unreadable), never 0.
 func TestUnreadable_GuardScope_FollowsTheParseFailedRule(t *testing.T) {
 	t.Parallel()
 	t.Run("unlistable _ directory beside the scope", func(t *testing.T) {
@@ -409,7 +413,7 @@ func TestUnreadable_GuardScope_FollowsTheParseFailedRule(t *testing.T) {
 			t.Fatalf("precondition: whole-tree run exit %d unreadable %v", wcode, wdoc.Unreadable)
 		}
 		code, doc, stderr := guardJSON(t, dir, "--scope", filepath.Join(dir, "sub"))
-		mustOK(t, code, stderr)
+		mustUndetermined(t, code, doc, stderr, "_archive")
 		if doc.Unreadable != nil {
 			t.Errorf("unreadable = %v, want absent", doc.Unreadable)
 		}
@@ -419,7 +423,7 @@ func TestUnreadable_GuardScope_FollowsTheParseFailedRule(t *testing.T) {
 		dir := writeParityTree(t, unreadableBase())
 		symlinkOrSkipT(t, "missing.yaml", filepath.Join(dir, "tenant-c.yaml"))
 		code, doc, stderr := guardJSON(t, dir, "--scope", filepath.Join(dir, "sub"))
-		mustOK(t, code, stderr)
+		mustUndetermined(t, code, doc, stderr, "tenant-c.yaml")
 		if doc.Unreadable != nil {
 			t.Errorf("unreadable = %v, want absent", doc.Unreadable)
 		}
@@ -450,7 +454,9 @@ func TestUnreadable_GuardScope_FollowsTheParseFailedRule(t *testing.T) {
 }
 
 // A config-named symlink to a directory is skipped, not unreadable: exit 0
-// and unreadable [] for effective, nothing for the guard.
+// and unreadable [] for effective, nothing in the guard's unreadable. The
+// route generator would read it (parse-tree: not_regular_file), so since
+// #2904 the guard run is undetermined (exit 4), not 0.
 func TestUnreadable_DirectorySymlinkIsNotUnreadable(t *testing.T) {
 	t.Parallel()
 	dir := writeParityTree(t, unreadableBase())
@@ -464,7 +470,7 @@ func TestUnreadable_DirectorySymlinkIsNotUnreadable(t *testing.T) {
 		t.Errorf("effective unreadable must be an empty list:\n%s", stdout)
 	}
 	gcode, gdoc, gstderr := guardJSON(t, dir)
-	mustOK(t, gcode, gstderr)
+	mustUndetermined(t, gcode, gdoc, gstderr, "x.yaml")
 	if gdoc.Unreadable != nil {
 		t.Errorf("guard unreadable = %v, want absent", gdoc.Unreadable)
 	}
@@ -877,4 +883,18 @@ func TestUnreadable_GuardScope_StatDeniedIsUnreadable(t *testing.T) {
 			t.Errorf("md: exit = %d report = %q, want %d naming locked/inner; stderr=%q", code, md, exitParseFailed, stderr)
 		}
 	})
+}
+
+// mustUndetermined: exit 4, with file named generator_unreadable (#2904).
+func mustUndetermined(t *testing.T, code int, doc guardUnreadableOut, stderr, file string) {
+	t.Helper()
+	if code != exitUndetermined {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitUndetermined, stderr)
+	}
+	for _, it := range doc.Undetermined {
+		if it.File == file && it.Reason == undeterminedGeneratorUnreadable {
+			return
+		}
+	}
+	t.Errorf("undetermined = %v, want %s as %s", doc.Undetermined, file, undeterminedGeneratorUnreadable)
 }

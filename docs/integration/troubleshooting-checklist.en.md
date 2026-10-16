@@ -1483,22 +1483,24 @@ da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds
 cat docs/schemas/tenant-config.schema.json
 # Compare and modify the yaml — add field / fix spelling
 
-# Re-run (one pass covers schema + routing + cardinality)
+# Re-run (one pass covers schema + cardinality; routing: see 2.2.2)
 da-tools guard defaults-impact --config-dir conf.d/
 ```
 
 #### 2.2.2 Routing-layer failure
 
-**Symptom**: `Domain X has no matching tenant` or `Tenant Y has no domain anchor`
+⚠️ Since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) da-guard **judges no routing or domain policy**: a tree carrying them gets a "Routing and domain policy: not judged" section and **exit 4**; the route generator judges them.
+
+**Symptom**: da-guard exit 4; or `generate-routes --validate --strict` reports a domain-policy violation or a receiver error
 
 **Most likely cause**: added a tenant yaml but didn't define the domain in `_defaults.yaml` or an upper-level directory; or a domain rename wasn't synced to the tenant side.
 
 **Fix**:
 
 ```bash
-# Re-run the guard and read the report's Routing section
-da-tools guard defaults-impact --config-dir conf.d/
-# Find isolated nodes; add the corresponding domain entry or tenant assignment
+# Routing and domain policy are the generator's to judge
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+# Fix each finding it lists: add the domain entry or tenant assignment
 ```
 
 #### 2.2.3 Cardinality-layer failure

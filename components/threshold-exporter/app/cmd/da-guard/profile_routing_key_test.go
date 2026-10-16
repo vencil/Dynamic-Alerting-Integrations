@@ -1,10 +1,12 @@
 package main
 
 // #2914: a routing-layer key (`_severity_dedup`, `_routing*`) in a threshold
-// profile is a routing_in_unread_location error, for every root platform file
-// and whether or not a tenant elects the profile; and the exporter's view
-// da-guard reads (effective, served-values) no longer carries it for the
-// tenant.
+// profile was a routing_in_unread_location error, for every root platform
+// file and whether or not a tenant elects the profile; and the exporter's
+// view da-guard reads (effective, served-values) no longer carries it for the
+// tenant. Since #2904 the default check judges no routing: the same trees are
+// undetermined (assertRoutingNotJudged), the route generator names the key
+// (`_grar_parse._unread_routing`, routing_in_unread_location).
 
 import (
 	"encoding/json"
@@ -56,7 +58,9 @@ func TestRun_ProfileRoutingLayerKeyIsUnreadLocation(t *testing.T) {
 		},
 		{
 			// Control: `_metadata` in a profile is a documented fill-in, and a
-			// nested `_profiles.yaml` is read by no plane.
+			// nested `_profiles.yaml` is read by no threshold plane (the
+			// generator reads every `_` file below the root, so its
+			// `_severity_dedup` is undetermined since #2904).
 			name: "metadata-and-nested-profiles-are-not-reported",
 			files: map[string]string{
 				"_defaults.yaml":      "defaults:\n  mysql_connections: 80\n",
@@ -71,13 +75,7 @@ func TestRun_ProfileRoutingLayerKeyIsUnreadLocation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			code, got := runRoutingTree(t, tc.files, tc.scope)
-			if code != tc.wantCode {
-				t.Errorf("exit = %d, want %d; findings %v", code, tc.wantCode, got)
-			}
-			if !equalStrings(got, tc.want) {
-				t.Errorf("findings:\n got %q\nwant %q", got, tc.want)
-			}
+			assertRoutingNotJudged(t, tc.wantCode, tc.want, false, runJudged(t, tc.files, tc.scope))
 		})
 	}
 }

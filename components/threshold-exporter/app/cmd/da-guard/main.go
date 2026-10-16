@@ -2,7 +2,9 @@
 //
 // It's the v2.8.0 Phase .c C-12 PR-4 deliverable: the first PR that
 // turns the guard library (PR-1 schema, PR-2 routing, PR-3
-// cardinality) into a customer-runnable binary. Customers run it
+// cardinality) into a customer-runnable binary. Since #2904 the CLI no
+// longer runs the routing checks: the route generator judges routing and
+// domain policy (exit 4 below). Customers run it
 // from a pre-commit hook, a CI workflow, or a local "is my conf.d/
 // safe?" sanity check before opening a PR.
 //
@@ -45,6 +47,22 @@
 //	   --config-dir). A DecodeError stops the run before any tenant is
 //	   checked, so only that first undecodable file is named (the
 //	   unreadable paths still are).
+//	4  undetermined (#2904, ADR-036 §9 step 2): the tree — the whole of
+//	   --config-dir, whatever --scope says — holds what only the route
+//	   generator judges (undetermined.go: a routing key at any depth, a
+//	   domain policy or routing profiles file, a file parse-tree names
+//	   unreadable, a tenant id the tenant-id rule refuses or two tenant files
+//	   declare), and this check
+//	   no longer judges routing or domain policy: it reports no routing
+//	   finding at all. The report lists the evidence (`undetermined`, always
+//	   present in the JSON, [] when there is none); the remedy is
+//	   `da-tools generate-routes --validate --strict`. A tree without any of
+//	   it is 0 as before — an empty scope included.
+//
+// Precedence 3 > 1 > 4 > 0. 1 wins over 4: a threshold error is
+// actionable without the generator; --warn-as-error affects 1 only.
+// `--required-fields` with a path under a routing key is a caller error (2),
+// never a check that silently passes.
 //
 // 3 wins over 1: findings computed over a tree with a skipped or unreadable
 // file describe only part of it, so "fix the file first" is the one
@@ -104,12 +122,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
-	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
 // Version is overridden at build time via `-ldflags "-X main.Version=..."`.
@@ -127,6 +142,10 @@ const (
 	exitFindings    = 1
 	exitCallerErr   = 2
 	exitParseFailed = 3
+	// exitUndetermined: the tree holds what only the route generator judges
+	// (routing, domain policy; undetermined.go), which this check does not
+	// (#2904, ADR-036 §9). Below 3 and 1, above 0.
+	exitUndetermined = 4
 )
 
 // flags is the parsed configuration for one run.
@@ -158,9 +177,9 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"Typical use in a CI hook: the changed _defaults.yaml's directory, relative to --config-dir (or absolute).")
 	fs.StringVar(&f.requiredFields, "required-fields", "",
 		"Comma-separated dotted paths every tenant's effective config must have "+
-			"(e.g. 'thresholds.cpu,_routing.receiver.type'). A '_routing' or '_routing.*' path is "+
-			"judged against the tenant's RESOLVED routing (_routing_defaults -> routing profile -> "+
-			"the tenant's _routing, what the route generator renders), not the effective config. "+
+			"(e.g. 'thresholds.cpu'). A path under a routing key ('_routing', '_routing.*', "+
+			"'_severity_dedup', ...) is refused (exit 2): routing is judged by "+
+			"'da-tools generate-routes --validate --strict', not here. "+
 			"Empty disables the schema check.")
 	fs.IntVar(&f.cardinalityLimit, "cardinality-limit", 0,
 		"Per-tenant predicted-metric-count ceiling; 0 disables. When omitted, the cap the exporter "+
@@ -202,7 +221,9 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"or why it cannot be read, as JSON (see '%s %s -h').\n\n", parseTreeCmd, programName, parseTreeCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
-			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n")
+			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n"+
+			"  4  routing or domain policy in the tree, which this check does not judge; the report names it\n"+
+			"     (run 'da-tools generate-routes --validate --strict'). 3 wins over 1, 1 over 4.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -274,6 +295,12 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		return exitCallerErr
 	}
 
+	if field := routingRequiredField(splitNonEmpty(f.requiredFields)); field != "" {
+		fmt.Fprintf(errOut, "%s: --required-fields %q: routing is no longer judged by da-guard; "+
+			"require it in the route generator's checks instead (%s)\n", programName, field, undeterminedRemedy)
+		return exitCallerErr
+	}
+
 	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
@@ -288,7 +315,10 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			if scoped != nil {
 				unreadable = unreadableEntries(scoped.Unreadable)
 			}
-			if werr := writeDecodeStopReport(stdout, errOut, f, de, unreadable); werr != nil {
+			// The evidence is the whole tree's, so the stopped run still lists
+			// it (the exit code stays 3).
+			undetermined := undeterminedEvidence(f.configDir, errOut)
+			if werr := writeDecodeStopReport(stdout, errOut, f, de, unreadable, undetermined); werr != nil {
 				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
 				return exitCallerErr
 			}
@@ -305,6 +335,7 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, scoped.RootListErr)
 	}
 	withGeneratorDuplicates(f.configDir, scoped, errOut)
+	undetermined := undeterminedEvidence(f.configDir, errOut)
 
 	// #2043: without an explicit --cardinality-limit, predict against the cap
 	// the exporter will actually enforce for this tree, not a constant. The
@@ -341,10 +372,10 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	}
 
 	// The checks run whether or not the scope has tenants (#2991): what is
-	// judged on the whole tree or on the scope's own files — platform-file
-	// problems, the `_routing_enforced` route, the defaults carriers, the
-	// /metrics gather verdict (#2031) — is reported with no tenant exactly
-	// as with some. The per-tenant checks find nothing on zero tenants.
+	// judged on the whole tree or on the scope's own files — the defaults
+	// carriers, the /metrics gather verdict (#2031) — is reported with no
+	// tenant exactly as with some. The per-tenant checks find nothing on zero
+	// tenants.
 	input := buildCheckInput(scoped, f)
 	report, err := check(input)
 	if err != nil {
@@ -362,13 +393,14 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// ⛔ Unless a file in scope failed the exporter's decode (#2123) or
 	// could not be read at all (#2588): the walker skipped it, so "no
 	// tenants" may be exactly the tenants that file declares. That is exit
-	// 3, never the vacuous 0.
+	// 3, never the vacuous 0. Nor when the tree holds what only the route
+	// generator judges (#2991, #2904): that is exit 4.
 	if len(scoped.Tenants) == 0 && len(report.Findings) == 0 {
-		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
+		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable, undetermined); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		return reportDroppedFiles(errOut, scoped, exitOK)
+		return reportDroppedFiles(errOut, scoped, undeterminedExit(errOut, undetermined, exitOK))
 	}
 
 	spellFindingsAsWritten(report, scoped)
@@ -379,23 +411,33 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			programName, n, findingkind.Unregistered())
 	}
 
-	if err := writeReport(stdout, errOut, f, scoped, report, notices); err != nil {
+	if err := writeReport(stdout, errOut, f, scoped, report, notices, undetermined); err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		return exitCallerErr
 	}
 
 	// Before the findings: see the exit-code contract at the top (3 wins
-	// over 1, the findings cover only the files the exporter can read).
-	if code := reportDroppedFiles(errOut, scoped, exitOK); code != exitOK {
+	// over 1, the findings cover only the files the exporter can read; 1
+	// wins over 4, a threshold error is actionable without the generator).
+	code := exitOK
+	if report.Summary.Errors > 0 || (f.warnAsError && report.Summary.Warnings > 0) {
+		code = exitFindings
+	}
+	return reportDroppedFiles(errOut, scoped, undeterminedExit(errOut, undetermined, code))
+}
+
+// undeterminedExit: when the tree holds what only the route generator judges
+// (undetermined.go), say so on stderr — whatever the exit code — and turn
+// exitOK into exitUndetermined; any other code (1) is returned as is.
+func undeterminedExit(errOut io.Writer, undetermined []undeterminedItem, code int) int {
+	if len(undetermined) == 0 {
 		return code
 	}
-	if report.Summary.Errors > 0 {
-		return exitFindings
+	reportUndetermined(errOut, undetermined)
+	if code == exitOK {
+		return exitUndetermined
 	}
-	if f.warnAsError && report.Summary.Warnings > 0 {
-		return exitFindings
-	}
-	return exitOK
+	return code
 }
 
 // reportDroppedFiles: when the scope has files the exporter's load drops
@@ -434,56 +476,21 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 	return false
 }
 
-// pyyamlOwn is the tenant file's block Resolve reads for ec, with the
-// receivers, `routes[i].match` values and override `alertname` /
-// `metric_group` of its `_routing` as the route generator's PyYAML reads
-// them (#2295, #2431): the exporter's merge decodes the file with yaml.v3,
-// which keeps a plain `on` a string that PyYAML reads as a boolean. Nothing
-// else in the block changes; ec.TenantOverridesRaw is not modified.
-// pyRouting holds routingpolicy.PyYAMLRoutingByTenant per source file (nil:
-// unreadable).
-// ⛔ A `_routing` with no PyYAML counterpart (the file not re-read, the
-// tenant or its `_routing` not found there) is not judged as yaml.v3 read
-// it: WithPyYAMLRouting(r, nil) makes each of those values Unmatched /
-// UnmatchedValue, refused.
-func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) map[string]any {
-	own := ec.TenantOverridesRaw
-	r, has := own["_routing"]
-	if !has {
-		return own
-	}
-	py := pyRouting[ec.SourceFile][ec.TenantID]
-	out := make(map[string]any, len(own))
-	for k, v := range own {
-		out[k] = v
-	}
-	out["_routing"] = routingpolicy.WithPyYAMLRouting(r, py)
-	return out
-}
-
 // buildCheckInput assembles a guard.CheckInput from the scoped
 // resolution. It's where the YAML-shape → guard-input mapping lives:
 //
 //   - EffectiveConfigs[id]      ← ec.MergedConfig (the merge, not the
 //     per-threshold view /effective reports: #2115 changed that view and
 //     must not change this gate's findings)
-//   - RoutingByTenant[id]       ← the tenant's RESOLVED routing (#2280):
-//     routingpolicy.Resolve over the tenant file's `_routing` /
-//     `_routing_profile` laid over the root platform overlay's (#2291,
-//     never the effective config) and the `_routing_defaults` and routing
-//     profiles of the conf.d root and of every directory level down to the
-//     tenant's (#2326) — the same three layers the route generator merges.
-//     `--required-fields _routing.*` is judged
-//     against it too.
 //   - TenantOverrides[id]       ← ec.TenantOverridesRaw (PR-5)
 //   - NewDefaultsByTenant[id]   ← ec.MergedDefaults      (PR-5)
 //
-// The PR-5 wiring (TenantOverrides + NewDefaultsByTenant) enables
-// the redundant-override warn-tier without changing the cardinality /
-// schema / routing error tiers. Fields used to be nil-left in PR-4
-// because pkg/config.EffectiveConfig didn't expose the pre-merge
-// shapes; PR-5 adds those (json:"-" so tenant-api's API contract
-// stays unchanged) and we now thread them through.
+// ⛔ No routing-plane input (#2904, ADR-036 §9 step 2): RoutingByTenant,
+// the domain policies, the routing tree's problems, the invalid / unloaded
+// tenant ids and `_routing_enforced` are left unset, so the CLI never reports
+// a findingkind.PlaneRouting finding. What only the route generator judges
+// is named as undetermined instead (undetermined.go, exit 4). The routing
+// checks of internal/guard stay until ADR-036 step 3 (#2905) deletes them.
 //
 // We deliberately use NewDefaultsByTenant rather than NewDefaults: a
 // scope spanning multiple cascading _defaults.yaml levels means
@@ -492,126 +499,12 @@ func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) 
 // guard.CheckInput documentation for the resolution rule.
 func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	effective := make(map[string]map[string]any, len(scoped.Tenants))
-	routing := make(map[string]map[string]any)
-	provenance := make(map[string]routingpolicy.Provenance)
-	unknownProfiles := make(map[string]string)
-	disabled := make(map[string]bool)
-	notMapping := make(map[string]any)
-	ignoredKeys := make(map[string][]string)
-	unknownKeys := make(map[string][]string) // #2983
-	invalidIDs := make(map[string]string)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
 	var notServed map[string]map[string]config.NotServedKey
 
-	// #2280: the routing layers and the domain policies come from the conf.d
-	// tree at --config-dir (never --scope), as the route generator reads them.
-	// A file the exporter already fails is skipped so it is named once, by
-	// exit 3; what the loader cannot use comes back as PlatformProblems —
-	// findings that skip only the checks depending on them (#1654), never
-	// entries in ParseFailed.
-	failed := make(map[string]bool, len(scoped.ParseFailed))
-	for _, pf := range scoped.ParseFailed {
-		failed[pf] = true
-	}
-	skip := func(rel string) bool { return failed[rel] }
-	// #2326: the WHOLE tree — `_routing_defaults` along each tenant's
-	// directory chain, profiles and domain policies scoped to their subtree
-	// (ADR-017 Decision 9), as the route generator reads it. Read
-	// from --config-dir even for a --scope run: the generator refuses the
-	// whole tree on a blocking shape anywhere in it, so a scoped run reports
-	// it too.
-	tree, policies, problems := routingpolicy.LoadTree(f.configDir, skip)
-	// #2291: routing written where the generator never reads it (a defaults
-	// block, a threshold profile) — the exporter merges it into the
-	// effective config, but no route is rendered from it.
-	problems = append(problems, routingpolicy.UnreadRouting(f.configDir, scoped.DefaultsFiles, skip)...)
-
-	// #2295 / #2431: each tenant file's `_routing` blocks as PyYAML reads
-	// them, read once per file (a file declares many tenants, #2153); see pyyamlOwn.
-	// #2519: and which of its tenants' bodies PyYAML does not read as a
-	// mapping — the generator does not load those (a read error: none, so the
-	// tenant stays in the enforced set, as before).
-	pyRouting := map[string]map[string]any{}
-	pyNotMapping := map[string]map[string]bool{}
-	for _, ec := range scoped.Tenants {
-		if _, done := pyRouting[ec.SourceFile]; !done {
-			// A read error leaves nil: every receiver of the file's tenants
-			// is then Unmatched and refused (fail-closed), not judged as
-			// yaml.v3 read it.
-			data, err := config.ReadConfFile(filepath.Join(config.AbsScanRoot(f.configDir), filepath.FromSlash(ec.SourceFile)))
-			if err == nil {
-				pyRouting[ec.SourceFile] = routingpolicy.PyYAMLRoutingByTenant(data)
-				pyNotMapping[ec.SourceFile] = routingpolicy.PyYAMLTenantBodyNotMapping(data)
-			} else {
-				pyRouting[ec.SourceFile] = nil
-			}
-		}
-	}
-
-	unloaded := make(map[string]string)
 	for _, ec := range scoped.Tenants {
 		effective[ec.TenantID] = ec.MergedConfig
-		if pyNotMapping[ec.SourceFile][ec.TenantID] && !tree.Root.PlatformBodies[ec.TenantID] {
-			unloaded[ec.TenantID] = ec.SourceFile
-		}
-		// The tenant's routing as the generator renders it: its own
-		// `_routing` laid over the referenced profile over
-		// `_routing_defaults`, `{{tenant}}` substituted. Tenants with no
-		// routing (disabled, or no layer supplies anything) are absent from
-		// the map — no finding, per guard/types.go.
-		//
-		// ⛔ #2291: the tenant layer is what the GENERATOR reads — the tenant
-		// file's `_routing` / `_routing_profile` over the root platform
-		// files' `tenants.<id>` entries (layers.TenantBlock) — never
-		// ec.EffectiveConfig, which also carries the defaults chain and the
-		// threshold profile. Routing there is never rendered (UnreadRouting
-		// names it); reading it here judged routes that do not exist.
-		// #2326: the layers of the tenant's own directory level.
-		// #2341 R8: an id the routing plane refuses gets no routing at all —
-		// the generator renders nothing for it (tenantid.Valid).
-		if !tenantid.Valid(ec.TenantID) {
-			invalidIDs[ec.TenantID] = ec.SourceFile
-		} else {
-			layers := tree.LayersFor(confdlayout.LevelOf(ec.SourceFile))
-			block := layers.TenantBlock(ec.TenantID, pyyamlOwn(ec, pyRouting))
-			if routingpolicy.IsDisabled(block["_routing"]) {
-				disabled[ec.TenantID] = true
-			}
-			if r, has := block["_routing"]; has && routingpolicy.RoutingNotMapping(r) {
-				notMapping[ec.TenantID] = r // #2341 R5
-			}
-			// #2960: judged on the block as written — before the receivers are
-			// swapped for their PyYAML values, whose keys are decoded too (an
-			// `on:` key would be named `true`).
-			own := layers.TenantBlock(ec.TenantID, ec.TenantOverridesRaw)
-			if f := routingpolicy.IgnoredKeys(own["_routing"], routingpolicy.BlockRouting); len(f) > 0 {
-				ignoredKeys[ec.TenantID] = f
-			}
-			// #2983: a `_routing`-prefixed key the generator does not read
-			// in a tenant's config (`_routing_profle`) — the tenant file's
-			// block and its root platform `tenants.<id>` entries, the two
-			// places the generator reads a tenant from (TenantBlock and
-			// Overlay keep only the two keys it reads).
-			written := map[string]any{}
-			for k := range ec.TenantOverridesRaw {
-				written[k] = nil
-			}
-			for k := range layers.OverlayUnknownKeys[ec.TenantID] {
-				written[k] = nil
-			}
-			if f := routingpolicy.UnknownRoutingKeys(written, routingpolicy.LayerTenant); len(f) > 0 {
-				unknownKeys[ec.TenantID] = f
-			}
-			resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
-			if ok {
-				routing[ec.TenantID] = resolved
-				provenance[ec.TenantID] = prov
-			}
-			if unknown != nil {
-				unknownProfiles[ec.TenantID] = *unknown
-			}
-		}
 		// PR-5: redundant-override warn-tier inputs. We populate
 		// both fields as soon as the resolver hands them to us; an
 		// absent tenant.yaml block (TenantOverridesRaw == nil) or
@@ -637,29 +530,16 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		}
 	}
 
-	required := splitNonEmpty(f.requiredFields)
-
 	return guard.CheckInput{
-		EffectiveConfigs:       effective,
-		RequiredFields:         required,
-		RoutingByTenant:        routing,
-		RoutingProvenance:      provenance,
-		RoutingDisabled:        disabled,
-		RoutingNotMapping:      notMapping,
-		RoutingIgnoredKeys:     ignoredKeys,
-		RoutingUnknownKeys:     unknownKeys,
-		InvalidTenantIDs:       invalidIDs,
-		UnloadedTenants:        unloaded,
-		UnknownRoutingProfiles: unknownProfiles,
-		DomainPolicies:         policies,
-		PlatformProblems:       problems,
-		RoutingEnforced:        tree.Enforced,
-		TenantOverrides:        tenantOverrides,
-		NewDefaultsByTenant:    newDefaultsByTenant,
-		CardinalityLimit:       f.cardinalityLimit,
-		CardinalityWarnRatio:   f.cardinalityWarnRatio,
-		DefaultsFiles:          scoped.DefaultsFiles,
-		ParseFailed:            scoped.ParseFailed,
+		EffectiveConfigs: effective,
+		// runWith refuses a routing path here (exit 2) before this runs.
+		RequiredFields:       splitNonEmpty(f.requiredFields),
+		TenantOverrides:      tenantOverrides,
+		NewDefaultsByTenant:  newDefaultsByTenant,
+		CardinalityLimit:     f.cardinalityLimit,
+		CardinalityWarnRatio: f.cardinalityWarnRatio,
+		DefaultsFiles:        scoped.DefaultsFiles,
+		ParseFailed:          scoped.ParseFailed,
 		// #1976: the exporter's own build's undeliverable set, in-scope
 		// tenants only (ScopeEffective filters it).
 		UndeliverableInherited: scoped.Undeliverable,
@@ -760,28 +640,32 @@ func splitNonEmpty(s string) []string {
 // path also drops a one-line summary on errOut so a CI log
 // surfaces "errors=N, warnings=M" without the user having to cat
 // the file separately.
-func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenants, report *guard.GuardReport, notices []string) error {
+func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenants, report *guard.GuardReport,
+	notices []string, undetermined []undeterminedItem) error {
 	var body string
 	switch f.format {
 	case "md":
-		body = renderMarkdown(scoped, report, notices)
+		body = renderMarkdown(scoped, report, notices, undetermined)
 	case "json":
 		b, err := json.MarshalIndent(struct {
-			ConfigDir   string             `json:"config_dir"`
-			Scope       string             `json:"scope,omitempty"`
-			SourceFiles []string           `json:"source_files"`
-			Notices     []string           `json:"notices,omitempty"`
-			ParseFailed []string           `json:"parse_failed,omitempty"`
-			Unreadable  []skippedFile      `json:"unreadable,omitempty"`
-			Report      *guard.GuardReport `json:"report"`
+			ConfigDir   string        `json:"config_dir"`
+			Scope       string        `json:"scope,omitempty"`
+			SourceFiles []string      `json:"source_files"`
+			Notices     []string      `json:"notices,omitempty"`
+			ParseFailed []string      `json:"parse_failed,omitempty"`
+			Unreadable  []skippedFile `json:"unreadable,omitempty"`
+			// #2904: always present, [] when there is none.
+			Undetermined []undeterminedItem `json:"undetermined"`
+			Report       *guard.GuardReport `json:"report"`
 		}{
-			ConfigDir:   f.configDir,
-			Scope:       f.scopeDir,
-			SourceFiles: nonNilStrings(scoped.SourceFiles), // #2031: [] for a scope with no tenant
-			Notices:     notices,
-			ParseFailed: scoped.ParseFailed,
-			Unreadable:  unreadableOrNil(scoped.Unreadable),
-			Report:      report,
+			ConfigDir:    f.configDir,
+			Scope:        f.scopeDir,
+			SourceFiles:  nonNilStrings(scoped.SourceFiles), // #2031: [] for a scope with no tenant
+			Notices:      notices,
+			ParseFailed:  scoped.ParseFailed,
+			Unreadable:   unreadableOrNil(scoped.Unreadable),
+			Undetermined: nonNilUndetermined(undetermined),
+			Report:       report,
 		}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encode JSON report: %w", err)
@@ -800,8 +684,8 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 	if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
 		return fmt.Errorf("write --output %q: %w", abs, err)
 	}
-	fmt.Fprintf(errOut, "%s: wrote report to %s (errors=%d, warnings=%d)\n",
-		programName, abs, report.Summary.Errors, report.Summary.Warnings)
+	fmt.Fprintf(errOut, "%s: wrote report to %s (errors=%d, warnings=%d, undetermined=%d)\n",
+		programName, abs, report.Summary.Errors, report.Summary.Warnings, len(undetermined))
 	return nil
 }
 
@@ -809,13 +693,14 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 // preamble (config dir, scanned files) so the PR-comment reader
 // has the context they need without scrolling back to the workflow
 // definition.
-func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, notices []string) string {
+func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, notices []string, undetermined []undeterminedItem) string {
 	var b strings.Builder
 	for _, n := range notices {
 		b.WriteString("> ⚠️ " + n + "\n\n")
 	}
 	b.WriteString(parseFailedMarkdown(scoped.ParseFailed))
 	b.WriteString(unreadableMarkdown(scoped.Unreadable))
+	b.WriteString(undeterminedMarkdown(undetermined))
 	body := report.Markdown()
 	if len(scoped.ParseFailed) > 0 || len(scoped.Unreadable) > 0 {
 		// #2123: the guard library's all-clear line says the change is safe
@@ -825,6 +710,9 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 		// "safe to merge" is absent, so a reworded library line cannot slip
 		// past this replacement unseen.
 		body = strings.Replace(body, noFindingsSafeLine, noFindingsNotSafeLine, 1)
+	} else if len(undetermined) > 0 {
+		// #2904: nor is it with routing nobody here judged.
+		body = strings.Replace(body, noFindingsSafeLine, noFindingsUndeterminedLine, 1)
 	}
 	b.WriteString(body)
 	if len(scoped.SourceFiles) > 0 {
@@ -846,17 +734,23 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 // Emits a clean Markdown / JSON shell so downstream consumers (PR
 // comment poster, dashboards, log scrapers) don't have to
 // special-case empty input.
-func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, unreadable []config.UnreadableFile) error {
+func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, unreadable []config.UnreadableFile,
+	undetermined []undeterminedItem) error {
 	var body string
 	switch f.format {
 	case "md":
 		verdict := "_No tenants under the requested scope; defaults change is vacuously safe._\n"
-		if len(parseFailed) > 0 || len(unreadable) > 0 {
+		switch {
+		case len(parseFailed) > 0 || len(unreadable) > 0:
 			// #2123, #2588: not "safe" — the tenants may be in the files listed.
 			verdict = "_No tenant could be checked under the requested scope; " +
 				"the files listed above cannot be decoded or read, so this is NOT a safe result._\n"
+		case len(undetermined) > 0:
+			// #2904: nor with routing nobody here judged.
+			verdict = "_No tenants under the requested scope; the routing and domain policy listed above " +
+				"are not judged here, so this is NOT a safe result (exit 4)._\n"
 		}
-		body = parseFailedMarkdown(parseFailed) + unreadableMarkdown(unreadable) +
+		body = parseFailedMarkdown(parseFailed) + unreadableMarkdown(unreadable) + undeterminedMarkdown(undetermined) +
 			"## Dangling Defaults Guard\n\n" +
 			"### Summary\n\n" +
 			"- Tenants in scope: **0**\n" +
@@ -869,6 +763,7 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, 
 			"config_dir":   f.configDir,
 			"scope":        f.scopeDir,
 			"source_files": []string{},
+			"undetermined": nonNilUndetermined(undetermined),
 			"report": map[string]any{
 				"findings": []any{},
 				"summary": map[string]int{
@@ -915,12 +810,13 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, 
 // the scope because one file failed the decode (#2123, exit 3). No tenant was
 // checked: ScopeEffective fails the whole scope on the first such file, so
 // the list names that file only — fix it and re-run to see the next one.
-func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError, unreadable []skippedFile) error {
+func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError, unreadable []skippedFile,
+	undetermined []undeterminedItem) error {
 	files := []string{de.Path}
 	var body string
 	switch f.format {
 	case "md":
-		body = parseFailedMarkdown(files) + unreadableMarkdownEntries(unreadable) +
+		body = parseFailedMarkdown(files) + unreadableMarkdownEntries(unreadable) + undeterminedMarkdown(undetermined) +
 			"## Dangling Defaults Guard\n\n" +
 			"_Stopped before checking any tenant: resolving the scope hit the file above " +
 			"(`" + de.Err.Error() + "`). The run stops at the first such file; fix it and re-run._\n"
@@ -930,6 +826,7 @@ func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.Decode
 			"scope":        f.scopeDir,
 			"source_files": []string{},
 			"parse_failed": files,
+			"undetermined": nonNilUndetermined(undetermined),
 			"error":        de.Err.Error(),
 			"report":       nil,
 		}
@@ -963,7 +860,20 @@ const (
 	noFindingsSafeLine    = "✅ No findings — defaults change is safe to merge.\n"
 	noFindingsNotSafeLine = "No findings among the tenants that were checked; the change cannot be " +
 		"judged until the files listed above can be decoded and read (exit 3).\n"
+	// noFindingsUndeterminedLine replaces it when the tree holds routing or
+	// domain policy (#2904).
+	noFindingsUndeterminedLine = "No threshold findings; routing and domain policy, listed above, are not " +
+		"judged here (exit 4).\n"
 )
+
+// nonNilUndetermined: the reports' `undetermined` is always present, [] when
+// there is none.
+func nonNilUndetermined(items []undeterminedItem) []undeterminedItem {
+	if items == nil {
+		return []undeterminedItem{}
+	}
+	return items
+}
 
 // parseFailedMarkdown is the report block naming the files whose exporter
 // YAML decode fails (#2123); "" when there are none, so a clean tree's

@@ -59,12 +59,15 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 			continue
 		}
 		withGeneratorDuplicates(dir, scoped, io.Discard)
-		input := buildCheckInput(scoped, &flags{
-			configDir:            dir, // the routing tree and domain policies are read from it
+		// The routing inputs come from routing_input_test.go: the CLI no
+		// longer judges routing (#2904), internal/guard's routing checks stay
+		// until #2905 and must still choose registered kinds.
+		input := withRoutingInput(buildCheckInput(scoped, &flags{
+			configDir:            dir,
 			requiredFields:       "_routing.receiver.type,mysql_connections",
 			cardinalityLimit:     1,
 			cardinalityWarnRatio: 0.5,
-		})
+		}), scoped, dir)
 		report, err := guard.CheckDefaultsImpact(input)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
