@@ -160,18 +160,37 @@ def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
     if ops not in sys.path:
         sys.path.insert(0, ops)
     import policy_engine as pe  # the engine's own loader
-    # Policy-as-Code's own lookup and its own note on a nested `_policies`.
-    path = _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE)
+    # Policy-as-Code's own lookup: the root carrier only, as it reads
+    # `_policies`. Not observed as a flat read — every key judged here comes
+    # from da-guard's reading of the whole tree, and the root-only
+    # `_policies` gap is Policy-as-Code's to report (validate-config's
+    # `policy_dsl` row, policy-engine itself).
+    path = _lib_confd.resolve_defaults_file(Path(conf_d), observed=False)
     return pe.load_policies(str(path)) if path.is_file() else []
+
+
+def note_root_only_policies(conf_d: str | os.PathLike[str]) -> None:
+    """Print, once, Policy-as-Code's own note naming the subdirectory
+    `_defaults.yaml` files whose `_policies` it does not read — and so this
+    verdict does not count — for a caller with no Policy-as-Code row of its
+    own to say it (explain-keys). Nothing when there is none."""
+    ops = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops")
+    if ops not in sys.path:
+        sys.path.insert(0, ops)
+    import policy_engine as pe
+    _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE)
 
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
                disable_effects: bool = True, rules: Iterable[Any] | None = None,
-               timeout: float = tv.DEFAULT_TIMEOUT) -> TreeVerdict:
-    """The verdict on every key of every tenant of the tree at `conf_d`."""
+               timeout: float = tv.DEFAULT_TIMEOUT,
+               effective_tree: tv.EffectiveTree | None = None) -> TreeVerdict:
+    """The verdict on every key of every tenant of the tree at `conf_d`.
+    `effective_tree`, given, is a `load_effective_tree` of the same tree the
+    caller already has (validate-config shares one run among its rows)."""
     tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
                                disable_effects=disable_effects)
-    effective = tv.load_effective_tree(conf_d, binary=binary, timeout=timeout).tenants
+    effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
     all_rules = list(_tree_rules(conf_d)) + list(rules or [])
     return judge(tree.tenants, effective, policy_targets(all_rules), aliases=tree.aliases,
                  undecidable=not root_platform_files(conf_d), disable_effects=disable_effects)
