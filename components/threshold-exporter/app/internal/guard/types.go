@@ -37,24 +37,11 @@
 //     duplicates the inherited value. Warning only; the
 //     duplication is harmless at runtime.
 //
-//  3. Routing schema guardrails (PR-2; see routing.go)
-//     Checks against each tenant's `_routing` block: unknown
-//     receiver type (error), missing receiver fields (error),
-//     override matcher contract — exactly one of alertname/
-//     metric_group, so both empty (error) and both set (error) are
-//     blocked — duplicate override matcher (warn), redundant
-//     override receiver (warn). Since #2280 the block checked is the
-//     RESOLVED routing (`_routing_defaults` → routing profile → the
-//     tenant's `_routing`), its ADR-007 `routes` entries are checked too
-//     (invalid_route_entry + the same receiver checks), and every
-//     receiver type is judged against the domain policies
-//     (domain_policy_violation).
-//     Note: the planning row originally said "routing tree cycle
-//     detection" — the codebase's routing model is a flat
-//     per-tenant block with no cross-references, so cycles are
-//     structurally impossible. PR-2 ships the checks that
-//     actually catch real bugs in this model. See routing.go
-//     header for the full rationale.
+//  3. Routing schema guardrails (PR-2) — deleted (ADR-036 §7 step 3, #2905).
+//     The route generator (`da-tools generate-routes --validate --strict`)
+//     is the one judge of routing and domain policy; the CLI names a tree
+//     that holds them as undetermined (cmd/da-guard/undetermined.go, exit 4).
+//     The number is kept so the check numbers below stay as cited.
 //
 //  4. Cardinality guard (PR-3; see cardinality.go)
 //     Predicts each tenant's post-merge metric count and flags
@@ -132,7 +119,6 @@ package guard
 import (
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // Severity classifies a Finding. Two tiers in PR-1; PR-2/3 may add
@@ -263,93 +249,15 @@ type CheckInput struct {
 
 	// RequiredFields is the dotted-path list the schema validator
 	// asserts non-nil presence for in every tenant's effective
-	// config. Empty/nil disables the schema check.
-	//
-	// #2291: `_routing` and `_routing.<path>` are the exception — they are
-	// judged against RoutingByTenant (the resolved routing the route
-	// generator renders), not the effective config.
+	// config. Empty/nil disables the schema check. A path under a
+	// routing key is the CLI's caller error (exit 2, ADR-036 §9): the
+	// route generator judges routing, and the effective config is not
+	// what it renders (#2291).
 	//
 	// PR-1 keeps this caller-supplied (no built-in schema). A future
 	// PR may add an optional `internal/schema/required.yaml` loader
 	// once the v2.8.0 mandatory-fields list lands.
 	RequiredFields []string `json:"required_fields,omitempty"`
-
-	// RoutingByTenant maps tenant ID → the parsed `_routing` block
-	// for that tenant. Routing schema checks (added in PR-2) run
-	// per tenant present in this map; tenants absent from the map
-	// have routing checks skipped (no finding emitted, not even a
-	// warning — absent routing is a valid configuration).
-	//
-	// The caller is responsible for parsing the routing payload —
-	// `_routing` ships across the wire as a YAML-serialised string
-	// inside ScheduledValue.Default, and unwrapping that requires
-	// the main package's config types. The guard library deliberately
-	// stays YAML-agnostic; the CLI wrapper (deferred PR-4) does the
-	// extraction before invoking CheckDefaultsImpact.
-	RoutingByTenant map[string]map[string]any `json:"routing_by_tenant,omitempty"`
-
-	// RoutingProvenance maps tenant ID → which layer each top-level key of
-	// its RoutingByTenant entry came from (#2280): the tenant's `_routing`,
-	// a routing profile, or `_routing_defaults`. Used in messages only;
-	// a tenant absent here reads as "the tenant's _routing".
-	RoutingProvenance map[string]routingpolicy.Provenance `json:"-"`
-
-	// RoutingDisabled holds the tenants whose routing is turned off by a
-	// disabling `_routing` string (`_routing: disable`). They are absent from
-	// RoutingByTenant; a required `_routing*` field names the opt-out instead
-	// of reading as an omission (#2291).
-	RoutingDisabled map[string]bool `json:"-"`
-
-	// RoutingNotMapping maps tenant ID → its `_routing` value (as PyYAML
-	// reads it) when that is neither a mapping nor a disabling string
-	// (#2341, routingpolicy.RoutingNotMapping). Such tenants are absent from
-	// RoutingByTenant: the generator renders no route for them.
-	RoutingNotMapping map[string]any `json:"-"`
-
-	// RoutingIgnoredKeys maps tenant ID → the paths, relative to its own
-	// `_routing`, of the keys the route generator does not read (#2960,
-	// routingpolicy.IgnoredKeys). Profiles and `_routing_defaults` are named
-	// through PlatformProblems instead.
-	RoutingIgnoredKeys map[string][]string `json:"-"`
-	// RoutingUnknownKeys maps tenant ID → the `_routing`-prefixed keys of its
-	// own config the route generator does not read (#2983,
-	// routingpolicy.UnknownRoutingKeys) — reported as FindingRoutingKeyIgnored.
-	RoutingUnknownKeys map[string][]string `json:"-"`
-
-	// InvalidTenantIDs maps each declared tenant id tenantid.Valid
-	// refuses to the tenant file that declares it (#2341). Such tenants are
-	// absent from RoutingByTenant.
-	InvalidTenantIDs map[string]string `json:"-"`
-
-	// UnloadedTenants maps each tenant id the route generator does not load
-	// to the tenant file that declares it (#2519): its body there is not a
-	// mapping as PyYAML reads it (a null body — the exporter still serves the
-	// tenant, so it is in EffectiveConfigs; routingpolicy.
-	// PyYAMLTenantBodyNotMapping) and no root platform file's entry gives it
-	// one (routingpolicy.Layers.PlatformBodies). Such a tenant is not in the
-	// generator's tenant set, so a `{{tenant}}` `_routing_enforced` renders no
-	// route for it and its group_by is not judged for it.
-	UnloadedTenants map[string]string `json:"-"`
-
-	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
-	// references that no profile file defines (warn finding).
-	UnknownRoutingProfiles map[string]string `json:"-"`
-
-	// DomainPolicies are the ADR-007 receiver-type policies, checked against
-	// every tenant in RoutingByTenant. nil disables the check.
-	DomainPolicies []routingpolicy.Policy `json:"-"`
-
-	// PlatformProblems are the platform-file structures the routing checks
-	// could not use (routingpolicy.LoadRoot). Each becomes one finding with
-	// an empty TenantID; the checks that do not depend on it still run.
-	PlatformProblems []routingpolicy.Problem `json:"-"`
-
-	// RoutingEnforced is the root's `_routing_enforced` block the route
-	// generator renders from (routingpolicy.Tree.Enforced; nil: none). Only
-	// its group_by is judged (#2503), the `{{tenant}}` shape over every
-	// valid tenant id of EffectiveConfigs and RoutingByTenant — routed or not,
-	// as the generator expands it (#2519) — less UnloadedTenants.
-	RoutingEnforced *routingpolicy.Enforced `json:"-"`
 
 	// CardinalityLimit is the per-tenant ceiling the cardinality
 	// check (PR-3) compares each tenant's predicted metric count

@@ -222,9 +222,8 @@ func modulePath(goMod string) (string, error) {
 	return "", fmt.Errorf("%s: no module line", goMod)
 }
 
-// requireKindIsolation runs the check over this module; TestFindingKindPlanes
-// calls it first, so the kind table it emits for the Python gate is never
-// written while a rule is broken.
+// requireKindIsolation runs the check over this module; TestFindingKindsAreReported
+// calls it first, so its source scan sees every use of a kind as a selector.
 func requireKindIsolation(t *testing.T) {
 	t.Helper()
 	start := time.Now()

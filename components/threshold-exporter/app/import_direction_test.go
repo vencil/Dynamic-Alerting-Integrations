@@ -40,9 +40,7 @@ var logicPackages = []string{
 	"internal/confdlayout", // #2899: conf.d layout helpers moved out of routingpolicy
 	"internal/guard",
 	"internal/parser",
-	"pkg/routingpolicy", // #2280: shared with tenant-api and da-guard
-	"pkg/receiverspec",  // #2295: the receiver contract, shared with tenant-api and da-guard
-	"pkg/pyyamlcompat",  // #2295: receivers decoded as PyYAML reads them, under routingpolicy
+	"pkg/receiverspec", // #2295: the receiver types pkg/config looks up (#2905: Known only)
 }
 
 const netHTTPImportPath = "net/http"

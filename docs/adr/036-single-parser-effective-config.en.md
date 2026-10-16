@@ -541,11 +541,11 @@ The options whose reasons are already given in the body (keep both sides imitati
 ## Implementation order
 
 - Done: the generator outputs structured findings.
-- Done: CI checks (users of the deletion scope, the divergence catalog and its two-way tests). The divergence catalog is deleted in step 3.
+- Done: CI checks (users of the deletion scope, the divergence catalog and its two-way tests). The divergence catalog was deleted in step 3.
 - Step 0 (ship first, no behaviour change): `parse-tree` and the fixed corpus `tests/shared/parse_tree_corpus.json`; the migration audit command; moving the utilities unrelated to parsing.
 - Step 1: the prerequisites listed in §7; the generator container (validation endpoint, status endpoint); the Helm chart adds the container, socket, policy-file mount and resources; tenant-api's writes ask the generator container, deleting tenant-api's Go-side routing and policy judging, the flat key `_routing_receiver_type` and `--policy-unavailable-open` at the same time.
 - Step 2: da-guard adds the "not judged" state and exit code 4; `guard-defaults-impact.yml` also runs the generator.
-- Step 3: delete the Go code that imitates PyYAML and the generator's semantics, the vendored yaml.v3 "spaces only" patch, the divergence catalog and the expiry check in `make pre-tag`.
+- Done, step 3: deleted the Go code that imitates PyYAML and the generator's semantics, the vendored yaml.v3 "spaces only" patch, the divergence catalog and the expiry check in `make pre-tag`.
 - Step 4: the generator and the Python tools read the parse-result JSON; delete the Python imitation loaders and the "non-specific tag" patch; the tools that write conf.d add the pre-write check; re-run the fixed corpus on main.
 
 Steps 0 to 4 merge into main in order, and each can be released once merged (§7).
@@ -562,20 +562,20 @@ Where the code is, for implementers; can be skipped when reading the decision. O
 | Tools that write conf.d (text produced by PyYAML; kept) | `StrictRewriteLoader`, callers of `strict_load_for_rewrite` / `load_yaml_file_for_rewrite` in `_lib_io` and `_lib_yaml_keys.dump_for_rewrite` (for example `patch_config`, `deprecate_rule`, `da_assembler`); `scaffold_tenant` and the others that create new files with `yaml.safe_dump` |
 | Policy file names the generator reads on its own | `_POLICY_FILENAMES` in `_grar_parse.py`; the exporter skipping nested `_` files is explained in `flat_build.go` |
 | The portal's preview-only parsing | js-yaml via `tools/portal/src/interactive/tools/_common/validation/yaml-parser.js`; the hand-written line-by-line parsing `tools/portal/src/interactive/tools/config-lint/lint.js` |
-| Utilities unrelated to parsing, moved out in step 0 | `IsValidTenantID`, `LevelOf`, `IsDomainPolicyFile` in `pkg/routingpolicy` |
-| Code that blocks duplicate keys and multiple documents today (taken over by `parse-tree` before deletion) | Python's `RejectDuplicateKeys`; Go's `pyyamlcompat.FindDuplicateKey`, `firstDocument` / `errMoreDocuments` in `routingpolicy`, da-guard's `pyyaml_duplicates.go` |
-| Go code that imitates PyYAML's reading | `pkg/pyyamlcompat`; `pyResolve` and the policy decoder that turns on `SpacesOnly` in `pkg/routingpolicy` |
-| Go code that imitates the generator's semantics | `shapeWork`, `ParseDomainPolicies`, `UnmarshalPolicy` in `pkg/routingpolicy`; `IsDisabled` (imitates the generator's `_lib_validation.is_disabled`; called by da-guard) |
-| Changes in the vendored yaml.v3 | `third_party/yaml.v3`: spaces only (delete), non-specific tag (delete), duplicate-key checking of large mappings (used by the exporter; keep); the pinning test `tests/ops/test_vendored_yaml_v3.py` is updated in the same PR |
+| Utilities unrelated to parsing, moved out in step 0 | `IsValidTenantID` (callers use `pkg/tenantid`), `LevelOf` and `IsDomainPolicyFile` (`internal/confdlayout`); the routing-profiles file names are `routingProfilesNames` in `cmd/da-guard` |
+| Code that blocks duplicate keys and multiple documents | Python's `RejectDuplicateKeys`; on the Go side `parse-tree` (`internal/parsetree`), which da-guard reads for its undetermined evidence. The Go copies (`pyyamlcompat.FindDuplicateKey`, `firstDocument` / `errMoreDocuments` in `routingpolicy`, da-guard's `pyyaml_duplicates.go`) were deleted in step 3 |
+| Go code that imitates PyYAML's reading (deleted in step 3) | `pkg/pyyamlcompat`; `pyResolve` and the policy decoder that turned on `SpacesOnly` in `pkg/routingpolicy` |
+| Go code that imitates the generator's semantics (deleted in step 3) | `shapeWork`, `ParseDomainPolicies`, `UnmarshalPolicy`, `IsDisabled` in `pkg/routingpolicy`; da-guard's routing checks `internal/guard/routing.go` and their finding kinds |
+| Changes in the vendored yaml.v3 | `third_party/yaml.v3`: spaces only (deleted in step 3), non-specific tag (delete in step 4), duplicate-key checking of large mappings (used by the exporter; keep); the pinning test `tests/ops/test_vendored_yaml_v3.py` is updated in the same PR |
 | Exporter readings affected by the non-specific tag | `isMergeKey` in `pkg/config/config_file.go`; `validateSloObjective` in `custom_alert.go` |
-| The Go copy of the receiver contract | `pkg/receiverspec`: `Known` (used by the exporter's routing resolution; kept); `Check` (used by da-guard and `pkg/routingpolicy`; deleted with step 3; tenant-api stopped using it in step 1) |
+| The Go copy of the receiver contract | `pkg/receiverspec`: `Known` (used by the exporter's routing resolution; kept); `Check` (used by da-guard and `pkg/routingpolicy`; deleted in step 3; tenant-api stopped using it in step 1) |
 | tenant-api's current write judging | the generator container's caller `internal/generator` (`Gate`); on the Go side only the shape and reserved-key checks remain (next two rows) |
 | Go re-emitting batch patches | `mergePatchYAML`; the invariant after the merge `verifyPartialWrite` (`handler/tenant_list.go`); the offline differential test `handler/batch_patch_diff_test.go` |
 | The rest of tenant-api's Go-side routing and policy judging (deleted in step 1, done) | the routing-patch check `validateRoutingPatch`; the receiver check `receiverViolations` in `gitops` (`placeholderViolations` in the same file is the masked-credential write-back guard and stays); `JudgeTenantBlock` / `CheckTenantRouting` in `internal/policy`; `tenantBlockOnDisk`, which treats an unreadable file as empty |
 | tenant-api's non-routing checks kept in step 1 | `validateShape` in `gitops/writer.go` (checks with yaml.v3 that the exporter can read the content); the reserved-key value checks in `handler/body_validator.go` (for example `validateSilentMode`) |
 | Descriptions to update for da-guard's exit 4 | the exit-code comment in `cmd/da-guard/main.go`; `scripts/tools/_lib_exitcodes.py`; `docs/cli-reference.md` |
 | The deletion-scope user check (CI) | declaration table `tests/shared/phase2_deletion_scope.json`; the test comparing it, `components/threshold-exporter/app/phase2_deletion_scope_test.go` |
-| Checks only Go's da-guard has | `internal/guard/types.go` minus `tests/shared/routing_policy_parity_matrix.json` |
+| Checks only Go's da-guard had (none left: moved to the generator in step 2, deleted in step 3) | the generator's side is pinned by `tests/shared/routing_policy_parity_matrix.json` |
 | The divergence catalog (deleted in step 3; the files and target below no longer exist) | `tests/shared/reader_divergence_catalog.yaml`; the Go verdict snapshot `tests/shared/merge_key_go_verdicts.json`; `tests/shared/test_reader_divergence_catalog.py`; `reader-divergence-expiry` in `make pre-tag` |
 
 ## References

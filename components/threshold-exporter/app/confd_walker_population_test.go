@@ -84,8 +84,7 @@ var confdWalkerExclusions = map[string]struct {
 	sites  int
 	reason string
 }{
-	"cmd/da-batchpr/main.go · walkFilesDir":                          {1, "walks the PR payload directory, not conf.d — #1911 ruling ①(a)"},
-	"internal/testutil/problem_kinds.go · RoutingPolicyProblemKinds": {1, "lists pkg/routingpolicy's Go sources for test tables (#2991), not conf.d"},
+	"cmd/da-batchpr/main.go · walkFilesDir": {1, "walks the PR payload directory, not conf.d — #1911 ruling ①(a)"},
 }
 
 // dirEnumeratingFuncs are the stdlib package-level entry points that DIRECTLY
