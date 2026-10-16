@@ -131,3 +131,42 @@ func TestServedValues_DisableEffectsSplitsARoundThatBreaksTheGather(t *testing.T
 		t.Errorf("c: disable = %q, want noop", got)
 	}
 }
+
+// a's own rows cannot be gathered in 01:00–02:00 (two keys, one series), the
+// hour b switches a key off. a's failure is not b's evidence: b is judged
+// apart in that hour, and its `disable` is effective.
+func TestServedValues_DisableEffectsSplitsAPartOfTheDayTheBaselineCannotGather(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_cpu: 75\n",
+		"a.yaml": "tenants:\n  a:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n" +
+			"        - {window: \"01:00-02:00\", value: \"70:critical\"}\n" +
+			"    mysql_connections_critical: 95\n" +
+			"    container_cpu: disable\n", // judged in the same round as b's
+		"b.yaml": "tenants:\n  b:\n    container_cpu:\n      default: \"70\"\n      overrides:\n" +
+			"        - {window: \"01:00-02:00\", value: disable}\n",
+	}, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	if got, _ := disableOf(t, doc, "b", "container_cpu"); got != disableEffective {
+		t.Errorf("b: disable = %q, want effective", got)
+	}
+}
+
+// What is compared is what /metrics serves: without the `disable` the row
+// would be built and dropped (a label named `tenant`), so nothing served
+// changes.
+func TestServedValues_DisableOfARowTheCollectorWouldDropIsNoop(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": defaultsOnly + "  mysql_connections{tenant=\"x\"}: 5\n",
+		"a.yaml":         "tenants:\n  a:\n    mysql_connections{tenant=\"x\"}: disable\n",
+		"b.yaml":         "tenants:\n  b:\n    mysql_connections: 70\n",
+	}, "", "--disable-effects")
+	mustOK(t, code, stderr)
+	if got, _ := disableOf(t, doc, "a", `mysql_connections{tenant="x"}`); got != disableNoop {
+		t.Errorf("a: disable = %q, want noop", got)
+	}
+	if _, ok := doc.Tenants["b"].Dropped[`mysql_connections{tenant="x"}`]; !ok {
+		t.Errorf("control: b's row of that default is dropped: %v", doc.Tenants["b"].Dropped)
+	}
+}

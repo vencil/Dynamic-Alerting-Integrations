@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (drafted 2026-10-16 and approved by the owner).
 
-Revised 2026-10-16 (corrected from measurement while implementing the registry): one more reader class, `policy_engine`; one more layer, a subdirectory's `_defaults.yaml`; the probe checks both directions, for every reader whose output can be compared (decisions 2 and 3).
+Revised 2026-10-16 (corrected from measurement while implementing the registry): one more reader class, `policy_engine`; one more layer, a subdirectory's `_defaults.yaml`; the probe checks both directions, for every reader whose output can be compared (decisions 2 and 3). The cost of the counterfactual recomputation is restated as measured after implementation (decision 8).
 
 ## Summary
 
@@ -206,7 +206,7 @@ When `_state_<filter>` points to a filter the platform has not declared, or the 
 - Reserved keys (`_routing: disable`, `_silent_mode: disable` …) are not exempt and are judged per decision 4.
 - A common cause of `disable_noop` is a misspelled key: in the example above, `mysql_slave_lagg: disable` turns off nothing, and the real `mysql_slave_lag` is still served.
 - The counterfactual recomputation must look at time windows across the whole day (including scheduled values), not a single instant. Otherwise the judgment inside and outside a window would be opposite.
-- Cost: round k removes the k-th `disable` of every tenant together and recomputes the whole tree only once, so the number of rounds equals the most `disable`s any single tenant has, independent of the number of tenants. Each round is one served-values plus a comparison; measured at 1000 tenants, one served-values (with `--schedules` on) takes about 0.5 seconds.
+- Cost: a tenant's threshold rows depend only on its own config and the platform's, so each tenant is recomputed at its own schedule cuts only, and each recomputation holds only that round's tenants; round k removes the k-th `disable` of every tenant together, so the number of rounds equals the most `disable`s any single tenant has, independent of the number of tenants. Measured at 1000 tenants with 963 `disable`s: served-values with `--schedules` takes about 5.6 seconds, and about 6.0 seconds with the counterfactual recomputation added.
 - A `disable` written in a profile or platform file affects every tenant that uses it and is reported on that file.
 - Both are reported as warnings across the whole tree. Those **newly introduced** by this change also appear in the config-diff PR comment, because that is what reviewers actually read ([ADR-037](./037-config-diff-compares-rendered-output.en.md)).
 - The counterfactual recomputation runs only in explain, config-diff and CI, not in tenant-api's write check: the write check has a time limit ([ADR-036](./036-single-parser-effective-config.en.md) §3), and the number of recomputation rounds depends on the config, so it is not fixed.

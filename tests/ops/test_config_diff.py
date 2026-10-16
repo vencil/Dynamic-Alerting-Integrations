@@ -1337,5 +1337,10 @@ class TestDisableWarnings:
         old, new = _pair(tmp_path, {"_defaults.yaml": self._DEFAULTS, "db-a.yaml": tenant},
                          {"_defaults.yaml": self._DEFAULTS.replace("  redis_memory: 70\n", ""),
                           "db-a.yaml": tenant})
-        got = {w["key"]: w for w in _json(_run_cli(old, new, "--format", "json"))["disable_warnings"]}
+        p = _run_cli(old, new, "--format", "json")
+        got = {w["key"]: w for w in _json(p)["disable_warnings"]}
         assert got["redis_memory"]["disable"] == "noop"
+        # 租戶本來就關掉它，送出的值沒變：只有提醒，結束碼 0，報告不說「沒有變更」就了事。
+        assert p.returncode == 0, p.stderr
+        md = _run_cli(old, new).stdout
+        assert "See the `disable` warnings above." in md

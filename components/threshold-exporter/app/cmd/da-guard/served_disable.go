@@ -36,7 +36,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -127,8 +126,11 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
 		if err != nil {
 			return err
 		}
-		if cf.failed && !base.failed && len(set) > 1 {
-			// Which tenant's change broke the Gather is not known: one by one.
+		if (cf.failed || base.failed) && len(set) > 1 {
+			// A Gather that fails fails for every tenant in it: which tenant's
+			// rows broke it is not known, so one by one. (A tenant judged alone
+			// whose own part of the day cannot be gathered either way gives no
+			// evidence there; its other parts of the day decide.)
 			for _, tk := range set {
 				if err := judge([]tenantKey{tk}, m); err != nil {
 					return err
@@ -233,7 +235,8 @@ func withoutDisables(cfg *config.ThresholdConfig, set []tenantKey) *config.Thres
 }
 
 // cutReading is what /metrics serves in one part of the day: per tenant, the
-// rows it keeps and drops, and the series of each kept key. failed: the
+// rows it keeps (a row the collector drops is not served: ADR-038 decision 8
+// compares what is served), and the series of each kept key. failed: the
 // Gather fails, nothing is served for anyone.
 type cutReading struct {
 	failed bool
@@ -251,7 +254,7 @@ func (r *cutReading) fingerprint(tenant string) string {
 // readCut reads cfg (one part of the day) through keyedRowsWith, silently.
 // A Gather failure is a reading (failed), not an error.
 func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (*cutReading, error) {
-	served, dropped, series, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
+	served, _, series, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
 	var ng *notGatherableError
 	if errors.As(err, &ng) {
 		return &cutReading{failed: true}, nil
@@ -260,22 +263,12 @@ func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (*cutRead
 		return nil, err
 	}
 	r := &cutReading{rows: map[string]string{}, series: series}
-	tenants := map[string]bool{}
 	for t := range served {
-		tenants[t] = true
-	}
-	for t := range dropped {
-		tenants[t] = true
-	}
-	for t := range tenants {
 		var parts []string
 		for k, rows := range served[t] {
 			for _, row := range rows {
 				parts = append(parts, "kept\x00"+k+"\x00"+rowOrder(row))
 			}
-		}
-		for k, errs := range dropped[t] {
-			parts = append(parts, fmt.Sprintf("dropped\x00%s\x00%d", k, len(errs)))
 		}
 		sort.Strings(parts)
 		r.rows[t] = strings.Join(parts, "\x01")

@@ -1495,6 +1495,8 @@ def render_markdown(report):
                          "changed with no effect on them (above).")
         else:
             lines.append("No changes detected.")
+        if report.get("disable"):
+            lines[-1] += " See the `disable` warnings above."
         return _cap_for_comment("\n".join(lines))
 
     if report["metric"]:

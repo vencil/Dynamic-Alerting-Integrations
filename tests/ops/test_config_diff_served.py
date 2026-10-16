@@ -316,15 +316,17 @@ def test_custom_alerts_stay_out_of_the_settings_section(tmp_path, da_guard):
 
 
 def test_served_sections_are_what_the_report_prints(tmp_path, da_guard):
-    """`served_sections` 交給報告的三個區段，就是上面各自測過的那三個讀法。"""
+    """`served_sections` 交給報告的區段，就是各自測過的那幾個讀法（`disable` 一節在
+    test_config_diff 的 TestDisableWarnings）。"""
     b, p = _served(tmp_path, da_guard,
                    {"t": {"mysql_connections": "100", "_silent_mode": "warning", "_custom_alerts": [_recipe()]}},
                    {"t": {"mysql_connections": "80", "_silent_mode": "all",
                           "_custom_alerts": [_recipe(threshold="200:critical")]}})
     sections = cd.served_sections(b, p)
     assert sections == {"metric": _metric(b, p), "setting": cd.served_setting_diff(b, p),
-                        "custom_alert": cd.served_custom_alert_diff(b, p)}
-    assert all(sections.values())
+                        "custom_alert": cd.served_custom_alert_diff(b, p),
+                        "disable": cd.served_disable_warnings(b, p)}
+    assert sections["metric"] and sections["setting"] and sections["custom_alert"]
 
 
 def test_every_row_of_a_recipe_counts_not_only_the_first():
