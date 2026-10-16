@@ -1002,7 +1002,7 @@ definitions:
           errors only a typed decode detects, or a declared tenant id that is not
           valid UTF-8). threshold-exporter skips such a file whole, so nothing is
           derived from it: raw_yaml and source_hash are returned (so the file can
-          be opened and fixed), and resolved_thresholds, custom_alerts,
+          be opened and fixed; withheld as RawYAMLWithheld says), and resolved_thresholds, custom_alerts,
           validation_warnings and validation_notices are ABSENT — not empty,
           which would read as "none". Partial writes (PUT .../custom-alerts, the
           batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
@@ -1039,11 +1039,16 @@ definitions:
       raw_yaml_withheld:
         description: |-
           RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
-          empty, when
-          the caller would be shown the masked form but the file cannot be masked
-          with certainty: it is not YAML, holds more than one document, or uses an
-          anchor, alias or merge key (a credential can be placed outside any
-          credential field through one).
+          empty, when the file is not shown to the caller: it declares a tenant
+          the caller may not read (#3050; a conf.d file can declare several, and
+          the file is shown whole or not at all), or its tenants cannot be listed
+          with certainty (not YAML; an alias, a merge key, a non-scalar key or a
+          key tagged other than !!str at the top level or in tenants:) and the
+          caller may not read every tenant;
+          or the caller would be shown the masked form but the file cannot be
+          masked with certainty: it is not YAML, holds more than one document, or
+          uses an anchor, alias or merge key (a credential can be placed outside
+          any credential field through one).
         type: boolean
       resolved_thresholds:
         items:
@@ -1145,6 +1150,14 @@ definitions:
         type: string
       source_hash:
         type: string
+      source_hash_withheld:
+        description: |-
+          SourceHashWithheld is true, with source_hash empty, when the tenant
+          file declares a tenant the caller may not read, or its tenants cannot
+          be listed with certainty and the caller may not read every tenant
+          (#3050): source_hash is the hash of that whole file, and confirms a
+          guess of it offline. merged_hash is this tenant's merge only.
+        type: boolean
       tenant_id:
         type: string
       warnings:
@@ -2037,6 +2050,12 @@ paths:
         source_hash empty (masked: true);
         or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
         key, holds several documents or is not YAML.
+        A conf.d file can declare several tenants: when it declares one the caller may not read (#3050), raw_yaml,
+        custom_alerts and source_hash are empty with raw_yaml_withheld: true for every caller, on the config_error
+        answer too — the file is shown whole or not at all, never re-encoded to the caller's own section. When its
+        tenants cannot be listed with certainty (not YAML; an alias, a merge key, a non-scalar key or a key tagged
+        other than !!str, e.g. !!binary, at the top level or in tenants:), it is shown only to a caller with read permission on all tenants (an RBAC rule with
+        tenants: ["*"] and no org-scope, environments or domains).
       parameters:
       - description: Tenant ID
         in: path
@@ -2128,21 +2147,22 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: 'Conflict: base hash mismatch, pending PR, ambiguous tenant
-            file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE;
-            nothing written), the tenant''s conf.d file is not a regular file (code
-            TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written),
-            or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink
-            (dangling, looping, or with a non-directory in its path) other than the
-            file this write replaces (#2939, ADR-036 §4: the tree after the write
-            is judged; repair it in git; nothing written; unreadable_count always,
-            the entries'' names and reasons in the text and in unreadable only for
-            a caller with write permission on all tenants). The tenant''s own file
-            being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
-            (config_error unreadable or not_regular_file) for every caller: it is
-            never replaced. A tenant file that is itself an unresolvable symlink (dangling,
-            looping, or with a non-directory in its path) does not count: the write
-            replaces it'
+          description: 'Conflict: base hash mismatch (current_source_hash only when
+            GET /tenants/{id} would show the caller that file''s source_hash, #3050),
+            pending PR, ambiguous tenant file, the tenant is already declared by another
+            conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), the tenant''s
+            conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error
+            not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when
+            conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory
+            in its path) other than the file this write replaces (#2939, ADR-036 §4:
+            the tree after the write is judged; repair it in git; nothing written;
+            unreadable_count always, the entries'' names and reasons in the text and
+            in unreadable only for a caller with write permission on all tenants).
+            The tenant''s own file being unreadable in any other way (a failed read,
+            a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file)
+            for every caller: it is never replaced. A tenant file that is itself an
+            unresolvable symlink (dangling, looping, or with a non-directory in its
+            path) does not count: the write replaces it'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2261,6 +2281,10 @@ paths:
         than the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot
         read (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's
         own file cannot be read.
+        422 TENANT_FILE_WITHHELD when the tenant's file also declares a tenant the caller may not read, or its
+        tenants cannot be listed with certainty and the caller lacks read permission on all tenants (#3050): GET
+        withholds that file's custom_alerts and source_hash (raw_yaml_withheld), so no edit can be based on them;
+        nothing written. A 409 CONFLICT carries current_source_hash only for a file GET would show the caller.
       parameters:
       - description: Tenant ID
         in: path
@@ -2316,19 +2340,20 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "422":
-          description: 'Refused by the route generator container (#2903, ADR-036 §4):
-            code GENERATOR_FINDINGS — the conf.d tree with this write applied does
-            not pass `generate-routes --validate --strict`; findings[] lists the generator''s
-            findings, the ones naming this write''s file or tenant first (related:
-            true), pre_existing set when findings_compared_with_base is true (the
-            tree before the write was judged too); a finding unrelated to this write
-            is shown only to a caller with write permission on all tenants (others
-            get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
-            memory / incomplete / too_large (the files the write produces are too
-            large to judge in one request) / invalid_request: the generator gave no
-            verdict; or normalized: git attributes (.gitattributes eol, text or a
-            filter) would commit other bytes than the ones the generator judged. Nothing
-            written'
+          description: 'TENANT_FILE_WITHHELD (#3050: the tenant file declares a tenant
+            the caller may not read; nothing written). Or refused by the route generator
+            container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree
+            with this write applied does not pass `generate-routes --validate --strict`;
+            findings[] lists the generator''s findings, the ones naming this write''s
+            file or tenant first (related: true), pre_existing set when findings_compared_with_base
+            is true (the tree before the write was judged too); a finding unrelated
+            to this write is shown only to a caller with write permission on all tenants
+            (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with
+            reason memory / incomplete / too_large (the files the write produces are
+            too large to judge in one request) / invalid_request: the generator gave
+            no verdict; or normalized: git attributes (.gitattributes eol, text or
+            a filter) would commit other bytes than the ones the generator judged.
+            Nothing written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2381,6 +2406,10 @@ paths:
         with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
         for a proposal over the tenant-document size limit, and 422 MASKED_PREVIEW_UNAVAILABLE when either side is
         not YAML, holds several documents, or uses an anchor, alias or merge key.
+        Every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant the caller may not read
+        (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty (not YAML; an alias,
+        a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:) and the caller lacks read permission on all
+        tenants: the diff would carry that file's lines, and has_diff would confirm a guess of it.
       parameters:
       - description: Tenant ID
         in: path
@@ -2480,6 +2509,10 @@ paths:
         "<masked: write permission required>", with masked: true and
         source_hash and merged_hash empty (either would let a guess of
         a credential be checked offline).
+        source_hash is the hash of the whole tenant file: when that file declares a tenant the caller may not
+        read (#3050), or its tenants cannot be listed with certainty and the caller lacks read permission on all
+        tenants, it is empty with source_hash_withheld: true; and a 500 CONFIG_DECODE_ERROR about such a file
+        carries a fixed text instead of the decoder's message (which quotes the value).
       parameters:
       - description: Tenant ID
         in: path

@@ -27,6 +27,14 @@ const caWriteRBAC = `groups:
     permissions: [read, write]
 `
 
+// caWriteRBACWithZ is caWriteRBAC plus read on db-z, the tenant the
+// shared-file fixtures put next to db-a: GET shows such a file only to a
+// caller who may read every tenant it declares (#3050).
+const caWriteRBACWithZ = caWriteRBAC + `  - name: dba
+    tenants: ["db-z"]
+    permissions: [read]
+`
+
 func putCustomAlerts(t *testing.T, deps *Deps, tenantID, bodyJSON, email string, groups []string) *http.Response {
 	t.Helper()
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+tenantID+"/custom-alerts", "id", tenantID,
