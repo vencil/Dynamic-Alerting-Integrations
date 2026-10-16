@@ -51,6 +51,8 @@ import hashlib
 import io
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -598,3 +600,52 @@ def test_merge_key_histogram_is_pinned() -> None:
 def test_oracle_cap_fails_loudly(monkeypatch) -> None:
     monkeypatch.setattr(sys.modules[__name__], "_ORACLE_NODES", 3)
     assert any("cap" in p for p in _oracle_problems("a: [1, 2, 3, 4]\n"))
+
+
+# The ADR-036 §9 window before step 4 (#2906): files only PyYAML refuses,
+# in a tree with no routing key. da-guard's default run passes such a tree
+# (exit 0, nothing undetermined — the Go half, TestPyYAMLOnlyReject_
+# WindowBeforeStep4 in components/threshold-exporter/app/cmd/da-guard/
+# pyyaml_only_window_test.go, over the same rows and the same tree; the two
+# name lists are checked equal below), so CI must still run the generator. Once step 4 makes
+# the generator read parse-tree's JSON, both halves flip or go.
+PYYAML_ONLY_WINDOW_ROWS = ("duplicate-anchor", "tab-after-colon", "invalid-calendar-timestamp",
+                           "single-quote-escape", "block-header-comment", "flow-plain-ending-colon")
+_WINDOW_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_WINDOW_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
+_GENERATE_ROUTES = REPO_ROOT / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
+_GO_WINDOW_TEST = (REPO_ROOT / "components" / "threshold-exporter" / "app" / "cmd" / "da-guard"
+                   / "pyyaml_only_window_test.go")
+
+
+def _generate_routes_strict(extra: dict | None) -> tuple[int, str]:
+    with tempfile.TemporaryDirectory() as d:
+        confd = Path(d) / "conf.d"
+        confd.mkdir()
+        (confd / "_defaults.yaml").write_text(_WINDOW_DEFAULTS, encoding="utf-8")
+        (confd / "tenant-x.yaml").write_text(_WINDOW_TENANT, encoding="utf-8")
+        for name, doc in (extra or {}).items():
+            (confd / name).write_text(doc, encoding="utf-8")
+        p = subprocess.run([sys.executable, str(_GENERATE_ROUTES), "--config-dir", str(confd),
+                            "--validate", "--strict"], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120, check=False)
+        return p.returncode, p.stdout + p.stderr
+
+
+def test_pyyaml_only_window_is_refused_by_generate_routes() -> None:
+    rows = {r["name"]: r for r in json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["rows"]}
+    code, out = _generate_routes_strict(None)
+    assert code == 0, f"control tree (no corpus file) refused, rc {code}:\n{out}"
+    for name in PYYAML_ONLY_WINDOW_ROWS:
+        r = rows[name]
+        assert (r["category"], r["generator"], r.get("encoding")) == ("pyyaml_only", "rejected", None), name
+        code, out = _generate_routes_strict({r["file"]: r["doc"]})
+        assert code != 0, f"{name}: generate-routes --validate --strict passed (rc 0):\n{out}"
+        assert r["file"] in out, f"{name}: the refusal does not name {r['file']}:\n{out}"
+
+
+def test_pyyaml_only_window_rows_match_the_go_half() -> None:
+    src = _GO_WINDOW_TEST.read_text(encoding="utf-8")
+    m = re.search(r"var pyyamlOnlyWindowRows = \[\]string\{(.*?)\n\}", src, re.DOTALL)
+    assert m, f"{_GO_WINDOW_TEST}: pyyamlOnlyWindowRows not found"
+    assert tuple(re.findall(r'^\s*"([^"]+)",', m.group(1), re.MULTILINE)) == PYYAML_ONLY_WINDOW_ROWS
