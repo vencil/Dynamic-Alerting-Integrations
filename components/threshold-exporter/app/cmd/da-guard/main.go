@@ -933,9 +933,6 @@ func reportParseFailed(errOut io.Writer, files []string) {
 		programName, len(files), strings.Join(files, ", "))
 }
 
-// unreadableEntries is the JSON form of the walk's unreadable entries
-// (served-values, effective and the guard report share it): never nil, so a
-// field that is always present encodes as [] when there is none.
 // rootUnreadable reports whether entries name the --config-dir root itself
 // ("."), whose reason the walk has already printed.
 func rootUnreadable(entries []skippedFile) bool {
@@ -947,6 +944,9 @@ func rootUnreadable(entries []skippedFile) bool {
 	return false
 }
 
+// unreadableEntries is the JSON form of the walk's unreadable entries
+// (served-values, effective and the guard report share it): never nil, so a
+// field that is always present encodes as [] when there is none.
 func unreadableEntries(us []config.UnreadableFile) []skippedFile {
 	out := make([]skippedFile, 0, len(us))
 	for _, u := range us {
