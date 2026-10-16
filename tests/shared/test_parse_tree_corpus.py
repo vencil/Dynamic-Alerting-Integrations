@@ -51,6 +51,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -598,3 +599,54 @@ def test_merge_key_histogram_is_pinned() -> None:
 def test_oracle_cap_fails_loudly(monkeypatch) -> None:
     monkeypatch.setattr(sys.modules[__name__], "_ORACLE_NODES", 3)
     assert any("cap" in p for p in _oracle_problems("a: [1, 2, 3, 4]\n"))
+
+
+
+# The ADR-036 §9 window before step 4 (#2906): files only PyYAML refuses,
+# in a tenant file of a tree with no routing key. da-guard's default run
+# passes such a tree (exit 0, nothing undetermined), so CI must still run the
+# generator. The window is defined by the corpus, not by a hand-copied list:
+# category pyyaml_only and a file name not starting with `_` (an `_` file the
+# generator reads is undetermined evidence by name). The Go half,
+# TestPyYAMLOnlyReject_WindowBeforeStep4 in
+# components/threshold-exporter/app/cmd/da-guard/pyyaml_only_window_test.go,
+# MEASURES the rows da-guard passes and asserts they are exactly this set;
+# this half asserts the generator refuses each of them. Once step 4 makes the
+# generator read parse-tree's JSON, both halves flip or go.
+_WINDOW_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_WINDOW_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
+_GENERATE_ROUTES = REPO_ROOT / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
+
+
+def in_pyyaml_only_window(row: dict) -> bool:
+    """The corpus's definition of the window (same predicate as the Go half)."""
+    return row["category"] == "pyyaml_only" and not row["file"].startswith("_")
+
+
+def _generate_routes_strict(extra: dict[str, bytes] | None) -> tuple[int, str]:
+    with tempfile.TemporaryDirectory() as d:
+        confd = Path(d) / "conf.d"
+        confd.mkdir()
+        (confd / "_defaults.yaml").write_text(_WINDOW_DEFAULTS, encoding="utf-8")
+        (confd / "tenant-x.yaml").write_text(_WINDOW_TENANT, encoding="utf-8")
+        for name, data in (extra or {}).items():
+            (confd / name).write_bytes(data)
+        p = subprocess.run([sys.executable, str(_GENERATE_ROUTES), "--config-dir", str(confd),
+                            "--validate", "--strict"], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120, check=False)
+        return p.returncode, p.stdout + p.stderr
+
+
+def test_pyyaml_only_window_is_refused_by_generate_routes() -> None:
+    rows = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["rows"]
+    window = [r for r in rows if in_pyyaml_only_window(r)]
+    # Known members, so an emptied or renamed window cannot pass vacuously.
+    assert {"duplicate-anchor", "tab-after-colon"} <= {r["name"] for r in window}
+    code, out = _generate_routes_strict(None)
+    assert code == 0, f"control tree (no corpus file) refused, rc {code}:\n{out}"
+    for r in window:
+        assert r["generator"] == "rejected", r["name"]
+        assert r["file"] not in ("_defaults.yaml", "tenant-x.yaml"), r["name"]
+        code, out = _generate_routes_strict({r["file"]: _encode(r["doc"], r.get("encoding"))})
+        assert code != 0, f"{r['name']}: generate-routes --validate --strict passed (rc 0):\n{out}"
+        assert r["file"] in out, f"{r['name']}: the refusal does not name {r['file']}:\n{out}"

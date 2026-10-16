@@ -27,6 +27,7 @@ updated_at: 2026-10-16
 - **2026-10-15 修訂（owner 決定）**：從 git 物件取檔時，不是一般檔的項目（symlink、gitlink 等）一律判為 `not_regular_file`（§3）。
 - **2026-10-15 修訂（owner 核可）**：批次 patch 與 custom-alerts 的合併改以合併後的不變式把關：編輯以外的部分，合併結果的節點寫出來要與原檔逐一相同（§4）。
 - **2026-10-16 修訂（owner 核可）**：「未判定」的範圍擴大到樹上有只由產生器判的 `_` 鍵（§9），配合 [ADR-038](./038-unread-keys-judged-by-readers.md)。
+- **2026-10-16 修訂（owner 核可）**：`parse-tree` 判為讀不了、exporter 照讀的檔列為未判定證據（exit 4），不回 exit 3；寫明步驟 4 之前「只有 PyYAML 拒收」的檔通過 da-guard 的已知窗口，並在步驟 4 完成時重評 exit 4（§9）。
 - 設計與修訂都經過對抗審查（由不同模型擔任）。
 
 ## 摘要
@@ -148,7 +149,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 
 **外層**：`schema` 為 `"da-guard.parse-tree/v1"`，另帶 `da_guard_version`。讀取端遇到其他 `schema` 值，整份當成不可用。新增欄位不換 `schema` 值，改變讀取端依賴的形狀才換，與 `served-values`／`effective` 的慣例相同。
 
-這些「讀不了」是 `parse-tree` 自己的規則。exporter 讀閾值的方式不變，所以同一份檔可能 exporter 照讀、產生器拒收；這時產生器與 CI 會擋下，不會放行。
+這些「讀不了」是 `parse-tree` 自己的規則。exporter 讀閾值的方式不變，所以同一份檔可能 exporter 照讀、產生器拒收（步驟 4 起，產生器讀的是 `parse-tree` 的結果；步驟 4 之前的產生器以 PyYAML 讀，不一定拒收這類檔，見 §9）；這時產生器與 CI 會擋下，不會放行。
 
 **「讀不了」是封閉清單**：只有上面列的 13 種情況算讀不了。它們是步驟 4 之後仍在的讀取端可能讀出不同意思的寫法；那時的讀取端是 exporter（以 yaml.v3 解碼進有型別的結構）、`parse-tree`、以 PyYAML 產生文字的寫入工具（寫入前必須通過 `parse-tree` 的單檔確認），以及 portal 以 js-yaml 做的預覽（不作為放行依據）。清單以外的一律照 yaml.v3 讀，包括今天產生器只因 PyYAML 的限制而拒收的檔，例如：
 
@@ -412,7 +413,9 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
   - 報告（文字與 JSON）明示路由與 policy「未判定」，並回 exit code 4。這樣「沒判」和「判過、沒問題」可以分得開。
   - 只在樹上有只能由產生器判定的內容時才回 4：路由、policy，或只由產生器讀、以及拼錯而只有產生器會報的 `_` 鍵（判法見 [ADR-038](./038-unread-keys-judged-by-readers.md)）。沒有這類內容的樹照常回 0。
   - 同時符合多個 exit code 時，優先順序是 3 > 1 > 4（3 是有檔讀不了，1 是有錯誤等級的 finding；3 優先於 1 與現在相同）。
-  - exit 3 只涵蓋 exporter 會丟掉或讀不到的檔。步驟 3 刪掉「產生器會因重複鍵整份拒收」這項 Go 端檢查後，da-guard 不再為此回 3；`parse-tree` 判為讀不了的檔由產生器那一側回報（步驟 4 起），不由 da-guard 的預設執行回報。
+  - exit 3 的範圍以 [CLI 參考的 guard 一節](../cli-reference.md#guard)為唯一定義：exporter 載入時整份丟掉的檔、合併時解碼失敗的檔（`_defaults.yaml` 鏈或租戶檔），以及讀不到的檔、子目錄或路徑。`parse-tree` 判為讀不了、exporter 卻照讀的檔不以 exit 3 回報，而是列為未判定證據（`generator_unreadable`，exit 4），交給產生器判。步驟 4 之前的產生器（PyYAML）不一定拒收這類檔：固定語料裡就有它照讀的列，例如檔案中段的 BOM、`!!binary` 這類型別標記；但有些它會整份拒收，例如因重複鍵。步驟 4 起產生器改讀 `parse-tree` 的 JSON，這類檔一律由產生器拒收。
+  - **步驟 4 之前的已知窗口**：產生器在步驟 4 之前仍用 PyYAML 讀檔。今天只有 PyYAML 拒收的寫法，放在沒有路由鍵的租戶檔裡時（以固定語料 `tests/shared/parse_tree_corpus.json` 裡分類為 `pyyaml_only`、檔名不以 `_` 開頭的那些列為準，例如同一個錨點名稱定義兩次、以 TAB 分隔、不存在的日期 `2001-13-45`、block 純量標頭後緊接 `#` 的 `|#`），yaml.v3 讀得了，`parse-tree` 照常讀出，da-guard 回 0；產生器卻整份拒收這個檔。所以步驟 4 之前，CI 不能只跑 da-guard，必須搭配 `da-tools generate-routes --validate --strict`（下面的遷移方式）。步驟 4 讓產生器改讀 `parse-tree` 的 JSON 後，產生器與 da-guard 讀到同樣的內容，這個窗口就消失。
+  - 步驟 4 完成時，重新評估 exit 4 是否仍有存在必要：屆時 da-guard 回 4 的條件仍是在預測產生器會不會判；如果真實的樹幾乎都回 4，這個條件就沒有資訊量。
   - 不另設旗標讓 CI 宣告「路由已由產生器判過」：`da-tools init` 產生的客戶 CI 範本本來就跑 `generate-routes --validate --strict`，不會單獨跑 da-guard。
   - 遷移方式：在 CI 原本跑 da-guard 的地方，加一步 `da-tools generate-routes --validate --strict`。
   - `--required-fields _routing.*` 會直接報錯，不會悄悄失效。
