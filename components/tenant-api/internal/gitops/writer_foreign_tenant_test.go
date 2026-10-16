@@ -465,3 +465,31 @@ func TestValidateNamesAnotherTenantOnlyWhenShown(t *testing.T) {
 		t.Errorf("shown: errs = %q, want the other tenant's message", errs)
 	}
 }
+
+// #3039: DiscloseKeyValidation asks names only about a tenant with something
+// to say. Each question is an RBAC org-read check that logs a deny and counts
+// it into the scope_would_deny soak count the enforce flip is judged by, so a
+// question about a quiet tenant counts a deny no message depended on — one
+// per tenant in a large flat file, under the writer lock.
+func TestDiscloseKeyValidationAsksOnlyAboutTenantsWithMessages(t *testing.T) {
+	t.Parallel()
+	kv := cfg.KeyValidationByTenant{Tenants: map[string]cfg.KeyValidation{
+		"db-a":   {Errors: []string{"own"}},
+		"quiet":  {},
+		"loud":   {Errors: []string{"tenant=loud: bad"}},
+		"notice": {Notices: []string{"tenant=notice: renamed"}},
+	}}
+	var asked []string
+	errs, notices := DiscloseKeyValidation("db-a", kv, func(id string) bool {
+		asked = append(asked, id)
+		return false
+	})
+	sort.Strings(asked)
+	if strings.Join(asked, ",") != "loud,notice" {
+		t.Errorf("names asked about %v, want only the tenants with messages [loud notice]", asked)
+	}
+	// The answer itself is unchanged by the order of the checks.
+	if strings.Join(errs, "|") != "own|"+msgOtherPlaceErrors || strings.Join(notices, "|") != msgOtherPlaceNotices {
+		t.Errorf("errs=%q notices=%q", errs, notices)
+	}
+}

@@ -166,12 +166,17 @@ func DiscloseKeyValidation(tenantID string, kv cfg.KeyValidationByTenant, names 
 	var hiddenErrs, hiddenNotices bool
 	for _, tid := range others {
 		v := kv.Tenants[tid]
+		// Before Shown, not after: each Shown is an RBAC org-read check that
+		// logs and counts a deny (the scope_would_deny soak count the enforce
+		// flip reads), so asking about a tenant with nothing to say would
+		// count a deny no message depended on — O(tenants) of them, under
+		// the writer lock, for a large flat file.
+		if len(v.Errors)+len(v.Notices) == 0 {
+			continue
+		}
 		if names.Shown(tid) {
 			errs = append(errs, v.Errors...)
 			notices = append(notices, v.Notices...)
-			continue
-		}
-		if len(v.Errors)+len(v.Notices) == 0 {
 			continue
 		}
 		hiddenErrs = hiddenErrs || len(v.Errors) > 0
