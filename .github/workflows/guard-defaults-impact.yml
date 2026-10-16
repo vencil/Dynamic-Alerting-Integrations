@@ -14,6 +14,17 @@
 #   - guard exit 0 → workflow success, comment posted with "no findings".
 #   - guard exit 1 → workflow FAIL; comment lists errors.
 #   - guard exit 2 → workflow FAIL (caller error); comment + log link.
+#   - guard exit 3 → workflow FAIL; files the exporter cannot decode or read.
+#   - guard exit 4 → NOT a failure here (#2904, ADR-036 §9 step 2): da-guard
+#     no longer judges routing or domain policy and says so with 4 ("the tree
+#     holds what only the route generator judges"). This workflow runs that
+#     generator — `generate_alertmanager_routes.py --validate --strict`, once
+#     per conf.d tree a da-guard run covered, whole tree (it judges the whole
+#     tree) — in the same step, so WORST counts a 4 as 0 and the generator's
+#     own exit is the routing verdict: non-zero → workflow FAIL, its output in
+#     the PR comment under the tree's heading. ⛔ Drop the generator run and a
+#     4 must count as a failure again: otherwise the platform files' routing
+#     checks vanish silently.
 #
 # ⚠️ "FAIL" is not "blocks merge", which is what these lines used to say.
 # `Defaults Impact Guard` is not among the required status checks
@@ -131,14 +142,21 @@ on:
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"
-      # #2280: the routing checks resolve each tenant's routing and judge the
-      # domain policies through pkg/routingpolicy, which reads the conf.d
-      # root's platform files through RootPlatformFiles. A PR changing only
-      # them changes every guard verdict on routing.
+      # #2904: da-guard no longer judges routing or domain policy, but its
+      # default check still calls pkg/routingpolicy (MergeShapeError, for the
+      # files the route generator refuses whole: exit 3) and reads the conf.d
+      # root's platform files through RootPlatformFiles, until ADR-036 step 3.
       - "components/threshold-exporter/app/pkg/routingpolicy/**"
-      # #2295: the receiver contract the routing checks judge every receiver by.
+      # #2295: the receiver contract, still built into da-guard until ADR-036 step 3.
       - "components/threshold-exporter/app/pkg/receiverspec/**"
       - "components/threshold-exporter/app/pkg/config/root_platform_files.go"
+      # #2904: the route generator this workflow runs beside da-guard, what it
+      # imports, and the constraints its PyYAML is installed from. Over-trigger
+      # on purpose (every `_lib_*`), never under.
+      - "scripts/tools/ops/generate_alertmanager_routes.py"
+      - "scripts/tools/ops/_grar_*.py"
+      - "scripts/tools/_lib_*.py"
+      - "requirements/ci-constraints.txt"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:
     inputs:
@@ -186,6 +204,17 @@ jobs:
           go-version-file: components/threshold-exporter/app/go.mod
           cache: true
           cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      # #2904: the route generator judges routing and domain policy, which
+      # da-guard no longer does; same interpreter and PyYAML pin as
+      # validate.yaml's generate-routes step.
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install route generator dependencies
+        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       - name: Build da-guard
         run: |
@@ -394,6 +423,11 @@ jobs:
           REPORT="$RUNNER_TEMP/guard-report.md"
           : > "$REPORT"
           WORST=0
+          # #2904: the route generator's worst exit over the trees it judged,
+          # and the trees it already judged (it reads the whole tree, so one
+          # run per --config-dir however many scopes resolve to it).
+          GEN_WORST=0
+          declare -A GEN_DONE=()
 
           # The PR's merge-base tree, for --baseline-config-dir (#2043 review):
           # since the cap is read from the tree under test, a PR that raises
@@ -474,6 +508,38 @@ jobs:
               echo "⚠️ **NOT VALIDATED** — da-guard exited $rc without producing a report for this tree." >> "$REPORT"
             fi
             echo >> "$REPORT"
+            # #2904: the generator, once per tree. Its exit is the routing
+            # verdict; its output goes under this tree's heading.
+            if [ -z "${GEN_DONE[$config_dir]:-}" ]; then
+              GEN_DONE[$config_dir]=1
+              local policy=() gen_out gen_rc
+              if [ -f .github/custom-rule-policy.yaml ]; then
+                policy=(--policy .github/custom-rule-policy.yaml)
+              fi
+              gen_out="$RUNNER_TEMP/generator.log"
+              set +e
+              python scripts/tools/ops/generate_alertmanager_routes.py \
+                  --config-dir "$config_dir" \
+                  --validate \
+                  --strict \
+                  "${policy[@]}" > "$gen_out" 2>&1
+              gen_rc=$?
+              set -e
+              cat "$gen_out"
+              echo "#### route generator (\`generate-routes --validate --strict\`, whole \`$config_dir\`) — exit $gen_rc" >> "$REPORT"
+              echo >> "$REPORT"
+              echo '```' >> "$REPORT"
+              tail -n 100 "$gen_out" >> "$REPORT"
+              echo '```' >> "$REPORT"
+              echo >> "$REPORT"
+              if [ "$gen_rc" -ne 0 ]; then
+                echo "::error::route generator (generate-routes --validate --strict) exited $gen_rc on $config_dir — see the PR comment"
+              fi
+              if [ "$gen_rc" -gt "$GEN_WORST" ]; then GEN_WORST="$gen_rc"; fi
+            fi
+            # ⛔ 4 counts as 0 ONLY because the generator ran for this tree
+            # just above (#2904); see the Exit-code policy at the top.
+            if [ "$rc" -eq 4 ]; then rc=0; fi
             # `if` rather than `a && b` — under the default `bash -e` a false
             # test as a standalone statement would abort the step.
             if [ "$rc" -gt "$WORST" ]; then WORST="$rc"; fi
@@ -559,6 +625,7 @@ jobs:
             run_one "${CONF_D}" "."
           fi
 
+          echo "generator_exit=$GEN_WORST" >> "$GITHUB_OUTPUT"
           echo "exit=$WORST" >> "$GITHUB_OUTPUT"
           # Always continue so the comment-posting step runs even when the
           # guard returned 1 (errors). The "Fail if guard found errors" step
@@ -662,7 +729,27 @@ jobs:
         if: ${{ !cancelled() && steps.detect.outputs.conf_d != '' }}
         env:
           GUARD_EXIT: ${{ steps.guard.outputs.exit }}
+          GENERATOR_EXIT: ${{ steps.guard.outputs.generator_exit }}
         run: |
+          # #2904: the route generator's verdict first — da-guard's 4 was
+          # counted as 0 only because the generator ran, so a generator that
+          # did not report is a routing verdict nobody gave. Its output is
+          # written just before `exit`, so an empty one beside a non-empty
+          # GUARD_EXIT is that case; with both empty the da-guard branch below
+          # names the cause.
+          if [ -n "$GUARD_EXIT" ]; then
+            case "$GENERATOR_EXIT" in
+              0) ;;
+              "")
+                echo "::error::the route generator produced no exit code — routing and domain policy were NOT judged (da-guard no longer judges them, #2904)."
+                exit 1
+                ;;
+              *)
+                echo "::error::route generator (generate-routes --validate --strict) exited $GENERATOR_EXIT — routing or domain policy errors. See the PR comment, under each tree's 'route generator' heading."
+                exit 1
+                ;;
+            esac
+          fi
           case "$GUARD_EXIT" in
             0)
               echo "✅ Dangling Defaults Guard: clean."
@@ -685,6 +772,12 @@ jobs:
               # over trees, so another tree's 1 or 2 is in the PR comment's
               # per-tree "exit N" headings.
               echo "::error::da-guard exit 3: config files the exporter cannot decode or cannot read (e.g. a dangling symlink). The PR comment lists them under 'Files the exporter cannot parse' / 'Files the exporter cannot read' — fix them and push again. If this run also printed other ::error:: lines (e.g. from guard_defaults_scopes.py, the producer), look at those first: WORST keeps only the highest code."
+              exit 1
+              ;;
+            4)
+              # The Run step counts a 4 as 0 once the generator has run for
+              # the tree, so a 4 here means it did not (#2904).
+              echo "::error::da-guard exit 4 reached the verdict: routing or domain policy that the route generator was not run on. Nothing judged it."
               exit 1
               ;;
             *)

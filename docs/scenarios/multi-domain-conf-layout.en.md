@@ -136,8 +136,8 @@ tenants:
 
 > ✅ **The routing plane follows the same directory hierarchy**
 > ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)):
-> `generate-routes` and da-guard read the whole tree, so a tenant at any depth gets a
-> route. `_routing_defaults` at the **top level** of each level's `_defaults.yaml` merges
+> `generate-routes` reads the whole tree, so a tenant at any depth gets a
+> route (da-guard no longer judges routing since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904); it exits 4 when the tree holds any). `_routing_defaults` at the **top level** of each level's `_defaults.yaml` merges
 > shallowly per top-level key (deeper level wins; `null` follows ADR-017's existing
 > per-field rules, and a subdirectory writing `receiver` / `overrides` as `null` is a
 > blocking error); `_routing_enforced` at the root only; `_routing_profiles.yaml` and

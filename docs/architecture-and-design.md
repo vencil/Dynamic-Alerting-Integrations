@@ -171,7 +171,7 @@ graph LR
         PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
         PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
         PR1 -.->|refresh --base-merged| PR2
-        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Routing / Cardinality / Redundant-override)"]
+        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
         PR2 -->|da-guard CI gate| LINT
     end
 
@@ -189,7 +189,7 @@ graph LR
 **全週期治理特色：**
 - **零 vendor lock-in**：遷移工具為每條規則保留「可回 Prom」可移植標記，遷入 VictoriaMetrics 後仍能識別可回 Prometheus 的子集。
 - **GitOps PR 切塊的正確順序**：Base PR 先 merge → 租戶 override PR 自動 rebase；parser 修正可針對特定規則細粒度重生 patch PR，不必整批重跑。
-- **CI 自動把關**：四層檢查（Schema / Routing / Cardinality / 冗餘 override）以 sticky PR comment 回報（同一則留言原地更新、不洗版）+ artifact 保留。
+- **CI 自動把關**：da-guard 的 Schema / Cardinality / 冗餘 override 檢查，加上同一個 workflow 跑的 route generator 判 Routing（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起 da-guard 不判路由），以 sticky PR comment 回報（同一則留言原地更新、不洗版）+ artifact 保留。
 - **三條交付路徑**：Docker image / 多架構 static binary / air-gapped tar，每條路徑 cosign keyless 簽章 + SBOM（SPDX / CycloneDX）；客戶 `make verify-release` 一鍵驗 supply-chain。
 
 ---

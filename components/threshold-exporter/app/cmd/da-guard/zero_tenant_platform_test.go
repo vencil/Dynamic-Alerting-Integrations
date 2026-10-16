@@ -1,11 +1,14 @@
 package main
 
-// #2991: what the guard judges without a tenant — platform-file problems
-// (guard.CheckInput.PlatformProblems, read from the whole tree at
-// --config-dir), the `_routing_enforced` route, the defaults carriers — is
-// reported when the scope has no tenant, as it is when the scope has some.
-// The "no tenants → vacuously safe" exit 0 holds only for a run with no
-// finding.
+// #2991: what the guard judges without a tenant — the defaults carriers, the
+// /metrics gather verdict — is reported when the scope has no tenant, as it
+// is when the scope has some. The "no tenants → vacuously safe" exit 0 holds
+// only for a run with no finding and nothing undetermined.
+//
+// #2904: the routing-tree problems (one row per routingpolicy Problem kind,
+// read from the whole tree at --config-dir) and the `_routing_enforced`
+// route are no longer judged by the default check; on a scope with no tenant
+// each of those trees is undetermined (exit 4), never the vacuous 0.
 
 import (
 	"path/filepath"
@@ -20,9 +23,10 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
-// zeroTenantPlatformCase is one routingpolicy Problem kind on a scope with
-// no tenant: the files of the conf.d tree, the --scope (relative to it; ""
-// = the whole tree) and the finding the run must carry.
+// zeroTenantPlatformCase is one tree on a scope with no tenant: the files of
+// the conf.d tree, the --scope (relative to it; "" = the whole tree) and the
+// finding the run must carry — for a routing row, the finding the CLI
+// carried before #2904, kept as the row's record.
 type zeroTenantPlatformCase struct {
 	files   map[string]string
 	scope   string
@@ -122,18 +126,11 @@ func TestGuard_ZeroTenantPlatformCasesCoverEveryKind(t *testing.T) {
 	}
 }
 
-// zeroTenantTreeLevelCases: the other findings judged without a tenant —
-// the `_routing_enforced` route the generator renders whatever the tenants
-// (#2503) and the defaults carriers (#2386). Not a list the code reads:
-// the guard runs every check on zero tenants, these rows only pin that.
+// zeroTenantTreeLevelCases: the findings judged without a tenant — the
+// defaults carriers (#2386) and the /metrics gather verdict. Not a list the
+// code reads: the guard runs every check on zero tenants, these rows only
+// pin that.
 var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
-	// generate_alertmanager_routes.py --validate --strict on this tree:
-	// "ERROR: _routing_enforced: group_by[1] is int 5, not a string", rc 1.
-	"enforced group_by, single shape": {
-		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
-			"\n  group_by: [\"alertname\", 5]\n"},
-		finding: findingkind.FindingRoutingGroupByInvalid,
-	},
 	"root defaults without the defaults: mapping": {
 		files:   map[string]string{"_defaults.yaml": "cpu: 80\n"},
 		finding: findingkind.FindingRootDefaultsUnwrapped,
@@ -170,31 +167,16 @@ const (
 // when every finding of it judges a tenant in scope (none can come out of a
 // scope with no tenant), kindTreeLevel when some finding of it is judged
 // without one. TestGuard_EveryFindingKindIsClassifiedForZeroTenants holds
-// it to findingkind.All() and holds every kindTreeLevel kind to a row of
-// zeroTenantPlatformCases / zeroTenantTreeLevelCases — so a new kind is red
-// until someone says which it is, and a tree-level one until a zero-tenant
-// run is shown to report it.
+// it to findingkind.All() — the PlaneRouting kinds excepted, which the CLI
+// reports on no tree since #2904 — and holds every kindTreeLevel kind to a
+// row of zeroTenantTreeLevelCases — so a new kind is red until someone says
+// which it is, and a tree-level one until a zero-tenant run is shown to
+// report it.
 var zeroTenantKindClass = map[string]string{
-	// Judged per tenant in EffectiveConfigs / RoutingByTenant / the
-	// per-tenant maps buildCheckInput fills from scoped.Tenants.
+	// Judged per tenant in EffectiveConfigs / the per-tenant maps
+	// buildCheckInput fills from scoped.Tenants.
 	"missing_required":              kindNeedsTenant,
 	"redundant_override":            kindNeedsTenant,
-	"unknown_receiver_type":         kindNeedsTenant,
-	"missing_receiver_field":        kindNeedsTenant,
-	"conflicting_receiver_field":    kindNeedsTenant,
-	"invalid_receiver_field":        kindNeedsTenant,
-	"empty_override_matcher":        kindNeedsTenant,
-	"conflicting_override_matcher":  kindNeedsTenant,
-	"duplicate_override_matcher":    kindNeedsTenant,
-	"redundant_override_receiver":   kindNeedsTenant,
-	"invalid_route_entry":           kindNeedsTenant,
-	"routing_value_not_string":      kindNeedsTenant,
-	"domain_policy_violation":       kindNeedsTenant,
-	"critical_escalation_missing":   kindNeedsTenant,
-	"critical_escalation_leak":      kindNeedsTenant,
-	"unknown_routing_profile":       kindNeedsTenant,
-	"routing_not_mapping":           kindNeedsTenant,
-	"invalid_tenant_id":             kindNeedsTenant,
 	"cardinality_exceeded":          kindNeedsTenant,
 	"cardinality_warning":           kindNeedsTenant,
 	"root_default_null_undeclared":  kindNeedsTenant,
@@ -207,21 +189,6 @@ var zeroTenantKindClass = map[string]string{
 	"value_not_served":              kindNeedsTenant,
 	"custom_alert_duplicate_series": kindNeedsTenant,
 
-	// PlatformProblems (whole tree at --config-dir).
-	"domain_policy_unusable":           kindTreeLevel,
-	"routing_profiles_unusable":        kindTreeLevel,
-	"routing_defaults_routes_ignored":  kindTreeLevel,
-	"routing_in_unread_location":       kindTreeLevel,
-	"routing_key_ignored":              kindTreeLevel, // also per tenant
-	"routing_defaults_not_mapping":     kindTreeLevel,
-	"routing_enforced_below_root":      kindTreeLevel,
-	"routing_enforced_match_invalid":   kindTreeLevel,
-	"routing_defaults_null_below_root": kindTreeLevel,
-	"routing_profile_duplicate":        kindTreeLevel,
-	"duplicate_tenant":                 kindTreeLevel,
-	"domain_policy_out_of_scope":       kindTreeLevel,
-	// The single-shape `_routing_enforced` route (also per tenant).
-	"routing_group_by_invalid": kindTreeLevel,
 	// The defaults carriers (DefaultsFiles).
 	"root_defaults_unwrapped":    kindTreeLevel,
 	"defaults_toplevel_ignored":  kindTreeLevel,
@@ -233,18 +200,22 @@ var zeroTenantKindClass = map[string]string{
 func TestGuard_EveryFindingKindIsClassifiedForZeroTenants(t *testing.T) {
 	t.Parallel()
 	covered := map[string]bool{}
-	for _, table := range []map[string]zeroTenantPlatformCase{zeroTenantPlatformCases, zeroTenantTreeLevelCases} {
-		for name, tc := range table {
-			covered[tc.finding.String()] = true
-			if zeroTenantKindClass[tc.finding.String()] != kindTreeLevel {
-				t.Errorf("row %q reports %q, which zeroTenantKindClass does not call %q", name, tc.finding, kindTreeLevel)
-			}
+	for name, tc := range zeroTenantTreeLevelCases {
+		covered[tc.finding.String()] = true
+		if zeroTenantKindClass[tc.finding.String()] != kindTreeLevel {
+			t.Errorf("row %q reports %q, which zeroTenantKindClass does not call %q", name, tc.finding, kindTreeLevel)
 		}
 	}
 	registered := map[string]bool{}
 	for _, e := range findingkind.All() {
 		name := e.Kind.String()
 		registered[name] = true
+		if e.Kind.Plane() == findingkind.PlaneRouting {
+			if _, listed := zeroTenantKindClass[name]; listed {
+				t.Errorf("%q is a routing-plane kind, which the CLI reports on no tree (#2904): drop it from zeroTenantKindClass", name)
+			}
+			continue
+		}
 		switch zeroTenantKindClass[name] {
 		case kindNeedsTenant:
 		case kindTreeLevel:
@@ -311,12 +282,39 @@ func assertZeroTenantFinding(t *testing.T, tc zeroTenantPlatformCase) {
 	}
 }
 
-func TestGuard_PlatformProblemOnZeroTenantScopeFails(t *testing.T) {
+// zeroTenantRoutingCases are the other routing trees with no tenant in
+// scope: the single-shape `_routing_enforced` route the generator renders
+// whatever the tenants (#2503; generate_alertmanager_routes.py --validate
+// --strict: "ERROR: _routing_enforced: group_by[1] is int 5, not a string",
+// rc 1).
+var zeroTenantRoutingCases = map[string]zeroTenantPlatformCase{
+	"enforced group_by, single shape": {
+		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
+			"\n  group_by: [\"alertname\", 5]\n"},
+		finding: findingkind.FindingRoutingGroupByInvalid,
+	},
+}
+
+// #2904 (absorbs #2991): every routing-tree problem on a scope with no
+// tenant is undetermined — exit 4, no finding, the evidence listed — where
+// the run used to report it (exit 1) and must never be the vacuous 0.
+func TestGuard_RoutingProblemOnZeroTenantScopeIsUndetermined(t *testing.T) {
 	t.Parallel()
-	for kind, tc := range zeroTenantPlatformCases {
-		t.Run(kind, func(t *testing.T) {
+	all := map[string]zeroTenantPlatformCase{}
+	for k, v := range zeroTenantPlatformCases {
+		all["platform/"+k] = v
+	}
+	for k, v := range zeroTenantRoutingCases {
+		all["routing/"+k] = v
+	}
+	for name, tc := range all {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			assertZeroTenantFinding(t, tc)
+			got := runJudged(t, tc.files, tc.scope)
+			if got.code != exitUndetermined || len(got.findings) != 0 || len(got.undetermined) == 0 {
+				t.Errorf("exit %d, findings %v, undetermined %v; want 4, none, some (was %s)\nstderr=%s",
+					got.code, got.findings, got.undetermined, tc.finding, got.stderr)
+			}
 		})
 	}
 }
@@ -339,6 +337,9 @@ func TestGuard_ZeroTenantRunReportsWhatATenantRunDoes(t *testing.T) {
 	all := map[string]zeroTenantPlatformCase{}
 	for k, v := range zeroTenantPlatformCases {
 		all["platform/"+k] = v
+	}
+	for k, v := range zeroTenantRoutingCases {
+		all["routing/"+k] = v
 	}
 	for k, v := range zeroTenantTreeLevelCases {
 		all["tree/"+k] = v
@@ -366,59 +367,64 @@ func TestGuard_ZeroTenantRunReportsWhatATenantRunDoes(t *testing.T) {
 }
 
 // The `{{tenant}}` shape of `_routing_enforced` renders one route per
-// tenant, so with no tenant there is no route to judge: the generator
-// (--validate --strict) prints no group_by error for it, and neither does
-// da-guard — the vacuous 0. With a tenant, both report it.
-func TestGuard_EnforcedTenantShapeGroupBy_FollowsTheTenants(t *testing.T) {
+// tenant: before #2904 the CLI judged its group_by only with a tenant (exit 0
+// without one, 1 with one), as the generator does. Since #2904 it judges
+// neither: both runs are undetermined, with no finding.
+func TestGuard_EnforcedTenantShapeGroupBy_IsUndetermined(t *testing.T) {
 	t.Parallel()
 	tc := zeroTenantPlatformCase{
 		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n" +
 			"  receiver: {type: webhook, url: \"https://noc.example.com/{{tenant}}\"}\n" +
 			"  group_by: [\"alertname\", 5]\n"},
 	}
-	code, fs := guardFindingsOf(t, tc.files)
-	if code != exitOK || len(fs) != 0 {
-		t.Errorf("no tenant: exit %d, findings %+v; want 0 and none", code, fs)
-	}
-	code, fs = guardFindingsOf(t, tc.withCleanTenant())
-	n := 0
-	for _, f := range fs {
-		if f.Kind == findingkind.FindingRoutingGroupByInvalid.String() {
-			n++
+	for label, files := range map[string]map[string]string{"no tenant": tc.files, "one tenant": tc.withCleanTenant()} {
+		if got := runJudged(t, files, ""); got.code != exitUndetermined || len(got.findings) != 0 {
+			t.Errorf("%s: exit %d, findings %v; want 4 and none", label, got.code, got.findings)
 		}
 	}
-	if code != exitFindings || n != 1 {
-		t.Errorf("one tenant: exit %d, findings %+v; want 1 and one %s", code, fs, findingkind.FindingRoutingGroupByInvalid)
-	}
 }
 
-// The brand-new domain skeleton stays vacuously safe: platform files the
-// routing checks can use, no tenant — exit 0, the empty report.
+// The brand-new domain skeleton stays vacuously safe when it holds no
+// routing: no tenant — exit 0, the empty report. With routing in it
+// (`_routing_defaults`, a routing profiles file) it is undetermined since
+// #2904: exit 4, the evidence listed, not called safe.
 func TestGuard_CleanSkeletonWithNoTenantIsVacuous(t *testing.T) {
 	t.Parallel()
-	tmp := t.TempDir()
-	testutil.WriteTree(t, tmp, map[string]string{
-		"conf.d/_defaults.yaml":         "defaults:\n  cpu: 80\n_routing_defaults:\n  receiver: " + webhookReceiver + "\n",
-		"conf.d/_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver: " + webhookReceiver + "\n",
-		"conf.d/team/_defaults.yaml":    "defaults:\n  cpu: 70\n",
-	})
-	code, stdout, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"))
-	if code != exitOK || !strings.Contains(stdout, "vacuously safe") {
-		t.Errorf("exit %d, stdout %q, stderr %q: want exit 0 and the vacuous report", code, stdout, stderr)
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		code  int
+	}{
+		{"no routing", map[string]string{
+			"conf.d/_defaults.yaml":      "defaults:\n  cpu: 80\n",
+			"conf.d/team/_defaults.yaml": "defaults:\n  cpu: 70\n",
+		}, exitOK},
+		{"routing", map[string]string{
+			"conf.d/_defaults.yaml":         "defaults:\n  cpu: 80\n_routing_defaults:\n  receiver: " + webhookReceiver + "\n",
+			"conf.d/_routing_profiles.yaml": "routing_profiles:\n  p1:\n    receiver: " + webhookReceiver + "\n",
+			"conf.d/team/_defaults.yaml":    "defaults:\n  cpu: 70\n",
+		}, exitUndetermined},
+	} {
+		tmp := t.TempDir()
+		testutil.WriteTree(t, tmp, tc.files)
+		code, stdout, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"))
+		if code != tc.code || strings.Contains(stdout, "vacuously safe") != (tc.code == exitOK) {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q: want exit %d, the vacuous report iff 0", tc.name, code, stdout, stderr, tc.code)
+		}
 	}
 }
 
-// The markdown report of a zero-tenant run with a platform problem is the
+// The markdown report of a zero-tenant run with a tree-level finding is the
 // ordinary report — 0 tenants, the error listed — not the vacuous one.
 func TestGuard_PlatformProblemOnZeroTenantScope_Markdown(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	testutil.WriteTree(t, tmp, map[string]string{"conf.d/_defaults.yaml": "_routing_defaults: [1, 2]\n"})
+	testutil.WriteTree(t, tmp, map[string]string{"conf.d/_defaults.yaml": "cpu: 80\n"})
 	code, stdout, _ := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"))
 	if code != exitFindings {
 		t.Errorf("exit %d, want %d", code, exitFindings)
 	}
-	for _, want := range []string{"Tenants in scope: **0**", "Errors: **1**", findingkind.FindingRoutingDefaultsNotMapping.String()} {
+	for _, want := range []string{"Tenants in scope: **0**", "Errors: **1**", findingkind.FindingRootDefaultsUnwrapped.String()} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("report lacks %q:\n%s", want, stdout)
 		}

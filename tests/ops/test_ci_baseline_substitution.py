@@ -1343,15 +1343,21 @@ def test_the_verdict_step_is_not_gated_on_the_producer_reporting() -> None:
 
 @needs_bash
 @pytest.mark.parametrize(
-    "guard_exit, must_fail",
-    [("0", False), ("1", True), ("2", True), ("", True), ("7", True)],
+    "guard_exit, generator_exit, must_fail",
+    [("0", "0", False), ("1", "0", True), ("2", "0", True), ("3", "0", True),
+     ("", "0", True), ("", "", True), ("7", "0", True),
+     # #2904: da-guard's 4 reaches the verdict only when the route generator
+     # was not run for its tree; the generator's own failure, or its missing
+     # verdict, fails the job whatever da-guard said.
+     ("4", "0", True), ("0", "1", True), ("0", "2", True), ("0", "", True)],
 )
 def test_the_verdict_step_treats_an_absent_exit_code_as_a_failure(
-        tmp_path, guard_exit: str, must_fail: bool) -> None:
+        tmp_path, guard_exit: str, generator_exit: str, must_fail: bool) -> None:
     step, _ = _verdict_step()
-    proc = _run(step, step.script, tmp_path, {"GUARD_EXIT": guard_exit})
+    proc = _run(step, step.script, tmp_path,
+                {"GUARD_EXIT": guard_exit, "GENERATOR_EXIT": generator_exit})
     assert (proc.returncode != 0) is must_fail, (
-        f"GUARD_EXIT={guard_exit!r} -> rc={proc.returncode}\n"
+        f"GUARD_EXIT={guard_exit!r} GENERATOR_EXIT={generator_exit!r} -> rc={proc.returncode}\n"
         f"{proc.stdout}\n{proc.stderr}")
 
 
@@ -1459,8 +1465,9 @@ def test_the_verdict_step_names_an_absent_verdict_as_its_own_case(
     prose would just be a second place to update.
     """
     step, _ = _verdict_step()
-    absent = _run(step, step.script, tmp_path, {"GUARD_EXIT": ""})
-    nonsense = _run(step, step.script, tmp_path, {"GUARD_EXIT": "7"})
+    # GENERATOR_EXIT "0" (#2904): so the da-guard branches are what differ.
+    absent = _run(step, step.script, tmp_path, {"GUARD_EXIT": "", "GENERATOR_EXIT": "0"})
+    nonsense = _run(step, step.script, tmp_path, {"GUARD_EXIT": "7", "GENERATOR_EXIT": "0"})
 
     assert absent.returncode != 0 and nonsense.returncode != 0
     # Comparing the two messages directly is not enough: a shared catch-all
@@ -1969,6 +1976,57 @@ def test_da_guard_report_does_not_carry_findings_between_trees(tmp_path) -> None
     assert "tree-a" not in tree_b_section, (
         "tree-b's section carries tree-a's findings — the comment describes a "
         f"tree that was never validated:\n{report}")
+
+
+@needs_bash
+@pytest.mark.parametrize("generator_rc", [0, 1])
+def test_da_guard_exit_4_counts_only_beside_the_generator_run(tmp_path, generator_rc: int) -> None:
+    """#2904: da-guard's 4 ("routing not judged here") is 0 in WORST because
+    the same step runs the route generator on the tree — once per tree, its
+    exit published as `generator_exit`, its output under the tree's heading.
+
+    Stubs: a da-guard that writes a report and exits 4 for every scope, a
+    `python` on PATH standing for the generator. Two scopes of one tree: the
+    generator runs once.
+    """
+    step = _step(GUARD_DEFAULTS, _S_RUN_DA_GUARD)
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _stub(runner_temp, "da-guard",
+          "#!/usr/bin/env bash\n"
+          "out=\"\"\n"
+          "while [ $# -gt 0 ]; do case \"$1\" in --output) out=\"$2\";; esac; shift; done\n"
+          "printf 'routing not judged\\n' > \"$out\"; exit 4\n")
+    calls = tmp_path / "generator-calls"
+    _stub(bin_dir, "python",
+          "#!/usr/bin/env bash\n"
+          f"echo \"$*\" >> '{calls.as_posix()}'\n"
+          f"echo 'GENERATOR SAYS {generator_rc}'; exit {generator_rc}\n")
+    targets = runner_temp / "guard-targets.tsv"
+    targets.write_text("target\ttree-a\tdb\ntarget\ttree-a\tweb\n", encoding="utf-8", newline="\n")
+    script = _render(step.script, {
+        "runner.temp": str(runner_temp.as_posix()),
+        "steps.detect.outputs.conf_d": "tree-a",
+    })
+    out = tmp_path / "gh-output"
+    proc = _run(step, script, tmp_path, {
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+        "TARGETS": str(targets.as_posix()),
+        "CONF_D": "tree-a",
+        "GITHUB_OUTPUT": str(out.as_posix()),
+    }, bin_dir=bin_dir)
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    published = out.read_text(encoding="utf-8")
+    assert "exit=0" in published.splitlines(), (
+        f"da-guard's 4 beside a generator run must count as 0:\n{published}")
+    assert f"generator_exit={generator_rc}" in published.splitlines(), published
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and "--config-dir tree-a" in lines[0] and "--validate" in lines[0] \
+        and "--strict" in lines[0], f"the generator must run once per tree, whole tree, --validate --strict: {lines}"
+    report = (runner_temp / "guard-report.md").read_text(encoding="utf-8")
+    assert f"GENERATOR SAYS {generator_rc}" in report and "route generator" in report, report
 
 
 @needs_bash

@@ -59,7 +59,7 @@ type TenantDetail struct {
 	// errors only a typed decode detects, or a declared tenant id that is not
 	// valid UTF-8). threshold-exporter skips such a file whole, so nothing is
 	// derived from it: raw_yaml and source_hash are returned (so the file can
-	// be opened and fixed), and resolved_thresholds, custom_alerts,
+	// be opened and fixed; withheld as RawYAMLWithheld says), and resolved_thresholds, custom_alerts,
 	// validation_warnings and validation_notices are ABSENT — not empty,
 	// which would read as "none". Partial writes (PUT .../custom-alerts, the
 	// batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
@@ -75,11 +75,16 @@ type TenantDetail struct {
 	// of the stored file would let a guess be checked offline.
 	Masked bool `json:"masked,omitempty"`
 	// RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
-	// empty, when
-	// the caller would be shown the masked form but the file cannot be masked
-	// with certainty: it is not YAML, holds more than one document, or uses an
-	// anchor, alias or merge key (a credential can be placed outside any
-	// credential field through one).
+	// empty, when the file is not shown to the caller: it declares a tenant
+	// the caller may not read (#3050; a conf.d file can declare several, and
+	// the file is shown whole or not at all), or its tenants cannot be listed
+	// with certainty (not YAML; an alias, a merge key, a non-scalar key or a
+	// key tagged other than !!str at the top level or in tenants:) and the
+	// caller may not read every tenant;
+	// or the caller would be shown the masked form but the file cannot be
+	// masked with certainty: it is not YAML, holds more than one document, or
+	// uses an anchor, alias or merge key (a credential can be placed outside
+	// any credential field through one).
 	RawYAMLWithheld bool `json:"raw_yaml_withheld,omitempty"`
 }
 
@@ -108,9 +113,14 @@ func sourceHashFor(data []byte, masked bool) string {
 }
 
 // rawYAMLFor returns what a caller is shown of the tenant file's bytes:
-// verbatim to one who can see credentials, masked to anyone else, and
-// nothing (withheld) when the masked form cannot be built with certainty.
+// nothing (withheld) when the file declares a tenant the caller may not read
+// (#3050, fileShown); otherwise verbatim to one who can see credentials,
+// masked to anyone else, and nothing (withheld) when the masked form cannot
+// be built with certainty.
 func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw string, masked, withheld bool) {
+	if !fileShown(r, d, data, tenantID) {
+		return "", false, true
+	}
 	if canSeeCredentials(r, d, tenantID) {
 		return string(data), false, false
 	}
@@ -143,6 +153,12 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Description source_hash empty (masked: true);
 // @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
 // @Description key, holds several documents or is not YAML.
+// @Description A conf.d file can declare several tenants: when it declares one the caller may not read (#3050), raw_yaml,
+// @Description custom_alerts and source_hash are empty with raw_yaml_withheld: true for every caller, on the config_error
+// @Description answer too — the file is shown whole or not at all, never re-encoded to the caller's own section. When its
+// @Description tenants cannot be listed with certainty (not YAML; an alias, a merge key, a non-scalar key or a key tagged
+// @Description other than !!str, e.g. !!binary, at the top level or in tenants:), it is shown only to a caller with read permission on all tenants (an RBAC rule with
+// @Description tenants: ["*"] and no org-scope, environments or domains).
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"

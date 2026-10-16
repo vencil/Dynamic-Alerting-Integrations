@@ -578,9 +578,10 @@ def test_the_printed_guard_command_runs_and_lists_the_file(
         capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=out, timeout=120,
         env=dict(os.environ, DA_GUARD_BINARY=str(da_guard)))
     report = guard.stdout + guard.stderr
-    # 0：乾淨；3：exporter 讀不了某個檔——正是 init 叫客戶去驗的那件事。
-    # 2 是 caller error：客戶照抄拿到的不是報告。
-    assert guard.returncode in (0, 3), report[-800:]
+    # 0：乾淨；3：exporter 讀不了某個檔——正是 init 叫客戶去驗的那件事；
+    # 4：樹上有路由，da-guard 不判、交給產生器（#2904），exporter 的讀法照常
+    # 列在 Scanned files。2 是 caller error：客戶照抄拿到的不是報告。
+    assert guard.returncode in (0, 3, 4), report[-800:]
     assert Path(rel).name in report, report[-800:]
-    if guard.returncode == 0:
+    if guard.returncode in (0, 4):
         assert "Scanned files" in report, report[-800:]
