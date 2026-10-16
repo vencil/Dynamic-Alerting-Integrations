@@ -133,3 +133,18 @@ def test_undecidable_threshold_keys_exit_2(tmp_path):
     doc = _json(p)
     assert doc["undecidable"] is True
     assert doc["tenants"]["ta"][0]["verdict"] == "undecidable"
+
+
+def test_subdirectory_policies_it_does_not_count_are_named(tmp_path):
+    """`_policies` 只從根 `_defaults.yaml` 讀（與 Policy-as-Code 相同）；子目錄的不算，
+    要說出來，否則使用者看不出某個 key 為何判成沒人讀。"""
+    d = tmp_path / "conf.d"
+    (d / "sub").mkdir(parents=True)
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (d / "sub" / "_defaults.yaml").write_text(
+        "_policies:\n  - {name: p1, target: custom_metric, operator: required, severity: error}\n",
+        encoding="utf-8")
+    (d / "sub" / "ta.yaml").write_text("tenants:\n  ta:\n    custom_metric: 5\n", encoding="utf-8")
+    p = _run("--config-dir", d)
+    assert p.returncode == 0, p.stderr
+    assert "`_policies` are read from the root" in p.stderr and "sub/_defaults.yaml" in p.stderr
