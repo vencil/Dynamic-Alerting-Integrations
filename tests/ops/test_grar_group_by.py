@@ -11,8 +11,8 @@
 
 * 述詞只有一個：`_grar_validate.group_by_problems`（單一列表）與
   `routing_group_by_invalid`（解析後 routing 的主 route、`overrides[i]`、
-  `routes[i]`）；Go 側是 `routingpolicy.GroupByInvalid`，兩邊由
-  `tests/shared/routing_policy_parity_matrix.json` 的 `group_by_invalid` 欄對齊。
+  `routes[i]`），由 `tests/shared/routing_policy_parity_matrix.json` 的
+  `group_by_invalid` 欄釘住。
 * 產生器會輸出 group_by 的五個位置——租戶主 route、`overrides[i]`、
   `routes[i]`、`_routing_enforced`（單一與 `{{tenant}}` 逐租戶）——全部經同一個
   修正函式。

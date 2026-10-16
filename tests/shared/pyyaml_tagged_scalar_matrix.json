@@ -6,11 +6,8 @@
       "REGEN_PYYAML_TAGGED_SCALARS=1; never edit by hand.",
       "`refused`: the exception class — safe_load rejects the whole document.",
       "Otherwise `type` is the Python type built and `bool` its value when it",
-      "is a bool. The Go half (pkg/routingpolicy/tagged_scalar_oracle_test.go)",
-      "asserts DecodePyYAML errors exactly on the refused rows, returns the",
-      "same bool on bool rows, nil on NoneType rows and a non-bool otherwise.",
-      "Rows `! <quoted or block>` carry the non-specific tag, which PyYAML",
-      "resolves as if plain; the vendored yaml.v3 keeps it (#2730 §6)."
+      "is a bool. Rows `! <quoted or block>` carry the non-specific tag,",
+      "which PyYAML resolves as if plain (#2730 §6)."
   ],
   "pyyaml": "6.0.3",
   "rows": [

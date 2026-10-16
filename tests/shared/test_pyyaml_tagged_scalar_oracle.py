@@ -1,15 +1,13 @@
-"""Python half of tests/shared/pyyaml_tagged_scalar_matrix.json (#2325).
+"""tests/shared/pyyaml_tagged_scalar_matrix.json and its oracle (#2325).
 
-`routingpolicy.DecodePyYAML` (Go) reads `require_critical_escalation` the way
-the route generator reads it — PyYAML's `safe_load` — and its contract is:
-for a scalar it returns an error exactly when `safe_load` refuses the
-document, and otherwise the value PyYAML builds (a bool as that bool, None as
-nil, anything else as some non-bool). The table holds scalars only: Go reads
-any mapping or sequence as a non-bool without looking inside, a contract the
-Go half asserts on its own (there is nothing to compare with PyYAML there).
-The Go half (components/threshold-exporter/app/pkg/routingpolicy/tagged_scalar_oracle_test.go)
-asserts that contract row by row; this half asserts every row IS what the
-installed PyYAML says, so the table cannot drift from its oracle.
+The table records what PyYAML's `safe_load` — the route generator's reader,
+and so how it reads `require_critical_escalation` — makes of each
+explicit-tag and plain scalar: a refusal of the whole document, or the Python
+type it builds (and the bool, when it is one). This file is its only reader:
+it asserts every row IS what the installed PyYAML says, so a PyYAML upgrade
+that changes a verdict shows up as a diff of the table. (Until ADR-036 step 3,
+#2905, a Go decoder that imitated PyYAML was held to the same rows; it was
+deleted with the rest of the Go routing code.)
 
 The rows are generated, never hand-edited:
 
@@ -70,9 +68,7 @@ OTHER_VALUES = ["yes", "5", "abc", "'yes'", "'5'", "~"]
 def _nonspecific() -> list[str]:
     """The non-specific tag `!` on non-plain scalars (#2730 §6): PyYAML
     resolves the text as if plain — `! "true"` is True, `! "7\\n"` is 7 (its
-    `$` matches before a final newline), `! "*"` has no constructor. The
-    vendored yaml.v3 keeps the tag (third_party/yaml.v3-nonspecific-tag.patch),
-    so Go reads these rows like any other."""
+    `$` matches before a final newline), `! "*"` has no constructor."""
     out = []
     for v in VALUES:
         if v[:1] in ("'", '"', "|", ">"):
@@ -121,11 +117,8 @@ def _render(rows: list[dict]) -> str:
         "REGEN_PYYAML_TAGGED_SCALARS=1; never edit by hand.",
         "`refused`: the exception class — safe_load rejects the whole document.",
         "Otherwise `type` is the Python type built and `bool` its value when it",
-        "is a bool. The Go half (pkg/routingpolicy/tagged_scalar_oracle_test.go)",
-        "asserts DecodePyYAML errors exactly on the refused rows, returns the",
-        "same bool on bool rows, nil on NoneType rows and a non-bool otherwise.",
-        "Rows `! <quoted or block>` carry the non-specific tag, which PyYAML",
-        "resolves as if plain; the vendored yaml.v3 keeps it (#2730 §6).",
+        "is a bool. Rows `! <quoted or block>` carry the non-specific tag,",
+        "which PyYAML resolves as if plain (#2730 §6).",
     ]
     body = ",\n".join("    " + json.dumps(r, ensure_ascii=False) for r in rows)
     return ("{\n  \"_comment\": " + json.dumps(comment, ensure_ascii=False, indent=4).replace("\n", "\n  ")
@@ -148,7 +141,7 @@ def test_matrix_is_not_vacuous() -> None:
     bools = [r for r in rows if "bool" in r]
     others = [r for r in rows if "type" in r and "bool" not in r]
     # Every tag contributes a refusal or a construction of its own kind; the
-    # three outcomes must all be present or the Go half proves nothing.
+    # three outcomes must all be present or the table pins nothing.
     assert refused and bools and others, (len(refused), len(bools), len(others))
     for needle in ("!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1"):
         assert any(r["source"] == needle and "refused" in r for r in rows), needle

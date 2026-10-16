@@ -159,7 +159,7 @@ type ScopedTenants struct {
 	// writes and that subtreeDefaultsRefusedKey refuses (reserved keys such
 	// as `_state_*`, `_silent_mode`, `_metadata`, and the keys
 	// resolveBaseRows never turns into a row; not the routing keys
-	// (IsRoutingKey), which da-guard's routing checks own), whatever their
+	// (IsRoutingKey), which the route generator's checks own), whatever their
 	// non-null value and
 	// whether or not the exporter applies it: key → the root-relative slash
 	// paths of the subtree defaults files writing it, root-first. Read off

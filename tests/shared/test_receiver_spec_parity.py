@@ -42,9 +42,10 @@ so those rows carry `python_differs` (the Python verdict and why), as
 tests/shared/routing_policy_parity_matrix.json does. What is nested inside
 http_config (tls_config, oauth2, authorization, basic_auth, the header
 mappings; #2984) only the schema and Alertmanager judge: those rows carry
-`python_differs` too (and a `go_differs` no reader asserts since #2905: the
-verdict of the deleted Go copy, still in the table). A row may carry its receiver as YAML text (`yaml`)
-instead of JSON: it is read with PyYAML here (plain `on` a boolean, quoted
+`python_differs` too. No row carries a Go verdict: the Go copy that judged
+receivers was deleted in ADR-036 step 3 (#2905), and `valid` / `am` /
+`python_differs` are the only verdict columns. A row may carry its receiver as
+YAML text (`yaml`) instead of JSON: it is read with PyYAML here (plain `on` a boolean, quoted
 `"on"` a string; see the plain-scalar candidates below). `schema_valid`
 records a row where the schema cannot judge like the pipeline (proxy_url parsing,
 a yaml row's plain-string `to`); `strict` names each row
@@ -242,6 +243,13 @@ def test_python_differs_rows_say_why():
            and (set(c["python_differs"]) != {"valid", "reason"} or not c["python_differs"]["reason"]
                 or c["python_differs"]["valid"] == c["valid"])]
     assert not bad, f"python_differs must be {{valid, reason}} and differ from `valid`: {bad}"
+
+
+def test_no_row_carries_a_go_verdict():
+    """#3093: the Go receiver check is deleted (#2905), so no column records
+    its verdict; a `go_differs` here would be a column no reader asserts."""
+    bad = [c["name"] for c in CASES if "go_differs" in c]
+    assert not bad, f"go_differs has no reader since #2905: {bad}"
 
 
 def test_pipeline_writes_yaml_bool_words_as_booleans():

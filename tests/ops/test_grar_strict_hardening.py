@@ -371,8 +371,8 @@ class TestTenantReceiverTypeNotString:
     `recv_type in forbidden_types` 曾直接 TypeError，`--strict` 以 traceback
     結束、findings 文件只剩 `run_failed`。
 
-    非字串的 type 不指名任何 receiver type：policy 檢查不判它（同 da-guard
-    `routingpolicy.ReceiverType()` 回 ""、explain-route 的 `_receiver_type`、
+    非字串的 type 不指名任何 receiver type：policy 檢查不判它（同
+    explain-route 的 `_receiver_type`、
     parity matrix「type 非空字串才算，否則 null」）。擋下它的是 receiver 本身的
     檢查——`build_receiver_config` 對同一租戶報 `missing_receiver_field`
     （`blocks: validate`），policy 這一處不重複報。

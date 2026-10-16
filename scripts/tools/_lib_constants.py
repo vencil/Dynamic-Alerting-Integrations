@@ -168,11 +168,9 @@ PLATFORM_DEFAULTS: Final[dict[str, Any]] = {
 # accepts" (required + optional) still sees them.
 #
 # The presence contract (required + exactly_one_of) is shared with
-# docs/schemas/tenant-config.schema.json and the Go copy
-# (components/threshold-exporter/app/pkg/receiverspec, used by da-guard,
-# tenant-api and pkg/config). The schema is the hub:
+# docs/schemas/tenant-config.schema.json, the hub:
 # tests/shared/test_receiver_spec_parity.py pins this dict to it (including the
-# accepted field set), and TestSpecs_MatchSchema pins the Go copy to it.
+# accepted field set). No Go copy judges receivers (ADR-036 §9).
 # Optional values (#2295) are read from the schema at run time
 # (_lib_validation.receiver_optional_problem): a property referencing
 # definitions.yamlBool takes a boolean, null or a YAML 1.1 boolean word, and
@@ -227,8 +225,7 @@ RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
 # prometheus/common HTTPClientConfig.Validate refuses every pair, and the whole
 # config then fails to reload. basic_auth / oauth2 / authorization are mappings
 # (an empty mapping counts as set); bearer_token / bearer_token_file are strings
-# ("" counts as unset). Same list as the Go HTTPConfigAuthFields
-# (pkg/receiverspec); rows of receiver_presence_cases.json pin both.
+# ("" counts as unset). Rows of receiver_presence_cases.json pin it.
 HTTP_CONFIG_AUTH_FIELDS: Final[tuple[str, ...]] = (
     "basic_auth", "oauth2", "authorization", "bearer_token", "bearer_token_file",
 )

@@ -885,10 +885,10 @@ func subtreeDefaultsRefusedKey(k string) bool {
 //
 // ⚠️ ROUTING KEYS (IsRoutingKey: `_routing`, `_routing_<…>`) ARE LEFT OUT,
 // and only here (#1976's report leaves them out through the shared
-// predicate). da-guard's routing checks already own every such key in a
-// subtree defaults file, and IsRoutingKey is their own predicate
-// (routingpolicy.UnreadRouting), so the two cannot disagree on which keys
-// that is: one inside `defaults:` is
+// predicate). The route generator's checks own every such key in a
+// subtree defaults file (da-guard only lists it as undetermined evidence,
+// reason routing_key), and IsRoutingKey is the same test as the
+// generator's own (_grar_parse._is_routing_key): one inside `defaults:` is
 // routing_in_unread_location (an error), `_routing_enforced` below the root
 // is routing_enforced_below_root (an error), and a top-level
 // `_routing_defaults` in a subtree `_defaults.yaml` with no `defaults:`

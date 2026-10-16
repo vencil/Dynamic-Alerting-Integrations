@@ -303,8 +303,8 @@ type ResolvedSeverityDedup struct {
 // the route generator reads (#2983): a tenant's own, and those it takes from
 // the top level of a conf.d `_` file. The `_routing` PREFIX keeps every
 // other spelling reserved (not a metric), so `_routing_profle` passed every
-// key check while nothing read it; tests/shared/routing_unknown_keys_cases.json
-// runs this side and _grar_validate's.
+// key check while nothing read it; the generator names such a key
+// (_grar_validate, pinned by tests/shared/routing_unknown_keys_cases.json).
 
 // keySet is the set of keys, for the generated tables.
 func keySet(keys ...string) map[string]bool {
@@ -413,12 +413,11 @@ func IsReservedKey(k string) bool {
 }
 
 // IsRoutingKey reports whether k is a routing key: `_routing` or
-// `_routing_<…>` — the keys the route generator reads, and the ones
-// routingpolicy.UnreadRouting reports where it does not (#2291). Narrower
-// than the `_routing` reserved PREFIX: `_routingProfile` / `_routings` are
-// reserved keys (IsReservedKey) but not routing keys. Lives here, not in
-// pkg/routingpolicy, because that package imports this one; the #2388 report
-// (subtreeReservedKeys) and UnreadRouting both call it.
+// `_routing_<…>` — the keys the route generator reads by name (#2291; its
+// own predicate is _grar_parse._is_routing_key). Narrower than the
+// `_routing` reserved PREFIX: `_routingProfile` / `_routings` are reserved
+// keys (IsReservedKey) but not routing keys. The #2388 report
+// (subtreeReservedKeys) calls it to leave routing keys to the generator.
 func IsRoutingKey(k string) bool {
 	return k == "_routing" || strings.HasPrefix(k, "_routing_")
 }

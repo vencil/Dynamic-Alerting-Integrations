@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-03-16
-updated_at: 2026-10-15
+updated_at: 2026-10-16
 ---
 # ADR-007: 跨域路由設定檔與域策略
 
@@ -18,6 +18,8 @@ updated_at: 2026-10-15
 ## 狀態
 
 ✅ **Accepted** (v2.1.0) — 四層路由 + 域策略驗證已完成，Profile 繼承鏈為 v2.7.0+ 候選
+
+2026-10-16 修訂：domain policy（含 `require_critical_escalation`）與解析後 routing 的檢查只由路由產生器做，da-guard 與 tenant-api 不再各有一份 Go 版的檢查；相關段落改寫為現況。
 
 ## 背景
 
@@ -121,7 +123,7 @@ domain_policies:
 
 主 receiver 是不是 PagerDuty，不影響子路由的判定：子路由攔走的 critical，本來就會送到後面的升級目的地。只有 N 是主 receiver 本身時，WARN 才會說 critical 落到主 receiver。這個判定只在 tenant route 子樹內、只針對等值 matcher 時精確。有兩處不在它的模型裡：一是排在 tenant route 之前的平台路由（例如 `alertname="Watchdog"` 或 `component="sentinel"` 的路由）沒有納入，match 寫到那些值的子路由其實收不到告警，仍可能被報，所以這部分只會多報。二是 receiver 內容無效、generator 不會 render 的子路由仍被當成存在：它本身可能被多報，也可能讓後面的 N 被當成已攔走而少報。custom 子樹帶著同一批子路由，判定在那裡同樣成立（#2342）。
 
-da-guard 也執行同一個約束，判準相同（#2325，`pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄與產生器對齊）：把不合規報成 `critical_escalation_missing`（error）、把上述 WARN 報成 `critical_escalation_leak`（warn）。tenant-api 不自己判：每筆寫入由產生器對寫入後的整棵樹判，不合規是 422 `GENERATOR_FINDINGS`（[ADR-036](036-single-parser-effective-config.md) §4），WARN 不擋寫入。因為判的是整棵樹，改 routing profile 或 domain policy 檔之後，任何經 tenant-api 的寫入都會碰到既有租戶的不合規。
+這個約束只由產生器判（[ADR-036](036-single-parser-effective-config.md) §9）：不合規的 finding kind 是 `critical_escalation_missing`（`--strict` 下為擋下的 ERROR），上述 WARN 是 `critical_escalation_leak`；`tests/shared/routing_policy_parity_matrix.json` 的 `escalation` 欄釘住判定結果。da-guard 不判 domain policy：樹上有 `_domain_policy.yaml` 時列為未判定（exit 4），交給產生器。tenant-api 不自己判：每筆寫入由產生器對寫入後的整棵樹判，不合規是 422 `GENERATOR_FINDINGS`（[ADR-036](036-single-parser-effective-config.md) §4），WARN 不擋寫入。因為判的是整棵樹，改 routing profile 或 domain policy 檔之後，任何經 tenant-api 的寫入都會碰到既有租戶的不合規。
 
 ### 為何拒絕三層 Contact Profile 模型
 
@@ -259,9 +261,8 @@ def resolve_tenant_routing(tenant_cfg, profiles, defaults):
 # 租戶因此無法覆蓋它。
 ```
 
-⚠️ 2026-09-28 更正（#2326）：這段虛擬碼原本三步都寫 `deep_merge`，還把 `_routing_enforced`
-併進結果。程式碼一直是淺合併（`_grar_merge.py` 的 `merge_routing_with_defaults`、Go 的
-`routingpolicy.Resolve`），與第一層底下「合併語意」那段寫的一致；enforced 路由也一直是分開產出。
+三步都是淺合併（`_grar_merge.py` 的 `merge_routing_with_defaults`），與第一層底下「合併語意」
+那段一致；`_routing_enforced` 不併進結果，enforced 路由分開產出。
 
 ### Policy 驗證邏輯
 
@@ -287,8 +288,8 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 ### Amendment 2026-09-28 (#2326)：profile 與 policy 的目錄範圍
 
-**狀態：已實作**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
-的選項 P2）：路由生成器、`check_routing_profiles` 與 da-guard（`pkg/routingpolicy.LoadTree`）
+**狀態：已實作**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：
+路由生成器與 `check_routing_profiles`
 在每一層都讀 `_routing_profiles.yaml` 與 `_domain_policy.yaml`。profile 名稱重複定義與其他
 阻擋性的樹形錯誤一起被拒收（生成器 rc 2；保留根目錄優先、依名稱順序先出現的定義，點名後者）。
 tenant-api 只服務根目錄的租戶檔；寫入時的 policy 判定由產生器對整棵樹做，每一層的 `_domain_policy.yaml` 都讀（[ADR-036](036-single-parser-effective-config.md) §4）。
@@ -329,8 +330,8 @@ tenant-api 只服務根目錄的租戶檔；寫入時的 policy 判定由產生�
 
 - **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
 - **#2244**：`require_critical_escalation` 開始由 `check_domain_policies()` 執行（先前只有 lint 認得這個鍵），判準見上方「第二層」
-- **#2280**：da-guard 與 tenant-api 改判**解析後**的 routing（`_routing_defaults` → profile → tenant `_routing`，與產生器同一套合併，共用 `pkg/routingpolicy`，以跨語言 parity 矩陣對齊）；主 receiver、`overrides`、`routes` 的 receiver type 都依 domain policy 判，`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發；da-guard 另檢查 `routes` 條目形狀與 `_routing_defaults.routes`；tenant-api batch 只在 patch 碰到 `_routing_profile` / `_routing` 時判 routing
-- **#2325**：da-guard 與 tenant-api 也執行 `require_critical_escalation`，判準與產生器相同，見上方「第二層」
+- **#2280**：domain policy 判的是**解析後**的 routing（`_routing_defaults` → profile → tenant `_routing`，產生器自己的合併）；主 receiver、`overrides`、`routes` 的 receiver type 都依 domain policy 判，`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發；`routes` 條目形狀與 `_routing_defaults.routes` 也檢查
+- **#2325**：`require_critical_escalation` 的值照 PyYAML 解讀（未加引號的 `yes`／`on` 是 true），判準見上方「第二層」
 - **#2326**（2026-09-28 已決定並實作）：profile 與 domain policy 以所在子樹為範圍、profile 名稱全樹唯一、policy 疊加判定——見上方「Amendment 2026-09-28」
 
 **殘留**：

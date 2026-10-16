@@ -1,5 +1,5 @@
 {
-  "_comment": "#2983: `_routing`-prefixed keys the route generator does not read in a layer. One row = a mapping as read (`layer`: tenant = a tenant's config, read for _routing / _routing_profile; platform = the top level of a conf.d `_` file, read for _routing_defaults / _routing_enforced) and the keys that must be named — nothing more, nothing less. Read by tests/ops/test_routing_unknown_keys.py (_grar_validate.unknown_routing_keys) and by components/threshold-exporter/app/pkg/routingpolicy/unknown_keys_test.go (routingpolicy.UnknownRoutingKeys).",
+  "_comment": "#2983: `_routing`-prefixed keys the route generator does not read in a layer. One row = a mapping as read (`layer`: tenant = a tenant's config, read for _routing / _routing_profile; platform = the top level of a conf.d `_` file, read for _routing_defaults / _routing_enforced) and the keys that must be named — nothing more, nothing less. Read by tests/ops/test_routing_unknown_keys.py (_grar_validate.unknown_routing_keys).",
   "cases": [
     {
       "name": "tenant-clean",

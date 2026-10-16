@@ -2,8 +2,8 @@
 generator does not read (#2960).
 
 The key sets are what the generator reads (``_grar_validate``); the JSON
-schemas are pinned to them here, not the other way round. The shared case
-table is read by the Go copy (``routingpolicy.IgnoredKeys``) as well.
+schemas are pinned to them here, not the other way round. This file is the
+only reader of the shared case table.
 """
 import json
 import os

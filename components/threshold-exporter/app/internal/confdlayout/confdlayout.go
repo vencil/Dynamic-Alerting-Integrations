@@ -3,10 +3,9 @@
 // level a file belongs to (LevelOf), and whether a basename is a domain
 // policy file (IsDomainPolicyFile).
 //
-// Neither reads a file. They were in pkg/routingpolicy (#2899), which
-// ADR-036 §7 / §11 splits: its PyYAML imitation is deleted at the switch,
-// so the helpers that do not parse move out first and the package can be
-// split without taking them along.
+// Neither reads a file. They were in pkg/routingpolicy (#2899) and moved
+// out before ADR-036 step 3 deleted that package with its PyYAML
+// imitation (#2905), so they outlived it.
 //
 // Why not internal/confdname: that package is restricted to the
 // exporter's walker's name rules, and `_domain_policy.yaml` is a name only

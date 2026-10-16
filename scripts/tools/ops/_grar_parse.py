@@ -324,8 +324,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             rd = data["_routing_defaults"]
             # #2412: a value that is neither a mapping nor null (a list, a
             # string, a number, a boolean) is named and contributes nothing —
-            # the subdirectory reader's verdict (`_parse_nested_config`) and
-            # Go's `routingDefaultsFromNode` (Defaults nil, no Problem). It
+            # the subdirectory reader's verdict (`_parse_nested_config`). It
             # is still stored, as None: a later root file that carries the
             # key replaces an earlier one WHOLE, whatever its value. Before,
             # the value reached `resolve_routing_defaults`' `dict(root)` and
@@ -437,8 +436,8 @@ def _tree_problem(result: dict, kind: str, fname: str, field: str,
                   message: str) -> None:
     """Record one #2326 routing-tree finding: ``(kind, file, field, message)``.
 
-    ``kind`` is the Go twin's ``routingpolicy.Problem*`` value, so the parity
-    matrix compares one spelling. setdefault: tests call the parse helpers
+    ``kind`` is the finding kind the parity matrix
+    (tests/shared/routing_policy_parity_matrix.json) spells. setdefault: tests call the parse helpers
     with hand-built result dicts.
     """
     result.setdefault("routing_tree_problems", []).append(
@@ -450,7 +449,7 @@ def _tree_problem(result: dict, kind: str, fname: str, field: str,
 # anything is rendered. The subtree-policy finding
 # (`domain_policy_out_of_scope`) is not here — it is ERROR under --strict and
 # WARN otherwise, like every other domain-policy finding (ADR-007 (d)).
-# `duplicate_tenant` is recorded (the parity matrix pins it against Go) but is
+# `duplicate_tenant` is recorded (the parity matrix pins it) but is
 # not here either: #2315 owns that refusal — `_refuse_duplicate_tenants`,
 # EXIT_VIOLATION, validate-config's `tenant_uniqueness` scan — and it runs
 # first, so a second spelling of the same verdict would only disagree on rc.
@@ -505,7 +504,7 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
 def _enforced_in_unread_file(path: Path, fname: str, result: dict) -> None:
     """(b) for a file this reader otherwise skips (an unselected carrier
     spelling below the root). A file that does not parse, or is not a
-    mapping, carries nothing here — Go's LoadTree skips it the same way."""
+    mapping, carries nothing here."""
     try:
         data = read_confd_yaml(path, ROUTING_READ)
     except Exception:  # noqa: BLE001 — see docstring
@@ -562,8 +561,7 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
 
     The exporter merges such a key into every tenant's effective config, so a
     reader of the effective config sees routing no route is rendered from.
-    Two places, as da-guard's ``routing_in_unread_location`` (an error
-    there; ADR-036 §9 moves it here):
+    Two places, reported as ``routing_in_unread_location``:
 
     1. inside the ``defaults:`` mapping of the directory's selected defaults
        carrier (root or below) — field ``defaults.<key>``;
@@ -578,7 +576,7 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
     """
     # A `_routing*` key at the TOP level of a `_` file — a carrier with no
     # `defaults:` mapping included — is routing_key_ignored instead (#2983,
-    # _record_unknown_routing_keys), as da-guard reports it: named once.
+    # _record_unknown_routing_keys), so each key is named once.
     found: list[tuple[str, str, str]] = []   # (field, key, why)
     if is_carrier:
         block = data.get("defaults")
@@ -640,8 +638,8 @@ def _parse_nested_config(data: dict, fname: str, level: str,
             # #2326 review F3: at the root this very file WOULD be read (any
             # root `_` file carries `_routing_defaults`), so moving it into a
             # subdirectory silently drops it — the #2291 "routing where
-            # nothing reads it" class. Same verdict as da-guard's
-            # `routing_in_unread_location` (error there): a `WARN … skipping`
+            # nothing reads it" class, reported as
+            # `routing_in_unread_location`: a `WARN … skipping`
             # line, blocking under `--validate` like `_routing_defaults.routes`.
             result.setdefault("routing_defaults_errors", []).append(
                 skipped_entry_warning(f"  WARN: _routing_defaults in {fname} is not read: below the "
@@ -722,14 +720,12 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 # Recorded after every root file (`_parse_config_files`):
                 # which definition of a duplicated name is "first" must not
                 # depend on whether a directory's name sorts before `_` —
-                # root files first, then the tree in name order, as Go's
-                # `routingpolicy.LoadTree` reads them.
+                # root files first, then the tree in name order.
                 result.setdefault("_nested_profile_defs", []).append(
                     (fname, level, profiles))
             else:
-                # #2904: a finding, not a bare stderr print — da-guard's
-                # routing_profiles_unusable (warn), moved here (ADR-036 §9).
-                # Never blocking, as there.
+                # #2904: a finding (routing_profiles_unusable, warn), not a
+                # bare stderr print. Never blocking.
                 result.setdefault("routing_profiles_errors", []).append(Finding(
                     f"  WARN: routing_profiles in {fname} must be a mapping of "
                     f"profile name to routing, got {type(profiles).__name__} — "
@@ -842,8 +838,7 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
 # The shared loader drops a null key (`~:`, `null:`, an empty `? ` key) in
 # EVERY mapping, as the exporter does. In a routes `match` that is fail-open:
 # `{~: x, severity: critical}` became a route on severity alone, wider than
-# written, while yaml.v3 keeps the key and da-guard reports
-# invalid_route_entry. So, after the normal read, the null key is put back —
+# written, while yaml.v3 keeps the key. So, after the normal read, the null key is put back —
 # as `None`, which `route_entry_matchers` refuses as "not a valid label
 # name", exactly like `a-b` — but ONLY at the paths the generator reads a
 # route `match` from (ROUTE_MATCH_SOURCES), never by key text: a tenant
@@ -1173,8 +1168,8 @@ def _parse_config_files(config_dir: str) -> dict:
             if path_p in readable_set:
                 # The unselected spelling: named above, not read — except
                 # that (b) is about ANY file below the root, so a
-                # `_routing_enforced` written into it is still refused, as Go's
-                # LoadTree refuses it (review of #2326, F1).
+                # `_routing_enforced` written into it is still refused
+                # (review of #2326, F1).
                 if level != ROOT_LEVEL:
                     _enforced_in_unread_file(path_p, fname, result)
                 continue
@@ -1680,13 +1675,13 @@ def load_tenant_tree(
     # #2960: keys a routing block carries that the generator does not read.
     schema_warnings.extend(parsed.get("ignored_routing_keys", []))
     # #2904: a `routing_profiles:` block that is not a mapping — no profile in
-    # it is applied. A warning that never blocks, as da-guard's
-    # routing_profiles_unusable (warn); the tenants that reference one of its
+    # it is applied: routing_profiles_unusable, a warning that never blocks;
+    # the tenants that reference one of its
     # profiles get the unknown-profile line besides.
     schema_warnings.extend(parsed.get("routing_profiles_errors", []))
-    # #2904: overrides that change nothing (da-guard's duplicate_override_matcher
-    # / redundant_override_receiver, warn there): a warning in every mode,
-    # never blocking, judged on the RESOLVED routing as da-guard judges it.
+    # #2904: overrides that change nothing (duplicate_override_matcher /
+    # redundant_override_receiver): a warning in every mode, never blocking,
+    # judged on the RESOLVED routing.
     for tenant, rc in sorted(routing_configs.items()):
         for kind, fld, text in override_redundancies(rc):
             schema_warnings.append(Finding(
@@ -1743,17 +1738,17 @@ def load_tenant_tree(
     # blocking ERRORs; non-strict keeps the legacy stderr WARN prints only.
     # #2431: a matcher value (`routes[i].match.<label>`, `overrides[i].
     # alertname` / `metric_group`) of the RESOLVED routing that PyYAML does
-    # not read as a string is a blocking ERROR too — da-guard and tenant-api
-    # refuse the same value; without --strict the generator keeps its legacy
+    # not read as a string is a blocking ERROR too (tenant-api's writes get
+    # this verdict from the generator itself); without --strict the generator keeps its legacy
     # behaviour (routes: WARN + skip; overrides: truthiness + str()).
     # #2503: a bad group_by element (not a string as PyYAML reads it, empty,
     # repeated, `...` mixed with labels) of the resolved routing or of
-    # `_routing_enforced` is a blocking ERROR too (da-guard:
-    # routing_group_by_invalid; tenant-api: 400); without --strict the
+    # `_routing_enforced` is a blocking ERROR too (kind
+    # routing_group_by_invalid); without --strict the
     # generator drops the element with a `WARN … skipping` line instead.
     if strict_policies:
-        # #2766: the strict twins of classified lines carry the same kind
-        # (da-guard's), so a finding's kind never depends on --strict.
+        # #2766: the strict twins of classified lines carry the same kind,
+        # so a finding's kind never depends on --strict.
         for tenant in invalid_ids:  # #2341 R8
             schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}",

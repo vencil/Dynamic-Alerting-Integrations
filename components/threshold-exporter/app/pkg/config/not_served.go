@@ -133,7 +133,7 @@ func TopLevelReadElsewhere() []string {
 // (RootDecodedKeys); TopLevelReadElsewhere; a key the merge drops at every
 // level (MergeDroppedKeys — `_metadata`), which acts in no shape; a
 // `_routing*` key, which the route generator does not read from a defaults
-// file in any shape (da-guard's routing_in_unread_location names it); and any
+// file in any shape (the generator's own routing findings name it); and any
 // other `_` key (e.g. `_x: &x`, a key that only carries a YAML anchor).
 //
 // ONE predicate for da-guard's root_defaults_unwrapped /
@@ -250,7 +250,8 @@ func (r *rejectRecorder) note(tenant, key, reason string) {
 // value_rejected or spelling_duplicate (#2031), and key is a threshold key — not `_`-prefixed
 // ("not reserved ⇒ is a threshold", the tenant schema's rule; a reserved
 // key a subtree `_defaults.yaml` writes is refused by the same overlay and
-// named by da-guard's subtree_default_reserved_key / routing checks). The
+// named by da-guard's subtree_default_reserved_key, or by the route
+// generator's routing findings for a routing key). The
 // exporter's da_config_values_not_served and da-guard's value_not_served
 // both select with it.
 func ValueNotServedAsWritten(key, reason string) bool {

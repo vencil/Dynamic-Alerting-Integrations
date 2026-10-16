@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-03
-updated_at: 2026-10-03
+updated_at: 2026-10-16
 ---
 
 # ADR-035: tenant id 合法字元集的單一來源
@@ -23,6 +23,7 @@ updated_at: 2026-10-03
 - 決策內容已由 owner 在 [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) 拍板，其中兩題是外審之後再拍板的。
 - 外審由不同模型以對抗方式進行，結論已併入本文。
 - owner 已核可本文。核可時一併修訂三處：原待決問題 1（tenant-api 讀取與刪除路徑）結案、補列 `init_project.py` 另一份 DNS-1123 寫法、`definitions.tenantId` 加上 `description`。
+- 2026-10-16 修訂：Go 端讀規則的地方改寫為現況（`pkg/tenantid` 的 `Valid`）；「現況」一節是起草時的快照，不改。
 
 ## 摘要
 
@@ -110,13 +111,13 @@ Go binary 在 runtime 讀不到 repo 的 `docs/`，所以採「產生副本＋�
 - 用一支產生腳本，從 schema 抽出 `definitions.tenantId`，寫出兩份 JSON：
   - `components/threshold-exporter/app/pkg/tenantid/tenant_id.json`
   - portal 的對應資料檔
-- Go 以 `go:embed` 讀取，`routingpolicy.IsValidTenantID` 改用它。tenant-api 經由既有的 `replace github.com/vencil/threshold-exporter => ../threshold-exporter/app` 引用。tenant-api 的 Dockerfile 會整包複製該 module，`.dockerignore` 沒有排除 `*.json`。
+- Go 以 `go:embed` 讀取（`pkg/tenantid` 的 `Valid`），exporter、da-guard 與 tenant-api 寫入路徑都呼叫它。tenant-api 經由既有的 `replace github.com/vencil/threshold-exporter => ../threshold-exporter/app` 引用。tenant-api 的 Dockerfile 會整包複製該 module，`.dockerignore` 沒有排除 `*.json`。
 - portal 的 `validateTenantName` 改讀它的資料檔，刪掉自己的 regex。
 - pre-commit 加一支漂移檢查：兩份副本都必須等於重新產生的結果。
 
 **為什麼不採 receiverspec 模式**
 
-receiverspec 模式是 Go 端手抄常數，再用 `TestSpecs_MatchSchema` 讀 schema 比對，見 `pkg/receiverspec/spec.go`。這個做法省掉產生腳本，但有兩個問題：
+receiverspec 模式是 Go 端手抄常數，再用測試讀 schema 比對；`pkg/receiverspec` 的 receiver type 清單與 `TestKnown_MatchesSchema` 就是這個做法。這個做法省掉產生腳本，但有兩個問題：
 
 - 規則文字在 Go 端仍然手抄一份，不符合「資料檔、兩種語言都讀」的決定。
 - portal 沒有 Go 測試可用，仍會留下第三份。
@@ -206,7 +207,7 @@ exporter 不拒收不合法 id 的租戶，每次 reload 時對每個不合法 i
 - tenant-api 的 `gitops.guardTenantID`：加上新規則；`confd.IsAddressableTenantID` 不動。
 - `_grar_parse.py` 與 `_grar_validate.invalid_tenant_id_text` 的 WARN 文字，目前寫「letters, digits, '_' and '-' only」。
 - `tests/shared/routing_policy_parity_matrix.json` 的 `tenant_ids` 表：把 `UPPER`、`Mixed_Case-1`、`_x`、`-x`、`x_`、64 字元等案例移到 invalid，並更新說明文字。
-- `components/tenant-api/internal/handler/tenant_id_write_test.go`、`tests/ops/test_tenant_name_rfc1123.py`、`pkg/routingpolicy/parity_test.go` 等測試。
+- `components/tenant-api/internal/handler/tenant_id_write_test.go`、`tests/ops/test_tenant_name_rfc1123.py`、`pkg/tenantid/tenantid_test.go` 等測試。
 
 ## 參考
 

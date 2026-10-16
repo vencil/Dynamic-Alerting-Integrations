@@ -434,7 +434,7 @@ def _contains_tenant_placeholder(obj: object) -> bool:
 # the tenant's path, each level a SHALLOW merge per top-level key, deeper
 # wins; routing profiles are visible to the tenants at their own level or
 # below. `level` is a directory relative to the conf.d root, POSIX-spelled,
-# "." for the root itself. Go twin: `routingpolicy.Tree.LayersFor`.
+# "." for the root itself.
 ROOT_LEVEL = "."
 
 
@@ -531,7 +531,7 @@ def merge_routing_with_defaults(defaults: dict, tenant_routing: dict | None, ten
 
 def _exactly_one_kind(spec: dict, receiver_obj: dict) -> str:
     """#2766: the kind of a ``receiver_exactly_one_problem`` finding, from
-    the same field states it judged (da-guard's split): a non-string value
+    the same field states it judged: a non-string value
     → invalid, none set → missing, more than one → conflicting."""
     for group in spec.get("exactly_one_of", []):
         states = [receiver_field_state(receiver_obj, f) for f in group]
@@ -546,8 +546,7 @@ def _exactly_one_kind(spec: dict, receiver_obj: dict) -> str:
 
 def _exactly_one_field(spec: dict, receiver_obj: dict) -> str | None:
     """#2904: the receiver field a ``receiver_exactly_one_problem`` finding is
-    about, from the same field states — da-guard's choice
-    (``receiverspec.exactlyOneProblem``): the first non-string field of the
+    about, from the same field states: the first non-string field of the
     group, else the group's first field when none is set, else the LAST field
     set. None when no group has a problem."""
     for group in spec.get("exactly_one_of", []):
@@ -565,9 +564,8 @@ def receiver_type(receiver_obj: object) -> str:
     """The receiver type every check reads: the receiver's ``type`` when the
     receiver is a mapping and the type a non-empty string, else ``""``.
 
-    #2780: the one read of ``receiver.type`` — the Go copy is
-    ``routingpolicy.ReceiverType()``. A type PyYAML builds as anything but a
-    string (``{a: 1}``, ``[a]``, ``5``, ``true``, ``~``) names no receiver
+    #2780: the one read of ``receiver.type``. A type PyYAML builds as
+    anything but a string (``{a: 1}``, ``[a]``, ``5``, ``true``, ``~``) names no receiver
     type; a mapping or a list is unhashable and crashed every ``in`` /
     ``dict.get`` a caller did with it. ``build_receiver_config`` refuses such
     a receiver (``missing_receiver_field``).
@@ -615,8 +613,9 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
         return None, warnings
 
     # Exact match, no case folding or trimming (#2180): the schema (`const`)
-    # and the Go guard both reject `Email` / ` email`, so normalising here
-    # made the generator the only one of the three to accept them.
+    # and the exporter (`receiverspec.Known`) both reject `Email` / ` email`,
+    # so normalising here made the generator the only one of the three to
+    # accept them.
     if rtype not in RECEIVER_TYPES:
         supported = ", ".join(sorted(RECEIVER_TYPES.keys()))
         warnings.append(skipped_entry_warning(
@@ -631,7 +630,7 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     for req in spec["required"]:
         problem = receiver_required_problem(rtype, receiver_obj, req)
         if problem:
-            # #2766: absent → missing (da-guard's split), present → invalid.
+            # #2766: absent → missing, present → invalid.
             warnings.append(skipped_entry_warning(
                 f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping",
                 kind=("missing_receiver_field" if req not in receiver_obj

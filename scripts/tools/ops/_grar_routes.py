@@ -120,8 +120,7 @@ def enforced_match_invalid(enforced_routing: object) -> bool:
     ``matchers`` as is, which the render crashed on (``re.match`` on a
     non-string) or Alertmanager refuses. Absent / null and ``[]`` stay "no
     matcher" (every alert, as documented). Elements are judged as PyYAML
-    reads them (an unquoted ``yes`` is a boolean). Go twin:
-    ``routingpolicy.enforcedFrom`` (ProblemRoutingEnforcedMatchInvalid).
+    reads them (an unquoted ``yes`` is a boolean).
     """
     if not isinstance(enforced_routing, dict):
         return False

@@ -552,7 +552,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
       (strict for the same reason). Whether a proxy_url
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
       generator's ``--validate`` hands the rendered config to amtool, which
-      runs it (the Go copy checks it itself, ProxyURLProblem);
+      runs it;
     - ``proxy_from_environment`` is a YAML boolean; true together with a
       non-empty proxy_url or a no_proxy is refused; no_proxy needs a
       proxy_url key; proxy_connect_header needs a non-empty proxy_url or
