@@ -19,8 +19,8 @@ v2.4.0 新增：解決 v2.3.0 release 過程中 opa-evaluate 加入 COMMAND_MAP
      （stdlib / dunder）自動略過，describe_tenant 這類「非底線」註解式
      維護的相依不在守備範圍（維持既有人工註解慣例）。
   2. REQUIRED_DATA_FILES 對照 — import 掃不到資料檔；已驗證「同目錄尋址
-     + 缺檔 fail-quiet」的 (module → data file) 顯式列管：模組在
-     TOOL_FILES 時其資料檔也必須在（否則工具靜默空轉，比 crash 更難察覺）。
+     + 缺檔即失效」的 (module → data file) 顯式列管：模組在
+     TOOL_FILES 時其資料檔也必須在（否則工具在映像裡靜默空轉或執行期才失敗）。
 
 用法:
     python3 scripts/tools/lint/check_build_completeness.py [--ci] [--json]
@@ -68,7 +68,8 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 # 資料檔無法用 import 掃 → 顯式列管（module → data files 皆為 basename，
 # 需同時出現在 TOOL_FILES）。只收「已驗證同目錄尋址」的組合：
 #   - _observed_map_lib.py: DEFAULT_MAP_PATH = <lib 同目錄>/metric_observed_map.yaml，
-#     且 load_observed_map() 對缺檔回 {} → 全 key 靜默 skip（fail-quiet，#719）。
+#     load_observed_map() 缺檔時報錯（#3017 之後 fail-closed，工具 rc 2）；這裡仍錨住它，
+#     讓映像缺檔在建置時就被擋下，而不是等到執行期才 rc 2。
 #   - analyze_rule_pack_gaps.py: DEFAULT_METRIC_DICT = <script 同目錄>/metric-dictionary.yaml
 #     （flat image layout 下即 /app/metric-dictionary.yaml）。
 # migrate_rule / generate_tenant_mapping_rules 也讀 metric-dictionary.yaml，
@@ -667,8 +668,8 @@ def check_required_data_files(
                 errors.append((
                     "error",
                     f"build.sh TOOL_FILES 有 '{module}' 但缺其資料檔"
-                    f" '{data_file}'。Image 內該工具會靜默空轉"
-                    f"（fail-quiet，比 crash 更難察覺）。"
+                    f" '{data_file}'。Image 內該工具會靜默空轉或"
+                    f"在執行期才失敗（observed-map 缺檔時 rc 2，#3017）。"
                 ))
     return errors
 

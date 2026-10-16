@@ -31,14 +31,18 @@ What it checks (via _observed_map_lib.check_consistency)
 - **orphan_thresholds (WARN)**: a ``record: tenant:alert_threshold:<key>`` with
   NO alert referencing it — a rule-pack gap, surfaced for the pack authors, not
   a map bug.
-- **coverage_gaps (WARN)**: alert-referenced keys absent from the map and not
-  known-deferred — genuine extractor gaps worth a regenerate.
+- **coverage_gaps (FAIL under --ci, #3017)**: alert-referenced keys absent from
+  the map and not known-deferred — the map is stale; every map consumer would
+  skip the key. A regenerate always clears one (``build_map`` emits an entry,
+  needs_review if need be, for every alert-referenced key).
 
 Severity model
 --------------
-``--ci`` exits 1 ONLY on ``errors``. infos/orphans/gaps are reported but never
-fail CI (Gemini final-check: unmapped known-deferred keys must not red-gate the
-PR). Without ``--ci`` it is report-only (exit 0).
+``--ci`` exits 1 on ``errors`` or ``coverage_gaps``; infos/orphans are reported
+but never fail CI (Gemini final-check: unmapped known-deferred keys must not
+red-gate the PR). A missing, unreadable or key-less map exits 2 with or without
+``--ci`` (#3017: it used to load as {} and pass). Without ``--ci`` the rest is
+report-only (exit 0).
 
 Lint class & scope (lint-policy.md §3)
 --------------------------------------
@@ -63,7 +67,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 
 def run_check() -> dict[str, list[str]]:
@@ -89,11 +93,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ci",
         action="store_true",
-        help="Exit 1 on hard drift (errors). infos/orphans/gaps never fail CI.",
+        help=("Exit 1 on hard drift (errors) or a coverage gap (an alert-referenced "
+              "key the map lacks, #3017); infos/orphans never fail CI. A missing or "
+              "unreadable map exits 2 either way."),
     )
     args = parser.parse_args(argv)
 
-    result = run_check()
+    try:
+        result = run_check()
+    except observed_map_lib.ObservedMapError as exc:
+        # #3017: an absent map used to load as {} and pass with every key a gap.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     errors = result["errors"]
     infos = result["infos"]
     orphans = result["orphan_thresholds"]
@@ -112,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
             f"the observed-map — run `threshold-recommend --generate-observed-map`."
         )
 
+    if gaps and args.ci:
+        # #3017: a key an alert compares but the map lacks is invisible to
+        # every map consumer (recommend skips it, backtest cannot read its
+        # direction) — the map is stale, regenerate it.
+        print(f"\n[FAIL] {len(gaps)} coverage gap(s) — regenerate the observed-map.",
+              file=sys.stderr)
+        if not errors:
+            return EXIT_VIOLATION
     if errors:
         print(
             f"\n[FAIL] {len(errors)} observed-map drift error(s):",

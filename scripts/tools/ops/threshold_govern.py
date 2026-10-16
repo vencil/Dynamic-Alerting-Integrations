@@ -1146,6 +1146,7 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
+@recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(

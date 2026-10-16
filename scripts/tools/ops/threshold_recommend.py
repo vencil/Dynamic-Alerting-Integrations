@@ -1121,13 +1121,15 @@ def run_analysis(
     print_load_warnings(tree)
     effective = load_effective(config_dir)
 
+    # Load the observed-map once and share across tenants (#719) — before the
+    # tenant filter, so an unusable map is an error even when no tenant
+    # matches (#3017: "found nothing" must not hide it).
+    observed_map = observed_map_lib.load_observed_map()
+
     if tenant_filter:
         if tenant_filter not in effective:
             return []
         effective = {tenant_filter: effective[tenant_filter]}
-
-    # Load the observed-map once and share across tenants (#719).
-    observed_map = observed_map_lib.load_observed_map()
 
     reports: list[TenantRecommendation] = []
     for tenant_name in sorted(effective):
@@ -1536,6 +1538,7 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 # ---------------------------------------------------------------------------
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
+@observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     """CLI entry point: threshold recommendation engine."""
     parser = argparse.ArgumentParser(

@@ -320,6 +320,7 @@ def all_threshold_keys(pack_paths: list[str]) -> set[str]:
 # ---------------------------------------------------------------------------
 # Shared paths / loading / known-deferred (used by recommend + drift-guard)
 # ---------------------------------------------------------------------------
+import functools  # noqa: E402
 import glob  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
@@ -327,6 +328,7 @@ import sys  # noqa: E402
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
 from _lib_compat import find_project_root  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
 
@@ -604,8 +606,15 @@ def write_observed_map(
     packs = pack_paths or default_pack_paths()
     out = out_path or DEFAULT_MAP_PATH
     fresh = build_map(packs)
-    if os.path.isfile(out):
+    try:
         old = load_observed_map(out)
+    except ObservedMapError as exc:
+        # Nothing to preserve in a missing or key-less map: build it fresh.
+        # An unreadable one may hold human picks — refuse, never overwrite.
+        if exc.kind == "unreadable":
+            raise
+        old = None
+    if old is not None:
         keys, warns, stats = merge_maps(old, fresh)
         for msg in warns:
             print(f"[WARN] {msg}", file=sys.stderr)
@@ -631,16 +640,68 @@ def write_observed_map(
     }
 
 
+class ObservedMapError(Exception):
+    """The observed-map cannot be used. ``kind`` is ``"missing"``,
+    ``"unreadable"`` (cannot be read or parsed) or ``"empty"`` (no non-empty
+    ``keys`` mapping); the generator rebuilds over a missing or empty map but
+    never over an unreadable one, which may still hold human picks."""
+
+    def __init__(self, message: str, kind: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 def load_observed_map(path: Optional[str] = None) -> dict[str, dict[str, Any]]:
-    """Load the committed observed-map; returns the ``keys`` mapping (or {})."""
+    """Load the committed observed-map's ``keys`` mapping.
+
+    ⛔ Fails closed (#3017): raises ``ObservedMapError`` when the file is
+    absent, cannot be read or parsed, or holds no non-empty ``keys`` mapping.
+    It used to return ``{}`` there, and every consumer read that as "no key is
+    mapped": threshold-recommend skipped every key at rc 0 and the drift-guard
+    passed with every alert key a WARN-only gap — a packaging or path slip
+    looked like a clean run (the #1501 shape: "found nothing" is not "nothing
+    to find"). The generator itself only loads a map that exists.
+    """
     if yaml is None:
         raise RuntimeError("pyyaml required")
     p = path or DEFAULT_MAP_PATH
+    regen = "regenerate with `threshold-recommend --generate-observed-map`"
     if not os.path.isfile(p):
-        return {}
-    with open(p, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh) or {}
-    return doc.get("keys", {}) or {}
+        raise ObservedMapError(f"{p}: observed-map not found ({regen})", "missing")
+    try:
+        with open(p, encoding="utf-8") as fh:
+            doc = yaml.safe_load(fh)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        # One line: a YAMLError's str() spans several (problem + context mark).
+        why = " ".join(str(exc).split())
+        raise ObservedMapError(
+            f"{p}: cannot read observed-map ({why}); fix or delete it, then "
+            "regenerate", "unreadable") from exc
+    if doc is None:
+        doc = {}  # an empty file: nothing in it, same as no keys
+    if not isinstance(doc, dict) or not isinstance(doc.get("keys"), (dict, type(None))):
+        raise ObservedMapError(
+            f"{p}: observed-map is not a mapping with a 'keys' mapping; fix or "
+            "delete it, then regenerate", "unreadable")
+    keys = doc.get("keys")
+    if not keys:
+        raise ObservedMapError(
+            f"{p}: observed-map has no keys ({regen})", "empty")
+    return keys
+
+
+def exit_on_observed_map_error(fn):
+    """Decorate a CLI ``main`` so an unusable observed-map (``ObservedMapError``)
+    exits 2 (``EXIT_CALLER_ERROR``, an environment error) with one ``ERROR:``
+    line naming the file, instead of a traceback at rc 1."""
+    @functools.wraps(fn)
+    def _wrapped(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ObservedMapError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    return _wrapped
 
 
 def resolve_observed(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
