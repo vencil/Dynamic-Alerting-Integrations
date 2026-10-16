@@ -706,6 +706,100 @@ def test_main_exits_ok_on_successful_apply(monkeypatch, tmp_path):
     assert exc.value.code == tg.EXIT_OK
 
 
+def _main_rc_with_failing_writes(monkeypatch, tmp_path, rec):
+    monkeypatch.setattr(recommend, "run_analysis",
+                        lambda *a, **k: [_report("db-a", [rec])])
+    calls = _patch_http(monkeypatch, per_tenant=True,
+                        put_result=(503, {"error": "overloaded"}, None))
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
+                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    return exc.value.code, calls
+
+
+def test_main_zero_current_key_attempts_no_write_so_rc_stays_ok(
+        monkeypatch, tmp_path, capsys):
+    """#2997 (accepted by the owner): an upper-bound key whose current is 0 is
+    force_manual, so no write is attempted for it — a run whose only drifted key
+    is one exits 0 even with every tenant-api write failing. Before #2997 it was
+    a 0 → P95 plan at +100% and that run exited 1."""
+    vals = [0.0] * 900 + [0.3] * 100
+    rec = recommend.recommend_threshold(
+        "mysql_connections", "0", recommend.compute_percentiles(vals),
+        1000, 100, values=vals)
+    code, calls = _main_rc_with_failing_writes(monkeypatch, tmp_path, rec)
+    assert code == tg.EXIT_OK
+    assert calls["put_count"] == 0
+    out = capsys.readouterr().out
+    assert f"db-a / mysql_connections: {rec.guardrail_reason}" in out
+
+
+def test_main_failing_writes_control_exits_violation(monkeypatch, tmp_path):
+    """Control for the test above: the same harness with an actionable key
+    reaches the failing write and exits 1."""
+    rec = _kr("mysql_connections", "2000", 100.0, -95.0,
+              recommend.CONFIDENCE_HIGH, p95=100.0)
+    code, calls = _main_rc_with_failing_writes(monkeypatch, tmp_path, rec)
+    assert code == tg.EXIT_VIOLATION
+    assert calls["put_count"] == 1
+
+
+def _zero_current_rec():
+    vals = [0.0] * 900 + [0.3] * 100
+    return recommend.recommend_threshold(
+        "mysql_connections", "0", recommend.compute_percentiles(vals),
+        1000, 100, values=vals)
+
+
+def _two_tenant_main(monkeypatch, tmp_path, put_by_tenant, **over):
+    """ta: only a zero-current key; tb: a real -95% key. Returns (rc, PUT tenants)."""
+    reports = [
+        _report("ta", [_zero_current_rec()]),
+        _report("tb", [_kr("mysql_connections", "2000", 100.0, -95.0,
+                           recommend.CONFIDENCE_HIGH, p95=100.0)]),
+    ]
+    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
+    _patch_http(monkeypatch, per_tenant=True)
+    put_to: list[str] = []
+
+    def fake_put(url, yaml_body, headers, timeout):
+        tenant = next(t for t in put_by_tenant if f"/tenants/{t}" in url)
+        put_to.append(tenant)
+        return put_by_tenant[tenant]
+
+    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
+                        lambda self: _args(apply=True, config_dir=str(tmp_path), **over))
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    return exc.value.code, put_to
+
+
+_OK_PUT = (200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None)
+
+
+def test_main_zero_current_write_no_longer_masks_another_tenants_failure(
+        monkeypatch, tmp_path):
+    """#2997 (accepted by the owner), the 0 → 1 direction: before #2997 ta's
+    0 → P95 write succeeded (or got a 409 already-pending) and counted as
+    progress, masking tb's failed write (rc 0). Now ta is force_manual and not
+    written, so tb's failure is the whole run: rc 1, and only tb is PUT."""
+    code, put_to = _two_tenant_main(monkeypatch, tmp_path, {
+        "ta": _OK_PUT, "tb": (503, {"error": "overloaded"}, None)})
+    assert code == tg.EXIT_VIOLATION
+    assert put_to == ["tb"]
+
+
+def test_main_zero_current_key_takes_no_max_prs_slot(monkeypatch, tmp_path):
+    """#2997: with --max-prs 1 the slot used to go to ta (first in order) for
+    its 0 → P95 write; now it goes to tb."""
+    code, put_to = _two_tenant_main(monkeypatch, tmp_path,
+                                    {"ta": _OK_PUT, "tb": _OK_PUT}, max_prs=1)
+    assert code == tg.EXIT_OK
+    assert put_to == ["tb"]
+
+
 def test_systemic_failure_live_path_circuit_breaker_many_tenants(monkeypatch):
     # HEADLINE #656 scenario: tenant-api down for a week with MANY drifted tenants.
     # After MAX_CONSECUTIVE_ERRORS the circuit breaker emits "skipped" outcomes — pin

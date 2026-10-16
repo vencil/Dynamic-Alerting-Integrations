@@ -3039,7 +3039,8 @@ da-tools threshold-recommend --generate-observed-map
 > - **P95 ≤ 0**：不給建議（`recommended` 為空，不寫進 `--export-patch`、`threshold-govern` 不開 PR），reason 為 `P95 is non-positive (max in window X) — no recommendation`。P95 = 0 不一定是閒置，現行告警可能響過，請看窗內最大值判斷。
 > - **P95 低於現值（收緊）**：建議值為 `max(P95, 現值一半向上取整, 窗內不超過現值的最大點向上取整)`，上限是現值。一輪最多收緊 50%；不會讓任何在現值下沒響的點開始響（窗內一個高於現值的尖峰不會擋住收緊），因此 backtest 對它判 LOW。被這個下限夾住時，reason 以 `tighten floored at …` 開頭並寫明是哪一項。取整依現值的寫法：整數現值（含 `1e3` 這種科學記號）取整數，其餘取現值本身的小數位數、至少兩位（`0.8` → 兩位，`0.001`、`1e-3` → 三位）；所以已經是該精度最小一格的現值（如 `0.001`）收不下去，會判為無變更。大幅收緊要分幾輪（例如 94% 為 0 的指標 30 → 15 → 8 → 4 → 2）。
 > - **P95 高於現值（放寬）**：改取 P99，依上述精度**向上**取整（放寬到 P95 仍約有 5% 的點超標；向上取整保證建議值不會落在現值以下）。這時 5% 的變動門檻量的是 P99 與現值的差距。
-> - 現值為 0 的 key 照舊（取 P95）；變動小於 5% 仍視為無變更。
+> - **現值為 0**（[#2997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2997)）：門檻 0 代表「任何大於 0 的值都告警」，常是刻意設定（如 `kafka_under_replicated_partitions`）；相對 0 的變動百分比沒有定義，所以不給建議值。有活動（P95 > 0）時標成 `force_manual`，`recommended` 與 `delta_pct` 皆為空，reason 為 `current threshold is 0 (fires on any positive value) — manual review; observed P99 X (rounded up to current's precision: Z), max Y`（Z 是 P99 依上述精度向上取整的值，可能大於窗內最大值 Y；與 X 相同時不列括號），`--export-patch` 以 `(manual)` 註解列出，`threshold-govern` 列進人工審查段，不開 PR。全為 0 的照上方 P95 ≤ 0 處理。
+> - 變動小於 5% 仍視為無變更。
 >
 > ⚠️ `threshold-govern --min-delta-pct` 設在 50 以上時，被「一半」夾住的 -50% 建議會被 govern 濾掉（不開 PR），但 `--export-patch` 仍會列出它。
 >
@@ -3116,11 +3117,11 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--timeout` | 呼叫 tenant-api（GET／PUT）的 HTTP 逾時秒數，只在 `--apply` 時用到；不影響 Prometheus 查詢。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)） | `30` |
 | `--json` | JSON 輸出 | - |
 
-> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除下界 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
+> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦、現值為 0 的上界 key、推薦時出例外的 key 都不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
 >
 > **#2116 只治理租戶自有的 key**：PR 只改租戶檔自己寫的 key，寫回時用檔案裡的拼法（舊拼法照舊）。繼承自 defaults／平台／profile 的 key 不進計畫、不查 Prometheus，只以 INFO 列出（JSON 的 `inherited` 陣列與計數），因此不會因為 tenant-api 的租戶檔裡找不到它而報錯、觸發連續錯誤斷路。租戶檔在子目錄時，tenant-api 只讀設定目錄最上層的租戶檔，本工具不送 GET、不開 PR，結果標為 `skipped_nested`（不算錯誤、不佔 `--max-prs`），需手動改該檔。
 >
-> **#916 下界整合**：下界 `percentile-lower` 收緊推薦（拉高 floor）會正常經閘門開 PR；但 `force_manual`（放鬆 / domain / 樣本 / 估計量發散）另列 **manual-review section**（附 `guardrail_reason` + miss delta），`not-applicable` 列 **INFO**（治理完成）——皆計入 summary、JSON 輸出 `force_manual` / `not_applicable` 陣列與計數。治理表格對下界 change 亦標 `+X% miss`。
+> **#916 下界整合**：下界 `percentile-lower` 收緊推薦（拉高 floor）會正常經閘門開 PR；但 `force_manual`（放鬆 / domain / 樣本 / 估計量發散）另列 **manual-review section**（附 `guardrail_reason` + miss delta），`not-applicable` 列 **INFO**（治理完成）——皆計入 summary、JSON 輸出 `force_manual` / `not_applicable` 陣列與計數。治理表格對下界 change 亦標 `+X% miss`。現值為 0 的上界 key（#2997）同樣列在 manual-review section，只附 reason、沒有 delta（JSON 的 `delta_pct` 為 `null`）；`--apply` 不會為它送出寫入，所以與 #2997 之前（建議 0 → P95、照開 PR）相比，結束碼在兩種情況下會不同：可寫入的 key 只有這類 key、且寫入失敗時，從 `1` 變成 `0`（沒有嘗試寫入）；它的寫入原本是整輪唯一成功（含已有 pending PR 的 409），而其他租戶的寫入都失敗時，從 `0` 變成 `1`（不再有成功掩蓋失敗）。`--max-prs` 的名額也不再被它占用，改由其他租戶使用。
 >
 > **`--min-delta-pct` 空間不對稱**：此旋鈕對上界比的是 **value 空間** delta、對下界比的是 **miss-rate 空間** delta——同一數值敏感度差很多（0.95 floor 的 25% miss ≈ 1.3% value）。`--min-delta-pct` 下限 `5.0` 指的是上界 5% value 邊界（下界 no-change 邊界為 10% miss），故該下限為下界的必要非充分條件。下界 key 建議搭配 `--lookback 14d`（週跑 govern 對下界覆蓋亦然）。
 
