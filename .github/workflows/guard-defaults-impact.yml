@@ -142,14 +142,10 @@ on:
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"
-      # #2904: da-guard no longer judges routing or domain policy, but its
-      # default check still calls pkg/routingpolicy (MergeShapeError, for the
-      # files the route generator refuses whole: exit 3) and reads the conf.d
-      # root's platform files through RootPlatformFiles, until ADR-036 step 3.
-      - "components/threshold-exporter/app/pkg/routingpolicy/**"
-      # #2295: the receiver contract, still built into da-guard until ADR-036 step 3.
+      # #2295: the receiver types pkg/config's routing resolver looks up
+      # (receiverspec.Known; ADR-036 step 3, #2905, deleted the rest of the
+      # package and pkg/routingpolicy, which da-guard no longer calls).
       - "components/threshold-exporter/app/pkg/receiverspec/**"
-      - "components/threshold-exporter/app/pkg/config/root_platform_files.go"
       # #2904: the route generator this workflow runs beside da-guard, what it
       # imports, and the constraints its PyYAML is installed from. Over-trigger
       # on purpose (every `_lib_*`), never under.

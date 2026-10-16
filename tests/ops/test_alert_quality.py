@@ -343,19 +343,20 @@ class TestQueryPrometheusAlerts:
         result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
         assert len(result) == 1
 
-    def test_error_returns_empty(self, monkeypatch):
-        """HTTP 錯誤回傳空清單。"""
+    def test_error_raises(self, monkeypatch):
+        """HTTP 錯誤往上拋、帶錯誤原文（#3065：以前收斂成空清單）。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
                             lambda url, timeout=10: (None, "refused"))
-        result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
-        assert result == []
+        with pytest.raises(aq.PrometheusQueryError, match="refused"):
+            aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
 
-    def test_api_error(self, monkeypatch):
-        """API 錯誤狀態回傳空清單。"""
+    def test_api_error_raises(self, monkeypatch):
+        """API 錯誤狀態往上拋（#3065）。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
-                            lambda url, timeout=10: ({"status": "error"}, None))
-        result = aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
-        assert result == []
+                            lambda url, timeout=10: ({"status": "error",
+                                                      "error": "bad query"}, None))
+        with pytest.raises(aq.PrometheusQueryError, match="bad query"):
+            aq.query_prometheus_alerts("http://prom", "ALERTS", 86400)
 
 
 # ── Alertmanager query mock ────────────────────────────────────
@@ -422,11 +423,19 @@ class TestAnalyzeFromPrometheus:
         assert metrics[0].fire_count >= 1
 
     def test_no_data(self, monkeypatch):
-        """無資料回傳空清單。"""
+        """查詢成功但無資料 → 空清單。"""
         monkeypatch.setattr("_lib_prometheus.http_get_json",
-                            lambda url, timeout=30: (None, "refused"))
+                            lambda url, timeout=30: ({"status": "success",
+                                                      "data": {"result": []}}, None))
         metrics = aq.analyze_from_prometheus("http://prom", 86400)
         assert metrics == []
+
+    def test_query_error_propagates(self, monkeypatch):
+        """查詢失敗不再被當成無資料（#3065）。"""
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=30: (None, "refused"))
+        with pytest.raises(aq.PrometheusQueryError):
+            aq.analyze_from_prometheus("http://prom", 86400)
 
 
 # ── CLI ────────────────────────────────────────────────────────
@@ -608,3 +617,116 @@ class TestTenantWhitelistRejectsTrailingNewline:
             aq.main()
         assert exc_info.value.code == 2
         assert "invalid tenant name" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# #3065: a Prometheus query error is a caller error, not "no alerts"
+# ---------------------------------------------------------------------------
+import contextlib  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+_AQ_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..",
+    "scripts", "tools", "ops", "alert_quality.py")
+
+
+@contextlib.contextmanager
+def _fake_prometheus(mode):
+    """本機假 Prometheus：``mode="503"`` 時 query_range 回 503 + error JSON；
+    ``mode="firing"`` 回一筆剛 firing 的 ALERTS series（對照組）。"""
+    now = time.time()
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            if mode == "503":
+                code, body = 503, {"status": "error", "errorType": "unavailable",
+                                   "error": "query queue full"}
+            elif self.path.startswith("/api/v1/query_range"):
+                code, body = 200, {"status": "success", "data": {
+                    "resultType": "matrix",
+                    "result": [{
+                        "metric": {"alertname": "HostDown", "tenant": "tenant-one",
+                                   "alertstate": "firing"},
+                        "values": [[now - 120, "1"], [now - 60, "1"]],
+                    }]}}
+            else:
+                code, body = 404, {"status": "error", "error": "not found"}
+            raw = json.dumps(body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):  # noqa: D401
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=5)
+
+
+def _run_aq(url, *extra):
+    env = {k: v for k, v in os.environ.items()
+           if k.lower() not in ("http_proxy", "https_proxy", "all_proxy")}
+    env["NO_PROXY"] = env["no_proxy"] = "*"
+    env["DA_LANG"] = "en"
+    return subprocess.run(
+        [sys.executable, _AQ_SCRIPT, "--prometheus", url, *extra],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+
+
+class TestPrometheusQueryErrorIsCallerError:
+    """#3065：query_range 失敗以前被收斂成「沒有警報」— 報告全 GOOD、
+    `--ci` rc 0。現在 rc 2，stderr 帶錯誤原文，`--json` 吐 caller_error envelope。"""
+
+    @pytest.mark.parametrize(
+        "extra", [[], ["--ci"], ["--markdown"], ["--markdown", "--ci"]],
+        ids=["plain", "ci", "markdown", "markdown-ci"])
+    def test_503_text_exits_caller_error(self, extra):
+        with _fake_prometheus("503") as url:
+            proc = _run_aq(url, *extra)
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        # 不出報告：stdout 不得有任何（空的、全 GOOD 的）報告
+        assert proc.stdout == "", proc.stdout
+        assert "503" in proc.stderr, proc.stderr
+        assert "Traceback" not in proc.stderr, proc.stderr
+
+    @pytest.mark.parametrize("extra", [[], ["--ci"]], ids=["plain", "ci"])
+    def test_503_json_emits_caller_error_envelope(self, extra):
+        with _fake_prometheus("503") as url:
+            proc = _run_aq(url, "--json", *extra)
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        doc = json.loads(proc.stdout)
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == "prometheus_query_error"
+        assert "503" in doc["error"], doc
+        # 沿用正常 schema 的鍵、歸零
+        assert doc["tenants"] == []
+        assert doc["summary"]["total_alertnames"] == 0
+        assert doc["period"] == "30d"
+        happy_keys = set(aq.asdict(aq.generate_report([], "30d")))
+        assert set(doc) == happy_keys | {"status", "reason", "error"}
+
+    def test_firing_series_is_reported_as_before(self):
+        with _fake_prometheus("firing") as url:
+            proc = _run_aq(url, "--json", "--ci")
+        assert proc.returncode == 0, (proc.returncode, proc.stdout, proc.stderr)
+        doc = json.loads(proc.stdout)
+        assert "status" not in doc
+        assert doc["summary"]["total_alertnames"] == 1
+        assert doc["tenants"][0]["alerts"][0]["alertname"] == "HostDown"

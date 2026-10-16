@@ -545,11 +545,11 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 ## 實作順序
 
 - 已完成：產生器輸出結構化的 finding。
-- 已完成：CI 檢查（刪除範圍的使用者比對、差異清單與它的雙向測試）。差異清單在步驟 3 刪除。
+- 已完成：CI 檢查（刪除範圍的使用者比對、差異清單與它的雙向測試）。差異清單已在步驟 3 刪除。
 - 步驟 0（先發布，行為不變）：`parse-tree` 與固定語料 `tests/shared/parse_tree_corpus.json`；遷移稽核指令；與解析無關的小工具搬家。
 - 步驟 1：§7 列的前置工作；產生器容器（驗證端點、狀態端點）；Helm chart 加容器、socket、policy 檔掛載與資源設定；tenant-api 寫入改問產生器容器，同時刪除 tenant-api 的 Go 端路由與 policy 判定、扁平鍵 `_routing_receiver_type` 與 `--policy-unavailable-open`。
 - 步驟 2：da-guard 加上「未判定」狀態與 exit code 4；`guard-defaults-impact.yml` 加跑產生器。
-- 步驟 3：刪除 Go 端模仿 PyYAML 與模仿產生器語意的程式、vendored yaml.v3 的「只認空格」patch、差異清單與 `make pre-tag` 的到期檢查。
+- 已完成，步驟 3：刪除了 Go 端模仿 PyYAML 與模仿產生器語意的程式、vendored yaml.v3 的「只認空格」patch、差異清單與 `make pre-tag` 的到期檢查。
 - 步驟 4：產生器與 Python 工具改讀解析結果 JSON；刪除 Python 端的模仿 loader 與「非特定 tag」patch；寫 conf.d 的工具加上寫入前確認；以固定語料在 main 上重測。
 
 步驟 0 至 4 依序合併進 main，每一步合併後都可以發布（§7）。
@@ -566,21 +566,21 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 | 寫 conf.d 的工具（PyYAML 產生文字；保留） | `_lib_io` 的 `StrictRewriteLoader`、`strict_load_for_rewrite`／`load_yaml_file_for_rewrite` 與 `_lib_yaml_keys.dump_for_rewrite` 的呼叫端（例如 `patch_config`、`deprecate_rule`、`da_assembler`）；以 `yaml.safe_dump` 產生新檔的 `scaffold_tenant` 等 |
 | 產生器另外讀的 policy 檔名 | `_grar_parse.py` 的 `_POLICY_FILENAMES`；exporter 不讀巢狀 `_` 檔的說明在 `flat_build.go` |
 | portal 只做預覽的解析 | js-yaml 經 `tools/portal/src/interactive/tools/_common/validation/yaml-parser.js`；手寫的逐行解析 `tools/portal/src/interactive/tools/config-lint/lint.js` |
-| 與解析無關、步驟 0 搬出的小工具 | `pkg/routingpolicy` 的 `IsValidTenantID`、`LevelOf`、`IsDomainPolicyFile` |
-| 今天擋下重複鍵、多份文件的程式（刪除前由 `parse-tree` 接手） | Python 的 `RejectDuplicateKeys`；Go 的 `pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go` |
-| Go 端模仿 PyYAML 讀法的程式 | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
-| Go 端模仿產生器語意的程式 | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`；`IsDisabled`（模仿產生器的 `_lib_validation.is_disabled`，由 da-guard 呼叫） |
-| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（刪除）、非特定 tag（刪除）、大型 mapping 的重複鍵檢查（exporter 使用，保留）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
+| 與解析無關、步驟 0 搬出的小工具 | `IsValidTenantID`（呼叫端改用 `pkg/tenantid`）、`LevelOf` 與 `IsDomainPolicyFile`（`internal/confdlayout`）；routing profiles 的檔名是 `cmd/da-guard` 的 `routingProfilesNames` |
+| 擋下重複鍵、多份文件的程式 | Python 的 `RejectDuplicateKeys`；Go 端是 `parse-tree`（`internal/parsetree`），da-guard 的未判定證據讀它。Go 端的仿製（`pyyamlcompat.FindDuplicateKey`、`routingpolicy` 的 `firstDocument`／`errMoreDocuments`、da-guard 的 `pyyaml_duplicates.go`）已在步驟 3 刪除 |
+| Go 端模仿 PyYAML 讀法的程式（已在步驟 3 刪除） | `pkg/pyyamlcompat`；`pkg/routingpolicy` 的 `pyResolve` 與打開 `SpacesOnly` 的 policy 解碼器 |
+| Go 端模仿產生器語意的程式（已在步驟 3 刪除） | `pkg/routingpolicy` 的 `shapeWork`、`ParseDomainPolicies`、`UnmarshalPolicy`、`IsDisabled`；da-guard 的路由檢查 `internal/guard/routing.go` 與它們的 finding kind |
+| vendored yaml.v3 的修改 | `third_party/yaml.v3`：只認空格（已在步驟 3 刪除）、非特定 tag（步驟 4 刪除）、大型 mapping 的重複鍵檢查（exporter 使用，保留）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
 | 非特定 tag 影響的 exporter 讀法 | `pkg/config/config_file.go` 的 `isMergeKey`；`custom_alert.go` 的 `validateSloObjective` |
-| Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（da-guard、`pkg/routingpolicy` 用，隨步驟 3 刪除；tenant-api 已在步驟 1 停用） |
+| Go 版的 receiver 規格 | `pkg/receiverspec`：`Known`（exporter 的路由解析用，保留）；`Check`（da-guard、`pkg/routingpolicy` 用，已在步驟 3 刪除；tenant-api 已在步驟 1 停用） |
 | tenant-api 現在的寫入判定 | 產生器容器的呼叫端 `internal/generator`（`Gate`）；Go 端只剩形狀與保留鍵的檢查（下兩列） |
 | 批次 patch 由 Go 重新輸出 | `mergePatchYAML`；合併後的不變式 `verifyPartialWrite`（`handler/tenant_list.go`）；離線差分測試 `handler/batch_patch_diff_test.go` |
 | tenant-api 裡其他的 Go 端路由與 policy 判定（步驟 1 已刪除） | 路由 patch 檢查 `validateRoutingPatch`；receiver 檢查 `gitops` 的 `receiverViolations`（同檔的 `placeholderViolations` 是遮罩憑證回寫防護，保留）；`internal/policy` 的 `JudgeTenantBlock`／`CheckTenantRouting`；「讀不了的檔當成空」的 `tenantBlockOnDisk` |
 | tenant-api 步驟 1 保留的非路由檢查 | `gitops/writer.go` 的 `validateShape`（以 yaml.v3 確認 exporter 讀得了）；`handler/body_validator.go` 的保留鍵值檢查（例如 `validateSilentMode`） |
 | da-guard exit 4 要更新的說明 | `cmd/da-guard/main.go` 的 exit code 註解；`scripts/tools/_lib_exitcodes.py`；`docs/cli-reference.md` |
 | 刪除範圍的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go` |
-| 只有 Go 有的 da-guard 檢查 | `internal/guard/types.go` 減去 `tests/shared/routing_policy_parity_matrix.json` |
-| 差異清單（步驟 3 刪除） | `tests/shared/reader_divergence_catalog.yaml`；Go 端判讀快照 `tests/shared/merge_key_go_verdicts.json`；`tests/shared/test_reader_divergence_catalog.py`；`make pre-tag` 的 `reader-divergence-expiry` |
+| 只有 Go 有的 da-guard 檢查（已無：步驟 2 搬到產生器，步驟 3 刪除） | 產生器那一側由 `tests/shared/routing_policy_parity_matrix.json` 釘住 |
+| 差異清單（已在步驟 3 刪除，下列檔案與指令已不存在） | `tests/shared/reader_divergence_catalog.yaml`；Go 端判讀快照 `tests/shared/merge_key_go_verdicts.json`；`tests/shared/test_reader_divergence_catalog.py`；`make pre-tag` 的 `reader-divergence-expiry` |
 
 ## 參考
 

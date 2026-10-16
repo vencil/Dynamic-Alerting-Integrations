@@ -859,6 +859,13 @@ RECIPES: list[Recipe] = [
     # ── alert_quality ──────────────────────────────────────────────────────
     R("alert_quality", "prometheus",
       lambda t, s: ["--prometheus", s, "--alertmanager", s, "--json"]),
+    # #3065: a failed ALERTS query used to read as "nothing fired" (rc 0
+    # under --ci). It is a caller error now, and still one document.
+    R("alert_quality", "prometheus-query-error",
+      # deliberately unreachable: port 1 is never listening
+      lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("prometheus_query_error")),
 
     # ── analyze_rule_pack_gaps ─────────────────────────────────────────────
     R("analyze_rule_pack_gaps", "config-dir",
@@ -908,6 +915,31 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
                     "--baseline", str(SEED_CONF_D),   # identical => zero changes
                     "--prometheus", s, "--json"]),
+    # #3059: the three rc 2 paths that printed nothing under `--json`; the
+    # two argument errors come before the Prometheus check, so
+    # `--skip-if-unavailable` cannot turn them into a skip.
+    R("backtest_threshold", "prometheus-unreachable",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
+                    "--old-value", "100", "--new-value", "150",
+                    "--prometheus", "http://127.0.0.1:1", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("prometheus_unavailable")),
+    R("backtest_threshold", "tenant-args-missing",
+      lambda t, s: ["--tenant", "tenant-one", "--prometheus", "http://127.0.0.1:1",
+                    "--skip-if-unavailable", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("tenant_args_missing")),
+    R("backtest_threshold", "invalid-tenant-id",
+      lambda t, s: ["--tenant", 'a"b', "--metric", "mysql_connections",
+                    "--old-value", "70", "--new-value", "50",
+                    "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("invalid_tenant_id")),
+    R("backtest_threshold", "no-change-source",
+      lambda t, s: ["--prometheus", "http://127.0.0.1:1",
+                    "--skip-if-unavailable", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("no_change_source")),
 
     # ── batch_diagnose  (⚠ known multi-mode trap) ──────────────────────────
     R("batch_diagnose", "dry-run",
@@ -934,6 +966,12 @@ RECIPES: list[Recipe] = [
     # ── cardinality_forecasting ────────────────────────────────────────────
     R("cardinality_forecasting", "forecast",
       lambda t, s: ["--prometheus", s, "--json"]),
+    # #3065: a failed query is told apart from "no data" (no_cardinality_data).
+    R("cardinality_forecasting", "prometheus-query-error",
+      # deliberately unreachable: port 1 is never listening
+      lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("prometheus_query_error")),
 
     # ── check_alert ────────────────────────────────────────────────────────
     R("check_alert", "query",

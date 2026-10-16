@@ -1,37 +1,29 @@
 package guard
 
-// finding_kind_gate_test.go — the da-guard finding kinds and their routing /
-// threshold split, for the Python gate (#2904, ADR-036 §9).
+// finding_kind_gate_test.go — every registered da-guard finding kind is one
+// the guard package reports (#2904).
 //
-// tests/shared/test_routing_policy_parity.py is the gate for deleting
-// da-guard's routing checks (#2903, #2905): every routing kind must be pinned
-// against the route generator first. The set of kinds and each kind's plane
-// are internal/guard/findingkind's: a closed type whose only constructor
-// registers the kind with its plane and reason (see that package's comment
-// for the four ways of listing kinds this replaces — a regex, an AST shape
-// rule, a go/types computation, a check at Run's exit — and why each fell).
+// The set of kinds is internal/guard/findingkind's: a closed type whose only
+// constructor registers the kind with its reason (see that package's
+// comment). First, finding_kind_isolation_test.go over the whole module:
+// findingkind is imported by name, so every use of a kind is a
+// `findingkind.FindingXxx` selector this test sees, and no kind var is
+// written to. Then, over every non-test .go file of this package whatever
+// its name or build constraint (go/build's default context would skip an
+// `_arm64.go` file): every registered kind is used by some file, else it is
+// stale.
 //
-// First, finding_kind_isolation_test.go over the whole module: findingkind
-// is imported by name, so every use of a kind is a `findingkind.FindingXxx`
-// selector this test sees, and no kind var is written to. Then, over every
-// non-test .go file of this package whatever its name or build constraint
-// (go/build's default context would skip an `_arm64.go` file): every
-// registered kind is used by some file (else it is stale), and a kind used
-// in routing.go is a routing kind.
-//
-// With DA_GUARD_EMIT_KINDS=<path> the test writes
-// {kind: {"plane": ..., "files": [...]}} to <path> once every check passed;
-// the Python gate runs this test that way and reads that file.
+// Until #2905 this test also split the kinds into a routing and a threshold
+// plane and wrote that table out for tests/shared/test_routing_policy_parity.py,
+// the gate for deleting da-guard's routing checks. Those checks and their
+// kinds are deleted (ADR-036 §7 step 3), so the split and the table went
+// with them.
 
 import (
-	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"maps"
-	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,19 +31,7 @@ import (
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
 
-// routingFindingsFile builds every routing and domain-policy finding; a kind
-// it refers to is a routing kind.
-const routingFindingsFile = "routing.go"
-
-// emitKindsEnv names the file the kind table is written to.
-const emitKindsEnv = "DA_GUARD_EMIT_KINDS"
-
 const findingKindImport = "github.com/vencil/threshold-exporter/internal/guard/findingkind"
-
-type emittedKind struct {
-	Plane findingkind.Plane `json:"plane"`
-	Files []string          `json:"files"`
-}
 
 // nonTestFiles parses every non-test .go file in dir, ignoring build
 // constraints.
@@ -127,13 +107,10 @@ func kindVars(t *testing.T) map[string]findingkind.Kind {
 	return out
 }
 
-func TestFindingKindPlanes(t *testing.T) {
+func TestFindingKindsAreReported(t *testing.T) {
 	requireKindIsolation(t) // finding_kind_isolation_test.go: rules a–e, module-wide
 	vars := kindVars(t)
 	_, files := nonTestFiles(t, ".")
-	if files[routingFindingsFile] == nil {
-		t.Fatalf("%s is not among the package's files", routingFindingsFile)
-	}
 
 	kindFiles := map[findingkind.Kind]map[string]bool{}
 	for name, f := range files {
@@ -175,30 +152,9 @@ func TestFindingKindPlanes(t *testing.T) {
 	}
 
 	for _, e := range findingkind.All() {
-		used := kindFiles[e.Kind]
-		switch {
-		case len(used) == 0:
+		if len(kindFiles[e.Kind]) == 0 {
 			t.Errorf("finding kind %q is registered but no non-test source of the guard package uses it; "+
 				"remove it from findingkind or report it", e.Kind)
-		case used[routingFindingsFile] && e.Plane != findingkind.PlaneRouting:
-			t.Errorf("finding kind %q is referred to in %s but registered on plane %q, not %q",
-				e.Kind, routingFindingsFile, e.Plane, findingkind.PlaneRouting)
 		}
-	}
-
-	out := os.Getenv(emitKindsEnv)
-	if out == "" || t.Failed() {
-		return
-	}
-	table := map[string]emittedKind{}
-	for k, used := range kindFiles {
-		table[k.String()] = emittedKind{Plane: k.Plane(), Files: slices.Sorted(maps.Keys(used))}
-	}
-	data, err := json.MarshalIndent(table, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(out, append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
 	}
 }

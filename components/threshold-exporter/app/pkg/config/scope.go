@@ -59,8 +59,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // ScopedTenants is the bundle ScopeEffective returns: per-tenant
@@ -96,10 +94,9 @@ type ScopedTenants struct {
 	// DefaultsFiles is every defaults carrier a defaults chain reads (the
 	// per-directory selection, DefaultsCarriers().ByDir) that bears on the
 	// scope — at-or-below it, or in a directory above it — with the bytes
-	// the scan read, sorted by Name (#2291). da-guard checks them for
-	// routing keys the route generator never reads
-	// (routingpolicy.UnreadRouting). A file in ParseFailed is listed too;
-	// the caller skips it.
+	// the scan read, sorted by Name (#2291). da-guard checks them for the
+	// `defaults:` wrapper shapes (#2386). A file in ParseFailed is listed
+	// too; the caller skips it.
 	DefaultsFiles []DefaultsFile
 
 	// Unreadable is every entry of the walk's TreeScan.Unreadable — a
@@ -144,14 +141,6 @@ type ScopedTenants struct {
 	// configDir and the reason (e.g. permission denied), for the caller to
 	// print. Tenants is then empty. nil otherwise.
 	RootListErr error
-
-	// NestedPlatformFiles is every `_` file below the root that is not a
-	// defaults carrier spelling (confdname.IsDefaults) and bears on the
-	// scope, with the bytes the scan read, sorted by Name (#2439). The
-	// exporter reads none of them, so only the YAML parser's verdict puts
-	// one in ParseFailed; da-guard checks them for the repeated keys the
-	// route generator refuses (withGeneratorDuplicates).
-	NestedPlatformFiles []DefaultsFile
 
 	// Undeliverable is, for each tenant in Tenants, the sorted keys
 	// (filtered by undeliverableThresholds, the same filter as
@@ -424,14 +413,13 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		unreadable = withUnreadable(unreadable, RootUnreadable)
 		rootListErr = fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
 	}
-	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
 	var noTenant []string
 	if wholeTree {
 		noTenant = noTenantKeys(scan)
 	}
 	if len(inScope) == 0 {
 		out := &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
-			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr, DeclaredStateFilters: stateFilters,
+			RootListErr: rootListErr, DeclaredStateFilters: stateFilters,
 			NoTenant: noTenant}
 		if built != nil { // #2031: the whole tree's /metrics, whatever the scope
 			out.Config, out.scan, out.built = &built.Config, scan, built
@@ -468,7 +456,6 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 		ParseFailed:            parseFailed,
 		DefaultsFiles:          defaultsFiles,
 		Unreadable:             unreadable,
-		NestedPlatformFiles:    nestedFiles,
 		NoTenant:               noTenant,
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
@@ -694,21 +681,6 @@ func withUnreadable(us []UnreadableFile, u UnreadableFile) []UnreadableFile {
 	}
 	out := append(append([]UnreadableFile(nil), us...), u)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].RelKey < out[j].RelKey })
-	return out
-}
-
-// scopeNestedPlatformFiles is ScopedTenants.NestedPlatformFiles.
-func scopeNestedPlatformFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
-	var out []DefaultsFile
-	for _, key := range scan.Keys {
-		f := scan.Files[key]
-		if f == nil || f.Data == nil || !isNestedPlatformFile(key) ||
-			confdname.IsDefaults(scanKeyBase(key)) || !bearsOnScope(key, scopeRel) {
-			continue
-		}
-		out = append(out, DefaultsFile{Name: key, Data: f.Data})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

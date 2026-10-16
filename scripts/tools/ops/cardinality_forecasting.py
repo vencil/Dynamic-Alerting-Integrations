@@ -49,6 +49,7 @@ try:
         parse_duration_seconds,
         query_prometheus_instant,
         query_prometheus_range,
+        safe_label,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
@@ -57,6 +58,7 @@ except ImportError:
         parse_duration_seconds,
         query_prometheus_instant,
         query_prometheus_range,
+        safe_label,
     )
 
 # ---------------------------------------------------------------------------
@@ -206,6 +208,14 @@ def compute_days_to_limit(
 # ---------------------------------------------------------------------------
 # Prometheus queries
 # ---------------------------------------------------------------------------
+class PrometheusQueryError(RuntimeError):
+    """Prometheus 查詢失敗（#3065）。
+
+    以前兩支查詢都收斂成 ``{}``，main 把它與「查詢成功但沒有資料」報成同一個
+    reason ``no_cardinality_data``。現在往上拋，訊息是錯誤原文。
+    """
+
+
 def query_cardinality_range(
     prometheus_url: str,
     lookback: str = DEFAULT_LOOKBACK,
@@ -223,6 +233,9 @@ def query_cardinality_range(
 
     Returns:
         {tenant: [(timestamp, cardinality), ...]}。
+
+    Raises:
+        PrometheusQueryError: 查詢失敗（#3065）。
     """
     lookback_secs = parse_duration_seconds(lookback)
     if lookback_secs is None:
@@ -239,13 +252,14 @@ def query_cardinality_range(
     # #1112: PromQL contains spaces/braces/quotes — it MUST be percent-encoded.
     # An f-string interpolation raises `InvalidURL: URL can't contain control
     # characters` against a real Prometheus. The encoding now lives in
-    # `_lib_prometheus.query_prometheus_range` (ROI r3 W1); the
-    # "any error → {}" collapse stays here. timeout=10 preserves the
-    # pre-consolidation behaviour (this site used http_get_json's default).
+    # `_lib_prometheus.query_prometheus_range` (ROI r3 W1). #3065: an error
+    # is raised, not collapsed into {} — main must tell it apart from an
+    # empty result. timeout=10 preserves the pre-consolidation behaviour
+    # (this site used http_get_json's default).
     result, err = query_prometheus_range(
         prometheus_url, query, start, end, step, timeout=10)
     if err:
-        return {}
+        raise PrometheusQueryError(err)
 
     results: dict[str, list[tuple[float, float]]] = {}
     for series in result:
@@ -270,6 +284,9 @@ def query_scrape_series_added(
 
     Returns:
         {tenant: current_scrape_series_added}。
+
+    Raises:
+        PrometheusQueryError: 查詢失敗（#3065）。
     """
     query = 'sum by (tenant)(scrape_series_added)'
     # #1112: percent-encode — delegated to
@@ -277,7 +294,7 @@ def query_scrape_series_added(
     # timeout=10 matches this site's pre-consolidation http_get_json default).
     result, err = query_prometheus_instant(prometheus_url, query)
     if err:
-        return {}
+        raise PrometheusQueryError(err)
 
     results: dict[str, float] = {}
     for series in result:
@@ -600,9 +617,31 @@ def main(argv: Optional[list[str]] = None) -> int:
     lookback_days = lookback_secs // SECONDS_PER_DAY
 
     # Query Prometheus
-    cardinality_data = query_cardinality_range(
-        args.prometheus, args.lookback
-    )
+    try:
+        cardinality_data = query_cardinality_range(
+            args.prometheus, args.lookback
+        )
+    except PrometheusQueryError as exc:
+        # #3065: a failed query is not "no data" — distinct reason, raw error.
+        if lang == "zh":
+            print(f"錯誤：Prometheus 查詢失敗：{safe_label(str(exc))}",
+                  file=sys.stderr)
+        else:
+            print(f"Error: Prometheus query failed: {safe_label(str(exc))}",
+                  file=sys.stderr)
+        if args.json_output:
+            print(format_json_report({
+                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "status": "caller_error",
+                "reason": "prometheus_query_error",
+                "error": str(exc),
+                "lookback_days": lookback_days,
+                "cardinality_limit": args.limit,
+                "warn_days": args.warn_days,
+                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+                "tenants": [],
+            }))
+        return EXIT_CALLER_ERROR
 
     if not cardinality_data:
         if lang == "zh":

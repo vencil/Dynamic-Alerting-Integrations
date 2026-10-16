@@ -252,7 +252,7 @@ tenants:
 
 在 CI / pre-commit 階段攔 schema / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
 
-⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（ADR-036 §9）起不再判路由與 domain policy：樹上有路由鍵、`_domain_policy`、`_routing_profiles`、產生器讀不了的檔等只能由 route generator 判的內容時，報告列為「未判定」（JSON 的 `undetermined`）並回 **exit 4**（優先序 3 > 1 > 4 > 0）；判定交給 `da-tools generate-routes --validate --strict`，CI 裡兩步一起跑。`app/pkg/routingpolicy` 與 `internal/guard` 的路由檢查留到 ADR-036 步驟 3（[#2905](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2905)）刪除，在那之前只由 `tests/shared/routing_policy_parity_matrix.json` 對齊產生器。exit code 與證據格式見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（ADR-036 §9）起不再判路由與 domain policy：樹上有路由鍵、`_domain_policy`、`_routing_profiles`、產生器讀不了的檔等只能由 route generator 判的內容時，報告列為「未判定」（JSON 的 `undetermined`）並回 **exit 4**（優先序 3 > 1 > 4 > 0）；判定交給 `da-tools generate-routes --validate --strict`，CI 裡兩步一起跑。Go 端的路由檢查（`app/pkg/routingpolicy` 與 `internal/guard` 的路由部分）已在 ADR-036 步驟 3（[#2905](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2905)）刪除；產生器會整份拒收、exporter 卻照讀的檔（例如重複鍵）也只列為未判定證據、回 exit 4，不再是 exit 3。exit code 與證據格式見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 
 ```bash
 da-guard --config-dir conf.d/ --required-fields cpu,memory   # 上限取根 _defaults.yaml 的 max_metrics_per_tenant（未設 = 500）

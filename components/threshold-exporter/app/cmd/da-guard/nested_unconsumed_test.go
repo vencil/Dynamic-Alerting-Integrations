@@ -47,7 +47,8 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 				"team/ty.yaml": "tenants:\n  ty:\n    mysql_connections: \"60\"\n",
 				tc.file:        tc.body,
 			}
-			code, failed, findings := runDupTree(t, files)
+			r := runDupTree(t, files)
+			code, failed, findings := r.code, r.parseFailed, r.findings
 			if code != tc.code || !reflect.DeepEqual(failed, tc.failed) {
 				t.Errorf("exit %d, parse_failed %v; want exit %d, parse_failed %v (findings %v)",
 					code, failed, tc.code, tc.failed, findings)
@@ -82,16 +83,15 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 	}
 }
 
-// TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsExitThree (#2439
-// review F1): the route generator refuses a repeated key in any file of the
-// tree, the nested `_` files the exporter never reads included. Since the
-// exporter no longer rejects those, withGeneratorDuplicates names them:
-// exit 3. served-values follows the exporter's load, which does not read
-// them, so it lists none — except the root control, which the exporter does
-// read and drops. A nested `_domain_policy` too since #2904 (it was the
-// routing loader's domain_policy_unusable, exit 1, which da-guard no longer
-// runs).
-func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsExitThree(t *testing.T) {
+// TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsUndetermined (#2439
+// review F1, #2905): the route generator refuses a repeated key in any file
+// of the tree, the nested `_` files the exporter never reads included. The
+// exporter does not reject those, so they are not exit 3; until #2905
+// withGeneratorDuplicates named them there, now parse-tree does: each is
+// undetermined evidence (duplicate_key, exit 4). served-values follows the
+// exporter's load, which does not read them, so it lists none — except the
+// root control, which the exporter does read and drops (exit 3 for both).
+func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsUndetermined(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name, file, body string
@@ -100,14 +100,14 @@ func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsExitThree(t *testing.
 		servedFailed     []string
 		finding          string
 	}{
-		{"subtree notes", "team/_notes.yaml", "note: 1\nnote: 2\n", exitParseFailed, []string{"team/_notes.yaml"}, nil, ""},
-		{"subtree notes, alias key", "team/_notes.yaml", "&q n : 1\n*q : 2\n", exitParseFailed, []string{"team/_notes.yaml"}, nil, ""},
-		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n    cpu: \"1\"\n    cpu: \"2\"\n", exitParseFailed, []string{"team/_profiles.yaml"}, nil, ""},
+		{"subtree notes", "team/_notes.yaml", "note: 1\nnote: 2\n", exitUndetermined, nil, nil, ""},
+		{"subtree notes, alias key", "team/_notes.yaml", "&q n : 1\n*q : 2\n", exitUndetermined, nil, nil, ""},
+		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n    cpu: \"1\"\n    cpu: \"2\"\n", exitUndetermined, nil, nil, ""},
 		{"subtree routing profiles", "team/_routing_profiles.yaml",
 			"routing_profiles:\n  p1:\n    receiver: {type: webhook, url: 'https://t.example/p'}\n  p1:\n    receiver: {type: webhook, url: 'https://t.example/q'}\n",
-			exitParseFailed, []string{"team/_routing_profiles.yaml"}, nil, ""},
+			exitUndetermined, nil, nil, ""},
 		{"subtree domain policy", "team/_domain_policy.yaml", "domain_policies:\n  d1:\n    tenants: [ty]\n    tenants: [ty]\n",
-			exitParseFailed, []string{"team/_domain_policy.yaml"}, nil, ""},
+			exitUndetermined, nil, nil, ""},
 		{"root notes control", "_notes.yaml", "note: 1\nnote: 2\n", exitParseFailed, []string{"_notes.yaml"}, []string{"_notes.yaml"}, ""},
 	}
 	for _, tc := range cases {
@@ -119,10 +119,14 @@ func TestRun_NestedFileTheGeneratorRefusesForARepeatedKeyIsExitThree(t *testing.
 				"team/ty.yaml": "tenants:\n  ty:\n    mysql_connections: \"60\"\n",
 				tc.file:        tc.body,
 			}
-			code, failed, findings := runDupTree(t, files)
+			r := runDupTree(t, files)
+			code, failed, findings := r.code, r.parseFailed, r.findings
 			if code != tc.code || !reflect.DeepEqual(failed, tc.failed) {
 				t.Errorf("exit %d, parse_failed %v; want exit %d, parse_failed %v (findings %v)",
 					code, failed, tc.code, tc.failed, findings)
+			}
+			if want := []string{tc.file + " duplicate_key"}; tc.code == exitUndetermined && !reflect.DeepEqual(r.unreadable, want) {
+				t.Errorf("generator_unreadable %v, want %v", r.unreadable, want)
 			}
 			if tc.finding != "" && !containsPrefix(findings, tc.finding) {
 				t.Errorf("findings %v, want one starting %q", findings, tc.finding)

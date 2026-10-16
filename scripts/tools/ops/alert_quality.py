@@ -35,6 +35,7 @@ from _lib_python import (  # noqa: E402
     http_get_json,
     parse_duration_seconds,
     query_prometheus_range,
+    safe_label,
 )
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
@@ -61,6 +62,14 @@ GRADE_GOOD = "GOOD"
 GRADE_WARN = "WARN"
 GRADE_BAD = "BAD"
 
+
+
+class PrometheusQueryError(RuntimeError):
+    """ALERTS range query 失敗（#3065）。
+
+    以前這裡收斂成 ``[]``，與「期間內沒有任何 firing」分不開：報告全 GOOD、
+    ``--ci`` rc 0。現在往上拋，由 :func:`main` 轉成 ``EXIT_CALLER_ERROR``。
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +146,10 @@ def query_prometheus_alerts(
 
     Returns:
         Prometheus range query 結果清單。
+
+    Raises:
+        PrometheusQueryError: 查詢失敗（連線、HTTP 非 2xx、``status`` 非
+            success）。訊息是錯誤原文（#3065）。
     """
     end_ts = time.time()
     start_ts = end_ts - period_seconds
@@ -152,12 +165,12 @@ def query_prometheus_alerts(
     # Fetch core delegated to _lib_prometheus.query_prometheus_range (ROI r3
     # W1): the lib percent-encodes the whole param set — the raw PromQL
     # carries `{`, `}` and `"`, which must not be interpolated into a URL
-    # unescaped (#1112 InvalidURL bug-class). The "any error → []" collapse
-    # stays here.
+    # unescaped (#1112 InvalidURL bug-class). #3065: an error is raised, not
+    # collapsed into [] — an empty result reads as "nothing fired".
     result, err = query_prometheus_range(
         prom_url, query, start_ts, end_ts, step, timeout=timeout)
     if err:
-        return []
+        raise PrometheusQueryError(err)
     return result
 
 
@@ -645,6 +658,17 @@ def generate_markdown(report: QualityReport) -> str:
     return "\n".join(lines)
 
 
+def empty_report(period: str, status: str, reason: str, error: str) -> dict[str, Any]:
+    """沒有跑出報告的終端路徑用的 ``--json`` envelope（#3065）。
+
+    鍵沿用 :class:`QualityReport` 並全部歸零，追加 ``status`` / ``reason``
+    discriminator 與 ``error`` 錯誤原文（dev-rules §13 的 --json 契約）。
+    """
+    doc = asdict(generate_report([], period))
+    doc.update({"status": status, "reason": reason, "error": error})
+    return doc
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -698,12 +722,21 @@ def main() -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
     # 分析
-    metrics = analyze_from_prometheus(
-        args.prometheus,
-        period_secs,
-        tenant=args.tenant,
-        am_url=args.alertmanager,
-    )
+    try:
+        metrics = analyze_from_prometheus(
+            args.prometheus,
+            period_secs,
+            tenant=args.tenant,
+            am_url=args.alertmanager,
+        )
+    except PrometheusQueryError as exc:
+        # #3065: 查詢失敗不是「沒有警報」— 不出報告、不走 CI gate。
+        print(f"Error: Prometheus query failed: {safe_label(str(exc))}",
+              file=sys.stderr)
+        if args.json_output:
+            print(format_json_report(empty_report(
+                args.period, "caller_error", "prometheus_query_error", str(exc))))
+        sys.exit(EXIT_CALLER_ERROR)
 
     # 產生報告
     report = generate_report(metrics, args.period)

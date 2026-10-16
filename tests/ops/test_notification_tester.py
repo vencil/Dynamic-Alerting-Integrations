@@ -163,10 +163,12 @@ class TestValidateReceiverUrl:
         assert url is not None
 
     @pytest.mark.parametrize("rtype,fields,expected_err_contains", [
-        ("webhook", {"type": "webhook", "url": "ftp://bad.example.com"}, "invalid URL scheme"),
+        ("webhook", {"type": "webhook", "url": "ftp://bad.example.com"},
+         "not in the format tenant-config.schema.json requires"),
         ("webhook", {"type": "webhook", "url": ""}, "missing required field"),
         ("slack", {"type": "slack"}, "missing required field"),
-        ("webhook", {"type": "webhook", "url": "not-a-url"}, "invalid URL scheme"),
+        ("webhook", {"type": "webhook", "url": "not-a-url"},
+         "not in the format tenant-config.schema.json requires"),
     ], ids=["ftp-scheme", "empty-url", "missing-field", "no-scheme"])
     def test_invalid_urls(self, rtype, fields, expected_err_contains):
         """非法 URL 應返回錯誤訊息。"""
@@ -196,7 +198,7 @@ class TestValidateReceiverUrl:
         """Email smarthost 缺少 port 應報錯。"""
         url, err = nt.validate_receiver_url({"type": "email", "to": "a@b.com", "smarthost": "smtp.example.com"})
         assert err is not None
-        assert "host:port" in err
+        assert "field 'smarthost' value 'smtp.example.com' is not in the format" in err
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -365,9 +367,9 @@ class _SlowHandler(http.server.BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def _slow_server(delay, tls_context=None):
-    """以 0 號 port 起本機慢 server，回傳 URL；離開時關閉。"""
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+def _slow_server(delay, tls_context=None, port=0):
+    """以 *port*（預設 0 號）起本機慢 server，回傳 URL；離開時關閉。"""
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), _SlowHandler)
     srv.daemon_threads = True
     srv.delay = delay
     srv.release = threading.Event()
@@ -572,7 +574,9 @@ class TestMalformedResponse:
         不是 receiver 回了壞回應。"""
         result = nt.test_receiver(self._recv(url), timeout=2)
         assert result.status == nt.STATUS_INVALID_URL, result.detail
-        assert result.detail.startswith("invalid URL:")
+        # #3048：路由產生器不收的 URL，送出前就以產生器自己那句判定。
+        assert result.detail.startswith("receiver type 'webhook' field 'url' value"), result.detail
+        assert "not in the format tenant-config.schema.json requires" in result.detail
 
     def test_close_without_response_stays_connection_error(self):
         """RemoteDisconnected 同時是 OSError 與 BadStatusLine：維持連線錯誤的
@@ -1212,6 +1216,260 @@ class TestCLI:
         err = capsys.readouterr().err
         assert "\x1b" not in err
         assert "FAIL: tenant" in err
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #3048：receiver 合格與否採路由產生器的判定；port 範圍；主機名編碼
+# ═══════════════════════════════════════════════════════════════════════
+_LONG_LABEL_URL = "http://" + "a" * 64 + ".example.com/hook"   # IDNA：label too long
+_EMPTY_LABEL_URL = "http://a..b/hook"                         # IDNA：empty label
+_FOLDED_PORT = 99999
+_FOLDED_TO = _FOLDED_PORT - 65536                              # glibc 折算後的 port
+
+
+def _webhook(url, label="w"):
+    return {"type": "webhook", "url": url, "_label": label}
+
+
+def _email(label="mail", **fields):
+    recv = {"type": "email", "to": "admin@example.com",
+            "smarthost": "smtp.example.com:587", "from": "alerts@example.com",
+            "_label": label}
+    recv.update(fields)
+    return recv
+
+
+@pytest.mark.usefixtures("_no_proxy")
+class TestGeneratorVerdict:
+    """receiver 本身的設定被產生器（build_receiver_config）拒收的，不得被
+    tester 拿去測或報 DRY_RUN（路由層的略過不在此範圍，#3076）；壞主機名、
+    超出範圍的 port 標 INVALID_URL，不得 traceback 或被折算到別的 port。"""
+
+    @pytest.mark.parametrize("url", [_LONG_LABEL_URL, _EMPTY_LABEL_URL],
+                             ids=["64-char-label", "empty-label"])
+    def test_host_encoding_error_is_invalid_url_when_sent(self, url):
+        result = nt.test_receiver(_webhook(url), timeout=2)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert result.detail.startswith("invalid URL:"), result.detail
+        assert "idna" in result.detail, result.detail
+
+    @pytest.mark.parametrize("url", [_LONG_LABEL_URL, _EMPTY_LABEL_URL],
+                             ids=["64-char-label", "empty-label"])
+    def test_dry_run_does_not_claim_hostname_encoding_checked(self, url):
+        """dry-run 不做 IDNA 預檢（會誤擋 percent-encoded 主機名與 proxy），
+        detail 如實寫出只在送出時檢查。"""
+        result = nt.test_receiver(_webhook(url), dry_run=True)
+        assert result.status == nt.STATUS_DRY_RUN
+        assert "hostname encoding is checked only when a request is sent" in result.detail
+        assert "dry-run" in result.detail
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_unclosed_ipv6_bracket_is_refused_like_the_generator(self, dry_run):
+        result = nt.test_receiver(_webhook("http://[::1/hook"), timeout=2, dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert result.detail == ("receiver type 'webhook' field 'url' value "
+                                 "'http://[::1/hook' is not in the format "
+                                 "tenant-config.schema.json requires")
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_bracketed_non_ip_host_is_invalid_url(self, dry_run):
+        """`[1:2]` 合 schema pattern（產生器收），但 urlsplit 的括號主機檢查丟
+        ValueError；要在送出前標 INVALID_URL，不得 traceback。"""
+        result = nt.test_receiver(_webhook("http://[1:2]/hook"), timeout=2, dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert result.detail.startswith("invalid URL 'http://[1:2]/hook':"), result.detail
+
+    @pytest.mark.parametrize("port", ["99999", "0", "65536"])
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_port_out_of_range_is_invalid_url(self, port, dry_run):
+        result = nt.test_receiver(_webhook(f"http://127.0.0.1:{port}/hook"),
+                                  timeout=2, dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert "port must be from 1 to 65535" in result.detail
+
+    def test_port_at_range_edges_is_accepted(self):
+        for port in ("1", "65535"):
+            result = nt.test_receiver(_webhook(f"http://127.0.0.1:{port}/hook"), dry_run=True)
+            assert result.status == nt.STATUS_DRY_RUN, (port, result.detail)
+
+    def test_folded_port_with_a_listener_is_not_ok(self):
+        """glibc 把 99999 折成 99999-65536；那個 port 剛好有服務時，修前報 OK。"""
+        try:
+            server = _slow_server(delay=0, port=_FOLDED_TO)
+            served_url = server.__enter__()
+        except OSError as exc:
+            pytest.skip(f"127.0.0.1:{_FOLDED_TO} is in use, cannot stand in for the folded port: {exc}")
+        try:
+            assert served_url.endswith(f":{_FOLDED_TO}/hook")
+            result = nt.test_receiver(
+                _webhook(f"http://127.0.0.1:{_FOLDED_PORT}/hook"), timeout=5)
+        finally:
+            server.__exit__(None, None, None)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_email_empty_recipient_is_invalid_config(self, dry_run):
+        result = nt.test_receiver(_email(to=[""]), dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_CONFIG, result.detail
+        assert result.detail == ("receiver type 'email' field 'to' item 0 must be "
+                                 "a non-empty string, got ''")
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_email_smarthost_non_numeric_port_is_invalid_url(self, dry_run):
+        result = nt.test_receiver(_email(smarthost="smtp.example.com:abc"), dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert "field 'smarthost' value 'smtp.example.com:abc'" in result.detail
+
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_email_smarthost_port_out_of_range_is_invalid_url(self, dry_run):
+        result = nt.test_receiver(_email(smarthost="smtp.example.com:99999"), dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        assert "port must be from 1 to 65535" in result.detail
+
+    def test_generator_refusal_of_an_optional_field_is_invalid_config(self):
+        recv = {**_webhook("https://hooks.example.com/alert"), "send_resolved": "maybe"}
+        result = nt.test_receiver(recv, dry_run=True)
+        assert result.status == nt.STATUS_INVALID_CONFIG, result.detail
+        assert "send_resolved" in result.detail
+
+    _EMPTY_URL_CASES = [
+        ({"type": "webhook", "url": "", "_label": "w"}, "url"),
+        ({"type": "webhook", "url": None, "_label": "w"}, "url"),
+        ({"type": "webhook", "_label": "w"}, "url"),
+        ({"type": "slack", "api_url": "", "_label": "s"}, "api_url"),
+        ({"type": "slack", "api_url": None, "_label": "s"}, "api_url"),
+        (_email(smarthost=""), "smarthost"),
+        (_email(smarthost=None), "smarthost"),
+        ({k: v for k, v in _email().items() if k != "smarthost"}, "smarthost"),
+    ]
+    _EMPTY_URL_IDS = ["webhook-empty", "webhook-null", "webhook-missing",
+                      "slack-empty", "slack-null",
+                      "email-smarthost-empty", "email-smarthost-null",
+                      "email-smarthost-missing"]
+
+    @pytest.mark.parametrize("recv,field", _EMPTY_URL_CASES, ids=_EMPTY_URL_IDS)
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_unset_url_field_is_invalid_config(self, recv, field, dry_run):
+        """缺鍵、空字串、null 都是「沒給」（receiver_field_state 為 FIELD_UNSET），
+        與修前相同標 INVALID_CONFIG；產生器對 "" / null 標 invalid_receiver_field，
+        不得因此被歸成 INVALID_URL。"""
+        result = nt.test_receiver(dict(recv), timeout=2, dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_CONFIG, result.detail
+        assert f"requires '{field}'" in result.detail, result.detail
+
+    @pytest.mark.parametrize("recv", [
+        _webhook("ftp://hooks.example.com/alert"),
+        {"type": "slack", "api_url": "not a url", "_label": "s"},
+        _email(smarthost="smtp.example.com"),
+        _webhook(5),
+    ], ids=["webhook-scheme", "slack-format", "email-no-port", "webhook-not-string"])
+    @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+    def test_malformed_url_field_is_invalid_url(self, recv, dry_run):
+        result = nt.test_receiver(dict(recv), timeout=2, dry_run=dry_run)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+
+    @pytest.mark.parametrize("recv", [
+        _webhook("https://hooks.example.com/alert"),
+        _webhook("http://[::1/hook"),
+        _webhook("http://h/a b"),
+        {**_webhook("https://hooks.example.com/alert"), "send_resolved": "maybe"},
+        _email(),
+        _email(to=[""]),
+        _email(smarthost="smtp.example.com"),
+        {"type": "email", "to": "a@b.c", "smarthost": "smtp.example.com:25", "_label": "m"},
+        {"type": "pagerduty", "_label": "pd"},
+        {"type": "slack", "_label": "s"},
+    ], ids=["ok", "ipv6", "space", "optional", "email-ok", "email-empty-to",
+            "email-no-port", "email-no-from", "pd-no-key", "slack-no-url"])
+    def test_verdict_matches_the_generator(self, recv):
+        """產生器收 ⇔ dry-run 不報 INVALID_*（產生器不看 tester 自加的 _label）。"""
+        from _grar_merge import build_receiver_config
+        am_config, _ = build_receiver_config(
+            {k: v for k, v in recv.items() if k != "_label"}, "t")
+        result = nt.test_receiver(recv, dry_run=True)
+        refused = result.status in (nt.STATUS_INVALID_CONFIG, nt.STATUS_INVALID_URL)
+        assert refused == (am_config is None), result
+
+    def test_generator_detail_is_escaped_in_text_report(self):
+        recv = _webhook("http://h/\x1b[31mred")
+        result = nt.test_receiver(recv, dry_run=True)
+        assert result.status == nt.STATUS_INVALID_URL, result.detail
+        report = nt.TenantTestReport(tenant="t", receivers=[result], failed=1)
+        assert "\x1b" not in nt.format_text_report([report])
+
+    def test_one_bad_receiver_does_not_lose_the_others(self, tmp_path):
+        """修前：主機名編碼錯誤 traceback，同一輪其他 receiver 的結果全丟。"""
+        with _slow_server(delay=0) as good_url:
+            write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+                "db-a", keys={"mysql_connections": 5},
+                routing={"receiver": {"type": "webhook", "url": _LONG_LABEL_URL},
+                         "routes": [{"matchers": {"severity": "critical"},
+                                     "receiver": {"type": "webhook", "url": good_url}}]}))
+            write_yaml(str(tmp_path), "db-b.yaml", make_tenant_yaml(
+                "db-b", keys={"mysql_connections": 5},
+                routing={"receiver": {"type": "webhook", "url": good_url}}))
+            reports = nt.run_all_tests(str(tmp_path), timeout=5, rate_limit=0)
+        statuses = {r.receiver_name: r.status for rep in reports for r in rep.receivers}
+        assert statuses == {"db-a-main": nt.STATUS_INVALID_URL,
+                            "db-a-route-0": nt.STATUS_OK,
+                            "db-b-main": nt.STATUS_OK}, statuses
+
+
+class TestCLIExitCodes3048:
+    """#3048：真實 CLI 的結束碼（owner 已同意的變化）。"""
+
+    _SCRIPT = os.path.join(_TOOLS_DIR, "ops", "notification_tester.py")
+
+    @staticmethod
+    def _env():
+        env = {k: v for k, v in os.environ.items()
+               if k.lower() not in ("http_proxy", "https_proxy", "all_proxy")}
+        env["no_proxy"] = env["NO_PROXY"] = "*"
+        return env
+
+    def _run(self, conf_dir, *flags):
+        proc = subprocess.run(
+            [sys.executable, self._SCRIPT, "--config-dir", str(conf_dir), "--json",
+             "--rate-limit", "0", "--timeout", "5", *flags],
+            capture_output=True, text=True, encoding="utf-8", timeout=60, env=self._env())
+        return proc
+
+    def _tree(self, tmp_path, bad_receiver, good_url):
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", keys={"mysql_connections": 5}, routing={"receiver": bad_receiver}))
+        write_yaml(str(tmp_path), "db-b.yaml", make_tenant_yaml(
+            "db-b", keys={"mysql_connections": 5},
+            routing={"receiver": {"type": "webhook", "url": good_url}}))
+
+    def test_host_encoding_error_reports_instead_of_crashing(self, tmp_path):
+        with _slow_server(delay=0) as good_url:
+            self._tree(tmp_path, {"type": "webhook", "url": _LONG_LABEL_URL}, good_url)
+            plain = self._run(tmp_path)
+            ci = self._run(tmp_path, "--ci")
+        assert plain.returncode == 0, plain.stderr
+        assert ci.returncode == 1, ci.stderr
+        for proc in (plain, ci):
+            assert "Traceback" not in proc.stderr
+            data = json.loads(proc.stdout)
+            statuses = {r["receiver_name"]: r["status"]
+                        for t in data["tenants"] for r in t["receivers"]}
+            assert statuses == {"db-a-main": "INVALID_URL", "db-b-main": "OK"}, statuses
+
+    @pytest.mark.parametrize("bad", [
+        {"type": "email", "to": [""], "smarthost": "smtp.example.com:587",
+         "from": "alerts@example.com"},
+        {"type": "webhook", "url": "http://127.0.0.1:99999/hook"},
+        {"type": "webhook", "url": ""},
+        {"type": "webhook", "url": None},
+        {"type": "webhook", "url": "ftp://hooks.example.com/alert"},
+    ], ids=["email-empty-to", "port-out-of-range", "url-empty", "url-null",
+            "url-malformed"])
+    def test_dry_run_ci_fails_on_what_the_generator_refuses(self, tmp_path, bad):
+        self._tree(tmp_path, bad, "https://hooks.example.com/alert")
+        proc = self._run(tmp_path, "--dry-run", "--ci")
+        assert proc.returncode == 1, (proc.stdout, proc.stderr)
+        data = json.loads(proc.stdout)
+        assert data["summary"]["failed"] == 1 and data["summary"]["passed"] == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════

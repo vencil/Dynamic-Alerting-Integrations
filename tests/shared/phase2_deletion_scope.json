@@ -2,7 +2,9 @@
   "_comment": [
     "Who uses the Go code that phase 2 of ADR-036 deletes (docs/adr/036-single-parser-effective-config.md",
     "section 11 and its implementation map; #2766, #2486). Phase 2 may delete a package or a vendored",
-    "yaml.v3 patch only once its users below are gone or rewritten.",
+    "yaml.v3 patch only once its users below are gone or rewritten. ADR-036 step 3 (#2905) deleted",
+    "pkg/pyyamlcompat, pkg/routingpolicy, the judging part of pkg/receiverspec and the spaces-only patch;",
+    "a deleted package stays here as a row with no importers, so a new import of it is red.",
     "Reader: components/threshold-exporter/app/phase2_deletion_scope_test.go, which lists the users",
     "from the source of BOTH Go modules (components/threshold-exporter/app, components/tenant-api)",
     "with go/parser and goes red when they differ from this file in either direction.",
@@ -11,64 +13,42 @@
     "importers: one row per (repo-relative directory, whether the importing file is a _test.go file);",
     "every .go file counts whatever its build tags, external `_test` packages included; not read:",
     "the module root's third_party/ (a third_party/ deeper down is read) and testdata/ at any depth.",
-    "spaces_only_callers: every `.SpacesOnly` selector (call or method value) outside the module root's third_party/.",
     "patches: exactly the third_party/*.patch files on disk, the same set",
     "tests/ops/test_vendored_yaml_v3.py pins in _PATCHES.",
-    "Dispositions: package delete | split; patch keep | delete-with-routingpolicy | delete-when-unrelied."
+    "Dispositions: package delete | split | deleted (the directory is gone and nothing imports it);",
+    "patch keep | delete-when-unrelied (believed_reliant: exporter-module directories, which must exist)."
   ],
   "packages": [
     {
       "package": "pkg/pyyamlcompat",
       "category": "ADR-036 section 11: Go code imitating how Python (PyYAML) reads YAML",
-      "disposition": "delete",
-      "notes": "The whole package decodes a yaml.v3 node into the value PyYAML's SafeLoader builds. Once the generator is the only parser nothing needs it; delete it after every importer below is rewritten.",
-      "importers": [
-        {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": false},
-        {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": true},
-        {"dir": "components/threshold-exporter/app/internal/guard", "test": true},
-        {"dir": "components/threshold-exporter/app/pkg/receiverspec", "test": true},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": true}
-      ]
+      "disposition": "deleted",
+      "notes": "Deleted in ADR-036 step 3 (#2905). It decoded a yaml.v3 node into the value PyYAML's SafeLoader builds; with the generator the only judge of routing and policy nothing needs it. A file the generator refuses for a key PyYAML counts twice is named by parse-tree (duplicate_key), not by a Go copy of the rule.",
+      "importers": []
     },
     {
       "package": "pkg/receiverspec",
       "category": "Not a row of ADR-036 section 11: the Go copy of the generator's receiver rules, whose judging callers ADR-036 removes (#2899)",
       "disposition": "split",
-      "notes": "Known stays for the exporter (pkg/config looks a receiver type up; it does not judge); the judging part goes with ADR-036 steps 1/3 (#2899).",
+      "notes": "Split done in ADR-036 step 3 (#2905): the judging part (Check and the per-type field rules) is deleted; Known stays for the exporter (pkg/config looks a receiver type up; it does not judge).",
       "importers": [
-        {"dir": "components/threshold-exporter/app/internal/guard", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/config", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false}
+        {"dir": "components/threshold-exporter/app/pkg/config", "test": false}
       ]
     },
     {
       "package": "pkg/routingpolicy",
       "category": "ADR-036 section 11: Go code imitating how Python reads YAML, mixed with small helpers unrelated to parsing",
-      "disposition": "split",
-      "notes": "Deleted: the PyYAML emulation, e.g. shapeWork, pyResolve, ParseDomainPolicies, UnmarshalPolicy and the policyDecoder that turns SpacesOnly on. Kept or moved to another package (ADR-036 section 11, last row): helpers that do not parse. Already moved (#2899): IsValidTenantID (callers use pkg/tenantid directly), LevelOf and IsDomainPolicyFile (internal/confdlayout). Still here: IsDisabled, which applies Python's str.strip()/lower() before pkg/config's set, so it is not a plain wrapper. Which side each remaining symbol falls on is decided when phase 2 is written, not tracked here.",
-      "importers": [
-        {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": false},
-        {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": true},
-        {"dir": "components/threshold-exporter/app/internal/guard", "test": false},
-        {"dir": "components/threshold-exporter/app/internal/guard", "test": true}
-      ]
+      "disposition": "deleted",
+      "notes": "Deleted in ADR-036 step 3 (#2905): the PyYAML emulation (shapeWork, pyResolve, ParseDomainPolicies, UnmarshalPolicy, the policyDecoder that turned SpacesOnly on) and the Go routing and policy judgement da-guard ran. The helpers that do not parse had moved before (#2899): IsValidTenantID (callers use pkg/tenantid), LevelOf and IsDomainPolicyFile (internal/confdlayout); the routing-profiles file names are cmd/da-guard's routingProfilesNames. IsDisabled had no caller left once da-guard stopped judging routing (#2904).",
+      "importers": []
     }
-  ],
-  "spaces_only_callers": [
-    {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false}
   ],
   "patches": [
     {
       "file": "yaml.v3-nonspecific-tag.patch",
       "disposition": "delete-when-unrelied",
-      "reason": "Always on (decode.go keeps Tag \"!\" on a non-plain scalar), so no call site shows who depends on it. Delete only once no code relies on the Tag == \"!\" behaviour. The packages below are believed reliant; that is NOT mechanically proven, and removing their imports does not prove the behaviour unused.",
-      "believed_reliant": ["pkg/pyyamlcompat", "pkg/routingpolicy"]
-    },
-    {
-      "file": "yaml.v3-spaces-only.patch",
-      "disposition": "delete-with-routingpolicy",
-      "reason": "Adds the Decoder.SpacesOnly option, off by default; only routingpolicy's policy reader turns it on (spaces_only_callers). Deleted together with that code."
+      "reason": "Always on (decode.go keeps Tag \"!\" on a non-plain scalar), so no call site shows who depends on it. The exporter relies on it (ADR-036 section 7: isMergeKey in config_file.go takes a `! \"<<\"` key as a merge, validateSloObjective in custom_alert.go refuses `! \"99.9\"`); it is deleted in ADR-036 step 4 together with the generator's switch to parse-tree. NOT mechanically proven: removing an import does not prove the behaviour unused.",
+      "believed_reliant": ["pkg/config"]
     },
     {
       "file": "yaml.v3-unhashable-merge-key.patch",

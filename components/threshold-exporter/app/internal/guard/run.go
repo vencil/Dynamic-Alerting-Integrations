@@ -25,8 +25,7 @@ import (
 //
 // No tenants (empty EffectiveConfigs) is a valid input (#2991): the
 // per-tenant checks then find nothing, and what is judged without a tenant
-// — the platform files (PlatformProblems), the `_routing_enforced` route,
-// the defaults carriers (DefaultsFiles), the /metrics gather verdict — is
+// — the defaults carriers (DefaultsFiles), the /metrics gather verdict — is
 // reported as with tenants. A caller with an empty scope decides
 // "vacuously safe" from the report having no finding, never by skipping
 // this call: a list of the inputs that matter without tenants would miss
@@ -39,7 +38,6 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	var findings []Finding
 	findings = append(findings, checkRequiredFields(input)...)
 	findings = append(findings, checkRedundantOverrides(input)...)
-	findings = append(findings, checkRoutingGuardrails(input)...)
 	findings = append(findings, checkCardinality(input)...)
 	findings = append(findings, checkDefaultsWrapper(input)...)
 	findings = append(findings, checkRootCriticalKeys(input)...)
@@ -110,10 +108,8 @@ func newGuardReport(findings []Finding, totalTenants int) *GuardReport {
 		switch f.Severity {
 		case SeverityError:
 			report.Summary.Errors++
-			// A finding with an empty TenantID is a platform file's —
-			// except invalid_tenant_id, whose TenantID IS the id, the
-			// empty one included (#2341).
-			if f.TenantID != "" || f.Kind == findingkind.FindingInvalidTenantID {
+			// A finding with an empty TenantID is a platform file's.
+			if f.TenantID != "" {
 				failingTenants[f.TenantID] = struct{}{}
 			}
 		case SeverityWarn:
