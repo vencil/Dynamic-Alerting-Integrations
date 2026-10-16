@@ -169,7 +169,7 @@ graph LR
         PB -->|da-batchpr apply| PR1["Base Infrastructure PR<br/>(_defaults.yaml)"]
         PB -->|da-batchpr apply| PR2["Tenant Override PRs<br/>(&lt;id&gt;.yaml — Blocked by Base)"]
         PR1 -.->|refresh --base-merged| PR2
-        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Routing / Cardinality / Redundant-override)"]
+        PR1 -->|da-guard CI gate| LINT["sticky PR comment<br/>(Schema / Cardinality / Redundant-override<br/>+ route generator: Routing)"]
         PR2 -->|da-guard CI gate| LINT
     end
 
@@ -187,7 +187,7 @@ graph LR
 **Full-lifecycle governance features:**
 - **Zero vendor lock-in**: the migration tooling keeps a "still-portable-to-Prom" marker per rule, so customers retain visibility into the subset that can return to Prometheus even after migrating to VictoriaMetrics.
 - **GitOps PR ordering is enforced**: the Base PR merges first → tenant override PRs auto-rebase; a parser fix can granularly regenerate patch PRs for specific rules without re-running the whole batch.
-- **CI gates report cleanly**: four checks (Schema / Routing / Cardinality / redundant override) post as a sticky PR comment (the same comment updates in place — no spam) + retained artifacts.
+- **CI gates report cleanly**: da-guard's Schema / Cardinality / redundant-override checks, plus Routing judged by the route generator in the same workflow (da-guard no longer judges routing since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)), post as a sticky PR comment (the same comment updates in place — no spam) + retained artifacts.
 - **Three delivery paths**: Docker image / multi-arch static binary / air-gapped tar — every path is cosign-keyless-signed + SBOM (SPDX / CycloneDX); customers verify supply-chain in one command via `make verify-release`.
 
 ---

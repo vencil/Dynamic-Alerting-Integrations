@@ -202,7 +202,6 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ParseFailedError,
     load_effective_tree,
-    load_guard_findings,
     print_load_error,
     value_not_served_as_written,
 )
@@ -1257,17 +1256,45 @@ def _effective_tree(config_dir: str):
 # #2914: the profiles row's FAIL for a routing-layer key in a threshold profile.
 _PROFILE_ROUTING_KEY_HINT = (
     "A threshold profile (`profiles:`) may not carry `_severity_dedup` or any "
-    "`_routing*` key; why, and where they belong: routing_in_unread_location "
-    "in docs/cli-reference.md#guard (`da-guard --config-dir <dir>` names each).")
+    "`_routing*` key: the route generator never reads them there (each line "
+    "above says where the key belongs). `da-tools generate-routes --validate "
+    "--strict` names each as routing_in_unread_location.")
+
+# #2904: the route generator could not read the tree for the row's #2914 check.
+_PROFILE_ROUTING_UNREAD_HINT = (
+    "The route generator could not read this tree (the line above says why), "
+    "so whether a threshold profile carries a routing key is NOT checked; run "
+    "`da-tools generate-routes --validate --strict --config-dir <dir>` to see it.")
+
+
+class ProfileRoutingUnjudged(RuntimeError):
+    """The route generator could not read the tree for the #2914 check."""
 
 
 def _profile_routing_findings(config_dir: str) -> list[tuple[str, str]]:
-    """(field, message) of each da-guard `routing_in_unread_location` finding
-    inside a threshold profile (field `<file>:profiles.<profile>.<key>`).
-    #2914: the verdict is da-guard's, not this row's. The field is compared
-    whole, never split: a profile name and a key may both hold a `.`."""
-    return [(f.field, f.message) for f in load_guard_findings(config_dir)
-            if f.kind == "routing_in_unread_location" and ":profiles." in f.field]
+    """(field, message) of each `routing_in_unread_location` the route
+    generator records inside a threshold profile (field
+    `<file>:profiles.<profile>.<key>`) — `_grar_parse._unread_routing`, read
+    through the generator's own `_parse_config_files`, the call this module
+    already makes (`_declared_defaults_hint`). #2914 / #2904: the verdict is
+    the generator's, not this row's and no longer da-guard's (it judges no
+    routing since ADR-036 §9 step 2). Every root `_` file's `profiles:`, bound
+    or not, in a tree with no tenant too. The field is compared whole, never
+    split: a profile name and a key may both hold a `.`.
+
+    ⛔ Fail-closed: a generator that cannot read the tree (it exits, or
+    raises) is `ProfileRoutingUnjudged`, never "no finding"."""
+    tools_dir = os.path.dirname(os.path.abspath(__file__))
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    import generate_alertmanager_routes as gen
+    try:
+        parsed = gen._parse_config_files(config_dir)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — named in the row
+        raise ProfileRoutingUnjudged(f"{type(exc).__name__}: {exc}") from exc
+    return [(f"{fname}:{fld}", msg)
+            for kind, fname, fld, msg in parsed.get("routing_tree_problems", [])
+            if kind == "routing_in_unread_location" and fld.startswith("profiles.")]
 
 
 def check_profiles(config_dir: str) -> dict[str, object]:
@@ -1278,12 +1305,11 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         exporter's answer, `da-guard effective`'s `profile`, not a Python
         reading of the files)
       - No threshold profile carries a routing-layer key (#2914): FAIL. The
-        verdict is da-guard's own `routing_in_unread_location` finding inside
-        a profile (a second da-guard run, the check itself), so it covers
-        every root `_` file's `profiles:`, not only `_profiles.yaml`, and
-        profiles no tenant elects — in a tree with no tenant at all too
-        (#2991: da-guard runs every check then; only a run with no finding
-        is its empty report).
+        verdict is the route generator's own `routing_in_unread_location`
+        inside a profile (#2904: da-guard judges no routing any more), so it
+        covers every root `_` file's `profiles:`, not only `_profiles.yaml`,
+        and profiles no tenant elects — in a tree with no tenant at all too.
+        A generator that cannot read the tree fails the row (fail-closed).
       - Other reserved keys in `_profiles.yaml` (`_silent_mode`, `_state_*`,
         …) are a WARN; `_metadata` is not — a profile's `_metadata` is filled
         into its tenants (docs/design/config-driven.md, #2830)
@@ -1351,15 +1377,14 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     profile_ref_count = 0
 
     # ── #2914: routing-layer keys in a threshold profile (FAIL) ──
-    # da-guard's own `routing_in_unread_location` findings inside a profile:
-    # every root platform file's `profiles:`, bound or not.
+    # The route generator's own `routing_in_unread_location` inside a profile
+    # (#2904): every root platform file's `profiles:`, bound or not.
     try:
         in_profiles = _profile_routing_findings(config_dir)
-    except (DaGuardNotFoundError, DaGuardError) as exc:
-        return _tenant_load_failure_row(
-            "profiles", exc, config_dir,
-            (_PROFILES_TREE_UNREADABLE_HINT, _PROFILES_NO_CONFIG_FILE_HINT,
-             _PROFILES_NO_DA_GUARD_HINT))
+    except ProfileRoutingUnjudged as exc:
+        return _make_result("profiles", FAIL,
+                            [f"the route generator cannot read this tree: {exc}"],
+                            hint=_PROFILE_ROUTING_UNREAD_HINT)
     errors = [msg for _field, msg in in_profiles]
     routing_fields = {field for field, _msg in in_profiles}
 

@@ -1,8 +1,16 @@
 package main
 
-// routing_source_test.go — #2291: da-guard judges the routing the route
-// generator RENDERS, read from where the generator reads it, and names the
+// routing_source_test.go — #2291: da-guard judged the routing the route
+// generator RENDERS, read from where the generator reads it, and named the
 // routing written anywhere else.
+//
+// Since #2904 (ADR-036 §9 step 2) the CLI judges no routing: the route
+// generator does. The cases below keep their pre-#2904 expectations as the
+// fixture corpus, and each run is held to the new contract by
+// assertRoutingNotJudged (undetermined_test.go): no routing-plane finding,
+// the other findings unchanged, every tree the old CLI reported routing on
+// undetermined (exit 4 below 3 and 1), and a `--required-fields` path under
+// a routing key a caller error (exit 2).
 //
 // Before, the routing checks resolved over the tenant's EFFECTIVE config,
 // which also carries the defaults chain and the threshold profile. A
@@ -13,49 +21,9 @@ package main
 // way (`_routing_defaults`) was reported missing.
 
 import (
-	"encoding/json"
-	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
-
-	"github.com/vencil/threshold-exporter/internal/testutil"
 )
-
-// runRoutingTree writes files under <tmp>/conf.d and runs da-guard there
-// (--format json plus args); scope, when non-empty, is a path under conf.d.
-// It returns the exit code and "severity kind tenant field" per finding.
-func runRoutingTree(t *testing.T, files map[string]string, scope string, args ...string) (int, []string) {
-	t.Helper()
-	tmp := t.TempDir()
-	tree := make(map[string]string, len(files))
-	for k, v := range files {
-		tree["conf.d/"+k] = v
-	}
-	testutil.WriteTree(t, tmp, tree)
-	root := filepath.Join(tmp, "conf.d")
-	argv := append([]string{"--config-dir", root, "--format", "json"}, args...)
-	if scope != "" {
-		argv = append(argv, "--scope", filepath.Join(root, scope))
-	}
-	code, stdout, stderr := runOnce(t, argv...)
-	var doc struct {
-		Report *struct {
-			Findings []jsonFinding `json:"findings"`
-		} `json:"report"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("exit %d, report is not JSON: %v\nstdout=%s\nstderr=%s", code, err, stdout, stderr)
-	}
-	out := []string{}
-	if doc.Report != nil {
-		for _, f := range doc.Report.Findings {
-			out = append(out, strings.Join([]string{f.Severity, f.Kind, f.TenantID, f.Field}, " "))
-		}
-	}
-	sort.Strings(out)
-	return code, out
-}
 
 const (
 	rsDefaults = "defaults:\n  mysql_connections: 80\n"
@@ -368,13 +336,24 @@ func TestRun_RoutingSource(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			code, got := runRoutingTree(t, tc.files, tc.scope, tc.args...)
-			if code != tc.wantCode {
-				t.Errorf("exit = %d, want %d; findings %v", code, tc.wantCode, got)
+			got := runJudged(t, tc.files, tc.scope, tc.args...)
+			if requiresRouting(tc.args) {
+				if got.code != exitCallerErr {
+					t.Errorf("--required-fields under a routing key: exit %d, want %d", got.code, exitCallerErr)
+				}
+				return
 			}
-			if !equalStrings(got, tc.want) {
-				t.Errorf("findings:\n got %q\nwant %q", got, tc.want)
-			}
+			assertRoutingNotJudged(t, tc.wantCode, tc.want, false, got)
 		})
 	}
+}
+
+// requiresRouting: args hold a --required-fields path under a routing key.
+func requiresRouting(args []string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--required-fields" && routingRequiredField(splitNonEmpty(args[i+1])) != "" {
+			return true
+		}
+	}
+	return false
 }

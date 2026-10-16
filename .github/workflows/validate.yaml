@@ -505,9 +505,9 @@ jobs:
       # --strict (ADR-007): domain-policy violations are BLOCKING here —
       # without it check_domain_policies() only ever emitted WARN and a
       # violating config sailed through this required check.
-      # ⛔ THIS is the routing gate for TENANT files (#2315): da-guard
-      # (guard-defaults-impact.yml) runs only when a `_`-prefixed platform
-      # file changes. Both shipped conf.d trees are gated — the dev tree and
+      # ⛔ THIS is the routing gate for TENANT files (#2315):
+      # guard-defaults-impact.yml (da-guard plus this same generator check,
+      # #2904) runs only when a `_`-prefixed platform file changes. Both shipped conf.d trees are gated — the dev tree and
       # the try-local seed (its `db-demo` tenant carries `_routing`, so this
       # is not a zero-route pass; `cache-demo` has none). A tenant id declared
       # in two files fails here too.

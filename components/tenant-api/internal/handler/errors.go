@@ -174,6 +174,16 @@ const (
 	// documents, an anchor, alias or merge key). Falling back to the raw
 	// diff would show the credentials the mask exists to hide.
 	CodeMaskedPreviewUnavailable = "MASKED_PREVIEW_UNAVAILABLE"
+	// CodeTenantFileWithheld marks a 422, for any caller, from a request
+	// whose answer is built on a tenant file the caller is not shown
+	// (#3050, fileShown: it declares a tenant the caller may not read, or its
+	// tenants cannot be listed with certainty and the caller may not read
+	// every tenant) — the file GET /tenants/{id} answers with
+	// raw_yaml_withheld. POST /tenants/{id}/diff: the preview would carry
+	// that file's lines, and a "no diff" would confirm a guess of it. PUT
+	// /tenants/{id}/custom-alerts: the edit would be based on the
+	// custom_alerts and source_hash GET withheld. Nothing written.
+	CodeTenantFileWithheld = "TENANT_FILE_WITHHELD"
 	// CodeGeneratorFindings marks a 422 from a write the generator container
 	// judged and refused (#2903, ADR-036 §4): the conf.d tree at the commit
 	// the write lands on, with the write applied, does not pass

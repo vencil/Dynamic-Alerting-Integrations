@@ -832,6 +832,10 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 		code int
 		// notices: the answer carries notices as well as errors.
 		notices bool
+		// withheldCode: while the other tenant is unreadable the call is
+		// refused before validation, TENANT_FILE_WITHHELD (#3050: the edit
+		// would be based on what GET withholds). 0: answered as code.
+		withheldCode int
 	}{
 		{"batch PATCH", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := httptest.NewRequest("POST", "/api/v1/tenants/batch", batchBody(t))
@@ -839,13 +843,13 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(BatchTenants(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusUnprocessableEntity, false},
+		}, http.StatusUnprocessableEntity, false, 0},
 		{"PUT", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(flat))
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(PutTenant(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusBadRequest, false},
+		}, http.StatusBadRequest, false, 0},
 		{"custom alerts", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			b, err := json.Marshal(PutCustomAlertsRequest{CustomAlerts: &[]map[string]any{}, BaseHash: cfg.ComputeSourceHash([]byte(flat))})
 			if err != nil {
@@ -856,23 +860,23 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(PutTenantCustomAlerts(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusBadRequest, false},
+		}, http.StatusBadRequest, false, http.StatusUnprocessableEntity},
 		{"dry-run", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+orgEnfTenantIn+"/validate", "id", orgEnfTenantIn, bytes.NewBufferString(flat))
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(ValidateTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusOK, true},
+		}, http.StatusOK, true, 0},
 		{"GET", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("GET", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, nil)
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(GetTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusOK, true},
+		}, http.StatusOK, true, 0},
 	}
 	// answer is the text checked: the whole body, except GET's, whose
-	// raw_yaml is the file itself (every reader of a tenant reads its whole
-	// file) — there only the validation fields.
+	// raw_yaml is the file itself once the caller may read every tenant in
+	// it (#3050; withheld before) — there only the validation fields.
 	answer := func(t *testing.T, name string, w *httptest.ResponseRecorder) string {
 		if name != "GET" {
 			return w.Body.String()
@@ -889,7 +893,12 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			f := newOrgEnfFixture(t, files)
 			w := c.call(t, f)
 			body := answer(t, c.name, w)
-			if w.Code != c.code || !strings.Contains(body, "another place in the file") {
+			switch {
+			case c.withheldCode != 0:
+				if w.Code != c.withheldCode || !strings.Contains(body, CodeTenantFileWithheld) {
+					t.Fatalf("status %d (want %d %s): %s", w.Code, c.withheldCode, CodeTenantFileWithheld, body)
+				}
+			case w.Code != c.code || !strings.Contains(body, "another place in the file"):
 				t.Fatalf("status %d (want %d), want the other tenant said to be another place: %s", w.Code, c.code, body)
 			}
 			for _, h := range hidden {

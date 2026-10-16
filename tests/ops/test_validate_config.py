@@ -20,7 +20,6 @@ import yaml
 
 import validate_config as vc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _platform_fs import require_shebang_scripts  # noqa: E402
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -412,14 +411,16 @@ class TestProfilesCheck:
             })
             result = vc.check_profiles(d)
             assert result["status"] == vc.FAIL, result
-            # da-guard's routing_in_unread_location message, as it writes it.
+            # the route generator's routing_in_unread_location message, as it
+            # writes it (#2904: da-guard judges no routing any more).
             assert any(detail.startswith("_profiles.yaml: profiles.bad-profile._routing is not rendered")
                        for detail in result["details"]), result
 
     def test_routing_in_profile_fails_in_a_tree_with_no_tenant(self):
-        """#2991: da-guard runs every check with no tenant in the tree, so the
-        profile's `_routing` is named and the row FAILs there too (it was an
-        empty, vacuously safe da-guard report, and the row did not see it)."""
+        """#2991 / #2904: the route generator judges every profile with no
+        tenant in the tree, so the profile's `_routing` is named and the row
+        FAILs there too (it was once an empty, vacuously safe da-guard report,
+        and the row did not see it)."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
                 "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connections: 80\n"
@@ -433,7 +434,8 @@ class TestProfilesCheck:
 
     def test_severity_dedup_in_another_root_file_and_unbound_profile_fails(self):
         """#2914: every profile source the exporter reads, not only
-        `_profiles.yaml`, and a profile no tenant elects."""
+        `_profiles.yaml`, and a profile no tenant elects (#2904: as the route
+        generator records them, `_grar_parse._unread_routing`)."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
                 "_platform.yaml": "profiles:\n  unused:\n    _severity_dedup: disable\n"
@@ -449,7 +451,7 @@ class TestProfilesCheck:
             assert any(x.startswith("_platform.yaml: profiles.unused._routing_profile ") for x in named), result
 
     def test_dotted_profile_name_or_key_is_only_a_fail(self):
-        """#2914: a `.` in a profile name or in a key does not split da-guard's
+        """#2914: a `.` in a profile name or in a key does not split the
         `<file>:profiles.<profile>.<key>` field wrongly, so the key is the
         FAIL alone — not also a reserved-key WARN of the structure check."""
         with tempfile.TemporaryDirectory() as d:
@@ -468,17 +470,18 @@ class TestProfilesCheck:
                            for x in result["details"]), (field, result)
             assert not [x for x in result["details"] if x.startswith("profile=")], result
 
-    def test_failing_check_run_fails_the_row_as_the_binarys_fault(self, tmp_path, monkeypatch,
-                                                                   da_guard_binary):
-        """#2914: the routing-layer-key verdict is a second da-guard run (the
-        check itself). When `effective` answers but that run fails, the row
-        FAILs as da-guard's fault — never PASSes on findings it did not get."""
-        require_shebang_scripts()
-        fake = tmp_path / "guard-check-fails"
-        fake.write_text(f'#!/bin/sh\nif [ "$1" = effective ]; then exec "{da_guard_binary}" "$@"; fi\n'
-                        "echo 'check run broke' >&2\nexit 5\n", encoding="utf-8")
-        fake.chmod(0o755)
-        monkeypatch.setenv("DA_GUARD_BINARY", str(fake))
+    @pytest.mark.parametrize("failure", [SystemExit(2), OSError("gone")])
+    def test_generator_that_cannot_read_the_tree_fails_the_row(self, tmp_path, monkeypatch,
+                                                               failure):
+        """#2904: the routing-layer-key verdict is the route generator's
+        (`_parse_config_files`). When `effective` answers but the generator
+        cannot read the tree — it exits, or raises — the row FAILs saying the
+        check did not run, never PASSes on findings it did not get."""
+        import generate_alertmanager_routes as gen  # validate_config's own import path
+
+        def broken(_config_dir):
+            raise failure
+        monkeypatch.setattr(gen, "_parse_config_files", broken)
         d = tmp_path / "conf.d"
         d.mkdir()
         self._tree(str(d), {
@@ -487,11 +490,10 @@ class TestProfilesCheck:
             "tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: p\n",
         })
         result = vc.check_profiles(str(d))
-        assert result["status"] == vc.FAIL and result["caller_error"], result
-        assert result["hint"] == vc._DA_GUARD_BROKEN_HINT, result
-        # the check run's error (`da-guard exited 5`), not `effective`'s
-        assert "ERROR: da-guard exited 5" in result["details"], result
-        assert any("check run broke" in x for x in result["details"]), result
+        assert result["status"] == vc.FAIL, result
+        assert result["hint"] == vc._PROFILE_ROUTING_UNREAD_HINT, result
+        assert any(x.startswith("the route generator cannot read this tree: ")
+                   for x in result["details"]), result
 
     def test_metadata_in_profile_passes(self):
         """#2914: a profile's `_metadata` is a documented fill-in (#2830), not

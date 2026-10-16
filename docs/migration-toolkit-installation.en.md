@@ -28,7 +28,7 @@ The Migration Toolkit packages this pipeline into a customer-runnable bundle tha
 | Tool | Interface | Purpose |
 |---|---|---|
 | `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` + `parser` subcommands wrapping da-guard / da-batchpr / da-parser |
-| `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / routing / cardinality / redundant-override 4-tier check) |
+| `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / cardinality / redundant-override checks; routing and domain policy are left to `da-tools generate-routes --validate --strict` since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904), exit 4 when the tree holds them) |
 | `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
 | `da-parser` | Go binary | PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
 
@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` config files the exporter cannot decode (see [cli-reference §guard](cli-reference.en.md#guard)). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
+Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` config files the exporter cannot decode or read / `4` undetermined (the tree holds routing or domain policy, which da-guard does not judge; run `da-tools generate-routes --validate --strict`); precedence and the full definition are in [cli-reference §guard](cli-reference.en.md#guard). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
 
 ---
 
@@ -333,7 +333,7 @@ cd <customer-repo>/conf.d
 da-guard --config-dir . --required-fields cpu --format md
 ```
 
-Expected output: `✅ No findings — defaults change is safe to merge.` (or `❌ N errors found, M warnings`).
+Expected output: `✅ No findings — defaults change is safe to merge.` (exit 0); with an error-tier finding the report lists an `### Errors (block merge)` table (exit 1); when the tree holds routing keys, a `_domain_policy` or anything else only the route generator judges, the report opens with `### Routing and domain policy: not judged` and ends with `No threshold findings; routing and domain policy, listed above, are not judged here (exit 4).` — then run `da-tools generate-routes --config-dir . --validate --strict`.
 
 For CI integration, see [`.github/workflows/guard-defaults-impact.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/guard-defaults-impact.yml) — the da-guard customer template, copy-paste ready.
 

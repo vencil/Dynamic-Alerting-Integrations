@@ -128,7 +128,7 @@
 | `da_config_last_scan_complete_unixtime_seconds` | Gauge | 上次掃描完成時間（`time() − 此值` = 卡住偵測） |
 | `da_config_last_reload_complete_unixtime_seconds` | Gauge | 上次 reload 完成時間 |
 | `da_config_free_os_memory_total` | Counter | 主動還記憶體給 OS 的次數（未開 `-free-os-mem-after-reload` 時恆 0） |
-| `da_config_subtree_undeliverable_tenants` | Gauge | 繼承了「只存在於子目錄 `_defaults.yaml`」之 key 的租戶數。`/effective` 會列出該 key 的值，但 collector 不會為它產生 `user_threshold`——collector 只走 conf.d **根目錄** `_defaults.yaml` 與宣告面（`optional_overrides:`），巢狀 `_defaults.yaml` 兩者都不餵——所以該租戶在這個 key 上的告警永遠不會觸發；租戶的其他 key 照常送出。暫行解法：把 key 宣告在根目錄 `_defaults.yaml` 或 `optional_overrides:`；`_` 開頭的閾值 key 只能宣告在根目錄 `_defaults.yaml`（`optional_overrides:` 不服務它們，宣告在那裡值不送出，該租戶仍計入本 gauge、ERROR 也照樣印）；根本解（交付子目錄範圍，或在驗證時拒收）追蹤於 [#1976](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1976)。同一份判定中的閾值 key 也在 merge 前由 `da-guard` 以 `subtree_default_undeliverable` warning 報出（下一個 minor 改為 error），`da-guard served-values` 把它列進 `unserved`；保留鍵與 exporter 本來就不產生閾值列的 `_silent_*`、`_state_*` 等鍵仍計入本 gauge，da-guard 不以這個 finding 報，改由 `subtree_default_reserved_key` 報（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)；`_routing`／`_routing_*` 由 routing 檢查報），被關掉的 key 也不報。每次 config commit 重設；ERROR log 點名租戶、來源檔與 key，**只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**，`> 0 for 10m` 是合理起點。⚠️ **BREAKING（#1957）**：取代舊的 conf.d 掃描器分歧 gauge（舊名見 CHANGELOG）；舊 gauge 的另一成因（同一個檔被兩平面解析出不同租戶）已因共用同一份完整解析而消失，故移除；解析失敗的檔宣告的租戶在兩平面都不存在：exporter 從 `/metrics` 移除、tenant-api 回 404、da-guard 以 exit 3 把該檔列入 `parse_failed`（增量 tenant-only reload 原本會保留最後正確值，[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980) 起不再保留）；根目錄 `_` 開頭檔案裡 `tenants:` 給既有租戶的值兩平面都套用（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)、[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)） |
+| `da_config_subtree_undeliverable_tenants` | Gauge | 繼承了「只存在於子目錄 `_defaults.yaml`」之 key 的租戶數。`/effective` 會列出該 key 的值，但 collector 不會為它產生 `user_threshold`——collector 只走 conf.d **根目錄** `_defaults.yaml` 與宣告面（`optional_overrides:`），巢狀 `_defaults.yaml` 兩者都不餵——所以該租戶在這個 key 上的告警永遠不會觸發；租戶的其他 key 照常送出。暫行解法：把 key 宣告在根目錄 `_defaults.yaml` 或 `optional_overrides:`；`_` 開頭的閾值 key 只能宣告在根目錄 `_defaults.yaml`（`optional_overrides:` 不服務它們，宣告在那裡值不送出，該租戶仍計入本 gauge、ERROR 也照樣印）；根本解（交付子目錄範圍，或在驗證時拒收）追蹤於 [#1976](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1976)。同一份判定中的閾值 key 也在 merge 前由 `da-guard` 以 `subtree_default_undeliverable` warning 報出（下一個 minor 改為 error），`da-guard served-values` 把它列進 `unserved`；保留鍵與 exporter 本來就不產生閾值列的 `_silent_*`、`_state_*` 等鍵仍計入本 gauge，da-guard 不以這個 finding 報，改由 `subtree_default_reserved_key` 報（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)；`_routing`／`_routing_*` 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起列為未判定、exit 4，交 route generator 判），被關掉的 key 也不報。每次 config commit 重設；ERROR log 點名租戶、來源檔與 key，**只在受影響集合「變化」時印一次**（含冷啟動、以及歸零後再度發生）。⚠️ **沒有出貨任何 PrometheusRule**，`> 0 for 10m` 是合理起點。⚠️ **BREAKING（#1957）**：取代舊的 conf.d 掃描器分歧 gauge（舊名見 CHANGELOG）；舊 gauge 的另一成因（同一個檔被兩平面解析出不同租戶）已因共用同一份完整解析而消失，故移除；解析失敗的檔宣告的租戶在兩平面都不存在：exporter 從 `/metrics` 移除、tenant-api 回 404、da-guard 以 exit 3 把該檔列入 `parse_failed`（增量 tenant-only reload 原本會保留最後正確值，[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980) 起不再保留）；根目錄 `_` 開頭檔案裡 `tenants:` 給既有租戶的值兩平面都套用（[#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)、[#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)） |
 | `promhttp_metric_handler_errors_total{cause}` | Counter | `/metrics` handler 失敗次數，cause: `gathering` / `encoding`（兩條皆從 0 起）。gather 失敗時整次 scrape 回 500，所以這個值**只在恢復後第一次成功 scrape 才看得到**——供事後回溯，不拿來告警；即時訊號是 `up == 0`（#2032） |
 
 ### 3.4 Exit Codes（CLI binaries）
@@ -138,7 +138,8 @@
 | 0 | clean | parse OK | 全部目標成功 |
 | 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） | 一個以上目標失敗 |
 | 2 | caller error（旗標 / 路徑） | caller error | caller error |
-| 3 | exporter 無法 decode 的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
+| 3 | exporter 無法 decode 或讀不到的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
+| 4 | 未判定：樹上有只能由 route generator 判的路由／domain policy 內容（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；優先序 3 > 1 > 4 > 0，見 [cli-reference §guard](../../docs/cli-reference.md#guard)） | — | — |
 
 ---
 
@@ -249,16 +250,16 @@ tenants:
 
 ### `da-guard` — `_defaults.yaml` 的 pre-merge 守門員
 
-在 CI / pre-commit 階段攔 schema / routing / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
+在 CI / pre-commit 階段攔 schema / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
 
-routing 檢查的是租戶**解析後**的 routing（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）：根目錄 `_routing_defaults` → `_routing_profile` 指向的 profile → 租戶 `_routing`，與 route generator 同一套合併（共用 `app/pkg/routingpolicy`，以 `tests/shared/routing_policy_parity_matrix.json` 與 Python 端對齊）。主 receiver、`overrides`、ADR-007 `routes` 都做形狀檢查（規則在 `app/pkg/receiverspec`；[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295) 起也查 `send_resolved`／`require_tls` 的布林值與 `http_config`），並依 `_domain_policy.yaml` 判 receiver type（forbidden 與 allowed 分開判）。租戶那一層只讀租戶檔與根目錄平台檔 `tenants.<id>` 的 `_routing` / `_routing_profile`（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)），寫在 defaults 區塊或 threshold profile 裡的 routing 由 `routing_in_unread_location` 點名；profile 裡連 `_severity_dedup` 與任何以 `_routing` 開頭的鍵都點名（exporter 也不套用，[#2914](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2914)）。新增的 finding kind 與嚴重度見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（ADR-036 §9）起不再判路由與 domain policy：樹上有路由鍵、`_domain_policy`、`_routing_profiles`、產生器讀不了的檔等只能由 route generator 判的內容時，報告列為「未判定」（JSON 的 `undetermined`）並回 **exit 4**（優先序 3 > 1 > 4 > 0）；判定交給 `da-tools generate-routes --validate --strict`，CI 裡兩步一起跑。`app/pkg/routingpolicy` 與 `internal/guard` 的路由檢查留到 ADR-036 步驟 3（[#2905](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2905)）刪除，在那之前只由 `tests/shared/routing_policy_parity_matrix.json` 對齊產生器。exit code 與證據格式見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 
 ```bash
 da-guard --config-dir conf.d/ --required-fields cpu,memory   # 上限取根 _defaults.yaml 的 max_metrics_per_tenant（未設 = 500）
 da-guard --config-dir conf.d/ --format json --output guard-report.json
 ```
 
-GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml)——客戶可整份 copy，於 `**/_defaults.yaml` 變更時自動跑並貼 PR comment。
+GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/guard-defaults-impact.yml)——客戶可整份 copy，於 `**/_defaults.yaml` 變更時自動跑 da-guard 與 route generator 並貼 PR comment。
 
 子命令 `served-values`（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）以 JSON 印出 `/metrics` 對每個租戶實際發出的值，值由 exporter 自己的載入與解析算出；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫。輸出欄位與 exit code 見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 

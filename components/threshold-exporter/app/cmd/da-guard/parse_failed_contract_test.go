@@ -21,11 +21,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -154,10 +152,10 @@ func guardUndecodable(tree map[string]string, scopeRel string) []string {
 // key — pyyamlcompat.FindDuplicateKeyIn, which its oracle table pins to the
 // generator's StrictLoader. Read for the scope: each tenant file under it
 // (every one in these trees declares a tenant), every `_defaults.yaml`
-// bearing on it, the root's other platform files except the
-// `_domain_policy` / `_routing_profiles` files (routingpolicy names those as
-// a Problem, never exit 3), and every other nested `_` file except a
-// `_domain_policy` (#2439).
+// bearing on it, the root's other platform files and every other nested `_`
+// file (#2439) — the `_domain_policy` / `_routing_profiles` files included
+// since #2904 (the routing loader that named those as a Problem no longer
+// runs in da-guard).
 func generatorRefused(tree map[string]string, scopeRel string) []string {
 	var out []string
 	for rel, body := range tree {
@@ -172,10 +170,8 @@ func generatorRefused(tree map[string]string, scopeRel string) []string {
 			read = scopeRel == "" || strings.HasPrefix(rel, scopeRel+"/")
 		case base == "_defaults.yaml":
 			read = bearsOnScope(rel, scopeRel)
-		case path.Dir(rel) == ".":
-			read = !routingpolicy.ReportsUnusable(base)
 		default:
-			read = !confdlayout.IsDomainPolicyFile(base)
+			read = true
 		}
 		if read && pyyamlcompat.FindDuplicateKeyIn([]byte(body)) != nil {
 			out = append(out, rel)
