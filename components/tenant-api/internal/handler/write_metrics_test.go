@@ -538,3 +538,39 @@ func TestWriteAttempt_Unwrap(t *testing.T) {
 		t.Fatal("the recorder under writeAttempt was not flushed")
 	}
 }
+
+// writeAttempt counts the status WriteHeader sets, and only that: it does not
+// override Write (the body goes straight to the writer underneath), so an
+// answer that never calls WriteHeader is unanswered for the count — an error,
+// like a panic on the way out. Every write exit answers through writeJSON,
+// which calls WriteHeader first (write_metrics.go lists the exits).
+func TestWriteAttempt_CountsOnlyWriteHeader(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name               string
+		answer             func(http.ResponseWriter)
+		ok, conflict, errs int64
+		body               bool // the body reaches the writer underneath
+	}{
+		{"WriteHeader then Write", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("{}"))
+		}, 1, 0, 0, true},
+		{"writeJSON", func(w http.ResponseWriter) { writeJSON(w, http.StatusConflict, map[string]string{}) }, 0, 1, 0, true},
+		{"Write alone (implicit 200)", func(w http.ResponseWriter) { _, _ = w.Write([]byte("{}")) }, 0, 0, 1, true},
+		{"no answer", func(http.ResponseWriter) {}, 0, 0, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &WriteResults{}
+			rec := httptest.NewRecorder()
+			a := (&Deps{WriteResults: m}).startWriteAttempt(rec, httptest.NewRequest("PUT", "/", nil))
+			tc.answer(a)
+			a.end()
+			wantWrites(t, m, tc.ok, tc.conflict, tc.errs)
+			if got := rec.Body.Len() > 0; got != tc.body {
+				t.Errorf("body reached the writer underneath = %v, want %v", got, tc.body)
+			}
+		})
+	}
+}

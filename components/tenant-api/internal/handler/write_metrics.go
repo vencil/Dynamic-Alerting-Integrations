@@ -121,6 +121,14 @@ func writeResultOfStatus(status int) (writeResult, bool) {
 
 // writeAttempt wraps the ResponseWriter of one write attempt from the writer
 // call on and counts the attempt by the status it is answered with (end).
+//
+// The status is what WriteHeader sets, and only that: like statusWriter it
+// does not override Write, which goes straight to the writer underneath. Every
+// exit of a wrapped attempt answers through writeJSON (WriteErrorEnvelope and
+// the helpers over it funnel there), which calls WriteHeader before Write. An
+// answer written with Write alone (an implicit 200) leaves the status 0 and is
+// counted as an error, as no answer at all is — so a new exit must call
+// WriteHeader (TestWriteAttempt_CountsOnlyWriteHeader).
 type writeAttempt struct {
 	http.ResponseWriter
 	sink   *WriteResults
@@ -151,13 +159,6 @@ func (a *writeAttempt) WriteHeader(code int) {
 		a.status = code
 	}
 	a.ResponseWriter.WriteHeader(code)
-}
-
-func (a *writeAttempt) Write(b []byte) (int, error) {
-	if a.status == 0 {
-		a.status = http.StatusOK
-	}
-	return a.ResponseWriter.Write(b)
 }
 
 // answered records the status of an answer the caller writes itself, after
