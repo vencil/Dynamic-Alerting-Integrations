@@ -38,6 +38,44 @@ EXIT_CALLER_ERROR (2)
     (fix the invocation or environment, then retry). argparse already
     exits 2 on unrecognised flags, which is consistent with this.
 
+Unexpected crash (#3090)
+------------------------
+An uncaught exception used to end at the interpreter's default rc 1 —
+indistinguishable from EXIT_VIOLATION. Importing this module now installs
+a ``sys.excepthook`` (only if the process still has the default one), so
+any script that imports it — directly or through one of the shared
+``_lib_*`` helpers that import it — and then lets an ``Exception``
+escape to the top level:
+
+1. prints the usual traceback to stderr,
+2. prints one line ``ERROR: unexpected internal error (<Type>): <message>``
+   (single line, bounded length — see ``crash_message``),
+3. exits with the crash code: EXIT_CALLER_ERROR (2) unless the tool chose
+   another one with ``set_crash_exit_code``.
+
+The hook exits via ``sys.exit`` (not ``os._exit``), so atexit handlers run
+and buffered stdout is flushed. An interactive session (``python -i``,
+the REPL) keeps the default hook's behaviour. ``SystemExit`` never reaches it, and
+``KeyboardInterrupt`` and any other non-``Exception`` base exception are
+handed to the previous hook untouched (Ctrl-C keeps its own exit status).
+
+Overrides:
+
+* ``set_crash_exit_code(code)`` — per-process crash code. tenant_verify
+  sets 1, because its 2 means "verification failed" (see below).
+* ``@main`` / ``@main(crash_exit_code=..., on_crash=...)`` — wrap a tool's
+  ``main()``: same report + exit, but in-function, so a tool with a
+  ``--json`` contract can emit its ``internal_error`` envelope from
+  ``on_crash(exc)`` before the process ends ("rc 2 always has an
+  envelope", #3059).
+
+``da-tools`` (components/da-tools/app/entrypoint.py) is the last line of
+defence for tools that never import this module: it catches what
+``exec_module`` raises and hands it to ``exit_on_crash`` when this module
+is loaded (honouring the tool's crash code), else prints the same line
+itself and exits 2. Tests: tests/shared/test_tool_exit_codes.py (crash
+section) and tests/shared/test_entrypoint.py.
+
 Allowed extensions
 ------------------
 A tool MAY define higher codes (>= 3) for finer-grained caller-error
@@ -69,15 +107,18 @@ One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification
 finding, exit 1 = caller error) as a sanctioned pre-SSOT exception: its
 codes are load-bearing in a shipped customer rollback runbook that keys on
 "exit 2 = mismatch" (see that file's header for the full rationale). It is
-the sole exception; do NOT repurpose 1 or 2 anywhere else — new tools MUST
+the sole exception; its crash code is set to 1 for the same reason (a
+crash must not read as "hash mismatch"). Do NOT repurpose 1 or 2 anywhere else — new tools MUST
 follow the base violation / caller-error meanings above.
 
 New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 """
 from __future__ import annotations
 
+import functools
 import sys
-from typing import Final, NoReturn
+import traceback
+from typing import Any, Callable, Final, NoReturn, Optional, TypeVar, overload
 
 # Import-time stdout hardening (cp950-class consoles): every da-tools CLI
 # imports at least one of the four root libs (_lib_compat / _lib_python /
@@ -100,3 +141,139 @@ def die_caller_error(message: str) -> NoReturn:
     """
     print(message, file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
+
+
+# ── Unexpected crash handling (#3090) ─────────────────────────────────
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+_CRASH_MESSAGE_MAX = 500
+_crash_exit_code: int = EXIT_CALLER_ERROR
+
+
+def set_crash_exit_code(code: int) -> None:
+    """Set the exit code this process uses for an unexpected crash.
+
+    Default EXIT_CALLER_ERROR (2). Only a tool whose own contract gives 2
+    another meaning should change it (tenant_verify: 1). 0 is refused — a
+    crash must never read as success — as are non-int and out-of-range
+    values.
+    """
+    if (isinstance(code, bool) or not isinstance(code, int)
+            or not 1 <= code <= 255):
+        raise ValueError(f"crash exit code must be an int in 1..255, got {code!r}")
+    global _crash_exit_code
+    _crash_exit_code = code
+
+
+def get_crash_exit_code() -> int:
+    """The exit code an unexpected crash ends with in this process."""
+    return _crash_exit_code
+
+
+def crash_message(exc: BaseException) -> str:
+    """The one ``ERROR:`` line printed after the traceback of a crash.
+
+    The exception text is collapsed to one line and bounded, so the line
+    stays greppable; an exception whose ``str()`` itself fails still gets a
+    line. ⚠️ components/da-tools/app/entrypoint.py mirrors this (it may not
+    import _lib_*); tests/shared/test_entrypoint.py pins the two together.
+    """
+    try:
+        text = str(exc)
+    except Exception:  # noqa: BLE001 — a broken __str__ must not hide the crash
+        text = "(unprintable message)"
+    text = " ".join(text.split()) or "(no message)"
+    if len(text) > _CRASH_MESSAGE_MAX:
+        text = text[:_CRASH_MESSAGE_MAX] + "..."
+    return f"ERROR: unexpected internal error ({type(exc).__name__}): {text}"
+
+
+def report_crash(exc: BaseException) -> None:
+    """Print the traceback of *exc*, then its ``crash_message`` line, to stderr."""
+    try:
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001 — a closed/broken stdout must not mask the crash
+        pass
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    print(crash_message(exc), file=sys.stderr, flush=True)
+
+
+def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
+                  on_crash: Optional[Callable[[BaseException], Any]] = None
+                  ) -> NoReturn:
+    """Report *exc* as an unexpected crash and exit.
+
+    Exits with *code*, else the process crash code (``set_crash_exit_code``).
+    *on_crash* runs after the report; if it raises, that is reported too and
+    the exit code is unchanged. Uses ``sys.exit`` so atexit handlers run.
+    """
+    report_crash(exc)
+    if on_crash is not None:
+        try:
+            on_crash(exc)
+        except Exception as hook_exc:  # noqa: BLE001
+            print("ERROR: on_crash handler failed:", file=sys.stderr)
+            traceback.print_exception(type(hook_exc), hook_exc,
+                                      hook_exc.__traceback__, file=sys.stderr)
+    sys.exit(_crash_exit_code if code is None else code)
+
+
+@overload
+def main(func: _F) -> _F: ...
+@overload
+def main(*, crash_exit_code: Optional[int] = None,
+         on_crash: Optional[Callable[[BaseException], Any]] = None
+         ) -> Callable[[_F], _F]: ...
+
+
+def main(func: Optional[_F] = None, *, crash_exit_code: Optional[int] = None,
+         on_crash: Optional[Callable[[BaseException], Any]] = None) -> Any:
+    """Decorator for a tool's ``main()``: an ``Exception`` escaping it becomes
+    an unexpected crash (traceback + ERROR line + crash exit code).
+
+    ``@main`` or ``@main(crash_exit_code=1, on_crash=emit_envelope)``.
+    ``crash_exit_code`` overrides ``set_crash_exit_code`` for this function;
+    ``on_crash(exc)`` lets a ``--json`` tool emit its envelope. ``SystemExit``
+    and ``KeyboardInterrupt`` pass through untouched.
+    """
+    if crash_exit_code is not None and (
+            isinstance(crash_exit_code, bool) or not isinstance(crash_exit_code, int)
+            or not 1 <= crash_exit_code <= 255):
+        raise ValueError(
+            f"crash exit code must be an int in 1..255, got {crash_exit_code!r}")
+
+    def decorate(f: _F) -> _F:
+        @functools.wraps(f)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return f(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 — that is the point
+                exit_on_crash(exc, code=crash_exit_code, on_crash=on_crash)
+        return wrapper  # type: ignore[return-value]
+
+    if func is not None:
+        return decorate(func)
+    return decorate
+
+
+_previous_excepthook = sys.excepthook
+
+
+def _crash_excepthook(exc_type, exc, tb) -> None:
+    # An interactive session (REPL, `python -i tool.py` post-mortem) reports
+    # an error and carries on: ending it at rc 2 would take the prompt away.
+    if not issubclass(exc_type, Exception) or sys.flags.interactive or hasattr(sys, "ps1"):
+        _previous_excepthook(exc_type, exc, tb)
+        return
+    if exc is None:  # defensive: hook called with a bare type
+        exc = exc_type()
+    if exc.__traceback__ is None:
+        exc = exc.with_traceback(tb)
+    exit_on_crash(exc)
+
+
+# Install only over the interpreter default: a process (or host such as an
+# IDE / test runner) that set its own hook keeps it.
+if sys.excepthook is sys.__excepthook__:
+    sys.excepthook = _crash_excepthook

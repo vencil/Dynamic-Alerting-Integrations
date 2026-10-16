@@ -25,6 +25,9 @@ Exit codes:
     2  — verification failed (--expect-merged-hash mismatch, tenant not
          found, or tenant declared in more than one file); with --all,
          any tenant declared in more than one file
+    An uncaught exception (traceback + one `ERROR: unexpected internal
+    error` line) also ends at 1 — not the da-tools-wide crash code 2,
+    which here would read as a mismatch (#3090).
 
 Design note: this tool reuses describe_tenant.ConfDScanner for the
 inheritance chain and source_hash; merged_hash is the one
@@ -65,6 +68,15 @@ EXIT_PASS = 0           # verification passed (tenant exists; hash matched if gi
 EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-excl flags,
                         # no merged_hash from da-guard — #1549)
 EXIT_VERIFY_FAILED = 2  # mismatch, not found, or duplicate (rollback-checklist signal)
+
+# An uncaught exception ends at EXIT_USAGE_ERROR (1), NOT the SSOT's crash
+# default 2 (#3090): here 2 would read as "hash mismatch". Set only when run
+# as a script (directly or via `da-tools`, both __main__) — importing this
+# module must not change the crash code of the importing process.
+if __name__ == "__main__":
+    import _lib_exitcodes  # noqa: E402
+
+    _lib_exitcodes.set_crash_exit_code(EXIT_USAGE_ERROR)
 
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
 _TOOL_DIR = Path(__file__).resolve().parent

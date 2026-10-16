@@ -97,9 +97,9 @@ da-tools <command> --help
 | **未知子命令** | `2` | 呼叫端錯誤（[#1406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1406) 起；之前是 `1`）。訊息一律走 stderr，stdout 為空 |
 | **映像內找不到子命令對應的腳本** | `2` | 同上；stderr 點名缺的腳本檔與已搜尋路徑 |
 | 子命令自己的結束碼 | 原封透傳 | 工具在同一行程內以 `__main__` 執行，無重映射——語意見各命令章節的結束碼表與 SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
-| 子命令拋出未捕捉的例外（traceback） | `1` | Python 直譯器的預設；分派層刻意不包 `try/except`（否則透傳就壞了）。這是與「有發現」的 `1` 仍撞碼的殘餘——讀到 `1` 而 stdout 沒有報告、stderr 有 `Traceback`（或工具自己的一行錯誤訊息），就是這一列 |
+| 子命令拋出未捕捉的例外（traceback） | `2` | 內部錯誤（[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090) 起；之前是直譯器預設的 `1`，與「有發現」撞碼）。stderr 先是 `Traceback`，最後一行是 `ERROR: unexpected internal error (<例外型別>): <訊息>`；工具在 crash 前已寫出的 stdout 保留。分派層只攔 `Exception`，工具自己的 `sys.exit(N)` 與 Ctrl-C 照舊原封透傳。唯一例外是 `tenant-verify`：它的 `2` 是「驗證不一致」，crash 維持 `1`（見該節） |
 
-各命令章節的結束碼表列的是主要觸發條件，**不是窮舉**：輸入壞到讓工具拋出未捕捉例外時，Python 工具一律是上面那列的 `1`，Go 工具（`guard`、`batch-pr`、`parser`）的 panic 則是 `2`，表上不逐一列出。
+各命令章節的結束碼表列的是主要觸發條件，**不是窮舉**：輸入壞到讓工具拋出未捕捉例外時，Python 工具一律是上面那列的 `2`（`tenant-verify` 是 `1`），Go 工具（`guard`、`batch-pr`、`parser`）的 panic 也是 `2`，表上不逐一列出。不經 `da-tools`、直接執行 `scripts/tools/` 下的腳本時也一樣：只要該腳本載入了 `_lib_exitcodes`（多數工具經 `_lib_io`／`_lib_python` 間接載入），之後發生的 crash 就是 `2`；在那之前的 import 期錯誤（例如缺 PyYAML）仍是 `1`。互動模式（`python -i`）不受影響。
 
 > ⚠️ 前兩列曾回 `1`，與各子命令「有發現」的 `1` 撞碼——`docker run … da-tools:<移動的 tag> <子命令>` 在子命令改名、或映像尚未收錄該子命令時，在 CI 看起來與「工具正常跑完並找到東西」完全同形（且 stdout 是一份空報告）。消費端請把 `2` 當「工具沒跑」處理，不要與 `1` 合併判定。
 
@@ -3012,7 +3012,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | 意義 |
 |---|---|
 | 0 | tenant 存在且只由一個檔宣告；若有 `--expect-merged-hash` 則一致。`--all`：沒有任何 tenant 被重複宣告 |
-| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用，或樹中任一被選用的 `_defaults.yaml` 無法解析／形狀不支援（不限該租戶的繼承鏈）（stderr 指名該檔，[#2459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2459)），或沒有 `merged_hash` 可比：da-guard 找不到、失敗、樹中有 exporter 讀不了的檔，或 da-guard 不解析該 tenant（條目為 `"error": "merged_hash_unavailable"`，`detail` 帶原因，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。argparse 擋下的參數錯（未知旗標、多餘參數）是 2 |
+| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用，或樹中任一被選用的 `_defaults.yaml` 無法解析／形狀不支援（不限該租戶的繼承鏈）（stderr 指名該檔，[#2459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2459)），或沒有 `merged_hash` 可比：da-guard 找不到、失敗、樹中有 exporter 讀不了的檔，或 da-guard 不解析該 tenant（條目為 `"error": "merged_hash_unavailable"`，`detail` 帶原因，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。argparse 擋下的參數錯（未知旗標、多餘參數）是 2；未捕捉的例外（`Traceback` 加一行 `ERROR: unexpected internal error`，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)） |
 | 2 | tenant 不存在、`--expect-merged-hash` 不一致，或**重複宣告**（同一 tenant 出現在兩個以上的檔）（incremental migration playbook checklist 第 6 項擋下訊號）。`--all`：有任何 tenant 被重複宣告 |
 
 **重複宣告**（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)）：同一 tenant 由多個檔宣告時，本工具不計算任何 hash——掃描器只會留其中一份、留哪份取決於檔名排序，照算會讓第 6 項在多餘檔排前面時假通過。單一 tenant 模式（不論有沒有帶 `--expect-merged-hash`）回 exit 2，JSON 為 `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}`（`files` 為排序後、相對 conf.d 的路徑），human 輸出逐行列出 `declared in: <檔>`。`--all` 把該 tenant 列成同形的 error 條目（沒有 `merged_hash`），其餘 tenant 照常列出，最後 exit 2；human 輸出的 `# total:` 行把已驗證、重複宣告（未驗證）與沒有 `merged_hash`（未驗證）三類分開計數。⚠️ da-guard 對有重複宣告的樹整棵拒收，所以其餘 tenant 也沒有 `merged_hash`（列成 `merged_hash_unavailable` 條目、不計入已驗證）。處置：刪除多餘的宣告、讓 tenant 只留在一個檔，再重跑（`validate-config` 的 `tenant_uniqueness` 報的是同一件事）。

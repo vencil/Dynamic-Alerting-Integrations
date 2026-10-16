@@ -363,7 +363,11 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         rc = _exit_code_of(exc)
     except MemoryError:
         memory = True
-    except BaseException:  # noqa: BLE001 — the CLI would die with rc 1, too
+    except Exception:  # noqa: BLE001 — the CLI would die with its crash code, too
+        traceback.print_exc()
+        from _lib_exitcodes import get_crash_exit_code  # loaded with gar (#3090)
+        rc = get_crash_exit_code()
+    except BaseException:  # noqa: BLE001 — e.g. KeyboardInterrupt: not a crash code
         traceback.print_exc()
         rc = 1
     finally:

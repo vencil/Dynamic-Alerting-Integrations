@@ -215,7 +215,8 @@ def main() -> int:
     except (OSError, yaml.YAMLError) as exc:
         # A malformed manifest or an unreadable source is a CALLER/environment
         # error (exit 2), not "the table is stale" (exit 1). Without this the
-        # traceback escapes and Python's default exit 1 misreports it as drift.
+        # traceback escapes — Python's default exit 1 used to misreport it as
+        # drift; since #3090 it is a crash at exit 2, but unnamed.
         print(f"ERROR: 讀取或解析來源失敗：{exc}", file=sys.stderr)
         return 2
 

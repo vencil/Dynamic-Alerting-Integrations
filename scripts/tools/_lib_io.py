@@ -23,7 +23,7 @@ from _lib_constants import ONBOARD_HINTS_FILENAME
 # Leaf module (yaml + stdlib only), so no import cycle (#2114).
 from _lib_yaml_keys import (ExporterKeyLoader, KeepPlainScalarText,
                             load_exporter_keys, load_for_rewrite)
-# No import cycle: _lib_exitcodes imports only sys + _lib_compat (#1641).
+# No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 from _lib_exitcodes import EXIT_CALLER_ERROR
 
 _F = TypeVar("_F", bound=Callable[..., Any])

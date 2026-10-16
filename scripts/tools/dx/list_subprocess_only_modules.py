@@ -96,8 +96,9 @@ def coverage_sources(repo: Path) -> tuple[list[str], set[str]]:
     ``[tool.coverage]`` + ``run.source``、陣列裡的註解、別處字串裡的假 header。
 
     ⚠️ 非 UTF-8 會讓 ``tomllib.load`` 丟 ``UnicodeDecodeError``——它是 ``ValueError`` 的
-    子類、**不是** ``OSError``，呼叫端攔不到 ⇒ 裸 traceback + rc 1，而這其實是「量不到」。
-    這裡轉成 ``RuntimeError`` 走 rc 2。釘住：``test_non_utf8_pyproject_is_rc2``。
+    子類、**不是** ``OSError``，呼叫端攔不到 ⇒ 裸 traceback（#3090 前是 rc 1，之後經
+    ``_lib_exitcodes`` 的 crash hook 是 rc 2，但仍是一份沒點名原因的 traceback），而這其實是
+    「量不到」。這裡轉成 ``RuntimeError`` 走具名的 rc 2。釘住：``test_non_utf8_pyproject_is_rc2``。
     """
     path = repo / "pyproject.toml"
     try:
@@ -160,7 +161,8 @@ def omit_matcher(omit: set[str]) -> "Callable[[str], bool] | None":
     ⛔ **coverage 拒絕一條 omit pattern 時，那是「量不到」，不是換個 matcher 的理由。**
     ``GlobMatcher`` 對自己 glob 文法不收的 pattern（``"***"``、未閉合的 ``[`` 等）在
     **建構期**丟 ``ConfigError``——它的 MRO 不含 ``RuntimeError``／``OSError``，直接讓它
-    逃出去會是裸 traceback + rc 1（本 repo 的 ``EXIT_VIOLATION``＝量了有問題），而真相是
+    逃出去會是裸 traceback（#3090 前是 rc 1，即本 repo 的 ``EXIT_VIOLATION``＝量了有問題；
+    之後是 crash 的 rc 2，仍沒點名原因），而真相是
     **設定讀不懂所以量不到**。⇒ 這裡轉成 ``RuntimeError`` 走 rc 2，與 TOML 解析失敗、
     omit 形狀不對走的是同一條路。
 

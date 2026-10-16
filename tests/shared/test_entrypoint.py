@@ -386,7 +386,8 @@ class TestRunToolExitPassthrough:
     工具以 exec_module 在同一行程內當 __main__ 執行，其 sys.exit(N) 以
     SystemExit(N) 直接竄出 run_tool——沒有任何重映射。用假工具把 0 / 1 / 2
     各自鎖住，避免日後在 run_tool 加 try/except 把 EXIT_VIOLATION 或
-    EXIT_CALLER_ERROR 折疊掉。
+    EXIT_CALLER_ERROR 折疊掉。run_tool 只攔 Exception（#3090 的最後防線），
+    SystemExit 與 KeyboardInterrupt 一律原樣竄出。
     """
 
     @staticmethod
@@ -407,12 +408,52 @@ class TestRunToolExitPassthrough:
             entrypoint.run_tool("fake_tool_xyz.py", ["--flag"])
         assert exc_info.value.code == code
 
-    def test_uncaught_exception_propagates_unwrapped(self, tmp_path, monkeypatch):
-        """工具拋出未捕捉例外 → 原樣竄出 run_tool（直譯器預設 rc 1、stderr 有
-        Traceback）——cli-reference 那一列說的「分派層刻意不包 try/except」。"""
+    def test_uncaught_exception_becomes_caller_error(self, tmp_path, monkeypatch, capsys):
+        """工具拋出未捕捉例外 → run_tool 是最後防線：印 Traceback 與一行
+        ERROR，以 EXIT_CALLER_ERROR (2) 結束（#3090；之前原樣竄出、直譯器
+        預設 rc 1，與「有發現」撞號）。"""
+        monkeypatch.setattr(_lib_exitcodes, "_crash_exit_code",
+                            _lib_exitcodes.EXIT_CALLER_ERROR)
         self._fake_tool(tmp_path, monkeypatch, "raise RuntimeError('boom')\n")
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(SystemExit) as exc_info:
             entrypoint.run_tool("fake_tool_xyz.py", [])
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "Traceback" in err
+        assert err.rstrip().splitlines()[-1] == \
+            "ERROR: unexpected internal error (RuntimeError): boom"
+
+    def test_tool_crash_exit_code_is_honoured(self, tmp_path, monkeypatch, capsys):
+        """工具自己 set_crash_exit_code(1)（tenant_verify 的倒置契約）→
+        run_tool 用它，不蓋成 2。"""
+        monkeypatch.setattr(_lib_exitcodes, "_crash_exit_code",
+                            _lib_exitcodes.EXIT_CALLER_ERROR)
+        self._fake_tool(tmp_path, monkeypatch,
+                        "import _lib_exitcodes\n"
+                        "_lib_exitcodes.set_crash_exit_code(1)\n"
+                        "raise RuntimeError('boom')\n")
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint.run_tool("fake_tool_xyz.py", [])
+        assert exc_info.value.code == 1
+        assert "ERROR: unexpected internal error (RuntimeError): boom" in \
+            capsys.readouterr().err
+
+    def test_keyboard_interrupt_propagates_unwrapped(self, tmp_path, monkeypatch):
+        """Ctrl-C 不是內部錯誤：原樣竄出，交給直譯器自己的處理。"""
+        self._fake_tool(tmp_path, monkeypatch, "raise KeyboardInterrupt\n")
+        with pytest.raises(KeyboardInterrupt):
+            entrypoint.run_tool("fake_tool_xyz.py", [])
+
+    def test_fallback_crash_line_matches_the_ssot(self):
+        """entrypoint 不能 import _lib_*，所以 crash 那一行在這裡有一份鏡像；
+        兩份必須逐字相同（含多行訊息壓成一行、無訊息、超長截斷）。"""
+        class Unprintable(Exception):
+            def __str__(self):
+                raise RuntimeError("no")
+
+        for exc in (RuntimeError("boom"), KeyError("k"), ValueError(),
+                    OSError("a\nb\tc"), RuntimeError("x" * 2000), Unprintable()):
+            assert entrypoint._crash_message(exc) == _lib_exitcodes.crash_message(exc)
 
     def test_normal_return_is_exit_zero(self, tmp_path, monkeypatch):
         """工具正常返回（不呼叫 sys.exit）→ run_tool 正常返回 → 直譯器 rc 0。"""
@@ -742,3 +783,67 @@ def test_dispatch_through_the_path_symlink_finds_the_tools(tmp_path):
     )
     assert p.returncode == 0, p.stderr
     assert "STUB-RAN" in p.stdout, p.stdout + p.stderr
+
+
+# ── Crash through the real dispatcher process (#3090) ────────────
+
+
+def _image_layout(tmp_path, tool_body):
+    """entrypoint.py and one tool flat in a directory, like the image — and,
+    like a raw local-dev run, NO _lib_* on sys.path."""
+    import shutil
+
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    shutil.copy(os.path.join(DA_TOOLS_DIR, "entrypoint.py"), opt / "entrypoint.py")
+    script = entrypoint.COMMAND_MAP["validate-config"]
+    (opt / script).write_text(tool_body, encoding="utf-8")
+    return opt / "entrypoint.py"
+
+
+def _run_dispatcher(entry, *args):
+    import subprocess
+
+    return subprocess.run(
+        [sys.executable, str(entry), "validate-config", *args],
+        cwd=entry.parent, capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+
+
+def test_dispatcher_turns_a_crash_of_a_tool_without_the_lib_into_rc_2(tmp_path):
+    """The tool never imports _lib_exitcodes (so no excepthook is installed):
+    only run_tool's own catch stands between the crash and rc 1."""
+    entry = _image_layout(
+        tmp_path, "print('partial')\nraise RuntimeError('boom')\n")
+    p = _run_dispatcher(entry)
+    assert p.returncode == 2, p.stderr
+    assert "Traceback" in p.stderr
+    assert p.stderr.rstrip().splitlines()[-1] == \
+        "ERROR: unexpected internal error (RuntimeError): boom"
+    assert p.stdout == "partial\n"
+
+
+def test_dispatcher_honours_the_tools_crash_exit_code(tmp_path):
+    """Tool loads _lib_exitcodes from the source tree and sets its own crash
+    code; the dispatcher's catch hands the crash to it instead of using 2."""
+    tools = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), os.pardir, os.pardir, "scripts", "tools"))
+    entry = _image_layout(
+        tmp_path,
+        f"import sys\nsys.path.insert(0, {tools!r})\n"
+        "import _lib_exitcodes\n_lib_exitcodes.set_crash_exit_code(1)\n"
+        "raise RuntimeError('boom')\n")
+    p = _run_dispatcher(entry)
+    assert p.returncode == 1, p.stderr
+    assert "ERROR: unexpected internal error (RuntimeError): boom" in p.stderr
+    assert p.stderr.count("ERROR: unexpected internal error") == 1, p.stderr
+
+
+@pytest.mark.parametrize("code", [0, 1, 2])
+def test_dispatcher_passes_tool_system_exit_through(tmp_path, code):
+    entry = _image_layout(tmp_path, f"import sys\nsys.exit({code})\n")
+    p = _run_dispatcher(entry)
+    assert p.returncode == code, p.stderr
+    assert "ERROR: unexpected internal error" not in p.stderr

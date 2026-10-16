@@ -1582,7 +1582,8 @@ def main():
     1 a change or something not compared, 2 no result.
 
     ⛔ The handler below catches ``Exception``, not a list of types: an
-    uncaught exception exits **1**, this tool's "changes detected", with an
+    uncaught exception used to exit **1** (the crash exit code is 2 since
+    #3090, but the handler stays the tool's own word), this tool's "changes detected", with an
     empty stdout — every consumer that follows the documented contract
     (``docs/integration/gitops-deployment.md``: 0 skip / 1 post the report /
     2 fail the pipeline) would read a crash as a finding. A render failing is

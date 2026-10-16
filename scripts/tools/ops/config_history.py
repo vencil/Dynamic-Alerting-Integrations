@@ -146,8 +146,10 @@ def _load_history(config_dir):
         # axis is the WRITE direction — "the output path the operator named is
         # unusable ⇒ rc 2 naming the flag". An unreadable history.json is a
         # corrupt state directory, not a mistyped flag, and wrapping it would
-        # print "cannot write …" for a read. It stays a traceback at rc=1,
-        # unchanged, and it MASKS the guarded write at `_save_history` below
+        # print "cannot write …" for a read. It stays an uncaught traceback —
+        # which since #3090 ends at rc=2 via _lib_exitcodes' crash hook
+        # ("ERROR: unexpected internal error …"), no longer the interpreter's
+        # rc=1 — and it MASKS the guarded write at `_save_history` below
         # for any shape that makes history.json unreadable — which is why no
         # row drives that sink and only the static pin speaks for it.
         # ⛔ It is not in that pin's NOT_GUARDED list either: the list is
