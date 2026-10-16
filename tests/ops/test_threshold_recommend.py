@@ -3,7 +3,7 @@
 測試涵蓋：
   - 百分位數計算（P50/P95/P99，已知分佈驗證）
   - 信心等級（樣本數門檻）
-  - 推薦邏輯（正常/noisy/低樣本/非數值/delta < 5%）
+  - 推薦邏輯（正常/低樣本/非數值/delta < 5%）
   - Reserved key 過濾
   - Prometheus 查詢（mock HTTP）
   - Dry-run 模式
@@ -188,13 +188,6 @@ class TestRecommendThreshold:
         assert rec.recommended == 95
         assert rec.confidence == tr.CONFIDENCE_MEDIUM
         assert rec.delta_pct == pytest.approx(18.75, abs=0.1)
-
-    def test_noisy_alert_recommends_p99(self):
-        """BAD noise grade 推薦 P99（放寬）。"""
-        pcts = {"p50": 50.0, "p95": 85.0, "p99": 95.0}
-        rec = tr.recommend_threshold("cpu", 80, pcts, 500, 100, noise_grade="BAD")
-        assert rec.recommended == 95
-        assert "P99" in rec.reason
 
     def test_within_margin_no_change(self):
         """Delta < 5% 不建議變更。"""

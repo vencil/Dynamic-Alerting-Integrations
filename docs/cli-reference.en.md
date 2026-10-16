@@ -3010,7 +3010,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 
 #### threshold-recommend
 
-Threshold recommendation engine — recommends optimal thresholds based on historical Prometheus P50/P95/P99 percentiles, with Noise Score integration for direction adjustment.
+Threshold recommendation engine — recommends optimal thresholds based on historical Prometheus P50/P95/P99 percentiles.
 
 **Usage**
 
