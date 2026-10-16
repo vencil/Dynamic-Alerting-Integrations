@@ -1273,8 +1273,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         verdict is da-guard's own `routing_in_unread_location` finding inside
         a profile (a second da-guard run, the check itself), so it covers
         every root `_` file's `profiles:`, not only `_profiles.yaml`, and
-        profiles no tenant elects. ⚠️ A tree with no
-        tenant at all gets an empty da-guard report, so nothing is named then.
+        profiles no tenant elects — in a tree with no tenant at all too
+        (#2991: da-guard runs every check then; only a run with no finding
+        is its empty report).
       - Other reserved keys in `_profiles.yaml` (`_silent_mode`, `_state_*`,
         …) are a WARN; `_metadata` is not — a profile's `_metadata` is filled
         into its tenants (docs/design/config-driven.md, #2830)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // --- path.go tests --------------------------------------------------
@@ -406,11 +407,37 @@ func TestCheckRedundantOverrides_NewDefaultsByTenant_TenantMissingFromBoth(t *te
 
 // --- run.go integration tests --------------------------------------
 
-func TestCheckDefaultsImpact_ErrorsOnEmptyConfigs(t *testing.T) {
+// #2991: zero tenants is a valid input — the caller reads "vacuously safe"
+// off a report with no finding, so the empty input is a clean report.
+func TestCheckDefaultsImpact_EmptyConfigsIsACleanReport(t *testing.T) {
 	t.Parallel()
-	_, err := CheckDefaultsImpact(CheckInput{})
-	if err == nil {
-		t.Fatal("err = nil for empty EffectiveConfigs, want error")
+	r, err := CheckDefaultsImpact(CheckInput{})
+	if err != nil {
+		t.Fatalf("CheckDefaultsImpact: %v", err)
+	}
+	if len(r.Findings) != 0 || r.Summary != (GuardSummary{}) {
+		t.Errorf("findings %+v, summary %+v: want none, all zero", r.Findings, r.Summary)
+	}
+}
+
+// #2991: a platform-file problem is judged on the whole tree, so zero
+// tenants is not a caller bug then — the report carries it, 0 tenants.
+func TestCheckDefaultsImpact_PlatformProblemWithZeroTenants(t *testing.T) {
+	t.Parallel()
+	r, err := CheckDefaultsImpact(CheckInput{
+		PlatformProblems: []routingpolicy.Problem{{
+			Kind: routingpolicy.ProblemRoutingDefaultsNotMapping, File: "_defaults.yaml",
+			Field: "_routing_defaults", Message: "m",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CheckDefaultsImpact: %v", err)
+	}
+	if len(r.Findings) != 1 || r.Findings[0].Kind != findingkind.FindingRoutingDefaultsNotMapping {
+		t.Fatalf("findings = %+v, want one routing_defaults_not_mapping", r.Findings)
+	}
+	if s := r.Summary; s.TotalTenants != 0 || s.Errors != 1 || s.PassedTenantCount != 0 {
+		t.Errorf("summary = %+v, want 0 tenants, 1 error, 0 passing", s)
 	}
 }
 

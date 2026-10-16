@@ -496,8 +496,10 @@ def load_guard_findings(
     the report still lists the findings it could make; the callers that need
     the tree whole fail on it through `load_effective_tree`). Anything else, or
     output that is not its JSON, raises `GuardCheckError`; a missing binary
-    `DaGuardNotFoundError`. ⚠️ With no tenant in the tree da-guard writes an
-    empty report (vacuously safe), so no finding is returned then."""
+    `DaGuardNotFoundError`. With no tenant in the tree da-guard still runs
+    every check (#2991): the findings that need no tenant (platform files,
+    threshold profiles, the defaults carriers) are returned as with tenants;
+    only a run with no finding at all is the empty, vacuously safe report."""
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:

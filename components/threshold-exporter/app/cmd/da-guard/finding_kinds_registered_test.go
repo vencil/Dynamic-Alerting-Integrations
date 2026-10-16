@@ -65,9 +65,6 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 			cardinalityLimit:     1,
 			cardinalityWarnRatio: 0.5,
 		})
-		if len(input.EffectiveConfigs) == 0 && input.MetricsNotGatherable == "" {
-			continue
-		}
 		report, err := guard.CheckDefaultsImpact(input)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

@@ -11,7 +11,6 @@ package guard
 // then field path.
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
@@ -24,22 +23,19 @@ import (
 // thrown via panic — invalid input becomes a fatal error return so
 // CI runners can distinguish "input bad" from "tenant bad".
 //
-// Errors:
-//   - len(EffectiveConfigs)==0 → fmt error. The guard's whole
-//     purpose is to validate against tenants; running it against
-//     an empty tenant set is almost always a caller bug (the
-//     correct path for "no tenants in this scope" is to skip
-//     calling the guard entirely). Except with MetricsNotGatherable
-//     set (#2031): that covers the whole tree, whatever the scope.
+// No tenants (empty EffectiveConfigs) is a valid input (#2991): the
+// per-tenant checks then find nothing, and what is judged without a tenant
+// — the platform files (PlatformProblems), the `_routing_enforced` route,
+// the defaults carriers (DefaultsFiles), the /metrics gather verdict — is
+// reported as with tenants. A caller with an empty scope decides
+// "vacuously safe" from the report having no finding, never by skipping
+// this call: a list of the inputs that matter without tenants would miss
+// the next one added.
 //
-// Otherwise CheckDefaultsImpact never errors. A clean run is a
-// GuardReport with zero Findings and PassedTenantCount equal to
-// the number of tenants.
+// CheckDefaultsImpact never errors today; the error return is kept for
+// callers' contract. A clean run is a GuardReport with zero Findings and
+// PassedTenantCount equal to the number of tenants.
 func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
-	if len(input.EffectiveConfigs) == 0 && input.MetricsNotGatherable == "" {
-		return nil, fmt.Errorf("guard: no tenants supplied in EffectiveConfigs (caller should skip the guard entirely when scope is empty)")
-	}
-
 	var findings []Finding
 	findings = append(findings, checkRequiredFields(input)...)
 	findings = append(findings, checkRedundantOverrides(input)...)
