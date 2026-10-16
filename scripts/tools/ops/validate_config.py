@@ -2352,8 +2352,9 @@ _CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT = (
     "needs da-guard (in the repo `make da-guard-build`, or set "
     "`DA_GUARD_BINARY`) and a tree it can read — the yaml_syntax, json_schema "
     "and values_not_served rows name a file it cannot; the compiler's side "
-    "needs `_custom_alerts` written as a list. Fix it and run again. Reported "
-    "only, not yet blocking.")
+    "stops on a `_custom_alerts` it cannot walk (e.g. a number in a "
+    "subdirectory file's `tenants:`). Fix it and run again. Reported only, not "
+    "yet blocking.")
 
 
 def _custom_alert_compiler():
@@ -2404,19 +2405,26 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
             f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
             hint=_CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT)
 
-    # What a rule joins on: the tenant's user_threshold row of the same
-    # recipe_id and severity. The name is only what each side calls it.
+    # A rule is one per (recipe_id, severity) for the whole pack, joined
+    # on(tenant) to every tenant's user_threshold row of that recipe_id and
+    # severity. So a tenant's compiled recipe fires only if the exporter
+    # serves that tenant such a row; a served row alerts if ANY tenant's
+    # recipe — a switched-off one too — got that rule compiled. The name is
+    # only what each side calls it.
     compiled: dict[tuple, dict] = {}
+    rules: set[tuple] = set()
     for a in accepted:
-        if not a["disabled"]:
-            for sev in a["severities"]:
+        for sev in a["severities"]:
+            rules.add((a["recipe_id"], sev))
+            if not a["disabled"]:
                 compiled[(a["tenant"], a["recipe_id"], sev)] = a
-    served_rows: dict[tuple, str] = {}
+    served_rows: dict[tuple, list[str]] = {}
     for t, v in served.items():
         for r in v.values.get("_custom_alerts") or []:
             if isinstance(r, dict) and isinstance(r.get("labels"), dict):
-                served_rows[(t, str(r["labels"].get("recipe_id")), str(r.get("severity")))] = \
-                    str(r["labels"].get("name"))
+                served_rows.setdefault(
+                    (t, str(r["labels"].get("recipe_id")), str(r.get("severity"))), []
+                ).append(str(r["labels"].get("name")))
 
     def _where(t: str) -> str:
         src = sources.get(t).key_sources.get("_custom_alerts") if t in sources else None
@@ -2426,10 +2434,18 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
     for (t, rid, sev), a in compiled.items():
         if (t, rid, sev) not in served_rows:
             origin = a["origin"] if a["own"] else "an inherited `_defaults.yaml`"
-            groups.setdefault(("never_fires", origin, a["name"], rid), set()).add(t)
-    for (t, rid, sev), name in served_rows.items():
-        if (t, rid, sev) not in compiled:
-            groups.setdefault(("not_compiled", _where(t), name, rid), set()).add(t)
+            groups.setdefault(("never_fires", origin, a["name"], rid, ""), set()).add(t)
+    for (t, rid, sev), names in served_rows.items():
+        if (rid, sev) not in rules:
+            for name in names:
+                groups.setdefault(("not_compiled", _where(t), name, rid, ""), set()).add(t)
+        elif len(names) > 1:
+            # Two served recipes of one shape and severity in one tenant: the
+            # compiler took one and quarantined the rest.
+            kept = compiled[(t, rid, sev)]["name"] if (t, rid, sev) in compiled else names[0]
+            for name in names:
+                if name != kept:
+                    groups.setdefault(("shared", _where(t), name, rid, kept), set()).add(t)
 
     def _tenants(ts: set[str]) -> str:
         ts = sorted(ts)
@@ -2437,18 +2453,22 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
         return ", ".join(ts[:WARN_LIMIT]) + more
 
     details = []
-    for (kind, where, name, rid), ts in sorted(groups.items()):
+    for (kind, where, name, rid, kept), ts in sorted(groups.items()):
         if kind == "never_fires":
             details.append(f"{where}: `{name}` ({rid}) is compiled, but the exporter serves "
                            f"no threshold for it — the rule never fires — tenant(s) {_tenants(ts)}")
-        else:
+        elif kind == "not_compiled":
             details.append(f"{where}: `{name}` ({rid}) is served, but no rule is compiled "
                            f"for it — it never alerts — tenant(s) {_tenants(ts)}")
+        else:
+            details.append(f"{where}: `{name}` ({rid}) is served beside `{kept}`, which has the "
+                           "same shape and severity — the compiler quarantined it (one alert per "
+                           f"shape and severity per tenant) — tenant(s) {_tenants(ts)}")
     if details:
         return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
     return _make_result("custom_alert_sources", PASS, [
-        f"{len({(t, rid) for t, rid, _ in compiled})} compiled custom alert(s), each with a served threshold, "
-        "and no served one without a rule"])
+        f"{len(compiled)} compiled custom alert(s), counted per tenant and severity, each with "
+        "a served threshold; every served one has a rule"])
 
 
 def check_root_defaults(config_dir: str) -> dict[str, object]:

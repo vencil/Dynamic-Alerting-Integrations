@@ -171,3 +171,45 @@ def test_a_tree_the_compiler_cannot_walk_is_a_warn_not_a_refusal(tmp_path, files
     rows = {x["check"]: x for x in json.loads(p.stdout)}
     assert rows["custom_alert_sources"]["status"] == vc.WARN
     assert p.returncode in (0, 1), p.returncode
+
+
+def test_a_served_row_another_tenant_got_a_rule_for_does_alert(tmp_path):
+    """Rules are per (recipe_id, severity) for the whole pack, joined on
+    tenant: t2's served row (from the root `_defaults.yaml` `tenants:`, which
+    the compiler does not read) is alerted on by the rule t1's own recipe
+    compiled."""
+    r = _row(_tree(tmp_path, {
+        "_defaults.yaml": _ROOT + "tenants:\n  t2:\n    _custom_alerts:\n" + _rec("n", "m"),
+        "team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("n", "m"),
+        "t2.yaml": "tenants:\n  t2:\n    mysql_connections: \"5\"\n"}))
+    assert r["status"] == vc.PASS, r
+
+
+def test_a_switched_off_recipe_still_compiles_the_rule(tmp_path):
+    """`a` is off (compiled, not served) and takes the shape; `b`, same shape
+    and severity, is quarantined but the only one served — the rule `a`
+    compiled alerts on it: nothing to report."""
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
+                              + _rec("a", "m", threshold="disable:warning")
+                              + _rec("b", "m", threshold="10:warning")}))
+    assert r["status"] == vc.PASS, r
+
+
+def test_two_served_recipes_of_one_shape_and_severity_are_said(tmp_path):
+    """The exporter serves both; the compiler takes one."""
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
+                              + _rec("a", "m", threshold="10:warning")
+                              + _rec("b", "m", threshold="20:warning")}))
+    assert r["status"] == vc.WARN
+    assert r["details"] == [
+        "team/t1.yaml: `b` (threshold__m__gt__w5m__for1m) is served beside `a`, which has the "
+        "same shape and severity — the compiler quarantined it (one alert per shape and "
+        "severity per tenant) — tenant(s) t1"]
+
+
+def test_the_pass_line_counts_per_tenant_and_severity(tmp_path):
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
+                              + _rec("a", "m", threshold="10:warning")
+                              + _rec("b", "m", threshold="20:critical")}))
+    assert r["details"] == ["2 compiled custom alert(s), counted per tenant and severity, "
+                            "each with a served threshold; every served one has a rule"]
