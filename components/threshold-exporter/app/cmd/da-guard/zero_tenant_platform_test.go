@@ -99,6 +99,11 @@ var zeroTenantPlatformCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "_routing_defaults:\n  continue: true\n"},
 		finding: findingkind.FindingRoutingKeyIgnored,
 	},
+	routingpolicy.ProblemRoutingEnforcedMatchInvalid: {
+		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
+			"\n  match: {severity: critical}\n"},
+		finding: findingkind.FindingRoutingEnforcedMatchInvalid,
+	},
 }
 
 func TestGuard_ZeroTenantPlatformCasesCoverEveryKind(t *testing.T) {
@@ -210,6 +215,7 @@ var zeroTenantKindClass = map[string]string{
 	"routing_key_ignored":              kindTreeLevel, // also per tenant
 	"routing_defaults_not_mapping":     kindTreeLevel,
 	"routing_enforced_below_root":      kindTreeLevel,
+	"routing_enforced_match_invalid":   kindTreeLevel,
 	"routing_defaults_null_below_root": kindTreeLevel,
 	"routing_profile_duplicate":        kindTreeLevel,
 	"duplicate_tenant":                 kindTreeLevel,
