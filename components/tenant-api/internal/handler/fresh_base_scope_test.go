@@ -430,7 +430,6 @@ func TestGroupMemberRefusalHidesUnreadableMembers(t *testing.T) {
 		for _, err := range []error{
 			&freshBaseScopeError{TenantID: member, Op: 13},
 			&freshBaseScopeError{TenantID: member, Op: 13, PreState: true},
-			&freshBasePolicyError{TenantID: member, Op: 13},
 		} {
 			r := freshBaseOpResult(member, err, false)
 			if strings.Contains(r.Message, "13") || strings.Contains(r.Message, "operations[") {

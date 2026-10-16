@@ -217,6 +217,8 @@ da-tools validate-config --config-dir ./conf.d/
 - 500 `TENANT_STORE_FAULT` (a batch: 500 whole); the tenant-api log shows `conf.d holds unreadable entries`, and the platform alert `TenantApiStoreUnreadable` or `TenantApiStoreScanStale` fires
 - 409 `TENANT_CONFIG_NOT_LOADABLE` with `config_error` `unreadable` or `not_regular_file`
 
+When only a partial update of one tenant (a batch patch, `PUT .../custom-alerts`) is refused with `config_error` `not_round_trippable`, this section does not apply: re-emitting that file would also change content the update does not edit; see [Tenant API hardening §3.9](api/tenant-api-hardening.en.md#39-every-write-asks-the-generator-container-first-2903).
+
 Unlike the exporter's `ConfigFilesUnreadable` (see [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay)), this is about the copy of conf.d tenant-api mounts.
 
 Causes and fixes: [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md#38-a-write-is-refused-while-confd-holds-an-entry-that-cannot-be-read-2939).

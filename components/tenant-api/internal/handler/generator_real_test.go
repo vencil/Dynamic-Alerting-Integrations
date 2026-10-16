@@ -13,7 +13,9 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,5 +186,88 @@ func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 	}
 	if head() != before {
 		t.Error("policy mismatch: a commit was made")
+	}
+}
+
+// #2903 PR-B: tenant-api no longer judges routing or the domain policy
+// itself; every such refusal is the real generator's finding (422
+// GENERATOR_FINDINGS), never 403 POLICY_VIOLATION, the old 400 receiver /
+// routing checks, or a 503 of tenant-api's own policy reader.
+func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
+	t.Parallel()
+	const slack = "        type: slack\n        api_url: https://hooks.example.com/x\n"
+	repo := seedGitTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-a]\n" +
+			"    constraints:\n      forbidden_receiver_types: [slack]\n",
+		"t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n",
+	})
+	policy := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(policy, []byte("allowed_domains: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sock := startRealGenerator(t, repo, policy)
+	d := &Deps{Writer: newTestWriter(repo), ConfigDir: repo, RBAC: adminRBAC(t), WriteMode: WriteModeDirect}
+	d.Writer.SetValidator(generator.NewGate(generator.NewClient(sock), policy))
+
+	kinds := func(w *httptest.ResponseRecorder) map[string]bool {
+		t.Helper()
+		m := genEnvelope(t, w)
+		if w.Code != http.StatusUnprocessableEntity || m["code"] != CodeGeneratorFindings {
+			t.Fatalf("status %d body %s; want 422 %s", w.Code, w.Body.String(), CodeGeneratorFindings)
+		}
+		out := map[string]bool{}
+		fs, _ := m["findings"].([]any)
+		for _, f := range fs {
+			out[f.(map[string]any)["kind"].(string)] = true
+		}
+		return out
+	}
+	for name, c := range map[string]struct{ body, kind string }{
+		"domain policy":         {"tenants:\n  t-a:\n    _routing:\n      receiver:\n" + slack, "domain_policy_violation"},
+		"receiver shape":        {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n", "missing_receiver_field"},
+		"routing not a mapping": {"tenants:\n  t-a:\n    _routing: slack\n", "routing_not_mapping"},
+		"group_by element": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
+			"        url: https://ok.example.com/x\n      group_by: [\"\"]\n", "routing_group_by_invalid"},
+		"matcher value": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
+			"        url: https://ok.example.com/x\n      routes:\n        - match: {severity: 1}\n" +
+			"          receiver: {type: webhook, url: \"https://ok.example.com/y\"}\n", "routing_value_not_string"},
+		"key the generator does not read": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
+			"        url: https://ok.example.com/x\n      continue: true\n", "routing_key_ignored"},
+	} {
+		before := gitRev(t, repo, "HEAD")
+		if got := kinds(putTenantAs(t, d, "t-a", c.body, "admins", nil)); !got[c.kind] {
+			t.Errorf("%s: findings %v, want %s", name, got, c.kind)
+		}
+		if gitRev(t, repo, "HEAD") != before {
+			t.Errorf("%s: a commit was made", name)
+		}
+	}
+	// A batch `_routing` patch that does not disable is merged and judged.
+	w := postTenantBatch(t, d, `[{"tenant_id":"t-a","patch":{"_routing":"slack"}}]`)
+	var br struct {
+		Results []struct {
+			Code string `json:"code"`
+		} `json:"results"`
+		Findings []map[string]any `json:"findings"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &br)
+	batchKinds := map[string]bool{}
+	for _, f := range br.Findings {
+		batchKinds[f["kind"].(string)] = true
+	}
+	if w.Code != http.StatusUnprocessableEntity || len(br.Results) != 1 || br.Results[0].Code != CodeGeneratorFindings ||
+		!batchKinds["routing_not_mapping"] {
+		t.Errorf("batch _routing patch: status %d body %s; want 422, %s with routing_not_mapping",
+			w.Code, w.Body.String(), CodeGeneratorFindings)
+	}
+	// The repo's policy file unreadable: the generator's finding, refusing
+	// even a threshold-only write — not tenant-api's 503.
+	if err := os.WriteFile(filepath.Join(repo, "_domain_policy.yaml"), []byte("domain_policies: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "commit", "-qam", "break the policy file")
+	if got := kinds(putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"71\"\n", "admins", nil)); !got["domain_policy_unusable"] {
+		t.Errorf("unusable policy file: findings %v, want domain_policy_unusable", got)
 	}
 }

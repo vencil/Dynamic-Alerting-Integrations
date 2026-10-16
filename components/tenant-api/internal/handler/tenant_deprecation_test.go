@@ -57,12 +57,12 @@ func TestPutTenant_DeprecatedKey_DirectMode200CarriesWarnings(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{"_defaults.yaml": deprecationDefaultsYAML})
 	initGitRepo(t, configDir)
 	gw := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, policyTestRBACYAML)
+	rbacMgr := newRBACManager(t, writeTestRBACYAML)
 
 	h := PutTenant(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
-	policyTestIdentity(req)
+	writeTestIdentity(req)
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
 
@@ -98,13 +98,13 @@ func TestPutTenant_DeprecatedKey_PRMode200CarriesWarnings(t *testing.T) {
 			return &platform.PRInfo{Number: 7, WebURL: "https://gh/7", State: "open", Title: title, HeadRef: headBranch}, nil
 		},
 	}
-	rbacMgr := newRBACManager(t, policyTestRBACYAML)
+	rbacMgr := newRBACManager(t, writeTestRBACYAML)
 	h := PutTenant(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: &mockPlatformTracker{}, RBAC: rbacMgr})
 	body := bytes.NewBufferString("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a", body)
 	// Routed through the RBAC middleware so the feature-branch git commit gets
 	// a non-empty author identity (same discipline as the direct-mode test).
-	policyTestIdentity(req)
+	writeTestIdentity(req)
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
 
@@ -127,7 +127,7 @@ func TestBatchTenants_DeprecatedKeyPatch_PerOpWarnings(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{"_defaults.yaml": deprecationDefaultsYAML})
 	initGitRepo(t, configDir)
 	gw := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, policyTestRBACYAML)
+	rbacMgr := newRBACManager(t, writeTestRBACYAML)
 
 	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
 	reqBody, _ := json.Marshal(BatchRequest{Operations: []BatchOperation{
@@ -136,7 +136,7 @@ func TestBatchTenants_DeprecatedKeyPatch_PerOpWarnings(t *testing.T) {
 	}})
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBuffer(reqBody))
 	req.Header.Set("Content-Type", "application/json")
-	policyTestIdentity(req)
+	writeTestIdentity(req)
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, nil).ServeHTTP(w, req)
 
@@ -196,13 +196,13 @@ func TestBatchTenants_PRModeAllNoOp_200CarriesWarnings(t *testing.T) {
 			return &platform.PRInfo{Number: 1, WebURL: "https://gh/1", State: "open"}, nil
 		},
 	}
-	rbacMgr := newRBACManager(t, policyTestRBACYAML)
+	rbacMgr := newRBACManager(t, writeTestRBACYAML)
 	h := BatchTenants(&Deps{Writer: writer, WriteMode: WriteModePR, PRClient: mockClient, PRTracker: &mockPlatformTracker{}, RBAC: rbacMgr})
 
 	reqBody, _ := json.Marshal(BatchRequest{Operations: []BatchOperation{{TenantID: "db-a", Patch: patch}}})
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBuffer(reqBody))
 	req.Header.Set("Content-Type", "application/json")
-	policyTestIdentity(req)
+	writeTestIdentity(req)
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, nil).ServeHTTP(w, req)
 
@@ -313,7 +313,7 @@ func TestPutCustomAlerts_DeprecatedKeyFile_200CarriesWarnings(t *testing.T) {
 	})
 	initGitRepo(t, configDir)
 	gw := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, policyTestRBACYAML)
+	rbacMgr := newRBACManager(t, writeTestRBACYAML)
 
 	h := PutTenantCustomAlerts(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
 	payload := map[string]any{
@@ -326,7 +326,7 @@ func TestPutCustomAlerts_DeprecatedKeyFile_200CarriesWarnings(t *testing.T) {
 	raw, _ := json.Marshal(payload)
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a/custom-alerts", "id", "db-a", bytes.NewBuffer(raw))
 	req.Header.Set("Content-Type", "application/json")
-	policyTestIdentity(req)
+	writeTestIdentity(req)
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
 

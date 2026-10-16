@@ -133,6 +133,10 @@ FINDING_KINDS: dict[str, str] = {
     "routing_enforced_enabled_invalid":
         "_routing_enforced.enabled is not a YAML boolean; no enforced route "
         "is rendered.",
+    "routing_enforced_match_invalid":
+        "_routing_enforced.match is written but is not a list of matcher "
+        "strings (e.g. a {severity: critical} mapping); no enforced route "
+        "is rendered.",
     "routing_value_not_string":
         "A matcher value YAML does not read as a string (quote it).",
     "routing_group_by_invalid":

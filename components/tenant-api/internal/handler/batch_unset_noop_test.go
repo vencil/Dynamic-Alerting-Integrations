@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/platform"
-	"github.com/vencil/tenant-api/internal/policy"
 )
 
 // noOpRun posts ops over files in mode and reports the response, whether a
@@ -25,8 +24,7 @@ import (
 func noOpRun(t *testing.T, mode WriteMode, files map[string]string, ops string) (resp BatchResponse, prOpened, headMoved bool, configDir string) {
 	t.Helper()
 	configDir = seedGitTree(t, files)
-	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
-		Policy: policy.NewManager(configDir), WriteMode: mode}
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t), WriteMode: mode}
 	if mode == WriteModePR {
 		d.PRClient = &mockPlatformClient{providerName: "github",
 			createPRFunc: func(title, body, h string, labels []string) (*platform.PRInfo, error) {

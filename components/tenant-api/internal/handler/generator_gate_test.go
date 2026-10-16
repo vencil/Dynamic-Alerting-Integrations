@@ -27,7 +27,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/platform"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -292,7 +291,7 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 		}, 503, CodeValidatorUnavailable, "amtool_missing", true, "server log"},
 		{"policy unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "--policy: bad"}
-		}, 503, CodePolicyUnavailable, "policy_unusable", true, "server log"},
+		}, 503, generator.CodePolicyUnavailable, "policy_unusable", true, "server log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -400,8 +399,8 @@ func TestGeneratorGate_AsyncBatchDeadline(t *testing.T) {
 }
 
 // G6: the flat `_routing_receiver_type` is a 400 on PUT (and on a batch
-// patch, validatePatchMap) before anything else judges it — the domain
-// policy forbids slack here, and the generator is never asked.
+// patch, validatePatchMap) before anything else judges it — the generator
+// is never asked (the domain policy here would forbid slack).
 func TestGeneratorGate_FlatReceiverTypeIs400(t *testing.T) {
 	t.Parallel()
 	f, fake := generatorDirectFixture(t, nil)
@@ -409,10 +408,14 @@ func TestGeneratorGate_FlatReceiverTypeIs400(t *testing.T) {
 		"    constraints:\n      forbidden_receiver_types: [slack]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f.deps.Policy = policy.NewManager(f.dir)
 	body := "tenants:\n  t-a:\n    mysql_connections: \"72\"\n    _routing_receiver_type: slack\n"
 	w := putTenantAs(t, f.deps, "t-a", body, "admins", nil)
-	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "_routing.receiver.type") {
+	// One source: the tenant key validation (gitops, cfg.ValidateTenantKeys)
+	// — code BAD_REQUEST with its "unknown routing key" text, not a handler
+	// INVALID_BODY violation.
+	if m := genEnvelope(t, w); w.Code != http.StatusBadRequest || m["code"] != CodeBadRequest ||
+		!strings.Contains(w.Body.String(), `unknown routing key \"_routing_receiver_type\"`) ||
+		!strings.Contains(w.Body.String(), "_routing.receiver.type") {
 		t.Errorf("PUT: status %d body %s", w.Code, w.Body.String())
 	}
 	code, _, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":{"_routing_receiver_type":"slack"}}]}`, false)

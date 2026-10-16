@@ -19,24 +19,11 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
-
-	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 )
 
 type parityTarget struct {
 	Ref  string  `json:"ref"`
 	Type *string `json:"type"`
-}
-
-type parityBatch struct {
-	Patch   map[string]string `json:"patch"`
-	Unset   []string          `json:"unset"` // B2 (#2341): keys the op removes
-	Verdict string            `json:"verdict"`
-}
-
-type parityTenantAPI struct {
-	Put   string       `json:"put"`
-	Batch *parityBatch `json:"batch"`
 }
 
 type parityDiffers struct {
@@ -45,12 +32,11 @@ type parityDiffers struct {
 	Policy         [][3]string     `json:"policy"`
 	RejectedRoutes []string        `json:"rejected_routes"`
 	GroupByInvalid [][2]string     `json:"group_by_invalid"` // #2503: the Python value only
-	// Refused and TenantAPI (ADR-036 step 2, PR-C): the generator's values —
-	// a refusal no Go reader knows (tenant_file_unreadable), and the verdict
-	// it would give the PUT. Parsed only: this half asserts the Go columns,
-	// tests/shared/test_reader_divergence_catalog.py ranks the difference.
-	Refused   *string          `json:"refused"`
-	TenantAPI *parityTenantAPI `json:"tenant_api"`
+	// Refused (ADR-036 step 2, PR-C): the generator's value — a refusal no
+	// Go reader knows (tenant_file_unreadable). Parsed only: this half
+	// asserts the Go columns, tests/shared/test_reader_divergence_catalog.py
+	// ranks the difference.
+	Refused *string `json:"refused"`
 }
 
 // parityEscalation is the `escalation` cell (#2325).
@@ -66,7 +52,6 @@ type parityExpect struct {
 	NotString      []string          `json:"values_not_string"`
 	GroupByInvalid [][2]string       `json:"group_by_invalid"`
 	UnknownProfile *string           `json:"unknown_profile"`
-	TenantAPI      *parityTenantAPI  `json:"tenant_api"`
 	PythonDiffers  *parityDiffers    `json:"python_differs"`
 	Escalation     *parityEscalation `json:"escalation"`
 	Refused        *string           `json:"refused"` // #2341
@@ -102,10 +87,7 @@ type parityMatrix struct {
 		Invalid             []string `json:"invalid"`
 		SchemaSearchAccepts []string `json:"schema_search_accepts"`
 	} `json:"tenant_ids"`
-	// TenantAPIUnmeasured: why a cell's tenant_api is null (asserted by the
-	// Python half, ADR-036 step 2); parsed only.
-	TenantAPIUnmeasured json.RawMessage `json:"tenant_api_unmeasured"`
-	Trees               []parityTree    `json:"trees"`
+	Trees []parityTree `json:"trees"`
 }
 
 func loadParityMatrix(t *testing.T) parityMatrix {
@@ -133,7 +115,7 @@ func loadParityMatrix(t *testing.T) parityMatrix {
 // first in name order, at any depth (#2326) — and that file's path; a root
 // platform file's entry for it is the overlay, Layers.TenantBlock. Its
 // `_routing` carries the values the generator reads with PyYAML
-// (WithPyYAMLRouting, #2295 / #2431), as da-guard and tenant-api read it.
+// (WithPyYAMLRouting, #2295 / #2431), as da-guard reads it.
 func tenantBlock(t *testing.T, files map[string]string, tenantID string) (map[string]any, string) {
 	t.Helper()
 	names := make([]string, 0, len(files))
@@ -377,8 +359,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 			for tenantID, want := range tree.Expect {
 				t.Run(tenantID, func(t *testing.T) {
 					// The generator's tenant layer: the tenant file's keys over
-					// the root platform overlay (#2291) — tenant-api's model
-					// below lays the PUT body over it too (#2486).
+					// the root platform overlay (#2291).
 					block, file := tenantBlock(t, tree.Files, tenantID)
 					if got := ltree.TenantLevel(tenantID); got != confdlayout.LevelOf(file) {
 						t.Errorf("tenant level = %q, want %q (%s)", got, confdlayout.LevelOf(file), file)
@@ -402,138 +383,10 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 						(unknown != nil && *unknown != *want.UnknownProfile) {
 						t.Errorf("unknown profile = %v, want %v", unknown, want.UnknownProfile)
 					}
-					if want.TenantAPI != nil {
-						checkTenantAPIModel(t, tree.Files, tenantID, block, layers, *want.TenantAPI)
-					}
 				})
 			}
 		})
 	}
-}
-
-// checkTenantAPIModel checks the tenant_api column against this package the
-// way DESIGN #2280 has tenant-api use it: policies from the root
-// `_domain_policy.yaml` and `.yml`, in that order, a domain in both being the
-// `.yml`'s (#2486); PUT judges the tenant's own file and a batch patch is
-// laid over the on-disk block — each over the root platform overlay
-// (Layers.TenantBlock, #2486) — and a patch is judged only when it touches
-// `_routing_profile` / `_routing`. It is a consistency check of the table —
-// the handler's own assertion lives in tenant-api
-// (internal/handler/routing_policy_parity_test.go).
-func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string, block map[string]any, layers Layers, want parityTenantAPI) {
-	t.Helper()
-	var pols []Policy
-	unavailable := false
-	for _, name := range []string{"_domain_policy.yaml", "_domain_policy.yml"} {
-		src, ok := files[name]
-		if !ok {
-			continue
-		}
-		if DomainPoliciesShapeError([]byte(src)) != nil {
-			// #2659: tenant-api refuses the file (parseConfig), and its
-			// watcher, reading the tree at startup, has no last good: hub
-			// #2486 Q7-2, a direct-mode PUT answers 503 POLICY_UNAVAILABLE.
-			unavailable = true
-			continue
-		}
-		filePols, _, err := ParseDomainPolicies([]byte(src))
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		for _, p := range filePols {
-			replaced := false
-			for i := range pols {
-				if pols[i].Domain == p.Domain {
-					pols[i], replaced = p, true
-				}
-			}
-			if !replaced {
-				pols = append(pols, p)
-			}
-		}
-	}
-	verdict := func(own map[string]any) bool { // true = refused
-		b := layers.TenantBlock(tenantID, own)
-		resolved, ok, _, _ := Resolve(tenantID, b, layers)
-		if !ok {
-			return false
-		}
-		if len(CheckReceiverTypes(tenantID, resolved, pols)) > 0 {
-			return true
-		}
-		for _, f := range CheckCriticalEscalation(tenantID, resolved, pols) { // #2325
-			if !f.Verdict.Compliant() {
-				return true
-			}
-		}
-		return false
-	}
-	put := "ok"
-	r, writesRouting := block["_routing"]
-	if unavailable {
-		put = "503"
-	} else if verdict(block) {
-		put = "403"
-	} else if (writesRouting && RoutingNotMapping(r)) || writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
-		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 ||
-		len(IgnoredKeys(block["_routing"], BlockRouting)) > 0 || len(UnknownRoutingKeys(block, LayerTenant)) > 0 {
-		put = "400" // #2295 receiver contract, #2431 a matcher value / #2503 a group_by element / #2960 an ignored key the block writes / #2983 an unknown `_routing*` key
-	}
-	if put != want.Put {
-		t.Errorf("tenant_api.put model = %s, table says %s", put, want.Put)
-	}
-	if want.Batch == nil {
-		return
-	}
-	patched := map[string]any{}
-	for k, v := range block {
-		patched[k] = v
-	}
-	touches := false
-	for k, v := range want.Batch.Patch {
-		patched[k] = v
-		touches = touches || k == "_routing_profile" || k == "_routing"
-	}
-	// B2: an unset key is removed after the patch; removing `_routing`
-	// re-enables a disabled tenant, so it is judged like writing it.
-	for _, k := range want.Batch.Unset {
-		delete(patched, k)
-		touches = touches || k == "_routing_profile" || k == "_routing"
-	}
-	got := "ok"
-	if v, has := want.Batch.Patch["_routing"]; has && !IsDisabled(v) {
-		got = "400" // #2341: a flat `_routing` patch can only disable
-	} else if touches && verdict(patched) {
-		got = "policy_violation"
-	}
-	if got != want.Batch.Verdict {
-		t.Errorf("tenant_api.batch model = %s, table says %s", got, want.Batch.Verdict)
-	}
-}
-
-// writesBadReceiver models tenant-api's #2295 PUT check: a receiver the
-// tenant block itself writes in `_routing` (main, overrides[i], routes[i];
-// absent or null is not written) that pkg/receiverspec reports.
-func writesBadReceiver(block map[string]any) bool {
-	routing, ok := block["_routing"].(map[string]any)
-	if !ok {
-		return false
-	}
-	holders := []map[string]any{routing}
-	for _, list := range []string{"overrides", "routes"} {
-		entries, _ := routing[list].([]any)
-		for _, e := range entries {
-			if m, ok := e.(map[string]any); ok {
-				holders = append(holders, m)
-			}
-		}
-	}
-	for _, h := range holders {
-		if recv := h["receiver"]; recv != nil && len(receiverspec.Check(recv)) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func itoa(i int) string {

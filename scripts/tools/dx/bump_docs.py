@@ -585,19 +585,8 @@ def _build_exporter_rules():
         # ⚠️ Deleted: OCI chart inline version in docs/index.md. That page was
         # rewritten into a router ("想試哪個？…") and contains no `oci://`
         # reference at all now.
-        # Exporter image tag in API docs
-        {
-            "file": "docs/api/README.md",
-            "desc": "exporter image tag in API docs (zh)",
-            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?" + _SEMVER,
-            "replacement": lambda v: f"ghcr.io/vencil/threshold-exporter:v{v}",
-        },
-        {
-            "file": "docs/api/README.en.md",
-            "desc": "exporter image tag in API docs (en)",
-            "pattern": r"ghcr\.io/vencil/threshold-exporter:v?" + _SEMVER,
-            "replacement": lambda v: f"ghcr.io/vencil/threshold-exporter:v{v}",
-        },
+        # ⚠️ Deleted: exporter image tag in docs/api/README{,.en}.md. Its Pod
+        # example was replaced by a pointer to the Helm chart's values.yaml.
         # OCI chart --version in scenario docs
         {
             "file": "docs/scenarios/multi-cluster-federation.md",

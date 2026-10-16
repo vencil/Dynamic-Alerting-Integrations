@@ -33,16 +33,15 @@ Fixture design (full-method fuzz):
   - TA_RATE_LIMIT_PER_MIN=0 disables the per-caller rate limiter
     (cmd/server/main.go); hundreds of fuzz requests/minute from one
     caller identity would otherwise trip 429s unrelated to the spec.
-  - `_domain_policy.yaml` lives INSIDE conf.d/ (unlike _rbac.yaml there
-    is no flag: policy.NewManager hard-joins configDir — cmd/server/main.go
-    → internal/policy/policy.go) and binds the seed tenant to a domain
-    that forbids one receiver type. This arms the API-layer policy gate
-    (CheckWrite → 403 POLICY_VIOLATION, internal/handler/tenant_put.go)
-    so the declared 403 contract is reachable in this fixture. Because
-    domain→tenant matching is an exact tenant list (no wildcard) and a
-    fuzzed body rarely hits `_routing.receiver.type` on the seed tenant,
-    a DETERMINISTIC smoke (run_policy_gate_smoke) fires the gate before
-    the fuzz — the 403 path never depends on fuzz luck.
+  - `_domain_policy.yaml` lives INSIDE conf.d/ and binds the seed tenant
+    to a domain that forbids one receiver type. tenant-api does not read
+    it (#2903, ADR-036 §4): the route generator judges every write on the
+    tree it produces, the policy included, and refuses a violation with
+    422 GENERATOR_FINDINGS. Because domain→tenant matching is an exact
+    tenant list (no wildcard) and a fuzzed body rarely hits
+    `_routing.receiver.type` on the seed tenant, a DETERMINISTIC smoke
+    (run_policy_gate_smoke) fires that refusal before the fuzz — the 422
+    path never depends on fuzz luck.
 
 Skipped checks (and why — see also docs/internal/testing-playbook.md):
   - `auth-required`: tenant-api auth is via X-Forwarded-* headers from
@@ -66,7 +65,7 @@ Excluded operations (known gaps + reopen conditions):
     `filter_too_much`, which schemathesis 4.x reports as an engine-level
     error (exit 1) that `--suppress-health-check` does not cover, so the
     op flakily reds the run without ever fuzzing (#1158). Covered by
-    Go handler tests + the deterministic policy-gate smoke. Reopen when
+    Go handler tests. Reopen when
     the batch schema is widened / given examples so it is fuzzable.
 """
 
@@ -141,14 +140,14 @@ FUZZ_EMAIL = "schemathesis@example.com"
 
 # Neutral fixture tenant (dev-rule #2: no real tenant ids in fixtures).
 # Seeded in conf.d so list endpoints have ≥1 tenant, and listed in the
-# domain policy fixture so the policy gate can actually match a tenant
-# (policy.go isTenantInPolicy is an exact-list match, no wildcard).
+# domain policy fixture so the generator's policy check can match a tenant
+# (an exact-list match, no wildcard).
 SEED_TENANT = "db-seed"
 
 # Domain policy fixture knobs. webhook is forbidden / email is allowed —
 # both are real receiver types from tenant-config.schema.json, so the
-# violating body is schema-valid and only the policy gate can reject it
-# (a 400 would mean the smoke broke, not the policy).
+# violating body is schema-valid and only the policy can reject it (a 400
+# would mean the smoke broke, not the policy).
 POLICY_DOMAIN = "contract-fixture-domain"
 POLICY_FORBIDDEN_RECEIVER = "webhook"
 POLICY_ALLOWED_RECEIVER = "email"
@@ -203,15 +202,15 @@ def write_domain_policy_fixture(config_dir: Path) -> None:
     Shape mirrors the real example
     (components/threshold-exporter/config/conf.d/examples/_domain_policy.yaml):
     forbidden_receiver_types + allowed_receiver_types on one domain. Must
-    live INSIDE conf.d — policy.NewManager joins configDir directly
-    (cmd/server/main.go), there is no -policy flag. The scanner skips
-    `_`-prefixed files (internal/handler/tenant_list.go), so the file
-    never shows up as a tenant.
+    live INSIDE conf.d: the route generator reads it from the tree it
+    judges (#2903). The scanner skips `_`-prefixed files
+    (internal/handler/tenant_list.go), so the file never shows up as a
+    tenant.
     """
     (config_dir / "_domain_policy.yaml").write_text(
         "domain_policies:\n"
         f"  {POLICY_DOMAIN}:\n"
-        "    description: \"Contract-test fixture: arms the API-layer policy gate\"\n"
+        "    description: \"Contract-test fixture: the route generator's policy check\"\n"
         f"    tenants: [{SEED_TENANT}]\n"
         "    constraints:\n"
         f"      allowed_receiver_types: [{POLICY_ALLOWED_RECEIVER}, pagerduty]\n"
@@ -257,23 +256,25 @@ def _put_tenant(base_url: str, body: bytes) -> tuple[int, str, bytes]:
 
 
 def run_policy_gate_smoke(base_url: str) -> bool:
-    """Deterministic contract case for the domain-policy 403 path.
+    """Deterministic contract case for a write the domain policy refuses.
 
     schemathesis almost never generates a body that sets
     `_routing.receiver.type` on the seed tenant, so without this the
-    policy gate's declared 403 would only be exercised by fuzz luck.
-    Two fixed requests, run BEFORE the fuzz (fail fast, and immune to
-    whatever state the fuzz leaves behind):
+    policy refusal would only be exercised by fuzz luck. Two fixed
+    requests, run BEFORE the fuzz (fail fast, and immune to whatever
+    state the fuzz leaves behind):
 
-      1. violating PUT (forbidden receiver type) → MUST be 403 with the
-         ErrorResponse envelope: code=POLICY_VIOLATION + violations[]
-         carrying the policy.Violation shape (domain/constraint/message).
-         The body is schema-valid apart from the policy, so a 400 here
-         means the smoke itself broke — not a pass.
+      1. violating PUT (forbidden receiver type) → MUST be 422 with the
+         ErrorResponse envelope: code=GENERATOR_FINDINGS + findings[]
+         holding the route generator's finding for the seed tenant's
+         policy (#2903: tenant-api no longer judges the policy itself;
+         the generator does, on the tree the write produces). The body
+         is schema-valid apart from the policy, so a 400 here means the
+         smoke itself broke — not a pass.
       2. control PUT (allowed receiver type) → MUST be 200. Guards
          against a miswired fixture where the policy (or the file's mere
          presence in conf.d) blocks every write and the fuzz would
-         silently degrade into an all-403 run.
+         silently degrade into an all-422 run.
     """
     ok = True
 
@@ -282,41 +283,41 @@ def run_policy_gate_smoke(base_url: str) -> bool:
         "        url: https://alerts.invalid/contract-fixture\n"
     ))
     detail = f"status={status} content-type={ctype} body={raw[:400]!r}"
-    if status != 403:
-        print(f"[contract] FAIL policy smoke: violating PUT expected 403, got {detail}")
+    if status != 422:
+        print(f"[contract] FAIL policy smoke: violating PUT expected 422, got {detail}")
         ok = False
     else:
         try:
             body = json.loads(raw)
         except ValueError:
-            print(f"[contract] FAIL policy smoke: 403 body is not JSON: {detail}")
+            print(f"[contract] FAIL policy smoke: 422 body is not JSON: {detail}")
             return False
-        violations = body.get("violations") or []
-        if body.get("code") != "POLICY_VIOLATION":
-            print(f"[contract] FAIL policy smoke: expected code=POLICY_VIOLATION, got {detail}")
+        findings = body.get("findings") or []
+        if body.get("code") != "GENERATOR_FINDINGS":
+            print(f"[contract] FAIL policy smoke: expected code=GENERATOR_FINDINGS, got {detail}")
             ok = False
-        elif not body.get("error") or not violations:
-            print(f"[contract] FAIL policy smoke: 403 missing error/violations: {detail}")
+        elif not body.get("error") or not findings:
+            print(f"[contract] FAIL policy smoke: 422 missing error/findings: {detail}")
             ok = False
         elif not any(
-            v.get("domain") == POLICY_DOMAIN
-            and v.get("constraint") == "forbidden_receiver_types"
-            and v.get("message")
-            for v in violations
+            f.get("tenant") == SEED_TENANT
+            and f.get("related") is True
+            and f"domain_policy '{POLICY_DOMAIN}'" in (f.get("message") or "")
+            and f"'{POLICY_FORBIDDEN_RECEIVER}' is forbidden" in (f.get("message") or "")
+            for f in findings
         ):
-            print(f"[contract] FAIL policy smoke: violations lack the policy.Violation shape: {detail}")
+            print(f"[contract] FAIL policy smoke: no related finding of the domain policy: {detail}")
             ok = False
         elif not ctype.startswith("application/json"):
-            print(f"[contract] FAIL policy smoke: 403 content-type not JSON: {detail}")
+            print(f"[contract] FAIL policy smoke: 422 content-type not JSON: {detail}")
             ok = False
 
     status, _, raw = _put_tenant(base_url, _tenant_body(
         f"        type: {POLICY_ALLOWED_RECEIVER}\n"
         "        to: oncall@example.com\n"
         "        smarthost: smtp.example.invalid:587\n"
-        # #2295: PUT refuses a receiver Alertmanager cannot load (email
-        # without `from`) with 400 INVALID_BODY, so the control must be a
-        # complete one or it answers 400 instead of the policy verdict.
+        # The route generator refuses a receiver Alertmanager cannot load
+        # (email without `from`), so the control must be a complete one.
         "        from: alerts@example.com\n"
     ))
     if status != 200:
@@ -325,7 +326,7 @@ def run_policy_gate_smoke(base_url: str) -> bool:
         ok = False
 
     if ok:
-        print("[contract] policy-gate smoke OK: violating PUT → 403 POLICY_VIOLATION, control PUT → 200")
+        print("[contract] policy smoke OK: violating PUT → 422 GENERATOR_FINDINGS, control PUT → 200")
     return ok
 
 

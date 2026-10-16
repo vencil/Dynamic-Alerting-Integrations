@@ -965,19 +965,22 @@ class TestPlatformSettings:
         md = _run_cli(old, new)
         assert "**Changed, no effect on the renders that read it** (1)" in md.stdout
 
-    def test_enforced_match_the_generator_drops_is_not_no_effect(self, tmp_path):
-        """#2962 review: the generator keeps `_routing_enforced.match` only as a list; a
-        mapping is dropped without a word. So `_routing_enforced` is partial, and an edit
-        to that mapping is "no difference" at rc 1 — never "no effect" at rc 0."""
-        enf = ("_routing_enforced:\n  enabled: true\n  match: {{severity: {sev}}}\n  receiver:\n"
+    def test_enforced_match_written_as_a_mapping_shows_in_the_render(self, tmp_path):
+        """#2989 (was #2962 review): `_routing_enforced.match` is read only as a list. A
+        mapping used to be dropped without a word, which is why the carrier was partial;
+        now the block is refused and renders no NOC route, so rewriting the list as the
+        `routes[i].match` mapping is a rendered change (the route goes away), and the
+        carrier is fully covered."""
+        assert cd.RENDERED_CARRIERS["_routing_enforced"][1] == "full"
+        enf = ("_routing_enforced:\n  enabled: true\n  match: {match}\n  receiver:\n"
                "    type: webhook\n    url: https://noc.example.com/h\n")
         old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
-                                    "_noc.yaml": enf.format(sev="critical")},
+                                    "_noc.yaml": enf.format(match="['severity=\"critical\"']")},
                          {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
-                          "_noc.yaml": enf.format(sev="warning")})
+                          "_noc.yaml": enf.format(match="{severity: critical}")})
         p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 1, p.stdout + p.stderr
-        assert [s[2] for s in _settings(_json(p))] == [cd.SETTING_NO_RENDER_CHANGE]
+        assert [s[2] for s in _settings(_json(p))] == [cd.SETTING_RENDERED]
 
     def test_no_effect_only_says_so_in_the_last_line(self, tmp_path):
         """#2962 review: not "No changes detected." under a list of changed settings."""

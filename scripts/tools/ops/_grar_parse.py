@@ -82,7 +82,12 @@ from _grar_validate import (  # noqa: E402
     value_not_string_message,
 )
 # #2503: the strict twin of the enforced routes' group_by render.
-from _grar_routes import enforced_group_by_problems, enforced_route_tenants  # noqa: E402
+from _grar_routes import (  # noqa: E402
+    enforced_group_by_problems,
+    enforced_match_invalid,
+    enforced_match_invalid_text,
+    enforced_route_tenants,
+)
 
 # ADR-007 --strict fail-open closure: filenames whose content carries the
 # domain policies. If such a file is unparseable, or a domain_policies
@@ -96,6 +101,34 @@ _POLICY_FILENAMES = ("_domain_policy.yaml", "_domain_policy.yml")
 ROUTING_READ = ParseMode(
     "_lib_io.strict_load_exporter_keys(raw_text_sequences=('tenants',))",
     lambda f: strict_load_exporter_keys(f, raw_text_sequences=("tenants",)))
+
+
+# #2981 (ADR-036 §3): the conf.d entries the generator service took from
+# git objects whose tree mode is not a regular file's (100644 / 100755) — a
+# symlink (120000), a gitlink (160000) or anything else — as {path relative
+# to the conf.d root: mode}. The service does not write them into the tree
+# it judges and sets them here instead, so each becomes a dropped file named
+# for what it is (not_regular_file), never whatever its link text happens to
+# parse as. Empty for every read of a real directory: a filesystem reader
+# follows a file symlink (a Kubernetes ConfigMap mount is made of them).
+_GIT_IRREGULAR: dict[str, str] = {}
+
+_GIT_MODE_NAMES = {"120000": "a symlink", "160000": "a gitlink (submodule)"}
+
+
+def set_git_irregular_entries(entries: "dict[str, str] | None") -> None:
+    """Install (or, with None, clear) the git entries described above."""
+    _GIT_IRREGULAR.clear()
+    if entries:
+        _GIT_IRREGULAR.update(entries)
+
+
+def git_irregular_reason(mode: str) -> str:
+    """The reason clause of a not-regular git entry (one wording, here)."""
+    what = _GIT_MODE_NAMES.get(mode, "not a regular file")
+    return (f"is not a regular file (not_regular_file): git tree mode {mode}, "
+            f"{what} — read from git objects, conf.d entries must be "
+            f"100644 / 100755 files")
 
 
 def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
@@ -139,18 +172,16 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     that is a behaviour change rather than a fail-open fix, and it is
     tracked separately — see the follow-up on #1448.
 
-    ⚠️ Two more readers disagree with this one, both measured, neither
-    closed here:
+    ⚠️ Two more readers used to disagree with this one; both are closed:
 
     * **Nested files** — closed by #2326: this loop walks the tree now, so
       ``conf.d/team-a/beta.yaml`` with a list at its top level is booked here
       too (it used to be ``validate-config`` rc=1 against
       ``generate-routes --validate --strict`` rc=0).
-    * **The write plane.** ``tenant-api``'s ``internal/policy`` unmarshals a
-      null ``domain_policies:`` to a nil map, replaces it with an empty one
-      and returns no error, so ``CheckWrite`` permits every write for the
-      exact shape this function has just promoted to a blocking ``--strict``
-      ERROR. Read from source; not exercised here.
+    * **The write plane** — closed by #2903: ``tenant-api`` no longer reads
+      the policy file itself (its ``internal/policy`` let every write
+      through for a null ``domain_policies:``); a write is judged by this
+      generator, so this function's ``--strict`` ERROR is its verdict too.
 
     ⛔ "Nothing" means exactly those two. It did NOT for one round: the
     caller's ``if not data: continue`` ran *before* the shape check, so
@@ -343,7 +374,17 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             _record_ignored_keys(result, raw, block="routing_enforced",
                                  where="_routing_enforced",
                                  field_prefix="_routing_enforced.", file=fname)
-            if isinstance(raw, dict) and enabled is True:
+            if isinstance(raw, dict) and enabled is True and enforced_match_invalid(raw):
+                # #2989: a `match` that is not a list (`{severity: critical}`)
+                # used to be dropped, so the NOC route took every alert. Not
+                # enabled, as for a non-boolean `enabled`: an earlier root
+                # file's block stays, and --validate fails on the line.
+                result.setdefault("enforced_errors", []).append(
+                    skipped_entry_warning(
+                        "  WARN: " + enforced_match_invalid_text(f" in {fname}", raw["match"]),
+                        kind="routing_enforced_match_invalid",
+                        file=fname, field="_routing_enforced.match"))
+            elif isinstance(raw, dict) and enabled is True:
                 result["enforced_routing"] = raw
             elif isinstance(raw, dict) and enabled is False:
                 pass  # explicitly disabled → None
@@ -1092,6 +1133,13 @@ def _parse_config_files(config_dir: str) -> dict:
         _drop_unreadable_file(
             rel, unusable_reason(bad),
             f"remove {rel} or replace it with a readable YAML file",
+            result)
+    # #2981: entries the generator service read from git as not regular files.
+    for rel, mode in sorted(_GIT_IRREGULAR.items()):
+        _drop_unreadable_file(
+            rel, git_irregular_reason(mode),
+            f"commit {rel} as a regular file (its content in place of the "
+            f"link), or remove it",
             result)
 
     # #1469: ONE predicate for "what is a config file", shared with

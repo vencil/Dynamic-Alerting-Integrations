@@ -1,18 +1,15 @@
 package handler
 
-// B2 F1 (#2341): PR mode cuts its branch from the FRESH origin base, but the
-// per-op domain-policy pre-check reads the pod's local tree, which is synced
-// only at startup. An op the local tree lets through can break the policy on
-// the base — re-enabling routing with unset, or pointing a tenant routing is
-// enabled for on the base at a violating profile. The merge closure now
-// judges the merged block on the fresh base too; a refusal there refuses the
-// whole batch (403 POLICY_VIOLATION, nothing written, no PR, no branch).
+// PR mode cuts its branch from the FRESH origin base, while the pod's local
+// tree is synced only at startup (#2341). The fixtures here build that
+// split; the domain-policy checks they were written for are gone (#2903:
+// the route generator judges the branch point), and what is left pins the
+// PR-mode batch behaviour that does not depend on them.
 //
 // Also B2 F2: an op that changes nothing (gitops.ErrMergeNoOp) still returns
 // the file's deprecation notices, as a byte-identical patch replay does.
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,8 +21,6 @@ import (
 
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
-	"github.com/vencil/tenant-api/internal/policy"
-	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 const tOther = "tenants:\n  t-other:\n    cpu_usage_percent: '85'\n"
@@ -66,7 +61,7 @@ func newStaleFixture(t *testing.T, local, originFiles map[string]string) *staleF
 	}
 	f := &staleFixture{dir: dir, bare: bare}
 	f.deps = &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t),
-		Groups: groups.NewDirManager(dir), Policy: policy.NewManager(dir), WriteMode: WriteModePR,
+		Groups: groups.NewDirManager(dir), WriteMode: WriteModePR,
 		PRClient: &mockPlatformClient{providerName: "github",
 			createPRFunc: func(title, body, h string, labels []string) (*platform.PRInfo, error) {
 				f.prOpened = true
@@ -92,33 +87,6 @@ func (f *staleFixture) batchBranches(t *testing.T) string {
 		}
 	}
 	return strings.Join(out, ",")
-}
-
-func (f *staleFixture) originFile(t *testing.T, name string) string {
-	t.Helper()
-	b, err := exec.Command("git", "-C", f.bare, "show", "main:"+name).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git show main:%s: %v\n%s", name, err, b)
-	}
-	return string(b)
-}
-
-// assertFreshBaseRefused: 403 POLICY_VIOLATION naming operations[op] and
-// tenant, no PR, no branch left, origin's main unmoved.
-func assertFreshBaseRefused(t *testing.T, f *staleFixture, w *httptest.ResponseRecorder, op int, tenant, originMainBefore string) {
-	t.Helper()
-	// #2900 F4: judged per op on the fresh base, answered like every refused
-	// batch — 422 rejected, the refused op's result carrying the code.
-	assertRejectedOp(t, w, op, tenant, CodePolicyViolation, "domain policy violation on the latest base branch")
-	if f.prOpened {
-		t.Error("a PR was opened")
-	}
-	if b := f.batchBranches(t); b != "" {
-		t.Errorf("batch branch left behind: %s", b)
-	}
-	if got := gitRev(t, f.bare, "main"); got != originMainBefore {
-		t.Errorf("origin main moved: %s → %s", originMainBefore, got)
-	}
 }
 
 // assertRejectedOp: w is the 422 of a rejected batch whose op-th result is
@@ -151,76 +119,12 @@ func gitRev(t *testing.T, dir, ref string) string {
 // staleTree: t-off and t-other, local copy as given.
 func staleTree(tOffDisk string) map[string]string {
 	files := offTree(tOffDisk)
-	files["_domain_policy.yaml"] = "domain_policies:\n  finance:\n    tenants: [t-off, t-other]\n" +
-		"    constraints:\n      forbidden_receiver_types: [slack]\n"
 	files["t-other.yaml"] = tOther
 	return files
 }
 
-func tOffFile(disk string) string { return "tenants:\n  t-off:\n    cpu_usage_percent: '85'\n" + disk }
-
-func TestBatchTenants_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
-	cases := []struct {
-		name, localTOff, originTOff, ops string
-		op                               int
-	}{
-		// 1. The blind-review case: locally enabled on a compliant profile;
-		// on origin, the violating profile with routing disabled. unset
-		// re-enables slack on the branch.
-		{"unset re-enables on the base", "    _routing_profile: domain-ok\n", offDisabledChat,
-			`[{"tenant_id":"t-off","unset":["_routing"]}]`, 0},
-		// 2. The pre-existing bypass: locally disabled, enabled on origin;
-		// the violating profile lands enabled.
-		{"profile patch on a base that has routing enabled", offDisabledOK, "    _routing_profile: domain-ok\n",
-			`[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`, 0},
-		// 3. op1 is compliant everywhere; op2 breaks the policy on the base.
-		// op1 must not land either.
-		{"unrelated op before it", "    _routing_profile: domain-ok\n", offDisabledChat,
-			`[{"tenant_id":"t-other","patch":{"cpu_usage_percent":"90"}},{"tenant_id":"t-off","unset":["_routing"]}]`, 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newStaleFixture(t, staleTree(tc.localTOff), map[string]string{"t-off.yaml": tOffFile(tc.originTOff)})
-			before := gitRev(t, f.bare, "main")
-			localBefore := mustRead(t, filepath.Join(f.dir, "t-off.yaml"))
-			w := postTenantBatch(t, f.deps, tc.ops)
-			assertFreshBaseRefused(t, f, w, tc.op, "t-off", before)
-			if f.originFile(t, "t-other.yaml") != tOther {
-				t.Error("op1 landed on origin")
-			}
-			if mustRead(t, filepath.Join(f.dir, "t-off.yaml")) != localBefore {
-				t.Error("the local t-off.yaml changed")
-			}
-		})
-	}
-}
-
-// 4. Local and origin agree: the per-op pre-check refuses the op, and since
-// #2900 the whole batch with it — 422 rejected, the refusal per op, the other
-// op not applied, no branch and no PR.
-func TestBatchTenants_PRMode_InSyncRefusalRejectsBatch(t *testing.T) {
-	f := newStaleFixture(t, staleTree("    _routing_profile: domain-ok\n"), nil)
-	before := gitRev(t, f.bare, "main")
-	w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
-		{"tenant_id":"t-other","patch":{"cpu_usage_percent":"90"}}]`)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422; body: %s", w.Code, w.Body.String())
-	}
-	var resp BatchResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	if resp.Status != batchStatusRejected || statuses(resp.Results) != "error,not_applied" || f.prOpened {
-		t.Errorf("response = %+v (PR opened %v), want rejected with error,not_applied and no PR", resp, f.prOpened)
-	}
-	if f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {
-		t.Errorf("rejected batch wrote something: branches %q", f.batchBranches(t))
-	}
-}
-
-// An unset of a key the base does not carry changes no routing, so the
-// in-lock check does not judge it either — the patch beside it is not
-// refused for the routing already on the base (here already violating).
+// An unset of a key the base does not carry beside a patch: the patch is
+// written, the unset changes nothing.
 func TestBatchTenants_PRMode_FreshBaseSkipsAbsentUnset(t *testing.T) {
 	f := newStaleFixture(t, staleTree("    _routing_profile: team-chat\n"), nil)
 	w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"},"unset":["_routing"]}]`)
@@ -229,101 +133,11 @@ func TestBatchTenants_PRMode_FreshBaseSkipsAbsentUnset(t *testing.T) {
 	}
 }
 
-// 5. The group batch's PR mode runs the same closure.
-func TestGroupBatch_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
-	local := staleTree("    _routing_profile: domain-ok\n")
-	local["_groups.yaml"] = "groups:\n  g-fin:\n    label: Finance\n    members: [t-other, t-off]\n"
-	f := newStaleFixture(t, local, map[string]string{"t-off.yaml": tOffFile(offDisabledChat)})
-	before := gitRev(t, f.bare, "main")
-	req := newRequestWithChiParam("POST", "/api/v1/groups/g-fin/batch", "id", "g-fin", bytes.NewBufferString(`{"unset":["_routing"]}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Forwarded-Email", "alice@example.com")
-	req.Header.Set("X-Forwarded-Groups", "admins")
-	w := httptest.NewRecorder()
-	f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
-	// A group batch names the member, never its index among the group's
-	// stored members, hidden ones included (#2857); #2900 F4: per op, 422.
-	assertRejectedOp(t, w, 1, "t-off", CodePolicyViolation, "domain policy violation on the latest base branch")
-	if f.prOpened {
-		t.Error("a PR was opened")
-	}
-	if got := gitRev(t, f.bare, "main"); got != before {
-		t.Errorf("origin main moved: %s → %s", before, got)
-	}
-}
-
-// B2 round 3 (B-1): the domain policy itself is read from the branch, not
-// from the policy watcher's copy of the local tree.
+// policyListing is a `_domain_policy.yaml` body forbidding slack for tenants
+// (a policy file on the tree; tenant-api itself no longer reads it, #2903).
 func policyListing(tenants string) string {
 	return "domain_policies:\n  finance:\n    tenants: [" + tenants + "]\n" +
 		"    constraints:\n      forbidden_receiver_types: [slack]\n"
-}
-
-func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
-	refused := []struct {
-		name, localTOff, ops string
-		origin               map[string]string
-	}{
-		// The base's policy lists t-off; the local one does not.
-		{"profile patch, tenant added to the policy on the base", "    _routing_profile: domain-ok\n",
-			`[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`,
-			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
-		{"unset, tenant added to the policy on the base", offDisabledChat,
-			`[{"tenant_id":"t-off","unset":["_routing"]}]`,
-			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
-		// (#2983: the flat `_routing_receiver_type` this list also had is
-		// refused as a body violation now, before any policy is read.)
-	}
-	for _, tc := range refused {
-		t.Run(tc.name, func(t *testing.T) {
-			local := staleTree(tc.localTOff)
-			local["_domain_policy.yaml"] = policyListing("t-other")
-			f := newStaleFixture(t, local, tc.origin)
-			before := gitRev(t, f.bare, "main")
-			assertFreshBaseRefused(t, f, postTenantBatch(t, f.deps, tc.ops), 0, "t-off", before)
-		})
-	}
-
-	// Fail-closed: the base's policy file does not parse.
-	t.Run("policy file broken on the base", func(t *testing.T) {
-		local := staleTree("    _routing_profile: domain-ok\n")
-		local["_domain_policy.yaml"] = policyListing("t-other")
-		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": "domain_policies: [unclosed\n"})
-		before := gitRev(t, f.bare, "main")
-		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-		assertRejectedOp(t, w, 0, "t-off", CodePolicyViolation, "(_domain_policy.yaml or .yml) on the latest base branch cannot be loaded")
-		if strings.Contains(w.Body.String(), f.dir) {
-			t.Errorf("the refusal names a server path: %s", w.Body.String())
-		}
-		if f.prOpened || f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {
-			t.Errorf("fail-closed batch wrote something: PR %v, branches %q", f.prOpened, f.batchBranches(t))
-		}
-	})
-
-	// No policy file on the base reads as the watcher's empty config: allowed.
-	t.Run("policy file removed on the base", func(t *testing.T) {
-		local := staleTree("    _routing_profile: domain-ok\n")
-		local["_domain_policy.yaml"] = policyListing("t-other")
-		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": ""})
-		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-		if w.Code != http.StatusOK || !f.prOpened {
-			t.Errorf("status = %d (PR opened %v), want 200 and a PR; body: %s", w.Code, f.prOpened, w.Body.String())
-		}
-	})
-
-	// The base RELAXES the policy: the local pre-check still refuses the op
-	// (pre-existing behaviour — it never reaches the branch); since #2900 the
-	// batch is rejected with it (422).
-	t.Run("policy relaxed on the base", func(t *testing.T) {
-		local := staleTree("    _routing_profile: domain-ok\n")
-		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": policyListing("t-other")})
-		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
-		var resp BatchResponse
-		_ = json.Unmarshal(w.Body.Bytes(), &resp)
-		if w.Code != http.StatusUnprocessableEntity || statuses(resp.Results) != "error" || f.prOpened {
-			t.Errorf("status %d, results %+v, PR %v; want 422 with the op refused per op by the local check", w.Code, resp.Results, f.prOpened)
-		}
-	})
 }
 
 // F2: a no-op op still carries the file's deprecation notices.

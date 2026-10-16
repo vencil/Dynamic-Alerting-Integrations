@@ -5,19 +5,18 @@ reader may be looser. This test is the one place that ranks each difference
 and matches it against tests/shared/reader_divergence_catalog.yaml, for two
 layers:
 
-Policy layer. The Go corpus tests write the rows where a Go reader's verdict
+Policy layer. The Go corpus test writes the rows where a Go reader's verdict
 on a `_domain_policy.yaml` differs from PyYAML's (`_parse_config_files`) to
 tests/shared/merge_key_go_verdicts.json (per reader, keyed by corpus row
-`id`).
+`id`). tenant-api is no reader any more (#2903: it no longer judges routing
+or policy; every write is the generator's to judge), so only da-guard's
+half writes rows.
 
 - direction() computes each snapshot row's direction from the rules each
   side actually enforces (go_looser / go_stricter / value_differs); a file
   the generator blocks on as production runs it (`--validate --strict`, the
   row's `pyyaml_strict_blocks`) counts as unusable, so a Go reader that
   neither refuses it nor reports a blocking problem is looser;
-- classify(): tenant-api refusing a file the generator reads is `go_refuses`,
-  not go_stricter — the watcher then serves that file's last good content
-  (or none), and with none the writes the policy judges are refused (503);
 - each entry pins its exact row count and an example row.
 
 Routing layer. tests/shared/routing_policy_parity_matrix.json carries, per
@@ -35,7 +34,7 @@ Both layers:
   healed — is red, as is an uncatalogued difference;
 - go_looser and value_differs entries list their rows / cells one by one
   and stay `fix-pending`: they block ADR-036's phase 2 (phase2_blockers());
-  go_stricter and go_refuses entries are `accept-document` with a sign_off;
+  go_stricter entries are `accept-document` with a sign_off;
 - expire_at: an expired entry warns; with READER_DIVERGENCE_STRICT_EXPIRY=1
   (`make pre-tag` sets it) it fails. READER_DIVERGENCE_TODAY=YYYY-MM-DD
   injects "today".
@@ -60,32 +59,29 @@ CATALOG_PATH = HERE / "reader_divergence_catalog.yaml"
 MATRIX_PATH = HERE / "routing_policy_parity_matrix.json"
 
 # Policy layer: the snapshot's readers. Routing layer: the matrix's Go
-# halves — pkg/routingpolicy's (the package da-guard and tenant-api share),
-# da-guard's CLI and tenant-api's handler.
-READERS = ("da-guard", "tenant-api")
-ROUTING_READERS = ("routingpolicy", "da-guard", "tenant-api")
+# halves — pkg/routingpolicy's (the package da-guard uses) and da-guard's
+# CLI. tenant-api left both with #2903: a row or entry naming it is red.
+READERS = ("da-guard",)
+ROUTING_READERS = ("routingpolicy", "da-guard")
 LAYERS = ("policy", "routing")
-DIRECTIONS = ("go_looser", "go_stricter", "go_refuses", "value_differs")
+DIRECTIONS = ("go_looser", "go_stricter", "value_differs")
 DISPOSITIONS = ("accept-document", "fix-pending")
 # Directions that block ADR-036's phase 2: they must be listed row by row.
 BLOCKING = ("go_looser", "value_differs")
 # Directions an owner may accept (sign_off): Go blocks where the generator
-# does not. go_refuses is tenant-api's alone (a policy file it refuses, or
-# a PUT it answers 503 POLICY_UNAVAILABLE for one).
-ACCEPTABLE = ("go_stricter", "go_refuses")
+# does not.
+ACCEPTABLE = ("go_stricter",)
 REQUIRED = ("id", "reader", "layer", "match", "mechanism", "direction", "disposition", "ref",
             "expire_at", "count")
 OPTIONAL = ("sign_off", "example")
 # The `python_differs` fields of the routing matrix and the Go halves that
-# assert each against the Go column (tenant_api's model in pkg/routingpolicy
-# is a consistency check of the table; the handler is tenant-api's reader).
+# assert each against the Go column.
 FIELD_READERS = {
     "targets": ("routingpolicy",),
     "policy": ("routingpolicy", "da-guard"),
     "rejected_routes": ("routingpolicy", "da-guard"),
     "group_by_invalid": ("routingpolicy", "da-guard"),
     "refused": ("routingpolicy", "da-guard"),
-    "tenant_api": ("tenant-api",),
 }
 _ROW_ID = re.compile(r"^[0-9a-f]{16}$")
 _ISSUE_URL = re.compile(r"^https://github\.com/vencil/Dynamic-Alerting-Integrations/(issues|pull)/\d+$")
@@ -285,46 +281,6 @@ def test_direction_refuses_equal_verdicts() -> None:
         direction({"fin": _dom(["t1"], ["slack"])}, {"fin": _dom(["t1"], ["slack"])})
 
 
-def classify(reader: str, row: dict, go: object) -> str:
-    """A snapshot row's direction for `reader`.
-
-    tenant-api refusing ("unusable") a file the generator reads — and does
-    not block on under --strict — is `go_refuses`, not go_stricter: the
-    watcher keeps serving that file's last good content, which may be a
-    stale policy, and with none the writes the policy judges are refused
-    (503; #2903 removed the escape hatch). Everything else
-    is direction(). Equal verdicts (both blocking included) raise."""
-    if reader == "tenant-api" and go == "unusable":
-        if effective_pyyaml(row) == "unusable":
-            raise ValueError("both refuse: no direction")
-        return "go_refuses"
-    return direction(row["pyyaml"], go, bool(row.get("pyyaml_strict_blocks")))
-
-
-_READ = {"id": "r", "pyyaml": {"fin": _dom(["t1"], ["slack"])}}
-
-
-@pytest.mark.parametrize("reader, row, go, want", [
-    ("tenant-api", _READ, "unusable", "go_refuses"),
-    ("da-guard", _READ, "unusable", "go_stricter"),
-    # A tenant-api read is ranked like any other.
-    ("tenant-api", _READ, {}, "go_looser"),
-    ("tenant-api", {"id": "r", "pyyaml": {}}, {"fin": _dom(["t1"], ["slack"])}, "go_stricter"),
-    ("tenant-api", {"id": "r", "pyyaml": "unusable"}, {}, "go_looser"),
-])
-def test_classify(reader, row, go, want) -> None:
-    assert classify(reader, row, go) == want
-
-
-def test_classify_both_refusing_is_no_difference() -> None:
-    """A file the generator drops, or blocks on under --strict, that
-    tenant-api refuses: both block — equal, not go_refuses."""
-    with pytest.raises(ValueError):
-        classify("tenant-api", {"id": "r", "pyyaml": "unusable"}, "unusable")
-    with pytest.raises(ValueError):
-        classify("tenant-api", {**_READ, "pyyaml_strict_blocks": [{"kind": "k"}]}, "unusable")
-
-
 # --- routing direction --------------------------------------------------------
 
 # Finding fields: each element is a blocking finding (a strict ERROR, a
@@ -340,18 +296,6 @@ def _blocks(py_blocks: bool, go_blocks: bool) -> str:
     return "value_differs"
 
 
-def _verdict_direction(py: str, go: str, ok: str = "ok") -> str | None:
-    """One tenant_api verdict (put or batch): None when equal. tenant-api
-    refusing for an unusable policy file (503 POLICY_UNAVAILABLE) where the
-    generator accepts is go_refuses, as for the policy layer: it hangs on
-    tenant-api's last good policy (#2903 removed the escape hatch)."""
-    if py == go:
-        return None
-    if go == "503" and py == ok:
-        return "go_refuses"
-    return _blocks(py != ok, go != ok)
-
-
 def routing_direction(field: str, py: object, go: object) -> str:
     """Which way the Go column of a routing-matrix cell leans from the
     generator's (`python_differs`).
@@ -362,11 +306,8 @@ def routing_direction(field: str, py: object, go: object) -> str:
 
     Per field: policy / rejected_routes / group_by_invalid are lists of
     findings — the generator's a strict superset is looser, Go's stricter,
-    neither value_differs. refused: one side refusing alone. tenant_api:
-    {put, batch} — a verdict other than 'ok' blocks, and tenant-api's 503
-    (an unusable policy file) where the generator says 'ok' is go_refuses;
-    put and batch ranked alone, then combined (two directions, or a side not judged, is
-    value_differs). targets is rendered routes, not a verdict:
+    neither value_differs. refused: one side refusing alone. targets is
+    rendered routes, not a verdict:
     value_differs whenever it differs. Equal values raise."""
     if py == go:
         raise ValueError(f"{field}: the values are equal: no direction")
@@ -382,23 +323,7 @@ def routing_direction(field: str, py: object, go: object) -> str:
         return "value_differs"
     if field == "refused":
         return _blocks(py is not None, go is not None)
-    if field == "tenant_api":
-        if py is None or go is None:
-            return "value_differs"  # one side not judged: cannot be ranked
-        subs = {_verdict_direction(py["put"], go["put"])}
-        if py["batch"] != go["batch"]:
-            pb, gb = py["batch"], go["batch"]
-            same_op = (pb is not None and gb is not None
-                       and {k: v for k, v in pb.items() if k != "verdict"}
-                       == {k: v for k, v in gb.items() if k != "verdict"})
-            subs.add(_verdict_direction(pb["verdict"], gb["verdict"]) if same_op else "value_differs")
-        subs.discard(None)
-        return subs.pop() if len(subs) == 1 else "value_differs"
     raise ValueError(f"{field}: not a python_differs field")
-
-
-_PUT = {"put": "ok", "batch": None}
-_BATCH = {"patch": {"_routing_profile": "p"}, "verdict": "ok"}
 
 
 @pytest.mark.parametrize("field, py, go, want", [
@@ -420,27 +345,6 @@ _BATCH = {"patch": {"_routing_profile": "p"}, "verdict": "ok"}
     ("refused", "tenant_file_unreadable", None, "go_looser"),
     ("refused", None, "routing_not_mapping", "go_stricter"),
     ("refused", "tenant_file_unreadable", "routing_not_mapping", "value_differs"),
-    # tenant_api: the generator refusing a PUT tenant-api lets through.
-    ("tenant_api", {"put": "403", "batch": None}, _PUT, "go_looser"),
-    ("tenant_api", {"put": "400", "batch": None}, _PUT, "go_looser"),
-    ("tenant_api", _PUT, {"put": "403", "batch": None}, "go_stricter"),
-    # tenant-api's policy file unusable (503) where the generator accepts:
-    # go_refuses. Both refusing (403 / 503) is no difference: the routing
-    # parity test holds python_differs to tenant-api's own cell there, so it
-    # never reaches this; ranked anyway, two codes are value_differs.
-    ("tenant_api", _PUT, {"put": "503", "batch": None}, "go_refuses"),
-    ("tenant_api", {"put": "403", "batch": None}, {"put": "503", "batch": None}, "value_differs"),
-    ("tenant_api", {"put": "403", "batch": None}, {"put": "400", "batch": None}, "value_differs"),
-    ("tenant_api", {"put": "403", "batch": None}, None, "value_differs"),
-    ("tenant_api", {"put": "ok", "batch": {**_BATCH, "verdict": "policy_violation"}},
-     {"put": "ok", "batch": _BATCH}, "go_looser"),
-    ("tenant_api", {"put": "ok", "batch": _BATCH},
-     {"put": "ok", "batch": {**_BATCH, "verdict": "policy_violation"}}, "go_stricter"),
-    # put looser, batch stricter: two directions.
-    ("tenant_api", {"put": "403", "batch": _BATCH},
-     {"put": "ok", "batch": {**_BATCH, "verdict": "policy_violation"}}, "value_differs"),
-    # Different batch ops cannot be ranked.
-    ("tenant_api", {"put": "ok", "batch": _BATCH}, {"put": "ok", "batch": None}, "value_differs"),
 ])
 def test_routing_direction(field, py, go, want) -> None:
     assert routing_direction(field, py, go) == want
@@ -451,6 +355,9 @@ def test_routing_direction_refuses_equal_and_unknown() -> None:
         routing_direction("policy", [], [])
     with pytest.raises(ValueError):
         routing_direction("escalation", None, {"verdict": "violation", "leaks": []})
+    # #2903: tenant_api is no python_differs field any more.
+    with pytest.raises(ValueError):
+        routing_direction("tenant_api", {"put": "403", "batch": None}, {"put": "ok", "batch": None})
 
 
 # --- loading ------------------------------------------------------------------
@@ -565,8 +472,6 @@ def schema_errors(entries: list, corpus_ids: set) -> list:
             errors.append(f"{name}: reader {e['reader']!r} not in {READERS}")
         if e["direction"] not in DIRECTIONS:
             errors.append(f"{name}: direction {e['direction']!r} not in {DIRECTIONS}")
-        if e["direction"] == "go_refuses" and e["reader"] != "tenant-api":
-            errors.append(f"{name}: go_refuses is tenant-api's refusal over a policy file alone")
         if e["disposition"] not in DISPOSITIONS:
             errors.append(f"{name}: disposition {e['disposition']!r} not in {DISPOSITIONS}")
         if e["disposition"] == "accept-document" and e["direction"] not in ACCEPTABLE:
@@ -622,7 +527,7 @@ def _policy_errors(entries: list, snapshot: dict, corpus: dict) -> list:
             if go == effective_pyyaml(row):
                 errors.append(f"{reader} {row_id}: the snapshot records PyYAML's own verdict")
                 continue
-            got = classify(reader, row, go)
+            got = direction(row["pyyaml"], go, bool(row.get("pyyaml_strict_blocks")))
             hits = [e for e in entries if _matches(e, reader, row, go)]
             if not hits:
                 blocked = " — blocked under --validate --strict" if row.get("pyyaml_strict_blocks") else ""
@@ -783,9 +688,9 @@ _CORPUS = {"aaaaaaaaaaaaaaaa": {"id": "aaaaaaaaaaaaaaaa", "pyyaml": "unusable", 
 
 
 def _refuses(**over) -> dict:
-    """A go_refuses entry: tenant-api's refusals of shape `s`."""
-    e = _entry(id="r", reader="tenant-api", match={"shape": "s", "verdict": "unusable"},
-               direction="go_refuses", disposition="accept-document", example="bbbbbbbbbbbbbbbb",
+    """A go_stricter entry by shape: da-guard's refusals of shape `s`."""
+    e = _entry(id="r", match={"shape": "s", "verdict": "unusable"},
+               direction="go_stricter", disposition="accept-document", example="bbbbbbbbbbbbbbbb",
                sign_off="https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759")
     e.update(over)
     return {k: v for k, v in e.items() if v is not None}
@@ -794,16 +699,16 @@ def _refuses(**over) -> dict:
 def test_gate_is_green_on_a_matching_catalog() -> None:
     assert catalog_errors([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL}}, _CORPUS) == []
     assert catalog_errors([_entry(), _refuses()],
-                          {"da-guard": {"aaaaaaaaaaaaaaaa": _POL},
-                           "tenant-api": {"bbbbbbbbbbbbbbbb": "unusable"}}, _CORPUS) == []
+                          {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "bbbbbbbbbbbbbbbb": "unusable"}},
+                          _CORPUS) == []
 
 
 # --- routing layer ------------------------------------------------------------
 
-def _cell(targets, policy=(), refused=None, tenant_api=None, differs=None) -> dict:
+def _cell(targets, policy=(), refused=None, differs=None) -> dict:
     return {"targets": targets, "policy": [list(p) for p in policy], "rejected_routes": [],
             "values_not_string": [], "group_by_invalid": [], "unknown_profile": None,
-            "tenant_api": tenant_api, "python_differs": differs, "escalation": None, "refused": refused}
+            "python_differs": differs, "escalation": None, "refused": refused}
 
 
 _SLACK = [{"ref": "receiver", "type": "slack"}]
@@ -812,7 +717,7 @@ _VIOLATION = [["fin", "receiver", "forbidden_receiver_types"]]
 
 def _differs(**over) -> dict:
     d = {"reason": "r", "targets": None, "policy": [], "rejected_routes": [], "group_by_invalid": [],
-         "refused": None, "tenant_api": {"put": "ok", "batch": None}}
+         "refused": None}
     d.update(over)
     return d
 
@@ -822,10 +727,9 @@ def _tree(name="t", tenant="t1", **cell) -> dict:
 
 
 # Go reads no routing for t1; the generator renders a slack receiver that
-# breaks the domain policy, and would refuse the PUT tenant-api accepts.
+# breaks the domain policy.
 _ROUTING_MATRIX = {"trees": [
-    _tree(targets=None, tenant_api={"put": "ok", "batch": None},
-          differs=_differs(targets=_SLACK, policy=_VIOLATION, tenant_api={"put": "403", "batch": None})),
+    _tree(targets=None, differs=_differs(targets=_SLACK, policy=_VIOLATION)),
     _tree(name="same", targets=_SLACK, policy=_VIOLATION),
 ]}
 
@@ -841,7 +745,6 @@ _ROUTING_ENTRIES = [
     _routing("rp-targets", "routingpolicy", [["t", "t1", "targets"]], "value_differs"),
     _routing("rp-policy", "routingpolicy", [["t", "t1", "policy"]]),
     _routing("dg-policy", "da-guard", [["t", "t1", "policy"]]),
-    _routing("ta-put", "tenant-api", [["t", "t1", "tenant_api"]]),
 ]
 
 
@@ -852,7 +755,6 @@ def test_routing_differences() -> None:
         ("routingpolicy", "t", "t1", "targets", "value_differs"),
         ("routingpolicy", "t", "t1", "policy", "go_looser"),
         ("da-guard", "t", "t1", "policy", "go_looser"),
-        ("tenant-api", "t", "t1", "tenant_api", "go_looser"),
     ])
 
 
@@ -880,7 +782,7 @@ def _healed(**cell_over) -> dict:
     # Healed in one field only (Go fixed: its column now says what the
     # generator says), and a python_differs that differs in nothing.
     (_ROUTING_ENTRIES, _healed(policy=_VIOLATION), "dg-policy: matches no routing difference (healed)"),
-    (_ROUTING_ENTRIES, _healed(targets=_SLACK, policy=_VIOLATION, tenant_api={"put": "403", "batch": None}),
+    (_ROUTING_ENTRIES, _healed(targets=_SLACK, policy=_VIOLATION),
      "python_differs differs from the Go columns in no field (healed)"),
     # A wrong direction, a wrong count, a cell its reader does not assert.
     ([_routing("rp-targets", "routingpolicy", [["t", "t1", "targets"]])] + _ROUTING_ENTRIES[1:],
@@ -889,6 +791,10 @@ def _healed(**cell_over) -> dict:
     ([_routing("x", "da-guard", [["t", "t1", "targets"]], "value_differs")], _ROUTING_MATRIX,
      "da-guard does not assert 'targets'"),
     ([_routing("x", "routingpolicy", [["t", "t1", "escalation"]])], _ROUTING_MATRIX, "field 'escalation'"),
+    # #2903: tenant-api is no routing reader, and tenant_api no field.
+    ([_routing("x", "tenant-api", [["t", "t1", "policy"]])], _ROUTING_MATRIX,
+     "reader 'tenant-api' not in ('routingpolicy', 'da-guard')"),
+    ([_routing("x", "routingpolicy", [["t", "t1", "tenant_api"]])], _ROUTING_MATRIX, "field 'tenant_api'"),
     ([_routing("x", "routingpolicy", [["t", "t1"]])], _ROUTING_MATRIX, "is no [tree, tenant, field]"),
     ([{**_ROUTING_ENTRIES[0], "match": {"tree": "t"}}], _ROUTING_MATRIX, "match must be {cells"),
     ([{**_ROUTING_ENTRIES[0], "example": "aaaaaaaaaaaaaaaa"}], _ROUTING_MATRIX, "takes no example"),
@@ -929,27 +835,21 @@ def test_routing_gate_is_red(entries, matrix, needle) -> None:
     ([_entry(expire_at="soon")], {}, "expire_at"),
     ([_entry(match={"rows": ["cccccccccccccccc"]})], {}, "in no corpus row"),
     ([_entry(extra=1)], {}, "unknown keys"),
-    # tenant-api refusing a file the generator reads: go_refuses, never
-    # go_stricter, and a refusal of one the generator drops is no difference.
+    # #2903: tenant-api is no policy reader — neither its snapshot rows nor
+    # an entry naming it.
     ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL}, "tenant-api": {"bbbbbbbbbbbbbbbb": "unusable"}},
-     "uncatalogued go_refuses"),
-    ([_entry(), _refuses(direction="go_stricter")],
-     {"da-guard": {"aaaaaaaaaaaaaaaa": _POL}, "tenant-api": {"bbbbbbbbbbbbbbbb": "unusable"}},
-     "is go_refuses, the entry says go_stricter"),
-    ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL}, "tenant-api": {"aaaaaaaaaaaaaaaa": "unusable"}},
-     "PyYAML's own verdict"),
-    ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL}, "tenant-api": {"dddddddddddddddd": "unusable"}},
-     "PyYAML's own verdict"),
+     "snapshot reader 'tenant-api' not in ('da-guard',)"),
+    ([_entry(reader="tenant-api")], {}, "reader 'tenant-api' not in ('da-guard',)"),
+    ([_entry(direction="go_refuses")], {}, "direction 'go_refuses' not in"),
+    # A shape entry of Go refusals: its count, its sign_off, its verdict.
     ([_entry(), _refuses(count=2)],
-     {"da-guard": {"aaaaaaaaaaaaaaaa": _POL}, "tenant-api": {"bbbbbbbbbbbbbbbb": "unusable"}}, "count says 2"),
+     {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "bbbbbbbbbbbbbbbb": "unusable"}}, "count says 2"),
     ([_entry(), _refuses(sign_off=None)], {}, "sign_off"),
-    ([_refuses(reader="da-guard")], {}, "go_refuses is tenant-api's"),
     ([_refuses(match={"shape": "s", "verdict": "{}"})], {}, "match.verdict"),
-    # The verdict filter: a tenant-api read in the same shape is not matched
+    # The verdict filter: a da-guard read in the same shape is not matched
     # by the refusals' entry — it needs its own.
     ([_entry(), _refuses()],
-     {"da-guard": {"aaaaaaaaaaaaaaaa": _POL},
-      "tenant-api": {"bbbbbbbbbbbbbbbb": "unusable", "eeeeeeeeeeeeeeee": {}}},
+     {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "bbbbbbbbbbbbbbbb": "unusable", "eeeeeeeeeeeeeeee": {}}},
      "eeeeeeeeeeeeeeee [s]: uncatalogued go_looser"),
     ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "bbbbbbbbbbbbbbbb": _POL}},
      "PyYAML's own verdict"),

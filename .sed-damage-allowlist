@@ -187,3 +187,16 @@ docs/adr/017-defaults-yaml-inheritance-dual-hash.en.md
 # openapi_spec_parity_test.go decodes it with KnownFields and needs every
 # route buildMux registers, so a truncated file fails to parse or drops paths.
 docs/api/threshold-exporter-openapi.yaml
+
+# #2903: the unreleased fragment's tenant-api domain-policy text no longer
+# holds (tenant-api no longer judges policy); only its config-watcher
+# sentence is left. Checked by generate_changelog.py --fragments.
+changelog.d/2280-tenant-api-routing-policy.md
+
+# #2903: tenant-api left the Go readers — its rows of the reader-divergence
+# catalog and its half of the Go verdict snapshot were removed, not truncated.
+# Both are checked independently: test_reader_divergence_catalog.py parses
+# them and matches every remaining entry to a live difference, and the
+# snapshot is re-rendered by TestMergeKeyCorpus (UPDATE_GO_VERDICTS=1).
+tests/shared/merge_key_go_verdicts.json
+tests/shared/reader_divergence_catalog.yaml

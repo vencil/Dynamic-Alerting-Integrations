@@ -16,8 +16,8 @@ import (
 // (invalid YAML among them).
 //
 // It runs write()'s refusal sequence in the same order: guardTenantID → the
-// body-only pre-flight (validateBodyOnly, then the receivers the body writes,
-// #2295 — the PUT handler judges those receivers (ReceiverPreflight) before it
+// body-only pre-flight (validateBodyOnly, then the masked-credential
+// placeholder — the PUT handler judges that (PlaceholderPreflight) before it
 // calls Write, so for a body refused by both, PUT and this dry-run can name a
 // different first reason) → the tenant file resolution
 // (ambiguous tenant file, #2078 declared-elsewhere; here through
@@ -68,9 +68,9 @@ func (w *Writer) DryRunValidate(ctx context.Context, tenantID, yamlContent strin
 }
 
 // DryRunValidateBodyOnly is the PR-mode dry-run: exactly what WritePR's
-// pre-flight runs — guardTenantID, then validateBodyOnly — plus the receiver
-// check the PUT handler runs before WritePR (#2295), and nothing that reads
-// the tree.
+// pre-flight runs — guardTenantID, then validateBodyOnly — plus the
+// placeholder check the PUT handler runs before WritePR (#1560), and nothing
+// that reads the tree.
 //
 // ⛔ DELIBERATELY WEAKER THAN DryRunValidate. The local tree in PR mode is only
 // synced at pod start and may lag the base (#1718); refusing on it would answer

@@ -23,7 +23,6 @@
       "disposition": "delete",
       "notes": "The whole package decodes a yaml.v3 node into the value PyYAML's SafeLoader builds. Once the generator is the only parser nothing needs it; delete it after every importer below is rewritten.",
       "importers": [
-        {"dir": "components/tenant-api/internal/gitops", "test": false},
         {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": false},
         {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": true},
         {"dir": "components/threshold-exporter/app/internal/guard", "test": true},
@@ -38,11 +37,9 @@
       "disposition": "split",
       "notes": "Known stays for the exporter (pkg/config looks a receiver type up; it does not judge); the judging part goes with ADR-036 steps 1/3 (#2899).",
       "importers": [
-        {"dir": "components/tenant-api/internal/gitops", "test": false},
         {"dir": "components/threshold-exporter/app/internal/guard", "test": false},
         {"dir": "components/threshold-exporter/app/pkg/config", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false},
-        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": true}
+        {"dir": "components/threshold-exporter/app/pkg/routingpolicy", "test": false}
       ]
     },
     {
@@ -51,10 +48,6 @@
       "disposition": "split",
       "notes": "Deleted: the PyYAML emulation, e.g. shapeWork, pyResolve, ParseDomainPolicies, UnmarshalPolicy and the policyDecoder that turns SpacesOnly on. Kept or moved to another package (ADR-036 section 11, last row): helpers that do not parse. Already moved (#2899): IsValidTenantID (callers use pkg/tenantid directly), LevelOf and IsDomainPolicyFile (internal/confdlayout). Still here: IsDisabled, which applies Python's str.strip()/lower() before pkg/config's set, so it is not a plain wrapper. Which side each remaining symbol falls on is decided when phase 2 is written, not tracked here.",
       "importers": [
-        {"dir": "components/tenant-api/internal/gitops", "test": false},
-        {"dir": "components/tenant-api/internal/handler", "test": false},
-        {"dir": "components/tenant-api/internal/policy", "test": false},
-        {"dir": "components/tenant-api/internal/policy", "test": true},
         {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": false},
         {"dir": "components/threshold-exporter/app/cmd/da-guard", "test": true},
         {"dir": "components/threshold-exporter/app/internal/guard", "test": false},

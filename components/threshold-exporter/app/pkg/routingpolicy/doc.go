@@ -13,8 +13,10 @@
 //     Tree.Enforced / EnforcedGroupByInvalid: the block of the last root
 //     platform file that enables it, read as PyYAML reads it; judged only
 //     with a receiver pkg/receiverspec accepts, the `{{tenant}}` shape per
-//     tenant after substitution). Its match, timing and the `--policy`
-//     domain allowlist are not read;
+//     tenant after substitution). Of its match only the shape is read: a
+//     block whose `match` is not a list is not enabled
+//     (ProblemRoutingEnforcedMatchInvalid, #2989). Its matchers, timing and
+//     the `--policy` domain allowlist are not read;
 //   - the platform files that feed it (_grar_parse._parse_platform_config
 //     and, below the root, _parse_nested_config): LoadTree reads the whole
 //     tree (#2326, ADR-017 Decision 9) — `_routing_defaults` along
@@ -59,8 +61,9 @@
 // parity_test.go here and cmd/da-guard/routing_policy_parity_test.go the Go
 // side. A behaviour change on either side goes into the matrix first.
 //
-// Consumers: cmd/da-guard (through internal/guard) and tenant-api, which
-// cannot import internal/guard. Besides the standard library, yaml.v3,
+// Consumer: cmd/da-guard (through internal/guard); tenant-api stopped
+// importing it with #2903 (its writes are judged by the route generator).
+// Besides the standard library, yaml.v3,
 // pkg/pyyamlcompat (receivers and matcher values as the generator's PyYAML
 // reads them, #2295 / #2431) and pkg/receiverspec (whether an enforced
 // route's receiver is rendered, #2503) it

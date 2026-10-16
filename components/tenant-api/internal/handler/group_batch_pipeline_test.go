@@ -10,15 +10,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -50,7 +47,7 @@ func newGroupBatchFixtureOver(t *testing.T, mode WriteMode, files map[string]str
 	configDir := seedGitTree(t, files)
 	f := &groupBatchFixture{configDir: configDir}
 	f.deps = &Deps{State: mustDirState(configDir), Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
-		Groups: groups.NewDirManager(configDir), Policy: policy.NewManager(configDir), WriteMode: mode}
+		Groups: groups.NewDirManager(configDir), WriteMode: mode}
 	if mode == WriteModePR {
 		f.deps.PRClient = &mockPlatformClient{
 			providerName: "github",
@@ -132,39 +129,6 @@ func TestGroupBatch_PRMode_OpensOnePR(t *testing.T) {
 	}
 }
 
-// Domain policy: finance forbids slack, and team-chat renders a slack
-// receiver. The patch is refused for every member in both write modes and
-// nothing is written.
-func TestGroupBatch_DomainPolicy(t *testing.T) {
-	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
-		t.Run(string(mode), func(t *testing.T) {
-			f := newGroupBatchFixture(t, mode)
-			before := f.mainSHA(t)
-			okBefore, _ := os.ReadFile(filepath.Join(f.configDir, "t-ok.yaml"))
-			resp := decodeGroupBatch(t, f.post(t, `{"patch":{"_routing_profile":"team-chat"}}`))
-
-			if len(resp.Results) != 2 {
-				t.Fatalf("results = %+v, want 2", resp.Results)
-			}
-			for _, r := range resp.Results {
-				if r.Status != "error" || !strings.Contains(r.Message, "policy violation") {
-					t.Errorf("%s = %+v, want refused for domain policy", r.TenantID, r)
-				}
-			}
-			if f.prCalls != 0 {
-				t.Errorf("CreatePR calls = %d, want 0", f.prCalls)
-			}
-			if after := f.mainSHA(t); after != before {
-				t.Errorf("base branch moved %s → %s", before, after)
-			}
-			okAfter, _ := os.ReadFile(filepath.Join(f.configDir, "t-ok.yaml"))
-			if !bytes.Equal(okBefore, okAfter) {
-				t.Errorf("refused patch changed t-ok.yaml:\n%s", okAfter)
-			}
-		})
-	}
-}
-
 // Patch values go through validatePatchMap, like /tenants/batch.
 func TestGroupBatch_PatchValueValidation(t *testing.T) {
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
@@ -189,37 +153,5 @@ func TestGroupBatch_PatchValueValidation(t *testing.T) {
 				t.Errorf("base branch moved %s → %s", before, after)
 			}
 		})
-	}
-}
-
-// Hub #2486 Q7-2: a `_domain_policy.yml` that cannot be used and never parsed
-// makes a direct-mode group batch whose patch the policy judges answer 503
-// POLICY_UNAVAILABLE, with nothing committed; PR mode is unaffected (its
-// fresh-base check refuses an unusable policy on its own), and a patch the
-// policy does not judge goes through.
-func TestGroupBatch_DirectMode_PolicyUnavailable(t *testing.T) {
-	files := batchTree()
-	files["_groups.yaml"] = finGroupsYAML
-	files["_domain_policy.yml"] = "domain_policies: [unclosed\n"
-	f := newGroupBatchFixtureOver(t, WriteModeDirect, files)
-	before := f.mainSHA(t)
-	for _, q := range []string{"", "?async=true"} {
-		req := newRequestWithChiParam("POST", "/api/v1/groups/g-fin/batch"+q, "id", "g-fin",
-			bytes.NewBufferString(`{"patch":{"_routing_profile":"team-chat"}}`))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Forwarded-Email", "alice@example.com")
-		req.Header.Set("X-Forwarded-Groups", "admins")
-		w := httptest.NewRecorder()
-		f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
-		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), CodePolicyUnavailable) {
-			t.Errorf("%q: status %d, body %s; want 503 POLICY_UNAVAILABLE", q, w.Code, w.Body.String())
-		}
-	}
-	if after := f.mainSHA(t); after != before {
-		t.Errorf("base branch moved %s → %s on a refused group batch", before, after)
-	}
-	resp := decodeGroupBatch(t, f.post(t, `{"patch":{"cpu_usage_percent":"90"}}`))
-	if len(resp.Results) != 2 || resp.Results[0].Status != "ok" {
-		t.Errorf("results = %+v, want the non-routing patch written", resp.Results)
 	}
 }

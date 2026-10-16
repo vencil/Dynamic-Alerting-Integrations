@@ -6,10 +6,14 @@ package handler
 // response. Keeping one copy prevents the two paths from drifting apart.
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"gopkg.in/yaml.v3"
@@ -21,10 +25,6 @@ import (
 // the error BatchResult and true when the op is rejected — the caller should
 // append it and `continue` — or a zero BatchResult and false when the op passes
 // and execution should proceed.
-//
-// Note: the tenant path layers an additional policy.CheckWrite step AFTER this
-// gate (group has none), so that check stays in executeBatchOps; only the two
-// checks that are identical across both paths live here.
 func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, meta ScopeMetaFunc) (BatchResult, bool) {
 	if err := ValidateWritableTenantID(tenantID); err != nil {
 		return BatchResult{TenantID: tenantID, Status: "error", Message: err.Error()}, true
@@ -47,8 +47,8 @@ var scopeMetadataKeys = []string{"_profile"}
 // scopeMetadataKeys key is authorized again against the metadata the tenant
 // will have once it is written (postStateScopeMeta), so a caller scoped to
 // environment=production cannot move a tenant to dev by patching its
-// `_profile`. prior is as for batchRoutingViolations: the same tenant's
-// earlier ops of the request, merged onto the same base before this one.
+// `_profile`. prior is the same tenant's earlier ops of the request, merged
+// onto the same base before this one.
 // Like the
 // pre-state check it inherits the metadata write axis's flag: inert in
 // shadow, refusing under --rbac-metadata-write-scope-enforce.
@@ -86,7 +86,7 @@ func touchesScopeMetadata(op BatchOperation) bool {
 // disk with prior, then op, laid over it (applyBatchEdit), read as a proposed
 // body is (proposedScopeMeta: over configDir's root platform layer).
 func postStateScopeMeta(configDir string, prior []BatchOperation, op BatchOperation) ScopeMetaFunc {
-	block := tenantBlockOnDisk(configDir, op.TenantID)
+	block := scopeBlockOnDisk(configDir, op.TenantID)
 	for _, p := range prior {
 		applyBatchEdit(block, p)
 	}
@@ -135,4 +135,58 @@ func write202Pending(w http.ResponseWriter, task *async.Task) {
 		"task_id":  task.ID,
 		"poll_url": fmt.Sprintf("/api/v1/tasks/%s", task.ID),
 	})
+}
+
+// scopeBlockOnDisk is tenants.<tenantID> of the tenant's file in configDir,
+// or an empty block for a new tenant — the base of the metadata write-scope
+// pre-check (postStateScopeMeta), and nothing else. A file that cannot be
+// resolved or read is logged and read as empty: the pre-check then judges
+// the patch's own metadata, and the write itself refuses a tenant file it
+// cannot read before it merges anything (gitops: TargetUnreadableError /
+// ErrMergeBaseNotLoadable; ADR-036 §4).
+func scopeBlockOnDisk(configDir, tenantID string) map[string]any {
+	block := map[string]any{}
+	path, err := confd.ResolveTenantFile(configDir, tenantID)
+	switch {
+	case err == nil:
+		data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
+		if problem != confd.ProblemNone {
+			slog.Warn("batch scope check: tenant file unreadable, judging the patch alone",
+				"tenant", tenantID, "problem", problem)
+		}
+		for k, v := range tenantBlockOf(data, tenantID) {
+			block[k] = v
+		}
+	case errors.Is(err, confd.ErrTenantFileNotFound):
+		// A new tenant: the patches are the whole block.
+	default:
+		slog.Warn("batch scope check: tenant file not resolved, judging the patch alone",
+			"tenant", tenantID, "error", err)
+	}
+	return block
+}
+
+// tenantBlockOf returns `tenants.<tenantID>` of a tenant document as yaml.v3
+// reads it, or nil when the document does not parse or does not declare the
+// tenant.
+func tenantBlockOf(body []byte, tenantID string) map[string]any {
+	var doc struct {
+		Tenants map[string]map[string]any `yaml:"tenants"`
+	}
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return nil
+	}
+	return doc.Tenants[tenantID]
+}
+
+// applyBatchEdit lays one op over a tenant block as mergePatchYAML lays it
+// over the file: its patch keys set, then its unset keys removed (the two
+// are disjoint — validateBatchEdit).
+func applyBatchEdit(block map[string]any, op BatchOperation) {
+	for k, v := range op.Patch {
+		block[k] = v
+	}
+	for _, k := range op.Unset {
+		delete(block, k)
+	}
 }
