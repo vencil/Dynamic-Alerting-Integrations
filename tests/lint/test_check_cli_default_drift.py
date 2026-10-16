@@ -360,3 +360,21 @@ class TestBlindIsNotClean:
         assert mod.main() != 0, (
             "a run that loaded nothing exited 0; that is indistinguishable "
             "from a run that checked everything and found no drift.")
+
+
+def test_a_tool_setting_its_crash_code_does_not_leak_it(tmp_path, monkeypatch):
+    """A tool run as __main__ may set the process crash code (tenant_verify
+    sets 1, #3090). Introspection runs every tool in THIS process, so the code
+    must be put back, or the next test in the worker crashes with rc 1."""
+    ec = sys.modules["_lib_exitcodes"]
+    monkeypatch.setattr(ec, "_crash_exit_code", 7)
+    tool = tmp_path / "setter.py"
+    tool.write_text("import argparse, _lib_exitcodes\n"
+                    "_lib_exitcodes.set_crash_exit_code(1)\n"
+                    "argparse.ArgumentParser().parse_args()\n", encoding="utf-8")
+    monkeypatch.setattr(mod, "parse_command_map", lambda: {"setter": "setter.py"})
+    monkeypatch.setattr(mod, "_resolve", lambda script: tool)
+
+    captured = mod.introspect_defaults()[0]
+    assert "setter" in captured  # the tool did run, up to argparse
+    assert ec.get_crash_exit_code() == 7
