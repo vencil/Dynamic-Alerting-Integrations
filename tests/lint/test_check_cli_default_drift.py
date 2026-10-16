@@ -360,3 +360,29 @@ class TestBlindIsNotClean:
         assert mod.main() != 0, (
             "a run that loaded nothing exited 0; that is indistinguishable "
             "from a run that checked everything and found no drift.")
+
+
+# #3100: introspection runs each tool as __main__ in THIS process. A tool that
+# sets the process crash exit code that way (tenant_verify sets 1, #3090) must
+# not leave it set: a later tool in the same process (a pytest worker) would
+# crash with the wrong code.
+_SETS_CRASH_CODE = (
+    "import _lib_exitcodes\n"
+    "_lib_exitcodes.set_crash_exit_code(1)\n"
+    "import argparse\n"
+    "argparse.ArgumentParser().parse_args()\n"
+)
+
+
+def test_a_tool_that_sets_the_crash_code_does_not_leave_it_set(tmp_path, monkeypatch):
+    tool = tmp_path / "sets_crash.py"
+    tool.write_text(_SETS_CRASH_CODE, encoding="utf-8")
+    monkeypatch.setattr(mod, "parse_command_map", lambda: {"sets-crash": "sets_crash.py"})
+    monkeypatch.setattr(mod, "_resolve", lambda script: tool)
+    ec = mod._lib_exitcodes
+    # idempotent reset (not save-then-restore): the test starts from the default
+    monkeypatch.setattr(ec, "_crash_exit_code", ec.EXIT_CALLER_ERROR)
+
+    captured, _unscoreable, blind, _faults = mod.introspect_defaults()
+    assert "sets-crash" in captured and not blind, (captured, blind)  # the tool ran
+    assert ec.get_crash_exit_code() == ec.EXIT_CALLER_ERROR
