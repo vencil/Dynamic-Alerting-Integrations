@@ -1,8 +1,11 @@
 package main
 
 // routing_policy_parity_test.go — da-guard's half of
-// tests/shared/routing_policy_parity_matrix.json (#2280). Each tree is run
-// through the CLI (run --format json); the findings must say what the table
+// tests/shared/routing_policy_parity_matrix.json (#2280). Each tree goes
+// through internal/guard with the routing inputs the CLI built before #2904
+// (routingGuardFindings, routing_input_test.go): since #2904 the CLI itself
+// judges no routing (ADR-036 §9 step 2), and this half holds the Go routing
+// checks to the generator until #2905 deletes them. The findings must say what the table
 // says the route generator does: one domain_policy_violation per `policy`
 // row (Field <ref>.receiver.type), one invalid_route_entry per
 // `rejected_routes` ref, unknown_routing_profile exactly when the table
@@ -177,22 +180,20 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			// #2326 (e): a duplicate tenant id is rejected by the exporter's
 			// own resolution before any check runs — exit 2 naming it, not a
 			// finding. The table's duplicate_tenant row is that refusal here.
+			findings, parseFailed, stop := routingGuardFindings(t, writeParityTree(t, tree.Files))
 			for _, row := range tree.Platform {
 				if row[0] != "duplicate_tenant" {
 					continue
 				}
-				code, _, stderr := runOnce(t, "--config-dir", writeParityTree(t, tree.Files), "--format", "json")
 				tid := strings.TrimPrefix(row[2], "tenants.")
-				if code != exitCallerErr || !strings.Contains(stderr, "duplicate tenant ID") ||
-					!strings.Contains(stderr, tid) || !strings.Contains(stderr, filepath.FromSlash(row[1])) {
-					t.Errorf("duplicate tenant: exit %d, stderr %q; want exit %d naming %s in %s",
-						code, stderr, exitCallerErr, tid, row[1])
+				if stop == nil || !strings.Contains(stop.Error(), "duplicate tenant ID") ||
+					!strings.Contains(stop.Error(), tid) || !strings.Contains(stop.Error(), filepath.FromSlash(row[1])) {
+					t.Errorf("duplicate tenant: resolve error %v; want one naming %s in %s", stop, tid, row[1])
 				}
 				return
 			}
-			code, findings, parseFailed := runTreeJSON(t, tree.Files)
-			if code == exitCallerErr || code == exitParseFailed || len(parseFailed) > 0 {
-				t.Fatalf("exit %d, parse_failed %v: every matrix tree must be one the exporter reads whole", code, parseFailed)
+			if stop != nil || len(parseFailed) > 0 {
+				t.Fatalf("resolve error %v, parse_failed %v: every matrix tree must be one the exporter reads whole", stop, parseFailed)
 			}
 			gotPlatform, wantPlatform := []string{}, []string{}
 			for _, f := range findings {

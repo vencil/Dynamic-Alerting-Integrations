@@ -104,13 +104,9 @@ func TestRun_DefaultsWrapper(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			code, got := runRoutingTree(t, tc.files, "")
-			if code != tc.wantCode {
-				t.Errorf("exit = %d, want %d; findings %v", code, tc.wantCode, got)
-			}
-			if !equalStrings(got, tc.want) {
-				t.Errorf("findings:\n got %q\nwant %q", got, tc.want)
-			}
+			// #2904: `_severity_dedup` is a routing-layer key, so a tree
+			// carrying one is undetermined (exit 4) unless an error wins.
+			assertRoutingNotJudged(t, tc.wantCode, tc.want, false, runJudged(t, tc.files, ""))
 			conn, dedup := servedTx(t, tc.files)
 			if conn != tc.wantConn || dedup != tc.wantDedup {
 				t.Errorf("served mysql_connections=%v _severity_dedup=%v, want %v %v", conn, dedup, tc.wantConn, tc.wantDedup)

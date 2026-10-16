@@ -256,9 +256,6 @@ __all__ = [
     "KeyRef",
     "KeyRefsError",
     "KeyRefsTree",
-    "GuardCheckError",
-    "GuardFinding",
-    "load_guard_findings",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "VALUE_NOT_SERVED_REASONS",
@@ -521,65 +518,6 @@ class EffectiveError(DaGuardError):
 
 class KeyRefsError(DaGuardError):
     """da-guard key-refs failed."""
-
-
-class GuardCheckError(DaGuardError):
-    """da-guard's check (no subcommand) failed."""
-
-
-class GuardFinding(NamedTuple):
-    severity: str   # "error" / "warn"
-    kind: str       # the finding kind, e.g. routing_in_unread_location
-    tenant_id: str  # "" for a platform file's finding
-    field: str      # for a platform file's finding `<file>:<key path>`
-    message: str
-
-
-_EXIT_FINDINGS = 1  # da-guard's check: a finding at the failing severity
-
-
-def load_guard_findings(
-    conf_d: str | Path,
-    binary: str | None = None,
-    timeout: float = DEFAULT_TIMEOUT,
-) -> list[GuardFinding]:
-    """The findings of `da-guard --config-dir <conf_d> --format json` (the
-    check itself, whole tree), in its report's order (#2914: validate-config's
-    profiles row takes its routing-layer-key verdict from da-guard's own
-    `routing_in_unread_location`, never from a Python reading of the files).
-
-    Exit 0 and 1 (findings) are answers; so is 3 (a file the exporter drops —
-    the report still lists the findings it could make; the callers that need
-    the tree whole fail on it through `load_effective_tree`). Anything else, or
-    output that is not its JSON, raises `GuardCheckError`; a missing binary
-    `DaGuardNotFoundError`. With no tenant in the tree da-guard still runs
-    every check (#2991): the findings that need no tenant (platform files,
-    threshold profiles, the defaults carriers) are returned as with tenants;
-    only a run with no finding at all is the empty, vacuously safe report."""
-    dispatcher = guard_dispatch.DISPATCHER
-    exe = dispatcher.resolve_binary(binary)
-    if exe is None:
-        raise DaGuardNotFoundError(dispatcher.binary_missing_message(binary).rstrip())
-    cmd = [exe, "--config-dir", str(conf_d), "--format", "json"]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise GuardCheckError(f"da-guard did not finish within {timeout}s", None,
-                              _stderr_text(e.stderr)) from e
-    except OSError as e:
-        raise GuardCheckError(f"da-guard could not be run ({exe}): {e}", None, "", broken=True) from e
-    stderr = _stderr_text(proc.stderr)
-    if proc.returncode not in (_EXIT_OK, _EXIT_FINDINGS, _EXIT_PARSE_FAILED):
-        raise GuardCheckError(f"da-guard exited {proc.returncode}", proc.returncode, stderr,
-                              broken=proc.returncode != _EXIT_CALLER_ERR)
-    try:
-        doc = json.loads(proc.stdout.decode("utf-8"))
-        return [GuardFinding(str(f["severity"]), str(f["kind"]), str(f.get("tenant_id") or ""),
-                             str(f.get("field") or ""), str(f.get("message") or ""))
-                for f in doc["report"]["findings"] or []]  # null when there is none
-    except (ValueError, KeyError, TypeError) as e:
-        raise GuardCheckError(f"da-guard exited {proc.returncode} without the expected JSON ({e})",
-                              proc.returncode, stderr, broken=True) from e
 
 
 def _stderr_text(b: bytes | str | None) -> str:
