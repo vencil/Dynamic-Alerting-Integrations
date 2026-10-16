@@ -1,0 +1,28 @@
+# Bare-rules promtool target for the TenantApiWriteErrorsHigh alert. promtool
+# can't consume the deployed ConfigMap directly (it needs a top-level `groups:`
+# document, not `data: platform-alert.yml: |`), so this is an EXTRACTED COPY of
+# the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — the expr/for/labels/summary here must match
+# byte-for-byte. tests/rulepacks/test_platform_rules_extract_sync.py enforces it.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantApiWriteErrorsHigh
+        expr: |
+          sum without (pod, instance, endpoint, result) (
+            increase(tenant_api_writes_total{job="tenant-api", result="error"}[1h])
+          ) >= 3
+          and
+          sum without (pod, instance, endpoint, result) (
+            increase(tenant_api_writes_total{job="tenant-api", result="error"}[1h])
+          )
+            / sum without (pod, instance, endpoint, result) (
+              increase(tenant_api_writes_total{job="tenant-api"}[1h])
+            ) >= 0.5
+        for: 5m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"

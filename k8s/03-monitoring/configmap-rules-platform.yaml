@@ -1110,6 +1110,67 @@ data:
                 window.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
 
+          # --- tenant-api conf.d writes mostly failing (#3054) ---
+          # tenant_api_writes_total{result} counts every conf.d write attempt — one
+          # per git commit or PR/MR attempt, a batch once — by its answer: ok (2xx),
+          # conflict (409), error (a server-side failure: 5xx/429, a direct write's
+          # git or file failure answered 400, the forge refusing tenant-api's own
+          # token with 403, a batch committed but not finished cleanly answered
+          # 409 committed: true). Requests refused as invalid or forbidden, and
+          # failures after the client went away, are not counted. All three series are
+          # emitted from process start, so the ratio always has its denominator.
+          # Two conditions, both over 1h: at least 3 errors (one failed write in a
+          # quiet hour does not fire) AND errors at least half of all attempts (a
+          # busy hour with a few transient errors does not either). Conflicts sit
+          # in the denominator, not the numerator: a conflict is the caller's
+          # refresh-and-retry, not a broken write plane. `sum without (pod,
+          # instance, endpoint, result)` drops the scrape topology, so a restart
+          # (new series) does not split the window, and the result label, so
+          # numerator and denominator match — while keeping namespace and the
+          # rest: two installs scraped by one Prometheus are judged each on its
+          # own (a bare sum() would add them together; the topology-label trap,
+          # as TenantApiSSEReconnectFailure). `for: 5m` rides out a single
+          # scrape's blip, like the sibling counter alerts.
+          - alert: TenantApiWriteErrorsHigh
+            expr: |
+              sum without (pod, instance, endpoint, result) (
+                increase(tenant_api_writes_total{job="tenant-api", result="error"}[1h])
+              ) >= 3
+              and
+              sum without (pod, instance, endpoint, result) (
+                increase(tenant_api_writes_total{job="tenant-api", result="error"}[1h])
+              )
+                / sum without (pod, instance, endpoint, result) (
+                  increase(tenant_api_writes_total{job="tenant-api"}[1h])
+                ) >= 0.5
+            for: 5m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"
+              description: |
+                In the last hour at least 3 tenant-api write attempts (PUT
+                /tenants/{id}, custom alerts, tenant and group batches, in every
+                write mode) ended in a server-side error, and they are at least
+                half of all write attempts. Writes are being lost: the caller got
+                a 5xx or 429, a 400 whose detail is withheld (a direct write's git
+                or file failure), or a 403 because the forge refused tenant-api's
+                own token, and nothing was written or no PR/MR was opened. One
+                error is the exception: a batch answered 409 with committed: true
+                IS written — its commit landed but did not finish cleanly (the
+                sync after it). Requests refused as invalid or forbidden, and
+                failures after the client went away, are not counted, so this is
+                the write plane, not the callers. Find
+                the cause in the tenant-api log ("internal error response; detail
+                withheld from the client", "forge PR/MR creation failed", git
+                errors) by request_id; check the sibling alerts that name one cause
+                (TenantApiPolicyUnavailable, TenantApiStoreUnreadable, the forge
+                circuit breaker tenant_api_forge_circuit_state). The alert clears
+                once the failing writes leave the 1h window, or successful writes
+                outweigh them.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
+
           # --- tenant-api conf.d copy has entries the server cannot read (#2939) ---
           # tenant-api judges every write on the conf.d tree after it (ADR-036
           # §4). An entry of ITS OWN copy that the server cannot read and git
@@ -1379,8 +1440,8 @@ data:
           # (a long scrape gap / <7d retention suppresses it) — correct for a planning
           # signal. COMPLEMENTARY read-QPS face an operator should also weigh:
           # rate(tenant_api_requests_total) (read-dominated; writes are the tiny
-          # writes_total) — NOT encoded here, to keep the contract single-signal and
-          # promtool-testable. CAVEAT when it fires: A4 (this split) only buys READ
+          # sum(rate(tenant_api_writes_total)), every result) — NOT encoded here,
+          # to keep the contract single-signal and promtool-testable. CAVEAT when it fires: A4 (this split) only buys READ
           # zero-downtime; the WRITE path (Save) still drops on every deploy until A3
           # (K8s Lease, #787) lands — sequence both, don't ship A4 alone.
           # Behavioural contract: tests/rulepacks/platform-read-ha-trigger_test.yaml.
