@@ -680,6 +680,22 @@ def test_main_exits_violation_on_total_apply_failure(monkeypatch, tmp_path):
     assert exc.value.code == tg.EXIT_VIOLATION
 
 
+def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, capsys):
+    # #3017: govern reads the map through recommend.run_analysis; an absent
+    # map is an environment error (rc 2, named), not a traceback at rc 1 —
+    # rc 1 here means "the write plane failed" to CronJobLastRunFailed.
+    missing = tmp_path / "metric_observed_map.yaml"
+    monkeypatch.setattr(tg.recommend.observed_map_lib, "DEFAULT_MAP_PATH", str(missing))
+    monkeypatch.setattr(tg, "run",
+                        lambda args: tg.recommend.observed_map_lib.load_observed_map())
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
+                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    assert exc.value.code == tg.EXIT_CALLER_ERROR
+    assert str(missing) in capsys.readouterr().err
+
+
 def test_main_exits_ok_on_successful_apply(monkeypatch, tmp_path):
     monkeypatch.setattr(tg, "run",
                         lambda args: tg.GovernanceResult([], [tg.TenantOutcome("t", "pr_opened")], []))

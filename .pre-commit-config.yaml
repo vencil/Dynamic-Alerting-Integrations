@@ -1479,9 +1479,9 @@ repos:
         # Fires when the map OR any rule pack changes — a renamed recording rule
         # / new alert can stale the committed map. FAIL on hard drift (errors):
         # stale pick, scope/direction/scaled drift, or a KNOWN_DEFERRED exit-lock
-        # breach (#916 Item B). known-deferred INFO listings + orphan/coverage
-        # warns still never red-gate (Gemini final-check) — only the deferral
-        # *itself* rotting is an error. Fix: `da-tools threshold-recommend
+        # breach (#916 Item B), or a coverage gap (#3017). known-deferred INFO
+        # listings + orphan warns still never red-gate (Gemini final-check) —
+        # only the deferral *itself* rotting is an error. A missing map exits 2. Fix: `da-tools threshold-recommend
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
         files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$
 

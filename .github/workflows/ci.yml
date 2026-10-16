@@ -704,8 +704,8 @@ jobs:
           #     cov._REPO to a tmp_path, so not one of them looks at the
           #     shipped tree; the alert firing-coverage baseline was
           #     unguarded in CI.
-          #   * threshold-observed-map-drift-check — tests/lint/ has no
-          #     corresponding test file at all.
+          #   * threshold-observed-map-drift-check — its tests/lint/ test
+          #     (#3017) pins the exit codes on stubs, not the shipped tree.
           #   * metric-dictionary-check — its live-repo test accepted exit
           #     code 1 (this PR tightens that to 0), so even Python Tests
           #     could not have caught a red gate.
