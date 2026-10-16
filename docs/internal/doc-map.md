@@ -48,6 +48,7 @@ lang: zh
 | `docs/adr/035-tenant-id-single-source.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-035: tenant id 合法字元集的單一來源 |
 | `docs/adr/036-single-parser-effective-config.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判 |
 | `docs/adr/037-config-diff-compares-rendered-output.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-037: config-diff 改為比較渲染結果 |
+| `docs/adr/038-unread-keys-judged-by-readers.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Actionable 之後：從告警決策到自動化動作的冪等光譜 |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 告警該響之前：從資源飽和到症狀導向的告警設計 |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 多嚴才算嚴：用 SLO 與錯誤預算決定告警門檻 |

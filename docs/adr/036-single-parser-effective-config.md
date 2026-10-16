@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-15
+updated_at: 2026-10-16
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -26,6 +26,7 @@ updated_at: 2026-10-15
 - **2026-10-14 修訂**：解析快取的 key 改用檔案內容的 SHA-256，不再用 git 的 blob SHA（§3）。
 - **2026-10-15 修訂（owner 決定）**：從 git 物件取檔時，不是一般檔的項目（symlink、gitlink 等）一律判為 `not_regular_file`（§3）。
 - **2026-10-15 修訂（owner 核可）**：批次 patch 與 custom-alerts 的合併改以合併後的不變式把關：編輯以外的部分，合併結果的節點寫出來要與原檔逐一相同（§4）。
+- **2026-10-16 修訂（owner 核可）**：「未判定」的範圍擴大到樹上有只由產生器判的 `_` 鍵（§9），配合 [ADR-038](./038-unread-keys-judged-by-readers.md)。
 - 設計與修訂都經過對抗審查（由不同模型擔任）。
 
 ## 摘要
@@ -409,7 +410,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 
 - **單獨執行 da-guard 時**（例如使用沒有 Python 的獨立 binary）：
   - 報告（文字與 JSON）明示路由與 policy「未判定」，並回 exit code 4。這樣「沒判」和「判過、沒問題」可以分得開。
-  - 只在樹上有路由或 policy 內容時才回 4；沒有這類內容的樹照常回 0。
+  - 只在樹上有只能由產生器判定的內容時才回 4：路由、policy，或只由產生器讀、以及拼錯而只有產生器會報的 `_` 鍵（判法見 [ADR-038](./038-unread-keys-judged-by-readers.md)）。沒有這類內容的樹照常回 0。
   - 同時符合多個 exit code 時，優先順序是 3 > 1 > 4（3 是有檔讀不了，1 是有錯誤等級的 finding；3 優先於 1 與現在相同）。
   - exit 3 只涵蓋 exporter 會丟掉或讀不到的檔。步驟 3 刪掉「產生器會因重複鍵整份拒收」這項 Go 端檢查後，da-guard 不再為此回 3；`parse-tree` 判為讀不了的檔由產生器那一側回報（步驟 4 起），不由 da-guard 的預設執行回報。
   - 不另設旗標讓 CI 宣告「路由已由產生器判過」：`da-tools init` 產生的客戶 CI 範本本來就跑 `generate-routes --validate --strict`，不會單獨跑 da-guard。
@@ -470,7 +471,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
   - [#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713)：被覆蓋的合併來源裡有無法解析的值。
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674)：自我參照的 YAML 別名。
 - **批次 patch 合併的離線差分測試**（§4）。
-- **da-guard 的「未判定」**：exit code 4 與報告內容有測試，包括沒有路由或 policy 內容時不回 4，以及與 3、1 同時成立時的優先順序。
+- **da-guard 的「未判定」**：exit code 4 與報告內容有測試，包括沒有只能由產生器判定的內容時不回 4，以及與 3、1 同時成立時的優先順序。
 - **產生器容器的拒收條件**：找不到 amtool、驗過與要寫的內容重驗一次仍不一致、產生器比 policy 要求的版本舊，三者各有測試，結果都是拒收。判定子程序超過記憶體上限、判定期限在判定中到期、在排隊中到期也各有測試：只拒收那一筆、不回 503，下一筆寫入照常判定；逾時後沒有殘留的子孫程序（amtool、da-guard 等）；剩餘時間不夠重驗時回可重試的拒收；推進到一半中斷後，這批路徑會重設成分支上的內容。
 - 在 CI 裡，以 chart 固定的那一組版本執行。
 
