@@ -447,6 +447,9 @@ func baseRowsSkipKey(metricKey string) bool {
 		IsRoutingLayerKey(metricKey)
 }
 
+// BaseRowsSkipKey is baseRowsSkipKey, for da-guard.
+func BaseRowsSkipKey(metricKey string) bool { return baseRowsSkipKey(metricKey) }
+
 // resolveBaseRows resolves a tenant's base thresholds from the given defaults
 // view using the three-state contract (custom value / omitted→default /
 // disable) plus the inline "value:severity" suffix. Extracted verbatim from

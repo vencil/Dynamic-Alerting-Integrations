@@ -330,6 +330,43 @@ func retiredHint(k string) string {
 	return ""
 }
 
+// RetiredHint is retiredHint, for da-guard.
+func RetiredHint(k string) string { return retiredHint(k) }
+
+// prefixReaders is one registered prefix and its readers.
+type prefixReaders struct {
+	prefix  string
+	readers map[string][]string
+}
+
+// RegisteredReaders is what the reserved-key registry declares for the `_`
+// key k: each reader → the layers it reads k in (ADR-038 decision 2), taken
+// from the key's own entry, else from the first registered prefix k carries.
+// registered is false for a key the registry does not list and for a
+// retired key (RetiredHint). A copy: the caller may keep or change it.
+func RegisteredReaders(k string) (readers map[string][]string, registered bool) {
+	if retiredHint(k) != "" {
+		return nil, false
+	}
+	src, ok := reservedKeyReaders[k]
+	if !ok {
+		for _, p := range reservedPrefixReaders {
+			if strings.HasPrefix(k, p.prefix) {
+				src, ok = p.readers, true
+				break
+			}
+		}
+	}
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string][]string, len(src))
+	for r, layers := range src {
+		out[r] = append([]string(nil), layers...)
+	}
+	return out, true
+}
+
 // IsUnknownRoutingKey reports whether k carries the `_routing` prefix but is
 // not a key the route generator reads in that place: a tenant's config when
 // platform is false, the top level of a conf.d `_` file when it is true.

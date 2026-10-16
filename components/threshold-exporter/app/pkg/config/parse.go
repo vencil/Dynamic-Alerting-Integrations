@@ -267,6 +267,13 @@ func formatDuration(d time.Duration) string {
 // IsDisabled checks if a value string means "disabled" (exported for testing).
 func IsDisabled(lower string) bool { return isDisabled(lower) }
 
+// DisabledAt reports whether sv resolves at now to a value that switches its
+// key off — the resolver's own reading (resolveValue, then isDisabled), with
+// the invalid-window WARN not repeated.
+func DisabledAt(sv ScheduledValue, now time.Time) bool {
+	return isDisabled(strings.ToLower(strings.TrimSpace(sv.resolveValue(now, nil))))
+}
+
 // isDisabled checks if a value string means "disabled".
 func isDisabled(lower string) bool {
 	return lower == "disable" || lower == "disabled" || lower == "off" || lower == "false"

@@ -7,8 +7,8 @@ exporter 也不套用。
 
 每棵樹都在同一支測試裡同時問兩邊，斷言答案相等：
 
-- exporter：`_lib_tenant_values.load_served_values` 的 `values["_routing"]`（有沒有、
-  receiver 是什麼）與 `values["_severity_dedup"]`。
+- exporter：`_lib_tenant_values.load_served_values` 的 `routing`（exporter module 的
+  路由 resolver 讀到的 `_routing`：有沒有、receiver 是什麼）與 `values["_severity_dedup"]`。
 - 產生器：`_grar_parse.load_tenant_tree` 的 `routing_configs`（有沒有、receiver）與
   `dedup_configs`。
 
@@ -76,7 +76,8 @@ def test_exporter_and_generator_agree(name: str, tmp_path: Path) -> None:
     files, applied = TREES[name]
     conf_d = _build(tmp_path, files)
 
-    exporter = tv.load_served_values(conf_d)["tx"].values
+    served = tv.load_served_values(conf_d)["tx"]
+    exporter = served.values
     generator = load_tenant_tree(str(conf_d))
 
     # 閾值這一側本來就一致（profile 的 55 兩邊都套用），先釘住前提。
@@ -86,7 +87,7 @@ def test_exporter_and_generator_agree(name: str, tmp_path: Path) -> None:
     gen_dedup = generator.dedup_configs["tx"]
     assert exp_dedup == gen_dedup, (name, exp_dedup, gen_dedup)
 
-    exp_recv = _receiver(exporter.get("_routing"))
+    exp_recv = _receiver(served.routing)
     gen_recv = _receiver(generator.routing_configs.get("tx"))
     assert exp_recv == gen_recv, (name, exp_recv, gen_recv)
 
