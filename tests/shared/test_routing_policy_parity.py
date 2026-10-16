@@ -66,10 +66,7 @@ against the generator by this half.
 
 A cell's `python_differs` replaces the Go value where the YAML readers
 disagree (see the matrix `_comment`): `targets`, `policy`, `rejected_routes`,
-`group_by_invalid` and `refused` are asserted against it here. Every field
-where it differs from the Go column is a reader difference that tests/shared/test_reader_divergence_catalog.py
-ranks and matches to a `layer: routing` entry of
-tests/shared/reader_divergence_catalog.yaml (ADR-036 step 2, PR-C). A tree
+`group_by_invalid` and `refused` are asserted against it here. A tree
 the generator refuses whole because a tenant file cannot be read
 (`tenant_file_errors`, #1460: rc 1, nothing rendered) is one only through
 that: every tenant's `python_differs.refused` is `tenant_file_unreadable`.
