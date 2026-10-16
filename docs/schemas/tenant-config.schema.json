@@ -807,37 +807,281 @@
       "description": "Optional HTTP client settings for webhook receiver (auth, TLS, proxy). See Alertmanager documentation.",
       "properties": {
         "basic_auth": {
-          "type": ["object", "null"],
+          "anyOf": [{ "$ref": "#/definitions/httpBasicAuth" }, { "type": "null" }],
           "title": "Basic Authentication",
-          "properties": {
-            "username": {
-              "type": "string"
-            },
-            "password": {
-              "type": "string"
-            }
-          }
+          "description": "HTTP basic authentication: username / username_file / username_ref (at most one) and password / password_file / password_ref (at most one)."
         },
-        "bearer_token": {
-          "type": ["string", "null"],
-          "title": "Bearer Token",
-          "description": "HTTP Bearer token for authentication. A string: quote a token YAML would read as a number or date."
+        "oauth2": { "anyOf": [{ "$ref": "#/definitions/httpOAuth2" }, { "type": "null" }], "title": "OAuth 2.0", "description": "OAuth 2.0 client credentials. client_id and token_url are required." },
+        "authorization": {
+          "anyOf": [{ "$ref": "#/definitions/httpAuthorization" }, { "type": "null" }],
+          "title": "Authorization Header",
+          "description": "Authorization header: type (default Bearer; never basic, use basic_auth) and at most one of credentials / credentials_file / credentials_ref."
+        },
+        "bearer_token": { "type": ["string", "null"], "title": "Bearer Token", "description": "HTTP Bearer token for authentication. A string: quote a token YAML would read as a number or date." },
+        "bearer_token_file": { "type": ["string", "null"], "title": "Bearer Token File", "description": "Path of a file holding the Bearer token. A string: quote a path YAML would read as a number or date." },
+        "tls_config": { "anyOf": [{ "$ref": "#/definitions/httpTLSConfig" }, { "type": "null" }], "title": "TLS Configuration", "description": "TLS settings for the connection to the webhook." },
+        "follow_redirects": {
+          "type": ["boolean", "null"],
+          "title": "Follow Redirects",
+          "description": "Whether to follow HTTP 3xx redirects (Alertmanager's default: true). The route generator passes it through as written, so write a YAML boolean, not a quoted word."
+        },
+        "enable_http2": {
+          "type": ["boolean", "null"],
+          "title": "Enable HTTP/2",
+          "description": "Whether to enable HTTP/2 (Alertmanager's default: true). The route generator passes it through as written, so write a YAML boolean, not a quoted word."
+        },
+        "http_headers": {
+          "anyOf": [{ "$ref": "#/definitions/httpHeaders" }, { "type": "null" }],
+          "title": "HTTP Headers",
+          "description": "Extra headers to send, by header name: each a mapping of values / secrets / files lists. Headers Alertmanager reserves (Authorization, Content-Type, ...) are refused."
         },
         "proxy_url": {
           "type": ["string", "null"],
           "title": "Proxy URL",
           "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here. da-guard and tenant-api check it (pkg/receiverspec ProxyURLProblem); the route generator leaves it to its amtool gate."
+        },
+        "no_proxy": { "type": ["string", "null"], "title": "No Proxy", "description": "Comma-separated hosts, IPs or CIDRs that bypass proxy_url. Needs proxy_url; not together with proxy_from_environment: true." },
+        "proxy_from_environment": { "$ref": "#/definitions/yamlBool", "title": "Proxy From Environment", "description": "Use the proxy from HTTP_PROXY / HTTPS_PROXY / NO_PROXY. Not together with a non-empty proxy_url or a no_proxy." },
+        "proxy_connect_header": {
+          "anyOf": [{ "$ref": "#/definitions/httpProxyConnectHeader" }, { "type": "null" }],
+          "title": "Proxy CONNECT Headers",
+          "description": "Headers sent to the proxy on CONNECT, each a list of values. Needs a non-empty proxy_url or proxy_from_environment: true."
         }
       },
-      "not": {
-        "required": ["basic_auth", "bearer_token"],
-        "properties": {
-          "basic_auth": { "type": "object" },
-          "bearer_token": { "type": "string", "minLength": 1 }
-        }
-      },
-      "$comment": "#2295: Alertmanager (prometheus/common HTTPClientConfig.Validate) refuses the whole config when more than one of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file is set; null and an empty bearer_token count as unset. The `not` covers the two auth keys listed here, additionalProperties: false the rest (and every other http_config key: a known limitation, the schema is stricter than Alertmanager there). The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by the rows of receiver_presence_cases.json.",
+      "allOf": [
+        { "not": { "required": ["basic_auth", "oauth2"], "properties": { "basic_auth": { "type": "object" }, "oauth2": { "type": "object" } } } },
+        { "not": { "required": ["basic_auth", "authorization"], "properties": { "basic_auth": { "type": "object" }, "authorization": { "type": "object" } } } },
+        { "not": { "required": ["basic_auth", "bearer_token"], "properties": { "basic_auth": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["basic_auth", "bearer_token_file"], "properties": { "basic_auth": { "type": "object" }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["oauth2", "authorization"], "properties": { "oauth2": { "type": "object" }, "authorization": { "type": "object" } } } },
+        { "not": { "required": ["oauth2", "bearer_token"], "properties": { "oauth2": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["oauth2", "bearer_token_file"], "properties": { "oauth2": { "type": "object" }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["authorization", "bearer_token"], "properties": { "authorization": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["authorization", "bearer_token_file"], "properties": { "authorization": { "type": "object" }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["bearer_token", "bearer_token_file"], "properties": { "bearer_token": { "type": "string", "minLength": 1 }, "bearer_token_file": { "type": "string", "minLength": 1 } } } },
+        { "$ref": "#/definitions/httpProxyRules" }
+      ],
+      "$comment": "#2295 / #2984: `properties` is the http_config key set Alertmanager accepts (prometheus/common HTTPClientConfig with its inline ProxyConfig), and each nested definition (httpBasicAuth, httpAuthorization, httpOAuth2, httpTLSConfig, httpHeader) is the key set of the struct Alertmanager decodes it into; tests/alertmanager-inhibit TestSchemaHTTPConfigKeys_MatchAlertmanager pins every one of them by reflection. additionalProperties: false therefore refuses only what Alertmanager refuses (an unknown key, at any depth, fails the whole config). The route generator passes http_config through whole, and the Go and Python checks judge only its top level, so the nested rules here are the schema's and Alertmanager's alone (the rows carrying python_differs / go_differs in receiver_presence_cases.json). The `allOf` pairs are every pair of basic_auth / oauth2 / authorization / bearer_token / bearer_token_file: Alertmanager (HTTPClientConfig.Validate) refuses more than one, null and an empty bearer_token / bearer_token_file count as unset, an empty mapping counts as set. The Go copy (pkg/receiverspec HTTPConfigAuthFields) is pinned by TestHTTPConfig_MatchSchema; the Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) by tests/shared/test_receiver_spec_parity.py and the rows of receiver_presence_cases.json.",
       "additionalProperties": false
+    },
+    "httpProxyRules": {
+      "title": "Alertmanager proxy rules",
+      "description": "prometheus/common ProxyConfig.Validate, for http_config and for oauth2 (which inlines the same proxy keys).",
+      "allOf": [
+        { "not": { "required": ["proxy_from_environment", "proxy_url"], "properties": { "proxy_from_environment": { "$ref": "#/definitions/yamlTrue" }, "proxy_url": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["proxy_from_environment", "no_proxy"], "properties": { "proxy_from_environment": { "$ref": "#/definitions/yamlTrue" }, "no_proxy": { "type": "string", "minLength": 1 } } } },
+        { "if": { "required": ["no_proxy"], "properties": { "no_proxy": { "type": "string", "minLength": 1 } } }, "then": { "required": ["proxy_url"], "properties": { "proxy_url": { "type": "string" } } } },
+        {
+          "if": { "required": ["proxy_connect_header"], "properties": { "proxy_connect_header": { "type": "object", "minProperties": 1 } } },
+          "then": {
+            "anyOf": [
+              { "required": ["proxy_url"], "properties": { "proxy_url": { "type": "string", "minLength": 1 } } },
+              { "required": ["proxy_from_environment"], "properties": { "proxy_from_environment": { "$ref": "#/definitions/yamlTrue" } } }
+            ]
+          }
+        }
+      ]
+    },
+    "httpBasicAuth": {
+      "type": "object",
+      "title": "Basic Authentication",
+      "properties": {
+        "username": { "type": ["string", "null"] },
+        "username_file": { "type": ["string", "null"] },
+        "username_ref": { "type": ["string", "null"] },
+        "password": { "type": ["string", "null"] },
+        "password_file": { "type": ["string", "null"] },
+        "password_ref": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "not": { "required": ["username", "username_file"], "properties": { "username": { "type": "string", "minLength": 1 }, "username_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["username", "username_ref"], "properties": { "username": { "type": "string", "minLength": 1 }, "username_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["username_file", "username_ref"], "properties": { "username_file": { "type": "string", "minLength": 1 }, "username_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["password", "password_file"], "properties": { "password": { "type": "string", "minLength": 1 }, "password_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["password", "password_ref"], "properties": { "password": { "type": "string", "minLength": 1 }, "password_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["password_file", "password_ref"], "properties": { "password_file": { "type": "string", "minLength": 1 }, "password_ref": { "type": "string", "minLength": 1 } } } }
+      ],
+      "additionalProperties": false
+    },
+    "httpAuthorization": {
+      "type": "object",
+      "title": "Authorization Header",
+      "properties": {
+        "type": {
+          "type": ["string", "null"],
+          "not": { "type": "string", "pattern": "^\\s*[Bb][Aa][Ss][Ii][Cc]\\s*$" },
+          "description": "Default Bearer. Alertmanager refuses basic in any case, surrounding whitespace trimmed: use basic_auth."
+        },
+        "credentials": { "type": ["string", "null"] },
+        "credentials_file": { "type": ["string", "null"] },
+        "credentials_ref": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "not": { "required": ["credentials", "credentials_file"], "properties": { "credentials": { "type": "string", "minLength": 1 }, "credentials_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["credentials", "credentials_ref"], "properties": { "credentials": { "type": "string", "minLength": 1 }, "credentials_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["credentials_file", "credentials_ref"], "properties": { "credentials_file": { "type": "string", "minLength": 1 }, "credentials_ref": { "type": "string", "minLength": 1 } } } }
+      ],
+      "additionalProperties": false
+    },
+    "httpOAuth2": {
+      "type": "object",
+      "title": "OAuth 2.0",
+      "properties": {
+        "client_id": { "type": ["string", "null"] },
+        "client_secret": { "type": ["string", "null"] },
+        "client_secret_file": { "type": ["string", "null"] },
+        "client_secret_ref": { "type": ["string", "null"] },
+        "client_certificate_key_id": { "type": ["string", "null"] },
+        "client_certificate_key": { "type": ["string", "null"] },
+        "client_certificate_key_file": { "type": ["string", "null"] },
+        "client_certificate_key_ref": { "type": ["string", "null"] },
+        "grant_type": { "type": ["string", "null"] },
+        "signature_algorithm": { "type": ["string", "null"] },
+        "iss": { "type": ["string", "null"] },
+        "audience": { "type": ["string", "null"] },
+        "claims": { "type": ["object", "null"] },
+        "scopes": { "type": ["array", "null"], "items": { "type": "string" } },
+        "token_url": { "type": ["string", "null"] },
+        "endpoint_params": { "type": ["object", "null"], "additionalProperties": { "type": "string" } },
+        "tls_config": { "anyOf": [{ "$ref": "#/definitions/httpTLSConfig" }, { "type": "null" }] },
+        "proxy_url": { "type": ["string", "null"] },
+        "no_proxy": { "type": ["string", "null"] },
+        "proxy_from_environment": { "type": ["boolean", "null"] },
+        "proxy_connect_header": { "anyOf": [{ "$ref": "#/definitions/httpProxyConnectHeader" }, { "type": "null" }] }
+      },
+      "allOf": [
+        { "required": ["client_id", "token_url"], "properties": { "client_id": { "type": "string", "minLength": 1 }, "token_url": { "type": "string", "minLength": 1 } } },
+        {
+          "if": { "required": ["grant_type"], "properties": { "grant_type": { "const": "urn:ietf:params:oauth:grant-type:jwt-bearer" } } },
+          "then": {
+            "properties": { "signature_algorithm": { "enum": ["", "RS256", "RS384", "RS512", null] } },
+            "allOf": [
+              {
+                "not": {
+                  "required": ["client_certificate_key", "client_certificate_key_file"],
+                  "properties": { "client_certificate_key": { "type": "string", "minLength": 1 }, "client_certificate_key_file": { "type": "string", "minLength": 1 } }
+                }
+              },
+              {
+                "not": {
+                  "required": ["client_certificate_key", "client_certificate_key_ref"],
+                  "properties": { "client_certificate_key": { "type": "string", "minLength": 1 }, "client_certificate_key_ref": { "type": "string", "minLength": 1 } }
+                }
+              },
+              {
+                "not": {
+                  "required": ["client_certificate_key_file", "client_certificate_key_ref"],
+                  "properties": { "client_certificate_key_file": { "type": "string", "minLength": 1 }, "client_certificate_key_ref": { "type": "string", "minLength": 1 } }
+                }
+              }
+            ]
+          },
+          "else": {
+            "allOf": [
+              { "not": { "required": ["client_secret", "client_secret_file"], "properties": { "client_secret": { "type": "string", "minLength": 1 }, "client_secret_file": { "type": "string", "minLength": 1 } } } },
+              { "not": { "required": ["client_secret", "client_secret_ref"], "properties": { "client_secret": { "type": "string", "minLength": 1 }, "client_secret_ref": { "type": "string", "minLength": 1 } } } },
+              {
+                "not": { "required": ["client_secret_file", "client_secret_ref"], "properties": { "client_secret_file": { "type": "string", "minLength": 1 }, "client_secret_ref": { "type": "string", "minLength": 1 } } }
+              }
+            ]
+          }
+        },
+        { "$ref": "#/definitions/httpProxyRules" }
+      ],
+      "$comment": "#2984: prometheus/common HTTPClientConfig.Validate's oauth2 half: client_id and token_url non-empty; with the JWT bearer grant at most one client_certificate_key form and signature_algorithm one of RS256 / RS384 / RS512 (an unexported list there, copied by hand), otherwise at most one client_secret form. The inline ProxyConfig is validated as http_config's is. proxy_from_environment takes a real boolean here: the route generator rewrites a YAML 1.1 word only at http_config's own level.",
+      "additionalProperties": false
+    },
+    "httpTLSConfig": {
+      "type": "object",
+      "title": "TLS Configuration",
+      "properties": {
+        "ca": { "type": ["string", "null"] },
+        "cert": { "type": ["string", "null"] },
+        "key": { "type": ["string", "null"] },
+        "ca_file": { "type": ["string", "null"] },
+        "cert_file": { "type": ["string", "null"] },
+        "key_file": { "type": ["string", "null"] },
+        "ca_ref": { "type": ["string", "null"] },
+        "cert_ref": { "type": ["string", "null"] },
+        "key_ref": { "type": ["string", "null"] },
+        "server_name": { "type": ["string", "null"] },
+        "insecure_skip_verify": { "type": ["boolean", "null"] },
+        "min_version": { "enum": ["TLS10", "TLS11", "TLS12", "TLS13", null] },
+        "max_version": { "enum": ["TLS10", "TLS11", "TLS12", "TLS13", null] }
+      },
+      "allOf": [
+        { "not": { "required": ["ca", "ca_file"], "properties": { "ca": { "type": "string", "minLength": 1 }, "ca_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["ca", "ca_ref"], "properties": { "ca": { "type": "string", "minLength": 1 }, "ca_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["ca_file", "ca_ref"], "properties": { "ca_file": { "type": "string", "minLength": 1 }, "ca_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["cert", "cert_file"], "properties": { "cert": { "type": "string", "minLength": 1 }, "cert_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["cert", "cert_ref"], "properties": { "cert": { "type": "string", "minLength": 1 }, "cert_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["cert_file", "cert_ref"], "properties": { "cert_file": { "type": "string", "minLength": 1 }, "cert_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["key", "key_file"], "properties": { "key": { "type": "string", "minLength": 1 }, "key_file": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["key", "key_ref"], "properties": { "key": { "type": "string", "minLength": 1 }, "key_ref": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["key_file", "key_ref"], "properties": { "key_file": { "type": "string", "minLength": 1 }, "key_ref": { "type": "string", "minLength": 1 } } } },
+        {
+          "if": {
+            "anyOf": [
+              { "required": ["cert"], "properties": { "cert": { "type": "string", "minLength": 1 } } },
+              { "required": ["cert_file"], "properties": { "cert_file": { "type": "string", "minLength": 1 } } },
+              { "required": ["cert_ref"], "properties": { "cert_ref": { "type": "string", "minLength": 1 } } }
+            ]
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["key"], "properties": { "key": { "type": "string", "minLength": 1 } } },
+              { "required": ["key_file"], "properties": { "key_file": { "type": "string", "minLength": 1 } } },
+              { "required": ["key_ref"], "properties": { "key_ref": { "type": "string", "minLength": 1 } } }
+            ]
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              { "required": ["key"], "properties": { "key": { "type": "string", "minLength": 1 } } },
+              { "required": ["key_file"], "properties": { "key_file": { "type": "string", "minLength": 1 } } },
+              { "required": ["key_ref"], "properties": { "key_ref": { "type": "string", "minLength": 1 } } }
+            ]
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["cert"], "properties": { "cert": { "type": "string", "minLength": 1 } } },
+              { "required": ["cert_file"], "properties": { "cert_file": { "type": "string", "minLength": 1 } } },
+              { "required": ["cert_ref"], "properties": { "cert_ref": { "type": "string", "minLength": 1 } } }
+            ]
+          }
+        }
+      ],
+      "$comment": "#2984: prometheus/common TLSConfig.Validate: at most one of each of ca / cert / key in its three forms, and a client cert needs a client key and the reverse. min_version / max_version: the keys of prometheus/common TLSVersions (pinned by tests/alertmanager-inhibit).",
+      "additionalProperties": false
+    },
+    "httpHeaders": {
+      "type": "object",
+      "title": "HTTP Headers",
+      "propertyNames": {
+        "not": {
+          "pattern": "^(?:[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Hh][Oo][Ss][Tt]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]|[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Tt][Yy][Pp][Ee]|[Uu][Ss][Ee][Rr]-[Aa][Gg][Ee][Nn][Tt]|[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]|[Kk][Ee][Ee][Pp]-[Aa][Ll][Ii][Vv][Ee]|[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee]|[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Ww][Ww][Ww]-[Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee]|[Aa][Cc][Cc][Ee][Pp][Tt]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]|[Xx]-[Pp][Rr][Oo][Mm][Ee][Tt][Hh][Ee][Uu][Ss]-[Rr][Ee][Mm][Oo][Tt][Ee]-[Ww][Rr][Ii][Tt][Ee]-[Vv][Ee][Rr][Ss][Ii][Oo][Nn]|[Xx]-[Pp][Rr][Oo][Mm][Ee][Tt][Hh][Ee][Uu][Ss]-[Rr][Ee][Mm][Oo][Tt][Ee]-[Rr][Ee][Aa][Dd]-[Vv][Ee][Rr][Ss][Ii][Oo][Nn]|[Xx]-[Pp][Rr][Oo][Mm][Ee][Tt][Hh][Ee][Uu][Ss]-[Ss][Cc][Rr][Aa][Pp][Ee]-[Tt][Ii][Mm][Ee][Oo][Uu][Tt]-[Ss][Ee][Cc][Oo][Nn][Dd][Ss]|[Xx]-[Aa][Mm][Zz]-[Dd][Aa][Tt][Ee]|[Xx]-[Aa][Mm][Zz]-[Ss][Ee][Cc][Uu][Rr][Ii][Tt][Yy]-[Tt][Oo][Kk][Ee][Nn]|[Xx]-[Aa][Mm][Zz]-[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ss][Hh][Aa]256)$"
+        }
+      },
+      "additionalProperties": { "anyOf": [{ "$ref": "#/definitions/httpHeader" }, { "type": "null" }] },
+      "$comment": "#2984: the names prometheus/common ReservedHeaders refuses, compared after http.CanonicalHeaderKey, i.e. in any case (pinned by tests/alertmanager-inhibit)."
+    },
+    "httpHeader": {
+      "type": "object",
+      "title": "HTTP Header",
+      "properties": {
+        "values": { "type": ["array", "null"], "items": { "type": "string" } },
+        "secrets": { "type": ["array", "null"], "items": { "type": "string" } },
+        "files": { "type": ["array", "null"], "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "httpProxyConnectHeader": { "type": "object", "title": "Proxy CONNECT Headers", "additionalProperties": { "type": ["array", "null"], "items": { "type": "string" } } },
+    "yamlTrue": {
+      "title": "YAML boolean true",
+      "description": "The values of definitions.yamlBool that mean true.",
+      "$comment": "#2984: the subset of yamlBool that _lib_validation._yaml_bool_true reads as true; tests/shared/test_receiver_spec_parity.py pins it to that function over the yamlBool enum.",
+      "enum": [true, "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"]
     },
     "httpConfigOrNull": {
       "title": "HTTP client configuration or null",
