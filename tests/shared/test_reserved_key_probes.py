@@ -14,6 +14,10 @@ Policy-as-Code):
   "the code reads it, the registry does not say so", which would make a key
   look read by nothing.
 
+A third check ties served-values' per-key `keys` (ADR-038 decision 5) to the
+registry: for the probed key it must say the exporter reads it exactly where
+the registry declares the exporter does.
+
 Policy-as-Code also reads any key a deployment's rule names as `target`;
 the probe trees hold no rule naming the probed key, so for it the second
 check only shows that it reads no key on its own (ADR-038 decision 3).
@@ -76,13 +80,6 @@ _SENTINELS = {
     "_state_": ("_state_maint", "disable"),
 }
 
-# served-values lists `_routing` under a tenant's values from its own routing
-# resolver, though the collector never reads it ("The collector does not read
-# _routing" in cmd/da-guard/served_values.go). Giving served-values a
-# per-key read_by is ADR-038 step 2; until then the probe leaves it out of
-# the exporter's output.
-_SERVED_VALUES_OWN_RESOLVER = {"_routing"}
-
 pytestmark = pytest.mark.skipif(
     not os.path.isfile(_REGISTRY), reason="the registry is not in this checkout")
 
@@ -142,10 +139,15 @@ class _Readers:
         p = _run([self.guard, "served-values", "--config-dir", d], self.env)
         assert p.returncode == 0, f"served-values rc {p.returncode} on {d}:\n{p.stderr[-800:]}"
         t = json.loads(p.stdout)["tenants"]["t2"]
-        out = {k: t[k] for k in ("values", "series", "severities", "state_filters", "time_boxes")}
-        for k in _SERVED_VALUES_OWN_RESOLVER:
-            out["values"].pop(k, None)
-        return out
+        # `routing` is left out: it is the exporter module's reading of a key
+        # the collector does not read (the route generator's).
+        return {k: t[k] for k in ("values", "series", "severities", "state_filters", "time_boxes")}
+
+    def exporter_keys(self, d):
+        """served-values' per-key verdict for t2 (ADR-038 decision 5)."""
+        p = _run([self.guard, "served-values", "--config-dir", d], self.env)
+        assert p.returncode == 0, f"served-values rc {p.returncode} on {d}:\n{p.stderr[-800:]}"
+        return json.loads(p.stdout)["tenants"]["t2"]["keys"]
 
     def _file_out(self, cmd, d, out, ok):
         """(rc, the file written) — rc is part of the output: the route
@@ -262,3 +264,28 @@ def test_a_retired_key_changes_no_exporter_output(readers, tmp_path):
                 assert readers.exporter(probe) == readers.exporter(base), (name, layer)
         finally:
             del _SENTINELS[name]
+
+
+@pytest.mark.parametrize("name,layer", _CASES, ids=[f"{n}@{l}" for n, l in _CASES])
+def test_served_values_keys_agree_with_the_registry(readers, name, layer):
+    """served-values' `keys` says whether the exporter reads each key of a
+    tenant's merged config. For the probed key it must say what the
+    registry declares for that layer — the same declaration the two tests
+    above measure — so a reader of `keys` and a reader of the registry
+    cannot disagree."""
+    key = _SENTINELS[name][0]
+    d = os.path.join(readers.tmp, f"keys-{name}-{layer}")
+    _tree(d, name, layer, False)
+    entry = readers.exporter_keys(d).get(key)
+    declared = layer in dict(_registered())[name].get("exporter", [])
+    if entry is None:
+        # Not in the tenant's merged config: the exporter's build did not
+        # take it in, so it cannot be one the registry says it reads.
+        assert not declared, (
+            f"reserved_keys.json says the exporter reads {key} in {layer}, but served-values "
+            f"has no keys entry for it")
+        return
+    assert entry["exporter"] == declared, (
+        f"served-values keys[{key}] = {entry} with {key} in {layer}; reserved_keys.json says "
+        f"the exporter {'reads' if declared else 'does not read'} it there")
+    assert entry.get("registered") is True, entry

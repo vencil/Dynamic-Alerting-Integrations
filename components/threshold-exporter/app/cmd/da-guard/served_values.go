@@ -172,7 +172,73 @@ type servedTenantValues struct {
 	// time-box (or one the exporter ignores) has no entry. Always present
 	// ({} when none).
 	TimeBoxes map[string][]servedTimeBox `json:"time_boxes"`
+	// Routing: the tenant's `_routing` as config.ResolveRouting reads it.
+	// The collector does not read `_routing` — the route generator does
+	// (reserved_keys.json) — so it is not in Values, and Keys says the
+	// exporter does not read it; it is here for the readers that show a
+	// tenant's receiver (config-diff, platform-data). Absent when the
+	// resolver accepts no `_routing` for the tenant; a `_routing` it
+	// rejects is in Unserved, as written.
+	Routing map[string]any `json:"routing,omitempty"`
+	// Keys (ADR-038 decision 5): for every key of the tenant's merged
+	// config and every key of Unserved, whether the exporter reads it, why
+	// not, and what the reserved-key registry declares for a `_` key. Facts
+	// only: no verdict on keys another reader owns. Always present.
+	Keys map[string]servedKey `json:"keys"`
 }
+
+// servedKey is one entry of servedTenantValues.Keys.
+//
+// Exporter, for a key that is not `_`-prefixed, an unregistered `_` key
+// and `_custom_alerts`: the key owns a row the resolver produced — kept
+// (Values) or dropped (Dropped). For any other registered `_` key it is what
+// the registry declares (reserved_keys.json, whose layers
+// tests/shared/test_reserved_key_probes.py measures; the merged config holds
+// only what the exporter's build took in), whether or not the resolver
+// accepts its value, except that a `_state_<filter>` whose filter the root
+// does not declare has no reading and is not read.
+type servedKey struct {
+	Exporter bool `json:"exporter"`
+	// Reason is why the exporter does not read the key, one of the
+	// keyReason* values; absent when Exporter is true.
+	Reason string `json:"reason,omitempty"`
+	// Registered is set for a `_` key only: whether reserved_keys.json lists
+	// it (or a prefix of it). A retired key is not registered.
+	Registered *bool `json:"registered,omitempty"`
+	// Declared: the registry's other readers of a registered `_` key, reader
+	// → the layers it reads the key in. The caller joins them with the
+	// key's layer (da-guard effective's key_sources). Absent when none.
+	Declared map[string][]string `json:"declared,omitempty"`
+	// Hint is the registry's hint for a retired key.
+	Hint string `json:"hint,omitempty"`
+}
+
+// Reasons of servedKey.Reason — a closed set.
+const (
+	// keyReasonDisabled: the value at --at switches the key off. Whether
+	// switching it off changed what /metrics serves is not decided here.
+	keyReasonDisabled = "disabled"
+	// keyReasonNoRow: a threshold key (or `_custom_alerts`) the resolver
+	// produced no row for — a misspelt key and a key the platform does not
+	// declare alike.
+	keyReasonNoRow = "no_row"
+	// keyReasonUndeliverable: LoadReport.Undeliverable (#1976).
+	keyReasonUndeliverable = "undeliverable"
+	// keyReasonShadowed: a retired spelling whose canonical key the same
+	// tenant writes; the canonical key's value is served.
+	keyReasonShadowed = "shadowed"
+	// keyReasonNotExporterKey: a registered `_` key the exporter does not
+	// read (Declared names who does).
+	keyReasonNotExporterKey = "not_exporter_key"
+	// keyReasonStateFilterUndeclared: `_state_<filter>` for a filter the
+	// root `state_filters:` does not declare.
+	keyReasonStateFilterUndeclared = "state_filter_undeclared"
+	// keyReasonUnregistered: a `_` key the registry does not list, with no
+	// row and not switched off.
+	keyReasonUnregistered = "unregistered"
+	// keyReasonRetired: a retired key (Hint says what replaced it).
+	keyReasonRetired = "retired"
+)
 
 // servedTimeBox is one entry of servedTenantValues.TimeBoxes.
 type servedTimeBox struct {
@@ -497,7 +563,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	for _, d := range res.SeverityDedup {
 		dedup[d.Tenant] = d.Mode
 	}
-	// The collector does not read _routing, so its resolver runs only here.
+	// The collector does not read _routing, so its resolver runs only here
+	// (Routing, not Values).
 	routing := map[string]config.RoutingConfig{}
 	for _, r := range cfg.ResolveRouting() {
 		routing[r.Tenant] = r
@@ -608,7 +675,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			reserved["_state_"+name] = on
 		}
 		if rc, ok := routing[tenant]; ok {
-			reserved["_routing"] = map[string]any{
+			tv.Routing = map[string]any{
 				"receiver_type":   rc.ReceiverType,
 				"receiver":        rc.ReceiverConfig,
 				"group_by":        nonNilStrings(rc.GroupBy),
@@ -632,6 +699,9 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			_, canonWritten := overrides[canon]
 			shadowed := isAlias && canonWritten
 			if _, served := tv.Values[canon]; served && !shadowed {
+				continue
+			}
+			if canon == "_routing" && tv.Routing != nil {
 				continue
 			}
 			tv.Unserved[k] = rawScheduledValue(sv)
@@ -663,6 +733,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		for k, sv := range undeliverable[tenant] {
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
+		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at)
 		out[tenant] = tv
 	}
 	if withSchedules {
@@ -671,6 +742,106 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 	}
 	return out, nil
+}
+
+// servedKeys is servedTenantValues.Keys for one tenant: an entry for every
+// key of its merged config (overrides) and of tv.Unserved, read off what
+// servedValues already holds for it — no reading of its own beyond the
+// registry lookup and the switch-off test (config.DisabledAt, the
+// resolver's own).
+func servedKeys(tv servedTenantValues,
+	overrides map[string]config.ScheduledValue, undeliverable map[string]config.ScheduledValue,
+	at time.Time,
+) map[string]servedKey {
+	out := map[string]servedKey{}
+	add := func(k string) {
+		if _, done := out[k]; done {
+			return
+		}
+		canon, isAlias := config.CanonicalKeyFor(k)
+		_, kept := tv.Values[canon]
+		_, dropped := tv.Dropped[canon]
+		_, canonWritten := overrides[canon]
+		var e servedKey
+		// threshold is the reading of a key the resolver treats as a
+		// threshold: rows, or why none.
+		threshold := func() {
+			_, inUndeliverable := undeliverable[k]
+			sv, written := overrides[k]
+			if !written {
+				sv, written = undeliverable[k]
+			}
+			switch {
+			case isAlias && canonWritten:
+				e.Reason = keyReasonShadowed
+			case kept || dropped:
+				e.Exporter = true
+			case written && config.DisabledAt(sv, at):
+				e.Reason = keyReasonDisabled
+			case inUndeliverable:
+				e.Reason = keyReasonUndeliverable
+			default:
+				e.Reason = keyReasonNoRow
+			}
+		}
+		if !strings.HasPrefix(k, "_") {
+			threshold()
+			out[k] = e
+			return
+		}
+		readers, registered := config.RegisteredReaders(k)
+		e.Registered = &registered
+		for r, layers := range readers {
+			if r == "exporter" {
+				continue
+			}
+			if e.Declared == nil {
+				e.Declared = map[string][]string{}
+			}
+			e.Declared[r] = layers
+		}
+		_, byExporter := readers["exporter"]
+		switch {
+		case config.RetiredHint(k) != "":
+			e.Reason, e.Hint = keyReasonRetired, config.RetiredHint(k)
+		case !registered && config.BaseRowsSkipKey(k):
+			// A key the row generator never reads (`_silent_…`): no row,
+			// no switch-off.
+			e.Reason = keyReasonUnregistered
+		case !registered:
+			// The exporter serves an unregistered `_` key as a threshold
+			// when the root declares it (#3045): read it as one — its rows,
+			// its switch-off — and name it unregistered only when nothing
+			// came of it.
+			threshold()
+			if e.Reason == keyReasonNoRow {
+				e.Reason = keyReasonUnregistered
+			}
+		case k == customAlertsKey:
+			// Measured: the recipes the exporter serves are its rows.
+			if kept || dropped {
+				e.Exporter = true
+			} else {
+				e.Reason = keyReasonNoRow
+			}
+		case !byExporter:
+			e.Reason = keyReasonNotExporterKey
+		case strings.HasPrefix(k, "_state_") && !kept:
+			e.Reason = keyReasonStateFilterUndeclared
+		default:
+			// Registered for the exporter: read, whether or not its value
+			// is one the resolver accepts (ADR-038 decision 10 judges that).
+			e.Exporter = true
+		}
+		out[k] = e
+	}
+	for k := range overrides {
+		add(k)
+	}
+	for k := range tv.Unserved {
+		add(k)
+	}
+	return out
 }
 
 // spellAsWritten re-keys each tenant's maps with its keys as written
@@ -690,6 +861,7 @@ func spellAsWritten(tenants map[string]servedTenantValues, written map[string]ma
 		tv.Series = renamed(tv.Series, name)
 		tv.Unserved = renamed(tv.Unserved, name)
 		tv.Dropped = renamed(tv.Dropped, name)
+		tv.Keys = renamed(tv.Keys, name)
 		if tv.Schedules != nil {
 			s := renamed(*tv.Schedules, name)
 			tv.Schedules = &s

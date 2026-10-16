@@ -759,6 +759,8 @@ def served_setting_configs(tenants):
         for key, value in tv.values.items():
             if str(key).startswith("_"):
                 settings[key] = value
+        if tv.routing is not None:
+            settings["_routing"] = tv.routing
         settings.pop("_custom_alerts", None)
         settings[SERVED_STATE_FILTERS_KEY] = dict(tv.state_filters or {})
         settings[SERVED_TIME_BOXES_KEY] = {

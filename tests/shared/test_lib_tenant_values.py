@@ -502,7 +502,7 @@ def test_output_without_aliases_is_refused(tmp_path):
 def test_output_without_schedules_is_refused(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
@@ -513,7 +513,7 @@ def test_output_without_series_is_refused(tmp_path):
     """#2750：da-guard 的輸出沒有 series → 這支 da-guard 比工具舊，不當成「沒有 series」讀。"""
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}}}}')
+                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "series" in str(ei.value) and ei.value.binary_fault
@@ -534,13 +534,13 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
 _ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
-             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}}}}')
+             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
 
 
 @pytest.mark.parametrize("asked", [False, True])
@@ -629,7 +629,7 @@ def test_load_key_refs_from_a_da_guard_without_the_subcommand_is_stale(tmp_path)
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────
 
 _SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
-_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}'
+_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}, "keys": {}'
 
 
 def _sv_doc(schema: str | None, tenant_extra: str = ', "state_filters": {}') -> str:
@@ -750,3 +750,53 @@ def test_real_da_guard_reports_a_silence_time_box(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: {target: warning, expires: \"2027-01-01T00:00:00Z\"}\n"})
     got = tv.load_served_values(conf_d, at="2026-07-01T00:00:00Z", binary=da_guard)["t"].time_boxes
     assert got == {"_silent_mode": (tv.TimeBox("warning", "2027-01-01T00:00:00Z", False),)}
+
+
+# ── ADR-038 決定 5：keys 與 routing ─────────────────────────────────────────
+
+def test_output_without_keys_is_refused_as_older(tmp_path):
+    """沒有 keys 的文件來自早於 ADR-038 第二步的 da-guard——它還把 `_routing` 放在
+    values 裡：當成舊版拒讀，不靜默讀成「沒有任何鍵」。"""
+    fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA).replace(', "keys": {}', ''))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "keys" in str(ei.value) and ei.value.stale
+
+
+@pytest.mark.parametrize("keys", [
+    '[]',
+    '{"k": {}}',
+    '{"k": {"exporter": "yes"}}',
+    '{"k": {"exporter": true, "reason": "no_row"}}',
+    '{"k": {"exporter": false}}',
+    '{"k": {"exporter": false, "reason": "typo"}}',
+    '{"k": {"exporter": false, "reason": "no_row", "registered": "no"}}',
+], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
+        "unknown-reason", "registered-not-bool"])
+def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"keys": {}', f'"keys": {keys}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "keys" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
+
+
+def test_routing_not_a_mapping_is_refused(tmp_path):
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA, ', "state_filters": {}, "routing": "x"')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert "routing" in str(ei.value) and ei.value.binary_fault
+
+
+def test_real_da_guard_reports_keys_and_routing(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_conections: 70\n    mysql_connections: 60\n"
+                  "    _routing: {receiver: {type: webhook, url: 'https://h.example/t'}}\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard)["t"]
+    assert got.keys["mysql_connections"] == tv.ServedKey(True)
+    assert got.keys["mysql_conections"] == tv.ServedKey(False, "no_row")
+    assert got.keys["_routing"] == tv.ServedKey(False, "not_exporter_key", True,
+                                                {"generator": ("tenant", "platform_tenants")})
+    assert "_routing" not in got.values
+    assert got.routing["receiver"] == {"type": "webhook", "url": "https://h.example/t"}

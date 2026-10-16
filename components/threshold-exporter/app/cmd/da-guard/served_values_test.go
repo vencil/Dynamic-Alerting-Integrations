@@ -55,6 +55,14 @@ type servedOut struct {
 			Expires string `json:"expires"`
 			Expired bool   `json:"expired"`
 		} `json:"time_boxes"`
+		Routing map[string]any `json:"routing"`
+		Keys    map[string]struct {
+			Exporter   bool                `json:"exporter"`
+			Reason     string              `json:"reason"`
+			Registered *bool               `json:"registered"`
+			Declared   map[string][]string `json:"declared"`
+			Hint       string              `json:"hint"`
+		} `json:"keys"`
 	} `json:"tenants"`
 	Aliases map[string]string `json:"aliases"`
 }
@@ -773,8 +781,12 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 				if want := wantTB[tenant]; !reflect.DeepEqual(gotTB, want) && (len(gotTB) > 0 || len(want) > 0) {
 					t.Errorf("%s: time_boxes %v, resolver %v", tenant, gotTB, want)
 				}
-				if _, ok := tv.Values["_routing"]; ok != routed[tenant] {
-					t.Errorf("%s: _routing present=%v, ResolveRouting has it=%v", tenant, ok, routed[tenant])
+				if ok := tv.Routing != nil; ok != routed[tenant] {
+					t.Errorf("%s: routing present=%v, ResolveRouting has it=%v", tenant, ok, routed[tenant])
+				}
+				// The collector does not read `_routing`: not a /metrics value.
+				if _, ok := tv.Values["_routing"]; ok {
+					t.Errorf("%s: values carries _routing; the collector does not read it", tenant)
 				}
 			}
 		})
@@ -800,7 +812,7 @@ func TestServedValues_ConsistencyTreeIsNotVacuous(t *testing.T) {
 		{"schedule in window", a.Values["container_memory"] == 88.0},
 		{"expired override serves the default", a.Values["container_cpu"] == 75.0},
 		{"custom alerts", a.Values[customAlertsKey] != nil},
-		{"routing", a.Values["_routing"] != nil},
+		{"routing", a.Routing != nil},
 		{"disabled → unserved", a.Unserved["redis_memory"] == "disable"},
 		{"platform tenants: beats profile", b.Values["redis_memory"] == 55.0},
 		{"profile disable → unserved", b.Unserved["container_cpu"] == "disable"},
@@ -1077,11 +1089,11 @@ func TestServedValues_NonUTF8_ExitsTwoNamingIt(t *testing.T) {
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml": "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: http://x\n" +
 				"        ? !!binary eP8=\n        : a\n        ? !!binary eP4=\n        : b\n",
-		}, `values["_routing"]["receiver"]["x\xfe"] (key)`},
+		}, `routing["receiver"]["x\xfe"] (key)`},
 		"_routing value": {map[string]string{
 			"_defaults.yaml": defaultsOnly + sf,
 			"tenant-a.yaml":  "tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: !!binary /w==\n",
-		}, `tenants["tenant-a"].values["_routing"]`},
+		}, `tenants["tenant-a"].routing["receiver"]`},
 		// Two broken files whose names differ only in a non-UTF-8 byte: JSON
 		// would render both as "b\ufffd.yaml".
 		"parse_failed file name": {map[string]string{

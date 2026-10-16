@@ -91,6 +91,22 @@ is what keeps either of them off column 0.
   only says whether it is in force at `at`; extending it or making it
   open-ended changes this instead. A da-guard whose output lacks the field is
   named as older than this tool.
+* `routing` — the tenant's `_routing` as the exporter module's routing
+  resolver reads it, None when it accepts none. The collector does not read
+  `_routing` (the route generator does), so it is not in `values`; a
+  `_routing` the resolver rejects is in `unserved`, as written.
+* `keys` (ADR-038 decision 5) — every key of the tenant's merged config and
+  of `unserved`, spelt as there -> `ServedKey(exporter, reason, registered,
+  declared, hint)`: whether the exporter reads it (a threshold key, a `_` key
+  the reserved-key registry does not list and `_custom_alerts`: whether it
+  has /metrics rows, kept or dropped; any other `_` key as the registry
+  declares, except a `_state_<filter>` for a filter the root does not
+  declare), and if
+  not, why (`SERVED_KEY_REASONS`). For a `_` key, `registered` says whether
+  the registry lists it and `declared` names its other readers, reader ->
+  layers. Facts, not a verdict: `disabled` does not say whether switching
+  the key off changed anything. A da-guard whose output lacks the field is
+  named as older than this tool.
 
 The document must name its shape: a `schema` other than
 `SERVED_VALUES_SCHEMA` is refused, and a document with none is named as
@@ -315,6 +331,34 @@ class TenantValues(NamedTuple):
     series: dict[str, tuple[Series, ...]]     # threshold key -> its /metrics series (#2750)
     state_filters: dict[str, str]             # filter on at `at` -> its user_state_filter severity
     time_boxes: dict[str, tuple[TimeBox, ...]]  # `_silent_mode` / `_state_maintenance` -> its time-boxes
+    # `_routing` as the exporter module's routing resolver reads it (the
+    # collector does not read it, so it is not in `values`); None when the
+    # resolver accepts none for the tenant.
+    routing: dict[str, Any] | None = None
+    # ADR-038 decision 5: every key of the tenant's merged config and of
+    # `unserved` -> whether the exporter reads it, and why not.
+    keys: dict[str, "ServedKey"] = {}
+
+
+class ServedKey(NamedTuple):
+    """One entry of served-values' per-tenant `keys` (ADR-038 decision 5):
+    facts, no verdict. `reason` is None when `exporter` is True, else one of
+    `SERVED_KEY_REASONS`; `registered` is None for a key without the `_`
+    prefix; `declared` is the registry's other readers of a `_` key, reader
+    -> the layers it reads the key in."""
+    exporter: bool
+    reason: str | None = None
+    registered: bool | None = None
+    declared: dict[str, tuple[str, ...]] = {}
+    hint: str | None = None
+
+
+#: The closed set of served-values' `keys[*].reason` (cmd/da-guard
+#: served_values.go keyReason*).
+SERVED_KEY_REASONS = frozenset({
+    "disabled", "no_row", "undeliverable", "shadowed", "not_exporter_key",
+    "state_filter_undeclared", "unregistered", "retired",
+})
 
 
 class SkippedFile(NamedTuple):
@@ -752,6 +796,19 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries time_boxes that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
+        if "keys" not in tv:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no keys — this da-guard is "
+                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        try:
+            keys = {str(k): _served_key(e) for k, e in tv["keys"].items()}
+            routing = tv.get("routing")
+            if routing is not None and not isinstance(routing, dict):
+                raise TypeError(f"routing is a {type(routing).__name__}")
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys or routing that are not of their shape ({e!r})",
+                returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
             if "schedules" not in tv:
@@ -766,8 +823,25 @@ def load_served_tree(
                     returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
-                                     state_filters, time_boxes)
+                                     state_filters, time_boxes, routing, keys)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
+
+
+def _served_key(e: Any) -> ServedKey:
+    """One `keys` entry, checked: a reason only when the exporter does not
+    read the key, and from the closed set."""
+    exporter = e["exporter"]
+    if not isinstance(exporter, bool):
+        raise TypeError(f"exporter is a {type(exporter).__name__}")
+    reason = e.get("reason")
+    if exporter == (reason is not None) or (reason is not None and reason not in SERVED_KEY_REASONS):
+        raise ValueError(f"exporter {exporter} with reason {reason!r}")
+    registered = e.get("registered")
+    if registered is not None and not isinstance(registered, bool):
+        raise TypeError(f"registered is a {type(registered).__name__}")
+    declared = {str(r): tuple(str(l) for l in layers) for r, layers in (e.get("declared") or {}).items()}
+    hint = e.get("hint")
+    return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint))
 
 
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
