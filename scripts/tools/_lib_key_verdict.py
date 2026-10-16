@@ -142,11 +142,15 @@ def policy_targets(rules: Iterable[Any]) -> list[PolicyHead]:
     return out
 
 
-def _named_by_policy(tenant: str, key: str, heads: list[PolicyHead]) -> bool:
-    """A rule that applies to the tenant names the key itself. A wildcard
-    (`mysql_*`) names no key: it would credit every misspelling it happens
-    to match."""
-    return any(tenant not in h.excluded and h.head == key for h in heads)
+def _named_by_policy(tenant: str, key: str, heads: list[PolicyHead],
+                     aliases: dict[str, str] | None) -> bool:
+    """A rule that applies to the tenant names the key itself — in either
+    #1231 spelling, as Policy-as-Code compares them (both through the
+    exporter's alias table). A wildcard (`mysql_*`) names no key: it would
+    credit every misspelling it happens to match."""
+    canon = tv.canonical_key(key, aliases)
+    return any(tenant not in h.excluded and tv.canonical_key(h.head, aliases) == canon
+               for h in heads)
 
 
 def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
@@ -196,14 +200,15 @@ def judge(served: dict[str, tv.TenantValues], effective: dict[str, tv.TenantEffe
                 k in sv.severities or k in sv.dropped for k in (key, canon))
             served_value = (sv.values.get(key, sv.values.get(canon)) if sv is not None else None)
             rows.append(_judge_key(tenant, key, sk.get(key), sources.get(key), cfg.get(key),
-                                   served_value, has_rows, heads, undecidable, disable_effects))
+                                   served_value, has_rows, heads, undecidable, disable_effects,
+                                   aliases))
         keys[tenant] = rows
     return TreeVerdict(keys, _findings(keys, root_defaults), undecidable)
 
 
 def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource | None, value: Any,
                served_value: Any, has_rows: bool, heads: list[PolicyHead], undecidable: bool,
-               disable_effects: bool) -> KeyVerdict:
+               disable_effects: bool, aliases: dict[str, str] | None = None) -> KeyVerdict:
     layer = src.layer if src is not None else None
     file = src.file if src is not None else None
     reg_layer = _LAYERS.get(layer or "")
@@ -233,6 +238,10 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
         # it in (`_state_<f>`, `_severity_dedup` from a subtree
         # `_defaults.yaml`), which the exporter's resolver read.
         read_by.add("exporter")
+    elif sk is None and key.startswith("_state_") and served_value is None:
+        # Inherited `_state_<filter>` with no reading: the filter is not
+        # declared where the exporter reads declarations (decision 7).
+        reason = "state_filter_undeclared"
     if sk is not None and reason == "disabled":
         unknown = disable is None and not disable_effects and not misspelt_reserved
         if disable in ("effective", "partial") or unknown:
@@ -246,7 +255,7 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
     # the reserved keys a tenant may carry. A rule naming a `_` key outside
     # that view finds nothing there.
     in_policy_view = not key.startswith("_") or bool(registered)
-    if in_policy_view and _named_by_policy(tenant, key, heads):
+    if in_policy_view and _named_by_policy(tenant, key, heads, aliases):
         read_by.add("policy_engine")
 
     platform_side = layer in ("platform", "profile", "defaults")
@@ -296,7 +305,10 @@ def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str]) 
                 if platform_owned:
                     # The platform's to fix: the file that declares it (or
                     # should), never the tenant's own.
-                    file = v.file if v.layer not in (None, "tenant") else root_defaults.get(v.tenant)
+                    # (`state_filters:` is declared in the root `_defaults.yaml`
+                    # only).
+                    own_file = v.layer not in (None, "tenant") and v.reason != "state_filter_undeclared"
+                    file = v.file if own_file else root_defaults.get(v.tenant)
                     gk = (kind, file, v.key, None, ())
                 else:
                     own = v.layer == "tenant"

@@ -3269,7 +3269,7 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --sever
 
 #### explain-keys
 
-Explain a tenant's keys ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md) decision 9). For each tenant it lists every key of its config: the layer and file it comes from (`da-guard effective`), which readers read it (the exporter as measured by `da-guard served-values`; the route generator, the custom-alert compiler, Policy-as-Code and annotations as the reserved-key registry declares for that layer; a key a `_policies` rule names as `target` counts as read by Policy-as-Code), the verdict and its severity, what a `disable` does (judged by resolving again without it), the value as written and what `/metrics` serves. The verdict is the shared one every gate uses. The tools report what they can; whether a value is what you meant is yours to check with this output, and to pin in your own CI with `--assert`.
+Explain a tenant's keys ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md) decision 9). For each tenant it lists every key of its config: the layer and file it comes from (`da-guard effective`), which readers read it (the exporter as measured by `da-guard served-values`; the route generator, the custom-alert compiler, Policy-as-Code and annotations as the reserved-key registry declares for that layer; a key a `_policies` rule that applies to the tenant names as `target` (or `when.target`) counts as read by Policy-as-Code: either #1231 spelling matches, a wildcard names no key, and a `_` key must be one the registry lists), the verdict and its severity, what a `disable` does (judged by resolving again without it), the value as written and what `/metrics` serves. The verdict is the shared one every gate uses. The tools report what they can; whether a value is what you meant is yours to check with this output, and to pin in your own CI with `--assert`.
 
 ```bash
 da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]
@@ -3289,7 +3289,7 @@ da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [
 
 **Fields of each key** (`--json`: `tenants.<tenant>[]`): `key`, `layer` / `file` (the source), `read_by`, `verdict` (`read` / `unread` / `undecidable` / `platform_violation`), `severity` (the severity once the gates block on it: `error` / `warning` / `notice`), `reason`, `disable` (`effective` / `partial` / `noop`), `served_family`, `value` (as written), `served` (what `/metrics` serves). `findings` is the deduplicated list of problems: one entry for the same problem in a platform file or profile, with the tenants it reaches.
 
-**The `--assert` file**: every tenant it lists under `tenants` lists all of its keys (one more or one fewer is a difference); each key is compared on the fields the file gives, so `key` and `verdict` alone pin only the verdict. Tenants it does not list are not compared.
+**The `--assert` file**: every tenant it lists under `tenants` lists all of its keys (one more or one fewer is a difference); each key is compared on the fields the file gives, so `key` and `verdict` alone pin only the verdict. Tenants it does not list are not compared. A field the document does not have (top level or in a key entry, e.g. a misspelt `verdcit`) or a key listed twice for one tenant is exit 2 — it would otherwise pass without comparing anything.
 
 **Exit codes**
 

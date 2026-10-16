@@ -242,3 +242,26 @@ def test_a_subtree_defaults_source_is_the_registry_layer_subtree_defaults():
     root = kv.judge(served, eff(0), [], undecidable=False)
     assert sub.keys["ta"][0].read_by == ("generator",)
     assert root.keys["ta"][0].read_by == ()
+
+
+@pytest.mark.parametrize("rule_key, written", [
+    ("mysql_threads_running_critical", "mysql_" + "cpu_critical"),
+    ("mysql_" + "cpu_critical", "mysql_threads_running_critical"),
+])
+def test_a_rule_names_a_key_in_either_alias_spelling(tmp_path, rule_key, written):
+    """Policy-as-Code 以別名表比對規則與 key；共用判決用同一個比法。"""
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+                          f"  - {{name: p, target: {rule_key}, operator: required, severity: error}}\n",
+        "ta.yaml": f"tenants:\n  ta:\n    {written}: abc\n"}))
+    assert "policy_engine" in _by_key(t, "ta")[written].read_by
+
+
+def test_an_inherited_undeclared_state_filter_is_the_root_files_notice(tmp_path):
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults:\n  _state_ghost: enable\n",
+        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+    v = _by_key(t, "ta")["_state_ghost"]
+    assert (v.verdict, v.severity, v.reason) == ("unread", "notice", "state_filter_undeclared")
+    assert [f.file for f in t.findings if f.key == "_state_ghost"] == ["_defaults.yaml"]

@@ -66,6 +66,10 @@ from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
 SCHEMA = "da-tools.explain-keys/v1"
 DEFAULT_TIMEOUT = tv.DEFAULT_TIMEOUT
+#: What this tool writes at the top level; an expected file may carry them
+#: (it is often this tool's own output) but only `tenants` is compared.
+TOP_FIELDS = frozenset({"schema", "status", "at", "undecidable", "tenants", "findings",
+                        "assert_differences"})
 FIELDS = ("layer", "file", "read_by", "verdict", "severity", "reason", "disable",
           "served_family", "value", "served")
 
@@ -114,6 +118,9 @@ def compare(doc: dict[str, Any], expected: Any) -> list[str]:
     """Every difference between `doc` and the expected document, one line each."""
     if not isinstance(expected, dict) or not isinstance(expected.get("tenants"), dict):
         raise ExplainError("--assert: the expected document needs a `tenants` mapping")
+    unknown_top = sorted(set(expected) - TOP_FIELDS)
+    if unknown_top:
+        raise ExplainError(f"--assert: unknown top-level field(s) {unknown_top}; only `tenants` is compared")
     out = []
     for tenant, want in sorted(expected["tenants"].items()):
         got = {e["key"]: e for e in doc["tenants"].get(tenant, [])}

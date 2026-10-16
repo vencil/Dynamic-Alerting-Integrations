@@ -3255,7 +3255,7 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --sever
 
 #### explain-keys
 
-逐鍵說明租戶設定（[ADR-038](adr/038-unread-keys-judged-by-readers.md) 決定 9）。對每個租戶列出設定裡的每個 key：來源層與檔案（`da-guard effective`）、哪些讀取端讀它（exporter 以 `da-guard served-values` 實測；路由產生器、自訂告警編譯器、Policy-as-Code 與標註依保留鍵登錄表在該層的宣告；`_policies` 規則以 `target` 指名的 key 算 Policy-as-Code 讀了）、判決與等級、`disable` 的作用（以拿掉它重算一次判斷）、寫下的值與 `/metrics` 實際送出的值。判決來自共用判決函式，與其他閘門同一份。工具會盡量把問題報出來，值是否符合你的預期，請用這個輸出自己檢查，並用 `--assert` 放進自己的 CI。
+逐鍵說明租戶設定（[ADR-038](adr/038-unread-keys-judged-by-readers.md) 決定 9）。對每個租戶列出設定裡的每個 key：來源層與檔案（`da-guard effective`）、哪些讀取端讀它（exporter 以 `da-guard served-values` 實測；路由產生器、自訂告警編譯器、Policy-as-Code 與標註依保留鍵登錄表在該層的宣告；`_policies` 中適用於該租戶的規則以 `target`（或 `when.target`）指名的 key 算 Policy-as-Code 讀了：舊拼法與現行拼法視為同一個，萬用字元不算指名，`_` 開頭的 key 還要是登錄表列出的）、判決與等級、`disable` 的作用（以拿掉它重算一次判斷）、寫下的值與 `/metrics` 實際送出的值。判決來自共用判決函式，與其他閘門同一份。工具會盡量把問題報出來，值是否符合你的預期，請用這個輸出自己檢查，並用 `--assert` 放進自己的 CI。
 
 ```bash
 da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]
@@ -3275,7 +3275,7 @@ da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [
 
 **每個 key 的欄位**（`--json` 的 `tenants.<租戶>[]`）：`key`、`layer`／`file`（來源）、`read_by`、`verdict`（`read`／`unread`／`undecidable`／`platform_violation`）、`severity`（各閘門改成「判到就擋」之後的等級：`error`／`warning`／`notice`）、`reason`、`disable`（`effective`／`partial`／`noop`）、`served_family`、`value`（寫下的值）、`served`（`/metrics` 送出的值）。`findings` 是去重後的問題清單：平台檔或 profile 的同一個問題只列一筆，附受影響的租戶。
 
-**`--assert` 的預期檔**：列在 `tenants` 裡的每個租戶，要列出它全部的 key（多一個、少一個都算不同）；每個 key 只比對預期檔寫出的欄位，例如只寫 `key` 與 `verdict` 就只釘判決。沒列的租戶不比。
+**`--assert` 的預期檔**：列在 `tenants` 裡的每個租戶，要列出它全部的 key（多一個、少一個都算不同）；每個 key 只比對預期檔寫出的欄位，例如只寫 `key` 與 `verdict` 就只釘判決。沒列的租戶不比。預期檔有不認得的欄位（頂層或 key 的欄位，例如拼錯的 `verdcit`）或同一租戶重複列同一個 key 時，結束碼 2——否則它會什麼都沒比就通過。
 
 **Exit codes**
 

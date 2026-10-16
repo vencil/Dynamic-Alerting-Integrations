@@ -95,10 +95,14 @@ def test_assert_compares_only_the_fields_given_but_every_key(conf_d, tmp_path):
     ([{"key": "mysql_connections", "verdcit": "read"}], "unknown field"),
     ([{"key": "mysql_connections", "verdict": "unread"}, {"key": "mysql_connections", "verdict": "read"}],
      "listed twice"),
+    ("top-level", "unknown top-level"),
 ])
 def test_an_assert_file_that_would_pass_vacuously_is_refused(conf_d, tmp_path, entries, reason):
     golden = tmp_path / "bad.json"
-    golden.write_text(json.dumps({"tenants": {"db-b": entries}}), encoding="utf-8")
+    doc = {"tenants": {"db-b": entries}}
+    if entries == "top-level":
+        doc = {"tenat": {"db-b": [{"key": "mysql_connections", "verdict": "unread"}]}, "tenants": {}}
+    golden.write_text(json.dumps(doc), encoding="utf-8")
     p = _run("--config-dir", conf_d, "--assert", golden, "--json")
     assert p.returncode == 2 and reason in _json(p)["reason"]
 
