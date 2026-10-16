@@ -28,6 +28,11 @@ func TestReceiverPresenceCases(t *testing.T) {
 		Receiver map[string]any `json:"receiver"`
 		YAML     string         `json:"yaml"`
 		Valid    bool           `json:"valid"`
+		// #2984: nested http_config is judged by the schema and
+		// Alertmanager only; such a row names the Go verdict here.
+		GoDiffers *struct {
+			Valid bool `json:"valid"`
+		} `json:"go_differs"`
 	}
 	if err := json.Unmarshal(data, &cases); err != nil || len(cases) == 0 {
 		t.Fatalf("parse cases: %v (n=%d)", err, len(cases))
@@ -53,8 +58,12 @@ func TestReceiverPresenceCases(t *testing.T) {
 					errs = append(errs, f.Message)
 				}
 			}
-			if valid := len(errs) == 0; valid != tc.Valid {
-				t.Errorf("guard valid=%v, table says %v: %s", valid, tc.Valid, strings.Join(errs, "; "))
+			want := tc.Valid
+			if tc.GoDiffers != nil {
+				want = tc.GoDiffers.Valid
+			}
+			if valid := len(errs) == 0; valid != want {
+				t.Errorf("guard valid=%v, table says %v: %s", valid, want, strings.Join(errs, "; "))
 			}
 		})
 	}

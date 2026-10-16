@@ -2018,6 +2018,16 @@ KNOWN_SKIP_TOLERANCE_GAPS = {
         "and getting that wrong reds every docs-only PR, so #1397 does not "
         "attempt it.",
     ),
+    ("ci.yml", "go-tests", "go-tests-am-inhibit"): (
+        frozenset({"schema_changed"}),
+        "the leg runs on `go_changed || schema_changed` (#2984: it pins the "
+        "tenant schema's http_config key sets to Alertmanager's structs), "
+        "while the gate forgives a skip whenever `go_changed != 'true'`. Same "
+        "latent shape and same reachability argument as threshold-exporter's "
+        "`docs_changed` above: the leg's only `needs:` is detect-changes, "
+        "whose failure the gate's first branch already catches, so it cannot "
+        "skip while its own `if:` was true.",
+    ),
 }
 
 

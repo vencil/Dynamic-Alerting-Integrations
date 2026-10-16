@@ -877,6 +877,56 @@ class TestCredentialsAreNotPrinted:
         """schema 裡長得像憑證的欄位，每一個都得歸類：要嘛遮、要嘛明列不是。"""
         schema = json.loads((REPO_ROOT / "docs" / "schemas"
                              / "tenant-config.schema.json").read_text(encoding="utf-8"))
+        # http_config 整個值當憑證遮（容器整個遮，見 _lib_redact），所以只有
+        # http_config 會用到的定義（httpConfig 與它引用的 httpOAuth2、
+        # httpTLSConfig…，#2984）裡的欄位已經歸類，不再逐一要求。
+        assert "http_config" in cd._CREDENTIAL_KEYS
+        defs = schema["definitions"]
+
+        prefix = "#/definitions/"
+
+        def ref_sites(node, prop=None):
+            """(definition, enclosing property name or None) for every `$ref`
+            in node, read from the JSON structure: a `$ref` nested in
+            anyOf / oneOf / allOf / items / not … belongs to the property
+            whose value contains it."""
+            if isinstance(node, dict):
+                ref = node.get("$ref")
+                if isinstance(ref, str) and ref.startswith(prefix):
+                    yield ref[len(prefix):], prop
+                for k, v in node.items():
+                    if k in ("properties", "patternProperties", "definitions") and isinstance(v, dict):
+                        for name, sub in v.items():
+                            yield from ref_sites(sub, None if k == "definitions" else name)
+                    else:
+                        yield from ref_sites(v, prop)
+            elif isinstance(node, list):
+                for x in node:
+                    yield from ref_sites(x, prop)
+
+        def closure(start):
+            seen, stack = set(), list(start)
+            while stack:
+                name = stack.pop()
+                if name not in seen:
+                    seen.add(name)
+                    stack.extend(d for d, _ in ref_sites(defs[name]))
+            return seen
+
+        roots = {"httpConfigOrNull", "httpConfig"}
+        inside = closure(roots)
+        outside = {k: v for k, v in schema.items() if k != "definitions"}
+        outside["definitions"] = {k: v for k, v in defs.items() if k not in inside}
+        sites = list(ref_sites(outside))
+        # The roots are entered only as the value of an `http_config` key —
+        # however that value wraps the $ref (anyOf, oneOf, allOf …).
+        entries = [(d, p) for d, p in sites if d in roots]
+        assert entries and {p for _, p in entries} == {"http_config"}, entries
+        # A definition under http_config that is also used elsewhere is walked,
+        # and so is everything it references.
+        inside -= closure({d for d, _ in sites if d in inside - roots})
+        schema = {k: v for k, v in schema.items() if k != "definitions"}
+        schema["definitions"] = {k: v for k, v in defs.items() if k not in inside}
         names = set()
 
         def walk(node):
@@ -965,19 +1015,22 @@ class TestPlatformSettings:
         md = _run_cli(old, new)
         assert "**Changed, no effect on the renders that read it** (1)" in md.stdout
 
-    def test_enforced_match_the_generator_drops_is_not_no_effect(self, tmp_path):
-        """#2962 review: the generator keeps `_routing_enforced.match` only as a list; a
-        mapping is dropped without a word. So `_routing_enforced` is partial, and an edit
-        to that mapping is "no difference" at rc 1 — never "no effect" at rc 0."""
-        enf = ("_routing_enforced:\n  enabled: true\n  match: {{severity: {sev}}}\n  receiver:\n"
+    def test_enforced_match_written_as_a_mapping_shows_in_the_render(self, tmp_path):
+        """#2989 (was #2962 review): `_routing_enforced.match` is read only as a list. A
+        mapping used to be dropped without a word, which is why the carrier was partial;
+        now the block is refused and renders no NOC route, so rewriting the list as the
+        `routes[i].match` mapping is a rendered change (the route goes away), and the
+        carrier is fully covered."""
+        assert cd.RENDERED_CARRIERS["_routing_enforced"][1] == "full"
+        enf = ("_routing_enforced:\n  enabled: true\n  match: {match}\n  receiver:\n"
                "    type: webhook\n    url: https://noc.example.com/h\n")
         old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
-                                    "_noc.yaml": enf.format(sev="critical")},
+                                    "_noc.yaml": enf.format(match="['severity=\"critical\"']")},
                          {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS,
-                          "_noc.yaml": enf.format(sev="warning")})
+                          "_noc.yaml": enf.format(match="{severity: critical}")})
         p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 1, p.stdout + p.stderr
-        assert [s[2] for s in _settings(_json(p))] == [cd.SETTING_NO_RENDER_CHANGE]
+        assert [s[2] for s in _settings(_json(p))] == [cd.SETTING_RENDERED]
 
     def test_no_effect_only_says_so_in_the_last_line(self, tmp_path):
         """#2962 review: not "No changes detected." under a list of changed settings."""

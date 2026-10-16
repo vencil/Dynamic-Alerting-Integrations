@@ -21,6 +21,7 @@ godebug urlstrictcolons=0
 
 require (
 	github.com/prometheus/alertmanager v0.33.1
+	github.com/prometheus/common v0.67.5
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -75,7 +76,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/exporter-toolkit v0.16.0 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/prometheus/sigv4 v0.4.1 // indirect

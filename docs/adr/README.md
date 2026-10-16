@@ -68,6 +68,7 @@ lang: zh
 | ADR-035 | [tenant id 合法字元集的單一來源](./035-tenant-id-single-source.md) | ✅ Accepted | — |
 | ADR-036 | [conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判](./036-single-parser-effective-config.md) | ✅ Accepted | — |
 | ADR-037 | [config-diff 改為比較渲染結果](./037-config-diff-compares-rendered-output.md) | ✅ Accepted | — |
+| ADR-038 | [沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告](./038-unread-keys-judged-by-readers.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
 

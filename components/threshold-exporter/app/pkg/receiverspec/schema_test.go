@@ -135,45 +135,90 @@ func TestFields_MatchSchema(t *testing.T) {
 	}
 }
 
-// TestHTTPConfig_MatchSchema pins the http_config half (#2295) to
-// definitions.httpConfig: every auth key the schema's `not` forbids together
-// is in HTTPConfigAuthFields, and proxy_url carries no pattern (Go's
-// net/url.Parse is not expressible as one; ProxyURLProblem holds the rule).
-// The auth keys the schema does not list as properties must be refused by
-// its additionalProperties: false — otherwise the schema would accept a
-// combination Go and Python refuse.
-func TestHTTPConfig_MatchSchema(t *testing.T) {
-	defs := schemaDefinitions(t)
-	var hc struct {
-		Properties           map[string]map[string]json.RawMessage `json:"properties"`
-		AdditionalProperties *bool                                 `json:"additionalProperties"`
-		Not                  struct {
-			Required   []string                              `json:"required"`
-			Properties map[string]map[string]json.RawMessage `json:"properties"`
+// httpConfigSchema is definitions.httpConfig as the http_config tests read it.
+type httpConfigSchema struct {
+	Properties           map[string]map[string]json.RawMessage `json:"properties"`
+	AdditionalProperties *bool                                 `json:"additionalProperties"`
+	AllOf                []struct {
+		Not *struct {
+			Required   []string                   `json:"required"`
+			Properties map[string]json.RawMessage `json:"properties"`
 		} `json:"not"`
-	}
+	} `json:"allOf"`
+}
+
+func readHTTPConfigSchema(t *testing.T) (map[string]json.RawMessage, httpConfigSchema) {
+	t.Helper()
+	defs := schemaDefinitions(t)
+	var hc httpConfigSchema
 	if err := json.Unmarshal(defs["httpConfig"], &hc); err != nil {
 		t.Fatalf("definitions.httpConfig: %v", err)
 	}
+	return defs, hc
+}
+
+// TestHTTPConfig_MatchSchema pins the http_config half (#2295) to
+// definitions.httpConfig: its `allOf` forbids every pair of
+// HTTPConfigAuthFields — and only those pairs — with each key in its "set"
+// shape (a mapping for httpConfigMapFields, a non-empty string for the
+// others), and proxy_url carries no pattern (Go's net/url.Parse is not
+// expressible as one; ProxyURLProblem holds the rule). A pair the schema
+// leaves out would let it accept a combination Go and Python refuse.
+func TestHTTPConfig_MatchSchema(t *testing.T) {
+	defs, hc := readHTTPConfigSchema(t)
 	if got := schemaPattern(t, defs, "httpConfig.proxy_url", hc.Properties["proxy_url"]); got != "" {
 		t.Errorf("httpConfig.proxy_url carries pattern %q; the rule is ProxyURLProblem's, a pattern would diverge from it", got)
 	}
-	if len(hc.Not.Required) < 2 {
-		t.Fatalf("httpConfig.not.required should name the auth keys that cannot be set together, got %v", hc.Not.Required)
+	if hc.AdditionalProperties == nil || *hc.AdditionalProperties {
+		t.Errorf("httpConfig.additionalProperties is not false; Alertmanager refuses an unknown http_config key")
 	}
-	for _, k := range hc.Not.Required {
-		if !slices.Contains(HTTPConfigAuthFields, k) {
-			t.Errorf("schema forbids %q together with the other auth keys; HTTPConfigAuthFields lacks it", k)
+	setShape := func(key string) map[string]any {
+		if slices.Contains(httpConfigMapFields, key) {
+			return map[string]any{"type": "object"}
+		}
+		return map[string]any{"type": "string", "minLength": float64(1)}
+	}
+	want := map[[2]string]bool{}
+	for i, a := range HTTPConfigAuthFields {
+		if _, listed := hc.Properties[a]; !listed {
+			t.Errorf("auth key %q is not a httpConfig property", a)
+		}
+		for _, b := range HTTPConfigAuthFields[i+1:] {
+			want[[2]string{a, b}] = true
 		}
 	}
-	for _, k := range HTTPConfigAuthFields {
-		_, listed := hc.Properties[k]
-		if !listed && (hc.AdditionalProperties == nil || *hc.AdditionalProperties) {
-			t.Errorf("auth key %q is not a httpConfig property and additionalProperties is not false", k)
+	got := map[[2]string]bool{}
+	for i, entry := range hc.AllOf {
+		if entry.Not == nil {
+			continue
 		}
-		if listed && !slices.Contains(hc.Not.Required, k) {
-			t.Errorf("auth key %q is a httpConfig property the schema's `not` does not cover", k)
+		var auth []string
+		for _, k := range entry.Not.Required {
+			if slices.Contains(HTTPConfigAuthFields, k) {
+				auth = append(auth, k)
+			}
 		}
+		if len(auth) == 0 {
+			continue
+		}
+		if len(auth) != 2 || len(entry.Not.Required) != 2 {
+			t.Errorf("httpConfig.allOf[%d].not.required = %v: an auth entry must name exactly two auth keys", i, entry.Not.Required)
+			continue
+		}
+		for _, k := range auth {
+			var shape map[string]any
+			if err := json.Unmarshal(entry.Not.Properties[k], &shape); err != nil || !reflect.DeepEqual(shape, setShape(k)) {
+				t.Errorf("httpConfig.allOf[%d].not.properties.%s = %s, want %v", i, k, entry.Not.Properties[k], setShape(k))
+			}
+		}
+		a, b := auth[0], auth[1]
+		if slices.Index(HTTPConfigAuthFields, a) > slices.Index(HTTPConfigAuthFields, b) {
+			a, b = b, a
+		}
+		got[[2]string{a, b}] = true
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("httpConfig.allOf forbids the auth pairs %v; HTTPConfigAuthFields needs every pair %v", got, want)
 	}
 }
 
@@ -216,8 +261,8 @@ func TestPresenceCases(t *testing.T) {
 		}
 		t.Run(tc.Name, func(t *testing.T) {
 			problems := Check(tc.Receiver)
-			if valid := len(problems) == 0; valid != tc.Valid {
-				t.Errorf("Check valid=%v, table says %v: %+v", valid, tc.Valid, problems)
+			if valid := len(problems) == 0; valid != tc.goValid() {
+				t.Errorf("Check valid=%v, table says %v: %+v", valid, tc.goValid(), problems)
 			}
 		})
 	}
@@ -249,6 +294,32 @@ type presenceCase struct {
 	Valid    bool           `json:"valid"`
 	AM       string         `json:"am"`
 	Strict   string         `json:"strict"`
+	// GoDiffers (#2984) marks a row the Go checks judge otherwise, with
+	// why: nested http_config, which only the schema and Alertmanager judge.
+	GoDiffers *goDiffers `json:"go_differs"`
+}
+
+type goDiffers struct {
+	Valid  bool   `json:"valid"`
+	Reason string `json:"reason"`
+}
+
+// goValid is the verdict the Go checks must reach on the row.
+func (c presenceCase) goValid() bool {
+	if c.GoDiffers != nil {
+		return c.GoDiffers.Valid
+	}
+	return c.Valid
+}
+
+// TestPresenceCases_GoDiffersSayWhy: a go_differs entry names its reason and
+// actually differs from the row's verdict.
+func TestPresenceCases_GoDiffersSayWhy(t *testing.T) {
+	for _, tc := range loadCases(t) {
+		if d := tc.GoDiffers; d != nil && (d.Reason == "" || d.Valid == tc.Valid) {
+			t.Errorf("%s: go_differs must name a reason and differ from valid=%v: %+v", tc.Name, tc.Valid, *d)
+		}
+	}
 }
 
 // loadCases reads the shared table. A row carries its receiver either as JSON

@@ -132,6 +132,14 @@ var (
 	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
 	FindingRoutingDefaultsNotMapping = register("routing_defaults_not_mapping", PlaneRouting,
 		"judges the shape of `_routing_defaults`")
+	// FindingRoutingEnforcedMatchInvalid (error, TenantID ""; #2989): an
+	// enabled root `_routing_enforced` whose `match` is written but is not a
+	// list of non-empty matcher strings (`{severity: critical}`, the
+	// `routes[i].match` spelling; `[1]`, `[~]`). The generator renders no enforced route from that block and
+	// blocks `--validate` on it; before, it dropped the `match` and the NOC
+	// route received every alert. Field `<file>:_routing_enforced.match`.
+	FindingRoutingEnforcedMatchInvalid = register("routing_enforced_match_invalid", PlaneRouting,
+		"judges the shape of `_routing_enforced.match`")
 	// FindingInvalidTenantID (error; #2341, ADR-035): a declared tenant id
 	// the tenant-id rule refuses (tenantid.Valid, a DNS-1123
 	// label); the route generator refuses the whole tree. TenantID is the id

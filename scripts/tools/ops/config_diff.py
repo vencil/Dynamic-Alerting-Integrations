@@ -109,9 +109,10 @@ RENDERED_CARRIERS = {
     "tenants": ((rd.VIEW_SERVED, rd.VIEW_ROUTES), "full"),
     "profiles": ((rd.VIEW_SERVED,), "full"),
     "_routing_defaults": ((rd.VIEW_ROUTES,), "partial"),   # its `routes` is dropped
-    # partial: a `match` that is not a list, and any sub-key the generator
-    # does not render, are dropped without a word (#2989).
-    "_routing_enforced": ((rd.VIEW_ROUTES,), "partial"),
+    # full since #2989: a `match` that is not a list no longer drops silently
+    # (the block is not rendered and `--validate` fails), and a sub-key the
+    # generator does not read is named the same way (#2960).
+    "_routing_enforced": ((rd.VIEW_ROUTES,), "full"),
     "routing_profiles": ((rd.VIEW_ROUTES,), "full"),
 }
 

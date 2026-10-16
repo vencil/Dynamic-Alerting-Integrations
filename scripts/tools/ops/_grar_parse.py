@@ -82,7 +82,12 @@ from _grar_validate import (  # noqa: E402
     value_not_string_message,
 )
 # #2503: the strict twin of the enforced routes' group_by render.
-from _grar_routes import enforced_group_by_problems, enforced_route_tenants  # noqa: E402
+from _grar_routes import (  # noqa: E402
+    enforced_group_by_problems,
+    enforced_match_invalid,
+    enforced_match_invalid_text,
+    enforced_route_tenants,
+)
 
 # ADR-007 --strict fail-open closure: filenames whose content carries the
 # domain policies. If such a file is unparseable, or a domain_policies
@@ -369,7 +374,17 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             _record_ignored_keys(result, raw, block="routing_enforced",
                                  where="_routing_enforced",
                                  field_prefix="_routing_enforced.", file=fname)
-            if isinstance(raw, dict) and enabled is True:
+            if isinstance(raw, dict) and enabled is True and enforced_match_invalid(raw):
+                # #2989: a `match` that is not a list (`{severity: critical}`)
+                # used to be dropped, so the NOC route took every alert. Not
+                # enabled, as for a non-boolean `enabled`: an earlier root
+                # file's block stays, and --validate fails on the line.
+                result.setdefault("enforced_errors", []).append(
+                    skipped_entry_warning(
+                        "  WARN: " + enforced_match_invalid_text(f" in {fname}", raw["match"]),
+                        kind="routing_enforced_match_invalid",
+                        file=fname, field="_routing_enforced.match"))
+            elif isinstance(raw, dict) and enabled is True:
                 result["enforced_routing"] = raw
             elif isinstance(raw, dict) and enabled is False:
                 pass  # explicitly disabled → None

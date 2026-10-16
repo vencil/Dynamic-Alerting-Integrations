@@ -183,8 +183,9 @@ _routing_enforced:
     channel: "#noc-alerts"
   # ⚠️ match MUST be a list of matcher strings. Omitting it yields a route with
   #    NO matchers, and with the hardcoded continue: true that double-sends every
-  #    alert from every tenant to this receiver (a match-all firehose). Writing
-  #    it as a map is silently discarded, with the same result.
+  #    alert from every tenant to this receiver (a match-all firehose). Written
+  #    as a map (or a single string), the generator renders no such route and
+  #    `--validate` exits 1 (#2989).
   match:
     - 'severity="critical"'
   group_wait: "10s"
