@@ -14,8 +14,8 @@ package guard
 //     found" (e.g. `a.b.c` against `{"a": {"b": "scalar"}}` → not
 //     found at `.c` because `b` isn't a map).
 //
-// PR-1 doesn't need fancier addressing (array indexing, wildcards).
-// If PR-2 routing checks need it, add a separate Path type then —
+// No caller needs fancier addressing (array indexing, wildcards).
+// If one ever does, add a separate Path type then —
 // keeping path.go single-purpose makes test coverage tractable.
 
 import "strings"
@@ -75,10 +75,10 @@ func flattenInto(node map[string]any, prefix string, out map[string]any) {
 			path = prefix + "." + k
 		}
 		if nested, ok := v.(map[string]any); ok {
-			// Empty submaps are skipped: PR-1's redundant-override
+			// Empty submaps are skipped: the redundant-override
 			// check rejects all map values via the structured-value
 			// gate, so emitting an empty-map leaf would never produce
-			// a finding anyway. If PR-2's routing checks need to
+			// a finding anyway. If a check ever needs to
 			// distinguish "explicitly set to {}" from "absent", add
 			// a separate emit_empty option then.
 			flattenInto(nested, path, out)

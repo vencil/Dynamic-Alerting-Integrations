@@ -7,8 +7,8 @@
 // tenant-id-json-check pre-commit hook and CI — is embedded here. Edit the
 // schema, then run `make tenant-id-json`; never edit tenant_id.json by hand.
 //
-// It depends on the standard library only, so da-guard, the routing checks
-// and tenant-api can all import it.
+// It depends on the standard library only, so the exporter, da-guard and
+// tenant-api can all import it.
 package tenantid
 
 import (

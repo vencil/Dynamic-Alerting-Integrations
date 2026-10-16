@@ -896,8 +896,11 @@ func subtreeDefaultsRefusedKey(k string) bool {
 // `parsed` holds too, because the merge then reads the whole document.
 // Listing them here would repeat an error as a warning, or report a valid
 // file. A key under the `_routing` reserved prefix that is NOT a routing
-// key (`_routingProfile`, `_routings`) is listed: no routing check names it
-// (the first version excluded the whole prefix and so reported it nowhere —
+// key (`_routingProfile`, `_routings`) is listed. Inside `defaults:` no
+// generator check names it (`--validate --strict` passes such a file); at
+// the top level of a file with no `defaults:` wrapper the generator names it
+// too, as routing_key_ignored (blocking under --validate), so there it is
+// reported by both (the first version excluded the whole prefix and so reported it nowhere —
 // #2388 r2). guard.TopLevelReadElsewhere is NOT used for this: it names only
 // the top-level `_routing_defaults` / `_routing_enforced`, and would leave a
 // `_routing` inside `defaults:` reported twice (warning here, error there).
