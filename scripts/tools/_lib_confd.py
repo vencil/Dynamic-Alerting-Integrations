@@ -460,7 +460,7 @@ def defaults_files_in(root: str | os.PathLike[str],
 
 def resolve_defaults_file(
     base: str | os.PathLike[str], *, tool: str | None = None,
-    skipped_note: str | None = None,
+    skipped_note: str | None = None, observed: bool = True,
 ) -> Path:
     """The platform-defaults carrier directly in `base`, in ANY casing.
 
@@ -490,6 +490,13 @@ def resolve_defaults_file(
     otherwise be told its subdirectory tenants were SKIPPED while it
     evaluates them. Nothing is printed when there is no nested carrier.
 
+    `observed=False` neither records nor prints: for a caller whose verdict
+    does not rest on the nested carriers this lookup skips — it reads the
+    tree through da-guard and takes only the root's `_policies`, exactly as
+    Policy-as-Code does, whose own row reports that gap (`_lib_key_verdict`,
+    ADR-038). A caller that judges files with what it finds here keeps the
+    default.
+
     A directory carrying two spellings resolves to the one the exporter
     reads (`select_defaults_carrier`, #1674) — before that it was the first
     in sort order, which picked `_DEFAULTS.YML` over the `_defaults.yaml`
@@ -510,10 +517,12 @@ def resolve_defaults_file(
     # skipped, not who is calling.
     # The walk is only paid when an observer is installed, as in
     # `warn_nested`; `_print_nested_once` does its own.
-    if _FLAT_READ_SINKS.get():
+    if observed and _FLAT_READ_SINKS.get():
         _record_flat_read(root, [p for p in nested_yaml_files(root)
                                  if is_defaults_name(p.name)])
-    if skipped_note is None:
+    if not observed:
+        pass  # the caller reports what this lookup skips (see `observed`)
+    elif skipped_note is None:
         _print_nested_once(root, tool=tool)
     else:
         _print_skipped_carriers(root, tool=tool, note=skipped_note)

@@ -160,8 +160,12 @@ def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
     if ops not in sys.path:
         sys.path.insert(0, ops)
     import policy_engine as pe  # the engine's own loader
-    # Policy-as-Code's own lookup and its own note on a nested `_policies`.
-    path = _lib_confd.resolve_defaults_file(Path(conf_d), skipped_note=pe.POLICIES_SKIPPED_NOTE)
+    # Policy-as-Code's own lookup: the root carrier only, as it reads
+    # `_policies`. Not observed as a flat read — every key judged here comes
+    # from da-guard's reading of the whole tree, and the root-only
+    # `_policies` gap is Policy-as-Code's to report (validate-config's
+    # `policy_dsl` row, policy-engine itself).
+    path = _lib_confd.resolve_defaults_file(Path(conf_d), observed=False)
     return pe.load_policies(str(path)) if path.is_file() else []
 
 

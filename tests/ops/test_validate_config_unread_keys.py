@@ -86,3 +86,19 @@ def test_the_row_does_not_change_the_exit_code(tmp_path):
     rows = {r["check"]: r for r in json.loads(p.stdout)}
     assert rows["unread_keys"]["status"] == vc.WARN
     assert p.returncode == 0, p.stderr
+
+
+def test_a_clean_nested_tree_passes_without_a_flat_read_caveat(tmp_path):
+    """The verdict reads the whole tree through da-guard: a subdirectory is
+    not something this row skipped, so it is no WARN and no
+    `skipped_nested_files`."""
+    d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                         "sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n",
+                         "sub/ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"})
+    p = subprocess.run([sys.executable, vc.__file__, "--config-dir", d, "--json"],
+                       capture_output=True, encoding="utf-8", timeout=600)
+    row = {r["check"]: r for r in json.loads(p.stdout)}["unread_keys"]
+    assert row["status"] == vc.PASS, row
+    assert not row.get("skipped_nested_files"), row
+    # The root-only `_policies` note is policy_dsl's to print, once.
+    assert p.stderr.count("`_policies` are read from the root") <= 1, p.stderr
