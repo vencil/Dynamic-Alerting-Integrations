@@ -664,7 +664,7 @@ class TestValidateTenantKeys:
 
     def test_custom_alerts_reserved_no_warning(self):
         """_custom_alerts（v2.9.0 ADR-024 能力 B, #741）為合法 reserved key，
-        不可被當成 typo（Python VALID_RESERVED_KEYS ↔ Go validReservedKeys 同步）。"""
+        不可被當成 typo（Python VALID_RESERVED_KEYS 與 Go validReservedKeys 皆由登錄表產生，ADR-038）。"""
         warnings = validate_tenant_keys("db-b", {"_custom_alerts"}, set())
         assert warnings == []
 

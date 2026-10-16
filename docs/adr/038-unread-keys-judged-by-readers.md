@@ -20,6 +20,8 @@ updated_at: 2026-10-16
 
 ✅ **Accepted**（2026-10-16 起草並由 owner 核可）。
 
+2026-10-16 修訂（實作登錄表時依實測修正）：讀取端多一類 `policy_engine`；層多一層子目錄 `_defaults.yaml`；探針改為雙向，涵蓋所有比對得到輸出的讀取端（決定 2、3）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -111,8 +113,8 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 量不到的事實寫在一份 JSON 登錄表，放在 exporter 的 Go module 內（`components/threshold-exporter/app/pkg/config/`），內容限於頂層 `_` 命名空間：
 
-- 每個保留鍵與前綴（`_silent_mode`、`_routing`、`_state_` …）屬於哪個**讀取端類別**：`exporter`、`generator`、`custom_alert_compiler`、`annotation`（只給人或工具看的標註，例如 `_namespaces`）。一個鍵可以屬於多個讀取端。
-- 每個鍵**可以出現在哪些層**：租戶檔、根平台檔的 `tenants:`、profile、defaults 頂層。
+- 每個保留鍵與前綴（`_silent_mode`、`_routing`、`_state_` …）屬於哪個**讀取端類別**：`exporter`、`generator`、`custom_alert_compiler`、`policy_engine`（Policy-as-Code，讀根 `_defaults.yaml` 的 `_policies`）、`annotation`（只給人或工具看的標註，例如 `_namespaces`）。一個鍵可以屬於多個讀取端。
+- 每個讀取端**在哪些層讀這個鍵**：租戶檔、根平台檔的 `tenants:`、profile、子目錄 `_defaults.yaml` 的 `defaults:`、根平台檔的頂層。同一個鍵，各讀取端讀的層可以不同：實測 `_custom_alerts` 寫在 profile 裡，exporter 讀、編譯器不讀。
 - **已退役的鍵**與給使用者的提示文字。
 - 說明文字（給 schema 的 description 與 explain 輸出）。
 
@@ -141,11 +143,12 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 ### 3. 防止登錄表與程式漂移
 
-用黑箱探針：依登錄表逐鍵、逐層產生一份最小設定，分別跑產生器與 served-values，看輸出有沒有因為這個鍵而改變。
+用黑箱探針：依登錄表逐鍵、逐層產生一份最小設定，分別跑 served-values、產生器、自訂告警編譯器與 Policy-as-Code，看輸出有沒有因為這個鍵而改變。
 
-- 登錄表說「某讀取端讀這個鍵」→ 該讀取端的輸出必須改變。這能抓到「登錄了，但程式已經不讀」。
-- 登錄表說「exporter 不讀」→ 該鍵不能出現在 exporter 送出的值裡。
+- 登錄表說「某讀取端在這一層讀這個鍵」→ 該讀取端的輸出必須改變。這能抓到「登錄了，但程式已經不讀」。
+- 登錄表沒說某讀取端在這一層讀 → 該讀取端的輸出不能改變。這能抓到「程式讀了，登錄表沒寫」；少寫一層，聯集判決就會把有人讀的鍵判成沒人讀。
 - 探針看不出「標註」與「沒人讀」的差別，也看不出「讀了但輸出不變」（例如產生器讀了 `_metadata` 卻沒用到）。這兩類在登錄表明確標註，不靠探針驗證。
+- Policy-as-Code 除了按名稱讀 `_policies`，還會讀部署端規則以 `target` 指名的任何鍵。這類讀取由規則決定，登錄表列不出來；探針的樹裡沒有指向該鍵的規則，所以對 Policy-as-Code 只驗它不會自己去讀鍵。共用判決因此要把規則指名的鍵算成有人讀。
 
 探針只看輸出，不看程式內部怎麼讀，所以讀取端改寫載入方式時不需要重做。
 
@@ -293,7 +296,8 @@ db-a
 
 ## 實作位置
 
-- 登錄表：`components/threshold-exporter/app/pkg/config/`（檔名於實作時定）；產生與比對沿用 `scripts/tools/dx/sync_schema.py` 的做法。
+- 登錄表：`components/threshold-exporter/app/pkg/config/reserved_keys.json`；`scripts/tools/dx/sync_schema.py --update` 產生、`--check` 比對（CI 由 `tests/dx/test_sync_schema.py` 執行）。
+- 探針：`tests/shared/test_reserved_key_probes.py`。
 - 共用函式：`scripts/tools/` 下的新模組，由 validate-config、產生器與產生器容器呼叫。
 - exporter 實測：`da-guard served-values`（`components/threshold-exporter/app/cmd/da-guard/served_values.go`）。
 - 規則讀取索引：`scripts/tools/ops/_threshold_alerts.py`、`rule-packs/threshold-registry.yaml`。

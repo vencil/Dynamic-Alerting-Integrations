@@ -1,0 +1,84 @@
+{
+  "$comment": "The one list of top-level `_` keys in conf.d (ADR-038 decision 2). scripts/tools/dx/sync_schema.py --update GENERATES from it: the Python constants in scripts/tools/_lib_constants.py, pkg/config/reserved_keys_gen.go, and the `_` keys of docs/schemas/tenant-config.schema.json and platform-defaults.schema.json; --check fails CI when any of them is stale. Nothing reads this file at run time. `read_by` is what each reader reads, by layer, as measured: tests/shared/test_reserved_key_probes.py writes each key into each layer and fails when a reader declared here does not change its output, or when the exporter serves a key it is not declared to read. Sub-keys (`_routing.*`, `_metadata.*`, `_custom_alerts[].*`) are not listed: the code that reads them is their list.",
+  "layers": {
+    "tenant": "a tenant's entry in its own tenant file",
+    "platform_tenants": "a tenant's entry under `tenants:` in a root `_` file (the platform's per-tenant default; the tenant file wins)",
+    "profile": "a profile in `_profiles.yaml` that a tenant names with `_profile`",
+    "subtree_defaults": "`defaults:` of a subdirectory's `_defaults.yaml`",
+    "platform_top": "the top level of a root conf.d `_` file"
+  },
+  "readers": {
+    "exporter": "threshold-exporter: what /metrics serves (da-guard served-values)",
+    "generator": "the Alertmanager route generator (generate_alertmanager_routes.py)",
+    "custom_alert_compiler": "the custom-alert rule-pack compiler (compile_custom_alerts.py)",
+    "policy_engine": "Policy-as-Code (evaluate-policy; validate-config's policy_dsl row). Listed here for `_policies`, which it reads by name; it also reads any key a deployment's rule names as `target`, which no registry can list: a verdict must count a key a rule names as read",
+    "annotation": "nothing on the alert path: a note for people and tools; not measured"
+  },
+  "keys": {
+    "_silent_mode": {
+      "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
+      "description": "Suppress notifications for some severities while alerts still fire."
+    },
+    "_severity_dedup": {
+      "read_by": {
+        "exporter": ["tenant", "platform_tenants", "subtree_defaults"],
+        "generator": ["tenant", "platform_tenants"]
+      },
+      "description": "Whether a firing critical suppresses its warning twin."
+    },
+    "_namespaces": {
+      "read_by": {"annotation": ["tenant", "platform_tenants"]},
+      "description": "Kubernetes namespaces of the tenant, written by scaffold-tenant for N:1 tenant mapping tooling."
+    },
+    "_metadata": {
+      "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
+      "description": "Tenant metadata (owner, tier, runbook_url, ...) served as tenant_metadata_info.",
+      "note": "The route generator also reads it and discards it (#3043); a read that changes no output is not measured."
+    },
+    "_profile": {
+      "read_by": {"exporter": ["tenant", "platform_tenants"]},
+      "description": "The threshold profile in `_profiles.yaml` the tenant inherits from."
+    },
+    "_routing": {
+      "read_by": {"generator": ["tenant", "platform_tenants"]},
+      "description": "The tenant's Alertmanager route and receiver."
+    },
+    "_routing_profile": {
+      "read_by": {"generator": ["tenant", "platform_tenants"]},
+      "description": "A routing profile in `_routing_profiles.yaml` the tenant's route starts from."
+    },
+    "_custom_alerts": {
+      "read_by": {
+        "exporter": ["tenant", "platform_tenants", "profile"],
+        "custom_alert_compiler": ["tenant", "platform_tenants", "platform_top"]
+      },
+      "description": "Tenant-authored alert recipes compiled into rule-pack-custom-alerts.yaml.",
+      "note": "The two readers take it from different layers (#3042)."
+    },
+    "_routing_defaults": {
+      "read_by": {"generator": ["platform_top"]},
+      "description": "The route every tenant without its own `_routing` gets."
+    },
+    "_routing_enforced": {
+      "read_by": {"generator": ["platform_top"]},
+      "description": "The platform-enforced (NOC) route rendered for every tenant."
+    },
+    "_policies": {
+      "read_by": {"policy_engine": ["platform_top"]},
+      "description": "Policy-as-Code rules; read from the root `_defaults.yaml` only."
+    }
+  },
+  "prefixes": {
+    "_state_": {
+      "read_by": {"exporter": ["tenant", "platform_tenants", "profile", "subtree_defaults"]},
+      "description": "`_state_<filter>`: turns a state filter declared under the root `state_filters:` on or off."
+    },
+    "_routing": {
+      "read_by": {},
+      "description": "Reserved for the route generator: it reads only the `_routing` keys listed above; any other `_routing...` key is reported as an unknown routing key."
+    }
+  },
+  "retired": {
+    "_routing_receiver_type": "no longer read: set the receiver type as `_routing.receiver.type`"
+  }
+}

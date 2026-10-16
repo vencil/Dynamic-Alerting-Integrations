@@ -312,9 +312,9 @@ class TestFileWritePermissions:
             "應保留原始權限而非強制 0o600（會改變既有檔案的 permission bits）"
         ),
         "scripts/tools/dx/sync_schema.py": (
-            "--update 以 open(path, 'w') 寫回 repo 內已追蹤的 "
-            "docs/schemas/tenant-config.schema.json，只替換一段 subschema；"
-            "應保留原始權限而非強制 0o600（#3016 R3）"
+            "--update 寫回 repo 內已追蹤、由保留鍵登錄表產生的檔"
+            "（_lib_constants.py、reserved_keys_gen.go、兩份 schema）；"
+            "應保留原始權限而非強制 0o600（#3016 R3、ADR-038）"
         ),
         "scripts/tools/ops/generate_rule_pack_split.py": (
             "寫出 validation-report.json 至使用者指定的 output 目錄，"

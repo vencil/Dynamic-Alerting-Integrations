@@ -1925,8 +1925,8 @@ def _keys_acting_when_merged(raw: dict) -> tuple[list[str], bool]:
     ``actsWhenMerged``, pinned to it by tests/shared/defaults_wrapper_matrix.json.
 
     A threshold (no ``_`` prefix) or a reserved tenant key
-    (``VALID_RESERVED_KEYS`` / ``VALID_RESERVED_PREFIXES``, pinned to Go by
-    tests/shared/test_reserved_key_py_go_parity.py). Excluded: ``defaults``;
+    (``VALID_RESERVED_KEYS`` / ``VALID_RESERVED_PREFIXES``, generated with
+    Go's from the reserved-key registry, ADR-038). Excluded: ``defaults``;
     a root-decode field (``_root_decoded_keys``); ``TOP_LEVEL_READ_ELSEWHERE``;
     ``MERGE_DROPPED_KEYS``, which act in no shape; ``_routing*`` keys, which
     the route generator does not read from a defaults file in any shape; and
