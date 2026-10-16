@@ -118,16 +118,65 @@ def test_a_root_platform_file_without_thresholds_still_decides(tmp_path):
     assert not t.undecidable
 
 
-@pytest.mark.parametrize("target", ["owner_tag", "*_tag", "owner_tag.sub"])
+@pytest.mark.parametrize("target", ["owner_tag", "owner_tag.sub"])
 def test_a_key_a_policy_rule_names_is_read(tmp_path, target):
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
                           f"  - {{name: p, target: '{target}', operator: required, severity: error}}\n",
-        "ta.yaml": "tenants:\n  ta:\n    owner_tag: team-a\n    other_tag2: x\n"}))
+        "ta.yaml": "tenants:\n  ta:\n    owner_tag: team-a\n    other_tag: x\n"}))
     keys = _by_key(t, "ta")
     assert keys["owner_tag"].read_by == ("policy_engine",) and keys["owner_tag"].verdict == "read"
-    # 對照：規則沒有指名的鍵照樣沒人讀（`*_tag` 不含 `other_tag2`）
-    assert keys["other_tag2"].verdict == "unread"
+    # 對照：規則沒有指名的鍵照樣沒人讀
+    assert keys["other_tag"].verdict == "unread"
+
+
+def test_a_wildcard_rule_names_no_key(tmp_path):
+    """`mysql_*` 會比到拼錯的 `mysql_conections`；萬用字元不算指名，不替錯字背書。"""
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+                          "  - {name: p, target: 'mysql_*', operator: lte, value: 60, severity: error}\n",
+        "ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
+    assert _by_key(t, "ta")["mysql_conections"].verdict == "unread"
+
+
+def test_a_rule_credits_no_tenant_it_excludes_and_no_unregistered_reserved_key(tmp_path):
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+                          "  - {name: p, target: owner_tag, operator: required, severity: error,"
+                          " exclude_tenants: [tb]}\n"
+                          "  - {name: q, target: _typo_reserved, operator: required, severity: error}\n",
+        "ta.yaml": "tenants:\n  ta:\n    owner_tag: a\n    _typo_reserved: 1\n",
+        "tb.yaml": "tenants:\n  tb:\n    owner_tag: b\n"}))
+    assert _by_key(t, "ta")["owner_tag"].verdict == "read"
+    assert _by_key(t, "tb")["owner_tag"].verdict == "unread"
+    assert _by_key(t, "ta")["_typo_reserved"].verdict == "unread"
+
+
+def test_a_reserved_key_inherited_from_a_layer_the_exporter_reads_is_read(tmp_path):
+    """子目錄 `_defaults.yaml` 的 `_state_<f>`、`_severity_dedup`：登錄表說 exporter 讀這一層，
+    不論值是什麼。"""
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
+                          "state_filters:\n  maint: {reasons: [X], severity: critical}\n",
+        "team/_defaults.yaml": "defaults:\n  _state_maint: enable\n  _severity_dedup: enable\n",
+        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+    keys = _by_key(t, "ta")
+    for k in ("_state_maint", "_severity_dedup"):
+        if k in keys:
+            assert keys[k].verdict == "read", (k, keys[k])
+    assert "_state_maint" in keys  # 不是恆真：至少一個真的被判了
+
+
+def test_an_undeclared_state_filter_is_a_platform_notice(tmp_path):
+    """租戶寫了平台沒宣告的 `_state_foo`：缺的是平台的宣告，報成平台側 notice（決定 7）。"""
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "ta.yaml": "tenants:\n  ta:\n    _state_foo: enable\n",
+        "tb.yaml": "tenants:\n  tb:\n    _state_foo: enable\n"}))
+    v = _by_key(t, "ta")["_state_foo"]
+    assert (v.verdict, v.severity, v.reason) == ("unread", "notice", "state_filter_undeclared")
+    found = [f for f in t.findings if f.key == "_state_foo"]
+    assert [(f.file, f.tenants) for f in found] == [("_defaults.yaml", ("ta", "tb"))]
 
 
 def test_a_declared_reader_counts_only_in_its_layer(tmp_path):

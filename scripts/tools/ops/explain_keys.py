@@ -34,9 +34,14 @@ Exit codes (dev-rules §13, `_lib_exitcodes`):
      or a verdict that cannot be given (no root platform file was read, so
      the threshold keys are `undecidable`; ADR-038 decision 7)
 
-`--json`: stdout is exactly one JSON document on every path (schema
-``da-tools.explain-keys/v1``); on exit 2 it carries ``status: "caller_error"``
-and ``reason`` with ``tenants`` empty.
+`--json`: stdout is exactly one JSON document on every path the tool runs
+(schema ``da-tools.explain-keys/v1``; an argument argparse refuses exits 2
+before that, as everywhere). A caller error carries ``status:
+"caller_error"`` and ``reason`` with ``tenants`` empty; undecidable threshold
+keys exit 2 with ``status: "ok"`` and the whole result, ``undecidable``
+true. The `--assert` file is refused (exit 2) when an entry has a field this
+document does not have or a tenant lists a key twice: either would let it
+pass without comparing what it seems to.
 """
 from __future__ import annotations
 
@@ -56,6 +61,7 @@ for _p in (_TOOLS, _HERE):
 import _lib_key_verdict as kv  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_io import safe_label  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
 SCHEMA = "da-tools.explain-keys/v1"
@@ -83,6 +89,11 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
         verdict = kv.judge_tree(conf_d, at=at, binary=binary, timeout=timeout)
     except (tv.DaGuardNotFoundError, tv.DaGuardError, tv.ParseFailedError) as e:
         raise ExplainError(f"da-guard: {e}") from e
+    except ValueError as e:
+        problems = getattr(e, "problems", None)  # policy_engine.InvalidPolicyRules
+        if problems is None:
+            raise
+        raise ExplainError("\n".join([str(e), *problems])) from e
     missing = sorted(set(tenants) - set(verdict.keys))
     if missing:
         raise ExplainError(f"no such tenant in {conf_d}: {', '.join(missing)}")
@@ -109,9 +120,18 @@ def compare(doc: dict[str, Any], expected: Any) -> list[str]:
         if tenant not in doc["tenants"]:
             out.append(f"{tenant}: not in the result")
             continue
-        if not isinstance(want, list) or not all(isinstance(e, dict) and "key" in e for e in want):
-            raise ExplainError(f"--assert: tenants.{tenant} must be a list of entries with a `key`")
-        wanted = {e["key"]: e for e in want}
+        if not isinstance(want, list) or not all(isinstance(e, dict) and isinstance(e.get("key"), str)
+                                                  for e in want):
+            raise ExplainError(f"--assert: tenants.{tenant} must be a list of entries with a string `key`")
+        wanted: dict[str, dict] = {}
+        for e in want:
+            unknown = sorted(set(e) - {"key", *FIELDS})
+            if unknown:
+                # A misspelt field would otherwise compare nothing and pass.
+                raise ExplainError(f"--assert: tenants.{tenant}: {e['key']}: unknown field(s) {unknown}")
+            if e["key"] in wanted:
+                raise ExplainError(f"--assert: tenants.{tenant}: {e['key']} is listed twice")
+            wanted[e["key"]] = e
         for key in sorted(set(got) - set(wanted)):
             out.append(f"{tenant}: {key}: in the result, not expected")
         for key in sorted(set(wanted) - set(got)):
@@ -127,11 +147,11 @@ def compare(doc: dict[str, Any], expected: Any) -> list[str]:
 def render_text(doc: dict[str, Any]) -> str:
     lines = []
     for tenant, rows in doc["tenants"].items():
-        lines.append(tenant)
+        lines.append(safe_label(tenant))
         table = [("key", "source", "read_by", "verdict", "severity", "disable")]
         for e in rows:
-            table.append((e["key"], e["file"] or "—", ",".join(e["read_by"]) or "—", e["verdict"],
-                          e["severity"] or "—", e["disable"] or "—"))
+            table.append((safe_label(e["key"]), safe_label(e["file"] or "—"), ",".join(e["read_by"]) or "—",
+                          e["verdict"], e["severity"] or "—", e["disable"] or "—"))
         widths = [max(len(str(r[i])) for r in table) for i in range(len(table[0]))]
         for r in table:
             lines.append("  " + "  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip())
@@ -139,10 +159,13 @@ def render_text(doc: dict[str, Any]) -> str:
     if doc["findings"]:
         lines.append("Findings:")
         for f in doc["findings"]:
-            who = ", ".join(f["tenants"][:5]) + (f" (+{len(f['tenants']) - 5} more)" if len(f["tenants"]) > 5 else "")
+            who = ", ".join(safe_label(t) for t in f["tenants"][:5]) + (
+                f" (+{len(f['tenants']) - 5} more)" if len(f["tenants"]) > 5 else "")
             why = f" ({f['reason']})" if f["reason"] else ""
-            fam = f"; still served: {', '.join(f['served_family'])}" if f["served_family"] else ""
-            lines.append(f"  {f['severity']}: {f['kind']}: {f['key']} in {f['file'] or '?'}{why}{fam} — {who}")
+            fam = (f"; still served: {', '.join(safe_label(k) for k in f['served_family'])}"
+                   if f["served_family"] else "")
+            lines.append(f"  {f['severity']}: {f['kind']}: {safe_label(f['key'])} in "
+                         f"{safe_label(f['file'] or '?')}{why}{fam} — {who}")
     if doc["undecidable"]:
         lines.append("No root platform file was read: threshold keys are undecidable (ADR-038 decision 7).")
     return "\n".join(lines).rstrip("\n")
@@ -200,9 +223,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _fail(reason: str, as_json: bool) -> int:
     first, *rest = reason.split("\n")
-    print(f"ERROR: {first}", file=sys.stderr)
+    print(f"ERROR: {safe_label(first)}", file=sys.stderr)
     for line in rest:
-        print(f"  {line}", file=sys.stderr)
+        print(f"  {safe_label(line)}", file=sys.stderr)
     if as_json:
         print(json.dumps({"schema": SCHEMA, "status": "caller_error", "reason": reason,
                           "at": None, "undecidable": False, "tenants": {}, "findings": []},
@@ -233,7 +256,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     else:
         print(render_text(doc))
         for d in diffs:
-            print(f"ASSERT: {d}", file=sys.stderr)
+            print(f"ASSERT: {safe_label(d)}", file=sys.stderr)
     if doc["undecidable"]:
         print("ERROR: no root platform file was read; threshold keys are undecidable "
               "(ADR-038 decision 7)", file=sys.stderr)

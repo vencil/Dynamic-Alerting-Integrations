@@ -14,8 +14,10 @@ It joins three readings, none of them its own:
   of a tenant's effective config comes from (`key_sources`), so a declared
   reader counts only in a layer the registry says it reads;
 * the Policy-as-Code rules the tree carries (root `_defaults.yaml`
-  `_policies`) plus any the caller passes: a key a rule names as `target`
-  is read by `policy_engine` (decision 3).
+  `_policies`) plus any the caller passes: a key a rule that applies to the
+  tenant names as `target` (or `when.target`) is read by `policy_engine`
+  (decision 3) — when Policy-as-Code's view holds it (a `_` key only if the
+  registry lists it). A wildcard target names no key.
 
 A key is `read` when some reader reads it (`annotation` counts), `unread`
 when none does, `undecidable` when no root platform file was read (a
@@ -43,7 +45,6 @@ refusal) catches `_lib_tenant_values.DaGuardError` and its kin.
 """
 from __future__ import annotations
 
-import fnmatch
 import os
 import sys
 from pathlib import Path
@@ -113,25 +114,39 @@ def registered_readers(key: str) -> tuple[dict[str, tuple[str, ...]], bool]:
 
 
 def root_platform_files(conf_d: str | os.PathLike[str]) -> list[str]:
-    """The `_` config files directly in `conf_d` (names, sorted)."""
-    return sorted(p.name for p in _lib_confd.iter_config_files(conf_d, recursive=False)
-                  if _lib_confd.is_reserved_name(p.name))
+    """The `_` config files directly in `conf_d` (names, sorted): the shared
+    walk of the whole tree (hidden entries left out as everywhere), kept to
+    the root level."""
+    root = Path(conf_d)
+    return sorted(p.name for p in _lib_confd.iter_config_files(conf_d)
+                  if p.parent == root and _lib_confd.is_reserved_name(p.name))
 
 
-def policy_targets(rules: Iterable[Any]) -> list[str]:
-    """The first path element of every rule's `target` and `when.target`."""
+class PolicyHead(NamedTuple):
+    """The first path element of a rule's `target` / `when.target`, and the
+    tenants the rule leaves out (`exclude_tenants`)."""
+    head: str
+    excluded: frozenset[str] = frozenset()
+
+
+def policy_targets(rules: Iterable[Any]) -> list[PolicyHead]:
+    """`PolicyHead` of every rule's `target` and `when.target`."""
     out = []
     for rule in rules:
         targets = [getattr(rule, "target", "")]
         when = getattr(rule, "when", None)
         if when:
             targets.append(str(when.get("target", "")))
-        out += [t.split(".", 1)[0] for t in targets if t]
+        excluded = frozenset(str(t) for t in (getattr(rule, "exclude_tenants", None) or []))
+        out += [PolicyHead(t.split(".", 1)[0], excluded) for t in targets if t]
     return out
 
 
-def _named_by_policy(key: str, heads: list[str]) -> bool:
-    return any(h == key or ("*" in h and fnmatch.fnmatchcase(key, h)) for h in heads)
+def _named_by_policy(tenant: str, key: str, heads: list[PolicyHead]) -> bool:
+    """A rule that applies to the tenant names the key itself. A wildcard
+    (`mysql_*`) names no key: it would credit every misspelling it happens
+    to match."""
+    return any(tenant not in h.excluded and h.head == key for h in heads)
 
 
 def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
@@ -159,7 +174,7 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
 
 
 def judge(served: dict[str, tv.TenantValues], effective: dict[str, tv.TenantEffective],
-          heads: list[str], *, undecidable: bool, disable_effects: bool = True,
+          heads: list[PolicyHead], *, undecidable: bool, disable_effects: bool = True,
           aliases: dict[str, str] | None = None) -> TreeVerdict:
     """`judge_tree` over readings already in hand."""
     keys: dict[str, list[KeyVerdict]] = {}
@@ -187,7 +202,7 @@ def judge(served: dict[str, tv.TenantValues], effective: dict[str, tv.TenantEffe
 
 
 def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource | None, value: Any,
-               served_value: Any, has_rows: bool, heads: list[str], undecidable: bool,
+               served_value: Any, has_rows: bool, heads: list[PolicyHead], undecidable: bool,
                disable_effects: bool) -> KeyVerdict:
     layer = src.layer if src is not None else None
     file = src.file if src is not None else None
@@ -212,6 +227,12 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
         # Not a key of the tenant's merged config: a threshold it inherits,
         # which /metrics serves for it.
         read_by.add("exporter")
+    elif sk is None and key.startswith("_") and reg_layer in declared.get("exporter", ()) \
+            and served_value is not None:
+        # A reserved key the tenant inherits from a layer the exporter reads
+        # it in (`_state_<f>`, `_severity_dedup` from a subtree
+        # `_defaults.yaml`), which the exporter's resolver read.
+        read_by.add("exporter")
     if sk is not None and reason == "disabled":
         unknown = disable is None and not disable_effects and not misspelt_reserved
         if disable in ("effective", "partial") or unknown:
@@ -220,7 +241,12 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
     for reader, layers in declared.items():
         if reader != "exporter" and reg_layer in layers:
             read_by.add(reader)
-    if _named_by_policy(key, heads):
+    # Policy-as-Code reads what its view holds (policy_engine.load_policy_inputs):
+    # every threshold key of the tenant's config (served, or as written) and
+    # the reserved keys a tenant may carry. A rule naming a `_` key outside
+    # that view finds nothing there.
+    in_policy_view = not key.startswith("_") or bool(registered)
+    if in_policy_view and _named_by_policy(tenant, key, heads):
         read_by.add("policy_engine")
 
     platform_side = layer in ("platform", "profile", "defaults")
@@ -239,7 +265,9 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
             reason = "retired" if reason == "retired" else "unregistered"
         elif disable == "noop":
             severity, reason = WARNING, "disable_noop"
-        elif platform_side:
+        elif platform_side or reason == "state_filter_undeclared":
+            # A `_state_<filter>` the root does not declare: the missing
+            # declaration is the platform's (decision 7).
             severity = NOTICE
         else:
             severity = ERROR
@@ -256,7 +284,6 @@ def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str]) 
     declares it, with every tenant it reaches — never charged to a tenant's
     own file (decision 6)."""
     groups: dict[tuple, list[KeyVerdict]] = {}
-    violation_file: dict[str, str | None] = {}
     for rows in keys.values():
         for v in rows:
             kinds = []
@@ -265,19 +292,19 @@ def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str]) 
             if v.disable == "partial":
                 kinds.append("disable_partial")
             for kind in kinds:
-                if kind == PLATFORM_VIOLATION:
-                    gk = (kind, None, v.key, None)
-                    if v.layer != "tenant":
-                        violation_file.setdefault(v.key, v.file)
-                    violation_file.setdefault(v.key, root_defaults.get(v.tenant))
+                platform_owned = kind == PLATFORM_VIOLATION or v.reason == "state_filter_undeclared"
+                if platform_owned:
+                    # The platform's to fix: the file that declares it (or
+                    # should), never the tenant's own.
+                    file = v.file if v.layer not in (None, "tenant") else root_defaults.get(v.tenant)
+                    gk = (kind, file, v.key, None, ())
                 else:
                     own = v.layer == "tenant"
-                    gk = (kind, v.file, v.key, v.tenant if own else None)
+                    gk = (kind, v.file, v.key, v.tenant if own else None,
+                          v.served_family if kind == "disable_partial" else ())
                 groups.setdefault(gk, []).append(v)
     out = []
-    for (kind, file, key, _), vs in groups.items():
-        if kind == PLATFORM_VIOLATION:
-            file = violation_file.get(key)
+    for (kind, file, key, _, _family), vs in groups.items():
         sev = WARNING if kind == "disable_partial" else vs[0].severity or NOTICE
         out.append(Finding(sev, kind, key, file, tuple(sorted({v.tenant for v in vs})),
                            None if kind == "disable_partial" else vs[0].reason,
