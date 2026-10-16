@@ -68,6 +68,7 @@ New here? Pick based on your needs:
 | ADR-035 | [Single Source for the Legal Tenant-ID Character Set](./035-tenant-id-single-source.en.md) | ✅ Accepted | — |
 | ADR-036 | [conf.d Is Parsed Once — Go Reads the YAML, the Generator Judges Routing and Policy](./036-single-parser-effective-config.en.md) | ✅ Accepted | — |
 | ADR-037 | [config-diff Compares Rendered Output](./037-config-diff-compares-rendered-output.en.md) | ✅ Accepted | — |
+| ADR-038 | [Keys No Reader Reads Are Judged by Measurement; Reserved Keys Are Declared in One Registry](./038-unread-keys-judged-by-readers.en.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
 

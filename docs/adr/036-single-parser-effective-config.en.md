@@ -20,6 +20,7 @@ lang: en
 - **Revision 2026-10-14**: the parse cache key uses the SHA-256 of the file's content instead of git's blob SHA (§3).
 - **Revision 2026-10-15 (owner decision)**: when files are read from git objects, every entry that is not a regular file (a symlink, a gitlink, …) is judged `not_regular_file` (§3).
 - **Revision 2026-10-15 (approved by the owner)**: merges of batch patches and custom-alerts are guarded by an invariant on the result: outside the edit, every node of the result must be written exactly as in the original (§4).
+- **Revision 2026-10-16 (approved by the owner)**: "not judged" now also covers a tree with `_` keys that only the generator judges (§9), to go with [ADR-038](./038-unread-keys-judged-by-readers.en.md).
 - Both the design and the revision went through adversarial review (by a different model).
 
 ## Summary
@@ -405,7 +406,7 @@ da-guard gains `parse-tree` and stops judging routing and policy; the generator'
 
 - **When da-guard runs alone** (for example the standalone binary without Python):
   - The report (text and JSON) states that routing and policy were "not judged", and returns exit code 4, so "not judged" and "judged, no problem" can be told apart.
-  - It returns 4 only when the tree actually contains routing or policy content; a tree without any still returns 0.
+  - It returns 4 only when the tree contains content that only the generator can judge: routing, policy, or `_` keys that only the generator reads or, misspelled, only the generator reports (how they are judged: [ADR-038](./038-unread-keys-judged-by-readers.en.md)). A tree without any still returns 0.
   - When several exit codes apply, the precedence is 3 > 1 > 4 (3 is files that cannot be read, 1 is error-level findings; 3 over 1 is unchanged from today).
   - Exit 3 covers only files the exporter drops or cannot read. Once step 3 deletes the Go check for "the generator refuses the whole file for a repeated key", da-guard no longer returns 3 for that; files `parse-tree` treats as unreadable are reported on the generator's side (from step 4), not by da-guard's default run.
   - No flag lets CI declare "routing already judged by the generator": the customer CI templates `da-tools init` generates already run `generate-routes --validate --strict` and never run da-guard alone.
@@ -466,7 +467,7 @@ Duplicate keys, more than one document, tags outside the allow-list: today the g
   - [#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713): an unparseable value inside an overridden merge source.
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674): a self-referencing YAML alias.
 - **The offline differential test for batch patch merging** (§4).
-- **da-guard's "not judged"**: exit code 4 and the report content are tested, including no 4 when there is no routing or policy content, and the precedence when 3 or 1 also applies.
+- **da-guard's "not judged"**: exit code 4 and the report content are tested, including no 4 when there is no content only the generator can judge, and the precedence when 3 or 1 also applies.
 - **The generator container's refusal conditions**: amtool missing, validated and to-be-written content still differing after one revalidation, and a generator older than a policy requires each have a test, and each ends in a refusal. A judging child exceeding its memory limit, the judging deadline passing during judging, and it passing while queued each have a test too: only that one write is refused, no 503, the next write is judged as usual, and no descendant process (amtool, da-guard and so on) is left behind after a timeout; a retryable refusal is returned when the remaining time is not enough to revalidate; and after an interrupted advance, this batch's paths are reset to the branch's content.
 - In CI, run against the version pair the chart pins.
 
