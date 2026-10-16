@@ -92,6 +92,10 @@ import (
 // @Description "<masked: write permission required>", with masked: true and
 // @Description source_hash and merged_hash empty (either would let a guess of
 // @Description a credential be checked offline).
+// @Description source_hash is the hash of the whole tenant file: when that file declares a tenant the caller may not
+// @Description read (#3050), or its tenants cannot be listed with certainty and the caller lacks read permission on all
+// @Description tenants, it is empty with source_hash_withheld: true; and a 500 CONFIG_DECODE_ERROR about such a file
+// @Description carries a fixed text instead of the decoder's message (which quotes the value).
 // @Success     200  {object} TenantEffectiveResponse
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
@@ -144,8 +148,15 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 				// #1560: except to a caller shown masked credentials — a yaml.v3
 				// type error quotes the offending value, which can be one.
 				msg := err.Error()
-				if !canSeeCredentials(r, d, tenantID) {
+				switch {
+				case !canSeeCredentials(r, d, tenantID):
 					msg = msgEffectiveDecodeMasked
+				case !confdFileShown(r, d, decodeErr.Path, tenantID, ""):
+					// #3050: the quoted value can be another tenant's — the
+					// file can declare several (a root platform file's
+					// tenants: block too).
+					slog.Warn("tenant effective: decode error withheld", "tenant", tenantID, "error", err)
+					msg = msgEffectiveDecodeWithheld
 				}
 				WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, msg)
 			default:
@@ -174,6 +185,13 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 			out.SourceHash, out.MergedHash = "", ""
 			out.Masked = true
 		}
+		// #3050: source_hash is the hash of the whole tenant file, which can
+		// declare other tenants — the hash GET /tenants/{id} then withholds.
+		// merged_hash covers this tenant's merge only and stays.
+		if out.SourceHash != "" && !confdFileShown(r, d, ec.SourceFile, tenantID, out.SourceHash) {
+			out.SourceHash = ""
+			out.SourceHashWithheld = true
+		}
 		writeJSON(w, http.StatusOK, out)
 	}
 }
@@ -188,6 +206,12 @@ type TenantEffectiveResponse struct {
 	// because the caller may read the tenant but not write it; source_hash
 	// and merged_hash are then empty.
 	Masked bool `json:"masked,omitempty"`
+	// SourceHashWithheld is true, with source_hash empty, when the tenant
+	// file declares a tenant the caller may not read, or its tenants cannot
+	// be listed with certainty and the caller may not read every tenant
+	// (#3050): source_hash is the hash of that whole file, and confirms a
+	// guess of it offline. merged_hash is this tenant's merge only.
+	SourceHashWithheld bool `json:"source_hash_withheld,omitempty"`
 }
 
 // msgEffectiveDecodeMasked replaces the decoder's message for a caller shown
@@ -195,6 +219,12 @@ type TenantEffectiveResponse struct {
 // decode, which can be a credential.
 const msgEffectiveDecodeMasked = "the tenant's effective config does not decode; " +
 	"the decoder's message is shown to callers with write permission on the tenant"
+
+// msgEffectiveDecodeWithheld is the 500 text for a caller who may write the
+// tenant when the file that does not decode declares a tenant the caller may
+// not read (#3050): the decoder's message quotes the value it rejected.
+const msgEffectiveDecodeWithheld = "the tenant's effective config does not decode; " +
+	"the decoder's message is withheld because the file also declares a tenant you may not read (see the server log)"
 
 // msgEffectiveUnresolved is the fixed client-facing text for a resolve
 // failure other than not-found, a duplicate or a decode error: those errors

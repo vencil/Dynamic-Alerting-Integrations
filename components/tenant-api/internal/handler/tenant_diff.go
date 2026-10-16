@@ -50,6 +50,10 @@ type DiffResponse struct {
 // @Description with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
 // @Description for a proposal over the tenant-document size limit, and 422 MASKED_PREVIEW_UNAVAILABLE when either side is
 // @Description not YAML, holds several documents, or uses an anchor, alias or merge key.
+// @Description Every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant the caller may not read
+// @Description (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty (not YAML; an alias,
+// @Description a merge key or a non-scalar key at the top level or in tenants:) and the caller lacks read permission on all
+// @Description tenants: the diff would carry that file's lines, and has_diff would confirm a guess of it.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -91,7 +95,18 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		}
 
 		if !masked {
-			diff, err := d.Writer.Diff(tenantID, proposed)
+			// Writer.Diff is PreviewCurrent + DiffTexts; split so the
+			// preview is judged on the bytes it diffs (#3050).
+			current, exists, err := d.Writer.PreviewCurrent(tenantID)
+			if err != nil {
+				writeDiffError(rw, r, d, err)
+				return
+			}
+			if exists && !fileShown(r, d, current, tenantID) {
+				writePreviewWithheld(rw, r)
+				return
+			}
+			diff, err := d.Writer.DiffTexts(tenantID, string(current), exists, proposed)
 			if err != nil {
 				writeDiffError(rw, r, d, err)
 				return
@@ -113,6 +128,10 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		current, exists, err := d.Writer.PreviewCurrent(tenantID)
 		if err != nil {
 			writeDiffError(rw, r, d, err)
+			return
+		}
+		if exists && !fileShown(r, d, current, tenantID) {
+			writePreviewWithheld(rw, r)
 			return
 		}
 		var maskedCurrent []byte
@@ -159,6 +178,17 @@ func writeDiffError(rw http.ResponseWriter, r *http.Request, d *Deps, err error)
 		return
 	}
 	WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
+}
+
+// writePreviewWithheld is the 422 for a preview whose current file declares
+// a tenant the caller may not read (#3050, fileShown): the diff carries the
+// file's lines around every change (and all of them against a short
+// proposal), and has_diff false would confirm a guess of the whole file. The
+// text names no tenant.
+func writePreviewWithheld(rw http.ResponseWriter, r *http.Request) {
+	WriteJSONErrorWithCode(rw, r, http.StatusUnprocessableEntity, CodeTenantFileWithheld,
+		"the current tenant file also declares a tenant you may not read (or its tenants cannot be listed "+
+			"with certainty), so no preview of it is shown")
 }
 
 // writeMaskedPreviewUnavailable is the 422 for a masked preview one of whose

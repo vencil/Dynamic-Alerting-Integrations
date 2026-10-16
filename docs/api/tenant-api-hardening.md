@@ -200,6 +200,8 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 **寫回保護**：`PUT /tenants/{id}` 的 body 只要有任何值**解碼後**等於佔位字串就回 400，引號、`!!str`、block scalar、alias 都一樣；`POST /tenants/{id}/validate` 對同一個 body 回 200 `valid: false` 並列出同一條理由。
 
+**同檔有讀不到的租戶時，對任何人都整份不給**（[#3050](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3050)）：conf.d 一份檔可以宣告多個租戶，而上面每個出口回的都是**整份檔**。所以檔內只要有呼叫者讀不到的租戶（判定與驗證訊息點名租戶用同一個讀取檢查，[#3039](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3039)），不論有沒有寫入權限：`GET` 回空的 `raw_yaml`、`custom_alerts`、`source_hash` 加 `raw_yaml_withheld: true`（`config_error` 那種回應也一樣）；`/diff` 回 422 `TENANT_FILE_WITHHELD`；`/effective` 的 `source_hash` 為空並帶 `source_hash_withheld: true`，解碼失敗的 500 改回固定文字；`PUT /tenants/{id}/custom-alerts` 回 422 `TENANT_FILE_WITHHELD`、不寫入（它要以 `GET` 給的 `custom_alerts` 與 `source_hash` 為基礎）；`PUT` 與 custom-alerts 的 409 不附 `current_source_hash`。**不會**改成只回自己那段：重新序列化出的已不是原檔（anchor、alias、block scalar 保不住），`source_hash` 也對不上。列不出檔內有哪些租戶時（不是 YAML；頂層或 `tenants:` 下有 alias、merge key 或非純量的 key），只給對所有租戶都有讀取權限的人（`tenants: ["*"]` 且不帶 `org-scope`／`environments`／`domains` 的規則）——所以壞掉的 YAML 檔，帶 scope 限制的寫入者也看不到原文；它本來就不能經 API 整檔覆蓋這種檔（見 `PUT` 的說明），要改請直接改 git。
+
 **hash 也不給**：被遮罩的人拿到的 `source_hash`（`GET`、`/effective`）與 `merged_hash`（`/effective`）是空字串。`merged_hash` 是解碼後合併結果的 hash，被遮罩的人手上有其他所有值，把猜測填回佔位字串的位置、用公開的演算法算一次就能離線驗證猜對沒有，低熵的密碼可以字典攻擊；`source_hash` 是原檔位元組的 hash，同樣能驗證對整份檔的猜測。被遮罩的人不能寫入，也用不到 `source_hash` 當 `base_hash`。
 
 **檔案 key 帶 tag 時不給**：key 寫成 `? !!binary YXBpX3VybA==` 會解碼成 `api_url`，照字面比對看不出來，所以 key 帶 `!!str` 以外的明確 tag 也算無法確定遮乾淨。

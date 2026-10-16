@@ -101,10 +101,21 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 			if got.ConfigError != c.reason {
 				t.Fatalf("GET config_error = %q, want %q", got.ConfigError, c.reason)
 			}
+			// #3050: neither broken file is shown to this caller — one
+			// declares a tenant the caller may not read, the other's tenants
+			// cannot be listed — so GET gave no source_hash. A client that
+			// has the hash anyway (it is in git) still gets this refusal.
+			baseHash := got.SourceHash
+			if c.reason != "" {
+				if baseHash != "" {
+					t.Fatalf("GET source_hash = %q, want it withheld (#3050)", baseHash)
+				}
+				baseHash = cfg.ComputeSourceHash([]byte(c.body))
+			}
 			list := append(got.CustomAlerts, map[string]any{
 				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
 			})
-			body, _ := json.Marshal(map[string]any{"base_hash": got.SourceHash, "custom_alerts": list})
+			body, _ := json.Marshal(map[string]any{"base_hash": baseHash, "custom_alerts": list})
 
 			path := filepath.Join(dir, "db-a.yaml")
 			before := mustRead(t, path)
@@ -602,7 +613,27 @@ func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
 			dir := rejDir(t, c.body)
 			path := filepath.Join(dir, "db-a.yaml")
 			before := mustRead(t, path)
-			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+			list := []map[string]any{{
+				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
+			}}
+
+			// #3050: a caller who may not read db-z is not shown this file,
+			// so its partial write is refused before the round-trip check
+			// (TENANT_FILE_WITHHELD), even with the file's hash in hand.
+			withheld := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+			wb, _ := json.Marshal(map[string]any{"base_hash": cfg.ComputeSourceHash([]byte(c.body)), "custom_alerts": list})
+			wresp := putCustomAlerts(t, withheld, "db-a", string(wb), "alice@example.com", []string{"dba"})
+			wrb, _ := readBody(wresp)
+			if wresp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(wrb, CodeTenantFileWithheld) {
+				t.Errorf("custom-alerts, db-z unreadable: %d %s; want 422 %s", wresp.StatusCode, wrb, CodeTenantFileWithheld)
+			}
+			if strings.Contains(wrb, "db-z") {
+				t.Errorf("the refusal names another tenant: %q", wrb)
+			}
+
+			// A caller who may read db-z too is shown the file and reaches
+			// the round-trip check.
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBACWithZ)}
 
 			// GET still serves it: the exporter loads the file.
 			gw := servePopulatingRBAC(t, GetTenant(deps),
@@ -617,10 +648,7 @@ func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
 			}
 
 			// PUT .../custom-alerts: 409 with the generator's reason.
-			list := append(got.CustomAlerts, map[string]any{
-				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
-			})
-			body, _ := json.Marshal(map[string]any{"base_hash": got.SourceHash, "custom_alerts": list})
+			body, _ := json.Marshal(map[string]any{"base_hash": got.SourceHash, "custom_alerts": append(got.CustomAlerts, list...)})
 			resp := putCustomAlerts(t, deps, "db-a", string(body), "alice@example.com", []string{"dba"})
 			rb, _ := readBody(resp)
 			var env map[string]any
@@ -630,9 +658,6 @@ func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
 			if resp.StatusCode != http.StatusConflict || env["code"] != wantNotLoadableCode ||
 				env["tenant_id"] != "db-a" || env["config_error"] != "not_round_trippable" {
 				t.Errorf("custom-alerts: %d %v; want 409 %s, config_error not_round_trippable", resp.StatusCode, env, wantNotLoadableCode)
-			}
-			if msg, _ := env["error"].(string); strings.Contains(msg, "db-z") {
-				t.Errorf("the refusal names another tenant: %q", msg)
 			}
 			if msg, _ := env["error"].(string); !strings.Contains(msg, "change content the update does not edit") {
 				t.Errorf("custom-alerts message does not say the file would not round-trip: %q", msg)
