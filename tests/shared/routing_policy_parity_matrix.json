@@ -7,8 +7,8 @@
     "Readers: tests/shared/test_routing_policy_parity.py (Python SSOT, _grar_parse.load_tenant_tree",
     "strict_policies=True + _grar_validate), components/threshold-exporter/app/pkg/routingpolicy/",
     "parity_test.go (the shared Go package), components/threshold-exporter/app/cmd/da-guard/",
-    "routing_policy_parity_test.go (da-guard findings) and tenant-api's",
-    "internal/handler/routing_policy_parity_test.go (the tenant_api column). Every reader reads",
+    "routing_policy_parity_test.go (da-guard findings). Every reader reads",
+    "only this matrix, never another reader's source. (tenant-api left the readers with #2903: it no longer judges routing; the route generator judges every write.)",
     "only this matrix, never another reader's source.",
     "expect.<tenant>.targets: the routes that render a receiver, in render order: main route",
     "(ref 'receiver'), overrides[i], routes[i]; type = receiver.type when it is a non-empty",
@@ -28,8 +28,8 @@
     "group_by[i], overrides[i].group_by[j], routes[i].group_by[j] - as PyYAML reads it: not_string (an",
     "unquoted 8 / on / yes), empty (''), duplicate (a label already listed), wildcard_mixed ('...' beside",
     "other labels); a quoted \"8\" is a label name (Alertmanager v0.34.1 validates UTF-8 names). The",
-    "generator's --strict ERROR, da-guard's routing_group_by_invalid, tenant-api's 400 for a value the PUT",
-    "body writes (a routing profile's is not judged there; a batch op cannot write a group_by). A repeated '...' alone is not a duplicate (Alertmanager loads ['...', '...']).",
+    "generator's --strict ERROR, da-guard's routing_group_by_invalid",
+    "(a repeated '...' alone is not a duplicate: Alertmanager loads ['...', '...']).",
     "The non-specific `!` tag (`! 'yes'`) is read as PyYAML reads it in every reader (#2730 §6).",
     "group_by is judged after {{tenant}} substitution in every reader (tenant `alertname`: [alertname, \"{{tenant}}\"] repeats).",
     "The {{tenant}} shape of _routing_enforced expands over EVERY valid tenant id, routed or not (#2519): a threshold-only or _silent_mode-only tenant is judged too, so every tenant of a tree with one is listed in expect. A tenant whose file body PyYAML does not read as a mapping (a null body) is not loaded by the generator unless a root platform file's entry gives it one, so it is not in that set and not listed.",
@@ -37,39 +37,19 @@
     "A reference is any non-empty string, trimmed: '   ' references the unknown profile ''.",
     "An allowed_receiver_types list with entries but no string among them allows no receiver type",
     "(Python restricts on the non-empty set); a non-string forbidden entry matches nothing.",
-    "tenant_api.put: '403' = PUT of the tenant's own file (files[<tenant>.yaml]) verbatim is refused",
-    "with POLICY_VIOLATION; '400' = refused with INVALID_BODY because a receiver the body itself writes",
-    "breaks the receiver contract (pkg/receiverspec, #2295) or the body's own _routing carries a values_not_string value (#2431; one from a routing layer is not judged; both checked after the policy, so a",
-    "forbidden type stays '403'); '503' = refused with POLICY_UNAVAILABLE: a root _domain_policy.yaml / .yml tenant-api cannot use, with no last good version (the server starts on the tree; hub #2486 Q7-2, direct mode); 'ok' = allowed. tenant-api reads _domain_policy.yaml and .yml as the",
-    "generator does, and judges the body's block over the root platform overlay (Layers.TenantBlock,",
-    "#2486), so an overlay _routing / _routing_profile the body does not replace is judged too.",
-    "tenant_api.batch: null, or one patch applied",
-    "to the tenant's block on disk: verdict 'policy_violation' when the op is refused for domain",
-    "policy, 'ok' otherwise; a patch that touches neither _routing_profile nor _routing is never",
-    "refused for the routing already on disk, and a batch op is never refused for a values_not_string value on disk (#2431).",
     "platform (per tree): [kind, file, field] of every platform-file finding, file relative to the",
     "conf.d root. routing_defaults_routes_ignored = a `_routing_defaults` carrying `routes`: both",
     "readers drop them before any merge; Python records a blocking WARN (--validate fails),",
     "da-guard an error finding with an empty tenant.",
     "python_differs: null, or the values the Python side produces where the YAML readers disagree",
     "(the Go columns above hold for every Go reader); `reason` says why. Its keys: targets, policy,",
-    "rejected_routes, group_by_invalid, refused - the generator's values, asserted by the Python half -",
-    "and tenant_api, the verdict the generator gives that PUT, taken from its own findings document with the",
-    "conf.d-only arguments --validate --strict (as `make validate-routes`) and --findings-json, in-process; the CLI --policy file (a deployment's allowed_domains) is out of scope by owner decision, see #2826: it refuses the write when an",
-    "in-force finding (blocks in the run's in-force set) names the tenant or the file the PUT writes",
-    "(`<tenant>.yaml`), or the run failed unitemised (run_failed) - '403' for a domain-policy kind, else '400' -",
-    "whatever layer the value came from. Where tenant-api answers 'ok' that code goes here; where tenant-api",
-    "answers 503 and the generator refuses nothing, 'ok'; else tenant-api's own cell. A blocking finding that",
-    "names neither the tenant nor its file (a platform file's, a refusal summary, a routing-tree finding) is",
-    "no finding of the write and is left out by design (ADR-036: a base tree's errors do not refuse a clean",
-    "write). [未驗] batch: the 12 tenant_api.batch sub-cells are not held to the generator (it would have to",
-    "run on the patched tree); test_batch_cells_are_pinned pins that count.",
+    "rejected_routes, group_by_invalid, refused - the generator's values, asserted by the Python half.",
     "refused may be 'tenant_file_unreadable' here alone: PyYAML cannot read",
     "a tenant file, so the generator refuses the whole tree (#1460, rc 1) and every tenant of it",
     "carries that refusal, targets null. ADR-036 step 2 (PR-C): every field where python_differs",
     "differs from the Go column is a reader difference - for each Go half that asserts that field",
     "(targets: pkg/routingpolicy; policy, rejected_routes, group_by_invalid, refused: pkg/routingpolicy",
-    "and da-guard; tenant_api: tenant-api) - that tests/shared/test_reader_divergence_catalog.py ranks",
+    "and da-guard) - that tests/shared/test_reader_divergence_catalog.py ranks",
     "and matches to a `layer: routing` entry of reader_divergence_catalog.yaml by [tree, tenant, field].",
     "When a Go reader is fixed, its half goes red on the Go column first: update the column, then",
     "python_differs (null once nothing differs), then the catalog, which is red until both agree.",
@@ -84,17 +64,17 @@
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
     "#2677 - merge precedence is PyYAML's SafeConstructor.flatten_mapping in the generator and da-guard: a key the mapping writes itself wins; among several merge keys in one mapping (`<<:` beside a tagged `!!merge x:`) the LATER one wins; within one merge sequence (`<<: [*a, *b]`) the EARLIER source wins; a merge source is itself flattened by the same rules first. The trees domain-policy-merge-key-order(-top) pin it; their policy cells are the generator's own --strict lines.",
-    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone). tenant-api reads a merge key with yaml.v3's own merge, which differs from the generator's (#2663), and refuses a file with a merge key spelled other than `<<` anywhere in it (DomainPoliciesShapeError; domain-policy-tagged-merge-value-scalar, and domain-policy-merge-key-order t-mo-earlier and t-mo-seq-key, where the generator's verdict is the same). tenant-api refuses the file there: 503, POLICY_UNAVAILABLE (hub #2486 Q7-2) - where the tenant's routing breaks a policy the generator refuses the PUT too (403: both refuse, no difference), else python_differs.tenant_api is 'ok' (go_refuses).",
+    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone).",
     "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
     "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
     "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
     "pagerduty receiver (main receiver not pagerduty, and no rendered routes entry matching severity: critical",
-    "sends to one) - the generator's strict ERROR, da-guard's critical_escalation_missing, tenant-api's 403;",
+    "sends to one) - the generator's strict ERROR, da-guard's critical_escalation_missing;",
     "'compliant' = they do, and leaks lists, in render order (overrides, routes, then 'receiver' = the main",
     "receiver), every non-pagerduty destination that still receives some of them first (#2312: its match ∪",
     "{severity: critical} ∪ {tenant: <id>} is not a superset of an earlier sub-route's match, and its match",
     "names neither a non-critical severity nor another tenant) - the generator's WARN, da-guard's",
-    "critical_escalation_leak (Field <ref>.receiver.type), tenant-api's warnings. The value is the same for",
+    "critical_escalation_leak (Field <ref>.receiver.type). The value is the same for",
     "every requiring domain that lists the tenant. No row's YAML readers disagree on it, so",
     "python_differs does not carry it.",
     "require_critical_escalation is read as PyYAML reads it (#2325): a PLAIN yes/Yes/YES/on/On/ON is true and",
@@ -115,8 +95,7 @@
     "root), routing_profile_duplicate (one name in two files; the first in root-first name order is kept,",
     "the later file is named). duplicate_tenant is recorded but not in blocking_kinds: the generator",
     "refuses it first through #2315 (exit 1), and da-guard stops earlier, exit 2, on the exporter's",
-    "DuplicateTenantError; the later file in name order is named. tenant_api is measured only for a tenant whose own file is at the root:",
-    "tenant-api lists tenant files at the conf.d root only.",
+    "DuplicateTenantError; the later file in name order is named.",
     "blocking_kinds (#2326 review): the platform kinds that refuse the whole tree (generator exit 2",
     "in every mode). Python asserts it equals _grar_parse.BLOCKING_TREE_KINDS and Go that",
     "routingpolicy.IsBlocking is true for exactly these among every Problem kind, so the lists cannot",
@@ -125,18 +104,10 @@
     "#2412 / #2341 - a `_routing_defaults` that is neither a mapping nor null (list, string, number, an unquoted boolean) contributes nothing, at the root and below; it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides. It is a platform row, routing_defaults_not_mapping [kind, file, '_routing_defaults']: the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's error with an empty tenant.",
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
-    "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
-    "#2341 - tenant_api.batch verdict '400' = the whole batch request is refused with INVALID_BODY before any write: a `_routing` patch value that is no disabling string (`on`, `slack`, '', a JSON null) - a flat patch cannot write a `_routing` mapping, so a batch re-enables routing with `unset`.",
-    "B2 (#2341) - tenant_api.batch may carry `unset` (a list; only '_routing'): the keys the op removes from the tenant's block on disk after its patch is laid over it. Removing `_routing` turns routing back on for a disabled tenant, so the op is judged like one that writes `_routing`: 'policy_violation' when the routing it re-enables breaks the domain policy, 'ok' otherwise.",
-    "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go tenantid.Valid) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 D3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id. schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 D2 names; Python asserts both halves, Go the refusal.",
+    "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping.",
+    "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go tenantid.Valid) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 D3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>). schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 D2 names; Python asserts both halves, Go the refusal.",
     "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping.",
-    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\"), da-guard reports domain_policy_unusable (field domain_policies), and tenant-api refuses the file (routingpolicy.DomainPoliciesShapeError, the shape check da-guard applies): on a hot reload it keeps the last good policy (tested in tenant-api, not expressible here); with none, as here, direct-mode writes the policy judges answer 503 POLICY_UNAVAILABLE (hub #2486 Q7-2).",
-    "tenant_api_unmeasured (ADR-036 step 2): every cell whose tenant_api is null - tenant-api's verdict is not",
-    "measured for it - as {tree: {tenant: {kind, reason}}}; the Python half asserts it is exactly the null cells",
-    "and checks the kind: nested_tree (the tenant's own file `<sub>/<tenant>.yaml` is below the root), no_put_body (no files[<tenant>.yaml] anywhere),",
-    "outside_table (a root files[<tenant>.yaml] PUT tenant-api refuses with a verdict the put values do not express; the reason says which).",
-    "Every measured cell is held to the generator's verdict on that PUT (test_routing_policy_parity._generator_put),",
-    "so a null cannot hide a difference.",
+    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\") and da-guard reports domain_policy_unusable (field domain_policies).",
     "#2904 (ADR-036 section 9) - the da-guard routing checks that only Go had are pinned here before the Go copies go:",
     "route_finding_kinds: the da-guard kinds of the receiver contract and the override checks; route_findings (per tree): [tenant, kind, field]",
     "per da-guard finding of one of those kinds, sorted ('' for no tenant) - da-guard's half asserts it; the Python half holds the generator's",
@@ -213,168 +184,6 @@
       "abc\n"
     ]
   },
-  "tenant_api_unmeasured": {
-    "top-level-yaml-merge-key-subtree": {
-      "t-sub-policy": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-sub-profile": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-sub-defaults": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-sub-unread": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-a-routing-defaults-chain-deeper-wins": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-deep": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-other": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-a-null-receiver-below-root": {
-      "t-own": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-b-routing-enforced-below-root": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-c-profiles-scoped-to-subtree": {
-      "t-a": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-b": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-c": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-d": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-c-profile-name-defined-twice": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-d-subtree-policy-additive-and-scoped": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-e-duplicate-tenant-id": {
-      "t-x": {
-        "kind": "outside_table",
-        "reason": "tenant-api refuses this PUT 409 TENANT_DECLARED_ELSEWHERE (t-x is declared again in team/t-x.yaml), a verdict the table's put values do not express; the generator refuses the tree too (duplicate_tenant)"
-      }
-    },
-    "hier-b-enforced-in-unselected-carrier-spelling": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-e-duplicate-tenant-with-null-body": {
-      "t-x": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-f-routing-defaults-in-nested-non-carrier": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "hier-a-root-routing-defaults-not-a-mapping": {
-      "t-team": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "routing-defaults-not-mapping-below-root": {
-      "t-a": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      },
-      "t-b": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    },
-    "invalid-tenant-ids": {
-      "": {
-        "kind": "no_put_body",
-        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
-      },
-      "bad tenant": {
-        "kind": "no_put_body",
-        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
-      },
-      "Bad_Tenant!": {
-        "kind": "no_put_body",
-        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
-      },
-      "UPPER": {
-        "kind": "no_put_body",
-        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
-      }
-    },
-    "every-tenant-id-invalid": {
-      "1.5e3": {
-        "kind": "no_put_body",
-        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
-      }
-    },
-    "tenant-merge-tag-key-2700": {
-      "t1": {
-        "kind": "outside_table",
-        "reason": "tenant-api refuses this PUT 400 BAD_REQUEST for a reason unrelated to routing or policy (`q` is no threshold key of defaults: 'unknown key \"q\" not in defaults'); the table's put verdicts do not express it. t2 of the same tree carries the routing difference with a known key"
-      }
-    },
-    "routing-in-unread-location-nested-2904": {
-      "t-a": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is team-a/t-a.yaml, below the conf.d root; tenant-api lists tenant files at the root only"
-      },
-      "t-b": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is team-b/t-b.yaml, below the conf.d root; tenant-api lists tenant files at the root only"
-      }
-    },
-    "routing-ignored-keys-2960": {
-      "t3": {
-        "kind": "nested_tree",
-        "reason": "the tenant's own file is below the conf.d root: tenant-api lists and writes tenant files at the root only, so a PUT for it is not a write of that file"
-      }
-    }
-  },
   "trees": [
     {
       "name": "i-routes-entry-unknown-receiver-type",
@@ -401,10 +210,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -451,10 +256,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -489,10 +290,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -539,10 +336,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -593,15 +386,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": {
-              "patch": {
-                "_routing_profile": "domain-finance-tier1"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -632,15 +416,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": {
-              "patch": {
-                "cpu_usage_percent": "90"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -660,15 +435,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": {
-              "patch": {
-                "_routing_profile": "team-dba-global"
-              },
-              "verdict": "policy_violation"
-            }
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -707,15 +473,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": {
-              "patch": {
-                "_routing_profile": "domain-finance-tier1"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -748,10 +505,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -797,10 +550,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -817,10 +566,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -849,10 +594,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": "team-missing",
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -869,10 +610,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": "team-missing",
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -895,10 +632,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -926,15 +659,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": {
-              "patch": {
-                "_routing": "on"
-              },
-              "verdict": "400"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -957,15 +681,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": {
-              "patch": {
-                "_routing": "disable"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -993,16 +708,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": {
-              "patch": {},
-              "unset": [
-                "_routing"
-              ],
-              "verdict": "policy_violation"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1014,16 +719,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": {
-              "patch": {},
-              "unset": [
-                "_routing"
-              ],
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1050,22 +745,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports a missing_receiver_field for the tenant (blocks=validate: a generation-stage finding) and fails.",
-            "targets": [],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -1091,10 +771,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1158,10 +834,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1178,10 +850,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1223,15 +891,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": {
-              "patch": {
-                "cpu_usage_percent": "90"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1275,10 +934,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1295,10 +950,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1351,10 +1002,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1373,29 +1020,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. The tenant's `routes` is no list.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -1435,10 +1060,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1475,10 +1096,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1516,10 +1133,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1557,10 +1170,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1577,10 +1186,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1606,10 +1211,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": "",
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1642,10 +1243,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1682,10 +1279,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1726,10 +1319,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1746,10 +1335,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1772,10 +1357,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1815,10 +1396,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1835,10 +1412,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1861,10 +1434,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1905,10 +1474,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1931,10 +1496,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1957,10 +1518,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1983,10 +1540,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2003,10 +1556,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2043,10 +1592,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2082,27 +1627,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api refuses the policy file (a merge key spelled other than `<<`: DomainPoliciesShapeError) and, with no last good version, answers the PUT 503 POLICY_UNAVAILABLE; the generator reads the file and t-mo-earlier's routing breaks no policy, so it accepts the write.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "slack"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "ok",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -2124,10 +1649,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2150,10 +1671,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2176,10 +1693,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2202,10 +1715,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2222,27 +1731,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api refuses the policy file (a merge key spelled other than `<<`: DomainPoliciesShapeError) and answers the PUT 503 POLICY_UNAVAILABLE; the generator reads the file and t-mo-seq-key's routing breaks no policy, so it accepts the write.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "slack"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "ok",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -2278,10 +1767,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2318,27 +1803,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api refuses the policy file (`!!merge q: 5`, a merge key spelled other than `<<`) and answers the PUT 503 POLICY_UNAVAILABLE; the generator drops the file (a platform finding, not one of this write) and judges the PUT on no policy: it accepts the write.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "slack"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "ok",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -2384,10 +1849,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2410,10 +1871,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2436,10 +1893,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2462,10 +1915,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2488,10 +1937,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2508,10 +1953,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2534,10 +1975,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2586,7 +2023,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2609,7 +2045,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2632,7 +2067,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2649,7 +2083,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2689,10 +2122,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2715,10 +2144,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2741,10 +2166,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -2790,15 +2211,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": {
-              "patch": {
-                "_routing_profile": "slack-only"
-              },
-              "verdict": "policy_violation"
-            }
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -2837,10 +2249,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -2864,10 +2272,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -2893,10 +2297,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -2924,10 +2324,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -2957,10 +2353,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -2990,10 +2382,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -3027,10 +2415,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -3054,10 +2438,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3085,10 +2465,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -3112,10 +2488,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3165,10 +2537,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3188,10 +2556,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3211,10 +2575,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3231,10 +2591,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3251,10 +2607,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3289,10 +2641,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3312,10 +2660,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3335,10 +2679,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -3358,10 +2698,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3388,10 +2724,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "compliant",
@@ -3432,10 +2764,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3458,7 +2786,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3475,7 +2802,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3492,7 +2818,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3535,10 +2860,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3555,7 +2876,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3598,7 +2918,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3629,10 +2948,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": "team-p",
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3649,7 +2964,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3666,7 +2980,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3683,7 +2996,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3695,7 +3007,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": "team-p",
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3740,10 +3051,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3760,7 +3067,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3805,10 +3111,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3836,7 +3138,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3873,7 +3174,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3911,7 +3211,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3948,7 +3247,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3985,7 +3283,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4019,10 +3316,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4039,10 +3332,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4059,7 +3348,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4091,10 +3379,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4131,10 +3415,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4181,10 +3461,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -4208,15 +3484,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": {
-              "patch": {
-                "_routing_profile": "p-quoted"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4237,10 +3504,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4261,10 +3524,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4285,10 +3544,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4309,29 +3564,7 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4351,29 +3584,7 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4393,29 +3604,7 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4433,10 +3622,6 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4459,31 +3644,7 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              },
-              {
-                "ref": "overrides[0]",
-                "type": "webhook"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4503,10 +3664,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4552,31 +3709,7 @@
           ],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431, supplied by _routing_defaults).",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              },
-              {
-                "ref": "overrides[0]",
-                "type": "webhook"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -4616,29 +3749,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4656,29 +3767,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4696,29 +3785,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4736,29 +3803,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4776,29 +3821,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4816,29 +3839,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4856,29 +3857,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -4896,29 +3875,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -4968,10 +3925,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4993,10 +3946,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5013,10 +3962,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5042,10 +3987,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5067,10 +4008,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5087,10 +4024,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5112,10 +4045,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5137,10 +4066,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5157,10 +4082,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5198,10 +4119,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5223,32 +4140,7 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through (it does not judge a routing profile's group_by); the generator's --validate --strict blocks the tenant with a routing_group_by_invalid ERROR from its profile.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [
-              [
-                "group_by[1]",
-                "not_string"
-              ]
-            ],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -5264,15 +4156,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": {
-              "patch": {
-                "_routing_profile": "p-gb"
-              },
-              "verdict": "ok"
-            }
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5294,10 +4177,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5314,10 +4193,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5343,10 +4218,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5368,10 +4239,6 @@
             ]
           ],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5408,10 +4275,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "403",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": {
             "verdict": "violation",
@@ -5433,29 +4296,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "webhook"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -5473,29 +4314,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "webhook"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -5513,29 +4332,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "webhook"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [
-              "routes[0]"
-            ],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -5564,10 +4361,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5620,10 +4413,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5640,10 +4429,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5676,10 +4461,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5691,10 +4472,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5727,10 +4504,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5758,10 +4531,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5773,10 +4542,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5812,10 +4577,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5845,10 +4606,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5887,10 +4644,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5929,10 +4682,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5964,10 +4713,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6012,10 +4757,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6027,10 +4768,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6042,10 +4779,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6057,10 +4790,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6072,10 +4801,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6087,10 +4812,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6102,10 +4823,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6117,10 +4834,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6132,10 +4845,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6152,10 +4861,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6172,10 +4877,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6187,22 +4888,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_not_mapping ERROR: the root platform overlay's _routing, which the body does not replace, is no mapping.",
-            "targets": null,
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": "routing_not_mapping",
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
         },
@@ -6213,10 +4899,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
@@ -6228,10 +4910,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6270,7 +4948,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6287,7 +4964,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6313,7 +4989,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": "invalid_tenant_id"
@@ -6325,7 +5000,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": "invalid_tenant_id"
@@ -6337,7 +5011,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": "invalid_tenant_id"
@@ -6349,7 +5022,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": "invalid_tenant_id"
@@ -6366,10 +5038,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6394,7 +5062,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": "invalid_tenant_id"
@@ -6431,27 +5098,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "503",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api refuses `domain_policies: null` and answers the PUT 503 POLICY_UNAVAILABLE; the generator drops the block (a platform finding, not one of this write) and judges the PUT on no policy: it accepts the write.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "slack"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "ok",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -6477,7 +5124,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": {
             "reason": "#2700: PyYAML takes any !!merge-tagged key as a merge key, so `!!merge q:` merges its _routing into t1 and the generator's --strict blocks the forbidden slack receiver; the Go readers' yaml.v3 reads `q` as a plain key and see no _routing (da-guard rc 0).",
             "targets": [
@@ -6495,8 +5141,7 @@
             ],
             "rejected_routes": [],
             "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": null
+            "refused": null
           },
           "escalation": null,
           "refused": null
@@ -6508,12 +5153,8 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": {
-            "reason": "#2700 with a known key: `!!merge _routing:` merges the inner _routing (a slack receiver) into t2 for PyYAML, and the generator's --strict blocks it; yaml.v3 reads a plain `_routing` key holding a mapping with no receiver, so the Go readers render nothing; da-guard and tenant-api name only that inner `_routing` as a key the generator does not read (#2960), not the forbidden receiver — tenant-api still refuses the PUT (400), so its cell no longer differs.",
+            "reason": "#2700 with a known key: `!!merge _routing:` merges the inner _routing (a slack receiver) into t2 for PyYAML, and the generator's --strict blocks it; yaml.v3 reads a plain `_routing` key holding a mapping with no receiver, so the Go readers render nothing; da-guard names only that inner `_routing` as a key the generator does not read (#2960), not the forbidden receiver.",
             "targets": [
               {
                 "ref": "receiver",
@@ -6529,11 +5170,7 @@
             ],
             "rejected_routes": [],
             "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
+            "refused": null
           },
           "escalation": null,
           "refused": null
@@ -6573,21 +5210,13 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": {
             "reason": "#2713: the merge source's _routing (`!!bool y`, a value PyYAML cannot build) is overridden by t1's own _routing. PyYAML builds every merged pair first and cannot read the file, so the generator refuses the whole tree (tenant_file_unreadable, rc 1); yaml.v3 skips the overridden value and the Go readers judge t1's own _routing.",
             "targets": null,
             "policy": [],
             "rejected_routes": [],
             "group_by_invalid": [],
-            "refused": "tenant_file_unreadable",
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
+            "refused": "tenant_file_unreadable"
           },
           "escalation": null,
           "refused": null
@@ -6619,10 +5248,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6639,10 +5264,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6697,10 +5318,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6717,10 +5334,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6737,10 +5350,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6793,10 +5402,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": "p-team",
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6835,7 +5440,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6852,7 +5456,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6900,10 +5503,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6951,10 +5550,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -6988,31 +5583,7 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
-          "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_override_entry for the tenant (blocks=validate: a generation-stage finding) and fails. overrides[0] is no mapping.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "webhook"
-              },
-              {
-                "ref": "overrides[1]",
-                "type": "webhook"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [],
-            "refused": null,
-            "tenant_api": {
-              "put": "400",
-              "batch": null
-            }
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         }
@@ -7086,10 +5657,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7106,10 +5673,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7126,7 +5689,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7177,10 +5739,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "400",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7197,10 +5755,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7237,10 +5791,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7283,10 +5833,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -7319,10 +5865,6 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": {
-            "put": "ok",
-            "batch": null
-          },
           "python_differs": null,
           "escalation": null,
           "refused": null
