@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-10-15
+updated_at: 2026-10-16
 ---
 # ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略
 
@@ -20,6 +20,8 @@ updated_at: 2026-10-15
 ## 狀態
 
 ✅ **Accepted**（v2.7.0, 2026-04-19）— Directory Scanner 混合模式 + `migrate-conf-d` CLI 已隨 v2.7.0 出貨。
+
+2026-10-16 修訂：路由面只剩路由生成器一個讀者，da-guard 不再有自己的路由層；表格與路由面段落改寫為現況。
 
 ## 背景
 
@@ -131,7 +133,7 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 | threshold-exporter **函式庫**（`pkg/config` 的 `ResolveEffective`；`/effective`、`describe_tenant.py` 走這裡） | ✅ 完整遞迴繼承 |
 | threshold-exporter **實際吐出的 metric** | ✅ 完整遞迴繼承（#1521 修復；在那之前是平面，見下方補記） |
 | `validate_config.py` | ✅ 已改為遞迴 |
-| 路由面：路由生成器（`generate_alertmanager_routes.py`）與 da-guard 的路由層（`pkg/routingpolicy`） | ✅ **階層**（#2326，見下方「Amendment 2026-09-28」）：生成器與 da-guard 讀整棵樹的租戶與路由層。tenant-api 只服務根目錄的租戶檔，不自己讀路由層：寫入由產生器對整棵樹判（[ADR-036](036-single-parser-effective-config.md) §4） |
+| 路由面：路由生成器（`generate_alertmanager_routes.py`） | ✅ **階層**（#2326，見下方「Amendment 2026-09-28」）：生成器讀整棵樹的租戶與路由層。da-guard 不判路由：樹上有路由內容時列為未判定（exit 4），交給生成器（[ADR-036](036-single-parser-effective-config.md) §9）。tenant-api 只服務根目錄的租戶檔，不自己讀路由層：寫入由產生器對整棵樹判（[ADR-036](036-single-parser-effective-config.md) §4） |
 | 其餘平面工具 | ⚠️ **仍是平面**，但會列出被跳過的檔案並指回本節 |
 
 > ⚠️ **補記（2026-08-22 發現 → 2026-08-24 關閉，#1521）**：本表原本只有一列
@@ -163,7 +165,7 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 
 ⇒ **路由面支援階層布局**（#2326，下方修訂）：任何深度的租戶都有路由，`_routing_defaults`
 沿目錄鏈逐層淺合併；子目錄 `_defaults.yaml` 的 `defaults:` 區塊裡的 `_routing*` 仍不會被
-任何元件消費（da-guard 以 `routing_in_unread_location` 點名）。
+任何元件消費（路由生成器以 `routing_in_unread_location` 點名，`--validate` 時擋下）。
 
 這個「平面但出聲」的契約由 `tests/shared/test_confd_enumeration_contract.py` 強制：
 新工具若平面讀取又不出聲會被擋下來，**選擇必須是刻意的**。共用列舉層在
@@ -176,15 +178,12 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 owner 裁決（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
 的選項 **P2**）：路由面改跟閾值面走同一套目錄階層，不再只讀根目錄。本修訂先定語意，
 實作在後續 PR 落地：路由生成器（`_grar_parse` / `_grar_merge`）、`explain-route`、
-`check_routing_profiles`、`validate-config` 的 schema / routes / policy 列，以及 Go 的
-`pkg/routingpolicy.LoadTree`（da-guard）同一支 PR 改，parity 矩陣的 `hier-*` 樹釘住兩邊。
-⚠️ tenant-api 只列根目錄的租戶檔，路由層仍用根目錄那一半（`LoadRoot`），見上方的表。
+`check_routing_profiles`、`validate-config` 的 schema / routes / policy 列同一支 PR 改，
+parity 矩陣的 `hier-*` 樹釘住結果。tenant-api 只列根目錄的租戶檔，見上方的表。
 
 - **走訪器**：與閾值面共用——Python `_lib_confd.list_config_tree()`、Go
   `config.ScanDirTree` + `CollectDefaultsChain`（剪掉隱藏目錄、回報目錄 symlink、只有 README
-  的目錄不貢獻任何東西）。路由生成器與 da-guard（`pkg/routingpolicy.LoadTree`）一起改，
-  Python ↔ Go 的 parity 矩陣維持同一個答案；tenant-api 只服務根目錄的租戶檔，路由層維持
-  根目錄那一半（`LoadRoot`），見上方的表。
+  的目錄不貢獻任何東西）。tenant-api 只服務根目錄的租戶檔，見上方的表。
 - **分層鏈**：租戶繼承鏈上的 `_routing_defaults` → routing profile → 租戶本體的
   `_routing`。完整語意（頂層逐鍵淺合併、`_routing_enforced` 只認根目錄、profile 與 domain
   policy 以子樹為範圍、租戶 id 重複）記在負責繼承語意的

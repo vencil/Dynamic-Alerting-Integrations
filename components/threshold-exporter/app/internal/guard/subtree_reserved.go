@@ -416,7 +416,8 @@ func filterPath(f string) string { return filterName(f) }
 
 // reservedKeyFix is the finding's fix sentence for a recognised reserved key
 // k, `_state_<f>` with f declared (subtreeReservedMessage routes the rest).
-// (No routing key reaches here: the routing checks own those.)
+// (No routing key reaches here: subtreeReservedKeys leaves those to the
+// route generator's checks.)
 func reservedKeyFix(k string) string {
 	if strings.HasPrefix(k, "_state_") {
 		return fmt.Sprintf("To have it take effect, set `%s` in each tenant's own entry under `tenants:`, or set "+

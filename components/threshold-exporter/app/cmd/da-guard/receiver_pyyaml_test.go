@@ -7,8 +7,6 @@ package main
 // reading — and the CLI judges no routing. Each tree below is the pre-#2904
 // fixture, and each test's comment says what it probed then; the run must
 // now be undetermined (exit 4), with no finding at all.
-// The Go reading stays held to the generator by the parity matrix
-// (routing_policy_parity_test.go) until #2905.
 
 import (
 	"strings"

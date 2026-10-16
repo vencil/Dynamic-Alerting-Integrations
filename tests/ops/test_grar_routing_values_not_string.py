@@ -5,9 +5,8 @@
 
 * 述詞只有一個：`_grar_validate.routing_values_not_string`，判的是**解析後**
   的 routing（租戶檔、根目錄 overlay、`_routing_defaults`、routing profile
-  來的值都算）；Go 側同一述詞是 `routingpolicy.ValuesNotString`，兩邊由
-  `tests/shared/routing_policy_parity_matrix.json` 的 `values_not_string`
-  欄對齊。
+  來的值都算），由 `tests/shared/routing_policy_parity_matrix.json` 的
+  `values_not_string` 欄釘住。
 * `--strict`（`--validate` 與 render 兩條路）：每個值一行 `ERROR:`，rc 1，
   訊息要求加引號。
 * 非 strict 行為不變：routes 照舊 `WARN … skipping`、overrides 照舊以

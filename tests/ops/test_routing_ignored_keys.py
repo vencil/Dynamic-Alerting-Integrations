@@ -2,8 +2,8 @@
 generator does not read (#2960).
 
 The key sets are what the generator reads (``_grar_validate``); the JSON
-schemas are pinned to them here, not the other way round. The shared case
-table is read by the Go copy (``routingpolicy.IgnoredKeys``) as well.
+schemas are pinned to them here, not the other way round. This file is the
+only reader of the shared case table.
 """
 import json
 import os
@@ -65,8 +65,7 @@ def test_receiver_keys_cover_every_field_the_spec_names(rtype):
 
 def test_non_string_keys_are_passed_over():
     """The routing loader reads keys as text and drops a null key's pair, so a
-    non-string key reaches here only from another reader; it is passed over
-    (Go's copy passes over a null key, TestIgnoredKeys_KeyText)."""
+    non-string key reaches here only from another reader; it is passed over."""
     got = gv.ignored_routing_keys({True: 1, "receiver": {"type": "webhook", "url": "u", 5: 1}},
                                   block="routing", where="x")
     assert got == []

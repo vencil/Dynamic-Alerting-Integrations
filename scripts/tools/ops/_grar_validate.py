@@ -1457,7 +1457,7 @@ def check_policy_scope(
                 msg += (f" — fix: move the entry to a _domain_policy.yaml at "
                         f"or above the tenant's directory, or drop '{t}' from "
                         f"this policy")
-            # #2766: da-guard / the tree record's kind for the same entry.
+            # #2766: the tree record's kind for the same entry.
             messages.append(Finding(
                 msg, kind="domain_policy_out_of_scope", blocks="strict",
                 tenant=t, policy=name, file=(policy_files or {}).get(name),
@@ -1805,8 +1805,8 @@ ROUTE_ENTRY_KEYS = frozenset({"match", "receiver", "group_by", "group_wait",
 # as if it were absent — `continue`, `mute_time_intervals`, a typo — so it is
 # named (`IgnoredKeyWarning`, blocking under `--validate`). These sets are the
 # generator's reads; the JSON schemas are pinned to them
-# (tests/ops/test_routing_ignored_keys.py), not the other way round, and the Go
-# copy is `routingpolicy.IgnoredKeys` (tests/shared/routing_ignored_keys_cases.json).
+# (tests/ops/test_routing_ignored_keys.py), not the other way round, and
+# tests/shared/routing_ignored_keys_cases.json pins them by example.
 # `http_config` is NOT looked into: it is passed to Alertmanager as written, so
 # a key there is Alertmanager's to refuse (amtool under `--validate`).
 _TIMING_KEYS = frozenset({"group_wait", "group_interval", "repeat_interval"})
@@ -1860,7 +1860,7 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
     the message; *field_prefix* is prepended to each finding's ``field``.
     The loader reads every key as its source text (so `1:` / `on:` are
     named) and drops a null key's pair; a non-string key reaching here anyway
-    is passed over, as Go's copy passes over a null one. A value of the wrong
+    is passed over. A value of the wrong
     shape is other checks' to name.
     """
     allowed = {"routing": ROUTING_BLOCK_KEYS, "routing_defaults": ROUTING_DEFAULTS_KEYS,
@@ -1915,9 +1915,8 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
 # in a tenant's config and PLATFORM_ROUTING_KEYS at the top level of a
 # platform (`_`) file (both generated from the reserved-key registry,
 # ADR-038). Any other `_routing`-prefixed key in that place is named
-# (`IgnoredKeyWarning`, blocking under `--validate`). The Go twin is
-# `routingpolicy.UnknownRoutingKeys`; tests/shared/routing_unknown_keys_cases.json
-# runs both.
+# (`IgnoredKeyWarning`, blocking under `--validate`).
+# tests/shared/routing_unknown_keys_cases.json pins it by example.
 
 
 def _unknown_routing_hint(key: str, layer: str) -> str:
@@ -1996,7 +1995,7 @@ def route_entry_matchers(entry: object, idx: int,
     unsupported key, or a missing / empty / malformed ``match``.
     """
     ctx = f"{tenant}: routes[{idx}]"
-    # #2766: da-guard's kind for the same entries (routingpolicy.RouteEntryProblem).
+    # #2766: one kind for every such entry.
     where = {"kind": "invalid_route_entry", "tenant": tenant or None,
              "field": f"routes[{idx}]"}
     if not isinstance(entry, dict):
@@ -2047,9 +2046,9 @@ def routing_values_not_string(routing_config: object) -> list[tuple[str, object]
     entry skipped by ``route_entry_matchers``; its value is not judged). An
     unquoted YAML 1.1 word is not text to PyYAML — ``yes`` is
     True, ``1:30`` is 90, ``2001-12-15`` a date, ``~`` None — and yaml.v3
-    (da-guard, tenant-api) reads the same bytes as strings, so the author's
-    intent is ambiguous: ``--strict`` refuses it and asks for quotes. The Go
-    copy is ``routingpolicy.ValuesNotString``; the parity matrix pins both.
+    (the exporter's reader) reads the same bytes as strings, so the author's
+    intent is ambiguous: ``--strict`` refuses it and asks for quotes. The
+    parity matrix pins it.
 
     ``field`` is the path in the routing (``routes[0].match.team``,
     ``overrides[1].alertname``). Order: overrides, then routes, each in list
@@ -2095,9 +2094,7 @@ def _canonical(value: object) -> str | None:
 def override_redundancies(routing_config: object) -> list[tuple[str, str, str]]:
     """``(kind, field, text)`` per override that changes nothing (#2904).
 
-    Two shapes, both warnings that never block (da-guard's
-    ``duplicate_override_matcher`` / ``redundant_override_receiver``, warn
-    there too — ADR-036 moves them here before the Go copy goes):
+    Two shapes, both warnings that never block:
 
     * ``duplicate_override_matcher`` (field ``overrides[i]``): the override
       carries the same matcher as an earlier one, so the earlier one catches
@@ -2108,8 +2105,7 @@ def override_redundancies(routing_config: object) -> list[tuple[str, str, str]]:
     * ``redundant_override_receiver`` (field ``overrides[i].receiver``): the
       override's receiver is structurally the main receiver (same keys, same
       values), so the alerts it catches reach the same destination anyway.
-      Judged for every mapping override whatever its matcher, as da-guard
-      judges it.
+      Judged for every mapping override whatever its matcher.
 
     Order: list order, the duplicate line of an override before its receiver
     line. A non-list ``overrides`` or a non-mapping entry is judged elsewhere
@@ -2186,8 +2182,7 @@ def group_by_problems(group_by: list) -> tuple[list[str], list[tuple[int, str, o
 
     ``kept`` is the list the generator renders without ``--strict`` (every
     problem element dropped; ``[]`` means "render no group_by"). ``problems``
-    is ``(index, kind, value)`` in index order. The Go copy is
-    ``routingpolicy.GroupByProblems``; the parity matrix pins both.
+    is ``(index, kind, value)`` in index order. The parity matrix pins it.
     """
     problems: list[tuple[int, str, object]] = []
     kept: list[tuple[int, str]] = []
@@ -2219,7 +2214,7 @@ def routing_group_by_invalid(routing_config: object) -> list[tuple[str, str, obj
     ``group_by`` is not judged (the generator renders none). ``field`` is
     the element's path (``group_by[1]``, ``overrides[0].group_by[2]``).
     ``_routing_enforced.group_by`` goes through ``group_by_problems`` at the
-    call site. The Go copy is ``routingpolicy.GroupByInvalid``.
+    call site.
     """
     out: list[tuple[str, str, object]] = []
     if not isinstance(routing_config, dict):
@@ -2439,7 +2434,7 @@ ESCALATION_TYPES = frozenset({"pagerduty"})
 
 def _subroute_receiver_type(sub_rc: dict) -> str:
     # #2780: a non-string type reads as "" (receiver_type) — it escalates
-    # nowhere, as da-guard's ReceiverType() reads it, instead of crashing the
+    # nowhere instead of crashing the
     # `in ESCALATION_TYPES` tests below.
     return receiver_type(sub_rc.get("receiver"))
 
@@ -2567,7 +2562,7 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
     (``critical_escalation_findings().leaks``) is always a plain WARN — it
     never blocks: it is not a ``SkippedEntryWarning`` (#2489), and the text
     still avoids the ``skipping`` word. #2766: both are ``Finding``s with
-    da-guard's kinds and fields (``critical_escalation_missing`` /
+    stable kinds and fields (``critical_escalation_missing`` /
     ``critical_escalation_leak``, ``<ref>.receiver.type``).
     """
     target, leaks = critical_escalation_findings(routing_config, tenant)
@@ -2693,7 +2688,7 @@ def check_domain_policies(
         unhashable) names no receiver type: strict ERRORs on it, and it is
         kept as the non-string placeholder None — it matches no receiver
         type, yet a non-empty `allowed_receiver_types` stays non-empty and
-        still restricts (as the corpus oracle and da-guard read it).
+        still restricts (as the corpus oracle reads it).
         """
         out: set = set()
         for entry in _constraint_list(policy_name, constraints, field):
@@ -2861,8 +2856,8 @@ def check_domain_policies(
                 # Check receiver type constraints
                 # #2780: a type that is not a string (a mapping or a list —
                 # unhashable, it crashed the `in` below — or a scalar such as
-                # 5 / true) reads as "" and no policy judges it, as da-guard's
-                # routingpolicy.ReceiverType() and explain-route read it.
+                # 5 / true) reads as "" and no policy judges it, as
+                # explain-route reads it.
                 # build_receiver_config refuses that entry itself
                 # (missing_receiver_field, blocking under --validate).
                 recv_type = receiver_type(rc.get("receiver"))

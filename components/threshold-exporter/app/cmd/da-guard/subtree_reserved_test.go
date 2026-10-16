@@ -295,10 +295,11 @@ func allFindings(t *testing.T, args ...string) []string {
 	return out
 }
 
-// #2388 r2 (F1): the routing exclusion is the routing checks' own predicate
-// (config.IsRoutingKey: `_routing`, `_routing_<…>`), not the `_routing`
-// reserved prefix. `_routingProfile` is a reserved key no routing check names:
-// reported here. `_routing_xyz` inside `defaults:` was routing_in_unread_location
+// #2388 r2 (F1): the routing exclusion is the route generator's routing-key
+// test (config.IsRoutingKey: `_routing`, `_routing_<…>`), not the `_routing`
+// reserved prefix. `_routingProfile` is not a routing key, and inside
+// `defaults:` the generator does not name it: reported here.
+// `_routing_xyz` inside `defaults:` was routing_in_unread_location
 // (an error) and is not repeated here; since #2904 the default check judges
 // no routing, so it is undetermined, no finding. A top-level
 // `_routing_defaults` in an unwrapped subtree file is the generator's
@@ -425,7 +426,7 @@ func TestGuard_SubtreeReservedAdviceIsAFix(t *testing.T) {
 }
 
 // #2388 r3: `_routingProfile` gets "delete it", and deleting it is the fix —
-// the finding goes; the routing checks name it nowhere either way.
+// the finding goes; inside `defaults:` the generator names it nowhere either way.
 func TestGuard_SubtreeReservedRoutingProfileDeleted(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

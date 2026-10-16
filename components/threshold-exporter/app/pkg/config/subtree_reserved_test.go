@@ -29,7 +29,7 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 		// and a plain threshold (the last two are #1976's, not #2388's).
 		"finance/_defaults.yaml": "defaults:\n  _state_maintenance: enable\n  _silent_mode: warning\n" +
 			"  _severity_dedup: disable\n  _state_bogus: 5\n  _metadata: null\n  _myth: 5\n  redis_x: 5\n" +
-			// `_routing*` is the routing checks' (routing_in_unread_location).
+			// `_routing*` is the route generator's (routing_in_unread_location).
 			"  _routing_profile: p1\n",
 		"finance/us/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
 		"finance/us/tenant-a.yaml":  "tenants:\n  tenant-a:\n    _silent_mode: critical\n",

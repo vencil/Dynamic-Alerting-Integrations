@@ -17,6 +17,7 @@ lang: en
 - The decisions were settled by the owner in [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655); two of them were settled after the external review.
 - The external review was carried out adversarially by a different model, and its conclusions have been merged into this document.
 - The owner has approved this document. Three revisions were made at approval time: former open question 1 (the tenant-api read and delete paths) is resolved, another DNS-1123 copy, in `init_project.py`, is now listed, and `definitions.tenantId` gains a `description`.
+- Revised 2026-10-16: where Go reads the rule now describes the current code (`Valid` in `pkg/tenantid`); the "Current state" section is the snapshot taken when this was drafted and is left as it was.
 
 ## Summary
 
@@ -104,13 +105,13 @@ A Go binary cannot read the repo's `docs/` at runtime, so we use "generated copy
 - A generator script extracts `definitions.tenantId` from the schema and writes two JSON files:
   - `components/threshold-exporter/app/pkg/tenantid/tenant_id.json`
   - the corresponding data file in the portal
-- Go reads it via `go:embed`, and `routingpolicy.IsValidTenantID` switches to it. tenant-api references it through the existing `replace github.com/vencil/threshold-exporter => ../threshold-exporter/app`. tenant-api's Dockerfile copies that whole module, and `.dockerignore` does not exclude `*.json`.
+- Go reads it via `go:embed` (`Valid` in `pkg/tenantid`), which the exporter, da-guard and the tenant-api write path all call. tenant-api references it through the existing `replace github.com/vencil/threshold-exporter => ../threshold-exporter/app`. tenant-api's Dockerfile copies that whole module, and `.dockerignore` does not exclude `*.json`.
 - The portal's `validateTenantName` switches to reading its data file and drops its own regex.
 - Add a drift check to pre-commit: both copies must equal a fresh regeneration.
 
 **Why not the receiverspec pattern**
 
-The receiverspec pattern hand-copies constants on the Go side and then compares them against the schema in `TestSpecs_MatchSchema`; see `pkg/receiverspec/spec.go`. It saves the generator script, but has two problems:
+The receiverspec pattern hand-copies constants on the Go side and then compares them against the schema in a test; the receiver-type list of `pkg/receiverspec` and `TestKnown_MatchesSchema` work this way. It saves the generator script, but has two problems:
 
 - The rule text is still hand-copied on the Go side, which contradicts the decision of "one data file, read by both languages".
 - The portal has no Go test to lean on, so a third copy would remain.
@@ -200,7 +201,7 @@ The exporter does not reject tenants with illegal ids; on every reload it prints
 - tenant-api's `gitops.guardTenantID`: add the new rule; leave `confd.IsAddressableTenantID` unchanged.
 - The WARN text in `_grar_parse.py` and `_grar_validate.invalid_tenant_id_text`, which currently says "letters, digits, '_' and '-' only".
 - The `tenant_ids` table in `tests/shared/routing_policy_parity_matrix.json`: move cases such as `UPPER`, `Mixed_Case-1`, `_x`, `-x`, `x_`, and 64 characters to invalid, and update the description text.
-- Tests such as `components/tenant-api/internal/handler/tenant_id_write_test.go`, `tests/ops/test_tenant_name_rfc1123.py`, and `pkg/routingpolicy/parity_test.go`.
+- Tests such as `components/tenant-api/internal/handler/tenant_id_write_test.go`, `tests/ops/test_tenant_name_rfc1123.py`, and `pkg/tenantid/tenantid_test.go`.
 
 ## References
 

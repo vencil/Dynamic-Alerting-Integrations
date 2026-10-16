@@ -14,6 +14,8 @@ lang: en
 
 ✅ **Accepted** (v2.1.0) — Four-layer routing + domain policy validation completed, profile inheritance chain as v2.7.0+ candidate
 
+Revised 2026-10-16: domain policies (`require_critical_escalation` included) and the checks on the resolved routing are run by the route generator alone, and da-guard and tenant-api no longer carry Go copies of those checks; the paragraphs concerned now describe that.
+
 ## Background
 
 As the number of tenants managed by the platform grows, routing configurations exhibit significant duplication. Multiple tenants share the same on-call teams, notification channels, and grouping policies, yet each tenant's `_routing` block must be configured independently.
@@ -116,7 +118,7 @@ Once a tenant complies, every non-PagerDuty destination that can still receive a
 
 Whether the main receiver is PagerDuty does not change the verdict for a sub-route: the critical alerts a sub-route catches would otherwise have reached a later escalation destination. The WARN says critical alerts land on the main receiver only when N is the main receiver itself. The check is exact only within the tenant route's sub-tree and only for equality matchers. Two things fall outside its model. First, platform routes placed ahead of the tenant route (e.g. `alertname="Watchdog"` or the `component="sentinel"` route) are not considered, so a sub-route whose match names those values may be reported although it never receives an alert; this part can only over-report. Second, a sub-route whose receiver content is invalid, which the generator does not render, is still treated as present: it may itself be over-reported, and it may make a later N look already caught and so be under-reported. The custom sub-tree carries the same sub-routes, so the verdict holds there too (#2342).
 
-da-guard enforces the same constraint with the same criterion (#2325, `pkg/routingpolicy`, pinned to the generator by the `escalation` column of `tests/shared/routing_policy_parity_matrix.json`): it reports non-compliance as `critical_escalation_missing` (error) and each WARN above as `critical_escalation_leak` (warn). tenant-api does not judge it itself: every write is judged by the generator over the whole tree after the write, and non-compliance is a 422 `GENERATOR_FINDINGS` ([ADR-036](036-single-parser-effective-config.en.md) §4); a WARN does not block the write. Because the whole tree is judged, after a routing profile or the domain policy file changes, any write through tenant-api meets the existing tenants' non-compliance.
+Only the generator judges this constraint ([ADR-036](036-single-parser-effective-config.en.md) §9): non-compliance has the finding kind `critical_escalation_missing` (a blocking ERROR under `--strict`) and each WARN above is `critical_escalation_leak`; the `escalation` column of `tests/shared/routing_policy_parity_matrix.json` pins the verdicts. da-guard does not judge domain policies: a tree with a `_domain_policy.yaml` is undetermined (exit 4) and left to the generator. tenant-api does not judge it itself: every write is judged by the generator over the whole tree after the write, and non-compliance is a 422 `GENERATOR_FINDINGS` ([ADR-036](036-single-parser-effective-config.en.md) §4); a WARN does not block the write. Because the whole tree is judged, after a routing profile or the domain policy file changes, any write through tenant-api meets the existing tenants' non-compliance.
 
 ### Why Reject Three-Layer Contact Profile Model
 
@@ -255,11 +257,9 @@ def resolve_tenant_routing(tenant_cfg, profiles, defaults):
 # impossible for a tenant to override.
 ```
 
-⚠️ Corrected 2026-09-28 (#2326): this pseudocode used to say `deep_merge` for all three
-steps and merged `_routing_enforced` into the result. The code has always merged shallowly
-(`merge_routing_with_defaults` in `_grar_merge.py`, `routingpolicy.Resolve` in Go), as the
-"Merge Semantics" paragraph under Layer 1 already states, and it builds the enforced routes
-separately.
+All three steps merge shallowly (`merge_routing_with_defaults` in `_grar_merge.py`), as the
+"Merge Semantics" paragraph under Layer 1 states; `_routing_enforced` is not merged into the
+result, and the enforced routes are built separately.
 
 ### Policy Validation Logic
 
@@ -285,9 +285,9 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 ### Amendment 2026-09-28 (#2326): directory scope of profiles and policies
 
-**Status: implemented** (option P2 of
-[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)): the route
-generator, `check_routing_profiles` and da-guard (`pkg/routingpolicy.LoadTree`) read
+**Status: implemented**
+([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)): the route
+generator and `check_routing_profiles` read
 `_routing_profiles.yaml` and `_domain_policy.yaml` at every level. A profile name defined twice
 is refused with the other blocking tree errors (generator exit 2; the first definition in
 root-first name order is kept and the later file is named). tenant-api serves tenant files
@@ -333,8 +333,8 @@ In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en
 - **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
 - **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
 - **#2244**: `require_critical_escalation` is now enforced by `check_domain_policies()` (only the lint recognised the key before); the criterion is described under "Layer 2" above
-- **#2280**: da-guard and tenant-api judge the **resolved** routing (`_routing_defaults` → profile → tenant `_routing`, the generator's own merge, shared through `pkg/routingpolicy` and pinned by a cross-language parity matrix); the receiver types of the main route, `overrides` and `routes` are all judged against domain policies, with `forbidden_receiver_types` and `allowed_receiver_types` as separate tests that can both fire; da-guard also checks `routes` entry shapes and `_routing_defaults.routes`; a tenant-api batch op is judged on routing only when its patch touches `_routing_profile` / `_routing`
-- **#2325**: da-guard and tenant-api enforce `require_critical_escalation` too, with the generator's criterion; see "Layer 2" above
+- **#2280**: domain policies judge the **resolved** routing (`_routing_defaults` → profile → tenant `_routing`, the generator's own merge); the receiver types of the main route, `overrides` and `routes` are all judged against domain policies, with `forbidden_receiver_types` and `allowed_receiver_types` as separate tests that can both fire; `routes` entry shapes and `_routing_defaults.routes` are checked too
+- **#2325**: the `require_critical_escalation` value is read as PyYAML reads it (an unquoted `yes` / `on` is true); the criterion is under "Layer 2" above
 - **#2326** (decided and implemented 2026-09-28): profiles and domain policies scoped to the subtree they sit in, profile names unique across the tree, policies judged additively — see "Amendment 2026-09-28" above
 
 **Remaining**:

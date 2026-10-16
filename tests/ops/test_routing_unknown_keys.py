@@ -2,8 +2,8 @@
 does not read in a tenant's config or at the top level of a `_` file (#2983).
 
 `_routing` is a reserved PREFIX, so `_routing_profle` passed every key check
-as reserved while nothing read it. The shared case table is read by the Go
-copy (``routingpolicy.UnknownRoutingKeys``) as well.
+as reserved while nothing read it. This file is the only reader of the
+shared case table.
 """
 import json
 import os

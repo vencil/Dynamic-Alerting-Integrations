@@ -20,7 +20,7 @@ var renderedByKeys = []string{
 }
 
 // routingProfilesNames: the generator takes routing_profiles from these
-// names only, exact spelling (_grar_parse, routingpolicy.profileFileNames).
+// names only, exact spelling (_grar_parse._parse_profiles_and_policies).
 var routingProfilesNames = map[string]bool{"_routing_profiles.yaml": true, "_routing_profiles.yml": true}
 
 // renderedBy is one `_` file's rendered_by entry: for each modelled key the

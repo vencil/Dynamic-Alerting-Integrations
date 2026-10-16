@@ -75,7 +75,9 @@ func TestRun_RoutingSource(t *testing.T) {
 				"tx.yaml":        rsTenant,
 			},
 			wantCode: exitFindings,
-			// #2983: a top-level key of a `_` file is LoadRoot's.
+			// #2983: a top-level key of a `_` file is the platform-file
+			// routing read's, not the defaults chain's (the generator names
+			// it routing_key_ignored now).
 			want: []string{"error routing_key_ignored  _defaults.yaml:_routing"},
 		},
 		{

@@ -400,8 +400,8 @@ jobs:
               - "docs/assets/template-data.json"
               # Also the receiver-required drift Vitest's (#2033) only source
               # since #2137: it reads the receiver field contract from this
-              # schema, to which _lib_constants.py (pytest) and the Go guard's
-              # routing.go (go test) are pinned in their own legs.
+              # schema, to which _lib_constants.py (pytest) and pkg/receiverspec
+              # (go test, TestKnown_MatchesSchema) are pinned in their own legs.
               - "docs/schemas/tenant-config.schema.json"
               - "rule-packs/threshold-registry.yaml"
               - "rule-packs/ALERT-REFERENCE.md"

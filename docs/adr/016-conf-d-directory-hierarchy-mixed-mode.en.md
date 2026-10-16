@@ -16,6 +16,8 @@ lang: en
 
 ✅ **Accepted** (v2.7.0, 2026-04-19) — Directory Scanner mixed-mode support and the `migrate-conf-d` CLI shipped with v2.7.0.
 
+Revised 2026-10-16: the route generator is the routing plane's one reader, and da-guard no longer has a routing layer of its own; the table and the routing-plane paragraphs now describe that.
+
 ## Context
 
 The v2.6.x Directory Scanner only recognizes a **flat** structure: all tenant YAML files in a single `conf.d/` folder.
@@ -127,7 +129,7 @@ State after the PR #1343 fix:
 | threshold-exporter **library** (`pkg/config`'s `ResolveEffective`; `/effective` and `describe_tenant.py` read through it) | ✅ full recursive inheritance |
 | threshold-exporter **metrics it actually emits** | ✅ full recursive inheritance (fixed by #1521; flat before that — see the note below) |
 | `validate_config.py` | ✅ now recursive |
-| routing plane: the route generator (`generate_alertmanager_routes.py`) and da-guard's routing layer (`pkg/routingpolicy`) | ✅ **hierarchical** (#2326, see "Amendment 2026-09-28" below): the generator and da-guard read tenants and routing layers from the whole tree. tenant-api serves tenant files at the root only and reads no routing layer itself: writes are judged by the generator over the whole tree ([ADR-036](036-single-parser-effective-config.en.md) §4) |
+| routing plane: the route generator (`generate_alertmanager_routes.py`) | ✅ **hierarchical** (#2326, see "Amendment 2026-09-28" below): the generator reads tenants and routing layers from the whole tree. da-guard does not judge routing: a tree with routing content is undetermined (exit 4) and left to the generator ([ADR-036](036-single-parser-effective-config.en.md) §9). tenant-api serves tenant files at the root only and reads no routing layer itself: writes are judged by the generator over the whole tree ([ADR-036](036-single-parser-effective-config.en.md) §4) |
 | remaining flat tools | ⚠️ **still flat**, but they now name the files they skip and point here |
 
 > ⚠️ **Note (found 2026-08-22 → closed 2026-08-24, #1521)**: this table used to
@@ -167,7 +169,7 @@ State after the PR #1343 fix:
 below): a tenant at any depth gets a route, and `_routing_defaults` merges
 shallowly level by level down its directory chain. `_routing*` inside the
 `defaults:` block of a nested `_defaults.yaml` is still consumed by nothing
-(da-guard names it as `routing_in_unread_location`).
+(the route generator names it as `routing_in_unread_location`, blocking under `--validate`).
 
 The "flat but loud" contract is enforced by
 `tests/shared/test_confd_enumeration_contract.py`: a new tool that reads flat and
@@ -185,19 +187,14 @@ the routing plane follows the same directory hierarchy as the threshold plane,
 instead of staying root-only. This amendment fixed the semantics first; the
 implementation followed in one PR: the route generator (`_grar_parse` /
 `_grar_merge`), `explain-route`, `check_routing_profiles`, validate-config's
-schema / routes / policy rows, and Go's `pkg/routingpolicy.LoadTree` (da-guard),
-with the parity matrix's `hier-*` trees pinning both sides. ⚠️ tenant-api lists
-tenant files at the root only and keeps reading the root half of the routing
-layers (`LoadRoot`); see the table above.
+schema / routes / policy rows, with the parity matrix's `hier-*` trees pinning
+the result. tenant-api lists tenant files at the root only; see the table above.
 
 - **Walker**: the same one the threshold plane uses — Python
   `_lib_confd.list_config_tree()`, Go `config.ScanDirTree` +
   `CollectDefaultsChain` (hidden directories pruned, directory symlinks
-  reported, a directory holding only a README contributes nothing). The route
-  generator and da-guard (`pkg/routingpolicy.LoadTree`) change together, so the
-  Python ↔ Go parity matrix stays one answer; tenant-api serves tenant files at
-  the root only and keeps the root half of the routing layers (`LoadRoot`), see
-  the table above.
+  reported, a directory holding only a README contributes nothing). tenant-api
+  serves tenant files at the root only, see the table above.
 - **Layer chain**: `_routing_defaults` along the tenant's chain → routing profile
   → the tenant's own `_routing`. The full semantics (shallow merge per top-level
   key, root-only `_routing_enforced`, subtree-scoped profiles and domain

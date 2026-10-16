@@ -51,8 +51,11 @@ const (
 	// undeterminedRoutingProfilesFile: a `_routing_profiles.yaml` / `.yml`
 	// file, any level. Field is "".
 	undeterminedRoutingProfilesFile = "routing_profiles_file"
-	// undeterminedGeneratorUnreadable: a file parse-tree names unreadable;
-	// the generator refuses it whole. Field is the parse-tree kind.
+	// undeterminedGeneratorUnreadable: a file parse-tree names unreadable,
+	// whether or not the exporter reads it. Before ADR-036 step 4 the
+	// generator (PyYAML) does not necessarily refuse such a file; from
+	// step 4 it reads parse-tree's JSON and refuses it. Field is the
+	// parse-tree kind.
 	undeterminedGeneratorUnreadable = "generator_unreadable"
 	// undeterminedTenantID: a tenant id under `tenants:` that the tenant-id
 	// rule refuses (tenantid.Valid); the generator refuses the whole tree

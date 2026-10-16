@@ -1,5 +1,5 @@
 {
-  "_comment": "#2960: keys a routing block carries that the route generator does not read. One row = a block as read (`block`: routing = a tenant _routing or a routing profile, routing_defaults, routing_enforced) and the `field`s, relative to the block, that must be named — nothing more, nothing less. Read by tests/ops/test_routing_ignored_keys.py (_grar_validate.ignored_routing_keys) and by components/threshold-exporter/app/pkg/routingpolicy/ignored_keys_test.go (routingpolicy.IgnoredKeys).",
+  "_comment": "#2960: keys a routing block carries that the route generator does not read. One row = a block as read (`block`: routing = a tenant _routing or a routing profile, routing_defaults, routing_enforced) and the `field`s, relative to the block, that must be named — nothing more, nothing less. Read by tests/ops/test_routing_ignored_keys.py (_grar_validate.ignored_routing_keys).",
   "cases": [
     {
       "name": "clean-full-block",

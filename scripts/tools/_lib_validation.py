@@ -249,8 +249,6 @@ def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
     stricter than Alertmanager on purpose: it renders ``0`` as ``"0"`` but
     fails to load ``[]`` (``cannot unmarshal !!seq``), so no "counts as given"
     rule for non-strings is right for all of them.
-
-    Same rule as the Go copy (pkg/receiverspec exactlyOneProblem).
     """
     value = receiver.get(field)
     if value is None or value == "":
@@ -541,7 +539,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
 
     Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
     as amtool 0.34.1 loads them), stricter only where the shared case table
-    says ``strict``; the Go copy is pkg/receiverspec checkHTTPConfig:
+    says ``strict``:
 
     - null is unset; otherwise a mapping;
     - ``HTTP_CONFIG_AUTH_MAPPINGS`` keys: null is unset, else a mapping (set
@@ -552,7 +550,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
       (strict for the same reason). Whether a proxy_url
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
       generator's ``--validate`` hands the rendered config to amtool, which
-      runs it (the Go copy checks it itself, ProxyURLProblem);
+      runs it;
     - ``proxy_from_environment`` is a YAML boolean; true together with a
       non-empty proxy_url or a no_proxy is refused; no_proxy needs a
       proxy_url key; proxy_connect_header needs a non-empty proxy_url or
@@ -624,7 +622,7 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
       follows ``_http_config_problem``.
 
     Returns the first problem (callers prefix tenant / receiver context), or
-    ``None``. Same rule as the Go copy (pkg/receiverspec Check); cases in
+    ``None``. Cases in
     components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
     """
     fields = _receiver_field_schemas().get(rtype, {})
@@ -656,8 +654,7 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
       string (the schema alone rejects that form).
 
     Returns the problem (callers prefix tenant / receiver context), or
-    ``None``. Same rule as the Go copy (pkg/receiverspec
-    requiredProblem); cases in
+    ``None``. Cases in
     components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
     """
     state = receiver_field_state(receiver, field)
