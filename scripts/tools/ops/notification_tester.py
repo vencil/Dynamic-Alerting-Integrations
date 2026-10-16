@@ -8,6 +8,17 @@ sends test messages to each receiver, and reports connectivity status.
 Per-tenant receivers only: the platform-enforced (`_routing_enforced`, NOC)
 receiver the generator also renders is not tested. A conf.d tree the route generator refuses is refused here too (rc 2).
 
+A receiver whose own config the route generator refuses
+(build_receiver_config) is never sent: INVALID_URL when its URL field (or
+email smarthost) is given but malformed, else INVALID_CONFIG (a missing,
+empty or null URL field included). On top of that the port must be 1-65535.
+Hostname encoding (IDNA) is checked only when a request is sent, so --dry-run
+does not cover it. Not covered yet (#3076): what the
+generator skips at the routing level is still tested — an override or routes
+entry it skips (an override with no alertname / metric_group, routes[i] with
+an unsupported key), and a tenant's whole overrides / routes set, which it
+does not render when the main receiver is refused.
+
 Usage:
   # Test all receivers for all tenants in config directory
   python3 notification_tester.py --config-dir ./conf.d/
@@ -15,7 +26,7 @@ Usage:
   # Test a specific tenant
   python3 notification_tester.py --config-dir ./conf.d/ --tenant db-a
 
-  # Dry-run: validate URLs and config without sending
+  # Dry-run: the generator's verdict and the port range, without sending
   python3 notification_tester.py --config-dir ./conf.d/ --dry-run
 
   # JSON output for CI integration
@@ -31,7 +42,7 @@ Usage:
   # 測試特定租戶
   python3 notification_tester.py --config-dir ./conf.d/ --tenant db-a
 
-  # 乾跑模式：僅驗證 URL 和配置，不實際發送
+  # 乾跑模式：依路由產生器判定並檢查 port 範圍，不實際發送
   python3 notification_tester.py --config-dir ./conf.d/ --dry-run
 
   # JSON 輸出（CI 整合用）
@@ -61,12 +72,12 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
-    RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
     detect_cli_lang,
-    receiver_exactly_one_problem,
     receiver_field_state,
+    receiver_required_problem,
     FIELD_SET,
+    FIELD_UNSET,
     exit_on_yaml_file_error,
     non_negative_seconds,
     positive_seconds,
@@ -76,6 +87,7 @@ from _lib_python import (  # noqa: E402
 from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
+from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -94,8 +106,8 @@ _HELP = {
         'en': 'Test only this tenant (omit to test all)',
     },
     'dry_run': {
-        'zh': '乾跑模式：僅驗證 URL 格式，不實際發送',
-        'en': 'Dry-run: validate URL format only, do not send',
+        'zh': '乾跑模式：依路由產生器的判定檢查 receiver 配置與 URL 格式、port 須在 1–65535，不實際發送（主機名編碼只在送出時檢查）',
+        'en': 'Dry-run: check receiver config and URL format by the route generator\'s verdict and the port range 1-65535, do not send (hostname encoding is checked only when a request is sent)',
     },
     'json_flag': {
         'zh': 'JSON 格式輸出',
@@ -277,21 +289,38 @@ def validate_receiver_url(
         if not url:
             return None, f"missing required field '{url_field}'"
 
-        # Email smarthost is host:port, not a URL
-        if rtype == "email":
-            if ":" not in str(url):
-                return None, f"smarthost should be host:port format, got '{url}'"
-            return str(url), None
-
-        # Validate URL scheme
-        parsed = urllib.parse.urlparse(str(url))
-        if parsed.scheme not in ("http", "https"):
-            return None, f"invalid URL scheme '{parsed.scheme}' (expected http/https)"
-        if not parsed.hostname:
-            return None, f"missing hostname in URL '{url}'"
+        # #3048: the format is the route generator's rule for this field (the
+        # schema pattern), in the generator's words — not a check of our own.
+        problem = receiver_required_problem(rtype, receiver, url_field)
+        if problem:
+            return None, f"receiver type '{rtype}' {problem}"
+        port_err = _port_problem(rtype, str(url))
+        if port_err:
+            return None, port_err
         return str(url), None
 
     return None, None
+
+
+def _port_problem(rtype: str, url: str) -> Optional[str]:
+    """The error for a port outside 1-65535 in *url* (an email smarthost is
+    ``host:port``), else None.
+
+    #3048: the schema pattern takes any digits; ``parsed.port`` raises
+    ValueError for one above 65535, and glibc's ``getaddrinfo`` folds such a
+    port modulo 65536, so a request to ``:99999`` went to ``:34463``.
+    """
+    try:
+        parts = urllib.parse.urlsplit("//" + url if rtype == "email" else url)
+    except ValueError as exc:  # e.g. "Invalid IPv6 URL"
+        return f"invalid URL '{url}': {exc}"
+    try:
+        port = parts.port
+    except ValueError:
+        port = 0
+    if port == 0:
+        return f"port must be from 1 to 65535, got '{url}'"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -413,34 +442,23 @@ def test_receiver(
             status=STATUS_INVALID_CONFIG,
             detail=type_err,
         )
-    if rtype not in RECEIVER_TYPES:
+    # #3048: whether the receiver's own config is usable is the route
+    # generator's verdict (build_receiver_config) — the one every receiver it
+    # renders goes through. A receiver it refuses there is not tested (or
+    # passed in dry-run). Routing-level skips (an override / routes entry the
+    # generator drops, or a tenant's overrides / routes when its main receiver
+    # is refused) are not seen here and are still tested (#3076).
+    refusal = _generator_refusal(receiver, label, rtype)
+    if refusal is not None:
+        status, detail = refusal
         return ReceiverTestResult(
             receiver_name=label,
             receiver_type=rtype,
-            status=STATUS_INVALID_CONFIG,
-            detail=f"unknown receiver type '{rtype}'",
+            status=status,
+            detail=detail,
         )
 
-    # Validate required fields
-    spec = RECEIVER_TYPES[rtype]
-    for req_field in spec["required"]:
-        if not receiver.get(req_field):
-            return ReceiverTestResult(
-                receiver_name=label,
-                receiver_type=rtype,
-                status=STATUS_INVALID_CONFIG,
-                detail=f"missing required field '{req_field}'",
-            )
-    problem = receiver_exactly_one_problem(rtype, receiver)
-    if problem:
-        return ReceiverTestResult(
-            receiver_name=label,
-            receiver_type=rtype,
-            status=STATUS_INVALID_CONFIG,
-            detail=problem,
-        )
-
-    # Validate URL
+    # Validate URL (the generator accepted it; the port range is on top)
     url, url_err = validate_receiver_url(receiver)
     if url_err:
         return ReceiverTestResult(
@@ -456,7 +474,8 @@ def test_receiver(
             receiver_name=label,
             receiver_type=rtype,
             status=STATUS_DRY_RUN,
-            detail="URL format valid (dry-run, no request sent)",
+            detail=("format accepted by the route generator; hostname encoding "
+                    "is checked only when a request is sent (dry-run, no request sent)"),
             url_tested=url or "",
         )
 
@@ -472,6 +491,45 @@ def test_receiver(
 
     # Send request
     return _send_test_request(label, rtype, target_url, payload, timeout)
+
+
+def _generator_refusal(
+    receiver: dict[str, Any],
+    label: str,
+    rtype: str,
+) -> Optional[tuple[str, str]]:
+    """(status, detail) when ``build_receiver_config`` refuses *receiver*,
+    else None.
+
+    The detail is the generator's own line without its framing (``WARN:
+    <label>:`` and ``, skipping``). A URL field (email: smarthost) that is
+    given but malformed or not a string is INVALID_URL, as before; one that is
+    missing, empty or null is INVALID_CONFIG, as before, and so is every other
+    refusal. ``_label`` is the tester's key, not the receiver's, so the
+    generator is given a copy without it.
+    """
+    receiver_obj = {k: v for k, v in receiver.items() if k != "_label"}
+    am_config, warnings = build_receiver_config(receiver_obj, label)
+    if am_config is not None:
+        return None
+    if not warnings:
+        return STATUS_INVALID_CONFIG, "the route generator refuses this receiver"
+    finding = warnings[0]
+    detail = str(finding).strip()
+    prefix = f"WARN: {label}: "
+    if detail.startswith(prefix):
+        detail = detail[len(prefix):]
+    if detail.endswith(", skipping"):
+        detail = detail[:-len(", skipping")]
+    url_fields = {f"receiver.{f}": f for f in RECEIVER_URL_FIELDS.get(rtype, [])}
+    refused_field = url_fields.get(getattr(finding, "field", None))
+    # The generator files "" and null as invalid_receiver_field, but they are
+    # "not given" (FIELD_UNSET) like a missing key: INVALID_CONFIG, as before.
+    if (getattr(finding, "kind", None) == "invalid_receiver_field"
+            and refused_field is not None
+            and receiver_field_state(receiver, refused_field) != FIELD_UNSET):
+        return STATUS_INVALID_URL, detail
+    return STATUS_INVALID_CONFIG, detail
 
 
 def _build_test_request(
@@ -496,8 +554,8 @@ def _build_test_request(
 
     if rtype == "pagerduty":
         # test_receiver has already enforced "exactly one, and a string" via
-        # receiver_exactly_one_problem; pick the key by the same rule so the
-        # one sent is the one that counts as given.
+        # build_receiver_config (receiver_exactly_one_problem); pick the key
+        # by the same rule so the one sent is the one that counts as given.
         key_field = next(f for f in ("routing_key", "service_key")
                          if receiver_field_state(receiver, f) == FIELD_SET)
         return ("https://events.pagerduty.com/v2/enqueue",
@@ -670,6 +728,22 @@ def _send_test_request(
             status=STATUS_HTTP_ERROR,
             latency_ms=latency,
             detail=f"malformed response: {type(exc).__name__}: {exc}"[:80],
+            url_tested=target_url,
+        )
+
+    except UnicodeError as exc:
+        # #3048: raised before anything is sent — a hostname IDNA cannot
+        # encode (a label over 63 characters, an empty label), which urllib
+        # does not wrap in URLError. Not caught by any branch above (it is a
+        # ValueError, neither an OSError nor an HTTPException), so it crashed
+        # the whole run. A plain ValueError is not caught here on purpose:
+        # the one a receiver URL can raise (urlsplit's bracketed-host check)
+        # is already refused by _port_problem before any send.
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_INVALID_URL,
+            detail=f"invalid URL: {exc}"[:80],
             url_tested=target_url,
         )
 

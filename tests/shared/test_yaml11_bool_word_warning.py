@@ -5,8 +5,8 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；yaml.v3 讀到的是字
 各檔種由不同的 Go reader 讀（有的保留字串、有的讀成布林、有的根本不讀），所以訊息只陳述
 可驗證的事實，不斷言 merged_hash／effective 的值（盲審第 2 輪 G／F）。本檔釘住：
 
-- 字眼的集合：以 Go `receiverspec.YAML11BoolLiterals`（spec.go）為準——去掉 yaml.v3 自己也讀成
-  布林的 true/false 三種拼法，剩下 yes/no/on/off 各三種拼法；schema 的 `yamlBool` enum 與它一致。
+- 字眼的集合：以 schema 的 `yamlBool` enum（唯一的手寫清單）為準——去掉 yaml.v3 自己也讀成
+  布林的 true/false 三種拼法，剩下 yes/no/on/off 各三種拼法。
 - 兩條 lint 路徑都看得到：`check_confd_schema`（pre-commit 的 confd-schema hook）印
   `WARN: <檔>:<行>: <欄位路徑>…`、rc 不變；`validate_config` 的 `yaml_quoting` 列轉 WARN、
   明細指名檔案與欄位。
@@ -36,7 +36,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +44,7 @@ import pytest
 import yaml
 
 import _lib_tenant_values as tv
+import _lib_validation
 import validate_config as vc
 # Module, not the names: on a tree without the finder (the counterfactual run on
 # main) the lint-path tests below must fail by assertion, not at collection.
@@ -52,8 +52,6 @@ import _lib_io
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LINT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_confd_schema.py"
-SPEC_GO = (REPO_ROOT / "components" / "threshold-exporter" / "app" / "pkg" / "receiverspec"
-           / "spec.go")
 TENANT_SCHEMA = REPO_ROOT / "docs" / "schemas" / "tenant-config.schema.json"
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -61,14 +59,13 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 _YAML12_BOOLS = {"true", "True", "TRUE", "false", "False", "FALSE"}
 
 
-def _go_yaml11_literals() -> set[str]:
-    src = SPEC_GO.read_text(encoding="utf-8")
-    body = re.search(r"var YAML11BoolLiterals = map\[string\]bool\{(.*?)\n\}", src, re.S)
-    assert body, "YAML11BoolLiterals not found in spec.go"
-    return set(re.findall(r'"([^"]+)":', body.group(1)))
+def _schema_yaml_bool_words() -> set[str]:
+    """The schema's `yamlBool` enum: the one authored list (#2295)."""
+    schema = json.loads(TENANT_SCHEMA.read_text(encoding="utf-8"))
+    return set(schema["definitions"]["yamlBool"]["anyOf"][1]["enum"])
 
 
-WORDS = sorted(_go_yaml11_literals() - _YAML12_BOOLS)
+WORDS = sorted(_schema_yaml_bool_words() - _YAML12_BOOLS)
 
 # field position -> (file name, body template with {v}, JSON-pointer path, where Go puts it)
 _WEBHOOK = ("    _routing:\n      receiver:\n        type: webhook\n"
@@ -105,11 +102,10 @@ def _warn_lines(p: subprocess.CompletedProcess) -> list[str]:
     return [l for l in (p.stdout + p.stderr).splitlines() if l.startswith("WARN:")]
 
 
-def test_word_set_is_go_yaml11_literals_minus_yaml12_bools():
-    """Go 為準；schema 的 enum 與 Go 一致；PyYAML resolver 恰好把這 12 個讀成布林。"""
+def test_word_set_is_schema_yaml_bool_minus_yaml12_bools():
+    """schema 的 enum 為準，且就是 _lib_validation 在執行期讀的那份；PyYAML resolver 恰好把這 12 個讀成布林。"""
     assert len(WORDS) == 12 and {w.lower() for w in WORDS} == {"yes", "no", "on", "off"}
-    schema = json.loads(TENANT_SCHEMA.read_text(encoding="utf-8"))
-    assert set(schema["definitions"]["yamlBool"]["anyOf"][1]["enum"]) == _go_yaml11_literals()
+    assert set(_lib_validation.yaml_bool_literals()) == _schema_yaml_bool_words()
     for w in WORDS:
         assert yaml.safe_load(f"k: {w}")["k"] in (True, False), w
 

@@ -630,7 +630,9 @@ func TestMetricsHandler(t *testing.T) {
 		"tenant_api_uptime_seconds",
 		"tenant_api_requests_total",
 		"tenant_api_errors_total",
-		"tenant_api_writes_total",
+		`tenant_api_writes_total{result="ok"}`,
+		`tenant_api_writes_total{result="conflict"}`,
+		`tenant_api_writes_total{result="error"}`,
 	}
 	for _, s := range expected {
 		if !strings.Contains(body, s) {

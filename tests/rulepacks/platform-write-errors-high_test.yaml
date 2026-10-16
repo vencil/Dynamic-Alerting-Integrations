@@ -1,0 +1,151 @@
+# promtool behavioural test for TenantApiWriteErrorsHigh (#3054):
+#   1) FIRES on exactly 3 errors that are exactly half of the hour's attempts,
+#      once the 5m hold-down passes (pins `>= 3` and `>= 0.5`).
+#   2) does NOT fire before the 5m hold-down (discriminates `for: 5m`).
+#   3) does NOT fire on 2 errors even when every attempt failed (the floor).
+#   4) does NOT fire when errors are under half of the attempts.
+#   5) conflicts count in the denominator: 3 errors + 4 conflicts does NOT fire.
+#   6) CLEARS once the errors have left the 1h window.
+#   7) another job's series does NOT fire.
+#   8) two installs (namespaces) under one Prometheus are judged each on its
+#      own: the failing one fires, labelled with its namespace, though summed
+#      together the errors are well under half (pins `sum without`, not sum()).
+# Run: promtool test rules tests/rulepacks/platform-write-errors-high_test.yaml
+#
+# ⚠️ Every series starts at 0 at t=0 and has a sample every minute through the
+# eval time, so increase() is EXACT here: the start is not extrapolated (a
+# counter's first sample at 0 caps it) and the end needs none. That is what
+# lets tests 1 and 4 sit right on the `>= 3` / `>= 0.5` thresholds.
+rule_files:
+  - platform-write-errors-high.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 3 errors (10m, 11m, 12m) and 3 ok: errors are exactly half. True from 12m.
+  # ⚠️ 14m is the DISCRIMINATOR for `for: 5m` (true, not yet held 5m); 20m is
+  # the one for both `>= 3` (a `> 3` rule stays silent) and `>= 0.5` (a `> 0.5`
+  # rule stays silent). 50m pins the 1h window (the errors are 38-40m old: a
+  # [30m] window has already cleared); 80m: (20m, 80m] holds no increase.
+  - interval: 1m
+    name: three-errors-half-of-attempts-fires-then-clears
+    input_series:
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="error"}'
+        values: '0x9 1 2 3x80'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="ok"}'
+        values: '0x9 1 2 3x80'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="conflict"}'
+        values: '0x92'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts:
+          - exp_labels:
+              job: tenant-api
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"
+      - eval_time: 50m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts:
+          - exp_labels:
+              job: tenant-api
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"
+      - eval_time: 80m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts: []
+
+  # 2 errors, nothing else: every attempt failed, but under the floor of 3.
+  - interval: 1m
+    name: two-errors-below-the-floor
+    input_series:
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="error"}'
+        values: '0x9 1 2x50'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="ok"}'
+        values: '0x61'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="conflict"}'
+        values: '0x61'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts: []
+
+  # 3 errors, 4 ok: 3/7 is under half.
+  - interval: 1m
+    name: errors-under-half-of-attempts
+    input_series:
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="error"}'
+        values: '0x9 1 2 3x50'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="ok"}'
+        values: '0x9 1 2 3 4x49'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="conflict"}'
+        values: '0x62'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts: []
+
+  # 3 errors, 4 conflicts, no ok: 3/7 with conflicts in the denominator. A rule
+  # dividing by ok+error only (1.0) would fire.
+  - interval: 1m
+    name: conflicts-count-in-the-denominator
+    input_series:
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="error"}'
+        values: '0x9 1 2 3x50'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="ok"}'
+        values: '0x62'
+      - series: 'tenant_api_writes_total{job="tenant-api", instance="10.0.0.2:8080", result="conflict"}'
+        values: '0x9 1 2 3 4x49'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts: []
+
+  # The same failing series under another job never fires.
+  - interval: 1m
+    name: other-job-does-not-fire
+    input_series:
+      - series: 'tenant_api_writes_total{job="other", instance="10.0.0.9:8080", result="error"}'
+        values: '0x9 1 2 3 4 5x50'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts: []
+
+  # Two installs scraped by one Prometheus. ns-a: 3 errors, 3 ok (half). ns-b:
+  # 0 errors, 100 ok. Each on its own, ns-a fires; a bare sum() (3/106) or a
+  # sum without namespace stays silent. The pod label differs per install and
+  # is dropped; namespace is kept and named on the alert.
+  - interval: 1m
+    name: two-namespaces-judged-each-on-its-own
+    input_series:
+      - series: 'tenant_api_writes_total{job="tenant-api", namespace="ns-a", pod="tenant-api-a", instance="10.0.0.2:8080", endpoint="http", result="error"}'
+        values: '0x9 1 2 3x50'
+      - series: 'tenant_api_writes_total{job="tenant-api", namespace="ns-a", pod="tenant-api-a", instance="10.0.0.2:8080", endpoint="http", result="ok"}'
+        values: '0x9 1 2 3x50'
+      - series: 'tenant_api_writes_total{job="tenant-api", namespace="ns-a", pod="tenant-api-a", instance="10.0.0.2:8080", endpoint="http", result="conflict"}'
+        values: '0x62'
+      - series: 'tenant_api_writes_total{job="tenant-api", namespace="ns-b", pod="tenant-api-b", instance="10.0.1.2:8080", endpoint="http", result="error"}'
+        values: '0x62'
+      - series: 'tenant_api_writes_total{job="tenant-api", namespace="ns-b", pod="tenant-api-b", instance="10.0.1.2:8080", endpoint="http", result="ok"}'
+        values: '0x9 100x52'
+      - series: 'tenant_api_writes_total{job="tenant-api", namespace="ns-b", pod="tenant-api-b", instance="10.0.1.2:8080", endpoint="http", result="conflict"}'
+        values: '0x62'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiWriteErrorsHigh
+        exp_alerts:
+          - exp_labels:
+              job: tenant-api
+              namespace: ns-a
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"

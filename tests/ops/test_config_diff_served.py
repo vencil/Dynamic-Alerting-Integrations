@@ -7,6 +7,10 @@
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +20,7 @@ import config_diff as cd
 import _lib_tenant_values as tv
 
 AT = "2026-10-10T03:00:00Z"
+CONFIG_DIFF = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops" / "config_diff.py"
 _DEFAULTS = ("defaults:\n  mysql_connections: 80\n  container_memory: 85\n"
              "state_filters:\n  crashloop:\n    reasons: [\"CrashLoopBackOff\"]\n    severity: critical\n")
 
@@ -67,6 +72,23 @@ def test_severity_only_change_reads_as_written(tmp_path, da_guard):
     b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections": "70"}}, {"t": {"mysql_connections": "70:critical"}})
     got = _by_key(_metric(b, p)["t"])["mysql_connections"]
     assert (got["old"], got["new"]) == (70, "70:critical")
+
+
+def test_empty_severity_is_a_change_not_a_failed_side(tmp_path, da_guard):
+    """#3060：`"70:"`（severity 為空字串）原本讓 served-values 的排程段少了 `severity`，
+    讀取端拒收、整支 rc 2；現在兩側都讀得到，`70` → `70:` 列為變更、rc 1。"""
+    base = _tree(tmp_path / "base", {"tx": {"mysql_connections": "70"}})
+    pr = _tree(tmp_path / "pr", {"tx": {"mysql_connections": "70:"}})
+    p = subprocess.run(
+        [sys.executable, str(CONFIG_DIFF), "--old-dir", str(base), "--new-dir", str(pr),
+         "--at", AT, "--format", "json"],
+        env={**os.environ, "DA_GUARD_BINARY": da_guard},
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert p.returncode == 1, (p.returncode, p.stderr)
+    doc = json.loads(p.stdout)
+    assert doc["views"]["served"]["status"] == "computed", doc["views"]
+    assert doc["threshold_changes"] == [
+        {"key": "mysql_connections", "old": 70, "new": "70:", "change": "modified", "tenants": ["tx"]}]
 
 
 def test_inherited_threshold_change_is_reported_for_tenants_that_do_not_override(tmp_path, da_guard):

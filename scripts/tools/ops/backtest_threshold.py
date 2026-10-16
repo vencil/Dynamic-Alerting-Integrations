@@ -62,6 +62,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load  # noqa: E402
 from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 # #2119: `--config-dir` / `--baseline` are read by the exporter, not here.
 from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
@@ -144,12 +145,21 @@ def prometheus_available(prom_url, timeout=5):
     return err is None
 
 
+class PrometheusQueryError(Exception):
+    """A range query Prometheus did not answer (HTTP error, timeout, an
+    ``error`` status, a body that is not a JSON object); the message is the
+    error text as received."""
+
+
 def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
     """Execute a Prometheus range_query and return result data.
 
-    Thin wrapper over ``_lib_prometheus.query_prometheus_range`` (ROI r3 W1):
-    the fetch core lives in the lib; the "any error → []" collapse stays
-    here (tests monkeypatch this module attribute by name — keep it).
+    Thin wrapper over ``_lib_prometheus.query_prometheus_range`` (ROI r3 W1);
+    tests monkeypatch this module attribute by name — keep it.
+
+    Raises ``PrometheusQueryError`` when the query fails (#3059): a failed
+    query used to return ``[]`` here, so it was reported as ``no_data`` —
+    "no history" — with exit code 0. An empty result is still ``[]``.
     """
     import time
     end = time.time()
@@ -158,7 +168,7 @@ def query_range(prom_url, query, lookback_seconds, step=DEFAULT_STEP):
     result, err = query_prometheus_range(
         prom_url, query, start, end, step, timeout=30)
     if err:
-        return []
+        raise PrometheusQueryError(str(err))
     return result
 
 
@@ -1273,12 +1283,17 @@ def _not_backtested(change, reason):
     }
 
 
+# How much of a query error's text a `query_error` row carries (#3059).
+_QUERY_ERROR_MAX = 300
+
+
 def backtest_change(prom_url, change, lookback_seconds):
     """Backtest a single threshold change against historical data.
 
     Returns analysis dict with breach counts and risk assessment; `query` is
     the PromQL asked (#3002 B). A change `not_backtestable` refuses is
-    returned as `not_backtested` without asking Prometheus anything.
+    returned as `not_backtested` without asking Prometheus anything; one
+    whose query fails is `query_error`, its message the error text (#3059).
     """
     metric = change["metric"]
     tenant = change["tenant"]
@@ -1295,8 +1310,26 @@ def backtest_change(prom_url, change, lookback_seconds):
     series, direction, _ = alert_comparison(change)
     query = f'{series}{{tenant="{tenant}"}}'
 
+    # #3059: a query Prometheus did not answer is `query_error`, not
+    # `no_data` — the change was not measured, which `main` turns into rc 2.
+    try:
+        rows = query_range(prom_url, query, lookback_seconds)
+    except PrometheusQueryError as exc:
+        text = safe_label(str(exc))
+        if len(text) > _QUERY_ERROR_MAX:
+            text = text[:_QUERY_ERROR_MAX] + "..."
+        return {
+            "tenant": tenant,
+            "metric": metric,
+            "old_value": old_value,
+            "new_value": new_value,
+            "status": "query_error",
+            "risk": "UNKNOWN",
+            "query": query,
+            "message": f"Prometheus query failed: {text}",
+        }
     values = []
-    for row in query_range(prom_url, query, lookback_seconds):
+    for row in rows:
         values.extend(row.get("values", []))
 
     if not values:
@@ -1437,26 +1470,35 @@ def empty_report(lookback, status, reason):
         "total_changes": 0,
         "analyzed": 0,
         "no_data": 0,
+        "query_error": 0,
         "risk_summary": {"HIGH": 0, "MEDIUM": 0, "LOW": 0},
         "changes": [],
     }
 
 
 def generate_report(results, lookback):
-    """Generate aggregate backtest report."""
+    """Generate aggregate backtest report.
+
+    #3059: when any change is `query_error` (not measured), the report also
+    carries ``status: "partial"`` / ``reason: "query_error"``, so a consumer
+    reading ``.status // "ok"`` does not take it for a complete run; a
+    complete run carries no ``status``, as before.
+    """
     analyzed = [r for r in results if r["status"] == "analyzed"]
     no_data = [r for r in results if r["status"] == "no_data"]
+    query_error = [r for r in results if r["status"] == "query_error"]
 
     high_risk = [r for r in analyzed if r["risk"] == "HIGH"]
     medium_risk = [r for r in analyzed if r["risk"] == "MEDIUM"]
     low_risk = [r for r in analyzed if r["risk"] == "LOW"]
 
-    return {
+    report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "lookback": lookback,
         "total_changes": len(results),
         "analyzed": len(analyzed),
         "no_data": len(no_data),
+        "query_error": len(query_error),
         "risk_summary": {
             "HIGH": len(high_risk),
             "MEDIUM": len(medium_risk),
@@ -1464,6 +1506,10 @@ def generate_report(results, lookback):
         },
         "changes": results,
     }
+    if query_error:
+        report["status"] = "partial"
+        report["reason"] = "query_error"
+    return report
 
 
 def _not_backtested_counts(changes):
@@ -1490,6 +1536,9 @@ def print_text_report(report):
     print(f"  Risk: {rs['HIGH']} HIGH, {rs['MEDIUM']} MEDIUM, {rs['LOW']} LOW")
     if report["no_data"] > 0:
         print(f"  No data: {report['no_data']} (no usable data in Prometheus)")
+    if report["query_error"] > 0:
+        print(f"  Query error: {report['query_error']} (the Prometheus query failed; "
+              "not measured)")
     skipped = _not_backtested_counts(report["changes"])
     if skipped:
         print(f"  Not backtested: {skipped}")
@@ -1522,6 +1571,10 @@ def generate_markdown(report):
     if skipped:
         lines.append(f"\n**Not backtested:** {skipped}")
 
+    if report["query_error"] > 0:
+        lines.append(f"\n> **{report['query_error']} change(s) not measured: "
+                     "the Prometheus query failed.**")
+
     rs = report["risk_summary"]
     if rs["HIGH"] > 0:
         lines.append(f"\n> **{rs['HIGH']} HIGH risk change(s) detected.**")
@@ -1536,8 +1589,12 @@ def generate_markdown(report):
         window = f" ({', '.join(c['window'])} UTC)" if c.get("window") else ""
         # #3002 B: the PromQL the verdict rests on; "—" when none was asked.
         query = f"`{c['query']}`" if c.get("query") else "—"
+        # #3059: a `query_error` message carries Prometheus's own text, which
+        # may hold `|` (a PromQL parse error quoting the query) — escaped so
+        # it stays one cell.
+        message = c["message"].replace("|", "\\|")
         lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window} | "
-                     f"{old_v} | {new_v} | {c['message']} | {query} |")
+                     f"{old_v} | {new_v} | {message} | {query} |")
 
     lines.append("")
     lines.append("---")
@@ -1648,6 +1705,33 @@ def main():
         help="Write Markdown report to file (for PR comments)",
     )
     args = parser.parse_args()
+
+    # #3059: argument errors first — before the Prometheus check, so
+    # `--skip-if-unavailable` cannot turn them into a green skip — and with
+    # the `--json` envelope (argparse's own usage errors still print none).
+    if args.tenant:
+        if not args.metric or (args.old_value is None and args.new_value is None):
+            print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
+                  file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "caller_error", "tenant_args_missing")))
+            sys.exit(EXIT_CALLER_ERROR)
+        # #3066: the id goes into `{tenant="..."}` as written; one the tenant
+        # id rule refuses (`a"b`, `a\b`) would make the query invalid PromQL.
+        if not is_valid_tenant_id(args.tenant):
+            print(f"ERROR: --tenant '{safe_label(args.tenant)}' is not a valid tenant id. "
+                  f"{tenant_id_rule()[1]}", file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "caller_error", "invalid_tenant_id")))
+            sys.exit(EXIT_CALLER_ERROR)
+    elif not (args.git_diff or args.config_dir):
+        print("ERROR: Specify --git-diff, --config-dir, or --tenant", file=sys.stderr)
+        if args.json:
+            print(format_json_report(empty_report(
+                args.lookback, "caller_error", "no_change_source")))
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Surface custom-alert recipes (parsed from disk; Prometheus-independent),
     # BEFORE the availability gate — a recipe-only change must not pass
@@ -1772,6 +1856,9 @@ def main():
         else:
             print(f"ERROR: Prometheus not reachable at {args.prometheus}", file=sys.stderr)
             print("Use --skip-if-unavailable to exit gracefully", file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "caller_error", "prometheus_unavailable")))
             sys.exit(EXIT_CALLER_ERROR)
 
     # Extract changes
@@ -1779,20 +1866,13 @@ def main():
         changes = keep_flat_threshold_changes(git_changes, parsed_conf)
     elif args.config_dir:
         changes = dir_changes
-    elif args.tenant:
-        if not args.metric or (args.old_value is None and args.new_value is None):
-            print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
-                  file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+    else:  # `--tenant`: the no-source case already exited above
         changes = [{
             "tenant": args.tenant,
             "metric": args.metric,
             "old_value": args.old_value,
             "new_value": args.new_value,
         }]
-    else:
-        print("ERROR: Specify --git-diff, --config-dir, or --tenant", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
 
     # ⛔ #1634: one filter, all three sources — see `tenant_is_queryable` for
     # why this is not per-path. A carrier whose name is not valid UTF-8 cannot
@@ -1856,6 +1936,13 @@ def main():
     high_count = report["risk_summary"]["HIGH"]
     if high_count > 0 and not args.json:
         print(f"\n  WARNING: {high_count} HIGH risk change(s) — review before merging.")
+    # #3059: a change not measured outranks HIGH — with one left unmeasured
+    # the run cannot say "only these are high risk". Prometheus answered, so
+    # this is not `--skip-if-unavailable`'s case either.
+    if report["query_error"] > 0:
+        print(f"ERROR: {report['query_error']} change(s) not measured: the Prometheus "
+              "query failed (see each change's message)", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if high_count > 0 else EXIT_OK)
 
 

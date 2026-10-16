@@ -211,7 +211,7 @@ def test_a_nested_skip_does_not_dilute_a_real_outage(tmp_path):
     """`skipped_nested` sent no request: it must not water down the systemic
     ratio of a run in which every request failed."""
     errs = [tg.TenantOutcome(f"t{i}", "error") for i in range(tg.MAX_CONSECUTIVE_ERRORS)]
-    skips = [tg.TenantOutcome(f"s{i}", "skipped") for i in range(3)]
+    skips = [tg.TenantOutcome(f"s{i}", "skipped_breaker") for i in range(3)]
     nested = [tg.TenantOutcome(f"n{i}", "skipped_nested") for i in range(50)]
     assert tg._is_systemic_failure(errs + skips + nested, True)
 

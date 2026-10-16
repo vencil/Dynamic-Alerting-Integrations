@@ -57,11 +57,9 @@ func mustPanic(t *testing.T, what string, f func()) {
 
 func TestRegisterRefusesBadRegistrations(t *testing.T) {
 	before := len(registry)
-	mustPanic(t, "duplicate name", func() { register(FindingMissingRequired.String(), PlaneThreshold, "again") })
-	mustPanic(t, "empty name", func() { register("", PlaneThreshold, "r") })
-	mustPanic(t, "unknown plane", func() { register("zz_probe_plane", Plane("policy"), "r") })
-	mustPanic(t, "empty plane", func() { register("zz_probe_plane", "", "r") })
-	mustPanic(t, "no reason", func() { register("zz_probe_reason", PlaneRouting, "") })
+	mustPanic(t, "duplicate name", func() { register(FindingMissingRequired.String(), "again") })
+	mustPanic(t, "empty name", func() { register("", "r") })
+	mustPanic(t, "no reason", func() { register("zz_probe_reason", "") })
 	if len(registry) != before {
 		t.Errorf("a refused registration was kept: %d kinds, had %d", len(registry), before)
 	}
@@ -75,27 +73,20 @@ func TestAllIsWhole(t *testing.T) {
 	if !sort.SliceIsSorted(all, func(i, j int) bool { return all[i].Kind.String() < all[j].Kind.String() }) {
 		t.Error("All() is not sorted by name")
 	}
-	planes := map[Plane]int{}
 	for _, e := range all {
 		k := e.Kind
 		switch {
 		case k.IsZero():
 			t.Errorf("All() holds the zero Kind: %+v", e)
-		case e.Plane != PlaneRouting && e.Plane != PlaneThreshold:
-			t.Errorf("%s: plane %q", k, e.Plane)
 		case e.Reason == "":
 			t.Errorf("%s: no reason", k)
-		case k.Plane() != e.Plane:
-			t.Errorf("%s: Plane() %q, registered %q", k, k.Plane(), e.Plane)
+		case !k.IsRegistered():
+			t.Errorf("%s: in All() but IsRegistered is false", k)
 		}
-		planes[e.Plane]++
-	}
-	if planes[PlaneRouting] == 0 || planes[PlaneThreshold] == 0 {
-		t.Errorf("a plane is empty: %v", planes)
 	}
 	var zero Kind
-	if !zero.IsZero() || zero.String() != "" || zero.Plane() != "" {
-		t.Errorf("zero Kind: IsZero %v, String %q, Plane %q", zero.IsZero(), zero.String(), zero.Plane())
+	if !zero.IsZero() || zero.String() != "" || zero.IsRegistered() {
+		t.Errorf("zero Kind: IsZero %v, String %q, IsRegistered %v", zero.IsZero(), zero.String(), zero.IsRegistered())
 	}
 }
 
@@ -206,9 +197,9 @@ func namesUnregistered(lit *ast.CompositeLit) bool {
 // The sentinel is no registered kind and cannot become one.
 func TestUnregisteredSentinel(t *testing.T) {
 	u := Unregistered()
-	if u.IsZero() || u.IsRegistered() || u.Plane() != "" || u.String() != unregisteredName {
-		t.Errorf("Unregistered(): IsZero %v, IsRegistered %v, Plane %q, String %q",
-			u.IsZero(), u.IsRegistered(), u.Plane(), u.String())
+	if u.IsZero() || u.IsRegistered() || u.String() != unregisteredName {
+		t.Errorf("Unregistered(): IsZero %v, IsRegistered %v, String %q",
+			u.IsZero(), u.IsRegistered(), u.String())
 	}
 	for _, e := range All() {
 		if e.Kind == u {
@@ -218,7 +209,7 @@ func TestUnregisteredSentinel(t *testing.T) {
 			t.Errorf("%s: in All() but IsRegistered is false", e.Kind)
 		}
 	}
-	mustPanic(t, "the sentinel's name", func() { register(unregisteredName, PlaneThreshold, "r") })
+	mustPanic(t, "the sentinel's name", func() { register(unregisteredName, "r") })
 	got, err := json.Marshal(u)
 	if err != nil || string(got) != `"`+unregisteredName+`"` {
 		t.Errorf("Unregistered() marshals to %s, %v", got, err)
@@ -230,13 +221,13 @@ func TestUnregisteredSentinel(t *testing.T) {
 	}
 }
 
-// staticRegistrations reads `var X = register("name", PlaneY, ...)` from the
-// package's non-test files: {X: name}, {name: plane}. Any other call of
+// staticRegistrations reads `var X = register("name", ...)` from the
+// package's non-test files: {X: name}, {name: true}. Any other call of
 // register, or any other package-level var initialised with a Kind, is an
 // error, so the names a reader finds in the source are the registry.
-func staticRegistrations(t *testing.T) (byVar map[string]string, planes map[string]Plane) {
+func staticRegistrations(t *testing.T) (byVar map[string]string, names map[string]bool) {
 	fset, files := packageFiles(t, false)
-	byVar, planes = map[string]string{}, map[string]Plane{}
+	byVar, names = map[string]string{}, map[string]bool{}
 	seen := map[*ast.CallExpr]bool{}
 	for _, f := range files {
 		for _, decl := range f.Decls {
@@ -254,19 +245,18 @@ func staticRegistrations(t *testing.T) (byVar map[string]string, planes map[stri
 					continue
 				}
 				pos := fset.Position(vs.Pos())
-				if len(vs.Names) != 1 || len(vs.Values) != 1 || vs.Type != nil || len(call.Args) != 3 {
-					t.Errorf("%s: write `var FindingXxx = register(\"name\", PlaneY, \"reason\")`", pos)
+				if len(vs.Names) != 1 || len(vs.Values) != 1 || vs.Type != nil || len(call.Args) != 2 {
+					t.Errorf("%s: write `var FindingXxx = register(\"name\", \"reason\")`", pos)
 					continue
 				}
 				name, err := strconv.Unquote(literal(call.Args[0]))
-				plane := map[string]Plane{"PlaneRouting": PlaneRouting, "PlaneThreshold": PlaneThreshold}[identName(call.Args[1])]
-				if err != nil || plane == "" {
-					t.Errorf("%s: register's name must be a string literal and its plane PlaneRouting or PlaneThreshold", pos)
+				if err != nil {
+					t.Errorf("%s: register's name must be a string literal", pos)
 					continue
 				}
 				seen[call] = true
 				byVar[vs.Names[0].Name] = name
-				planes[name] = plane
+				names[name] = true
 			}
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
@@ -279,7 +269,7 @@ func staticRegistrations(t *testing.T) (byVar map[string]string, planes map[stri
 			return true
 		})
 	}
-	return byVar, planes
+	return byVar, names
 }
 
 // registerCall is e when e is a call of register, else nil.
@@ -310,15 +300,15 @@ func identName(e ast.Expr) string {
 
 // TestRegistrationsAreTheSource: what the source says is what All() holds.
 func TestRegistrationsAreTheSource(t *testing.T) {
-	byVar, planes := staticRegistrations(t)
+	byVar, names := staticRegistrations(t)
 	all := All()
-	if len(all) != len(planes) || len(byVar) != len(planes) {
+	if len(all) != len(names) || len(byVar) != len(names) {
 		t.Errorf("All() has %d kinds, the source registers %d names through %d vars",
-			len(all), len(planes), len(byVar))
+			len(all), len(names), len(byVar))
 	}
 	for _, e := range all {
-		if planes[e.Kind.String()] != e.Plane {
-			t.Errorf("%s: All() says plane %q, the source %q", e.Kind, e.Plane, planes[e.Kind.String()])
+		if !names[e.Kind.String()] {
+			t.Errorf("%s: in All() but registered by no `var FindingXxx = register(...)` of the source", e.Kind)
 		}
 	}
 	for v := range byVar {

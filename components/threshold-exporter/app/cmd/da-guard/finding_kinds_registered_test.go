@@ -5,15 +5,12 @@ package main
 //
 // findingkind.Kind is closed: a finding's kind is one of findingkind.All()
 // or the zero Kind, which is what a finding gets when its check chose no
-// kind (a receiverspec or routingpolicy problem kind the mapping in
-// internal/guard/routing.go lacks). Writing the report as JSON refuses the
-// zero Kind; this test finds it in process, over the trees the other tests
-// already hold da-guard to: every tree of the routing-policy parity matrix
-// and every tests/golden fixture, with --required-fields and a cardinality
-// limit set so those checks run too.
+// kind. Writing the report as JSON refuses the zero Kind; this test finds it
+// in process, over the trees the other tests already hold da-guard to: every
+// tree of the routing-policy parity matrix and every tests/golden fixture,
+// with --required-fields and a cardinality limit set so those checks run too.
 
 import (
-	"io"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -31,7 +28,7 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 	}
 
 	trees := map[string]string{} // name -> conf.d
-	for _, tree := range loadRoutingPolicyMatrixFull(t).Trees {
+	for _, tree := range loadRoutingPolicyMatrix(t) {
 		trees["matrix/"+tree.Name] = writeParityTree(t, tree.Files)
 	}
 	golden, err := filepath.Glob(filepath.Join(goldenDir(t), "fixtures", "*", "conf.d"))
@@ -58,16 +55,12 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 			t.Logf("%s: not judged: %v", name, err)
 			continue
 		}
-		withGeneratorDuplicates(dir, scoped, io.Discard)
-		// The routing inputs come from routing_input_test.go: the CLI no
-		// longer judges routing (#2904), internal/guard's routing checks stay
-		// until #2905 and must still choose registered kinds.
-		input := withRoutingInput(buildCheckInput(scoped, &flags{
+		input := buildCheckInput(scoped, &flags{
 			configDir:            dir,
-			requiredFields:       "_routing.receiver.type,mysql_connections",
+			requiredFields:       "mysql_connections",
 			cardinalityLimit:     1,
 			cardinalityWarnRatio: 0.5,
-		}), scoped, dir)
+		})
 		report, err := guard.CheckDefaultsImpact(input)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -83,13 +76,9 @@ func TestDaGuard_FixtureFindingsHaveRegisteredKinds(t *testing.T) {
 			seen[f.Kind] = true
 		}
 	}
-	// Not vacuous: the trees were judged and produced kinds of both planes.
-	planes := map[findingkind.Plane]bool{}
-	for k := range seen {
-		planes[k.Plane()] = true
-	}
-	if judged == 0 || !planes[findingkind.PlaneRouting] || !planes[findingkind.PlaneThreshold] {
-		t.Errorf("judged %d trees, planes seen %v: the fixtures no longer exercise both planes", judged, planes)
+	// Not vacuous: the trees were judged and produced findings.
+	if judged == 0 || len(seen) == 0 {
+		t.Errorf("judged %d trees, %d distinct kinds seen: the fixtures no longer exercise the checks", judged, len(seen))
 	}
 	t.Logf("judged %d of %d trees; %d distinct kinds", judged, len(names), len(seen))
 }

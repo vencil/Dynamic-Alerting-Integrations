@@ -48,7 +48,11 @@ func TestMetricsHandler_Golden(t *testing.T) {
 	// previous value, so pin + save is one atomic step each.
 	prevReq := Metrics.requestsTotal.Swap(42)
 	prevErr := Metrics.errorsTotal.Swap(7)
-	prevWr := Metrics.writesTotal.Swap(3)
+	pinnedWr := &WriteResults{}
+	pinnedWr.counters[writeResultOK].Store(3)
+	pinnedWr.counters[writeResultConflict].Store(1)
+	pinnedWr.counters[writeResultError].Store(2)
+	prevWr := processWriteResults.Swap(pinnedWr)
 	prevBypass := devBypassActive.Swap(false)
 	prevHSCfg := humanSocketConfigured.Swap(true)
 	prevHSUp := humanSocketUp.Swap(true)
@@ -61,7 +65,7 @@ func TestMetricsHandler_Golden(t *testing.T) {
 	t.Cleanup(func() {
 		Metrics.requestsTotal.Store(prevReq)
 		Metrics.errorsTotal.Store(prevErr)
-		Metrics.writesTotal.Store(prevWr)
+		processWriteResults.Store(prevWr)
 		devBypassActive.Store(prevBypass)
 		humanSocketConfigured.Store(prevHSCfg)
 		humanSocketUp.Store(prevHSUp)

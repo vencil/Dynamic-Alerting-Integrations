@@ -137,7 +137,8 @@ func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gathe
 			seg.Error = gerr
 		case served:
 			seg.Value = jsonFloat(r.value)
-			seg.Severity = r.severity
+			sev := r.severity
+			seg.Severity = &sev
 			seg.Series = r.series
 		default:
 			seg.Value = jsonNull

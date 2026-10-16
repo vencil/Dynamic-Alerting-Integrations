@@ -361,9 +361,9 @@ func isNestedPlatformFile(key string) bool {
 // other content the `any` decode refuses is not a parse failure of a file
 // the exporter never consumes — it used to raise da_config_parse_failure_total
 // and da-guard's exit 3 for a tree the generator accepts. Readers that DO
-// consume such a file judge it themselves (routingpolicy.LoadTree reports
-// an unusable nested policy / routing-profiles file; da-guard names a
-// repeated key the generator refuses, ScopedTenants.NestedPlatformFiles).
+// consume such a file judge it themselves (the route generator reads a
+// nested policy / routing-profiles file; da-guard's parse-tree names one the
+// generator cannot read, ADR-036 §2).
 //
 // Returns the probe's decode and ok=true when the file is syntactically
 // fine, so reportNestedPlatformTenants can inspect it WITHOUT a second

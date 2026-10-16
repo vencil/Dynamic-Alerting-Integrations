@@ -1,11 +1,14 @@
 // Package findingkind is the closed set of da-guard finding kinds, each
-// registered with its plane — routing or threshold (#2904, ADR-036 §9).
+// registered with the reason it is there (#2904). Every kind judges threshold
+// values, defaults files, cardinality or /metrics: routing and domain policy
+// are the route generator's alone (ADR-036 §9; the routing kinds and the
+// routing / threshold "plane" each kind used to carry were deleted with
+// da-guard's routing checks, #2905).
 //
 // Kind's one unexported field keeps a kind from being made by accident: a
 // conversion, a literal or a decoder cannot produce one, so the only Kinds
 // are the registered vars below, the zero Kind and Unregistered(). What is
-// guaranteed is that every kind da-guard outputs is registered, and so
-// classified: the guard package's report output swaps any other kind for
+// guaranteed is that every kind da-guard outputs is registered: the guard package's report output swaps any other kind for
 // Unregistered() with severity error (internal/guard/seal.go). Non-goal: a
 // kind forged on purpose (unsafe, reflect over unsafe pointers, linkname
 // into the registry) — under a registered name it is that kind, under any
@@ -22,25 +25,9 @@ import (
 // finding carries when no kind was chosen for it.
 type Kind struct{ s string }
 
-// Plane says which side of ADR-036 §9 a kind is on.
-type Plane string
-
-const (
-	// PlaneRouting kinds judge `_routing*` keys, routing profiles, domain
-	// policies, receivers / overrides / routes, or which tenants the route
-	// generator renders. ADR-036 §9 moves their checks to the generator;
-	// each must be pinned in tests/shared/routing_policy_parity_matrix.json
-	// before its Go check is deleted.
-	PlaneRouting Plane = "routing"
-	// PlaneThreshold kinds judge threshold values, defaults files or
-	// cardinality, and stay with da-guard.
-	PlaneThreshold Plane = "threshold"
-)
-
-// Entry is one registered kind with its plane and the reason it is there.
+// Entry is one registered kind with the reason it is there.
 type Entry struct {
 	Kind   Kind
-	Plane  Plane
 	Reason string
 }
 
@@ -50,13 +37,10 @@ var registry = map[string]Entry{}
 
 // register is the only place a non-zero Kind is made. A bad registration is
 // a programming error found when the package initialises, so it panics.
-func register(name string, plane Plane, reason string) Kind {
+func register(name string, reason string) Kind {
 	switch {
 	case name == "":
 		panic("findingkind: register with an empty name")
-	case plane != PlaneRouting && plane != PlaneThreshold:
-		panic(fmt.Sprintf("findingkind: %q registered on plane %q, neither %q nor %q",
-			name, plane, PlaneRouting, PlaneThreshold))
 	case reason == "":
 		panic(fmt.Sprintf("findingkind: %q registered without a reason", name))
 	}
@@ -67,7 +51,7 @@ func register(name string, plane Plane, reason string) Kind {
 		panic(fmt.Sprintf("findingkind: %q registered twice", name))
 	}
 	k := Kind{s: name}
-	registry[name] = Entry{Kind: k, Plane: plane, Reason: reason}
+	registry[name] = Entry{Kind: k, Reason: reason}
 	return k
 }
 
@@ -76,8 +60,7 @@ func register(name string, plane Plane, reason string) Kind {
 const unregisteredName = "unregistered_finding_kind"
 
 // Unregistered is the kind a guard report's output writes in place of any
-// kind that is not registered (see the package comment). It is not in All()
-// and has no plane.
+// kind that is not registered (see the package comment). It is not in All().
 func Unregistered() Kind { return Kind{s: unregisteredName} }
 
 // IsRegistered reports whether k is a kind register made: one of All().
@@ -92,9 +75,6 @@ func (k Kind) String() string { return k.s }
 
 // IsZero reports whether k is the zero Kind (no kind chosen).
 func (k Kind) IsZero() bool { return k.s == "" }
-
-// Plane is the plane k was registered on; "" for the zero Kind.
-func (k Kind) Plane() Plane { return registry[k.s].Plane }
 
 // MarshalJSON writes the kind's name as a JSON string. Only a registered
 // kind or Unregistered() is written; the zero Kind and any other Kind are
