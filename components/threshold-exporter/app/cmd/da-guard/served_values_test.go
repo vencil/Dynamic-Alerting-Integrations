@@ -57,11 +57,13 @@ type servedOut struct {
 		} `json:"time_boxes"`
 		Routing map[string]any `json:"routing"`
 		Keys    map[string]struct {
-			Exporter   bool                `json:"exporter"`
-			Reason     string              `json:"reason"`
-			Registered *bool               `json:"registered"`
-			Declared   map[string][]string `json:"declared"`
-			Hint       string              `json:"hint"`
+			Exporter     bool                `json:"exporter"`
+			Reason       string              `json:"reason"`
+			Registered   *bool               `json:"registered"`
+			Declared     map[string][]string `json:"declared"`
+			Hint         string              `json:"hint"`
+			Disable      string              `json:"disable"`
+			ServedFamily []string            `json:"served_family"`
 		} `json:"keys"`
 	} `json:"tenants"`
 	Aliases map[string]string `json:"aliases"`

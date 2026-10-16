@@ -771,8 +771,10 @@ def test_output_without_keys_is_refused_as_older(tmp_path):
     '{"k": {"exporter": false}}',
     '{"k": {"exporter": false, "reason": "typo"}}',
     '{"k": {"exporter": false, "reason": "no_row", "registered": "no"}}',
+    '{"k": {"exporter": false, "reason": "disabled", "disable": "maybe"}}',
+    '{"k": {"exporter": false, "reason": "disabled", "disable": "noop", "served_family": ["k_critical"]}}',
 ], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
-        "unknown-reason", "registered-not-bool"])
+        "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial"])
 def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
     doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"keys": {}', f'"keys": {keys}')
     with pytest.raises(tv.ServedValuesError) as ei:
@@ -800,6 +802,22 @@ def test_real_da_guard_reports_keys_and_routing(tmp_path, da_guard):
                                                 {"generator": ("tenant", "platform_tenants")})
     assert "_routing" not in got.values
     assert got.routing["receiver"] == {"type": "webhook", "url": "https://h.example/t"}
+
+
+def test_disable_effects_are_asked_for_and_read(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_conections: disable\n    mysql_connections: disable\n"
+                  "    redis_memory: disable\n    redis_memory_critical: 90\n",
+    })
+    got = tv.load_served_values(conf_d, binary=da_guard, disable_effects=True)["t"].keys
+    assert got["mysql_conections"].disable == "noop"
+    assert got["mysql_connections"].disable == "effective"
+    assert (got["redis_memory"].disable, got["redis_memory"].served_family) == \
+        ("partial", ("redis_memory_critical",))
+    # 對照：沒要求就不算（也不付重算的成本）
+    plain = tv.load_served_values(conf_d, binary=da_guard)["t"].keys
+    assert plain["mysql_conections"].disable is None
 
 
 # ── load_guard_findings (#2914: validate-config's profiles row) ──────────────

@@ -891,13 +891,38 @@ VIEW_TITLES = {rd.VIEW_SERVED: "Exporter values (da-guard served-values)",
 
 
 def served_sections(old_tenants, new_tenants):
-    """The three served sections from the two sides' served tenants: what
+    """The served sections from the two sides' served tenants: what
     `_render_diff.compare` keeps of the served renders (masked)."""
     return {
         "metric": served_metric_diff(old_tenants, new_tenants),
         "setting": served_setting_diff(old_tenants, new_tenants),
         "custom_alert": served_custom_alert_diff(old_tenants, new_tenants),
+        "disable": served_disable_warnings(old_tenants, new_tenants),
     }
+
+
+#: What a `disable` does that the report warns about (ADR-038 decision 8).
+DISABLE_WARNED = ("noop", "partial")
+
+
+def served_disable_warnings(old_tenants, new_tenants):
+    """`{tenant: [{"key", "disable", "served_family"}, ...]}`: every key the
+    PR side switches off with no effect (noop) or only in part (partial)
+    whose effect differs on the base side — what this change brings in, not
+    what was already there. A warning, never a change: it does not make the
+    exit code 1 on its own."""
+    out = {}
+    for tenant, tv_new in new_tenants.items():
+        old_keys = (old_tenants.get(tenant).keys if tenant in old_tenants else {}) or {}
+        for key, e in sorted((tv_new.keys or {}).items()):
+            if e.disable not in DISABLE_WARNED:
+                continue
+            was = old_keys.get(key)
+            if was is not None and was.disable == e.disable and was.served_family == e.served_family:
+                continue
+            out.setdefault(tenant, []).append(
+                {"key": key, "disable": e.disable, "served_family": list(e.served_family)})
+    return out
 
 
 def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
@@ -907,6 +932,7 @@ def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
     metric = served.get("metric") or {}
     setting = served.get("setting") or {}
     custom = served.get("custom_alert") or {}
+    disable = served.get("disable") or {}
 
     tenants_added, tenants_removed, dropped = [], [], {}
     for c in diff.served.changes:
@@ -935,7 +961,7 @@ def build_report(diff, old_dir, new_dir, *, timeout=rd.DEFAULT_TIMEOUT):
     report = {
         "old_dir": str(old_dir), "new_dir": str(new_dir), "at": diff.at,
         "views": {rd.VIEW_SERVED: diff.served, rd.VIEW_ROUTES: diff.routes},
-        "metric": metric, "setting": setting, "custom_alert": custom,
+        "metric": metric, "setting": setting, "custom_alert": custom, "disable": disable,
         "tenants_added": sorted(tenants_added), "tenants_removed": sorted(tenants_removed),
         "dropped": dropped, "other_served": other,
         "routes": routes, "receivers": receivers, "inhibits": inhibits,
@@ -1069,6 +1095,7 @@ def report_json(report, exit_code):
         "custom_alert_changes": _grouped(report["custom_alert"]),
         "dropped_key_changes": _grouped(report["dropped"]),
         "other_served_changes": _grouped(report["other_served"]),
+        "disable_warnings": _grouped(report.get("disable") or {}),
         "route_changes": _group_by(
             report["routes"], lambda c: {"change": c.kind, "fields": _pairs(c.changes)}, route_merge),
         "receiver_changes": _group_by(
@@ -1301,6 +1328,21 @@ def _render_keyed(title, note, per_tenant, lines):
     lines.append("")
 
 
+def _render_disable_warnings(per_tenant, lines):
+    lines.append("## `disable` With No or Partial Effect")
+    lines.append("")
+    lines.append("> Brought in by this change. noop: taking the `disable` away changes nothing "
+                 "the exporter serves (often a misspelt key). partial: the key is off, but its "
+                 "`_critical` or dimensional keys are still served.")
+    lines.append("")
+    for c, tenants in _group_per_tenant(per_tenant):
+        still = ""
+        if c["served_family"]:
+            still = " — still served: " + ", ".join(_code_span(k) for k in c["served_family"])
+        lines.append(f"- {_code_span(c['key'])}: {c['disable']}{still} — {_who(tenants)}")
+    lines.append("")
+
+
 def _render_thresholds(metric, lines):
     lines.append("## Threshold Changes")
     lines.append("")
@@ -1436,6 +1478,8 @@ def render_markdown(report):
         _render_keyed("Other Served Changes",
                       "Changes in what the exporter serves that no section above shows.",
                       report["other_served"], lines)
+    if report.get("disable"):
+        _render_disable_warnings(report["disable"], lines)
 
     computed = all(v.status == "computed" for v in report["views"].values())
     if not report_has_changes(report):
