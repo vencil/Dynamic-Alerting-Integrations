@@ -908,14 +908,14 @@ repos:
 
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
-        name: Schema/Go/Python reserved-key drift (3-way)
+        name: Reserved-key lists generated from the registry (ADR-038)
         entry: python3 -X utf8 scripts/tools/dx/sync_schema.py --check
         language: python
         pass_filenames: false
-        # 3-way (#658): also trigger on the Python reserved-key SSOT, not just
-        # the Go source (components/) + schema (docs/). The authoritative CI gate
-        # is the pytest tests/dx/test_sync_schema.py; this stays manual-stage as
-        # a fast local mirror.
+        # The registry (pkg/config/reserved_keys.json) and the four files
+        # generated from it. The authoritative CI gate is the pytest
+        # tests/dx/test_sync_schema.py; this stays manual-stage as a fast
+        # local mirror.
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py)
         stages: [manual]
 

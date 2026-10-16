@@ -1,315 +1,236 @@
-"""Tests for sync_schema.py — the Schema ↔ Go ↔ Python reserved-key drift tool.
+"""Tests for sync_schema.py — the reserved `_` key lists generated from the one
+registry, components/threshold-exporter/app/pkg/config/reserved_keys.json
+(ADR-038 decision 2).
 
-This file IS a CI gate for the drift triangle: `test_no_drift_between_schema_and_go`
-and `test_no_drift_three_way` run in the normal pytest suite, so a future
-schema-only key (the `_operator` class of bug), a Go key absent from the schema,
-or a Python allowlist that lags Go all fail CI — without relying on the
-manual-stage `schema-check` pre-commit hook ever being run.
+`TestCommittedFilesAreGenerated` IS the CI gate: the Python constants, Go's
+reserved_keys_gen.go and the two schemas' `_` keys must be exactly what the
+registry generates, so a key added in one place only fails CI. (Before the
+registry, three hand-kept copies were held together by a Python↔Go parity
+test and a Schema↔Go test; generation replaces both.)
 
-`extract_go_keys` previously read `app/config.go` (where the map does NOT live),
-so it returned empty — and its only caller, the manual-stage `schema-check`
-hook, was never run anyway; these tests pin the corrected `pkg/config/types.go`
-path and put the gate in normal CI.
-
-#658 added the explicit Python leg (extract_python_keys / check_py_go_parity):
-Go↔Python was already gated by tests/shared/test_reserved_key_py_go_parity.py, so
-the triangle closed by transitivity; checking Schema↔Python here removes that
-transitive reliance.
+Whether the registry says what the readers actually do is measured by
+tests/shared/test_reserved_key_probes.py, not here.
 """
+import json
 import os
+import re
+import shutil
+import subprocess
+import sys
 
 import pytest
 
 import sync_schema as ss
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_GO_SRC = os.path.join(_REPO, "components", "threshold-exporter", "app")
-_SCHEMA = os.path.join(_REPO, "docs", "schemas", "tenant-config.schema.json")
-_PY_SRC = os.path.join(_REPO, "scripts", "tools", "_lib_constants.py")
+_TOOL = os.path.join(_REPO, "scripts", "tools", "dx", "sync_schema.py")
+_TARGETS = (ss.PY_REL, ss.GO_REL, ss.TENANT_SCHEMA_REL, ss.PLATFORM_SCHEMA_REL)
 
-# Gate on the Go source TREE, not a specific file path: skipping on
-# pkg/config/types.go's existence would make the whole module silently skip if
-# that file is ever moved/renamed — exactly the case extract_go_keys' glob
-# fallback handles, so the gate must still run. Only a Python-only checkout (no
-# Go tree at all) legitimately skips.
 pytestmark = pytest.mark.skipif(
-    not os.path.isdir(_GO_SRC),
-    reason="Go source tree not present (Python-only checkout)")
+    not os.path.isfile(os.path.join(_REPO, ss.REGISTRY_REL)),
+    reason="the registry is not in this checkout (Python-only tree)")
 
 
-class TestExtractGoKeys:
-    """extract_go_keys must read the REAL Go map, not return empty."""
-
-    def test_reads_real_reserved_keys(self):
-        keys, prefixes = ss.extract_go_keys(_GO_SRC)
-        # The bug: reading app/config.go returned an empty set. Non-empty proves
-        # the corrected pkg/config/types.go path (or the glob fallback) works.
-        assert keys, "extract_go_keys returned no keys — wrong Go file?"
-        # _custom_alerts is the v2.9.0 key whose drift motivated this fix.
-        assert "_custom_alerts" in keys
-        assert {"_silent_mode", "_severity_dedup", "_metadata"} <= keys
-        assert set(prefixes) == {"_state_", "_routing"}
-
-    @pytest.mark.parametrize(
-        "root_parts", [("vendor", "app"), ("plain",)],
-        ids=["under-vendor", "plain"])
-    def test_fallback_glob_ignores_checkout_path(self, tmp_path, root_parts):
-        """The glob fallback's vendor/testdata/mocks skip is relative to the Go
-        tree: a tree checked out under ``.../vendor/`` still resolves (#1810),
-        while a decoy inside the tree's own mocks/ (sorts before pkg/, so the
-        glob reaches it first) stays excluded."""
-        go_dir = tmp_path.joinpath(*root_parts)
-        decoy = go_dir / "mocks" / "a.go"
-        real = go_dir / "pkg" / "moved" / "keys.go"
-        for f, key in ((decoy, "_decoy"), (real, "_real")):
-            f.parent.mkdir(parents=True)
-            f.write_text(
-                "package x\n"
-                f'var validReservedKeys = map[string]bool{{"{key}": true}}\n',
-                encoding="utf-8")
-        keys, _prefixes = ss.extract_go_keys(str(go_dir))
-        assert keys == {"_real"}
+def _registry():
+    with open(os.path.join(_REPO, ss.REGISTRY_REL), encoding="utf-8") as f:
+        return json.load(f)
 
 
-class TestSchemaInSync:
-    """The committed schema must match the Go reserved keys — the gate that
-    would have caught the schema-only `_operator` drift."""
-
-    def test_no_drift_between_schema_and_go(self):
-        keys, prefixes = ss.extract_go_keys(_GO_SRC)
-        schema_keys = ss.extract_schema_keys(_SCHEMA)
-        missing, extra = ss.check_drift(keys, prefixes, schema_keys)
-        assert not missing, f"schema is missing Go reserved keys: {sorted(missing)}"
-        assert not extra, (
-            f"schema declares properties absent from Go (schema-only drift, e.g. "
-            f"the removed `_operator`): {sorted(extra)}")
+def _copy_tree(tmp_path, registry=None):
+    """The registry and the four generated files under *tmp_path*."""
+    for rel in (ss.REGISTRY_REL, *_TARGETS):
+        dst = tmp_path / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(os.path.join(_REPO, rel), dst)
+    if registry is not None:
+        (tmp_path / ss.REGISTRY_REL).write_text(json.dumps(registry), encoding="utf-8")
+    return tmp_path
 
 
-class TestExtractPythonKeys:
-    """extract_python_keys must read the REAL Python allowlist, and must NOT be
-    fooled by a quoted token inside a `#` comment (the _lib_constants.py comment
-    on `_custom_alerts` literally contains `component="custom"`)."""
-
-    def test_reads_real_reserved_keys(self):
-        keys, prefixes = ss.extract_python_keys(_PY_SRC)
-        assert keys, "extract_python_keys returned no keys — wrong file/regex?"
-        assert "_custom_alerts" in keys
-        assert {"_silent_mode", "_severity_dedup", "_metadata"} <= keys
-        assert set(prefixes) == {"_state_", "_routing"}
-        # The `# ... component="custom"` comment must NOT leak a bogus `custom`
-        # key — without `#`-stripping it would, inflating the set and crying
-        # false Python drift.
-        assert "custom" not in keys
-
-    def test_comment_quoted_token_not_extracted(self, tmp_path):
-        """A deprecate-by-comment (and any quoted token in a comment) is GONE."""
-        synthetic = (
-            'VALID_RESERVED_KEYS: Final[set[str]] = {\n'
-            '    "_silent_mode",\n'
-            '    # "_deprecated": true,  emits "ghost" tokens if not stripped\n'
-            '}\n'
-            'VALID_RESERVED_PREFIXES: Final[tuple[str, ...]] = ("_state_",)\n'
-        )
-        tmp = tmp_path / "synthetic_constants.py"
-        tmp.write_text(synthetic, encoding="utf-8")
-        keys, prefixes = ss.extract_python_keys(str(tmp))
-        assert keys == {"_silent_mode"}
-        assert prefixes == ["_state_"]
+def _cli(*args):
+    return subprocess.run([sys.executable, _TOOL, *args], cwd=_REPO, capture_output=True,
+                          text=True, encoding="utf-8", timeout=120)
 
 
-class TestPyGoParity:
-    """check_py_go_parity must be byte-for-byte (same shape, no prefix expansion),
-    and must DETECT drift in either direction (mutation-proven)."""
-
-    def test_real_python_matches_go(self):
-        go_keys, go_prefixes = ss.extract_go_keys(_GO_SRC)
-        py_keys, py_prefixes = ss.extract_python_keys(_PY_SRC)
-        key_drift, prefix_drift = ss.check_py_go_parity(
-            go_keys, go_prefixes, py_keys, py_prefixes)
-        assert not key_drift, f"Go↔Python reserved-KEY drift: {sorted(key_drift)}"
-        assert not prefix_drift, f"Go↔Python reserved-PREFIX drift: {sorted(prefix_drift)}"
-
-    def test_detects_python_only_key(self):
-        # A key Python has but Go lacks (or vice versa) must surface — the exact
-        # #741 `_custom_alerts` lag this leg exists to catch.
-        key_drift, prefix_drift = ss.check_py_go_parity(
-            {"_a", "_b"}, ["_state_"], {"_a", "_b", "_c"}, ["_state_"])
-        assert key_drift == {"_c"}
-        assert not prefix_drift
-
-    def test_detects_prefix_drift(self):
-        key_drift, prefix_drift = ss.check_py_go_parity(
-            {"_a"}, ["_state_", "_routing"], {"_a"}, ["_state_"])
-        assert not key_drift
-        assert prefix_drift == {"_routing"}
+def _read(root, rel):
+    return (root / rel).read_text(encoding="utf-8")
 
 
-class TestThreeWayInSync:
-    """The committed Schema, Go, and Python surfaces must all agree."""
+class TestCommittedFilesAreGenerated:
+    def test_nothing_is_stale(self):
+        assert ss.run(_REPO, os.path.join(_REPO, ss.REGISTRY_REL), update=False) == []
 
-    def test_no_drift_three_way(self):
-        go_keys, go_prefixes = ss.extract_go_keys(_GO_SRC)
-        schema_keys = ss.extract_schema_keys(_SCHEMA)
-        py_keys, py_prefixes = ss.extract_python_keys(_PY_SRC)
+    def test_check_passes_on_the_repo(self):
+        p = _cli("--check")
+        assert p.returncode == 0, p.stdout + p.stderr
 
-        missing, extra = ss.check_drift(go_keys, go_prefixes, schema_keys)
-        key_drift, prefix_drift = ss.check_py_go_parity(
-            go_keys, go_prefixes, py_keys, py_prefixes)
-
-        assert not (missing or extra or key_drift or prefix_drift), (
-            "3-way reserved-key drift — Schema/Go/Python disagree. "
-            f"schema-missing-go={sorted(missing)}, schema-extra={sorted(extra)}, "
-            f"go-python-key-drift={sorted(key_drift)}, "
-            f"go-python-prefix-drift={sorted(prefix_drift)}")
-
-
-class TestExtractPythonKeysEdge:
-    """Cover extract_python_keys' no-match fallback (constants block absent)."""
-
-    def test_empty_when_constants_absent(self, tmp_path):
-        tmp = tmp_path / "no_constants.py"
-        tmp.write_text("X = 1\nY = 'foo'\n", encoding="utf-8")
-        keys, prefixes = ss.extract_python_keys(str(tmp))
-        assert keys == set()
-        assert prefixes == []
-
-    def test_module_level_only_ignores_nested_decoy(self, tmp_path):
-        # A function-local VALID_RESERVED_KEYS must NOT shadow the module-level one
-        # (module-level `tree.body` scan, not ast.walk). Adversarial review NIT-1.
-        tmp = tmp_path / "decoy.py"
-        tmp.write_text(
-            'VALID_RESERVED_KEYS = {"_real"}\n'
-            'VALID_RESERVED_PREFIXES = ("_state_",)\n'
-            'def f():\n'
-            '    VALID_RESERVED_KEYS = {"_decoy"}\n'
-            '    return VALID_RESERVED_KEYS\n',
-            encoding="utf-8")
-        keys, prefixes = ss.extract_python_keys(str(tmp))
-        assert keys == {"_real"}
-        assert prefixes == ["_state_"]
+    def test_the_imported_constants_are_the_registry_s(self):
+        import _lib_constants as c
+        d = ss.derive(ss.load_registry(os.path.join(_REPO, ss.REGISTRY_REL)))
+        assert sorted(c.VALID_RESERVED_KEYS) == d["reserved_keys"]
+        assert list(c.VALID_RESERVED_PREFIXES) == d["reserved_prefixes"]
+        assert sorted(c.TENANT_ROUTING_KEYS) == d["tenant_routing_keys"]
+        assert sorted(c.PLATFORM_ROUTING_KEYS) == d["platform_routing_keys"]
+        assert sorted(c.TOP_LEVEL_READ_ELSEWHERE) == d["top_level_read_elsewhere"]
+        assert c.RETIRED_RESERVED_KEYS == d["retired"]
 
 
-class TestPrintDriftReport:
-    """print_drift_report: has_drift return + every drift section renders."""
+class TestCheckAndUpdate:
+    # A hand edit --update can undo byte for byte. (Renaming a schema
+    # property cannot be undone: the stub that replaces it has no body.)
+    @pytest.mark.parametrize("rel,old,new", [
+        (ss.PY_REL, '"_silent_mode",', '"_silent_mod",'),
+        (ss.GO_REL, '"_silent_mode",', '"_silent_mod",'),
+        (ss.TENANT_SCHEMA_REL, "_routing_profile|_severity_dedup", "_routing_profile"),
+        (ss.PLATFORM_SCHEMA_REL, '"^_state_"', '"^_stat_"'),
+    ])
+    def test_a_hand_edit_is_stale_and_update_restores_it(self, tmp_path, rel, old, new):
+        root = _copy_tree(tmp_path)
+        good = _read(root, rel)
+        bad = good.replace(old, new, 1)
+        assert bad != good, rel
+        (root / rel).write_text(bad, encoding="utf-8")
+        check = _cli("--root", str(root), "--check")
+        assert check.returncode == 1 and f"STALE: {rel}" in check.stdout, check.stdout
+        upd = _cli("--root", str(root), "--update")
+        assert upd.returncode == 0 and f"UPDATED: {rel}" in upd.stdout, upd.stdout + upd.stderr
+        assert _read(root, rel) == good
+        assert _cli("--root", str(root), "--check").returncode == 0
 
-    def test_no_drift_returns_false(self, capsys):
-        assert ss.print_drift_report(set(), set(), set(), set()) is False
-        assert "in sync" in capsys.readouterr().out
+    def test_a_missing_go_file_is_written(self, tmp_path):
+        root = _copy_tree(tmp_path)
+        (root / ss.GO_REL).unlink()
+        assert _cli("--root", str(root), "--check").returncode == 1
+        assert _cli("--root", str(root), "--update").returncode == 0
+        assert _read(root, ss.GO_REL) == open(os.path.join(_REPO, ss.GO_REL), encoding="utf-8").read()
 
-    def test_each_drift_branch_returns_true(self, capsys):
-        # One member in each of the four drift buckets → all sections print.
-        assert ss.print_drift_report({"_a"}, {"_b"}, {"_c"}, {"_d"}) is True
-        out = capsys.readouterr().out
-        assert "missing in Schema" in out          # missing_in_schema
-        assert "not defined in Go source" in out    # extra_in_schema
-        assert "Reserved KEYS differ between Go and Python" in out
-        assert "Reserved PREFIXES differ between Go and Python" in out
-
-
-_ROUTING_SRC = os.path.join(_REPO, "scripts", "tools", "ops", "_grar_validate.py")
-
-
-def _real_expected():
-    keys, prefixes = ss.extract_python_keys(_PY_SRC)
-    return ss.expected_property_names(
-        keys, prefixes, ss.extract_tenant_routing_keys(_ROUTING_SRC))
-
-
-def _committed():
-    with open(_SCHEMA, encoding="utf-8") as f:
-        return f.read()
-
-
-def _without_property_names(text):
-    """`text` with tenantConfig's own propertyNames line block removed."""
-    import json
-    marker = '\n      "propertyNames": '
-    start = text.index(marker, text.index('"tenantConfig": {'))
-    _, end = json.JSONDecoder().raw_decode(text, start + len(marker))
-    out = text[:start] + text[end + len(","):]
-    assert out.count('"propertyNames"') == text.count('"propertyNames"') - 1
-    return out
+    def test_without_check_stale_is_reported_but_rc_0(self, tmp_path):
+        root = _copy_tree(tmp_path)
+        (root / ss.GO_REL).write_text("package config\n", encoding="utf-8")
+        p = _cli("--root", str(root))
+        assert p.returncode == 0 and f"STALE: {ss.GO_REL}" in p.stdout
 
 
-class TestClosedUnderscoreNamespace:
-    """#3016 R3: tenantConfig.propertyNames closes the `_` namespace, and it is
-    generated from the Python SSOT rather than written by hand."""
+class TestANewKeyReachesEveryCopy:
+    """Adding one key to the registry is the whole change: every copy follows."""
 
-    def test_reads_the_real_tenant_routing_keys(self):
-        assert ss.extract_tenant_routing_keys(_ROUTING_SRC) == {"_routing", "_routing_profile"}
+    def _with(self, tmp_path, name, entry):
+        reg = _registry()
+        reg["keys"][name] = entry
+        root = _copy_tree(tmp_path, reg)
+        assert _cli("--root", str(root), "--update").returncode == 0
+        return root
 
-    def test_reads_a_frozenset_literal_and_nothing_else(self, tmp_path):
-        src = tmp_path / "m.py"
-        src.write_text('def f():\n    TENANT_ROUTING_KEYS = frozenset({"_decoy"})\n'
-                       'TENANT_ROUTING_KEYS = frozenset({"_a", "_b"})\n', encoding="utf-8")
-        assert ss.extract_tenant_routing_keys(src) == {"_a", "_b"}
-        src.write_text("TENANT_ROUTING_KEYS = make()\n", encoding="utf-8")
-        assert ss.extract_tenant_routing_keys(src) == set()
+    def test_a_tenant_key(self, tmp_path):
+        root = self._with(tmp_path, "_probe_key", {
+            "read_by": {"exporter": ["tenant"]}, "description": "probe"})
+        assert '"_probe_key",' in _read(root, ss.PY_REL)
+        assert '"_probe_key",' in _read(root, ss.GO_REL)
+        tenant = json.loads(_read(root, ss.TENANT_SCHEMA_REL))["definitions"]["tenantConfig"]
+        assert tenant["properties"]["_probe_key"] == {"description": "probe"}
+        assert re.search(tenant["propertyNames"]["pattern"], "_probe_key")
+        platform = json.loads(_read(root, ss.PLATFORM_SCHEMA_REL))
+        assert platform["properties"]["_probe_key"] == {"description": "probe"}
 
-    def test_committed_schema_is_in_sync(self):
-        import json
-        schema = json.loads(_committed())
-        assert ss.check_property_names(schema, _real_expected()) == []
+    def test_a_platform_top_key_is_not_a_tenant_key(self, tmp_path):
+        root = self._with(tmp_path, "_probe_top", {
+            "read_by": {"generator": ["platform_top"]}, "description": "probe"})
+        py = _read(root, ss.PY_REL)
+        top = py[py.index("TOP_LEVEL_READ_ELSEWHERE: Final"):py.index("RETIRED_RESERVED_KEYS: Final")]
+        assert '"_probe_top"' in top
+        assert py.count('"_probe_top"') == 1  # not a reserved tenant key
+        tenant = json.loads(_read(root, ss.TENANT_SCHEMA_REL))["definitions"]["tenantConfig"]
+        assert "_probe_top" not in tenant["properties"]
+        assert not re.search(tenant["propertyNames"]["pattern"], "_probe_top")
+        assert "_probe_top" in json.loads(_read(root, ss.PLATFORM_SCHEMA_REL))["properties"]
+
+    def test_removing_a_key_removes_it_and_keeps_every_other_byte(self, tmp_path):
+        reg = _registry()
+        del reg["keys"]["_namespaces"]
+        root = _copy_tree(tmp_path, reg)
+        assert _cli("--root", str(root), "--update").returncode == 0
+        for rel in (ss.TENANT_SCHEMA_REL, ss.PLATFORM_SCHEMA_REL):
+            before = open(os.path.join(_REPO, rel), encoding="utf-8").read()
+            after = _read(root, rel)
+            assert "_namespaces" not in json.dumps(json.loads(after).get("properties", {})) or \
+                rel == ss.TENANT_SCHEMA_REL
+            # Only the removed member (and the pattern) changed.
+            assert len(before) - len(after) < 2000, rel
+        tenant = json.loads(_read(root, ss.TENANT_SCHEMA_REL))["definitions"]["tenantConfig"]
+        assert "_namespaces" not in tenant["properties"]
+        assert not re.search(tenant["propertyNames"]["pattern"], "_namespaces")
+
+    def test_update_is_idempotent(self, tmp_path):
+        root = self._with(tmp_path, "_probe_key", {
+            "read_by": {"exporter": ["tenant"]}, "description": "probe"})
+        snap = {rel: _read(root, rel) for rel in _TARGETS}
+        assert _cli("--root", str(root), "--update").stdout.startswith("OK")
+        assert {rel: _read(root, rel) for rel in _TARGETS} == snap
+
+
+class TestTheClosedUnderscoreNamespace:
+    """tenantConfig.propertyNames: a `_` key is one a reader reads, or a typo."""
+
+    def _pattern(self):
+        tc = json.loads(open(os.path.join(_REPO, ss.TENANT_SCHEMA_REL), encoding="utf-8").read())
+        return tc["definitions"]["tenantConfig"]["propertyNames"]["pattern"]
 
     @pytest.mark.parametrize("key", [
         "cpu", "mysql_connections", 'redis_db_keys{db="db2"}', "_silent_mode",
         "_routing", "_routing_profile", "_custom_alerts", "_metadata", "_profile",
         "_namespaces", "_severity_dedup", "_state_maintenance", "_state_custom_x",
     ])
-    def test_the_pattern_accepts_what_a_reader_reads(self, key):
-        import re
-        assert re.search(_real_expected()["pattern"], key), key
+    def test_accepts_what_a_reader_reads(self, key):
+        assert re.search(self._pattern(), key), key
 
     @pytest.mark.parametrize("key", [
         "_routng", "_silense_mode", "_routing_profle", "_routing_defaults",
-        "_routing_enforced", "_domain_policy", "_", "_silent_mode_x", "_metadata2",
+        "_routing_enforced", "_policies", "_domain_policy", "_", "_silent_mode_x",
+        "_metadata2", "_routing_receiver_type",
     ])
-    def test_the_pattern_rejects_what_nothing_reads(self, key):
-        import re
-        assert not re.search(_real_expected()["pattern"], key), key
+    def test_rejects_what_nothing_reads_in_a_tenant(self, key):
+        assert not re.search(self._pattern(), key), key
 
-    def test_a_defined_property_the_pattern_rejects_is_drift(self):
-        import json
-        schema = json.loads(_committed())
-        schema["definitions"]["tenantConfig"]["properties"]["_routing_defaults"] = {}
-        assert ss.check_property_names(schema, _real_expected()) == [
-            "tenantConfig.properties._routing_defaults is a key propertyNames rejects"]
 
-    def test_a_stale_subschema_is_drift(self):
-        import json
-        schema = json.loads(_committed())
-        schema["definitions"]["tenantConfig"]["propertyNames"]["pattern"] = "^"
-        assert any("stale" in line for line in ss.check_property_names(schema, _real_expected()))
+class TestRegistryShape:
+    """A malformed registry is refused (rc 2), never half-generated."""
 
-    def test_splice_is_byte_preserving_and_idempotent(self):
-        text = _committed()
-        expected = _real_expected()
-        assert ss.splice_property_names(text, expected) == text
-        # Remove the subschema, splice it back: the whole file round-trips.
-        assert ss.splice_property_names(_without_property_names(text), expected) == text
+    @pytest.mark.parametrize("mutate,needle", [
+        (lambda r: r["keys"]["_silent_mode"]["read_by"].update({"exporter": ["tenants"]}),
+         "read_by.exporter"),
+        (lambda r: r["keys"]["_silent_mode"]["read_by"].update({"exportr": ["tenant"]}),
+         "unknown reader"),
+        (lambda r: r["keys"]["_silent_mode"].update({"read_by": {}}), "belongs under retired"),
+        (lambda r: r["keys"]["_silent_mode"].pop("description"), "description"),
+        (lambda r: r["keys"].update({"silent": r["keys"]["_silent_mode"]}), "must start with '_'"),
+        (lambda r: r["retired"].update({"_silent_mode": "x"}), "retired._silent_mode"),
+        (lambda r: r["keys"]["_silent_mode"].update({"readers": {}}), "allowed fields"),
+        (lambda r: r.update({"extra": 1}), "top-level keys"),
+        (lambda r: r["layers"].pop("profile"), "layers must be"),
+    ])
+    def test_refused(self, tmp_path, mutate, needle):
+        reg = _registry()
+        mutate(reg)
+        root = _copy_tree(tmp_path, reg)
+        p = _cli("--root", str(root), "--check")
+        assert p.returncode == 2 and needle in p.stderr, p.stderr
+        for rel in _TARGETS:
+            assert _read(root, rel) == open(os.path.join(_REPO, rel), encoding="utf-8").read()
 
-    def test_splice_never_touches_a_nested_property_names(self):
-        text = _committed().replace(
-            '"tenantConfig": {',
-            '"tenantConfig": {\n      "x": {"propertyNames": {"pattern": "^k"}},', 1)
-        out = ss.splice_property_names(text, _real_expected())
-        assert '"x": {"propertyNames": {"pattern": "^k"}}' in out
+    def test_unreadable_registry_is_rc_2(self, tmp_path):
+        root = _copy_tree(tmp_path)
+        (root / ss.REGISTRY_REL).write_text("{", encoding="utf-8")
+        p = _cli("--root", str(root), "--check")
+        assert p.returncode == 2 and "cannot read" in p.stderr
 
-    def test_update_writes_and_check_passes(self, tmp_path):
-        import subprocess
-        import sys
-        schema = tmp_path / "s.json"
-        text = _committed()
-        schema.write_text(_without_property_names(text), encoding="utf-8")
-        tool = os.path.join(_REPO, "scripts", "tools", "dx", "sync_schema.py")
-        base = [sys.executable, tool, "--schema", str(schema)]
-        check = subprocess.run([*base, "--check"], cwd=_REPO, capture_output=True,
-                               text=True, encoding="utf-8", timeout=120)
-        assert check.returncode == 1 and "propertyNames is stale" in check.stdout
-        upd = subprocess.run([*base, "--update"], cwd=_REPO, capture_output=True,
-                             text=True, encoding="utf-8", timeout=120)
-        assert upd.returncode == 0, upd.stdout + upd.stderr
-        assert schema.read_text(encoding="utf-8") == text
-        again = subprocess.run([*base, "--check"], cwd=_REPO, capture_output=True,
-                               text=True, encoding="utf-8", timeout=120)
-        assert again.returncode == 0, again.stdout
+
+@pytest.mark.skipif(shutil.which("gofmt") is None, reason="gofmt not installed")
+def test_the_generated_go_is_gofmt_clean(tmp_path):
+    reg = _registry()
+    reg["keys"]["_probe_key"] = {"read_by": {"exporter": ["tenant"]}, "description": "x"}
+    reg["retired"]["_probe_old"] = "a hint with `quotes` and \"double\" quotes"
+    out = tmp_path / "gen.go"
+    out.write_text(ss.render_go(ss.derive(reg)), encoding="utf-8")
+    p = subprocess.run(["gofmt", "-l", str(out)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=60)
+    assert p.returncode == 0 and p.stdout == "", p.stdout + p.stderr

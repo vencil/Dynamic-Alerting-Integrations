@@ -44,6 +44,11 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
 )
+from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registry)
+    PLATFORM_ROUTING_KEYS,
+    RETIRED_RESERVED_KEYS,
+    TENANT_ROUTING_KEYS,
+)
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
@@ -1906,14 +1911,13 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
 # ── #2983: the `_routing*` keys each layer is read for ──
 # `_routing` is a reserved PREFIX (VALID_RESERVED_PREFIXES), so a misspelling
 # such as `_routing_profle` passes every key check as reserved — and the
-# generator reads none of it. The generator reads exactly these names: a
-# tenant's own two, and the two it takes from the top level of a platform
-# (`_`) file. Any other `_routing`-prefixed key in that place is named
-# (`IgnoredKeyWarning`, blocking under `--validate`). The Go copy is
+# generator reads none of it. The generator reads exactly TENANT_ROUTING_KEYS
+# in a tenant's config and PLATFORM_ROUTING_KEYS at the top level of a
+# platform (`_`) file (both generated from the reserved-key registry,
+# ADR-038). Any other `_routing`-prefixed key in that place is named
+# (`IgnoredKeyWarning`, blocking under `--validate`). The Go twin is
 # `routingpolicy.UnknownRoutingKeys`; tests/shared/routing_unknown_keys_cases.json
 # runs both.
-TENANT_ROUTING_KEYS = frozenset({"_routing", "_routing_profile"})
-PLATFORM_ROUTING_KEYS = frozenset({"_routing_defaults", "_routing_enforced"})
 
 
 def _unknown_routing_hint(key: str, layer: str) -> str:
@@ -1922,8 +1926,8 @@ def _unknown_routing_hint(key: str, layer: str) -> str:
     if layer == "platform" and key in TENANT_ROUTING_KEYS:
         return ("a tenant key: set it in the tenant's own file (or its root "
                 "platform `tenants:` entry); routing for every tenant is `_routing_defaults`")
-    if key == "_routing_receiver_type":
-        return "no longer read: set the receiver type as `_routing.receiver.type`"
+    if key in RETIRED_RESERVED_KEYS:
+        return RETIRED_RESERVED_KEYS[key]
     allowed = TENANT_ROUTING_KEYS if layer == "tenant" else PLATFORM_ROUTING_KEYS
     close = difflib.get_close_matches(key, sorted(allowed), n=1, cutoff=0.8)
     if close:

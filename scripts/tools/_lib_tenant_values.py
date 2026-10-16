@@ -1102,12 +1102,11 @@ def load_key_refs(
 
 def is_tenant_reserved_key(key: str) -> bool:
     """A reserved key a tenant may carry: `VALID_RESERVED_KEYS` or a
-    `VALID_RESERVED_PREFIXES` key (the Python copy of the exporter's list,
-    pinned to Go by tests/shared/test_reserved_key_py_go_parity.py), minus
-    the platform-level keys another reader takes from the top of a defaults
-    file (`TOP_LEVEL_READ_ELSEWHERE`: `_routing_defaults`,
-    `_routing_enforced`) that are not themselves tenant keys. `_policies`
-    and any other root-only `_` key is not one."""
+    `VALID_RESERVED_PREFIXES` key (generated, as Go's are, from the
+    reserved-key registry; ADR-038), minus the platform-level keys another
+    reader takes from the top of a defaults file (`TOP_LEVEL_READ_ELSEWHERE`:
+    `_routing_defaults`, `_routing_enforced`) that are not themselves tenant
+    keys. `_policies` and any other root-only `_` key is not one."""
     if key in VALID_RESERVED_KEYS:
         return True
     return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
