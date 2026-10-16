@@ -91,7 +91,9 @@ def test_help_exits_zero(tool_path):
 INVALID_ARG_EXIT2_EXEMPT: set[str] = {
     # These two a11y dev tools take a bare positional `path` (no argparse
     # flag parsing), so an unrecognised "--flag" is treated as a path and
-    # raises an uncaught FileNotFoundError → Python's default exit 1, not 2.
+    # raises an uncaught FileNotFoundError. That used to be Python's default
+    # exit 1; since #3090 the crash hook makes it 2 — but as a crash
+    # (traceback), not a rejected flag, so they stay exempt here.
     # Minor known inconsistency in non-customer-facing dx tools; left as-is
     # to avoid widening this sweep. Their valid exit paths DO use the 0/1/2
     # constants (see the files' main()).
@@ -128,7 +130,8 @@ def test_invalid_args_exits_nonzero(tool_path):
     asserts exit == 2 — and exit 2 implies non-zero, so a full-ALL_TOOLS
     sweep here added ~186 redundant subprocess spawns with zero extra
     coverage. This test only guards the two argparse-exempt tools that the
-    exit-2 sweep skips (they exit 1 via uncaught FileNotFoundError)."""
+    exit-2 sweep skips (an uncaught FileNotFoundError: the crash exit code,
+    2 since #3090)."""
     result = subprocess.run(
         [sys.executable, str(tool_path), "--this-flag-does-not-exist-xyz"],
         capture_output=True, timeout=10
@@ -174,3 +177,293 @@ def test_invalid_args_exits_caller_error(tool_path):
         f"{tool_path.name} should exit 2 (EXIT_CALLER_ERROR) on a bad flag, "
         f"got {result.returncode}\nstderr: {result.stderr.decode('utf-8', 'replace')[:300]}"
     )
+    # #3090: a crash is rc 2 too — the bad flag must be refused, not crash.
+    assert b"ERROR: unexpected internal error" not in result.stderr, (
+        f"{tool_path.name} crashed on a bad flag instead of refusing it")
+
+
+# ── Uncaught exception → crash exit code (#3090) ─────────────────────
+#
+# A crash used to end at the interpreter's default rc 1 — the same number as
+# EXIT_VIOLATION ("ran and found something"). Importing _lib_exitcodes now
+# installs a sys.excepthook that prints the traceback, then one
+# "ERROR: unexpected internal error (<type>): <message>" line, and exits with
+# the crash code (EXIT_CALLER_ERROR unless the tool set its own).
+#
+# ⛔ These run in a REAL subprocess on purpose: CI executes the scripts
+# directly (not through `da-tools`), and an excepthook only fires at the top
+# level of an interpreter — an in-process `pytest.raises` never reaches it.
+
+_CRASH_PRELUDE = (
+    "import atexit, sys\n"
+    "sys.path.insert(0, {tools!r})\n"
+    "import _lib_exitcodes\n"
+    "atexit.register(lambda: print('ATEXIT-RAN', file=sys.stderr, flush=True))\n"
+)
+
+
+def _run_crash_script(tmp_path, body, *, prelude=_CRASH_PRELUDE):
+    script = tmp_path / "crash_tool.py"
+    script.write_text(prelude.format(tools=str(TOOLS_DIR)) + body, encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=30,
+    )
+
+
+def _stderr_lines(proc):
+    return [line for line in proc.stderr.splitlines() if line.strip()]
+
+
+def test_direct_run_crash_exits_caller_error(tmp_path):
+    """Raise at top level of a script that imported _lib_exitcodes → rc 2,
+    traceback kept, then the one ERROR line; atexit still runs and stdout
+    written before the crash is not lost (no os._exit)."""
+    proc = _run_crash_script(
+        tmp_path, "print('partial report')\nraise RuntimeError('boom')\n")
+    assert proc.returncode == 2, proc.stderr
+    assert "Traceback (most recent call last)" in proc.stderr
+    lines = _stderr_lines(proc)
+    assert "ERROR: unexpected internal error (RuntimeError): boom" in lines, proc.stderr
+    # ERROR line comes after the traceback (it is the line to grep for)
+    assert lines.index("ERROR: unexpected internal error (RuntimeError): boom") \
+        > lines.index("RuntimeError: boom")
+    assert lines[-1] == "ATEXIT-RAN", proc.stderr
+    assert proc.stdout == "partial report\n"
+
+
+def test_interactive_session_keeps_the_default_hook(tmp_path):
+    """`python -i` (and the REPL) report an error and carry on: the crash hook
+    must not end the session at rc 2 (#3090 review)."""
+    proc = subprocess.run(
+        [sys.executable, "-i", "-q"], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=30,
+        input=(f"import sys; sys.path.insert(0, {str(TOOLS_DIR)!r})\n"
+               "import _lib_exitcodes\n1/0\nprint('still alive')\n"))
+    assert proc.returncode == 0, proc.stderr
+    assert "still alive" in proc.stdout
+    assert "unexpected internal error" not in proc.stderr
+
+
+def test_importing_tenant_verify_leaves_the_crash_code_alone(tmp_path):
+    """tenant_verify sets its crash code 1 only when it is the program
+    (`__main__`): a module that imports it keeps 2 (#3090 review)."""
+    proc = _run_crash_script(
+        tmp_path,
+        f"sys.path.insert(0, {str(TOOLS_DIR / 'dx')!r})\n"
+        "import tenant_verify\nprint(_lib_exitcodes.get_crash_exit_code())\n")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "2"
+
+
+def test_crash_inside_main_function_exits_caller_error(tmp_path):
+    """The usual shape: `if __name__ == "__main__": main()` raising deep inside."""
+    proc = _run_crash_script(
+        tmp_path,
+        "def _inner():\n    {}['missing']\n"
+        "def main():\n    _inner()\n"
+        "if __name__ == '__main__':\n    sys.exit(main())\n")
+    assert proc.returncode == 2, proc.stderr
+    assert "Traceback" in proc.stderr
+    assert "ERROR: unexpected internal error (KeyError): 'missing'" in _stderr_lines(proc)
+
+
+@pytest.mark.parametrize("code", [0, 1, 2])
+def test_system_exit_passes_through_unchanged(tmp_path, code):
+    """sys.exit(N) is never relabelled as a crash."""
+    proc = _run_crash_script(tmp_path, f"sys.exit({code})\n")
+    assert proc.returncode == code, proc.stderr
+    assert "ERROR: unexpected internal error" not in proc.stderr
+    assert "ATEXIT-RAN" in proc.stderr
+
+
+def test_keyboard_interrupt_is_not_turned_into_caller_error(tmp_path):
+    """Ctrl-C is not an internal error: the interpreter's own handling stays
+    (POSIX: the process re-kills itself with SIGINT, rc -2 / 130)."""
+    proc = _run_crash_script(tmp_path, "raise KeyboardInterrupt\n")
+    assert proc.returncode not in (0, 1, 2), (proc.returncode, proc.stderr)
+    assert "ERROR: unexpected internal error" not in proc.stderr
+    assert "KeyboardInterrupt" in proc.stderr
+
+
+def test_tool_can_set_its_own_crash_exit_code(tmp_path):
+    """set_crash_exit_code(N) is what the hook exits with."""
+    proc = _run_crash_script(
+        tmp_path, "_lib_exitcodes.set_crash_exit_code(1)\nraise ValueError('x')\n")
+    assert proc.returncode == 1, proc.stderr
+    assert "ERROR: unexpected internal error (ValueError): x" in _stderr_lines(proc)
+
+
+def test_existing_custom_excepthook_is_not_clobbered(tmp_path):
+    """A process that already installed its own excepthook keeps it."""
+    prelude = (
+        "import os, sys\n"
+        "sys.excepthook = lambda *a: (print('CUSTOM-HOOK', file=sys.stderr),"
+        " sys.stderr.flush(), os._exit(7))\n"
+        "sys.path.insert(0, {tools!r})\n"
+        "import _lib_exitcodes\n"
+    )
+    proc = _run_crash_script(tmp_path, "raise RuntimeError('boom')\n", prelude=prelude)
+    assert proc.returncode == 7, proc.stderr
+    assert "CUSTOM-HOOK" in proc.stderr
+    assert "ERROR: unexpected internal error" not in proc.stderr
+
+
+def test_main_decorator_calls_on_crash_and_exits_with_crash_code(tmp_path):
+    """@_lib_exitcodes.main(on_crash=...) — the hook for tools with a --json
+    contract to emit their envelope before the process ends."""
+    proc = _run_crash_script(
+        tmp_path,
+        "import json\n"
+        "def envelope(exc):\n"
+        "    print(json.dumps({'status': 'internal_error', 'type': type(exc).__name__}))\n"
+        "@_lib_exitcodes.main(on_crash=envelope)\n"
+        "def main():\n    raise OSError('disk gone')\n"
+        "main()\n")
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stdout.strip() == '{"status": "internal_error", "type": "OSError"}'
+    assert "Traceback" in proc.stderr
+    assert "ERROR: unexpected internal error (OSError): disk gone" in _stderr_lines(proc)
+    assert "ATEXIT-RAN" in proc.stderr
+
+
+class TestMainDecoratorInProcess:
+    """The decorator's own contract, without a subprocess."""
+
+    @staticmethod
+    def _ec(monkeypatch):
+        sys.path.insert(0, str(TOOLS_DIR))
+        import _lib_exitcodes as ec  # noqa: E402
+        # idempotent reset (not save-then-restore): every test starts from 2
+        monkeypatch.setattr(ec, "_crash_exit_code", ec.EXIT_CALLER_ERROR)
+        return ec
+
+    def test_bare_decorator_exits_crash_code(self, monkeypatch, capsys):
+        ec = self._ec(monkeypatch)
+
+        @ec.main
+        def tool():
+            raise RuntimeError("boom")
+
+        with pytest.raises(SystemExit) as exc_info:
+            tool()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "Traceback" in err
+        assert err.rstrip().splitlines()[-1] == \
+            "ERROR: unexpected internal error (RuntimeError): boom"
+
+    def test_on_crash_receives_the_exception(self, monkeypatch, capsys):
+        ec = self._ec(monkeypatch)
+        seen = []
+
+        @ec.main(on_crash=seen.append)
+        def tool():
+            raise ValueError("bad shape")
+
+        with pytest.raises(SystemExit) as exc_info:
+            tool()
+        assert exc_info.value.code == 2
+        assert len(seen) == 1 and isinstance(seen[0], ValueError)
+
+    def test_failing_on_crash_still_exits_crash_code(self, monkeypatch, capsys):
+        ec = self._ec(monkeypatch)
+
+        def broken(exc):
+            raise TypeError("envelope writer broke")
+
+        @ec.main(on_crash=broken)
+        def tool():
+            raise ValueError("first")
+
+        with pytest.raises(SystemExit) as exc_info:
+            tool()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR: unexpected internal error (ValueError): first" in err
+        assert "envelope writer broke" in err
+
+    def test_decorator_crash_exit_code_overrides_module_setting(self, monkeypatch):
+        ec = self._ec(monkeypatch)
+
+        @ec.main(crash_exit_code=1)
+        def tool():
+            raise RuntimeError("x")
+
+        with pytest.raises(SystemExit) as exc_info:
+            tool()
+        assert exc_info.value.code == 1
+
+    def test_decorator_uses_set_crash_exit_code(self, monkeypatch):
+        ec = self._ec(monkeypatch)
+        ec.set_crash_exit_code(1)
+
+        @ec.main
+        def tool():
+            raise RuntimeError("x")
+
+        with pytest.raises(SystemExit) as exc_info:
+            tool()
+        assert exc_info.value.code == 1
+
+    @pytest.mark.parametrize("code", [0, 1, 2, None])
+    def test_decorator_passes_system_exit_through(self, monkeypatch, code):
+        ec = self._ec(monkeypatch)
+        called = []
+
+        @ec.main(on_crash=called.append)
+        def tool():
+            sys.exit(code)
+
+        with pytest.raises(SystemExit) as exc_info:
+            tool()
+        assert exc_info.value.code == code
+        assert called == []
+
+    def test_decorator_passes_keyboard_interrupt_through(self, monkeypatch):
+        ec = self._ec(monkeypatch)
+
+        @ec.main
+        def tool():
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            tool()
+
+    def test_decorator_returns_the_wrapped_value(self, monkeypatch):
+        ec = self._ec(monkeypatch)
+
+        @ec.main
+        def tool(a, *, b):
+            return a + b
+
+        assert tool(1, b=2) == 3
+        assert tool.__name__ == "tool"
+
+    @pytest.mark.parametrize("bad", [0, -1, 256, True, "1", None])
+    def test_set_crash_exit_code_rejects_unusable_codes(self, monkeypatch, bad):
+        """0 would make a crash read as success; non-int / out-of-range codes
+        are not exit statuses."""
+        ec = self._ec(monkeypatch)
+        with pytest.raises(ValueError):
+            ec.set_crash_exit_code(bad)
+        assert ec.get_crash_exit_code() == 2
+
+    def test_crash_message_is_one_bounded_line(self, monkeypatch):
+        ec = self._ec(monkeypatch)
+        msg = ec.crash_message(RuntimeError("line one\nline two\r\n" + "x" * 2000))
+        assert "\n" not in msg and "\r" not in msg
+        assert msg.startswith("ERROR: unexpected internal error (RuntimeError): line one line two")
+        assert len(msg) < 600
+
+    def test_crash_message_without_text_or_with_broken_str(self, monkeypatch):
+        ec = self._ec(monkeypatch)
+
+        class Unprintable(Exception):
+            def __str__(self):
+                raise RuntimeError("no")
+
+        assert ec.crash_message(RuntimeError()) == \
+            "ERROR: unexpected internal error (RuntimeError): (no message)"
+        assert ec.crash_message(Unprintable()) == \
+            "ERROR: unexpected internal error (Unprintable): (unprintable message)"

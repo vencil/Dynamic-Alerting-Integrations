@@ -86,6 +86,26 @@ def test_output_is_byte_identical_to_before_findings(tmp_path, fixture, mode):
             assert doc is not None and doc["exit_code"] == res.returncode
 
 
+def test_a_crash_writes_the_exit_code_the_process_ends_with(tmp_path):
+    """#3090: an exception the run does not turn into an exit ends the process
+    with the crash code (2); the document says the same (#2766)."""
+    import subprocess
+    out = tmp_path / "f.json"
+    script = tmp_path / "crash.py"
+    script.write_text(
+        f"import sys\nsys.path.insert(0, {str(OPS.parent)!r})\nsys.path.insert(0, {str(OPS)!r})\n"
+        "import generate_alertmanager_routes as gar\n"
+        "def boom(*a, **k):\n    raise RuntimeError('injected')\n"
+        "gar._run = boom\n"
+        f"gar.main(['--config-dir', {str(tmp_path)!r}, '--findings-json', {str(out)!r}])\n",
+        encoding="utf-8")
+    res = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", timeout=60)
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert res.returncode == 2, res.stderr
+    assert doc["exit_code"] == res.returncode
+
+
 # ── 2. --findings-json: the document ─────────────────────────────────────
 
 @pytest.mark.parametrize("fixture,mode", cases.CASES,
@@ -295,7 +315,8 @@ def test_an_exception_still_writes_a_failing_document(tmp_path, monkeypatch):
     with pytest.raises(BrokenPipeError):
         gar.main()
     doc = json.loads(out.read_text(encoding="utf-8"))
-    assert doc["exit_code"] == 1
+    # #3090: the code the uncaught exception ends the process with (it was 1).
+    assert doc["exit_code"] == 2
     assert [r["kind"] for r in doc["findings"]] == ["unclassified", "run_failed"]
 
 

@@ -258,8 +258,9 @@ GAP_SKIP = "skip"
 # non-zero on FINDINGS is a gate wearing a reporter's docstring.
 #
 # ⚠️ "Never chosen" is the honest claim, not "never seen". An unanticipated
-# exception still leaves Python's default 1 — with a traceback, which is what
-# distinguishes it from a verdict. That is precisely why every input boundary
+# exception used to leave Python's default 1; since #3090 _lib_exitcodes'
+# crash hook ends it at 2 — with a traceback and an "ERROR: unexpected
+# internal error" line, which is what distinguishes it from a named exit 2. That is precisely why every input boundary
 # below carries its own shape guard converting malformed input into a named
 # exit 2: the contract is kept by the guards, not by a catch-all, because a
 # catch-all would turn a real logic bug into a tidy "could not check".

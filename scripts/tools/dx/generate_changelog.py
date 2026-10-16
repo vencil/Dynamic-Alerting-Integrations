@@ -855,8 +855,10 @@ def main() -> int:
         for target in targets:
             # ⛔ `_lib_exitcodes` splits these: a bad path or an unreadable
             # file is the CALLER's error (2), not a finding the user must act
-            # on in the file (1). An uncaught traceback exits 1 too, which is
-            # indistinguishable from "this changelog has one issue".
+            # on in the file (1). An uncaught traceback used to exit 1 too,
+            # indistinguishable from "this changelog has one issue" (since
+            # #3090 a crash exits 2 via _lib_exitcodes — still a traceback,
+            # not the named one-line caller error below).
             p = Path(target)
             if not p.is_file():
                 print(f"ERROR: not a readable file: {target}", file=sys.stderr)

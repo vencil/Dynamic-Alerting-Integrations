@@ -472,13 +472,18 @@ def test_decorator_exits_2_with_one_line_and_no_traceback(tmp_path: Path, blocke
 
 def test_decorator_leaves_other_exceptions_alone(tmp_path: Path):
     """Broadening the decorator to ``except OSError`` (or ``Exception``) makes
-    this red: an unrelated failure must keep its traceback and its rc=1, not
-    be relabelled as an output-path problem with a flag to check."""
+    this red: an unrelated failure must stay a crash — traceback plus the
+    ``_lib_exitcodes`` "unexpected internal error" line — not be relabelled as
+    an output-path problem with a flag to check.
+
+    ⚠️ Since #3090 both outcomes exit 2 (a crash is EXIT_CALLER_ERROR, no
+    longer the interpreter's rc 1), so the rc no longer tells them apart: the
+    discriminating assertions are the stderr ones."""
     proc = _run_script(tmp_path, _DECORATED_MAIN_OTHER.format(tools=str(TOOLS_DIR)))
 
-    assert proc.returncode == 1, proc.stderr
+    assert proc.returncode == 2, proc.stderr
     assert "Traceback" in proc.stderr
-    assert "ValueError" in proc.stderr
+    assert "ERROR: unexpected internal error (ValueError): some other bug" in proc.stderr
     assert "ERROR: cannot " not in proc.stderr
 
 
@@ -495,7 +500,8 @@ def test_decorator_does_not_claim_a_plain_oserror(tmp_path: Path):
     proc = _run_script(tmp_path, _DECORATED_MAIN_INPUT_OSERROR.format(
         tools=str(TOOLS_DIR), missing=str(missing)))
 
-    assert proc.returncode == 1, proc.stderr
+    # rc 2 either way since #3090 — the stderr shape is what discriminates.
+    assert proc.returncode == 2, proc.stderr
     assert "Traceback" in proc.stderr
-    assert "FileNotFoundError" in proc.stderr
+    assert "ERROR: unexpected internal error (FileNotFoundError):" in proc.stderr
     assert "ERROR: cannot " not in proc.stderr

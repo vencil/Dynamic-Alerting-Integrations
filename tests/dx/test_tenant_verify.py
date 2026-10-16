@@ -457,3 +457,31 @@ def test_control_parseable_defaults_still_verify(verify_module, conf_d, capsys, 
     cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(conf_d))
     assert verify_module.main() == 0
     assert "does not parse" not in capsys.readouterr().err
+
+
+# ── Crash exit code stays 1 (#3090) ────────────────────────────────
+
+
+def test_crash_exits_1_not_the_verification_failed_2(tmp_path):
+    """An uncaught exception in tenant-verify must end at 1 (its caller /
+    usage error), not the SSOT default crash code 2 — here 2 means
+    "verification failed", which the rollback runbook reads as a hash
+    mismatch. Run as a real `__main__` (the excepthook only fires at the top
+    level); the crash is injected at argument parsing, which every run hits."""
+    import subprocess
+
+    wrapper = tmp_path / "run_crashing_tenant_verify.py"
+    wrapper.write_text(
+        "import argparse, runpy, sys\n"
+        "def _boom(*a, **k):\n"
+        "    raise RuntimeError('injected crash')\n"
+        "argparse.ArgumentParser.parse_args = _boom\n"
+        f"sys.argv = [{str(TOOL_PATH)!r}, '--all']\n"
+        f"runpy.run_path({str(TOOL_PATH)!r}, run_name='__main__')\n",
+        encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(wrapper)], capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=60)
+    assert proc.returncode == 1, proc.stderr
+    assert "Traceback" in proc.stderr
+    assert "ERROR: unexpected internal error (RuntimeError): injected crash" in proc.stderr

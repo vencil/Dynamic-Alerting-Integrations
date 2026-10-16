@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+import traceback
 
 
 def _build_help_text(lang):
@@ -557,7 +558,51 @@ def run_tool(script_name, args):
     # Load and execute the script as __main__
     spec = importlib.util.spec_from_file_location("__main__", script_path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001 — last line of defence (#3090)
+        # SystemExit / KeyboardInterrupt are not Exception: a tool's own
+        # sys.exit(N) still passes through unchanged (#1406), and Ctrl-C
+        # keeps the interpreter's handling.
+        _exit_on_tool_crash(exc)
+
+
+# Mirrors scripts/tools/_lib_exitcodes.crash_message (zero-import, see
+# EXIT_CALLER_ERROR above); tests/shared/test_entrypoint.py pins the two.
+_CRASH_MESSAGE_MAX = 500
+
+
+def _crash_message(exc):
+    try:
+        text = str(exc)
+    except Exception:  # noqa: BLE001 — a broken __str__ must not hide the crash
+        text = "(unprintable message)"
+    text = " ".join(text.split()) or "(no message)"
+    if len(text) > _CRASH_MESSAGE_MAX:
+        text = text[:_CRASH_MESSAGE_MAX] + "..."
+    return f"ERROR: unexpected internal error ({type(exc).__name__}): {text}"
+
+
+def _exit_on_tool_crash(exc):
+    """A tool raised an uncaught Exception: report it and exit, never rc 1.
+
+    The tool's crash code wins: if it loaded _lib_exitcodes (looked up in
+    sys.modules, not imported — this module stays zero-import), that
+    module's exit_on_crash reports and exits with whatever the tool set via
+    set_crash_exit_code (tenant_verify: 1). Otherwise print the same
+    traceback + ERROR line here and exit EXIT_CALLER_ERROR.
+    """
+    lib = sys.modules.get("_lib_exitcodes")
+    handler = getattr(lib, "exit_on_crash", None)
+    if callable(handler):
+        handler(exc)
+    try:
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001
+        pass
+    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    print(_crash_message(exc), file=sys.stderr, flush=True)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 def _print_version(tools_dir=None):
