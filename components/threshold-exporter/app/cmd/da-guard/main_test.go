@@ -979,9 +979,9 @@ func TestRun_RoutingOnlyTreesAreUndetermined(t *testing.T) {
 
 // parityTree is one tree of tests/shared/routing_policy_parity_matrix.json,
 // read here as a fixture only: its name and its files. The matrix's
-// expectations are the route generator's (tests/shared/
-// test_routing_policy_parity.py); da-guard's own half of it went with its
-// routing checks (#2905).
+// expectations are the route generator's
+// (tests/shared/test_routing_policy_parity.py); da-guard's own half of it
+// went with its routing checks (#2905).
 type parityTree struct {
 	Name  string            `json:"name"`
 	Files map[string]string `json:"files"`
