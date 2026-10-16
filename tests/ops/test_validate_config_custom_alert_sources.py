@@ -134,3 +134,40 @@ def test_without_the_compiler_the_row_is_absent(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         vc.main()
     assert "custom_alert_sources" not in {r["check"] for r in json.loads(capsys.readouterr().out)}
+
+
+@pytest.mark.parametrize("threshold", ["disable", "Disable", "disabled", "off:warning", "FALSE"])
+def test_every_spelling_the_exporter_switches_off_is_left_out(tmp_path, threshold):
+    """The exporter's own opt-out test (isDisabled): disable / disabled / off
+    / false, any case — compiled, not served, by design."""
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
+                              + _rec("turned_off", "m_off", threshold=threshold)}))
+    assert r["status"] == vc.PASS, r
+
+
+def test_the_name_does_not_decide_a_match(tmp_path):
+    """A rule joins on recipe_id and severity; a name the two sides spell
+    differently (unquoted `on`: Python True, Go "on") is the same alert."""
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
+                              "      - {recipe: threshold, name: on, metric: m, op: '>', "
+                              "window: 5m, threshold: '10:warning'}\n"}))
+    assert r["status"] == vc.PASS, r
+
+
+@pytest.mark.parametrize("files", [
+    {"team/t1.yaml": _T1 + "    _custom_alerts: 5\n"},
+    {"_defaults.yaml": _ROOT + "_custom_alerts: 5\n"},
+], ids=["tenant", "root-defaults-top"])
+def test_a_tree_the_compiler_cannot_walk_is_a_warn_not_a_refusal(tmp_path, files):
+    """`_custom_alerts` that is not a list stops the compiler's walk: the row
+    says nothing was compared — it does not FAIL, and the run's exit code is
+    the one the other rows give (here 1, from json_schema)."""
+    d = _tree(tmp_path, files)
+    r = _row(d)
+    assert r["status"] == vc.WARN and not r["caller_error"], r
+    assert r["details"][0].startswith("comparison incomplete: the compiler's custom alerts")
+    p = subprocess.run([sys.executable, vc.__file__, "--config-dir", d, "--json"],
+                       capture_output=True, encoding="utf-8", timeout=600)
+    rows = {x["check"]: x for x in json.loads(p.stdout)}
+    assert rows["custom_alert_sources"]["status"] == vc.WARN
+    assert p.returncode in (0, 1), p.returncode

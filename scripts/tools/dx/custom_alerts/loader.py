@@ -384,9 +384,9 @@ def build_shapes(config_dir: Path,
     COMPILED.
 
     `accepted`, given, receives one dict per recipe instance that COMPILED —
-    `tenant`, `name`, `recipe_id`, `origin`, `own` and `disabled` (its
-    threshold value or SLO objective is `disable`: compiled, but the exporter
-    serves no row for it by design) — in compile order. #3042: what this
+    `tenant`, `name`, `recipe_id`, `severities`, `origin`, `own` and
+    `disabled` (switched off the way the exporter reads it: compiled, but the
+    exporter serves no row for it by design) — in compile order. #3042: what this
     compiler builds a rule for, per tenant, to set beside what the exporter
     serves.
 
@@ -554,10 +554,14 @@ def build_shapes(config_dir: Path,
         if is_own:
             own_per_tenant[tenant] += len(sevs)
         if accepted is not None:
+            # The exporter's own opt-out test: an SLO objective of exactly
+            # `disable` (resolveSloBurnRate); a threshold value any of
+            # disable / disabled / off / false, any case (isDisabled).
             off = (str(inst.get("objective", "")).strip() == "disable" if is_slo
-                   else _value.strip() == "disable")
+                   else _value.strip().lower() in ("disable", "disabled", "off", "false"))
             accepted.append({"tenant": tenant, "name": name, "recipe_id": rid,
-                             "origin": origin, "own": is_own, "disabled": off})
+                             "severities": list(sevs), "origin": origin, "own": is_own,
+                             "disabled": off})
 
         if rid not in shapes:
             shapes[rid] = {

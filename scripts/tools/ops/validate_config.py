@@ -2348,9 +2348,12 @@ _CUSTOM_ALERT_SOURCES_HINT = (
     "belongs in the tenant's own entry, a root platform file's `tenants:` or "
     "a profile. Reported only, not yet blocking.")
 _CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT = (
-    "Nothing was compared: the exporter's side needs da-guard (built into the "
-    "image; in the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix "
-    "what the line above names and run again. Reported only, not yet blocking.")
+    "Nothing was compared; the line above names why. The exporter's side "
+    "needs da-guard (in the repo `make da-guard-build`, or set "
+    "`DA_GUARD_BINARY`) and a tree it can read — the yaml_syntax, json_schema "
+    "and values_not_served rows name a file it cannot; the compiler's side "
+    "needs `_custom_alerts` written as a list. Fix it and run again. Reported "
+    "only, not yet blocking.")
 
 
 def _custom_alert_compiler():
@@ -2369,7 +2372,8 @@ def _custom_alert_compiler():
 def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object]:
     """#3042: the custom alerts the compiler builds a rule for, per tenant,
     beside the ones the exporter serves a threshold for — the two readers of
-    `_custom_alerts`, compared on (tenant, name, recipe_id). Neither side is
+    `_custom_alerts`, compared on what a rule joins on: (tenant, recipe_id,
+    severity); the name is only what each side calls it. Neither side is
     re-derived here: the compiler's own `build_shapes` (what it accepts, not
     what it collects) and da-guard served-values.
 
@@ -2380,40 +2384,54 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
       (a root `_defaults.yaml` `tenants:` entry, a profile, a tenant's own
       recipe quarantined for a same-named inherited one).
 
-    A recipe whose threshold or objective is `disable` is compiled and not
-    served by design: not a finding. Report only (#3016): WARN, never FAIL;
-    da-guard unavailable or failing is a WARN saying nothing was compared.
+    A recipe switched off the way the exporter reads it (a threshold of
+    disable / disabled / off / false, an SLO objective of `disable`) is
+    compiled and not served by design: not a finding. Report only (#3016):
+    WARN, never FAIL; either side unreadable (da-guard unavailable or failing,
+    a file it cannot read, a `_custom_alerts` the compiler cannot walk) is a
+    WARN saying nothing was compared.
     """
+    side = "exporter"
     try:
         served = load_served_tree(config_dir).tenants
         sources = _effective_tree(config_dir).tenants
+        side = "compiler"
+        accepted: list[dict] = []
+        (loader or _custom_alert_compiler()).build_shapes(Path(config_dir), accepted=accepted)
     except Exception as exc:  # noqa: BLE001 — any failure is "not compared", never a refusal
         return _make_result("custom_alert_sources", WARN, [
-            "comparison incomplete: the exporter's custom alerts were not read "
+            f"comparison incomplete: the {side}'s custom alerts were not read "
             f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
             hint=_CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT)
-    accepted: list[dict] = []
-    (loader or _custom_alert_compiler()).build_shapes(Path(config_dir), accepted=accepted)
 
-    compiled = {(a["tenant"], a["name"], a["recipe_id"]): a for a in accepted if not a["disabled"]}
-    served_rows = {(t, str(r["labels"].get("name")), str(r["labels"].get("recipe_id")))
-                   for t, v in served.items()
-                   for r in (v.values.get("_custom_alerts") or [])
-                   if isinstance(r, dict) and isinstance(r.get("labels"), dict)}
+    # What a rule joins on: the tenant's user_threshold row of the same
+    # recipe_id and severity. The name is only what each side calls it.
+    compiled: dict[tuple, dict] = {}
+    for a in accepted:
+        if not a["disabled"]:
+            for sev in a["severities"]:
+                compiled[(a["tenant"], a["recipe_id"], sev)] = a
+    served_rows: dict[tuple, str] = {}
+    for t, v in served.items():
+        for r in v.values.get("_custom_alerts") or []:
+            if isinstance(r, dict) and isinstance(r.get("labels"), dict):
+                served_rows[(t, str(r["labels"].get("recipe_id")), str(r.get("severity")))] = \
+                    str(r["labels"].get("name"))
 
     def _where(t: str) -> str:
         src = sources.get(t).key_sources.get("_custom_alerts") if t in sources else None
         return src.file if src is not None else "?"
 
-    groups: dict[tuple, list[str]] = {}
-    for (t, name, rid), a in compiled.items():
-        if (t, name, rid) not in served_rows:
+    groups: dict[tuple, set[str]] = {}
+    for (t, rid, sev), a in compiled.items():
+        if (t, rid, sev) not in served_rows:
             origin = a["origin"] if a["own"] else "an inherited `_defaults.yaml`"
-            groups.setdefault(("never_fires", origin, name, rid), []).append(t)
-    for t, name, rid in served_rows - set(compiled):
-        groups.setdefault(("not_compiled", _where(t), name, rid), []).append(t)
+            groups.setdefault(("never_fires", origin, a["name"], rid), set()).add(t)
+    for (t, rid, sev), name in served_rows.items():
+        if (t, rid, sev) not in compiled:
+            groups.setdefault(("not_compiled", _where(t), name, rid), set()).add(t)
 
-    def _tenants(ts: list[str]) -> str:
+    def _tenants(ts: set[str]) -> str:
         ts = sorted(ts)
         more = f" (+{len(ts) - WARN_LIMIT} more)" if len(ts) > WARN_LIMIT else ""
         return ", ".join(ts[:WARN_LIMIT]) + more
@@ -2429,7 +2447,7 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
     if details:
         return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
     return _make_result("custom_alert_sources", PASS, [
-        f"{len(compiled)} compiled custom alert(s), each with a served threshold, "
+        f"{len({(t, rid) for t, rid, _ in compiled})} compiled custom alert(s), each with a served threshold, "
         "and no served one without a rule"])
 
 
