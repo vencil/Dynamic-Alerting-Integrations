@@ -211,6 +211,15 @@ type servedKey struct {
 	Declared map[string][]string `json:"declared,omitempty"`
 	// Hint is the registry's hint for a retired key.
 	Hint string `json:"hint,omitempty"`
+	// Disable, only with --disable-effects and only for a key that reads
+	// `disable` in some part of the day and is not a registered `_` key:
+	// what switching it off does to the user_threshold rows /metrics serves — effective, partial (ServedFamily is still served) or
+	// noop — by resolving the tree again without it (served_disable.go).
+	Disable string `json:"disable,omitempty"`
+	// ServedFamily: for a partial Disable, the keys of the same family (its
+	// `_critical`, its dimensional spellings) /metrics still serves in some
+	// part of the day.
+	ServedFamily []string `json:"served_family,omitempty"`
 }
 
 // Reasons of servedKey.Reason — a closed set.
@@ -294,9 +303,10 @@ type scheduleSegment struct {
 var jsonNull = json.RawMessage("null")
 
 type servedValuesFlags struct {
-	configDir string
-	at        string
-	schedules bool
+	configDir      string
+	at             string
+	schedules      bool
+	disableEffects bool
 }
 
 func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags, error) {
@@ -310,8 +320,12 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 	fs.BoolVar(&f.schedules, "schedules", false,
 		"Also print each tenant's schedules: every threshold key over the whole UTC day.\n"+
 			"Resolves the tree once per part of the day in which some schedule changes.")
+	fs.BoolVar(&f.disableEffects, "disable-effects", false,
+		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
+			"what /metrics serves (effective / partial / noop), by resolving the tree again without it.\n"+
+			"Costs (most switched-off keys of one tenant) x (parts of the day) resolves.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules] [--disable-effects]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
 			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
@@ -392,6 +406,9 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			return exitCallerErr
 		}
 		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules, written)
+		if err == nil && f.disableEffects {
+			err = addDisableEffects(cfg, at, tenants, written)
+		}
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
@@ -742,6 +759,33 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 	}
 	return out, nil
+}
+
+// addDisableEffects fills Keys[].Disable / ServedFamily (--disable-effects).
+// Runs before spellAsWritten: tenants' keys are still cfg's spelling.
+func addDisableEffects(cfg *config.ThresholdConfig, at time.Time,
+	tenants map[string]servedTenantValues, written map[string]map[string]string,
+) error {
+	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
+	effects, err := disableEffects(cfg, at, name)
+	if err != nil {
+		return err
+	}
+	for tenant, byKey := range effects {
+		tv := tenants[tenant]
+		for k, eff := range byKey {
+			e, ok := tv.Keys[k]
+			if !ok {
+				return fmt.Errorf("internal: tenant %s: switched-off key %q has no keys entry", tenant, k)
+			}
+			e.Disable = eff.effect
+			for _, f := range eff.family {
+				e.ServedFamily = append(e.ServedFamily, name(tenant, f))
+			}
+			tv.Keys[k] = e
+		}
+	}
+	return nil
 }
 
 // servedKeys is servedTenantValues.Keys for one tenant: an entry for every

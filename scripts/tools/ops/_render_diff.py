@@ -171,11 +171,12 @@ def has_config(conf_d: str | os.PathLike[str]) -> bool:
 
 def render_served(conf_d: str | os.PathLike[str], at: str, *, binary: str | None = None,
                   timeout: float = DEFAULT_TIMEOUT) -> dict[str, tv.TenantValues]:
-    """served-values for every tenant at `at`, with the whole day's schedules.
+    """served-values for every tenant at `at`, with the whole day's schedules
+    and what each `disable` does (ADR-038 decision 8).
     Raises `RenderError` classified as described in the module docstring."""
     try:
         return tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
-                                   schedules=True).tenants
+                                   schedules=True, disable_effects=True).tenants
     except tv.ParseFailedError as e:
         # The exporter's own reason for each file it skips (da-guard's
         # stderr), not only that it skipped one: the reader has to fix it.

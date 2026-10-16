@@ -105,7 +105,11 @@ is what keeps either of them off column 0.
   not, why (`SERVED_KEY_REASONS`). For a `_` key, `registered` says whether
   the registry lists it and `declared` names its other readers, reader ->
   layers. Facts, not a verdict: `disabled` does not say whether switching
-  the key off changed anything. A da-guard whose output lacks the field is
+  the key off changed anything: with `disable_effects=True` (da-guard
+  `--disable-effects`) `disable` says so — "effective", "partial" (the
+  `_critical` or dimensional keys of `served_family` are still served) or
+  "noop" — for every key that reads `disable` in some part of the day,
+  registered `_` keys aside. A da-guard whose output lacks the field is
   named as older than this tool.
 
 The document must name its shape: a `schema` other than
@@ -351,7 +355,15 @@ class ServedKey(NamedTuple):
     registered: bool | None = None
     declared: dict[str, tuple[str, ...]] = {}
     hint: str | None = None
+    # Only from `disable_effects=True`, for a key that reads `disable` in some
+    # part of the day: "effective" | "partial" | "noop" (ADR-038 decision 8),
+    # and for partial the family keys still served.
+    disable: str | None = None
+    served_family: tuple[str, ...] = ()
 
+
+#: The closed set of served-values' `keys[*].disable`.
+DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
 
 #: The closed set of served-values' `keys[*].reason` (cmd/da-guard
 #: served_values.go keyReason*).
@@ -713,12 +725,15 @@ def load_served_values(
     binary: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     schedules: bool = False,
+    disable_effects: bool = False,
 ) -> dict[str, TenantValues]:
     """`{tenant_id: TenantValues}` for the conf.d tree at `conf_d`, as
     /metrics serves it at `at` (RFC3339; None = now); with `schedules`, each
-    tenant's whole day too. See the module docstring for the contract and
-    the exceptions."""
-    return load_served_tree(conf_d, at=at, binary=binary, timeout=timeout, schedules=schedules).tenants
+    tenant's whole day too; with `disable_effects`, what each `disable`
+    does (`ServedKey.disable`; the tree is resolved again per switched-off
+    key). See the module docstring for the contract and the exceptions."""
+    return load_served_tree(conf_d, at=at, binary=binary, timeout=timeout, schedules=schedules,
+                            disable_effects=disable_effects).tenants
 
 
 def load_served_tree(
@@ -727,12 +742,15 @@ def load_served_tree(
     binary: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     schedules: bool = False,
+    disable_effects: bool = False,
 ) -> ServedTree:
     """`load_served_values`'s tenants plus the files the load serves no
     tenant from. Same arguments and exceptions."""
     extra = ["--at", at] if at is not None else []
     if schedules:
         extra.append("--schedules")
+    if disable_effects:
+        extra.append("--disable-effects")
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
@@ -841,7 +859,14 @@ def _served_key(e: Any) -> ServedKey:
         raise TypeError(f"registered is a {type(registered).__name__}")
     declared = {str(r): tuple(str(l) for l in layers) for r, layers in (e.get("declared") or {}).items()}
     hint = e.get("hint")
-    return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint))
+    disable = e.get("disable")
+    if disable is not None and disable not in DISABLE_EFFECTS:
+        raise ValueError(f"disable {disable!r}")
+    family = tuple(str(k) for k in (e.get("served_family") or ()))
+    if family and disable != "partial":
+        raise ValueError(f"served_family with disable {disable!r}")
+    return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
+                     disable, family)
 
 
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
