@@ -1026,7 +1026,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|------|
 | `0` | 成功（CI 模式：所有告警品質達標） |
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
-| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數。⚠️ Prometheus 連不上**不是** 2——查詢失敗當成沒有資料、報告照印（rc 0；`--ci` 下另依分數／BAD 數判 1） |
+| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0）——此時不印報告，stderr 帶錯誤原文；`--json` 印 `{"status": "caller_error", "reason": "prometheus_query_error", "error": "<原文>", ...}`（其餘鍵沿用正常報告並歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
 
 ---
 
@@ -1164,6 +1164,14 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `critical` | 預測在 `--warn-days` 天內觸頂 |
 | `warning` | 趨勢為 growing 但尚未觸及預警 |
 | `safe` | 趨勢穩定或下降 |
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 成功（CI 模式：沒有 critical 風險） |
+| `1` | CI 模式：有 critical 風險 |
+| `2` | 呼叫端錯誤：參數錯誤；或取不到基數資料。`--json` 的 `reason` 分得開兩種：Prometheus 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML）⇒ `"status": "caller_error"`、`"reason": "prometheus_query_error"`，並帶 `"error": "<原文>"`（#3065，之前與下一種同為 `"status": "no_data"`、`no_cardinality_data`）；查詢成功但沒有任何 `tenant_threshold_*` series ⇒ `"status": "no_data"`、`"reason": "no_cardinality_data"`。`da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
 
 #### config-history
 

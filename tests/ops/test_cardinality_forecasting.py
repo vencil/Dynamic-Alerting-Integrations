@@ -397,9 +397,16 @@ class TestQueryPrometheus:
         assert len(result["db-a"]) == 3
 
     @patch("_lib_prometheus.http_get_json")
-    def test_query_range_empty(self, mock_get):
-        """查詢失敗回傳空 dict。"""
+    def test_query_range_error_raises(self, mock_get):
+        """查詢失敗往上拋、帶錯誤原文（#3065：以前收斂成空 dict）。"""
         mock_get.return_value = (None, "connection error")
+        with pytest.raises(cf.PrometheusQueryError, match="connection error"):
+            cf.query_cardinality_range("http://prom:9090")
+
+    @patch("_lib_prometheus.http_get_json")
+    def test_query_range_empty(self, mock_get):
+        """查詢成功但無 series → 空 dict。"""
+        mock_get.return_value = ({"status": "success", "data": {"result": []}}, None)
         result = cf.query_cardinality_range("http://prom:9090")
         assert result == {}
 
@@ -413,8 +420,8 @@ class TestQueryPrometheus:
     def test_query_range_error_status(self, mock_get):
         """查詢 status != success。"""
         mock_get.return_value = ({"status": "error", "error": "bad query"}, None)
-        result = cf.query_cardinality_range("http://prom:9090")
-        assert result == {}
+        with pytest.raises(cf.PrometheusQueryError, match="bad query"):
+            cf.query_cardinality_range("http://prom:9090")
 
     @patch("_lib_prometheus.http_get_json")
     def test_query_scrape_series(self, mock_get):
@@ -432,10 +439,10 @@ class TestQueryPrometheus:
 
     @patch("_lib_prometheus.http_get_json")
     def test_query_scrape_series_empty(self, mock_get):
-        """scrape_series_added 查詢失敗。"""
+        """scrape_series_added 查詢失敗往上拋（#3065）。"""
         mock_get.return_value = (None, "connection error")
-        result = cf.query_scrape_series_added("http://prom:9090")
-        assert result == {}
+        with pytest.raises(cf.PrometheusQueryError, match="connection error"):
+            cf.query_scrape_series_added("http://prom:9090")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -524,7 +531,7 @@ class TestCLI:
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_no_data(self, mock_get, capsys):
-        """無資料（連線失敗）→ exit 2 (caller error, #452)。"""
+        """連線失敗 → exit 2 (caller error, #452)。"""
         mock_get.return_value = (None, "connection error")
         exit_code = cf.main(["--prometheus", "http://prom:9090"])
         assert exit_code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
@@ -546,7 +553,7 @@ class TestCLI:
     @patch("_lib_prometheus.http_get_json")
     def test_main_valid_lookback_still_accepted(self, mock_get, capsys):
         """control：`--lookback 30d` 通過 argparse（後續因無資料 exit 2，非 usage error）。"""
-        mock_get.return_value = (None, "connection error")
+        mock_get.return_value = ({"status": "success", "data": {"result": []}}, None)
         exit_code = cf.main(["--prometheus", "http://prom:9090", "--lookback", "30d", "--json"])
         assert exit_code == 2
         doc = json.loads(capsys.readouterr().out)   # 走到了 no_data envelope，不是 usage error
@@ -562,7 +569,7 @@ class TestCLI:
         的 generate_json_report() 一致（+ status/reason）——讓「happy path 新增
         欄位、no-data envelope 沒跟上」直接紅。
         """
-        mock_get.return_value = (None, "connection error")
+        mock_get.return_value = ({"status": "success", "data": {"result": []}}, None)
         exit_code = cf.main(["--prometheus", "http://prom:9090", "--json",
                              "--limit", "1000", "--warn-days", "14",
                              "--lookback", "30d"])
@@ -589,6 +596,26 @@ class TestCLI:
         # 人類訊息在 stderr，stdout 不含散文
         assert "cardinality data" in captured.err or "基數資料" in captured.err
         assert "Check Prometheus" not in captured.out
+
+    @patch("_lib_prometheus.http_get_json")
+    def test_main_query_error_json_envelope(self, mock_get, capsys):
+        """#3065: 查詢失敗 + --json → caller_error envelope，key set 對齊 happy path。"""
+        mock_get.return_value = (None, "connection error")
+        exit_code = cf.main(["--prometheus", "http://prom:9090", "--json",
+                             "--limit", "1000", "--warn-days", "14",
+                             "--lookback", "30d"])
+        assert exit_code == 2
+        captured = capsys.readouterr()
+        doc = json.loads(captured.out)
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == "prometheus_query_error"
+        assert doc["error"] == "connection error"
+        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0}
+        assert doc["tenants"] == []
+        happy_keys = set(cf.generate_json_report(
+            cf.generate_forecast({}, limit=1000, warn_days=14, lookback_days=30)))
+        assert set(doc) == happy_keys | {"status", "reason", "error"}
+        assert "connection error" in captured.err
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_tenant_filter(self, mock_get, capsys):
@@ -662,3 +689,109 @@ class TestForecastReportProperties:
         assert report.critical_count == 1
         assert report.warning_count == 1
         assert report.safe_count == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# #3065: 查詢錯誤與「沒有資料」在 --json 分得開
+# ═══════════════════════════════════════════════════════════════════
+import contextlib  # noqa: E402
+import subprocess  # noqa: E402
+import threading  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+_CF_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..",
+    "scripts", "tools", "ops", "cardinality_forecasting.py")
+
+
+@contextlib.contextmanager
+def _fake_prometheus(mode):
+    """本機假 Prometheus：``mode="503"`` 時一律回 503 + error JSON；
+    ``mode="empty"`` 時 query_range 回 success + 空結果。"""
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length") or 0)
+            if length:
+                self.rfile.read(length)
+            if mode == "503":
+                code, body = 503, {"status": "error", "errorType": "unavailable",
+                                   "error": "query queue full"}
+            else:
+                code, body = 200, {"status": "success",
+                                   "data": {"resultType": "matrix", "result": []}}
+            raw = json.dumps(body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):  # noqa: D401
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{srv.server_address[1]}"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        thread.join(timeout=5)
+
+
+def _run_cf(url, *extra, lang="en"):
+    env = {k: v for k, v in os.environ.items()
+           if k.lower() not in ("http_proxy", "https_proxy", "all_proxy")}
+    env["NO_PROXY"] = env["no_proxy"] = "*"
+    env["DA_LANG"] = lang
+    return subprocess.run(
+        [sys.executable, _CF_SCRIPT, "--prometheus", url, *extra],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+
+
+class TestQueryErrorVsNoData:
+    """#3065：查詢失敗以前也回 reason `no_cardinality_data`，與真的沒資料分不開。"""
+
+    def test_503_json_reason_is_prometheus_query_error(self):
+        with _fake_prometheus("503") as url:
+            proc = _run_cf(url, "--json")
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        doc = json.loads(proc.stdout)
+        assert doc["status"] == "caller_error"
+        assert doc["reason"] == "prometheus_query_error"
+        assert "503" in doc["error"], doc
+        assert doc["tenants"] == []
+        assert doc["summary"]["total"] == 0
+
+    @pytest.mark.parametrize(
+        "extra", [[], ["--ci"], ["--markdown"], ["--markdown", "--ci"]],
+        ids=["plain", "ci", "markdown", "markdown-ci"])
+    def test_503_text_names_the_error(self, extra):
+        with _fake_prometheus("503") as url:
+            proc = _run_cf(url, *extra)
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        # 不出報告：stdout 不得有任何（空的、全 GOOD 的）報告
+        assert proc.stdout == "", proc.stdout
+        assert "503" in proc.stderr, proc.stderr
+        assert "Traceback" not in proc.stderr, proc.stderr
+
+    def test_503_text_zh_names_the_error(self):
+        """DA_LANG=zh：錯誤訊息比照同檔 no-data 訊息走中文。"""
+        with _fake_prometheus("503") as url:
+            proc = _run_cf(url, lang="zh")
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        assert "Prometheus 查詢失敗" in proc.stderr, proc.stderr
+        assert "503" in proc.stderr, proc.stderr
+        assert "Error: Prometheus query failed" not in proc.stderr, proc.stderr
+
+    def test_empty_result_stays_no_cardinality_data(self):
+        with _fake_prometheus("empty") as url:
+            proc = _run_cf(url, "--json")
+        assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
+        doc = json.loads(proc.stdout)
+        assert doc["status"] == "no_data"
+        assert doc["reason"] == "no_cardinality_data"
+        assert "error" not in doc
