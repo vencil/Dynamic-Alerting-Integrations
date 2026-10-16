@@ -298,6 +298,19 @@ class TestGenerateMarkdown:
         md = bt.generate_markdown(report)
         assert "—" in md
 
+    def test_pipe_in_message_stays_in_one_cell(self):
+        """#3059：query_error 的訊息帶 Prometheus 原文，可能含 `|`；跳脫後仍是 7 欄。"""
+        results = [
+            {"status": "query_error", "risk": "UNKNOWN", "tenant": "t-x",
+             "metric": "m", "old_value": "70", "new_value": "50",
+             "query": 'q{tenant="t-x"}',
+             "message": "Prometheus query failed: parse error: unexpected | in a | b"},
+        ]
+        md = bt.generate_markdown(bt.generate_report(results, "7d"))
+        row = next(line for line in md.splitlines() if line.startswith("| UNKNOWN |"))
+        assert row.replace("\\|", "").count("|") == 8
+        assert "unexpected \\| in a \\| b" in row
+
 
 # ── backtest_change（mock query_range）────────────────────────────
 
@@ -481,21 +494,29 @@ class TestQueryRange:
         result = bt.query_range("http://prom", "up", 3600)
         assert len(result) == 1
 
-    def test_http_error_returns_empty(self, monkeypatch):
-        """HTTP 錯誤回傳空清單。"""
+    def test_http_error_raises(self, monkeypatch):
+        """#3059：HTTP 錯誤丟 PrometheusQueryError、帶錯誤原文，不再回空清單
+        （以前回 []，被報成 no_data、rc 0）。"""
         def mock_get(url, timeout=30):
             return None, "connection refused"
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
-        result = bt.query_range("http://prom", "up", 3600)
-        assert result == []
+        with pytest.raises(bt.PrometheusQueryError, match="^connection refused$"):
+            bt.query_range("http://prom", "up", 3600)
 
-    def test_api_error_returns_empty(self, monkeypatch):
-        """API 錯誤狀態回傳空清單。"""
+    def test_api_error_raises(self, monkeypatch):
+        """#3059：API 錯誤狀態（含沒有 error 欄位）丟 PrometheusQueryError。"""
         def mock_get(url, timeout=30):
             return {"status": "error"}, None
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
-        result = bt.query_range("http://prom", "bad{", 3600)
-        assert result == []
+        with pytest.raises(bt.PrometheusQueryError, match="Unknown Prometheus error"):
+            bt.query_range("http://prom", "bad{", 3600)
+
+    def test_empty_result_is_still_empty(self, monkeypatch):
+        """control：查詢成功但沒有 series 仍是 []（no_data 那條路）。"""
+        def mock_get(url, timeout=30):
+            return {"status": "success", "data": {"result": []}}, None
+        monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
+        assert bt.query_range("http://prom", "up", 3600) == []
 
 
 # ── print_text_report ─────────────────────────────────────────────
@@ -904,9 +925,12 @@ class TestPrometheusEnvFallback:
             return False  # unreachable → --skip-if-unavailable graceful exit(0)
 
         monkeypatch.setattr(bt, "prometheus_available", fake_available)
-        cli_argv(*argv)
-        with pytest.raises(SystemExit):
+        # #3059: a change source is required before the Prometheus check, so
+        # the bare argv these rows used would exit 2 without asking.
+        cli_argv(*argv, "--tenant", "t", "--metric", "mysql_connections", "--new-value", "1")
+        with pytest.raises(SystemExit) as ei:
             bt.main()
+        assert ei.value.code == 0
         return captured["url"]
 
     def test_uses_env_when_flag_absent(self, monkeypatch, cli_argv):
@@ -1477,3 +1501,215 @@ class TestMalformedObservedMap:
         assert ei.value.code == 2
         err = capsys.readouterr().err
         assert "ERROR:" in err and "'mysql_connections'" in err and "not a mapping" in err
+
+
+# ── 查詢錯誤與空結果分開、rc 2 路徑的 envelope（#3059）──────────────
+
+
+class _FakeProm:
+    """本機假 Prometheus：buildinfo 200；`query_range` 依 `{tenant="..."}`
+    回應——`errors` 裡的租戶回該 HTTP 狀態碼，其他租戶回 `values`。
+
+    請求沒有 body（GET），仍照 Content-Length 讀完；回應後先
+    `shutdown(SHUT_WR)` 再關線。"""
+
+    def __init__(self, errors, values):
+        import http.server
+        import socket
+        import threading
+        import urllib.parse
+
+        fake = self
+        fake.asked = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                if n:
+                    self.rfile.read(n)
+                url = urllib.parse.urlparse(self.path)
+                if url.path == "/api/v1/status/buildinfo":
+                    return self._send(200, {"status": "success", "data": {"version": "2.51.0"}})
+                if url.path == "/api/v1/query_range":
+                    q = urllib.parse.parse_qs(url.query)["query"][0]
+                    fake.asked.append(q)
+                    for tenant, code in errors.items():
+                        if f'tenant="{tenant}"' in q:
+                            return self._send(code, {"status": "error", "errorType": "bad_data",
+                                                     "error": "boom"})
+                    return self._send(200, {"status": "success", "data": {
+                        "resultType": "matrix",
+                        "result": [{"metric": {}, "values": [[i, str(v)]
+                                                             for i, v in enumerate(values)]}]}})
+                return self._send(404, {})
+
+            def _send(self, code, obj):
+                body = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def finish(self):
+                try:
+                    super().finish()
+                    self.request.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=10)
+
+
+@pytest.fixture
+def fake_prom():
+    started = []
+
+    def start(errors=None, values=(90,) * 10):
+        p = _FakeProm(errors or {}, list(values))
+        started.append(p)
+        return p
+    yield start
+    for p in started:
+        p.close()
+
+
+def _diff_for(*tenants):
+    """一段 `--git-diff`：每個租戶的 mysql_connections 100 → 50。"""
+    out = b""
+    for t in tenants:
+        out += (f"+++ b/conf.d/{t}.yaml\n"
+                "-    mysql_connections: '100'\n"
+                "+    mysql_connections: '50'\n").encode()
+    return out
+
+
+def _run_main(cli_argv, capsys, *argv):
+    cli_argv("backtest_threshold", *argv)
+    with pytest.raises(SystemExit) as ei:
+        bt.main()
+    return ei.value.code, capsys.readouterr()
+
+
+class TestQueryError:
+    """#3059：Prometheus 連得上、但查詢失敗（400／503）的那一筆是
+    `query_error`，不是「沒資料」；有任何一筆就 rc 2，優先於 HIGH 的 rc 1，
+    `--skip-if-unavailable` 也不把它轉成 0（Prometheus 不是 unavailable）。"""
+
+    @pytest.mark.parametrize("code", [400, 503])
+    def test_single_query_error_is_rc2_partial(self, fake_prom, cli_argv, capsys, code):
+        p = fake_prom(errors={"t-bad": code})
+        rc, out = _run_main(cli_argv, capsys, "--tenant", "t-bad", "--metric", "mysql_connections",
+                            "--old-value", "70", "--new-value", "50",
+                            "--prometheus", p.url, "--json")
+        doc = json.loads(out.out)
+        assert rc == 2
+        assert (doc["status"], doc["reason"]) == ("partial", "query_error")
+        assert doc["query_error"] == 1 and doc["no_data"] == 0
+        row = doc["changes"][0]
+        assert (row["status"], row["risk"]) == ("query_error", "UNKNOWN")
+        assert f"HTTP Error {code}" in row["message"]
+        assert row["query"] == 'tenant:mysql_threads_connected:max{tenant="t-bad"}'
+        assert "not measured" in out.err
+
+    def _git(self, monkeypatch, *tenants):
+        diff = _diff_for(*tenants)
+        monkeypatch.setattr(bt, "_git_bytes",
+                            lambda args, quotepath_off=False: diff if "--unified=0" in args else b"")
+
+    def test_other_changes_still_run_and_query_error_beats_high(
+            self, fake_prom, monkeypatch, cli_argv, capsys):
+        p = fake_prom(errors={"t-bad": 400})
+        self._git(monkeypatch, "t-ok", "t-bad")
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        doc = json.loads(out.out)
+        got = {r["tenant"]: r for r in doc["changes"]}
+        assert got["t-ok"]["status"] == "analyzed" and got["t-ok"]["risk"] == "HIGH"
+        assert got["t-bad"]["status"] == "query_error"
+        assert doc["risk_summary"]["HIGH"] == 1
+        assert rc == 2, "a change not measured outranks HIGH (owner ruling)"
+        assert len(p.asked) == 2
+
+    def test_high_alone_is_still_rc1(self, fake_prom, monkeypatch, cli_argv, capsys):
+        """control：沒有 query_error 時 HIGH 照舊 rc 1，頂層不帶 status。"""
+        p = fake_prom()
+        self._git(monkeypatch, "t-ok")
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        doc = json.loads(out.out)
+        assert rc == 1 and "status" not in doc and doc["query_error"] == 0
+
+    def test_skip_if_unavailable_does_not_hide_query_error(
+            self, fake_prom, monkeypatch, cli_argv, capsys):
+        p = fake_prom(errors={"t-bad": 503})
+        self._git(monkeypatch, "t-bad")
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url,
+                            "--skip-if-unavailable", "--json")
+        assert rc == 2
+        assert json.loads(out.out)["status"] == "partial"
+
+    def test_text_and_markdown_name_the_unmeasured(
+            self, fake_prom, monkeypatch, cli_argv, capsys, tmp_path):
+        p = fake_prom(errors={"t-bad": 400})
+        self._git(monkeypatch, "t-ok", "t-bad")
+        md = tmp_path / "out.md"
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url,
+                            "--markdown-output", str(md))
+        assert rc == 2
+        assert "Query error: 1" in out.out
+        assert "1 change(s) not measured" in md.read_text(encoding="utf-8")
+
+    def test_message_is_escaped_and_truncated(self, monkeypatch, cpu_mapped):
+        def failing(*a, **kw):
+            raise bt.PrometheusQueryError("line1\nFAKE [PASS]\x1b[2J" + "x" * 1000)
+        monkeypatch.setattr(bt, "query_range", failing)
+        r = bt.backtest_change("http://prom", {"tenant": "t", "metric": "cpu",
+                                               "old_value": "70", "new_value": "50"}, 86400)
+        assert r["status"] == "query_error"
+        assert "\n" not in r["message"] and "\x1b" not in r["message"]
+        assert len(r["message"]) < 400
+
+
+class TestCallerErrorEnvelopes:
+    """#3059：三條 rc 2 路徑在 `--json` 下 stdout 恰一份 caller_error
+    envelope；參數錯在 Prometheus 檢查之前，`--skip-if-unavailable` 吃不掉。"""
+
+    def _envelope(self, out, reason):
+        doc = json.loads(out.out)
+        assert (doc["status"], doc["reason"]) == ("caller_error", reason)
+        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+
+    def test_prometheus_unreachable_envelope(self, monkeypatch, cli_argv, capsys):
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--metric", "mysql_connections",
+                            "--old-value", "70", "--new-value", "50",
+                            "--prometheus", "http://prom:9090", "--json")
+        assert rc == 2
+        self._envelope(out, "prometheus_unavailable")
+        assert "not reachable" in out.err
+
+    @pytest.mark.parametrize("skip", [False, True], ids=["plain", "skip-if-unavailable"])
+    def test_tenant_args_missing(self, monkeypatch, cli_argv, capsys, skip):
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--prometheus", "http://prom:9090",
+                            "--json", *(["--skip-if-unavailable"] if skip else []))
+        assert rc == 2
+        self._envelope(out, "tenant_args_missing")
+
+    @pytest.mark.parametrize("skip", [False, True], ids=["plain", "skip-if-unavailable"])
+    def test_no_change_source(self, monkeypatch, cli_argv, capsys, skip):
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        rc, out = _run_main(cli_argv, capsys, "--prometheus", "http://prom:9090",
+                            "--json", *(["--skip-if-unavailable"] if skip else []))
+        assert rc == 2
+        self._envelope(out, "no_change_source")

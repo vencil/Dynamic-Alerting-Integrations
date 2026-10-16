@@ -908,6 +908,25 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
                     "--baseline", str(SEED_CONF_D),   # identical => zero changes
                     "--prometheus", s, "--json"]),
+    # #3059: the three rc 2 paths that printed nothing under `--json`; the
+    # two argument errors come before the Prometheus check, so
+    # `--skip-if-unavailable` cannot turn them into a skip.
+    R("backtest_threshold", "prometheus-unreachable",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
+                    "--old-value", "100", "--new-value", "150",
+                    "--prometheus", "http://127.0.0.1:1", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("prometheus_unavailable")),
+    R("backtest_threshold", "tenant-args-missing",
+      lambda t, s: ["--tenant", "tenant-one", "--prometheus", "http://127.0.0.1:1",
+                    "--skip-if-unavailable", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("tenant_args_missing")),
+    R("backtest_threshold", "no-change-source",
+      lambda t, s: ["--prometheus", "http://127.0.0.1:1",
+                    "--skip-if-unavailable", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("no_change_source")),
 
     # ── batch_diagnose  (⚠ known multi-mode trap) ──────────────────────────
     R("batch_diagnose", "dry-run",
