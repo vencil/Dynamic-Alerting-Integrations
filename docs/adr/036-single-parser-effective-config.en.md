@@ -576,7 +576,7 @@ Where the code is, for implementers; can be skipped when reading the decision. O
 | Descriptions to update for da-guard's exit 4 | the exit-code comment in `cmd/da-guard/main.go`; `scripts/tools/_lib_exitcodes.py`; `docs/cli-reference.md` |
 | The deletion-scope user check (CI) | declaration table `tests/shared/phase2_deletion_scope.json`; the test comparing it, `components/threshold-exporter/app/phase2_deletion_scope_test.go` |
 | Checks only Go's da-guard has | `internal/guard/types.go` minus `tests/shared/routing_policy_parity_matrix.json` |
-| The divergence catalog (deleted in step 3) | `tests/shared/reader_divergence_catalog.yaml`; the Go verdict snapshot `tests/shared/merge_key_go_verdicts.json`; `tests/shared/test_reader_divergence_catalog.py`; `reader-divergence-expiry` in `make pre-tag` |
+| The divergence catalog (deleted in step 3; the files and target below no longer exist) | `tests/shared/reader_divergence_catalog.yaml`; the Go verdict snapshot `tests/shared/merge_key_go_verdicts.json`; `tests/shared/test_reader_divergence_catalog.py`; `reader-divergence-expiry` in `make pre-tag` |
 
 ## References
 
