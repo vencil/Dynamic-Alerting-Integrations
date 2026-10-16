@@ -659,6 +659,28 @@ class TestCLI:
                 tr.main()
             assert exc_info.value.code == EXIT_CALLER_ERROR
 
+    def test_missing_observed_map_exits_caller_error(self, tmp_path, monkeypatch, capsys):
+        """#3017：map 缺檔不再把每個 key 靜默 skip、rc 0；改 rc 2 並點名檔案。"""
+        missing = tmp_path / "metric_observed_map.yaml"
+        monkeypatch.setattr(tr.observed_map_lib, "DEFAULT_MAP_PATH", str(missing))
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
+        with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path), "--dry-run"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and str(missing) in err
+
+    def test_missing_observed_map_with_unmatched_tenant_still_fails(self, tmp_path, monkeypatch):
+        """--tenant 對不到任何租戶時也先載入 map：「什麼都沒找到」不能掩蓋缺 map。"""
+        monkeypatch.setattr(tr.observed_map_lib, "DEFAULT_MAP_PATH", str(tmp_path / "absent.yaml"))
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
+        with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
+                                 "--dry-run", "--tenant", "no-such-tenant"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+
     def test_dry_run_cli(self, tmp_path):
         """CLI --dry-run 正常完成。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))

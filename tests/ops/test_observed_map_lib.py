@@ -233,22 +233,79 @@ groups:
         assert "container_cpu" not in res["coverage_gaps"]
 
 
+class TestLoadFailsClosed:
+    """#3017：缺檔、讀不了、沒有 keys 一律 raise，不再回 {}（消費端會把 {}
+    讀成「沒有任何 key 有對映」而靜默放行）。"""
+
+    @pytest.mark.parametrize("body", [
+        None,                      # 檔案不存在
+        "",                        # 空檔
+        "version: 1\n",            # 沒有 keys
+        "keys: {}\n",              # keys 為空
+        "keys: [a, b]\n",          # keys 不是 mapping
+        "keys: [\n",               # YAML 壞掉
+        "- just\n- a list\n",       # 頂層不是 mapping
+    ], ids=["missing", "empty", "no-keys", "empty-keys", "keys-list", "bad-yaml", "top-list"])
+    def test_unusable_map_raises(self, tmp_path, body):
+        p = tmp_path / "metric_observed_map.yaml"
+        if body is not None:
+            p.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError, match=str(p).replace("\\", "\\\\")):
+            L.load_observed_map(str(p))
+
+    @pytest.mark.parametrize("body, kind", [
+        (None, "missing"), ("", "empty"), ("keys: {}\n", "empty"),
+        ("keys: [\n", "unreadable"), ("keys: [a, b]\n", "unreadable"),
+    ])
+    def test_error_kind_and_one_line(self, tmp_path, body, kind):
+        """kind 決定生成器能不能重建；訊息一行（YAMLError 的 str() 有多行）。"""
+        p = tmp_path / "metric_observed_map.yaml"
+        if body is not None:
+            p.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError) as ei:
+            L.load_observed_map(str(p))
+        assert ei.value.kind == kind
+        assert "\n" not in str(ei.value)
+
+    @pytest.mark.parametrize("body", ["", "keys: {}\n", "version: 1\n"])
+    def test_generator_rebuilds_a_keyless_map(self, tmp_path, body):
+        """沒有 key 的 map 沒有人工 pick 可保留：重新產生，不因 fail-closed 卡住。"""
+        out = tmp_path / "metric_observed_map.yaml"
+        out.write_text(body, encoding="utf-8")
+        L.write_observed_map(out_path=str(out))
+        assert L.load_observed_map(str(out)) == L.load_observed_map()
+
+    def test_generator_refuses_an_unreadable_map(self, tmp_path):
+        """YAML 壞掉的 map 可能還有人工 pick：拒絕覆寫，提示修正或刪除。"""
+        out = tmp_path / "metric_observed_map.yaml"
+        out.write_text("keys: [\n", encoding="utf-8")
+        with pytest.raises(L.ObservedMapError, match="fix or delete"):
+            L.write_observed_map(out_path=str(out))
+        assert out.read_text(encoding="utf-8") == "keys: [\n"
+
+    def test_usable_map_returns_keys(self, tmp_path):
+        p = tmp_path / "metric_observed_map.yaml"
+        p.write_text("keys:\n  k:\n    direction: '>'\n", encoding="utf-8")
+        assert L.load_observed_map(str(p)) == {"k": {"direction": ">"}}
+
+    def test_default_path_is_read_at_call_time(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(L, "DEFAULT_MAP_PATH", str(tmp_path / "absent.yaml"))
+        with pytest.raises(L.ObservedMapError, match="not found"):
+            L.load_observed_map()
+
+
 class TestCommittedMap:
     """The committed map must pass its own drift-guard (no errors)."""
 
     def test_committed_map_consistent(self):
-        m = L.load_observed_map()
-        if not m:
-            pytest.skip("committed observed-map not present")
+        m = L.load_observed_map()  # raises when absent (#3017): never a skip
         res = L.check_consistency(m, L.default_pack_paths())
         assert res["errors"] == [], f"committed map has drift: {res['errors']}"
 
     def test_committed_map_consistent_with_exit_lock(self):
         # #916 Item B: the real-map lint path enforces the KNOWN_DEFERRED exit
         # lock; the committed map + real packs must still be green under it.
-        m = L.load_observed_map()
-        if not m:
-            pytest.skip("committed observed-map not present")
+        m = L.load_observed_map()  # raises when absent (#3017): never a skip
         res = L.check_consistency(
             m, L.default_pack_paths(), enforce_known_deferred=True
         )
@@ -558,9 +615,7 @@ class TestMergeMaps:
 
     def test_idempotent_pin_on_committed_map(self):
         # (12) merge_maps(committed, build_map(real packs)) == committed (deep).
-        committed = L.load_observed_map()
-        if not committed:
-            pytest.skip("committed observed-map not present")
+        committed = L.load_observed_map()  # raises when absent (#3017): never a skip
         fresh = L.build_map(L.default_pack_paths())
         merged, warns, stats = L.merge_maps(committed, fresh)
         assert merged == committed, "regen is not idempotent over the committed map"
@@ -766,9 +821,7 @@ class TestLowerBoundClassification:
     def test_committed_map_classification_pin(self):
         # DATA-PIN: the committed map's four `<` entries carry exactly the #916
         # classification (regen output pinned so a silent drift fails here).
-        m = L.load_observed_map()
-        if not m:
-            pytest.skip("committed observed-map not present")
+        m = L.load_observed_map()  # raises when absent (#3017): never a skip
         db2 = m["db2_bufferpool_hit_ratio"]
         assert db2[L.MODE_FIELD] == "percentile-lower"
         assert db2["observed_series"] == "tenant:db2_bufferpool_hit_ratio:min"
@@ -783,9 +836,7 @@ class TestLowerBoundClassification:
         # merge_maps(committed, build_map(real)) == committed for the `<` entries
         # (the whole map is pinned by test_idempotent_pin_on_committed_map; this
         # narrows the failure message to the lower-bound cohort).
-        committed = L.load_observed_map()
-        if not committed:
-            pytest.skip("committed observed-map not present")
+        committed = L.load_observed_map()  # raises when absent (#3017): never a skip
         fresh = L.build_map(L.default_pack_paths())
         merged, _w, _s = L.merge_maps(committed, fresh)
         for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",

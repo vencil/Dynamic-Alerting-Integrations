@@ -239,8 +239,9 @@ TOOL_FILES=(
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup
-    # (DEFAULT_MAP_PATH); a missing file fail-quiets load_observed_map()
-    # to {} (every key silently skipped), so it MUST ship with the lib.
+    # (DEFAULT_MAP_PATH); without it load_observed_map() raises and
+    # threshold-recommend / threshold-govern exit 2 (#3017), so it MUST ship
+    # with the lib.
     ops/metric_observed_map.yaml
 )
 
