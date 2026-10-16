@@ -2280,6 +2280,19 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
         f"declares, is not this row's finding)"])
 
 
+# ADR-038: the row's own hints where the check-level one ("fix a misspelt
+# key, or remove one nothing reads") would claim a key the row never judged.
+_UNREAD_KEYS_INCOMPLETE_HINT = (
+    "No key was judged: the verdict needs da-guard (built into the image; in "
+    "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
+    "line above names and run again. Reported only, not yet blocking (#3016).")
+_UNREAD_KEYS_UNDECIDABLE_HINT = (
+    "Whether a threshold key is read is judged against the root platform "
+    "files (`_defaults.yaml` at the root of --config-dir); none was read. "
+    "Point --config-dir at the conf.d root, or add the root `_defaults.yaml`, "
+    "and run again. Reported only, not yet blocking (#3016).")
+
+
 def check_unread_keys(config_dir: str) -> dict[str, object]:
     """Keys no reader reads (ADR-038), by the shared verdict
     (`_lib_key_verdict.judge_tree`: da-guard served-values with
@@ -2297,7 +2310,8 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
     except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
         return _make_result("unread_keys", WARN, [
             "verdict incomplete: the keys no reader reads were not judged "
-            f"({type(exc).__name__}: {' '.join(str(exc).split())})"])
+            f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
+            hint=_UNREAD_KEYS_INCOMPLETE_HINT)
     details = []
     for f in verdict.findings:
         who = ", ".join(f.tenants[:WARN_LIMIT]) + (
@@ -2310,7 +2324,10 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         details.append(f"no root platform file was read: {n} threshold key(s) cannot be judged "
                        "(undecidable)")
     if details:
-        return _make_result("unread_keys", WARN, details)
+        # Only an undecidable line: no key was found unread, so the advice
+        # is about the root file, not about a key.
+        hint = _UNREAD_KEYS_UNDECIDABLE_HINT if not verdict.findings else None
+        return _make_result("unread_keys", WARN, details, hint=hint)
     return _make_result("unread_keys", PASS, [
         f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
 

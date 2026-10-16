@@ -59,6 +59,16 @@ def test_undecidable_is_said(tmp_path):
     r = vc.check_unread_keys(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
     assert r["status"] == vc.WARN
     assert r["details"][-1] == "no root platform file was read: 1 threshold key(s) cannot be judged (undecidable)"
+    # Nothing was found unread: the advice is about the root file.
+    assert r["hint"] == vc._UNREAD_KEYS_UNDECIDABLE_HINT
+
+
+def test_a_finding_keeps_the_key_advice(tmp_path):
+    """A key found unread gets the check-level advice (fix or remove it)."""
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: 70\n"}))
+    assert r["status"] == vc.WARN and r["hint"] is None
+    assert "misspelt key" in vc._CHECK_HINTS["unread_keys"][0]
 
 
 @pytest.mark.parametrize("exc", [
@@ -75,6 +85,8 @@ def test_a_verdict_that_cannot_be_given_is_a_warn_not_a_refusal(tmp_path, monkey
     r = vc.check_unread_keys(_tree(tmp_path, {"_defaults.yaml": _DEFAULTS}))
     assert r["status"] == vc.WARN and not r["caller_error"]
     assert r["details"][0].startswith("verdict incomplete: ")
+    # No key was judged: the advice is about da-guard, not "fix a misspelt key".
+    assert r["hint"] == vc._UNREAD_KEYS_INCOMPLETE_HINT
 
 
 def test_the_row_does_not_change_the_exit_code(tmp_path):
