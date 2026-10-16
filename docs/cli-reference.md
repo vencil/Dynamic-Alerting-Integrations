@@ -3005,7 +3005,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 
 #### threshold-recommend
 
-閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值，整合 Noise Score 調整推薦方向。
+閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值。
 
 **用法**
 
