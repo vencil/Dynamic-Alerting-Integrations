@@ -1426,14 +1426,29 @@ class TestWrittenValues:
         with pytest.raises(ValueError):
             bt.parse_threshold_value(key, raw)
 
-    def test_severity_change_is_not_backtested(self, monkeypatch, capsys, cli_argv):
-        """審查的重現：70 → 95:critical 以前判 HIGH「3 fewer」、rc 1。"""
+    def test_severity_change_compares_the_values_on_both_alerts(
+            self, monkeypatch, capsys, cli_argv):
+        """#3060 R1：severity 只決定由哪支 alert 比，觸發點只看值。70 → 95:critical
+        由 warning 與 critical 兩支 alert 比；兩支比同一條 series、同一個方向，所以
+        照值回測（先前一律不回測；更早的 #3061 審查重現是只拿 warning alert 比）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                        "mysql_connections", "70", "95:critical")
-        assert (rc, asked) == (0, [])
-        assert rows[0]["status"] == "not_backtested"
-        assert rows[0]["backtest"] == ("skipped: severity changes (warning -> critical): "
-                                       "the two values are compared by different alerts")
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert rows[0]["status"] == "analyzed"
+        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 1)
+        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "critical")
+        assert rc == (1 if rows[0]["risk"] == "HIGH" else 0)
+
+    def test_a_side_no_rule_selects_is_no_threshold(self, monkeypatch, capsys, cli_argv):
+        """#3060 R1：`70:high` 沒有 alert 在比，等於沒有門檻——70 → 70:high 是告警
+        被靜默，與 `disable` 同判定；只有一邊有規則會選的 severity 時照常查詢。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", "70:high")
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert (rows[0]["status"], rows[0]["risk"]) == ("analyzed", "MEDIUM")
+        assert rows[0]["message"] == "Metric disabled — all alerts silenced"
+        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "high")
+        assert rc == 0
 
     def test_both_critical_compare_the_numbers_on_the_critical_alert(
             self, monkeypatch, capsys, cli_argv):
@@ -1480,9 +1495,12 @@ class TestWrittenValues:
         got = {r["metric"]: r for r in rows}
         assert (got["mysql_connections"]["old_breach_count"],
                 got["mysql_connections"]["new_breach_count"]) == (3, 1)
-        assert got["pg_connections"]["status"] == "not_backtested"
-        assert "severity changes" in got["pg_connections"]["backtest"]
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        # #3060 R1: '70' -> '95:critical' is compared by pg's warning and
+        # critical alerts; whatever they say, it is no longer "severity changes".
+        assert "severity changes" not in got["pg_connections"].get("backtest", "")
+        assert (got["pg_connections"]["old_severity"],
+                got["pg_connections"]["new_severity"]) == ("warning", "critical")
+        assert asked[0] == 'tenant:mysql_threads_connected:max{tenant="t-x"}'
 
 
 class TestMalformedObservedMap:

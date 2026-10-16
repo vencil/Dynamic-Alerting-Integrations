@@ -22,6 +22,7 @@ da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來�
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 import sys
@@ -218,7 +219,9 @@ def test_one_pair_in_several_parts_of_the_day_is_one_change(
 def test_a_severity_boundary_does_not_split_a_change(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The current side changes severity at 01:00 and 09:00 but serves 75 all
-    day: one change, all day, no window (the run-merge branch)."""
+    day: one change, all day, no window (the run-merge branch). Both
+    severities are compared, so the boundary does not split it (#3060); the
+    severities it is served with are named."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
         "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n      overrides:\n"
@@ -227,7 +230,8 @@ def test_a_severity_boundary_does_not_split_a_change(
     assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
     got = _backtest(monkeypatch, b, c)
     assert _no_series(got) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75"}]
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
+         "old_severity": "warning", "new_severity": "warning/critical"}]
     # #2750: both series the key is served as that day, from the segments —
     # 01:00-09:00 is served as the critical row.
     assert got[0]["series"] == [_ident("mysql_connections", "warning"),
@@ -245,13 +249,122 @@ def test_an_empty_severity_is_read_from_the_schedule(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """#3060: `"70:"` is served with severity "". da-guard used to leave
     `severity` out of such a segment, so the reader (strict: a served segment
-    carries it) raised and backtest exited 2. Only "no longer raises" and the
-    "" are pinned here: whether a severity-only change is listed is not."""
+    carries it) raised and backtest exited 2. It is a severity-only change
+    (`test_a_severity_only_change_is_listed`)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:")})
     segs = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"].schedules["mysql_connections"].segments
     assert [s[:4] for s in segs] == [("00:00", "24:00", 70.0, "")]
     _backtest(monkeypatch, b, c)  # raised ServedValuesError before #3060
+
+
+@pytest.mark.parametrize("value,severity,compared", [
+    ("70:critical", "critical", True), ("70:high", "high", False), ("70:", "", False)])
+def test_a_severity_only_change_is_listed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, severity: str,
+        compared: bool) -> None:
+    """#3060 R1: the same value under another severity is a change. A
+    severity a threshold rule selects keeps the threshold (another alert
+    compares it); one no rule selects is no threshold (`new_compared`)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(value)})
+    got = _backtest(monkeypatch, b, c)
+    want = {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "70",
+            "old_severity": "warning", "new_severity": severity}
+    if not compared:
+        want["new_compared"] = False
+    assert _no_series(got) == [want]
+    assert got[0]["series"] == [_ident("mysql_connections", "warning"),
+                                _ident("mysql_connections", severity)]
+
+
+def test_a_severity_only_part_of_the_day_is_its_own_change(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """70 all day on both sides, critical 01:00-09:00 on the current one: one
+    severity-only change carrying that window, beside no value change."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("70:critical")})
+    assert _no_series(_backtest(monkeypatch, b, c)) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "70",
+         "old_severity": "warning", "new_severity": "critical", "window": ["01:00-09:00"]}]
+
+
+def test_opposite_severity_changes_are_two_changes(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Warning -> critical outside 01:00-09:00 and critical -> warning inside
+    it: two changes, each with its own windows, not one all-day change of
+    "warning/critical" on both sides."""
+    def tree(name: str, default: str, night: str) -> Path:
+        return _tree(tmp_path / name, {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
+            f"tenants:\n  tx:\n    mysql_connections:\n      default: \"{default}\"\n"
+            f"      overrides:\n        - window: \"01:00-09:00\"\n          value: \"{night}\"\n")})
+    got = _no_series(_backtest(monkeypatch, tree("base", "70", "70:critical"),
+                               tree("cur", "70:critical", "70")))
+    common = {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "70"}
+    assert got == [
+        {**common, "old_severity": "warning", "new_severity": "critical",
+         "window": ["00:00-01:00", "09:00-24:00"]},
+        {**common, "old_severity": "critical", "new_severity": "warning",
+         "window": ["01:00-09:00"]}]
+
+
+@pytest.mark.parametrize("old,new,status,risk,message,rc", [
+    # The same points fire, under the critical alert: no change in firing.
+    ("70", "70:critical", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
+    # No rule selects "high": the warning alert loses its threshold.
+    ("70", "70:high", "analyzed", "MEDIUM", "Metric disabled — all alerts silenced", 0),
+    ("70", "70:", "analyzed", "MEDIUM", "Metric disabled — all alerts silenced", 0),
+    # ... and back: the alert compares it again (2000 fires: HIGH).
+    ("70:high", "70", "analyzed", "HIGH", "Metric newly enabled — 1/2 points would fire", 1),
+    # A value and a severity no rule selects: the alert is silenced (it was
+    # not backtested: "selected by no threshold rule").
+    ("70", "60:high", "analyzed", "MEDIUM", "Metric disabled — all alerts silenced", 0),
+], ids=["to-critical", "to-high", "to-empty", "from-high", "value-to-high"])
+def test_a_severity_only_change_is_backtested_by_r1(
+        tmp_path: Path, monkeypatch, capsys, cli_argv, old: str, new: str, status: str,
+        risk: str, message: str, rc: int) -> None:
+    """#3060 R1 (owner ruling): the severity decides which alert compares a
+    row, the value when it fires. Owner-approved exit codes: `from-high` is
+    the 0 -> 1 the ruling names (on main it was not listed at all)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(old)})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(new)})
+    got_rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["status"], r["risk"], r["message"]) for r in rows] == [(status, risk, message)]
+    sev = lambda v: v.partition(":")[2] if ":" in v else "warning"  # noqa: E731
+    assert (rows[0]["old_severity"], rows[0]["new_severity"]) == (sev(old), sev(new))
+    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
+    assert got_rc == rc
+
+
+def test_reports_name_the_severities(tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """`70 -> 70` alone does not say what changed: the text and Markdown
+    reports show each side's severity beside its value."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:high")})
+    md = tmp_path / "r.md"
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert "70 (warning) -> 70 (high)" in out.out
+    assert "| 70 (warning) | 70 (high) |" in md.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("severity,text,cell", [
+    ("a|b", "70 (a|b)", "70 (a\\|b)"),        # a `|` would add a Markdown column
+    ("a\\x1bb", "70 (a?b)", "70 (a?b)"),       # YAML's `\x1b`: not printed raw
+])
+def test_a_severity_from_the_tree_is_escaped(
+        tmp_path: Path, monkeypatch, capsys, cli_argv, severity: str, text: str,
+        cell: str) -> None:
+    """The severity is tenant input: escaped (`safe_label`) in both reports,
+    and its `|` escaped in the Markdown table, which keeps its 7 columns."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS,
+                                  "tx.yaml": _wrapper(f"70:{severity}")})
+    md = tmp_path / "r.md"
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert f"70 (warning) -> {text}" in out.out and "\x1b" not in out.out
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if cell in line)
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
 
 
 def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
@@ -409,16 +522,17 @@ def test_a_critical_key_without_its_base_is_not_backtested(
 
 
 @pytest.mark.parametrize("old,new", [
-    ("70", "60:high"),               # one side standard, one not
     ("70:high", "60:high"),
     ("70:Critical", "60:Critical"),  # the rules select "critical" exactly
-], ids=["warning-to-high", "high", "capital-Critical"])
+], ids=["high", "capital-Critical"])
 def test_a_severity_no_rule_selects_is_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv, old: str, new: str) -> None:
     """The exporter serves `60:high` as severity="high"; the threshold rules
     select severity="warning" / "critical" exactly, so no alert compares that
     row. It used to be replayed against the warning alert (#3017 review);
-    `--git-diff` / `--tenant` give the same reason."""
+    `--git-diff` / `--tenant` give the same reason. With neither side any
+    rule selects there is nothing to compare; one side standard is #3060
+    R1's (`test_a_severity_only_change_is_backtested_by_r1`)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(old)})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(new)})
     sev = new.partition(":")[2]
