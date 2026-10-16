@@ -449,7 +449,7 @@ def test_run_apply_circuit_breaks_on_consecutive_errors(monkeypatch):
     calls = _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
     outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
     errors = [o for o in outcomes if o.status == "error"]
-    aborted = [o for o in outcomes if o.status == "skipped" and "aborted" in o.message]
+    aborted = [o for o in outcomes if o.status == "skipped_breaker" and "aborted" in o.message]
     assert len(errors) == tg.MAX_CONSECUTIVE_ERRORS          # stopped attempting after the cap
     assert len(aborted) == n - tg.MAX_CONSECUTIVE_ERRORS     # the rest are marked, not attempted
     assert calls["put_count"] == tg.MAX_CONSECUTIVE_ERRORS   # no further round-trips after the break
@@ -582,13 +582,14 @@ def test_committed_lower_bound_entries_satisfy_three_state_invariant():
 
 
 # ---------------------------------------------------------------------------
-# 7. #656 dead-man's-switch exit code — a governance run where EVERY write failed
-#    must exit non-zero so the CronJob Job is marked Failed AND
+# 7. #656 / #3054 dead-man's-switch exit code — an --apply run whose failures
+#    (errors + circuit-breaker skips) reach >= 90% of the attempted writes must exit
+#    non-zero, even if it opened a PR, so the CronJob Job is marked Failed AND
 #    kube_cronjob_status_last_successful_time stays frozen (→ ThresholdGovernanceStale
 #    can fire). Without it the run exits 0 / Job Successful / clock advances while
-#    ZERO PRs opened — the staleness alert would be a placebo. STRICTER than
-#    maintenance_scheduler's any-error exit contract: only a TOTAL write failure trips
-#    it (a single flaky tenant amid successes must not freeze the staleness clock).
+#    the writes fail — the staleness alert would be a placebo. STRICTER than
+#    maintenance_scheduler's any-error exit contract: only a near-total write failure
+#    trips it (a single flaky tenant amid successes must not freeze the clock).
 # ---------------------------------------------------------------------------
 def _oc(status):
     return tg.TenantOutcome("t", status)
@@ -598,9 +599,9 @@ def test_systemic_failure_true_when_apply_run_all_errored():
     assert tg._is_systemic_failure([_oc("error"), _oc("error")], applied=True) is True
 
 
-def test_systemic_failure_false_when_any_pr_opened():
-    # a partial success means the write plane works — one flaky tenant must not
-    # fail the whole governance run.
+def test_systemic_failure_false_when_pr_opened_and_half_errored():
+    # a 50% failure share is partial degradation — one flaky tenant must not
+    # fail the whole governance run (#3054: by the ratio, not because a PR opened).
     assert tg._is_systemic_failure([_oc("pr_opened"), _oc("error")], applied=True) is False
 
 
@@ -620,9 +621,9 @@ def test_systemic_failure_true_when_errors_swamp_one_pending_survivor():
 
 def test_systemic_failure_true_when_breaker_skips_with_pending_survivor():
     # Same masking scenario WITH the circuit breaker engaged: a total outage shows up
-    # as ~MAX_CONSECUTIVE_ERRORS errors + many `skipped`. Counting skips as failures
-    # keeps the share high; a bare error ratio (5/100) would dilute it and miss it.
-    outcomes = [_oc("error")] * 5 + [_oc("skipped")] * 94 + [_oc("already_pending")]
+    # as ~MAX_CONSECUTIVE_ERRORS errors + many `skipped_breaker`. Counting those as
+    # failures keeps the share high; a bare error ratio (5/100) would dilute it.
+    outcomes = [_oc("error")] * 5 + [_oc("skipped_breaker")] * 94 + [_oc("already_pending")]
     assert tg._is_systemic_failure(outcomes, applied=True) is True
 
 
@@ -644,8 +645,8 @@ def test_systemic_failure_false_when_nothing_actionable():
 
 
 def test_systemic_failure_false_when_skipped_only():
-    # circuit-breaker / max-prs skips are not errors — a run that only skipped
-    # (e.g. cap reached) is not a total write failure.
+    # --max-prs skips sent no request — a run that only cap-skipped attempted
+    # nothing, so it is not a write failure.
     assert tg._is_systemic_failure([_oc("skipped"), _oc("skipped")], applied=True) is False
 
 
@@ -802,18 +803,201 @@ def test_main_zero_current_key_takes_no_max_prs_slot(monkeypatch, tmp_path):
 
 def test_systemic_failure_live_path_circuit_breaker_many_tenants(monkeypatch):
     # HEADLINE #656 scenario: tenant-api down for a week with MANY drifted tenants.
-    # After MAX_CONSECUTIVE_ERRORS the circuit breaker emits "skipped" outcomes — pin
-    # that the {error, skipped} mix STILL trips the switch (errors>0 dominates), so a
+    # After MAX_CONSECUTIVE_ERRORS the circuit breaker emits "skipped_breaker" outcomes
+    # — pin that the {error, skipped_breaker} mix STILL trips the switch (errors>0 dominates), so a
     # future breaker refactor can't silently turn the headline case green. The 2-tenant
-    # live tests above stay below the breaker, so this is the only case that exercises
-    # the error+skipped path end-to-end.
+    # live tests above stay below the breaker, so this exercises the
+    # error+skipped_breaker path end-to-end.
     n = tg.MAX_CONSECUTIVE_ERRORS + 3
     _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
     _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "down"}, None))
     outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
     statuses = {o.status for o in outcomes}
-    assert "error" in statuses and "skipped" in statuses   # breaker actually tripped
+    assert statuses == {"error", "skipped_breaker"}   # breaker actually tripped
     assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+# ---------------------------------------------------------------------------
+# #3054: the rc follows the plan, but is monotone in write-plane health.
+# A PR opened no longer marks the run healthy on its own: what counts is the
+# failure share of the ATTEMPTED set — errors plus circuit-breaker skips, over
+# every outcome that sent (or was going to send) a write. A --max-prs skip and
+# a skipped_nested sent nothing and say nothing about the write plane.
+# ---------------------------------------------------------------------------
+_OK = (200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None)
+_DOWN = (503, {"error": "down"}, None)
+_PENDING = (409, {"code": "PENDING_PR_EXISTS", "existing_pr_url": "https://gh/1"}, None)
+
+
+def _main_rc(monkeypatch, tmp_path, tenants, put_results, **over):
+    """Run main() end to end; the PUT for tenants[i] answers put_results[i]."""
+    _stub_reports(monkeypatch, tenants)
+    answers = dict(zip(tenants, put_results))
+
+    def fake_get(url, *, timeout=10, headers=None):
+        tenant = url.rstrip("/").rsplit("/", 1)[-1]
+        return {"raw_yaml": _synth_tenant_yaml(tenant)}, None
+
+    def fake_put(url, yaml_body, headers, timeout):
+        return answers[url.rstrip("/").rsplit("/", 1)[-1]]
+
+    monkeypatch.setattr(tg, "http_get_json", fake_get)
+    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
+    args = _args(apply=True, config_dir=str(tmp_path), max_prs=100)
+    for k, v in over.items():
+        setattr(args, k, v)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
+    with pytest.raises(SystemExit) as exc:
+        tg.main()
+    return exc.value.code
+
+
+def test_systemic_failure_true_when_pr_opened_but_rest_errored():
+    # The 0 → 1 change #3054 makes: one PR opened no longer hides a run whose
+    # other writes (≥ 90% of the attempted set) all failed.
+    outcomes = [_oc("pr_opened")] + [_oc("error")] * 9
+    assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+def test_main_rc1_when_first_pr_opens_then_write_plane_dies(monkeypatch, tmp_path):
+    # Live path: 1 PR opened, then 5 errors trip the breaker and the remaining
+    # 6 tenants are breaker-skipped → (5 + 6) / 12 ≥ 0.9 → rc 1 (was 0).
+    tenants = [f"t{i}" for i in range(12)]
+    rc = _main_rc(monkeypatch, tmp_path, tenants, [_OK] + [_DOWN] * 11)
+    assert rc == tg.EXIT_VIOLATION
+
+
+def test_breaker_skip_has_its_own_status(monkeypatch):
+    # The two skips must be told apart, or a --max-prs skip would count as a
+    # failure once `opened > 0` no longer short-circuits.
+    _stub_reports(monkeypatch, [f"t{i}" for i in range(tg.MAX_CONSECUTIVE_ERRORS + 2)])
+    _patch_http(monkeypatch, per_tenant=True, put_result=_DOWN)
+    statuses = [o.status for o in tg.run(_args(apply=True, max_prs=100)).outcomes]
+    assert statuses == ["error"] * tg.MAX_CONSECUTIVE_ERRORS + ["skipped_breaker"] * 2
+
+
+def test_cap_skip_keeps_the_skipped_status(monkeypatch):
+    _stub_reports(monkeypatch, ["t0", "t1", "t2"])
+    _patch_http(monkeypatch, per_tenant=True, put_result=_OK)
+    statuses = [o.status for o in tg.run(_args(apply=True, max_prs=1)).outcomes]
+    assert statuses == ["pr_opened", "skipped", "skipped"]
+
+
+def test_main_rc0_when_cap_skips_dominate(monkeypatch, tmp_path):
+    # max_prs=1: 1 PR opened + 9 --max-prs skips. The skips sent nothing, so
+    # they are neither failures nor attempts → rc 0.
+    tenants = [f"t{i}" for i in range(10)]
+    rc = _main_rc(monkeypatch, tmp_path, tenants, [_OK] * 10, max_prs=1)
+    assert rc == tg.EXIT_OK
+
+
+def test_cap_skip_is_not_attempted():
+    # 9 errors + 1 PR opened is 0.9 of the attempted set. The 90 --max-prs
+    # skips sent nothing; counting them as attempts would dilute it to 0.09.
+    outcomes = [_oc("error")] * 9 + [_oc("pr_opened")] + [_oc("skipped")] * 90
+    assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+def test_breaker_skip_counts_as_failure():
+    outcomes = [_oc("error")] * 5 + [_oc("skipped_breaker")] * 4 + [_oc("pr_opened")]
+    assert tg._is_systemic_failure(outcomes, applied=True) is True
+
+
+def test_main_rc0_when_every_write_is_already_pending(monkeypatch, tmp_path):
+    tenants = [f"t{i}" for i in range(4)]
+    assert _main_rc(monkeypatch, tmp_path, tenants, [_PENDING] * 4) == tg.EXIT_OK
+
+
+def _mixed_outcomes():
+    return ([tg.TenantOutcome("t0", "pr_opened", pr_url="u")]
+            + [tg.TenantOutcome(f"e{i}", "error", message="HTTP 503: down") for i in range(5)]
+            + [tg.TenantOutcome(f"b{i}", "skipped_breaker") for i in range(2)]
+            + [tg.TenantOutcome(f"c{i}", "skipped") for i in range(3)])
+
+
+def test_text_report_labels_and_counts_the_breaker_skip():
+    # The rc counts breaker skips as failures; the report must show them as such,
+    # apart from the --max-prs skips, or Summary cannot explain an rc 1.
+    plans = [_plan(t) for t in ("t0", "e0", "b0")]
+    text = tg.format_text_report(plans, _mixed_outcomes(), applied=True)
+    assert "[✗ skip (circuit breaker)] b0:" in text
+    line = _summary(text)
+    assert "5 error(s), 3 skipped (--max-prs), 2 skipped (circuit breaker);" in line
+
+
+def test_json_summary_counts_both_skips():
+    summary = json.loads(tg.format_json_report([], _mixed_outcomes(), applied=True))["summary"]
+    assert (summary["errors"], summary["skipped"], summary["skipped_breaker"]) == (5, 3, 2)
+
+
+def test_main_rc0_on_empty_plan(monkeypatch, tmp_path):
+    assert _main_rc(monkeypatch, tmp_path, [], []) == tg.EXIT_OK
+
+
+def test_main_rc0_in_dry_run_even_if_writes_would_fail(monkeypatch, tmp_path):
+    tenants = [f"t{i}" for i in range(3)]
+    assert _main_rc(monkeypatch, tmp_path, tenants, [_DOWN] * 3, apply=False) == tg.EXIT_OK
+
+
+_RESPONSES = ("pr_opened", "already_pending", "no_changes", "error")
+
+
+@pytest.mark.parametrize("ratio,breaker", [(0.9, 5), (0.5, 2), (0.75, 3)])
+def test_rc_is_monotone_in_write_failures(monkeypatch, ratio, breaker):
+    """For a fixed plan, turning any one successful write into an error never
+    takes the rc from 1 to 0 — over every response sequence of length ≤ 7 and
+    several --max-prs values, through the real run() loop (breaker and cap).
+
+    At the shipped 0.9 a run of ≤ 7 tenants is rc 1 only when no write
+    succeeded, so the ratio and breaker are also lowered: monotonicity must
+    hold for any ratio, and the lower ones put successes inside rc-1 runs.
+    """
+    import itertools
+
+    monkeypatch.setattr(tg, "_SYSTEMIC_FAILURE_RATIO", ratio)
+    monkeypatch.setattr(tg, "MAX_CONSECUTIVE_ERRORS", breaker)
+    answers = {}
+
+    def fake_open(plan, args):
+        return tg.TenantOutcome(plan.tenant, answers[plan.tenant], [])
+
+    monkeypatch.setattr(tg, "open_governance_pr", fake_open)
+    all_tenants = [f"t{i}" for i in range(7)]
+    reports = {n: [_report(t, [_kr("mysql_connections", "2000", 100.0, -95.0,
+                                    recommend.CONFIDENCE_HIGH, p95=100.0)])
+                   for t in all_tenants[:n]] for n in range(8)}
+    current = {"n": 0}
+    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports[current["n"]])
+
+    memo = {}
+
+    def rc(seq, max_prs):
+        key = (seq, max_prs)
+        if key not in memo:
+            current["n"] = len(seq)
+            answers.clear()
+            answers.update(zip(all_tenants, seq))
+            out = tg.run(_args(apply=True, max_prs=max_prs)).outcomes
+            ok = any(o.status in ("pr_opened", "already_pending", "no_changes") for o in out)
+            memo[key] = (1 if tg._is_systemic_failure(out, applied=True) else 0, ok)
+        return memo[key][0]
+
+    flips = 0
+    for n in range(8):
+        for seq in itertools.product(_RESPONSES, repeat=n):
+            for max_prs in (1, 2, 3, 7):
+                if rc(seq, max_prs) == 0:
+                    continue
+                for i, r in enumerate(seq):
+                    if r == "error":
+                        continue
+                    worse = seq[:i] + ("error",) + seq[i + 1:]
+                    assert rc(worse, max_prs) == 1, (seq, worse, max_prs)
+                    flips += 1
+    assert flips > 0
+    if ratio < 0.9:
+        # non-vacuous: some rc-1 run did have a write that succeeded
+        assert any(v == (1, True) for v in memo.values())
 
 
 # ---------------------------------------------------------------------------
