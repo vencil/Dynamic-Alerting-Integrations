@@ -45,6 +45,12 @@ Checks:
                     threshold for every tenant (#1414); and no `_routing*`
                     key there — the route generator reads routing only from
                     top-level `_routing_defaults` (#2291)
+  14. Unread keys  — every key of every tenant that no reader reads, by the
+                    shared verdict (`_lib_key_verdict`, ADR-038): misspelt
+                    keys, a `disable` that switches nothing off, a key read
+                    in no layer it is written in. Report only: WARN, never
+                    FAIL, and da-guard failing is a WARN that the verdict is
+                    incomplete, not a refusal (ADR-038 decisions 4 and 5)
 
 Hierarchical trees: a row may get its input from a reader that is FLAT — it
 reads only the top level of --config-dir — while threshold-exporter reads the
@@ -200,6 +206,8 @@ from _lib_tenant_values import (  # noqa: E402
     print_load_error,
     value_not_served_as_written,
 )
+# ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
+import _lib_key_verdict as key_verdict  # noqa: E402
 
 # ============================================================
 # Check results
@@ -2247,6 +2255,41 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
         f"declares, is not this row's finding)"])
 
 
+def check_unread_keys(config_dir: str) -> dict[str, object]:
+    """Keys no reader reads (ADR-038), by the shared verdict
+    (`_lib_key_verdict.judge_tree`: da-guard served-values with
+    `--disable-effects`, da-guard effective, the tree's `_policies`).
+
+    Report only, until the gates block (#3016): every finding is a WARN
+    line with the severity the verdict gives it once they do, and the exit
+    code does not change. A verdict that cannot be given — no da-guard, or
+    da-guard failing — is a WARN saying so, never a FAIL (decision 5: a
+    broken da-guard must not refuse writes). No root platform file read:
+    the threshold keys are undecidable, said in one line (decision 7).
+    """
+    try:
+        verdict = key_verdict.judge_tree(config_dir, effective_tree=_effective_tree(config_dir))
+    except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
+        return _make_result("unread_keys", WARN, [
+            "verdict incomplete: the keys no reader reads were not judged "
+            f"({type(exc).__name__}: {' '.join(str(exc).split())})"])
+    details = []
+    for f in verdict.findings:
+        who = ", ".join(f.tenants[:WARN_LIMIT]) + (
+            f" (+{len(f.tenants) - WARN_LIMIT} more)" if len(f.tenants) > WARN_LIMIT else "")
+        why = f" ({f.reason})" if f.reason else ""
+        fam = f"; still served: {', '.join(f.served_family)}" if f.served_family else ""
+        details.append(f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — tenant(s) {who}")
+    if verdict.undecidable:
+        n = sum(v.verdict == key_verdict.UNDECIDABLE for vs in verdict.keys.values() for v in vs)
+        details.append(f"no root platform file was read: {n} threshold key(s) cannot be judged "
+                       "(undecidable)")
+    if details:
+        return _make_result("unread_keys", WARN, details)
+    return _make_result("unread_keys", PASS, [
+        f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
@@ -2506,6 +2549,14 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "`{default, overrides: [{window, value}]}` schedule; keep one spelling "
         "of a threshold a mapping writes twice (spelling_duplicate). "
         "`da-guard effective --config-dir <dir>` lists each one under `not_served`.",
+        "docs/cli-reference.md#validate-config",
+    ),
+    # ADR-038: each line names the file, the key, the reason and the tenants.
+    "unread_keys": (
+        "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
+        "switches nothing off usually sits on a misspelt key. "
+        "`da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
+        "key, who reads it and why not. Reported only, not yet blocking (#3016).",
         "docs/cli-reference.md#validate-config",
     ),
     # #2386: the row names the file and keys; where they go depends on level.
@@ -3128,6 +3179,11 @@ def main() -> None:
     # 13. Threshold values /metrics does not serve as written (#2065) —
     # unconditional: da-guard refuses the same set (value_not_served).
     results.append(_run_check("values_not_served", check_values_not_served,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 14. Keys no reader reads (ADR-038) — unconditional, report only:
+    # WARN, never FAIL, until the gates block (#3016).
+    results.append(_run_check("unread_keys", check_unread_keys,
                               args.config_dir, _config_dir=args.config_dir))
     _effective_runs = None
 

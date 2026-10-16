@@ -167,11 +167,14 @@ def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
                disable_effects: bool = True, rules: Iterable[Any] | None = None,
-               timeout: float = tv.DEFAULT_TIMEOUT) -> TreeVerdict:
-    """The verdict on every key of every tenant of the tree at `conf_d`."""
+               timeout: float = tv.DEFAULT_TIMEOUT,
+               effective_tree: tv.EffectiveTree | None = None) -> TreeVerdict:
+    """The verdict on every key of every tenant of the tree at `conf_d`.
+    `effective_tree`, given, is a `load_effective_tree` of the same tree the
+    caller already has (validate-config shares one run among its rows)."""
     tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
                                disable_effects=disable_effects)
-    effective = tv.load_effective_tree(conf_d, binary=binary, timeout=timeout).tenants
+    effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
     all_rules = list(_tree_rules(conf_d)) + list(rules or [])
     return judge(tree.tenants, effective, policy_targets(all_rules), aliases=tree.aliases,
                  undecidable=not root_platform_files(conf_d), disable_effects=disable_effects)
