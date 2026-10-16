@@ -85,13 +85,19 @@ class TestExtraction:
         assert m["foo"]["scope"] == "tenant"
         assert not m["foo"].get("needs_review")
 
-    def test_lower_bound_needs_review(self, tmp_path):
+    def test_unclassified_lower_bound_records_the_fact(self, tmp_path):
+        """#3017：map 記事實。沒分類的 `<` key 照樣記下比較的序列與方向，
+        推薦器仍以 lower-bound marker 略過（govern 列為未治理下界），backtest
+        讀得到；分類缺漏改由 drift-guard 擋（見 TestConsistency）。"""
         p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
         m = L.build_map([p])
-        assert m["bar"].get("needs_review") is True
-        assert m["bar"]["direction"] == "<"
-        assert "lower-bound" in m["bar"]["reason"]  # semantic, not a brittle issue-ref pin
-        assert "observed_series" not in m["bar"]
+        e = m["bar"]
+        assert e["observed_series"] == "tenant:bar_count:max"
+        assert e["direction"] == "<"
+        assert not e.get("needs_review") and L.MODE_FIELD not in e
+        series, why = L.usable_for_recommend(e)
+        assert series is None and "lower-bound (<)" in why
+        assert L.usable_for_backtest(e) == ("tenant:bar_count:max", "below", None)
 
     def test_composite_needs_review_with_candidates(self, tmp_path):
         p = _write_pack(tmp_path, "rule-pack-composite.yaml", PACK_COMPOSITE)
@@ -177,7 +183,14 @@ class TestConsistency:
         p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
         m = L.build_map([p])
         res = L.check_consistency(m, [p])
-        assert res["errors"] == []
+        # The only error is the unclassified '<' key (#3017 gate below).
+        assert [e for e in res["errors"] if not e.startswith("bar:")] == []
+
+    def test_unclassified_lower_bound_is_error(self, tmp_path):
+        """#3017：`<` key 不再以 needs_review 隱含「未分類」；沒分類就是 drift。"""
+        p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
+        res = L.check_consistency(L.build_map([p]), [p])
+        assert any(e.startswith("bar:") and "not classified" in e for e in res["errors"])
 
     def test_stale_observed_series_is_error(self, tmp_path):
         p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
@@ -233,22 +246,149 @@ groups:
         assert "container_cpu" not in res["coverage_gaps"]
 
 
+class TestLoadFailsClosed:
+    """#3017：缺檔、讀不了、沒有 keys 一律 raise，不再回 {}（消費端會把 {}
+    讀成「沒有任何 key 有對映」而靜默放行）。"""
+
+    @pytest.mark.parametrize("body", [
+        None,                      # 檔案不存在
+        "",                        # 空檔
+        "version: 1\n",            # 沒有 keys
+        "keys: {}\n",              # keys 為空
+        "keys: [a, b]\n",          # keys 不是 mapping
+        "keys: [\n",               # YAML 壞掉
+        "- just\n- a list\n",       # 頂層不是 mapping
+    ], ids=["missing", "empty", "no-keys", "empty-keys", "keys-list", "bad-yaml", "top-list"])
+    def test_unusable_map_raises(self, tmp_path, body):
+        p = tmp_path / "metric_observed_map.yaml"
+        if body is not None:
+            p.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError, match=str(p).replace("\\", "\\\\")):
+            L.load_observed_map(str(p))
+
+    @pytest.mark.parametrize("body, kind", [
+        (None, "missing"), ("", "empty"), ("keys: {}\n", "empty"),
+        ("keys: [\n", "unreadable"), ("keys: [a, b]\n", "unreadable"),
+    ])
+    def test_error_kind_and_one_line(self, tmp_path, body, kind):
+        """kind 決定生成器能不能重建；訊息一行（YAMLError 的 str() 有多行）。"""
+        p = tmp_path / "metric_observed_map.yaml"
+        if body is not None:
+            p.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError) as ei:
+            L.load_observed_map(str(p))
+        assert ei.value.kind == kind
+        assert "\n" not in str(ei.value)
+
+    @pytest.mark.parametrize("body", ["", "keys: {}\n", "version: 1\n"])
+    def test_generator_rebuilds_a_keyless_map(self, tmp_path, body):
+        """沒有 key 的 map 沒有人工 pick 可保留：重新產生，不因 fail-closed 卡住。"""
+        out = tmp_path / "metric_observed_map.yaml"
+        out.write_text(body, encoding="utf-8")
+        L.write_observed_map(out_path=str(out))
+        assert L.load_observed_map(str(out)) == L.load_observed_map()
+
+    def test_generator_refuses_an_unreadable_map(self, tmp_path):
+        """YAML 壞掉的 map 可能還有人工 pick：拒絕覆寫，提示修正或刪除。"""
+        out = tmp_path / "metric_observed_map.yaml"
+        out.write_text("keys: [\n", encoding="utf-8")
+        with pytest.raises(L.ObservedMapError, match="fix or delete"):
+            L.write_observed_map(out_path=str(out))
+        assert out.read_text(encoding="utf-8") == "keys: [\n"
+
+    @pytest.mark.parametrize("body,why", [
+        ("keys:\n  k: 5\n", "is a int, not a mapping"),
+        ("keys:\n  k:\n    observed_series: [a, b]\n", "non-string 'observed_series'"),
+        ("keys:\n  k:\n    direction: 1\n", "non-string 'direction'"),
+        ("keys:\n  k:\n    scope: [tenant]\n", "non-string 'scope'"),
+        ("keys:\n  k:\n    candidates: tenant:a:max\n", "'candidates' that is not a list"),
+        ("keys:\n  k:\n    candidates: [1]\n", "'candidates' that is not a list"),
+        ("keys:\n  1:\n    direction: '>'\n", "is not keyed by a string"),
+    ], ids=["int-entry", "list-series", "int-direction", "list-scope", "str-candidates",
+            "int-candidate", "int-key"])
+    def test_malformed_entry_is_unreadable(self, tmp_path, body, why):
+        """#3017 review：型別不對的條目以前會在消費端變成 traceback（`.get`
+        打在 int 上）或拼出假的 PromQL（list 當 series 名）。一行、指名 key。"""
+        p = tmp_path / "metric_observed_map.yaml"
+        p.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError) as ei:
+            L.load_observed_map(str(p))
+        assert ei.value.kind == "unreadable"
+        assert why in str(ei.value) and "entry " in str(ei.value)
+        assert "\n" not in str(ei.value)
+
+    def test_generator_refuses_a_malformed_map(self, tmp_path):
+        """型別壞掉的 map 一樣是 unreadable：生成器拒絕覆寫（可能還有人工 pick）。"""
+        out = tmp_path / "metric_observed_map.yaml"
+        body = "keys:\n  k:\n    observed_series: [a, b]\n"
+        out.write_text(body, encoding="utf-8")
+        with pytest.raises(L.ObservedMapError, match="fix or delete"):
+            L.write_observed_map(out_path=str(out))
+        assert out.read_text(encoding="utf-8") == body
+
+    def test_usable_map_returns_keys(self, tmp_path):
+        p = tmp_path / "metric_observed_map.yaml"
+        p.write_text("keys:\n  k:\n    direction: '>'\n", encoding="utf-8")
+        assert L.load_observed_map(str(p)) == {"k": {"direction": ">"}}
+
+    def test_default_path_is_read_at_call_time(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(L, "DEFAULT_MAP_PATH", str(tmp_path / "absent.yaml"))
+        with pytest.raises(L.ObservedMapError, match="not found"):
+            L.load_observed_map()
+
+
+class TestLookupAndPolicies:
+    """#3017：同一份事實、兩種政策——recommend 與 backtest 各自決定能不能用。"""
+
+    def test_lookup_entry_and_reasons(self):
+        m = L.load_observed_map()
+        assert L.lookup(m, "mysql_connections") == (m["mysql_connections"], None)
+        entry, why = L.lookup(m, "container_cpu")
+        assert entry is None and "KNOWN_DEFERRED" in why
+        entry, why = L.lookup(m, "mongodb_connections_current_critical")
+        assert entry is None and why.startswith("no shipped alert compares")
+
+    def test_backtest_policy_on_committed_lower_bound_keys(self):
+        """#3017 的 4 個下界 key 全都能回測，且方向是 below。"""
+        m = L.load_observed_map()
+        for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",
+                  "kafka_broker_count", "rabbitmq_consumers"):
+            series, direction, why = L.usable_for_backtest(m[k])
+            assert (direction, why) == ("below", None) and series, k
+
+    @pytest.mark.parametrize("entry, needle", [
+        ({"needs_review": True, "reason": "pick one", "direction": ">"}, "needs review: pick one"),
+        ({"scope": "tenant_version", "direction": ">", "observed_series": "x"}, "unsupported scope"),
+        ({"scope": "tenant", "observed_series": "x"}, "direction"),
+        ({"scope": "tenant", "direction": ">", "candidates": ["a", "b"]}, "composite"),
+    ])
+    def test_backtest_policy_refuses_with_a_reason(self, entry, needle):
+        series, direction, why = L.usable_for_backtest(entry)
+        assert series is None and direction is None and needle in why
+
+    def test_recommend_policy_ignores_the_fact_shape(self):
+        """改記事實（#3017）不改推薦判定：每個出廠條目換回舊形狀
+        （candidates 而非 observed_series）時，usable_for_recommend 結果相同。"""
+        for key, entry in L.load_observed_map().items():
+            if not entry.get(L.MODE_FIELD) == "not-applicable":
+                continue
+            old_shape = {k: v for k, v in entry.items() if k != "observed_series"}
+            old_shape["candidates"] = [entry["observed_series"]]
+            assert L.usable_for_recommend(old_shape) == L.usable_for_recommend(entry), key
+
+
 class TestCommittedMap:
     """The committed map must pass its own drift-guard (no errors)."""
 
     def test_committed_map_consistent(self):
-        m = L.load_observed_map()
-        if not m:
-            pytest.skip("committed observed-map not present")
+        m = L.load_observed_map()  # raises when absent (#3017): never a skip
         res = L.check_consistency(m, L.default_pack_paths())
         assert res["errors"] == [], f"committed map has drift: {res['errors']}"
 
     def test_committed_map_consistent_with_exit_lock(self):
         # #916 Item B: the real-map lint path enforces the KNOWN_DEFERRED exit
         # lock; the committed map + real packs must still be green under it.
-        m = L.load_observed_map()
-        if not m:
-            pytest.skip("committed observed-map not present")
+        m = L.load_observed_map()  # raises when absent (#3017): never a skip
         res = L.check_consistency(
             m, L.default_pack_paths(), enforce_known_deferred=True
         )
@@ -558,9 +698,7 @@ class TestMergeMaps:
 
     def test_idempotent_pin_on_committed_map(self):
         # (12) merge_maps(committed, build_map(real packs)) == committed (deep).
-        committed = L.load_observed_map()
-        if not committed:
-            pytest.skip("committed observed-map not present")
+        committed = L.load_observed_map()  # raises when absent (#3017): never a skip
         fresh = L.build_map(L.default_pack_paths())
         merged, warns, stats = L.merge_maps(committed, fresh)
         assert merged == committed, "regen is not idempotent over the committed map"
@@ -715,7 +853,8 @@ groups:
 """
 
 # Same key but the observed series was RENAMED away from the dict pick → the
-# resolved classification must NOT honor it (fail-loud needs_review).
+# resolved classification must NOT honor it (no mode; the drift-guard fails,
+# naming the stale pick — #3017).
 PACK_RESOLVED_KEY_RENAMED = """
 groups:
   - name: g
@@ -731,6 +870,63 @@ groups:
 """
 
 
+def _lb_pack(key: str, exprs: list[str]) -> str:
+    """A pack with one '<' alert per expr on threshold key ``key``."""
+    rules = [f"      - record: tenant:alert_threshold:{key}\n"
+             f"        expr: max by(tenant) (user_threshold{{metric=\"{key}\"}})"]
+    for i, ex in enumerate(exprs):
+        rules.append(f"      - alert: A{i}\n        expr: |\n          {ex}")
+    return "groups:\n  - name: g\n    rules:\n" + "\n".join(rules) + "\n"
+
+
+class TestLowerBoundGateOnAmbiguousAlerts:
+    """#3017 審查：`<` 的分類守門不能在 alert 有歧義（composite／scaled）時消失。"""
+
+    COMPOSITE = ["(tenant:q_a:max < on(tenant) group_left tenant:alert_threshold:{k}) or "
+                 "(tenant:q_b:max < on(tenant) group_left tenant:alert_threshold:{k})"]
+    SCALED = ["tenant:q_a:max * 100 < on(tenant) group_left tenant:alert_threshold:{k}"]
+
+    @pytest.mark.parametrize("exprs", [COMPOSITE, SCALED], ids=["composite", "scaled"])
+    def test_unclassified_ambiguous_lower_bound_is_error(self, tmp_path, exprs):
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack("qux", [e.format(k="qux") for e in exprs]))
+        m = L.build_map([p])
+        assert m["qux"].get("needs_review") is True and "observed_series" not in m["qux"]
+        errs = L.check_consistency(m, [p])["errors"]
+        assert any(x.startswith("qux:") and "not classified" in x for x in errs), errs
+
+    @pytest.mark.parametrize("exprs", [COMPOSITE, SCALED], ids=["composite", "scaled"])
+    def test_not_applicable_ambiguous_alert_keeps_candidates(self, tmp_path, monkeypatch, exprs):
+        """composite／scaled 的 N/A key 不得把 cands[0] 當成比較序列。"""
+        monkeypatch.setitem(L.NOT_APPLICABLE_KEYS, "qux", "test")
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack("qux", [e.format(k="qux") for e in exprs]))
+        e = L.build_map([p])["qux"]
+        assert e[L.MODE_FIELD] == "not-applicable"
+        assert "observed_series" not in e and e["candidates"]
+        assert L.usable_for_backtest(e)[0] is None
+
+    def test_resolved_pick_correct_but_not_regenerated_says_regenerate(self, tmp_path, monkeypatch):
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack(
+            "qux", ["tenant:q_a:min < on(tenant) group_left tenant:alert_threshold:qux"]))
+        m = L.build_map([p])                       # not yet in the allowlist: no mode
+        monkeypatch.setitem(L.LOWER_BOUND_RESOLVED, "qux", "tenant:q_a:min")
+        errs = [x for x in L.check_consistency(m, [p])["errors"] if x.startswith("qux:")]
+        assert errs and "regenerate" in errs[0] and "rename" not in errs[0], errs
+
+    def test_regenerate_applies_a_new_classification_to_a_manual_pick(self, tmp_path, monkeypatch):
+        """手動 resolve 的 composite `<` key 後來加進 NOT_APPLICABLE_KEYS：
+        照守門的「regenerate」提示重產一次就要綠（mode 取 fresh 的）。"""
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack(
+            "qux", [e.format(k="qux") for e in self.COMPOSITE]))
+        fresh0 = L.build_map([p])
+        manual = {**fresh0["qux"], "observed_series": "tenant:q_a:max", "resolved_via": "manual"}
+        manual.pop("needs_review"); manual.pop("reason")
+        monkeypatch.setitem(L.NOT_APPLICABLE_KEYS, "qux", "test")
+        merged, _w, stats = L.merge_maps({"qux": manual}, L.build_map([p]))
+        assert stats["preserved"] == 1
+        assert merged["qux"][L.MODE_FIELD] == "not-applicable"
+        assert [x for x in L.check_consistency(merged, [p])["errors"] if x.startswith("qux:")] == []
+
+
 class TestLowerBoundClassification:
     def test_not_applicable_key_gets_mode_and_keeps_fields(self, tmp_path):
         m = L.build_map([_write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)])
@@ -738,10 +934,15 @@ class TestLowerBoundClassification:
         assert e[L.MODE_FIELD] == "not-applicable"
         assert not e.get("needs_review")
         assert e["direction"] == "<"                    # direction kept
-        assert e["candidates"] == ["tenant:kafka_active_controllers:max"]  # candidates kept
+        # #3017: the compared series is a fact (backtest replays it); the mode
+        # is recommender policy only. observed_series XOR candidates.
+        assert e["observed_series"] == "tenant:kafka_active_controllers:max"
+        assert "candidates" not in e
         assert L._NOT_APPLICABLE_MARKER in e["reason"]
         assert "lower-bound (<)" not in e["reason"]      # must not collide with T3 marker
-        assert "observed_series" not in e
+        series, why = L.usable_for_recommend(e)
+        assert series is None and L._NOT_APPLICABLE_MARKER in why
+        assert L.usable_for_backtest(e) == ("tenant:kafka_active_controllers:max", "below", None)
 
     def test_resolved_key_gets_series_and_percentile_lower(self, tmp_path):
         m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY)])
@@ -752,23 +953,32 @@ class TestLowerBoundClassification:
         assert not e.get("needs_review")
         assert "candidates" not in e                     # resolved → series XOR candidates
 
-    def test_resolved_series_mismatch_falls_back_to_needs_review(self, tmp_path):
+    def test_resolved_series_mismatch_fails_the_drift_guard(self, tmp_path):
         # the pack renamed the series away from LOWER_BOUND_RESOLVED's pick → the
-        # generator must NOT honor a stale pick; fail-loud to needs_review.
-        m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml",
-                                     PACK_RESOLVED_KEY_RENAMED)])
+        # generator must NOT honor a stale pick (no percentile-lower mode, so the
+        # recommender skips it); the fact is still recorded (#3017) and the
+        # drift-guard fails loud, naming the stale pick.
+        p = _write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY_RENAMED)
+        m = L.build_map([p])
         e = m["db2_bufferpool_hit_ratio"]
-        assert e.get("needs_review") is True
         assert L.MODE_FIELD not in e
-        assert "observed_series" not in e
-        assert "lower-bound (<)" in e["reason"]
+        assert e["observed_series"] == "tenant:db2_bufferpool_hit_ratio:avg"
+        series, why = L.usable_for_recommend(e)
+        assert series is None and "lower-bound (<)" in why
+        errs = L.check_consistency(m, [p])["errors"]
+        assert any("LOWER_BOUND_RESOLVED pick" in x and ":min" in x for x in errs), errs
+
+    def test_not_applicable_key_without_its_mode_is_error(self, tmp_path):
+        p = _write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)
+        m = L.build_map([p])
+        del m["kafka_active_controllers"][L.MODE_FIELD]
+        errs = L.check_consistency(m, [p])["errors"]
+        assert any("NOT_APPLICABLE_KEYS but recommendation_mode" in x for x in errs), errs
 
     def test_committed_map_classification_pin(self):
         # DATA-PIN: the committed map's four `<` entries carry exactly the #916
         # classification (regen output pinned so a silent drift fails here).
-        m = L.load_observed_map()
-        if not m:
-            pytest.skip("committed observed-map not present")
+        m = L.load_observed_map()  # raises when absent (#3017): never a skip
         db2 = m["db2_bufferpool_hit_ratio"]
         assert db2[L.MODE_FIELD] == "percentile-lower"
         assert db2["observed_series"] == "tenant:db2_bufferpool_hit_ratio:min"
@@ -783,9 +993,7 @@ class TestLowerBoundClassification:
         # merge_maps(committed, build_map(real)) == committed for the `<` entries
         # (the whole map is pinned by test_idempotent_pin_on_committed_map; this
         # narrows the failure message to the lower-bound cohort).
-        committed = L.load_observed_map()
-        if not committed:
-            pytest.skip("committed observed-map not present")
+        committed = L.load_observed_map()  # raises when absent (#3017): never a skip
         fresh = L.build_map(L.default_pack_paths())
         merged, _w, _s = L.merge_maps(committed, fresh)
         for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",

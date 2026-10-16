@@ -1,46 +1,47 @@
 #!/usr/bin/env python3
 """
-sync_schema.py — Check tenant reserved-key drift across Schema / Go / Python.
+sync_schema.py — Generate the reserved `_` key lists from the one registry.
 
-The tenant reserved-key allowlist is declared THREE times and the three MUST
-agree, or one surface flags a shipped key as a typo (or accepts a key the others
-reject):
+The top-level `_` keys of conf.d are listed ONCE, in
+components/threshold-exporter/app/pkg/config/reserved_keys.json (ADR-038
+decision 2): which reader reads each key, in which layer, and the retired
+keys with their hints. Every other copy is GENERATED from it:
 
-  - JSON Schema : docs/schemas/tenant-config.schema.json (definitions.tenantConfig)
-  - Go          : components/threshold-exporter/app/pkg/config/types.go
-                  (validReservedKeys / validReservedPrefixes)
-  - Python      : scripts/tools/_lib_constants.py
-                  (VALID_RESERVED_KEYS / VALID_RESERVED_PREFIXES)
+  - Python : the block between the GENERATED markers in
+             scripts/tools/_lib_constants.py (VALID_RESERVED_KEYS,
+             VALID_RESERVED_PREFIXES, TENANT_ROUTING_KEYS,
+             PLATFORM_ROUTING_KEYS, TOP_LEVEL_READ_ELSEWHERE,
+             RETIRED_RESERVED_KEYS)
+  - Go     : components/threshold-exporter/app/pkg/config/reserved_keys_gen.go
+  - Schema : the `_` keys of docs/schemas/tenant-config.schema.json
+             (tenantConfig.properties and the propertyNames pattern that
+             closes the `_` namespace, #3016 R3) and of
+             docs/schemas/platform-defaults.schema.json (top-level
+             properties and patternProperties)
 
-This tool reads all three and reports drift in ONE place (the explicit 3-way
-gate #658 asked for). Two pairwise pytest gates already enforce the edges in CI —
-tests/dx/test_sync_schema.py (Schema↔Go) and
-tests/shared/test_reserved_key_py_go_parity.py (Go↔Python) — so the triangle was
-already closed by transitivity; checking Schema↔Python HERE removes that
-transitive reliance (a disabled edge no longer silently opens the Schema↔Python
-gap) and surfaces a Python-only drift in the same report as the Schema/Go drift.
+A schema property's BODY is hand-written and kept; only which `_` keys exist
+is generated (a new key gets a stub carrying the registry's description, a
+key gone from the registry is removed).
 
-The schema also CLOSES the `_` namespace (#3016 R3): `tenantConfig.propertyNames`
-rejects any `_` key that is not a reserved key, a tenant routing key
-(`_grar_validate.TENANT_ROUTING_KEYS`) or under the open `_state_` prefix, so an
-editor flags `_routng` as you type. That subschema is GENERATED from the Python
-SSOT by `--update`, and `--check` reports it stale like any other drift.
+Whether the registry matches what the readers actually do is not this tool's
+question: tests/shared/test_reserved_key_probes.py measures it.
 
 Usage:
-  sync_schema.py [--go-source PATH] [--schema PATH] [--py-source PATH]
-                 [--routing-source PATH] [--check | --update]
+  sync_schema.py [--registry PATH] [--root DIR] [--check | --update]
 
 Options:
-  --go-source PATH       Go source directory (default: components/threshold-exporter/app/)
-  --schema PATH          Schema file path (default: docs/schemas/tenant-config.schema.json)
-  --py-source PATH       Python reserved-key SSOT (default: scripts/tools/_lib_constants.py)
-  --routing-source PATH  TENANT_ROUTING_KEYS (default: scripts/tools/ops/_grar_validate.py)
-  --check                Exit 1 if drift detected (for CI)
-  --update               Rewrite tenantConfig.propertyNames from the SSOT
+  --registry PATH  The registry (default: <root>/components/threshold-exporter/
+                   app/pkg/config/reserved_keys.json)
+  --root DIR       Repository root the generated files live under (default:
+                   the repository this script is in)
+  --check          Exit 1 if any generated file is stale (for CI)
+  --update         Rewrite the stale generated files
+
+Exit codes: 0 in sync (or updated), 1 stale under --check, 2 the registry or a
+target cannot be read or is malformed.
 """
 
 import argparse
-import ast
 import json
 import os
 import re
@@ -52,191 +53,307 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
+REGISTRY_REL = "components/threshold-exporter/app/pkg/config/reserved_keys.json"
+PY_REL = "scripts/tools/_lib_constants.py"
+GO_REL = "components/threshold-exporter/app/pkg/config/reserved_keys_gen.go"
+TENANT_SCHEMA_REL = "docs/schemas/tenant-config.schema.json"
+PLATFORM_SCHEMA_REL = "docs/schemas/platform-defaults.schema.json"
 
-def extract_go_keys(go_source_path):
-    """Extract valid tenant config keys from Go source files."""
-    go_dir = Path(go_source_path)
+LAYERS = ("tenant", "platform_tenants", "profile", "subtree_defaults", "platform_top")
+READERS = ("exporter", "generator", "custom_alert_compiler", "policy_engine", "annotation")
+#: The layers that end up in a tenant's own config: a key read in one of them
+#: is a reserved TENANT key.
+TENANT_LAYERS = frozenset({"tenant", "platform_tenants", "profile"})
 
-    # validReservedKeys / validReservedPrefixes live in pkg/config/types.go.
-    # This previously read `config.go` (where the map does NOT live), so both
-    # regexes matched nothing → extract returned empty → check_drift would then
-    # flag every real schema key as drift (false-positive, exit 1) if --check
-    # ever ran; but its only caller, the manual-stage `schema-check` hook, never
-    # ran in CI — so the gate was dead both ways (#841 review). Read the right
-    # file, with a content-based fallback so a future move can't silently
-    # re-break it the same way.
-    config_file = go_dir / "pkg" / "config" / "types.go"
-    if not config_file.exists():
-        # Production-source only: a `_test.go` or a mock/testdata/vendor copy that
-        # (re)declares `var validReservedKeys` must never become the authoritative
-        # source — otherwise the schema would get synced to a dummy test key.
-        # Segments are matched relative to go_dir: a Go tree checked out
-        # under e.g. .../vendor/ must not have every file excluded (#1810).
-        _excluded_dirs = {"vendor", "testdata", "mocks"}
-        config_file = next(
-            (p for p in sorted(go_dir.rglob("*.go"))
-             if not p.name.endswith("_test.go")
-             and not _excluded_dirs & set(p.relative_to(go_dir).parts)
-             and "var validReservedKeys" in p.read_text(encoding="utf-8", errors="ignore")),
-            None,
-        )
-        if config_file is None:
-            print(f"ERROR: could not find 'var validReservedKeys' under {go_dir}",
-                  file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+PY_BEGIN = "# BEGIN GENERATED reserved keys"
+PY_END = "# END GENERATED reserved keys"
 
-    with open(config_file, "r", encoding="utf-8") as f:
-        content = f.read()
 
-    # Strip Go `//` line comments first: a key deprecated by commenting it out
-    # (`// "_old": true,`) is GONE for the compiler, so the gate must agree, and
-    # a stray `}` inside a comment must not truncate the brace-matched block.
-    # Mirrors tests/shared/test_reserved_key_py_go_parity.py's _strip_go_line_comments.
-    content = re.sub(r"//.*", "", content)
+class RegistryError(ValueError):
+    """The registry is malformed; the message names what and where."""
 
-    # Extract validReservedKeys map
-    reserved_keys = set()
-    keys_match = re.search(
-        r'var validReservedKeys = map\[string\]bool\{(.+?)\}',
-        content,
-        re.DOTALL
+
+def _repo_root():
+    return Path(_THIS_DIR).resolve().parents[2]
+
+
+# ---------------------------------------------------------------- registry
+
+def load_registry(path):
+    """The registry at *path*, checked. Raises RegistryError on any shape it
+    does not expect — a misspelt layer or reader would otherwise generate a
+    list that silently leaves the key out."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            reg = json.load(f)
+    except (OSError, UnicodeDecodeError, ValueError) as e:
+        raise RegistryError(f"{path}: cannot read: {e}") from e
+    if not isinstance(reg, dict):
+        raise RegistryError(f"{path}: not a JSON object")
+    want = {"$comment", "layers", "readers", "keys", "prefixes", "retired"}
+    if set(reg) != want:
+        raise RegistryError(f"{path}: top-level keys must be {sorted(want)}, got {sorted(reg)}")
+    if tuple(reg["layers"]) != LAYERS:
+        raise RegistryError(f"{path}: layers must be {list(LAYERS)} in that order")
+    if tuple(reg["readers"]) != READERS:
+        raise RegistryError(f"{path}: readers must be {list(READERS)} in that order")
+    for section in ("keys", "prefixes"):
+        for name, entry in reg[section].items():
+            where = f"{section}.{name}"
+            if not name.startswith("_") or name != name.strip():
+                raise RegistryError(f"{where}: a name must start with '_'")
+            if not isinstance(entry, dict) or not set(entry) <= {"read_by", "description", "note"}:
+                raise RegistryError(f"{where}: allowed fields are read_by, description, note")
+            if not isinstance(entry.get("description"), str) or not entry["description"]:
+                raise RegistryError(f"{where}: description must be a non-empty string")
+            read_by = entry.get("read_by")
+            if not isinstance(read_by, dict):
+                raise RegistryError(f"{where}: read_by must be an object")
+            if section == "keys" and not read_by:
+                raise RegistryError(f"{where}: a key nothing reads belongs under retired")
+            for reader, layers in read_by.items():
+                if reader not in READERS:
+                    raise RegistryError(f"{where}: unknown reader {reader!r}")
+                if (not isinstance(layers, list) or not layers
+                        or any(l not in LAYERS for l in layers)
+                        or len(set(layers)) != len(layers)):
+                    raise RegistryError(f"{where}.read_by.{reader}: a non-empty list of distinct layers")
+    for name, hint in reg["retired"].items():
+        if not name.startswith("_") or name in reg["keys"]:
+            raise RegistryError(f"retired.{name}: must start with '_' and not be a key")
+        if not isinstance(hint, str) or not hint:
+            raise RegistryError(f"retired.{name}: the hint must be a non-empty string")
+    return reg
+
+
+def is_routing_key(k):
+    """`_routing` or `_routing_<…>` (Go config.IsRoutingKey)."""
+    return k == "_routing" or k.startswith("_routing_")
+
+
+def _layers(entry):
+    return {l for layers in entry["read_by"].values() for l in layers}
+
+
+def derive(reg):
+    """The lists every generated file holds, from the registry."""
+    keys = reg["keys"]
+    tenant = sorted(k for k, e in keys.items() if _layers(e) & TENANT_LAYERS)
+    top = sorted(k for k, e in keys.items() if "platform_top" in _layers(e))
+    return {
+        "reserved_keys": tenant,
+        "reserved_prefixes": list(reg["prefixes"]),
+        "tenant_routing_keys": [k for k in tenant if is_routing_key(k)],
+        "platform_routing_keys": [k for k in top if is_routing_key(k)],
+        "top_level_read_elsewhere": top,
+        # A prefix is OPEN in the schema when something reads keys under it
+        # in a tenant's config (`_state_<filter>`: the suffix is a platform
+        # `state_filters` name this file cannot know); `_routing` is closed:
+        # its keys are listed.
+        "open_prefixes": [p for p, e in reg["prefixes"].items() if _layers(e) & TENANT_LAYERS],
+        "retired": dict(sorted(reg["retired"].items())),
+        "descriptions": {k: e["description"] for k, e in keys.items()},
+    }
+
+
+# ---------------------------------------------------------------- Python
+
+def render_python(d):
+    def fset(name, items, kind="frozenset"):
+        body = "".join(f"    {json.dumps(k)},\n" for k in items)
+        if kind == "set":
+            return f"{name}: Final[set[str]] = {{\n{body}}}\n"
+        return f"{name}: Final[frozenset[str]] = frozenset({{\n{body}}})\n"
+
+    prefixes = ", ".join(json.dumps(p) for p in d["reserved_prefixes"])
+    retired = "".join(f"    {json.dumps(k)}:\n        {json.dumps(v, ensure_ascii=False)},\n"
+                      for k, v in d["retired"].items())
+    return (
+        f"{PY_BEGIN} — scripts/tools/dx/sync_schema.py --update writes this\n"
+        f"# block from {REGISTRY_REL}. DO NOT EDIT.\n"
+        + fset("VALID_RESERVED_KEYS", d["reserved_keys"], "set")
+        + f"VALID_RESERVED_PREFIXES: Final[tuple[str, ...]] = ({prefixes})\n"
+        + fset("TENANT_ROUTING_KEYS", d["tenant_routing_keys"])
+        + fset("PLATFORM_ROUTING_KEYS", d["platform_routing_keys"])
+        + fset("TOP_LEVEL_READ_ELSEWHERE", d["top_level_read_elsewhere"])
+        + f"RETIRED_RESERVED_KEYS: Final[dict[str, str]] = {{\n{retired}}}\n"
+        + PY_END + "\n"
     )
-    if keys_match:
-        keys_block = keys_match.group(1)
-        for match in re.finditer(r'"([^"]+)"\s*:\s*true', keys_block):
-            reserved_keys.add(match.group(1))
 
-    # Extract validReservedPrefixes array
-    reserved_prefixes = []
-    prefixes_match = re.search(
-        r'var validReservedPrefixes = \[\]string\{(.+?)\}',
-        content,
-        re.DOTALL
+
+def splice_python(text, block):
+    """*text* with the GENERATED block replaced by *block*."""
+    if text.count(PY_BEGIN) != 1 or text.count(PY_END) != 1:
+        raise RegistryError(f"{PY_REL}: expected one {PY_BEGIN!r} and one {PY_END!r} line")
+    start = text.index(PY_BEGIN)
+    end = text.index("\n", text.index(PY_END)) + 1
+    return text[:start] + block + text[end:]
+
+
+# ---------------------------------------------------------------- Go
+
+def _go_str(s):
+    return json.dumps(s, ensure_ascii=False)
+
+
+def render_go(d):
+    def lines(items):
+        return "".join(f"\t{_go_str(k)},\n" for k in items)
+
+    retired = "".join(f"\t{{{_go_str(k)}, {_go_str(v)}}},\n" for k, v in d["retired"].items())
+    return (
+        "// Code generated by scripts/tools/dx/sync_schema.py; DO NOT EDIT.\n"
+        f"// Source: {REGISTRY_REL} (ADR-038 decision 2).\n"
+        "\n"
+        "package config\n"
+        "\n"
+        "// validReservedKeys are the reserved tenant keys: read in a tenant's\n"
+        "// own config (tenant file, root platform `tenants:` entry, profile).\n"
+        f"var validReservedKeys = keySet(\n{lines(d['reserved_keys'])})\n"
+        "\n"
+        "// validReservedPrefixes reserve every key under them.\n"
+        f"var validReservedPrefixes = []string{{\n{lines(d['reserved_prefixes'])}}}\n"
+        "\n"
+        "// tenantRoutingKeys / platformRoutingKeys are the `_routing` keys the\n"
+        "// route generator reads in a tenant's config / at the top level of a\n"
+        "// root conf.d `_` file (#2983).\n"
+        f"var tenantRoutingKeys = keySet(\n{lines(d['tenant_routing_keys'])})\n"
+        "\n"
+        f"var platformRoutingKeys = keySet(\n{lines(d['platform_routing_keys'])})\n"
+        "\n"
+        "// topLevelReadElsewhere are the `_` keys another reader takes from the\n"
+        "// top level of a root conf.d `_` file.\n"
+        f"var topLevelReadElsewhere = []string{{\n{lines(d['top_level_read_elsewhere'])}}}\n"
+        "\n"
+        "// retiredReservedKeys are keys nothing reads any more, with the hint\n"
+        "// printed when one is found.\n"
+        f"var retiredReservedKeys = []retiredKey{{\n{retired}}}\n"
     )
-    if prefixes_match:
-        prefixes_block = prefixes_match.group(1)
-        for match in re.finditer(r'"([^"]+)"', prefixes_block):
-            reserved_prefixes.append(match.group(1))
-
-    return reserved_keys, reserved_prefixes
 
 
-def extract_schema_keys(schema_path):
-    """Extract properties from tenant config schema."""
-    with open(schema_path, "r", encoding="utf-8") as f:
-        schema = json.load(f)
+# ---------------------------------------------------------------- schemas
 
-    # Get properties from tenantConfig definition
-    tenant_config = schema.get("definitions", {}).get("tenantConfig", {})
-    schema_properties = set(tenant_config.get("properties", {}).keys())
-
-    return schema_properties
+_DEC = json.JSONDecoder()
+_WS = " \t\r\n"
 
 
-def _string_literals(node):
-    """Return the str constants of a set/list/tuple literal AST node, in order.
-
-    Non-literal forms (a comprehension, a name reference, a call) have no `.elts`
-    of plain string constants → returns [] (caller treats as empty, the 3-way
-    gate then fail-louds the resulting drift so a maintainer notices).
-    """
-    if not isinstance(node, (ast.Set, ast.List, ast.Tuple)):
-        return []
-    return [
-        elt.value for elt in node.elts
-        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-    ]
+def _skip_ws(text, i):
+    while i < len(text) and text[i] in _WS:
+        i += 1
+    return i
 
 
-def extract_python_keys(py_source_path):
-    """Extract VALID_RESERVED_KEYS / VALID_RESERVED_PREFIXES from the Python SSOT.
+def members(text, obj):
+    """The direct members of the JSON object whose `{` is at *obj*:
+    ``[(key, key_start, value_start, value_end)]`` in file order."""
+    if text[obj] != "{":
+        raise RegistryError(f"expected an object at offset {obj}")
+    out = []
+    i = _skip_ws(text, obj + 1)
+    if text[i] == "}":
+        return out
+    while True:
+        key, after_key = _DEC.raw_decode(text, i)
+        j = _skip_ws(text, after_key)
+        if text[j] != ":":
+            raise RegistryError(f"expected ':' at offset {j}")
+        vstart = _skip_ws(text, j + 1)
+        _, vend = _DEC.raw_decode(text, vstart)
+        out.append((key, i, vstart, vend))
+        i = _skip_ws(text, vend)
+        if text[i] == "}":
+            return out
+        if text[i] != ",":
+            raise RegistryError(f"expected ',' or '}}' at offset {i}")
+        i = _skip_ws(text, i + 1)
 
-    Uses the stdlib `ast` module, NOT regex — the source IS Python, so the
-    compiler's own parser gives 100% accuracy immune to `#` comments (incl.
-    quoted tokens inside them, e.g. _lib_constants.py's `component="custom"`),
-    multi-line literals, and reformatting. (extract_go_keys must stay regex —
-    there's no Go AST in Python; here Python parses Python.) A SyntaxError in the
-    SSOT is intentionally left to propagate — that file is imported app-wide, so
-    a malformed edit is already caught by every other test.
 
-    Scans MODULE-LEVEL statements only (`tree.body`), not `ast.walk` — the SSOT
-    is a module-level constant, and walking every nested node would let a
-    function-local `VALID_RESERVED_KEYS = {...}` decoy shadow it (adversarial
-    review NIT-1). Non-literal / augmented (`|=`) forms aren't matched → return
-    empty → the 3-way gate fail-louds the drift.
-    """
-    path = Path(py_source_path)
-    with open(path, "r", encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=str(path))
+def locate(text, path):
+    """Offset of the value at *path* (a list of member names) in *text*."""
+    at = _skip_ws(text, 0)
+    for name in path:
+        found = [m for m in members(text, at) if m[0] == name]
+        if len(found) != 1:
+            raise RegistryError(f"expected exactly one {'.'.join(path)}")
+        at = found[0][2]
+    return at
 
-    reserved_keys = set()
-    reserved_prefixes = []
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            names = {t.id for t in node.targets if isinstance(t, ast.Name)}
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
-            names = {node.target.id}  # `X: Final[...] = {...}`
-            value = node.value
-        else:
+
+def _indent_of(text, at):
+    line = text.rindex("\n", 0, at) + 1
+    return text[line:at]
+
+
+def _dump(value, indent):
+    return json.dumps(value, indent=2, ensure_ascii=False).replace("\n", "\n" + indent)
+
+
+def set_member(text, obj_path, name, value):
+    """*text* with member *name* of the object at *obj_path* set to *value*
+    (added as the object's first member when absent)."""
+    obj = locate(text, obj_path)
+    ms = members(text, obj)
+    for key, kstart, vstart, vend in ms:
+        if key == name:
+            return text[:vstart] + _dump(value, _indent_of(text, kstart)) + text[vend:]
+    if not ms:
+        raise RegistryError(f"{'.'.join(obj_path)} is empty")
+    indent = _indent_of(text, ms[0][1])
+    new = f"{json.dumps(name)}: {_dump(value, indent)},\n{indent}"
+    return text[:ms[0][1]] + new + text[ms[0][1]:]
+
+
+def _drop_member(text, ms, i):
+    """*text* without member *i* of *ms* (and the comma that joined it)."""
+    if i + 1 < len(ms):
+        return text[:ms[i][1]] + text[ms[i + 1][1]:]
+    if i == 0:
+        raise RegistryError(f"refusing to empty an object (member {ms[i][0]!r})")
+    return text[:ms[i - 1][3]] + text[ms[i][3]:]
+
+
+def sync_underscore_members(text, obj_path, keep, required, stub):
+    """*text* with the `_`-prefixed members of the object at *obj_path*
+    synced: each name in *required* that is missing is added as
+    ``stub(name)``, placed before the first `_` member that sorts after it
+    (else after the last `_` member); each `_` member ``keep(name)`` refuses
+    is removed. The bodies of the members kept are not touched, and non-`_`
+    members are left alone."""
+    for name in sorted(required):
+        ms = members(text, locate(text, obj_path))
+        if any(m[0] == name for m in ms):
             continue
-        if "VALID_RESERVED_KEYS" in names:
-            reserved_keys = set(_string_literals(value))
-        if "VALID_RESERVED_PREFIXES" in names:
-            reserved_prefixes = _string_literals(value)
-
-    return reserved_keys, reserved_prefixes
-
-
-def _frozenset_literal(node):
-    """`frozenset({...})` / `frozenset([...])` → its str constants, else []."""
-    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-            and node.func.id == "frozenset" and len(node.args) == 1):
-        return _string_literals(node.args[0])
-    return _string_literals(node)
-
-
-def extract_tenant_routing_keys(path):
-    """`TENANT_ROUTING_KEYS` from `scripts/tools/ops/_grar_validate.py`.
-
-    The `_routing`-prefixed names the route generator reads in a TENANT's
-    config (#2983). Read with `ast` like `extract_python_keys`, so this tool
-    does not import the route generator. Missing or non-literal → empty set,
-    which the propertyNames check then reports as drift.
-    """
-    with open(path, "r", encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=str(path))
-    for node in tree.body:
-        if (isinstance(node, ast.Assign)
-                and any(isinstance(t, ast.Name) and t.id == "TENANT_ROUTING_KEYS"
-                        for t in node.targets)):
-            return set(_frozenset_literal(node.value))
-    return set()
+        under = [m for m in ms if m[0].startswith("_")]
+        after = [m for m in under if m[0] > name]
+        if after:
+            indent = _indent_of(text, after[0][1])
+            member = f"{json.dumps(name)}: {_dump(stub(name), indent)}"
+            text = text[:after[0][1]] + member + ",\n" + indent + text[after[0][1]:]
+        else:
+            last = under[-1] if under else ms[-1]
+            indent = _indent_of(text, last[1])
+            member = f"{json.dumps(name)}: {_dump(stub(name), indent)}"
+            text = text[:last[3]] + ",\n" + indent + member + text[last[3]:]
+    while True:
+        ms = members(text, locate(text, obj_path))
+        extra = [i for i, m in enumerate(ms) if m[0].startswith("_") and not keep(m[0])]
+        if not extra:
+            return text
+        text = _drop_member(text, ms, extra[0])
 
 
 PROPERTY_NAMES_COMMENT = (
     "GENERATED by scripts/tools/dx/sync_schema.py --update from "
-    "_lib_constants.VALID_RESERVED_KEYS / VALID_RESERVED_PREFIXES and "
-    "_grar_validate.TENANT_ROUTING_KEYS — DO NOT EDIT. Closes the `_` "
-    "namespace (#3016 R3): a `_`-prefixed key is either one the platform "
-    "reads, or a typo nothing reads.")
+    "components/threshold-exporter/app/pkg/config/reserved_keys.json — "
+    "DO NOT EDIT. Closes the `_` namespace (#3016 R3): a `_`-prefixed key is "
+    "either one the platform reads, or a typo nothing reads.")
 
 
-def expected_property_names(reserved_keys, reserved_prefixes, tenant_routing_keys):
-    """The `tenantConfig.propertyNames` subschema the SSOT implies.
-
-    A `_`-prefixed tenant key must be a reserved key, a tenant routing key, or
-    start with an OPEN reserved prefix. A prefix is CLOSED when the generator
-    names exactly which keys under it it reads — `_routing` is (#2983), so
-    `_routing_profle` and the platform-only `_routing_defaults` /
-    `_routing_enforced` are rejected. `_state_` stays open: its suffix is a
-    platform `state_filters` name, which this file cannot know (and a
-    misspelled one is reported as unserved by `da-guard served-values`).
-    """
-    closed = {p for p in reserved_prefixes
-              if any(k.startswith(p) for k in tenant_routing_keys)}
-    keys = sorted(set(reserved_keys) | set(tenant_routing_keys))
-    open_prefixes = sorted(p for p in reserved_prefixes if p not in closed)
+def expected_property_names(d):
+    """The `tenantConfig.propertyNames` subschema: a `_` key must be a
+    reserved tenant key or start with an open prefix."""
+    keys = d["reserved_keys"]
+    open_prefixes = d["open_prefixes"]
     alts = ["^(?!_)", "^(?:" + "|".join(re.escape(k) for k in keys) + ")$"]
     if open_prefixes:
         alts.append("^(?:" + "|".join(re.escape(p) for p in open_prefixes) + ")")
@@ -250,242 +367,103 @@ def expected_property_names(reserved_keys, reserved_prefixes, tenant_routing_key
     }
 
 
-def splice_property_names(text, expected):
-    """`text` (the schema file) with `tenantConfig.propertyNames` set to
-    `expected`, every other byte unchanged.
-
-    ⛔ Not `json.dump` of the whole document: the file is hand-formatted
-    (inline arrays, literal `—`), and a re-serialisation rewrites hundreds of
-    unrelated lines. Raises ValueError when `tenantConfig` is not found
-    exactly once.
-    """
-    anchor = '"tenantConfig": {'
-    if text.count(anchor) != 1:
-        raise ValueError(f"expected exactly one {anchor!r} in the schema")
-    start = text.index(anchor) + len(anchor) - 1
-    _, end = json.JSONDecoder().raw_decode(text, start)
-    line_start = text.rindex("\n", 0, start) + 1
-    indent = " " * (len(text[line_start:start]) - len(text[line_start:start].lstrip()) + 2)
-    body = json.dumps(expected, indent=2, ensure_ascii=False).replace("\n", "\n" + indent)
-    key = '"propertyNames": '
-    # A DIRECT child only (its own indent): a nested object's propertyNames
-    # inside tenantConfig must never be the one replaced.
-    at = text.find("\n" + indent + key, start, end)
-    if at != -1:
-        at += 1 + len(indent)
-        _, vend = json.JSONDecoder().raw_decode(text, at + len(key))
-        return text[:at + len(key)] + body + text[vend:]
-    return text[:start + 1] + "\n" + indent + key + body + "," + text[start + 1:]
+def render_tenant_schema(text, d):
+    pn = expected_property_names(d)
+    text = set_member(text, ["definitions", "tenantConfig"], "propertyNames", pn)
+    # A `_state_<filter>` example property (`_state_maintenance`) is kept: the
+    # pattern admits it. One the pattern refuses no tenant file could carry.
+    pat = re.compile(pn["pattern"])
+    return sync_underscore_members(
+        text, ["definitions", "tenantConfig", "properties"],
+        keep=lambda k: pat.search(k) is not None,
+        required=d["reserved_keys"],
+        stub=lambda k: {"description": d["descriptions"][k]})
 
 
-def check_property_names(schema, expected):
-    """Drift lines for `tenantConfig.propertyNames` (empty = in sync).
-
-    Two ways to drift: the committed subschema is not the one the SSOT
-    implies, or the schema still DEFINES a `_` property that the pattern
-    rejects (a property no tenant file could ever carry).
-    """
-    tc = schema.get("definitions", {}).get("tenantConfig", {})
-    out = []
-    if tc.get("propertyNames") != expected:
-        out.append("tenantConfig.propertyNames is stale vs the SSOT "
-                   "(run sync_schema.py --update)")
-    pat = re.compile(expected["pattern"])
-    for key in sorted(tc.get("properties", {})):
-        if not pat.search(key):
-            out.append(f"tenantConfig.properties.{key} is a key propertyNames rejects")
-    return out
-
-
-def check_drift(go_keys, go_prefixes, schema_keys):
-    """Check for drift between the Go reserved keys and the JSON schema.
-
-    A schema property is legitimate if it is an explicit Go reserved key OR it
-    matches a Go reserved prefix (e.g. _state_maintenance ⊂ _state_, _routing*
-    ⊂ _routing). The prefix allowance is derived from the actual ``go_prefixes``
-    — not a hardcoded example list — so a newly added _state_*/_routing* schema
-    key can't false-positive as drift.
-
-    Returns ``(missing_in_schema, extra_in_schema)``:
-      - missing_in_schema: explicit Go keys absent from the schema.
-      - extra_in_schema: schema properties that are neither an explicit Go key
-        nor covered by a Go prefix (e.g. the removed schema-only ``_operator``).
-    """
-    missing_in_schema = go_keys - schema_keys
-    extra_in_schema = {
-        key for key in schema_keys
-        if key not in go_keys and not any(key.startswith(p) for p in go_prefixes)
-    }
-    return missing_in_schema, extra_in_schema
+def render_platform_schema(text, d):
+    """The defaults file's top level: the reserved tenant keys (a defaults
+    document read whole merges them into its tenants) and the keys another
+    reader takes from the top level; one patternProperty per prefix."""
+    names = sorted(set(d["reserved_keys"]) | set(d["top_level_read_elsewhere"]))
+    text = sync_underscore_members(
+        text, ["properties"], keep=lambda k: k in names, required=names,
+        stub=lambda k: {"description": d["descriptions"][k]})
+    patterns = ["^" + p for p in d["reserved_prefixes"]]
+    for p in patterns:
+        if p not in [m[0] for m in members(text, locate(text, ["patternProperties"]))]:
+            text = set_member(text, ["patternProperties"], p, {})
+    while True:
+        ms = members(text, locate(text, ["patternProperties"]))
+        extra = [i for i, m in enumerate(ms) if m[0].startswith("^_") and m[0] not in patterns]
+        if not extra:
+            return text
+        text = _drop_member(text, ms, extra[0])
 
 
-def check_py_go_parity(go_keys, go_prefixes, py_keys, py_prefixes):
-    """Check the Go↔Python leg of the triangle.
+# ---------------------------------------------------------------- main
 
-    Unlike Schema↔Go (where the schema legitimately carries prefix-EXPANDED keys
-    such as _state_maintenance), the Python and Go allowlists are the SAME shape —
-    a flat key set + a prefix list — so they must be byte-for-byte equal.
-
-    Returns ``(key_drift, prefix_drift)`` as symmetric differences (empty = OK).
-    """
-    key_drift = set(py_keys) ^ set(go_keys)
-    prefix_drift = set(py_prefixes) ^ set(go_prefixes)
-    return key_drift, prefix_drift
+def targets(root, d):
+    """``[(relpath, render(current_text) -> wanted_text)]``."""
+    return [
+        (PY_REL, lambda t: splice_python(t, render_python(d))),
+        (GO_REL, lambda _t: render_go(d)),
+        (TENANT_SCHEMA_REL, lambda t: render_tenant_schema(t, d)),
+        (PLATFORM_SCHEMA_REL, lambda t: render_platform_schema(t, d)),
+    ]
 
 
-def print_drift_report(missing_in_schema, extra_in_schema, py_go_key_drift, py_go_prefix_drift,
-                       property_names_drift=()):
-    """Print the 3-way drift report. Returns True if ANY drift was found."""
-    has_drift = False
-
-    if property_names_drift:
-        print("DRIFT: the closed `_` namespace (tenantConfig.propertyNames):")
-        for line in property_names_drift:
-            print(f"  - {line}")
-        has_drift = True
-
-    if missing_in_schema:
-        print("DRIFT: Keys in Go source but missing in Schema:")
-        for key in sorted(missing_in_schema):
-            print(f"  - {key}")
-        has_drift = True
-
-    if extra_in_schema:
-        print("DRIFT: Schema properties not defined in Go source:")
-        for key in sorted(extra_in_schema):
-            print(f"  - {key}")
-        has_drift = True
-
-    if py_go_key_drift:
-        print("DRIFT: Reserved KEYS differ between Go and Python (_lib_constants.py):")
-        for key in sorted(py_go_key_drift):
-            print(f"  - {key}")
-        has_drift = True
-
-    if py_go_prefix_drift:
-        print("DRIFT: Reserved PREFIXES differ between Go and Python (_lib_constants.py):")
-        for key in sorted(py_go_prefix_drift):
-            print(f"  - {key}")
-        has_drift = True
-
-    if not has_drift:
-        print("OK: Schema, Go, and Python reserved keys are in sync (3-way)")
-
-    return has_drift
+def run(root, registry, update):
+    """``(stale relpaths, errors)``; writes the stale files when *update*."""
+    reg = load_registry(registry)
+    d = derive(reg)
+    stale = []
+    for rel, render in targets(root, d):
+        path = Path(root) / rel
+        try:
+            current = path.read_text(encoding="utf-8") if path.exists() or rel != GO_REL else ""
+        except (OSError, UnicodeDecodeError) as e:
+            raise RegistryError(f"{rel}: cannot read: {e}") from e
+        wanted = render(current)
+        if wanted != current:
+            stale.append(rel)
+            if update:
+                path.write_text(wanted, encoding="utf-8", newline="\n")
+    return stale
 
 
-def main():
-    """CLI entry point: check Schema/Go/Python reserved-key drift (3-way)."""
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--go-source",
-        default="components/threshold-exporter/app/",
-        help="Go source directory (default: components/threshold-exporter/app/)"
-    )
-    parser.add_argument(
-        "--schema",
-        default="docs/schemas/tenant-config.schema.json",
-        help="Schema file path (default: docs/schemas/tenant-config.schema.json)"
-    )
-    parser.add_argument(
-        "--py-source",
-        default="scripts/tools/_lib_constants.py",
-        help="Python reserved-key SSOT (default: scripts/tools/_lib_constants.py)"
-    )
-    parser.add_argument(
-        "--routing-source",
-        default="scripts/tools/ops/_grar_validate.py",
-        help="TENANT_ROUTING_KEYS source (default: scripts/tools/ops/_grar_validate.py)"
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Exit 1 if drift detected (for CI)"
-    )
-    parser.add_argument(
-        "--update",
-        action="store_true",
-        help="Auto-update schema file"
-    )
+def main(argv=None):
+    """CLI entry point: generate (--update) or check (--check) the lists."""
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--registry", default=None,
+                        help=f"the registry (default: <root>/{REGISTRY_REL})")
+    parser.add_argument("--root", default=None,
+                        help="repository root (default: the repository this script is in)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true",
+                      help="exit 1 if any generated file is stale (for CI)")
+    mode.add_argument("--update", action="store_true",
+                      help="rewrite the stale generated files")
+    args = parser.parse_args(argv)
 
-    args = parser.parse_args()
-
-    # Resolve paths
-    go_source = Path(args.go_source).resolve()
-    schema_path = Path(args.schema).resolve()
-    py_source = Path(args.py_source).resolve()
-    routing_source = Path(args.routing_source).resolve()
-
-    if not go_source.exists():
-        print(f"ERROR: Go source directory not found: {go_source}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    if not schema_path.exists():
-        print(f"ERROR: Schema file not found: {schema_path}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    if not py_source.exists():
-        print(f"ERROR: Python reserved-key source not found: {py_source}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    if not routing_source.exists():
-        print(f"ERROR: tenant routing-key source not found: {routing_source}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    # Extract keys
-    print(f"Reading Go source from {go_source}...")
-    go_keys, go_prefixes = extract_go_keys(go_source)
-    print(f"  Found {len(go_keys)} reserved keys: {sorted(go_keys)}")
-    print(f"  Found {len(go_prefixes)} reserved prefixes: {go_prefixes}")
-
-    print(f"\nReading schema from {schema_path}...")
-    schema_keys = extract_schema_keys(schema_path)
-    print(f"  Found {len(schema_keys)} schema properties: {sorted(schema_keys)}")
-
-    print(f"\nReading Python reserved keys from {py_source}...")
-    py_keys, py_prefixes = extract_python_keys(py_source)
-    print(f"  Found {len(py_keys)} reserved keys: {sorted(py_keys)}")
-    print(f"  Found {len(py_prefixes)} reserved prefixes: {py_prefixes}")
-
-    # Check for drift across all three surfaces
-    missing, extra = check_drift(go_keys, go_prefixes, schema_keys)
-    py_go_key_drift, py_go_prefix_drift = check_py_go_parity(
-        go_keys, go_prefixes, py_keys, py_prefixes)
-
-    expected = expected_property_names(
-        py_keys, py_prefixes, extract_tenant_routing_keys(routing_source))
-    with open(schema_path, "r", encoding="utf-8") as f:
-        schema = json.load(f)
-    if args.update and schema.get("definitions", {}).get(
-            "tenantConfig", {}).get("propertyNames") != expected:
-        # The one surface this tool writes; the diff is exactly the subschema.
-        with open(schema_path, "r", encoding="utf-8") as f:
-            text = f.read()
-        with open(schema_path, "w", encoding="utf-8", newline="\n") as f:
-            f.write(splice_property_names(text, expected))
-        with open(schema_path, "r", encoding="utf-8") as f:
-            schema = json.load(f)
-        print(f"\nUPDATED: tenantConfig.propertyNames in {schema_path}")
-    property_names_drift = check_property_names(schema, expected)
-
-    print(f"\nDrift analysis:")
-    has_drift = print_drift_report(missing, extra, py_go_key_drift, py_go_prefix_drift,
-                                   property_names_drift)
-
-    if has_drift:
-        if args.check:
-            print("\nCI MODE: Exiting with code 1 due to schema drift")
-            sys.exit(EXIT_VIOLATION)
-        elif args.update:
-            print("\nUPDATE MODE: only tenantConfig.propertyNames is written; "
-                  "the drift above needs a hand edit")
-            sys.exit(EXIT_OK)
-        else:
-            print("\nRun with --check for CI mode or --update to fix")
-            sys.exit(EXIT_OK)
-    else:
-        sys.exit(EXIT_OK)
+    root = Path(args.root) if args.root else _repo_root()
+    registry = Path(args.registry) if args.registry else root / REGISTRY_REL
+    try:
+        stale = run(root, registry, args.update)
+    except RegistryError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    if not stale:
+        print(f"OK: generated reserved-key lists match {REGISTRY_REL}")
+        return EXIT_OK
+    verb = "UPDATED" if args.update else "STALE"
+    for rel in stale:
+        print(f"{verb}: {rel}")
+    if args.update:
+        return EXIT_OK
+    print(f"Run: python3 scripts/tools/dx/sync_schema.py --update", file=sys.stderr)
+    return EXIT_VIOLATION if args.check else EXIT_OK
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

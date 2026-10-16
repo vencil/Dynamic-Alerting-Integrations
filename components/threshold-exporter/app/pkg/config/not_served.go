@@ -115,11 +115,11 @@ func RootDecodedKeys() map[string]bool {
 	return out
 }
 
-// topLevelReadElsewhere are the `_`-prefixed keys another reader takes from
-// the top level of a defaults file: the route generator's
-// `_routing_defaults` / `_routing_enforced`, and the custom-alert compiler's
-// `_custom_alerts` (moved from internal/guard, #2296).
-var topLevelReadElsewhere = []string{"_custom_alerts", "_routing_defaults", "_routing_enforced"}
+// topLevelReadElsewhere (reserved_keys_gen.go, from the reserved-key
+// registry; ADR-038) are the `_`-prefixed keys another reader takes from the
+// top level of a defaults file: the route generator's `_routing_defaults` /
+// `_routing_enforced`, the custom-alert compiler's `_custom_alerts`, and
+// Policy-as-Code's `_policies` (moved from internal/guard, #2296).
 
 // TopLevelReadElsewhere is a copy of topLevelReadElsewhere, for da-guard.
 func TopLevelReadElsewhere() []string {

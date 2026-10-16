@@ -678,7 +678,14 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
-   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。查 Prometheus 用的 metric 名稱取自 served-values 對該 key 回報的 `/metrics` series 的 `metric_key`（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`（即使租戶把 `<base>` 本身 `disable`）與時段內覆寫成 `N:critical` 的 key，都以 `<base>` 的資料回測；舊拼法別名的 twin（`legacy_twin: true`）不查，舊名底下的資料不算這個門檻的資料。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`），文字與 Markdown 報告列出未回測幾筆。
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。每一列由哪支告警比較，取自 served-values 對該 key 回報的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（例如 `60:high`、`60:Critical`——規則只選 `severity="warning"`／`"critical"`，大小寫也要一致）沒有告警比較，不回測（`severity '...' is selected by no threshold rule`，與 `--git-diff`／`--tenant` 同一個理由）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不讀，舊名底下的資料不算這個門檻的資料。一列的 row 若由比較不同 series 或不同方向的告警比較，一次回放代表不了兩者，該列不回測（`rows compared differently`）。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。
+
+**回測查什麼**（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017)、[#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002)）
+
+- 每筆變更只查一次 Prometheus：該 key 的告警拿來和門檻比較的那條 recording rule（[`metric_observed_map.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/metric_observed_map.yaml) 的 `observed_series`），加上 `{tenant="<租戶>"}`。越界照告警的比較方向計數：`>` 的告警數高於門檻的點，`<` 的告警（下界，例如 `db2_bufferpool_hit_ratio`、`kafka_broker_count`）數低於門檻的點。先前一律以 `>` 計數，並依序猜 `<key>`、`tenant:<key>:max`、`<key>{namespace=...}` 三種名稱——將近一半的 key，告警比的不是其中任何一條。
+- `--git-diff`／`--tenant` 給的是檔裡寫的 key 與值：退役拼法先經別名表換成正名（例如 `mysql_cpu` → `mysql_threads_running`）。`--tenant` 給含 `{` 的 key 時不回測（`dimensioned key`）；⚠️ `--git-diff` 的 diff 解析根本看不到帶維度（加引號）的 key，只改這種 key 的 PR 會得到「No threshold changes found.」、結束碼 0。值照 exporter 的讀法：第一個 `:` 前是數字、後是 severity（`70:critical`；沒寫是 warning），`<base>_critical` key 的整個值就是數字。有值的那一邊（或兩邊）是 critical 時查 `<key>_critical` 的告警、比數字；新舊值 severity 不同（兩支不同的告警）、severity 不是 warning／critical，或值這裡無法照 exporter 的讀法讀（`7O` 這種 exporter 也讀不懂的值，exporter 會改用預設值或丟掉那一列，從值本身看不出來；另有幾種 exporter 讀得懂、但這裡保守不讀的寫法，例如 `1_000`、`0x1p4`）時不回測。
+- 下列變更標為 `not_backtested`（風險 `UNKNOWN`、不影響結束碼、不查 Prometheus），`backtest` 為 `skipped: <理由>`、訊息為 `Not backtested: <理由>`：observed-map 沒有該 key（沒有出廠告警比較它；`container_cpu` 等 KNOWN_DEFERRED key 的告警比的是 observed-map 不收錄的 version-aware recording rule，理由另寫）；條目無法回放（待人工確認、複合告警沒有單一 series、方向未解析、不是 per-tenant series）；目錄比對模式下一列的 row 由不同告警比較。理由講的若不是該列自己的 key（critical row 的 `_critical` 告警），前面冠上那個 key。
+- ⚠️ 已知近似：回放的是告警的比較運算元，不是告警本身——`for:`、維護期過濾、複合 AND 告警的其他條件都不模擬，所以計出的是「比較成立的點數」，不等於告警實際觸發的次數。`--git-diff`／`--tenant` 看不到租戶有沒有同 metric 的帶維度 row，門檻的 `max by(tenant)` 在這兩種模式下也不模擬；`<base>` 有沒有在根目錄 `defaults:` 宣告同樣看不到。
 
 **選項**
 
@@ -691,7 +698,9 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 對比報告，顯示各項 threshold 變更在歷史數據上的影響（可能增加/減少的 alert）。
 
-觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。`+Inf`／`-Inf` 是真實樣本，照常比較。
+觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。每筆 `analyzed`／`no_data` 結果帶 `query` 欄位，即實際送出的 PromQL；文字報告在訊息下一行印 `query: ...`，Markdown 表格多一欄 `Query`（`not_backtested` 沒有查詢，該欄為 `—`）。
+
+查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。只查一次，所以沒有別的查詢可換。`+Inf`／`-Inf` 是真實樣本，照常比較。
 
 **範例**
 
@@ -713,7 +722,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|------|
 | `0` | 成功 |
 | `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
-| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119） |
+| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119）；observed-map（`metric_observed_map.yaml`）缺檔、讀不了、沒有 key 或有型別不對的條目（帶 `--skip-if-unavailable` 也一樣；`--json` 的 envelope `reason` 為 `observed_map_unavailable`，#3017） |
 
 ---
 
@@ -2681,7 +2690,7 @@ da-tools guard <subcommand> [flags]
 
 | Code | 意義 |
 |---|---|
-| 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
+| 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`）。`--scope` 內沒有租戶時照樣跑所有檢查：不依賴租戶的那些（平台檔問題、`_routing_enforced` 的 `group_by`、defaults 檔形狀、`/metrics` 無法 gather）有 finding 就照常出報告、依 finding 決定結束碼；完全沒有 finding 才印「vacuously safe」、回 0（[#2991](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2991)） |
 | 1 | guard 偵測到 error，或 `--warn-as-error` 下有 warning — block merge / commit |
 | 2 | caller error（flag 錯、路徑不對——`--config-dir`／`--scope` 不存在、路徑中途有一段不是目錄或 symlink 迴圈——、scope 跑出 root 之外（含經由 symlink 指到 root 外）、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
 | 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、exporter 卻照讀或根本不讀的檔（例如 alias key 與其 anchor 並列、子目錄 exporter 不讀的 `_` 檔裡的重複 key；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；根目錄的 `_domain_policy`／`_routing_profiles` 與子目錄的 `_domain_policy` 檔除外，以 `*_unusable` finding 回報，#2295、#2439），以及 exporter 載入時 stat 或讀取失敗的檔與無法列出內容的子目錄（與 `served-values` 的 `unreadable` 同一份，報告另列「Files the exporter cannot read」，JSON 報告為 `unreadable`；指向目錄的 symlink 不列入，[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔；無法列出內容的目錄則在它就是 `--scope`、位於 `--scope` 之下或包含 `--scope` 時才算），以及讀不到的 `--scope` 本身（stat 因路徑不對以外的原因失敗，例如權限不足、位在執行身分無法進入的目錄底下；以 `stat_error` 列出，與遮住它的目錄的 `walk_error` 並列）與讀不到的 `--config-dir` 本身（無法列出內容時以 `.` 的 `walk_error`、無法 stat 時以 `.` 的 `stat_error` 列出，原因印在 stderr；過去為 2，[#2627](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2627)）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；無法 decode 的檔一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
@@ -2996,7 +3005,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 
 #### threshold-recommend
 
-閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值，整合 Noise Score 調整推薦方向。
+閾值推薦引擎 — 根據 Prometheus 歷史 P50/P95/P99 百分位數推薦最佳閾值。
 
 **用法**
 
@@ -3024,13 +3033,14 @@ da-tools threshold-recommend --generate-observed-map
 >
 > **#2116 值的來源**：租戶、目前值與每個 key 屬於哪個檔取自 `da-guard effective`（與 tenant-api `/effective` 同一套解析，含 `_defaults.yaml`、平台檔 `tenants:`、profile 與子目錄的租戶）。租戶檔自己寫的 key 是一般推薦；繼承自 defaults／平台／profile 的 key 另列「Inherited, reference only」，只列目前值與來源檔，不查 Prometheus、不產生推薦值。`--export-patch` 每行標出目前值的來源檔（`# was 60 (from tenant-a.yaml)`），繼承的 key 只以註解列出目前值與擁有它的檔——寫進租戶檔會把租戶釘在那個值。租戶名或 key 不是一般名稱（`[A-Za-z0-9][A-Za-z0-9._-]*` 以外，或 exporter 讀成空 key 的 `null`；`010`、`true`、`2024` 這類 exporter 照原文讀的 id 照常產生值行）時不產生值行，改以 `(not written)` 註解列出推薦值與目前值，請手動改該租戶檔。租戶檔用舊拼法（如 `mysql_cpu`）時以 exporter 的別名表查 observed-map，輸出保留檔案裡的拼法。需要 da-guard（da-tools image 內附；或以 `$DA_GUARD_BINARY` 指定），失敗時回 2 並轉出 da-guard 的 stderr。別名表取自 `da-guard served-values`，所以 served-values 拒收的樹（例如根 `defaults:` 與租戶同時寫 `X_critical`）上本工具與 `threshold-govern` 都會回 2。沒有任何設定檔的 `--config-dir`（空目錄）同樣回 2（da-guard 拒收）；排程跑 `threshold-govern` 的 Job 遇到時會判為失敗。
 >
-> **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關。重新產生時採 **merge-preserve**（#916）：仍有效的人工 resolved `observed_series` 會跨 rule-pack 變更保留（pick 失效則降回 needs_review、已移除的 key 則 drop），摘要列出 preserved/demoted/dropped 計數、細節走 stderr WARN。
+> **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。map 記的是事實：每個 key 的 alert 比的是哪條序列、往哪個方向比（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017) 起下界 key 也一樣），推薦與否另由 `recommendation_mode` 決定；比較方向是 `<` 的 key 必須在 `_observed_map_lib.py` 的 `NOT_APPLICABLE_KEYS` 或 `LOWER_BOUND_RESOLVED` 分類，否則 drift-guard 失敗。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關；alert 有比較、map 卻沒收錄的 key（coverage gap）會讓 drift-guard 在 CI 失敗。map 缺檔、讀不了或沒有 `keys` 時，`threshold-recommend` 與 `threshold-govern` 都以結束碼 2 退出並點名檔案（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017)；先前缺檔或沒有 key 時會把每個 key 靜默略過、結束碼 0，YAML 壞掉時則是 traceback）。map 缺檔或沒有 key 時 `--generate-observed-map` 會重新產生；YAML 壞掉的 map 不會被覆寫，請先修正或刪除。重新產生時採 **merge-preserve**（#916）：仍有效的人工 resolved `observed_series` 會跨 rule-pack 變更保留（pick 失效則降回 needs_review、已移除的 key 則 drop），摘要列出 preserved/demoted/dropped 計數、細節走 stderr WARN。
 >
 > **上界 (`>`) 推薦值怎麼算（[#2964](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2964)）**：以未捨入的 P95 判斷方向（報表顯示的 P50/P95/P99 捨入到兩位小數）。
 > - **P95 ≤ 0**：不給建議（`recommended` 為空，不寫進 `--export-patch`、`threshold-govern` 不開 PR），reason 為 `P95 is non-positive (max in window X) — no recommendation`。P95 = 0 不一定是閒置，現行告警可能響過，請看窗內最大值判斷。
 > - **P95 低於現值（收緊）**：建議值為 `max(P95, 現值一半向上取整, 窗內不超過現值的最大點向上取整)`，上限是現值。一輪最多收緊 50%；不會讓任何在現值下沒響的點開始響（窗內一個高於現值的尖峰不會擋住收緊），因此 backtest 對它判 LOW。被這個下限夾住時，reason 以 `tighten floored at …` 開頭並寫明是哪一項。取整依現值的寫法：整數現值（含 `1e3` 這種科學記號）取整數，其餘取現值本身的小數位數、至少兩位（`0.8` → 兩位，`0.001`、`1e-3` → 三位）；所以已經是該精度最小一格的現值（如 `0.001`）收不下去，會判為無變更。大幅收緊要分幾輪（例如 94% 為 0 的指標 30 → 15 → 8 → 4 → 2）。
 > - **P95 高於現值（放寬）**：改取 P99，依上述精度**向上**取整（放寬到 P95 仍約有 5% 的點超標；向上取整保證建議值不會落在現值以下）。這時 5% 的變動門檻量的是 P99 與現值的差距。
-> - 現值為 0 的 key 照舊（取 P95）；變動小於 5% 仍視為無變更。
+> - **現值為 0**（[#2997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2997)）：門檻 0 代表「任何大於 0 的值都告警」，常是刻意設定（如 `kafka_under_replicated_partitions`）；相對 0 的變動百分比沒有定義，所以不給建議值。有活動（P95 > 0）時標成 `force_manual`，`recommended` 與 `delta_pct` 皆為空，reason 為 `current threshold is 0 (fires on any positive value) — manual review; observed P99 X (rounded up to current's precision: Z), max Y`（Z 是 P99 依上述精度向上取整的值，可能大於窗內最大值 Y；與 X 相同時不列括號），`--export-patch` 以 `(manual)` 註解列出，`threshold-govern` 列進人工審查段，不開 PR。全為 0 的照上方 P95 ≤ 0 處理。
+> - 變動小於 5% 仍視為無變更。
 >
 > ⚠️ `threshold-govern --min-delta-pct` 設在 50 以上時，被「一半」夾住的 -50% 建議會被 govern 濾掉（不開 PR），但 `--export-patch` 仍會列出它。
 >
@@ -3107,11 +3117,11 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--timeout` | 呼叫 tenant-api（GET／PUT）的 HTTP 逾時秒數，只在 `--apply` 時用到；不影響 Prometheus 查詢。須大於 0、可帶小數，`0`、負數、`nan`、`inf` 與大於 `9223372036`（`threading.TIMEOUT_MAX`）的值以結束碼 `2` 拒絕（[#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)） | `30` |
 | `--json` | JSON 輸出 | - |
 
-> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除下界 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
+> **閘門**：只納 \|delta\| ≥ `--min-delta-pct` 且 confidence ∈ {HIGH, MEDIUM} 的推薦（樣本不足不開 PR，防破窗），並**排除 `force_manual`**（放鬆 floor / 超出 domain / 樣本不足的下限推薦、現值為 0 的上界 key、推薦時出例外的 key 都不自動開 PR）。**Dedup**：tenant-api 對「該租戶已有 pending PR」回 409 → 視為已在處理、跳過，重跑不洗版。**通道隔離**：PUT 帶 `X-DA-Write-Source: threshold-governance` → PR 走獨立 label / 標題 / 來源，不冒充 tenant-manager UI、不污染告警平面。讀-改-寫只 surgical 取代被推薦的值行（保留註解，PR diff 乾淨）。推薦邏輯 / 資料源完全沿用 `threshold-recommend`（Day-N observed recording rule，#719）。
 >
 > **#2116 只治理租戶自有的 key**：PR 只改租戶檔自己寫的 key，寫回時用檔案裡的拼法（舊拼法照舊）。繼承自 defaults／平台／profile 的 key 不進計畫、不查 Prometheus，只以 INFO 列出（JSON 的 `inherited` 陣列與計數），因此不會因為 tenant-api 的租戶檔裡找不到它而報錯、觸發連續錯誤斷路。租戶檔在子目錄時，tenant-api 只讀設定目錄最上層的租戶檔，本工具不送 GET、不開 PR，結果標為 `skipped_nested`（不算錯誤、不佔 `--max-prs`），需手動改該檔。
 >
-> **#916 下界整合**：下界 `percentile-lower` 收緊推薦（拉高 floor）會正常經閘門開 PR；但 `force_manual`（放鬆 / domain / 樣本 / 估計量發散）另列 **manual-review section**（附 `guardrail_reason` + miss delta），`not-applicable` 列 **INFO**（治理完成）——皆計入 summary、JSON 輸出 `force_manual` / `not_applicable` 陣列與計數。治理表格對下界 change 亦標 `+X% miss`。
+> **#916 下界整合**：下界 `percentile-lower` 收緊推薦（拉高 floor）會正常經閘門開 PR；但 `force_manual`（放鬆 / domain / 樣本 / 估計量發散）另列 **manual-review section**（附 `guardrail_reason` + miss delta），`not-applicable` 列 **INFO**（治理完成）——皆計入 summary、JSON 輸出 `force_manual` / `not_applicable` 陣列與計數。治理表格對下界 change 亦標 `+X% miss`。現值為 0 的上界 key（#2997）同樣列在 manual-review section，只附 reason、沒有 delta（JSON 的 `delta_pct` 為 `null`）；`--apply` 不會為它送出寫入，所以與 #2997 之前（建議 0 → P95、照開 PR）相比，結束碼在兩種情況下會不同：可寫入的 key 只有這類 key、且寫入失敗時，從 `1` 變成 `0`（沒有嘗試寫入）；它的寫入原本是整輪唯一成功（含已有 pending PR 的 409），而其他租戶的寫入都失敗時，從 `0` 變成 `1`（不再有成功掩蓋失敗）。`--max-prs` 的名額也不再被它占用，改由其他租戶使用。
 >
 > **`--min-delta-pct` 空間不對稱**：此旋鈕對上界比的是 **value 空間** delta、對下界比的是 **miss-rate 空間** delta——同一數值敏感度差很多（0.95 floor 的 25% miss ≈ 1.3% value）。`--min-delta-pct` 下限 `5.0` 指的是上界 5% value 邊界（下界 no-change 邊界為 10% miss），故該下限為下界的必要非充分條件。下界 key 建議搭配 `--lookback 14d`（週跑 govern 對下界覆蓋亦然）。
 
@@ -3142,6 +3152,26 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 **支援的 Receiver 類型**
 
 `webhook`、`slack`、`teams`、`pagerduty`、`rocketchat`、`email`（SMTP 連通性檢查）
+
+**狀態**
+
+每個 receiver 的測試結果標成下列其中一種（文字輸出的狀態欄、`--json` 的 `status`）。只有 `OK` 與 `DRY_RUN` 算通過、`SKIPPED` 另計，其餘都算失敗。連線階段的錯誤依例外型別分類，不比對錯誤訊息（[#2995](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2995)）。
+
+| 狀態 | 意義 |
+|------|------|
+| `OK` | receiver 回了成功的 HTTP 回應 |
+| `DRY_RUN` | `--dry-run`：設定與 URL 合格，未實際連線 |
+| `SKIPPED` | 沒有可測的 URL（例如 `email`） |
+| `TIMEOUT` | 連線或等待回應超過 `--timeout` |
+| `CONNECTION_REFUSED` | 對端拒絕連線（埠上沒有服務，或被防火牆以 RST 拒絕） |
+| `CONNECTION_ERROR` | 其他連線錯誤：DNS 解析失敗、連線被重置、收下請求後不回應就關線、網路不可達。經 HTTPS proxy 時 CONNECT 失敗，detail 前綴 `via proxy: `，表示失敗的是 proxy 這一段 |
+| `TLS_ERROR` | TLS 錯誤：憑證驗證失敗、https 連到純 http 埠、握手失敗 |
+| `AUTH_ERROR` | HTTP `401`／`403` |
+| `HTTP_ERROR` | 其他 HTTP 錯誤狀態碼，或回應格式錯誤、被截斷（detail 以 `malformed response:` 開頭） |
+| `INVALID_URL` | URL 不合法或 scheme 不是 `http`／`https` |
+| `INVALID_CONFIG` | receiver 設定不合法（例如缺必填欄位、`type` 不認得） |
+
+`TIMEOUT`、`CONNECTION_REFUSED`、`CONNECTION_ERROR`、`TLS_ERROR` 的 detail 截在 80 字元（含 `via proxy: ` 前綴），較長的錯誤訊息會被切掉。設了 `https_proxy`／`http_proxy` 時，這些狀態可能描述的是到 proxy 的那一段：proxy 的埠沒開是 `CONNECTION_REFUSED`、proxy 主機名解析失敗是 `CONNECTION_ERROR`，http receiver 經 proxy 收到的 `HTTP 502` 是 `HTTP_ERROR`；只有 HTTPS 的 CONNECT 失敗會帶 `via proxy: ` 前綴（含 proxy 回 `504 Connection Timed Out`，這時不標 `TIMEOUT`）。
 
 **範例**
 

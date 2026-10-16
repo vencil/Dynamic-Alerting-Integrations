@@ -35,7 +35,7 @@
 # for: 擋不掉——這一點與數值無關，故留在這裡。
 #
 # ⛔ 正式採用前必須以該租戶實際 baseline 校準，不要照抄：
-#   Day N：da-tools threshold-recommend —— P95/P99 + alert_quality Noise Score，
+#   Day N：da-tools threshold-recommend —— 依歷史 P95/P99 推薦，
 #          已涵蓋本 pack 全部閾值 key（scripts/tools/ops/metric_observed_map.yaml）
 #   Day 0：直接查該租戶的 oracledb_* 原始 metric 取正常水位分布。
 #          ⚠️ 不要用 `da-tools baseline`——它的 DEFAULT_METRICS 目前只有

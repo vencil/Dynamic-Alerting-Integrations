@@ -501,7 +501,8 @@ class TestCheckRequiredDataFiles:
 
     def test_missing_data_file_is_error(self):
         # NEGATIVE FIXTURE: module shipped but its required data file absent
-        # → ERROR (the fail-quiet trap: load returns {} → all keys skipped).
+        # → ERROR (in the image the tool would fail at run time: rc 2 since
+        # #3017, every key silently skipped before it).
         required = {"_observed_map_lib.py": ("metric_observed_map.yaml",)}
         errors = mod.check_required_data_files(
             {"_observed_map_lib.py"}, required=required)

@@ -124,7 +124,7 @@ lang: zh
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
 | `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
-| `sync_schema.py` | Check tenant reserved-key drift across Schema / Go / Python. |
+| `sync_schema.py` | Generate the reserved `_` key lists from the one registry. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 | `verify_diff.py` | diff-scoped Python test selector (rule mapping + fail-closed; testing-ROI W6-E MVP) |

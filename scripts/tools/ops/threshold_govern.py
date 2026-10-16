@@ -199,9 +199,12 @@ class NotApplicableKey:
 
 @dataclass
 class ForceManualKey:
-    """A lower-bound (percentile-lower) recommendation a guardrail routed to
-    manual review (#916 Item A ``force_manual``): relaxation (floor would drop),
-    an out-of-ratio-domain current/candidate, or too thin a sample.
+    """A key the recommender routed to manual review (``force_manual``): a
+    lower-bound (percentile-lower) guardrail trip (#916 Item A — relaxation,
+    floor would drop; an out-of-ratio-domain current/candidate; too thin a
+    sample), an upper-bound key whose current threshold is 0 (#2997), or a
+    recommender exception on any key. ``delta_pct`` is a miss-rate delta for
+    a lower-bound trip and None otherwise.
 
     This is the floor-rot CORE signal — a floor drifting toward relaxation must
     never be invisible — so it gets its own manual-review section + summary count,
@@ -260,9 +263,10 @@ def is_governance_actionable(
     differs.
 
     Keys the engine skipped (unmapped / lower-bound ``<`` N/A / unsupported scope
-    / no data → ``recommended is None``) are excluded for free, as are lower-bound
-    keys a guardrail routed to manual review (#916 ``force_manual`` — explicit
-    even though ``force_manual`` always implies ``recommended is None``).
+    / no data → ``recommended is None``) are excluded for free, as are keys
+    routed to manual review (``force_manual``: a lower-bound guardrail trip
+    (#916), an upper-bound current of 0 (#2997), a recommender exception —
+    explicit even though ``force_manual`` always implies ``recommended is None``).
     """
     return (
         rec.recommended is not None
@@ -392,10 +396,11 @@ def collect_not_applicable(
 def collect_force_manual(
     reports: list["recommend.TenantRecommendation"],
 ) -> list[ForceManualKey]:
-    """Lower-bound recommendations a guardrail routed to manual review (#916).
+    """Keys the recommender routed to manual review (``force_manual``).
 
-    ``force_manual`` = relaxation / out-of-domain / thin sample; the floor-rot
-    core signal. Surfaced as its own manual-review section + count so a floor
+    Mostly lower-bound guardrail trips (#916: relaxation / out-of-domain / thin
+    sample; the floor-rot core signal); also an upper-bound current of 0
+    (#2997) and recommender exceptions (see ``ForceManualKey``). Surfaced as its own manual-review section + count so a floor
     drifting toward relaxation is never invisible in the governance run.
     """
     out: list[ForceManualKey] = []
@@ -829,17 +834,16 @@ def format_text_report(
         fm = force_manual or []
         if not fm:
             return []
-        # Direction-agnostic wording: force_manual is a generic flag — the common
-        # case is a lower-bound floor guardrail trip, but analyze_tenant's per-key
-        # except also sets it for ANY-direction key that throws. Each body line
-        # carries its own guardrail_reason (already direction-correct), so the
-        # header must not assume lower-bound or an upper-bound exception would be
-        # mislabelled as a floor issue.
+        # Cause-agnostic wording: force_manual is a generic flag — a lower-bound
+        # floor guardrail trip (#916), an upper-bound key whose current is 0
+        # (#2997), or analyze_tenant's per-key except for ANY-direction key that
+        # throws. Each body line carries its own guardrail_reason (the cause), so
+        # the header names no cause and mislabels none.
         head = (
-            f"⚠ {len(fm)} 個閾值需人工 review（護欄觸發／推薦例外；#916）："
+            f"⚠ {len(fm)} 個閾值需人工 review（不提供建議值，原因見各行）："
             if _LANG == "zh" else
             f"⚠ {len(fm)} threshold(s) need manual review "
-            "(guardrail tripped / recommender exception — #916):"
+            "(no value proposed — reason per line):"
         )
         body = []
         for k in fm:
@@ -1029,8 +1033,8 @@ def run(args: argparse.Namespace) -> GovernanceResult:
     Returns a ``GovernanceResult``. In dry-run, outcomes is empty (no writes). The
     three surfaced-but-not-auto-PR categories are always populated independent of
     --apply (all informational): ``ungoverned`` (un-classified ``<`` tail),
-    ``not_applicable`` (by-design N/A INFO), and ``force_manual`` (lower-bound
-    guardrail tripped — manual review).
+    ``not_applicable`` (by-design N/A INFO), and ``force_manual`` (manual review:
+    lower-bound guardrail trip, upper-bound current of 0, recommender exception).
     """
     reports = recommend.run_analysis(
         args.config_dir,
@@ -1146,6 +1150,7 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
+@recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(

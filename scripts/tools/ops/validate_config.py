@@ -1273,8 +1273,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         verdict is da-guard's own `routing_in_unread_location` finding inside
         a profile (a second da-guard run, the check itself), so it covers
         every root `_` file's `profiles:`, not only `_profiles.yaml`, and
-        profiles no tenant elects. ⚠️ A tree with no
-        tenant at all gets an empty da-guard report, so nothing is named then.
+        profiles no tenant elects — in a tree with no tenant at all too
+        (#2991: da-guard runs every check then; only a run with no finding
+        is its empty report).
       - Other reserved keys in `_profiles.yaml` (`_silent_mode`, `_state_*`,
         …) are a WARN; `_metadata` is not — a profile's `_metadata` is filled
         into its tenants (docs/design/config-driven.md, #2830)
@@ -1924,8 +1925,8 @@ def _keys_acting_when_merged(raw: dict) -> tuple[list[str], bool]:
     ``actsWhenMerged``, pinned to it by tests/shared/defaults_wrapper_matrix.json.
 
     A threshold (no ``_`` prefix) or a reserved tenant key
-    (``VALID_RESERVED_KEYS`` / ``VALID_RESERVED_PREFIXES``, pinned to Go by
-    tests/shared/test_reserved_key_py_go_parity.py). Excluded: ``defaults``;
+    (``VALID_RESERVED_KEYS`` / ``VALID_RESERVED_PREFIXES``, generated with
+    Go's from the reserved-key registry, ADR-038). Excluded: ``defaults``;
     a root-decode field (``_root_decoded_keys``); ``TOP_LEVEL_READ_ELSEWHERE``;
     ``MERGE_DROPPED_KEYS``, which act in no shape; ``_routing*`` keys, which
     the route generator does not read from a defaults file in any shape; and

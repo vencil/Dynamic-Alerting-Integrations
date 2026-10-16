@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """threshold_recommend.py — 閾值推薦引擎。
 
-根據 Prometheus 歷史 metrics 的 P50/P95/P99 百分位數，結合 alert_quality Noise Score，
+根據 Prometheus 歷史 metrics 的 P50/P95/P99 百分位數，
 為每個 tenant 的每個 metric key 產生閾值推薦。
 
 #719 資料源（重要）：本工具查每個閾值 key 在 rule-pack alert 中**實際比對**的
@@ -212,9 +212,11 @@ class KeyRecommendation:
     sample_count: int = 0
     reason: str = ""
     promql: str = ""
-    # #916 Item A (lower-bound engine): a guardrail tripped so this key needs a
-    # human (relaxation / out-of-domain / thin sample). recommended stays None;
-    # _exportable / is_governance_actionable exclude it; govern surfaces it in a
+    # This key needs a human; set by the lower-bound engine's guardrails (#916
+    # Item A: relaxation / out-of-domain / thin sample), for an upper-bound key
+    # whose current is 0 (#2997), and for any key whose recommendation raised
+    # (_recommend_key). recommended stays None; _exportable /
+    # is_governance_actionable exclude it; govern surfaces it in a
     # manual-review section keyed on guardrail_reason.
     force_manual: bool = False
     guardrail_reason: str = ""
@@ -388,7 +390,6 @@ def recommend_threshold(
     pcts: dict[str, float],
     sample_count: int,
     min_samples: int,
-    noise_grade: Optional[str] = None,
     values: Optional[list[float]] = None,
 ) -> KeyRecommendation:
     """Generate a threshold recommendation for one upper-bound (``>``) key.
@@ -405,8 +406,10 @@ def recommend_threshold(
         points over; rounding to the nearest could land at or under current).
       - Rounding keeps current's style: an int for a whole number (``"1e3"``
         too), else current's own decimal places, at least 2 (``_decimals``).
-      - noise_grade == BAD: P99 instead of P95 (relax a noisy alert).
-      - current == 0: unchanged (P95, delta 100% / 0%).
+      - current == 0 with P95 > 0 (#2997): no recommendation; ``force_manual``
+        with ``delta_pct`` None (a change from 0 has no relative size). The
+        reason names the observed P99 (and its round-up to current's
+        precision when that differs) and the window max.
       - Delta < 5%: no change recommended (within noise margin).
 
     Args:
@@ -415,7 +418,6 @@ def recommend_threshold(
         pcts: Dict with p50, p95, p99 values (2-dp, as shown).
         sample_count: Number of data points.
         min_samples: Minimum sample threshold for confidence.
-        noise_grade: Optional noise grade from alert_quality.
         values: The raw points ``pcts`` came from. Gives the unrounded
             P95 / P99 and the window max; without them the 2-dp ``pcts`` are
             used and the tighten floor is half of current alone.
@@ -476,32 +478,50 @@ def recommend_threshold(
 
     places = _decimals(current_value)
 
+    if current_float == 0:
+        # #2997: a 0 threshold fires on any positive value and is often meant
+        # (kafka_under_replicated_partitions "should be 0"). A change relative
+        # to 0 is undefined, so no value is proposed: the key goes to govern's
+        # manual-review section rather than vanishing into "skipped".
+        # delta_pct stays None — govern tags a number with the lower-bound
+        # "% miss". P99 is also shown rounded UP in current's format, as a
+        # relax would be — named as such, since it can exceed the max. The
+        # confidence stays the sample-count grade (not used for gating here).
+        raw, up = f"{p99:.6g}", _format_threshold_value(_ceil_to(p99, places))
+        shown = raw if raw == up else f"{raw} (rounded up to current's precision: {up})"
+        seen = f", max {_format_threshold_value(clean[-1])}" if clean else ""
+        why = ("current threshold is 0 (fires on any positive value) — manual "
+               f"review; observed P99 {shown}{seen}")
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            p50=pcts.get("p50"),
+            p95=pcts.get("p95"),
+            p99=pcts.get("p99"),
+            confidence=confidence,
+            sample_count=sample_count,
+            reason=why,
+            force_manual=True,
+            guardrail_reason=why,
+        )
+
     def _round(x: float) -> Any:
         return round(x) if places == 0 else round(x, places)
 
-    noisy = noise_grade == "BAD"
-    base = p99 if noisy else p95
     floored = ""
-    if current_float == 0:
-        # Not in #2964's scope: kept as it was (the shown 2-dp percentile).
-        target = pcts.get("p99" if noisy else "p95", base)
-        reason_prefix = ("noisy alert (BAD noise grade) → relaxed to P99" if noisy
-                         else "recommended at P95")
-    elif base > current_float:
+    if p95 > current_float:
         # Up, never to the nearest: rounding P99 to current's precision could
         # land at or under current (0.001 → 0.0 was a "-100% relax").
         target = _ceil_to(p99, places)
-        reason_prefix = ("noisy alert (BAD noise grade) → relaxed to P99" if noisy
-                         else "relaxed to P99")
+        reason_prefix = "relaxed to P99"
         if target <= current_float:
             # Defence only (ceil keeps target >= P99 > current): a relax
             # must never come out as a decrease.
             target = current_float
     else:
-        target = _round(base)
-        reason_prefix = ("noisy alert (BAD noise grade) → recommended at P99"
-                         if noisy else "recommended at P95")
-        if base < current_float:
+        target = _round(p95)
+        reason_prefix = "recommended at P95"
+        if p95 < current_float:
             half = _ceil_to(Decimal(str(current_float)) * Decimal("0.5"), places)
             holds = {("one round tightens at most 50% (half of current, rounded up, "
                       f"is {_format_threshold_value(half)})"): half}
@@ -516,10 +536,10 @@ def recommend_threshold(
                        else current_float)
                 target = min(floor, cap)
                 reason_prefix = (f"tighten floored at {_format_threshold_value(target)} above "
-                                 f"P{99 if noisy else 95} {base:.6g}")
+                                 f"P95 {p95:.6g}")
                 floored = ": " + "; ".join(w for w, v in holds.items() if v == floor)
 
-    if current_float != 0 and target <= 0:
+    if target <= 0:
         # Defence only: every branch above keeps target > 0 once P95 > 0.
         return KeyRecommendation(
             key=key, current_value=current_value, p50=pcts.get("p50"),
@@ -529,11 +549,8 @@ def recommend_threshold(
                     "is non-positive — no recommendation"),
         )
 
-    # Calculate delta
-    if current_float != 0:
-        delta_pct = round(((target - current_float) / current_float) * 100, 1)
-    else:
-        delta_pct = 0.0 if target == 0 else 100.0
+    # Calculate delta (current is non-zero here: 0 returned above)
+    delta_pct = round(((target - current_float) / current_float) * 100, 1)
 
     # Skip if delta is within noise margin
     if abs(delta_pct) < 5.0:
@@ -1058,9 +1075,12 @@ def _recommend_key(
                 values=values,
             )
             hours = len({int(ts // 3600) for ts, _ in pairs})
-            if hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW:
+            if (hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW
+                    and not rec.force_manual):
                 # #2941: too little history for any recommendation to be
                 # trusted; LOW keeps threshold_govern from opening a PR.
+                # #2997: a force_manual key has no recommendation to downgrade,
+                # and its reason is the manual-review text govern shows.
                 rec.confidence = CONFIDENCE_LOW
                 rec.reason = (f"{rec.reason}; data in {hours} distinct hour(s) "
                               f"< {MIN_UPPER_COVERAGE_HOURS} → LOW")
@@ -1121,13 +1141,15 @@ def run_analysis(
     print_load_warnings(tree)
     effective = load_effective(config_dir)
 
+    # Load the observed-map once and share across tenants (#719) — before the
+    # tenant filter, so an unusable map is an error even when no tenant
+    # matches (#3017: "found nothing" must not hide it).
+    observed_map = observed_map_lib.load_observed_map()
+
     if tenant_filter:
         if tenant_filter not in effective:
             return []
         effective = {tenant_filter: effective[tenant_filter]}
-
-    # Load the observed-map once and share across tenants (#719).
-    observed_map = observed_map_lib.load_observed_map()
 
     reports: list[TenantRecommendation] = []
     for tenant_name in sorted(effective):
@@ -1290,7 +1312,8 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     """(label, detail) for a non-exportable key's transparency comment.
 
     A ``force_manual`` key (a lower-bound guardrail tripped — relaxation / thin
-    sample / out-of-domain) is labelled ``manual`` and carries its
+    sample / out-of-domain; an upper-bound current of 0, #2997; or a
+    recommender exception) is labelled ``manual`` and carries its
     ``guardrail_reason`` so a floor rotting toward relaxation is never invisible;
     every other non-exportable key stays ``skipped``. #2969: a key past the
     margin but graded LOW is labelled ``low confidence`` and carries the value
@@ -1327,7 +1350,8 @@ def _exportable(r: KeyRecommendation) -> bool:
     recommendation — i.e. a numeric ``recommended`` AND a delta past the 5%
     noise margin. Keys that were skipped (unmapped / lower-bound N/A / unsupported
     scope / no data — ``recommended is None``), within-margin (no change needed),
-    or routed to manual review by a lower-bound guardrail (#916 ``force_manual``)
+    or routed to manual review (``force_manual``: a lower-bound guardrail, #916;
+    an upper-bound current of 0, #2997; a recommender exception)
     are intentionally NOT patched, mirroring the analyze_tenant skip.
 
     #2969: nor is one graded LOW (or never graded): the same confidence floor
@@ -1536,6 +1560,7 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 # ---------------------------------------------------------------------------
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
+@observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     """CLI entry point: threshold recommendation engine."""
     parser = argparse.ArgumentParser(

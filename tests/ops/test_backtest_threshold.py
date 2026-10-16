@@ -302,6 +302,25 @@ class TestGenerateMarkdown:
 # ── backtest_change（mock query_range）────────────────────────────
 
 
+def _map_with(monkeypatch, **entries):
+    """真的 observed-map 加上這些假條目（#3017：map 沒收錄的 key 不回測，
+    所以用假 key 的測試要先給它一個 alert）。"""
+    keys = {**bt._observed_map(), **entries}
+    monkeypatch.setattr(bt, "_observed_map", lambda: keys)
+
+
+def _upper(series):
+    """一個 `series > threshold` 的 per-tenant 條目。"""
+    return {"scope": "tenant", "direction": ">", "observed_series": series}
+
+
+@pytest.fixture
+def cpu_mapped(monkeypatch):
+    """`cpu` 不是出廠 key；給它一個 `tenant:cpu:max > threshold` 的 alert。"""
+    _map_with(monkeypatch, cpu=_upper("tenant:cpu:max"))
+
+
+@pytest.mark.usefixtures("cpu_mapped")
 class TestBacktestChange:
     """backtest_change() 單一變更回測分析。"""
 
@@ -359,8 +378,11 @@ class TestBacktestChange:
         assert result["new_breach_count"] > 0
 
 
+@pytest.mark.usefixtures("cpu_mapped")
 class TestBacktestChangeNaN:
-    """#2963：全 NaN 不得報成 analyzed／LOW；分母仍含 NaN（owner 裁定的方案 P）。"""
+    """#2963：全 NaN 不得報成 analyzed／LOW；分母仍含 NaN（owner 裁定的方案 P）。
+
+    #3002 後只有一個查詢，全 NaN 沒有「下一個 pattern」可換，維持 no_data。"""
 
     def _run(self, monkeypatch, vals, old, new):
         values = [(i, v) for i, v in enumerate(vals)]
@@ -1057,3 +1079,401 @@ class TestConfdSpellingParityWithTheExporter:
         assert "acme" in err, "CONTROL: the .yaml recipe tenant was always named"
         assert "beta" in err, "#1603: the .yml recipe tenant is a real tenant"
         assert "ghost" not in err
+
+
+# ── 回放 alert 實際比較的那條 series（#3017 / #3002）──────────────
+
+
+def _boom(*a, **kw):
+    raise AssertionError("must not query Prometheus")
+
+
+class TestAlertComparison:
+    """#3017：越界方向照 alert 的比較方向（observed-map 的 `direction`），不再
+    一律 `>`。#3002：只查一次——alert 比較的那條 recording rule（observed-map
+    的 `observed_series`）加 `{tenant=...}`，不再猜三種 pattern。map 沒收錄或
+    無法回放的 key 判 not_backtested、不查 Prometheus。
+
+    下界 key、查詢名稱都用 repo 內真的 map（SoT），不 mock：map 改了這裡會紅。
+    """
+
+    def _run(self, monkeypatch, metric, vals, old, new, tenant="t-x"):
+        asked = []
+
+        def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+            asked.append(q)
+            return [{"values": [(i, str(v)) for i, v in enumerate(vals)]}] if vals else []
+        monkeypatch.setattr(bt, "query_range", query_range)
+        change = {"tenant": tenant, "metric": metric, "old_value": old, "new_value": new}
+        return bt.backtest_change("http://prom", change, 86400), asked
+
+    # ── 方向（#3017）──
+    def test_lower_bound_key_counts_points_below(self, monkeypatch):
+        """票上的重現：`< 95` 一點都不觸發，`< 99.9` 全部 100 點觸發。"""
+        r, _ = self._run(monkeypatch, "db2_bufferpool_hit_ratio", [99.5] * 100, "95", "99.9")
+        assert r["status"] == "analyzed"
+        assert (r["old_breach_count"], r["new_breach_count"]) == (0, 100)
+        assert r["risk"] == "HIGH"
+        assert "START firing" in r["message"]
+
+    def test_lower_bound_key_loosening_is_fewer(self, monkeypatch):
+        """下界門檻調低是放寬：觸發點變少，方向不得算反。"""
+        r, _ = self._run(monkeypatch, "kafka_broker_count", [2] * 6 + [3] * 4, "3", "2")
+        assert (r["old_breach_count"], r["new_breach_count"]) == (6, 0)
+        assert r["message"].startswith("6 fewer firing points")
+
+    def test_lower_bound_disable_counts_old_below(self, monkeypatch):
+        r, _ = self._run(monkeypatch, "rabbitmq_consumers", [0, 0, 1, 5], "1", "disable")
+        assert (r["risk"], r["old_breach_count"]) == ("MEDIUM", 2)
+
+    def test_lower_bound_enable_counts_new_below(self, monkeypatch):
+        r, _ = self._run(monkeypatch, "kafka_active_controllers", [0, 1, 1, 1], "disable", "1")
+        assert r["new_breach_count"] == 1
+
+    def test_upper_bound_key_unchanged(self, monkeypatch):
+        r, _ = self._run(monkeypatch, "mysql_connections", [60, 80, 90], "70", "85")
+        assert (r["old_breach_count"], r["new_breach_count"]) == (2, 1)
+
+    # ── 查詢（#3002）──
+    @pytest.mark.parametrize("metric,query", [
+        # 告警比的是 threads_connected，不是 `mysql_connections` 這個 key 名。
+        ("mysql_connections", 'tenant:mysql_threads_connected:max{tenant="t-x"}'),
+        # 比的是使用率 ratio，不是連線數。
+        ("pg_connections", 'tenant:pg_connection_usage:ratio{tenant="t-x"}'),
+        # 退役拼法（`--git-diff` 讀到的是檔裡寫的）先過 alias 表。
+        ("mysql_cpu", 'tenant:mysql_threads_running:avg1m{tenant="t-x"}'),
+        ("mysql_cpu_critical", 'tenant:mysql_threads_running:avg1m{tenant="t-x"}'),
+    ])
+    def test_one_query_of_the_series_the_alert_compares(self, monkeypatch, metric, query):
+        r, asked = self._run(monkeypatch, metric, [1, 2], "70", "85")
+        assert asked == [query]
+        assert r["query"] == query
+
+    @pytest.mark.parametrize("vals,message", [
+        ([], "No historical data found in Prometheus"),
+        (["NaN"] * 3, "Only NaN samples in lookback window"),
+    ])
+    def test_no_data_names_the_one_query(self, monkeypatch, vals, message):
+        """只問一次：查不到或全 NaN 都是 no_data，`query` 指出問的是什麼。"""
+        r, asked = self._run(monkeypatch, "mysql_connections", vals, "70", "85")
+        assert (r["status"], r["message"]) == ("no_data", message)
+        assert asked == [r["query"]] == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+
+    @pytest.mark.parametrize("old,new", [("70", "85"), ("70", "disable"), ("disable", "70")])
+    def test_every_analyzed_result_carries_its_query(self, monkeypatch, old, new):
+        r, asked = self._run(monkeypatch, "mysql_connections", [60, 80, 90], old, new)
+        assert r["status"] == "analyzed" and r["query"] == asked[0]
+
+    def test_dimensioned_key_resolves_to_its_base(self):
+        assert bt.alert_comparison({"tenant": "t", "metric": 'db2_bufferpool_hit_ratio{db="a"}',
+                                    "old_value": "90", "new_value": "95"}) \
+            == ("tenant:db2_bufferpool_hit_ratio:min", "below", None)
+
+    # ── 不回測（#3017）──
+    def test_unmapped_and_deferred_keys_have_distinct_reasons(self, monkeypatch):
+        monkeypatch.setattr(bt, "query_range", _boom)
+        reasons = {}
+        for key in ("es_index_doc_count", "container_cpu"):
+            change = {"tenant": "t-x", "metric": key, "old_value": "70", "new_value": "50"}
+            r = bt.backtest_change("http://prom", change, 86400)
+            assert (r["status"], r["risk"]) == ("not_backtested", "UNKNOWN")
+            assert "query" not in r
+            assert r["message"] == "Not backtested: " + r["backtest"].removeprefix("skipped: ")
+            assert bt.not_backtestable(change) == r["backtest"].removeprefix("skipped: ")
+            reasons[key] = bt.not_backtestable(change)
+        assert reasons["es_index_doc_count"].startswith("no shipped alert compares this key")
+        assert "KNOWN_DEFERRED" in reasons["container_cpu"]
+        assert "no shipped alert" not in reasons["container_cpu"]
+
+    @pytest.mark.parametrize("entry,why", [
+        ({"scope": "tenant", "needs_review": True, "reason": "composite"}, "needs review"),
+        ({"scope": "tenant", "direction": None, "observed_series": "tenant:k:max"}, "direction"),
+        ({"scope": "tenant", "direction": ">"}, "composite"),
+    ])
+    def test_unusable_entry_is_not_backtested(self, monkeypatch, entry, why):
+        _map_with(monkeypatch, k=entry)
+        monkeypatch.setattr(bt, "query_range", _boom)
+        r = bt.backtest_change("http://prom", {"tenant": "t", "metric": "k", "old_value": "1",
+                                               "new_value": "2"}, 86400)
+        assert r["status"] == "not_backtested" and why in r["backtest"]
+
+    # ── served-values 的 row（#2750 × #3017）──
+    def _served(self, metric, *rows):
+        import _lib_tenant_values as tv
+        series = [tv.Series("user_threshold", {"severity": sev}, key, twin, {}, {})
+                  for key, sev, twin in rows]
+        return {"tenant": "t-x", "metric": metric, "old_value": "1", "new_value": "2",
+                "series": series}
+
+    def test_served_critical_row_uses_the_critical_alert(self, monkeypatch):
+        _map_with(monkeypatch, k=_upper("tenant:k:max"),
+                  k_critical={"scope": "tenant", "direction": "<",
+                              "observed_series": "tenant:k_crit:min"})
+        assert bt.alert_comparison(self._served("k", ("k", "critical", False))) == (
+            "tenant:k_crit:min", "below", None)
+        assert bt.alert_comparison(self._served("k", ("k", "warning", False))) == (
+            "tenant:k:max", "above", None)
+
+    def test_rows_compared_differently_are_not_backtested(self, monkeypatch):
+        _map_with(monkeypatch, k=_upper("tenant:k:max"), k_critical=_upper("tenant:k_crit:max"))
+        monkeypatch.setattr(bt, "query_range", _boom)
+        change = self._served("k", ("k", "warning", False), ("k", "critical", False))
+        r = bt.backtest_change("http://prom", change, 86400)
+        assert r["status"] == "not_backtested"
+        assert r["backtest"].startswith("skipped: rows compared differently")
+
+    def test_rows_compared_alike_are_backtested_once(self, monkeypatch):
+        """mysql_connections 與其 _critical 比同一條 series、同方向：照常回測。"""
+        change = self._served("mysql_connections", ("mysql_connections", "warning", False),
+                              ("mysql_connections", "critical", False))
+        assert bt.alert_comparison(change) == ("tenant:mysql_threads_connected:max", "above", None)
+
+    def test_mongodb_critical_row_has_no_alert(self, monkeypatch):
+        """mongodb 的門檻 recording rule 只正規化 severity="warning"：覆寫成
+        `N:critical` 的時段沒有 alert 在比，不借 base 的。"""
+        monkeypatch.setattr(bt, "query_range", _boom)
+        change = self._served("mongodb_connections_current",
+                              ("mongodb_connections_current", "critical", False))
+        reason = bt.not_backtestable(change)
+        assert reason.startswith("mongodb_connections_current_critical: no shipped alert")
+        assert bt.backtest_change("http://prom", change, 86400)["status"] == "not_backtested"
+
+    def test_legacy_twin_row_is_not_read(self):
+        change = self._served("mysql_threads_running",
+                              ("mysql_threads_running", "warning", False),
+                              ("mysql_cpu", "warning", True))
+        assert bt._alert_keys(change) == (["mysql_threads_running"], None)
+
+
+class TestAlertComparisonCli:
+    """#3017 對結束碼的影響（owner 同意）：未收錄 key 不再判 HIGH；規則本身
+    （rc 1 若且唯若有 HIGH）不變。"""
+
+    def _main(self, monkeypatch, capsys, cli_argv, metric, old, new, vals, *extra):
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [
+            {"values": [(i, str(v)) for i, v in enumerate(vals)]}])
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", metric,
+                 "--old-value", old, "--new-value", new,
+                 "--prometheus", "http://prom:9090", *extra)
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        return ei.value.code, capsys.readouterr()
+
+    def test_unmapped_key_is_listed_rc0(self, monkeypatch, capsys, cli_argv):
+        """以前會判 HIGH（rc 1）的未收錄 key：列為 Not backtested、rc 0。"""
+        rc, out = self._main(monkeypatch, capsys, cli_argv, "es_index_doc_count",
+                             "100", "50", [90] * 10, "--json")
+        doc = json.loads(out.out)
+        assert rc == 0 and doc["risk_summary"]["HIGH"] == 0
+        assert doc["changes"][0]["status"] == "not_backtested"
+
+    @pytest.mark.parametrize("old,new,risk,rc", [
+        ("95", "99.9", "HIGH", 1),   # 下界收緊到 99.5 之上：開始觸發
+        ("95", "96", "LOW", 0),      # 兩邊都不觸發
+    ])
+    def test_rc_is_1_iff_high(self, monkeypatch, capsys, cli_argv, old, new, risk, rc):
+        got, out = self._main(monkeypatch, capsys, cli_argv, "db2_bufferpool_hit_ratio",
+                              old, new, [99.5] * 100, "--json")
+        doc = json.loads(out.out)
+        assert (doc["changes"][0]["risk"], got) == (risk, rc)
+        assert doc["changes"][0]["query"] == 'tenant:db2_bufferpool_hit_ratio:min{tenant="t-x"}'
+
+    def test_text_and_markdown_show_the_query(self, monkeypatch, capsys, cli_argv, tmp_path):
+        md = tmp_path / "out.md"
+        _, out = self._main(monkeypatch, capsys, cli_argv, "mysql_connections", "70", "85",
+                            [60, 80, 90], "--markdown-output", str(md))
+        q = 'tenant:mysql_threads_connected:max{tenant="t-x"}'
+        assert f"query: {q}" in out.out
+        assert f"| `{q}` |" in md.read_text(encoding="utf-8")
+
+
+class TestObservedMapMissing:
+    """#3017：observed-map 不能用 → rc 2（環境錯），在 Prometheus 檢查之前，
+    `--skip-if-unavailable` 也蓋不掉；`--json` 照樣拿到 caller_error envelope。"""
+
+    def _argv(self, cli_argv, *extra):
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+                 "--old-value", "70", "--new-value", "85",
+                 "--prometheus", "http://prom:9090", "--skip-if-unavailable", *extra)
+
+    def _missing(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(bt, "_OBSERVED_MAP", None)
+        monkeypatch.setattr(bt.observed_map_lib, "DEFAULT_MAP_PATH", str(tmp_path / "nope.yaml"))
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+
+    def test_missing_map_exits_2(self, monkeypatch, tmp_path, capsys, cli_argv):
+        self._missing(monkeypatch, tmp_path)
+        self._argv(cli_argv)
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        assert ei.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and "observed-map not found" in err and "nope.yaml" in err
+
+    def test_missing_map_json_envelope(self, monkeypatch, tmp_path, capsys, cli_argv):
+        self._missing(monkeypatch, tmp_path)
+        self._argv(cli_argv, "--json")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        assert ei.value.code == 2
+        doc = json.loads(capsys.readouterr().out)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "observed_map_unavailable")
+
+    def test_a_later_load_failure_is_still_rc_2(self, monkeypatch, capsys, cli_argv):
+        """後援：main 的 decorator 讓任何一處 ObservedMapError 都是 rc 2，不是 traceback。"""
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            if len(calls) > 1:
+                raise bt.observed_map_lib.ObservedMapError("gone", "missing")
+            return {}
+        monkeypatch.setattr(bt, "_observed_map", flaky)
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        self._argv(cli_argv)
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        assert ei.value.code == 2 and "ERROR: gone" in capsys.readouterr().err
+
+
+# ── 寫在檔裡的值：`N:critical`、讀不懂的值（#3017 review）────────────
+
+
+class TestWrittenValues:
+    """`--git-diff`／`--tenant` 給的是檔裡寫的值。exporter 對 `70:critical` 的
+    讀法（`pkg/config/resolve.go`：切第一個 `:`，前段是數字、後段是 severity）
+    在這裡照抄；以前 `float("95:critical")` 失敗被當成 0 個越界點，判出假的
+    HIGH（rc 1）或假的 LOW。"""
+
+    _VALS = [60, 80, 90, 100]
+
+    def _main(self, monkeypatch, capsys, cli_argv, argv):
+        asked = []
+
+        def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+            asked.append(q)
+            return [{"values": [(i, str(v)) for i, v in enumerate(self._VALS)]}]
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", query_range)
+        cli_argv("backtest_threshold", *argv, "--prometheus", "http://prom:9090", "--json")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        return ei.value.code, json.loads(capsys.readouterr().out)["changes"], asked
+
+    def _tenant(self, monkeypatch, capsys, cli_argv, metric, old, new):
+        return self._main(monkeypatch, capsys, cli_argv,
+                          ["--tenant", "t-x", "--metric", metric,
+                           "--old-value", old, "--new-value", new])
+
+    @pytest.mark.parametrize("key,raw,want", [
+        ("mysql_connections", "70", (70.0, "warning")),
+        ("mysql_connections", " 70 : critical ", (70.0, "critical")),
+        ("mysql_connections", "70:info", (70.0, "info")),
+        ("mysql_connections_critical", "95", (95.0, "critical")),
+        ("mysql_connections", "disable", None),
+        ("mysql_connections", None, None),
+        ("mysql_connections", "NaN", (float("nan"), "warning")),
+        # Spellings Go's ParseFloat accepts too (measured).
+        ("mysql_connections", "Inf", (float("inf"), "warning")),
+        ("mysql_connections", "-inf:critical", (float("-inf"), "critical")),
+        ("mysql_connections_critical", "+Inf", (float("inf"), "critical")),
+        ("mysql_connections", "infinity", (float("inf"), "warning")),
+        ("mysql_connections", "1e-400", (0.0, "warning")),
+    ])
+    def test_parse_threshold_value(self, key, raw, want):
+        got = bt.parse_threshold_value(key, raw)
+        if want is None or want[0] == want[0]:
+            assert got == want
+        else:
+            assert got[0] != got[0] and got[1] == want[1]
+
+    @pytest.mark.parametrize("key,raw", [
+        ("mysql_connections", "7O"), ("mysql_connections", "1_000"),
+        ("mysql_connections", "١٢"), ("mysql_connections_critical", "95:critical"),
+        ("mysql_connections", "+nan"), ("mysql_connections", "-nan:critical"),
+        ("mysql_connections", "1e400"), ("mysql_connections_critical", "-1e400"),
+        ("mysql_connections", "0x1p4"),
+    ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key",
+            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "hex-float"])
+    def test_values_this_backtest_cannot_read_are_refused(self, key, raw):
+        """Go 也拒絕：typo、非 ASCII 數字、帶號 NaN、溢位（ErrRange）。Go 接受但
+        這裡保守拒絕：`1_000`、`0x1p4`（實測 go run strconv.ParseFloat）。"""
+        with pytest.raises(ValueError):
+            bt.parse_threshold_value(key, raw)
+
+    def test_severity_change_is_not_backtested(self, monkeypatch, capsys, cli_argv):
+        """審查的重現：70 → 95:critical 以前判 HIGH「3 fewer」、rc 1。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", "95:critical")
+        assert (rc, asked) == (0, [])
+        assert rows[0]["status"] == "not_backtested"
+        assert rows[0]["backtest"] == ("skipped: severity changes (warning -> critical): "
+                                       "the two values are compared by different alerts")
+
+    def test_both_critical_compare_the_numbers_on_the_critical_alert(
+            self, monkeypatch, capsys, cli_argv):
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70:critical", "95:critical")
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 1)
+
+    def test_enable_as_critical(self, monkeypatch, capsys, cli_argv):
+        """停用 → 啟用：只有一邊有值，severity 取那一邊的。"""
+        _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                      "mysql_connections", "disable", "95:critical")
+        assert rows[0]["status"] == "analyzed" and rows[0]["new_breach_count"] == 1
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+
+    def test_critical_value_with_no_critical_alert(self, monkeypatch, capsys, cli_argv):
+        """mongodb 的門檻只正規化 warning：`N:critical` 沒有 alert 在比。"""
+        _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                      "mongodb_connections_current", "70:critical", "80:critical")
+        assert asked == []
+        assert rows[0]["backtest"].startswith(
+            "skipped: mongodb_connections_current_critical: no shipped alert compares")
+
+    @pytest.mark.parametrize("old,new,why", [
+        ("70", "7O", "value '7O': this backtest cannot read it the way the exporter does"),
+        ("70:info", "80:info", "severity 'info' is selected by no threshold rule"),
+    ])
+    def test_unreadable_values_are_not_backtested(self, monkeypatch, capsys, cli_argv,
+                                                   old, new, why):
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv, "mysql_connections", old, new)
+        assert (rc, asked) == (0, [])
+        assert rows[0]["backtest"].startswith("skipped: " + why)
+
+    def test_git_diff_reads_the_critical_suffix(self, monkeypatch, capsys, cli_argv):
+        """`--git-diff` 這條路一樣：diff 裡的 `"95:critical"` 不是 0 個越界點。"""
+        diff = (b"+++ b/conf.d/t-x.yaml\n"
+                b"-    mysql_connections: '70:critical'\n"
+                b"+    mysql_connections: '95:critical'\n"
+                b"-    pg_connections: '70'\n"
+                b"+    pg_connections: '95:critical'\n")
+        monkeypatch.setattr(bt, "_git_bytes",
+                            lambda args, quotepath_off=False: diff if "--unified=0" in args else b"")
+        rc, rows, asked = self._main(monkeypatch, capsys, cli_argv, ["--git-diff"])
+        got = {r["metric"]: r for r in rows}
+        assert (got["mysql_connections"]["old_breach_count"],
+                got["mysql_connections"]["new_breach_count"]) == (3, 1)
+        assert got["pg_connections"]["status"] == "not_backtested"
+        assert "severity changes" in got["pg_connections"]["backtest"]
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+
+
+class TestMalformedObservedMap:
+    def test_malformed_map_exits_2(self, monkeypatch, tmp_path, capsys, cli_argv):
+        """#3017 review：`keys: {mysql_connections: 5}` 以前是 AttributeError
+        traceback（rc 1，讀起來像 HIGH）；現在是 rc 2、一行指名 key。"""
+        bad = tmp_path / "metric_observed_map.yaml"
+        bad.write_text("keys:\n  mysql_connections: 5\n", encoding="utf-8")
+        monkeypatch.setattr(bt, "_OBSERVED_MAP", None)
+        monkeypatch.setattr(bt.observed_map_lib, "DEFAULT_MAP_PATH", str(bad))
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+                 "--old-value", "70", "--new-value", "85", "--prometheus", "http://prom:9090")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        assert ei.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and "'mysql_connections'" in err and "not a mapping" in err

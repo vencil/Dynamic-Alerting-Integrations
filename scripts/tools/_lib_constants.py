@@ -46,27 +46,55 @@ DOCS_INSTALL_URL: Final[str] = (
 )
 
 # ============================================================
-# Reserved Tenant Config Keys (Python source of truth)
+# Reserved Tenant Config Keys
 # ============================================================
-# Go equivalent: components/threshold-exporter/app/pkg/config/types.go
-#   validReservedKeys + validReservedPrefixes — keep in sync.
-# Enforced by tests/shared/test_reserved_key_py_go_parity.py (CI parity gate).
+# The top-level `_` keys are listed once, in
+# components/threshold-exporter/app/pkg/config/reserved_keys.json (ADR-038);
+# the block below is generated from it, as are Go's copies
+# (pkg/config/reserved_keys_gen.go) and the two schemas' `_` keys.
+#
+# VALID_RESERVED_KEYS / VALID_RESERVED_PREFIXES: the reserved tenant keys
+# (read in a tenant's own config) and the prefixes that reserve every key
+# under them. TENANT_ROUTING_KEYS / PLATFORM_ROUTING_KEYS: the `_routing`
+# keys the route generator reads in a tenant's config / at the top level of
+# a root conf.d `_` file (#2983). TOP_LEVEL_READ_ELSEWHERE: the `_` keys
+# another reader takes from the top level of a root `_` file, so
+# validate_config never reports them (#2386; pinned beside da-guard's by
+# tests/shared/defaults_wrapper_matrix.json). The policy readers use it too,
+# to keep platform-level keys out of a tenant's reserved keys.
+# RETIRED_RESERVED_KEYS: keys nothing reads any more, with the hint printed.
+# BEGIN GENERATED reserved keys — scripts/tools/dx/sync_schema.py --update writes this
+# block from components/threshold-exporter/app/pkg/config/reserved_keys.json. DO NOT EDIT.
 VALID_RESERVED_KEYS: Final[set[str]] = {
-    "_silent_mode", "_severity_dedup", "_namespaces", "_metadata", "_profile",
-    "_routing_profile",  # v2.1.0 ADR-007: cross-domain routing profile reference
-    "_custom_alerts",  # v2.9.0 ADR-024 能力 B (#741): tenant-authored custom alerts → user_threshold{component="custom"}
+    "_custom_alerts",
+    "_metadata",
+    "_namespaces",
+    "_profile",
+    "_routing",
+    "_routing_profile",
+    "_severity_dedup",
+    "_silent_mode",
 }
 VALID_RESERVED_PREFIXES: Final[tuple[str, ...]] = ("_state_", "_routing")
-
-#: `_`-prefixed keys another reader takes from the TOP level of a defaults
-#: file — the route generator's `_routing_defaults` / `_routing_enforced`, the
-#: custom-alert compiler's `_custom_alerts` — so validate_config never reports
-#: them (#2386). da-guard's `TopLevelReadElsewhere` is the same list;
-#: tests/shared/defaults_wrapper_matrix.json pins both. Moved here from
-#: validate_config (#2115 0-B): the policy readers use it too, to keep
-#: platform-level keys out of a tenant's reserved keys.
-TOP_LEVEL_READ_ELSEWHERE: Final[frozenset[str]] = frozenset(
-    {"_custom_alerts", "_routing_defaults", "_routing_enforced"})
+TENANT_ROUTING_KEYS: Final[frozenset[str]] = frozenset({
+    "_routing",
+    "_routing_profile",
+})
+PLATFORM_ROUTING_KEYS: Final[frozenset[str]] = frozenset({
+    "_routing_defaults",
+    "_routing_enforced",
+})
+TOP_LEVEL_READ_ELSEWHERE: Final[frozenset[str]] = frozenset({
+    "_custom_alerts",
+    "_policies",
+    "_routing_defaults",
+    "_routing_enforced",
+})
+RETIRED_RESERVED_KEYS: Final[dict[str, str]] = {
+    "_routing_receiver_type":
+        "no longer read: set the receiver type as `_routing.receiver.type`",
+}
+# END GENERATED reserved keys
 
 # ============================================================
 # Timing Guardrails

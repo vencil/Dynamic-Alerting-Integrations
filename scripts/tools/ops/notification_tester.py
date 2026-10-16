@@ -47,6 +47,7 @@ import argparse
 import http.client
 import json
 import os
+import ssl
 import sys
 import time
 import urllib.error
@@ -122,6 +123,8 @@ STATUS_OK = "OK"
 STATUS_TIMEOUT = "TIMEOUT"
 STATUS_AUTH_ERROR = "AUTH_ERROR"
 STATUS_CONNECTION_REFUSED = "CONNECTION_REFUSED"
+STATUS_CONNECTION_ERROR = "CONNECTION_ERROR"
+STATUS_TLS_ERROR = "TLS_ERROR"
 STATUS_INVALID_URL = "INVALID_URL"
 STATUS_INVALID_CONFIG = "INVALID_CONFIG"
 STATUS_HTTP_ERROR = "HTTP_ERROR"
@@ -507,6 +510,31 @@ def _build_test_request(
     return None, f"no test implementation for receiver type '{rtype}'"
 
 
+# http.client raises OSError with this message when an HTTPS proxy refuses the
+# CONNECT; DNS failures and refused connections behind the proxy all look like
+# this, so what failed is the proxy hop, not necessarily the receiver.
+_PROXY_TUNNEL_PREFIX = "Tunnel connection failed"
+
+
+def _classify_connection_error(cause: object, message: str) -> tuple[str, str]:
+    """Map a non-timeout connection error to (status, detail).
+
+    Classified by the exception type of ``cause``, never by its message (the
+    proxy prefix is the one exception: http.client gives it no own type).
+    ``cause`` is the bare OSError, or ``URLError.reason``, which may be a plain
+    string; a string reason is never a refused connection (urllib always
+    passes the ConnectionRefusedError object), so it is CONNECTION_ERROR.
+    """
+    if message.startswith(_PROXY_TUNNEL_PREFIX):
+        return STATUS_CONNECTION_ERROR, ("via proxy: " + message)[:80]
+    if isinstance(cause, ConnectionRefusedError):
+        return STATUS_CONNECTION_REFUSED, message[:80]
+    if isinstance(cause, ssl.SSLError):  # includes SSLCertVerificationError
+        return STATUS_TLS_ERROR, message[:80]
+    # DNS (gaierror), reset, RemoteDisconnected, unreachable, ...
+    return STATUS_CONNECTION_ERROR, message[:80]
+
+
 def _send_test_request(
     label: str,
     rtype: str,
@@ -572,21 +600,21 @@ def _send_test_request(
     except urllib.error.URLError as exc:
         latency = int((time.monotonic() - start) * 1000)
         reason = str(exc.reason) if exc.reason else str(exc)
-        # Type check first: an empty-message TimeoutError gives "" (#2965).
-        if isinstance(exc.reason, TimeoutError) or "timed out" in reason.lower():
-            status = STATUS_TIMEOUT
-        elif "refused" in reason.lower():
-            status = STATUS_CONNECTION_REFUSED
+        # The proxy hop first: a CONNECT answered "504 Connection Timed Out"
+        # is the proxy's verdict, not this receiver timing out (#2995).
+        # Then type: an empty-message TimeoutError gives "" (#2965).
+        if reason.startswith(_PROXY_TUNNEL_PREFIX):
+            status, detail = _classify_connection_error(exc.reason, reason)
+        elif isinstance(exc.reason, TimeoutError) or "timed out" in reason.lower():
+            status, detail = STATUS_TIMEOUT, (reason or "timed out")[:80]
         else:
-            status = STATUS_CONNECTION_REFUSED
-        if status == STATUS_TIMEOUT and not reason:
-            reason = "timed out"
+            status, detail = _classify_connection_error(exc.reason, reason)
         return ReceiverTestResult(
             receiver_name=label,
             receiver_type=rtype,
             status=status,
             latency_ms=latency,
-            detail=reason[:80],
+            detail=detail,
             url_tested=target_url,
         )
 
@@ -606,13 +634,16 @@ def _send_test_request(
         )
 
     except OSError as exc:
+        # Errors urllib does not wrap in URLError: a reset or a close without
+        # reply (RemoteDisconnected) after the request went out.
         latency = int((time.monotonic() - start) * 1000)
+        status, detail = _classify_connection_error(exc, str(exc))
         return ReceiverTestResult(
             receiver_name=label,
             receiver_type=rtype,
-            status=STATUS_CONNECTION_REFUSED,
+            status=status,
             latency_ms=latency,
-            detail=str(exc)[:80],
+            detail=detail,
             url_tested=target_url,
         )
 
@@ -782,6 +813,8 @@ _STATUS_SYMBOLS = {
     STATUS_TIMEOUT: "⏱",
     STATUS_AUTH_ERROR: "🔒",
     STATUS_CONNECTION_REFUSED: "✗",
+    STATUS_CONNECTION_ERROR: "✗",
+    STATUS_TLS_ERROR: "✗",
     STATUS_INVALID_URL: "✗",
     STATUS_INVALID_CONFIG: "✗",
     STATUS_HTTP_ERROR: "✗",

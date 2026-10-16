@@ -5,6 +5,11 @@ Given a set of threshold changes (from git diff or manual input), queries
 Prometheus range data to simulate how alert firing counts would change under
 old vs new thresholds. Produces a risk assessment report suitable for PR review.
 
+Each change is replayed against the one series its alert compares, the way
+the alert compares it (`>` / `<`), as metric_observed_map.yaml records it
+(#3017 / #3002); a key the map does not record that way is listed as not
+backtested.
+
 Usage:
   # From git diff (CI mode)
   python3 backtest_threshold.py --git-diff --prometheus http://localhost:9090
@@ -63,10 +68,16 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ServedValuesError,
     DA_GUARD_PREFIX,
+    canonical_key,
     load_served_tree,
     now_at,
     print_load_error,
 )
+# #3017 / #3002: what each alert compares (series + direction) is read from the
+# observed-map, never guessed; `--git-diff` / `--tenant` keys are as written, so
+# a retired spelling goes through the alias table first.
+import _observed_map_lib as observed_map_lib  # noqa: E402
+from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
     has_yaml_extension,
@@ -612,6 +623,25 @@ def _print_tree_warnings(trees):
                 print(f"WARN: [{where}] {safe_label(line)}", file=sys.stderr)
 
 
+def _row_identity(series):
+    """What a threshold recording rule groups a /metrics row by: its metric
+    key and severity (`max by(tenant)` over every row of that pair)."""
+    return series.metric_key, series.labels.get("severity")
+
+
+def _dimensioned_rows(days):
+    """`{(metric_key, severity): {key, ...}}`: the dimensioned keys a tenant
+    serves on either side at any time of the day (legacy twins aside)."""
+    out = {}
+    for key, pair in days.items():
+        for day in pair:
+            for _s, _e, _v, series in day:
+                for s in series or ():
+                    if (s.dimensions or s.dimensions_regex) and not s.legacy_twin:
+                        out.setdefault(_row_identity(s), set()).add(key)
+    return out
+
+
 def extract_changes_from_dirs(config_dir, baseline_dir):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
@@ -631,9 +661,14 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
       as on either side in any part of the day the pair holds in, as
       served-values reports it — never empty, since at least one side
       serves a value there and a served segment always carries its series.
-      `backtest_change` queries Prometheus with the `metric_key` of those
-      that are not a legacy twin (a `<base>_critical` key's is `<base>`), so
-      a critical key is backtested against its base's data.
+      `alert_comparison` reads, from each one that is not a legacy twin,
+      which alert compares it (`<metric_key>_critical` for a critical row,
+      else `metric_key`; #3017).
+    * `dimensioned_siblings` (only when non-empty): the dimensioned keys
+      the tenant serves, on either side at any time of the day, as rows of
+      the same metric key and severity as one of this change's rows. The
+      alert's threshold is `max by(tenant)` over all of those rows, so the
+      changed value alone is not what the alert compares (#3017).
     * A key /metrics serves on one side only (switched off, dropped, or the
       tenant added / removed) has None on the other side — the shape
       `backtest_change` already reads as "enabled" / "disabled".
@@ -663,9 +698,10 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
         for tv_ in (old_tv, new_tv):
             if tv_ is not None:
                 keys |= set(tv_.schedules or {})
-        for key in sorted(keys):
-            old_day = _served_day(old_tv, key, "baseline")
-            new_day = _served_day(new_tv, key, "current")
+        days = {key: (_served_day(old_tv, key, "baseline"), _served_day(new_tv, key, "current"))
+                for key in sorted(keys)}
+        dimensioned = _dimensioned_rows(days)
+        for key, (old_day, new_day) in days.items():
             pairs = {}
             for start, end, old_v, new_v in _differing_runs(old_day, new_day):
                 pairs.setdefault((old_v, new_v), []).append((start, end))
@@ -675,6 +711,11 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
                 change["series"] = _series_in((old_day, new_day), spans)
+                siblings = sorted({k for s in change["series"]
+                                   if not (s.legacy_twin or s.dimensions or s.dimensions_regex)
+                                   for k in dimensioned.get(_row_identity(s), ())})
+                if siblings:
+                    change["dimensioned_siblings"] = siblings
                 changes.append(change)
 
     return changes
@@ -1017,83 +1058,246 @@ def custom_alert_markdown(tenants):
     )
 
 
-def not_backtestable(change):
-    """Why a threshold key cannot be backtested, or None.
+_OBSERVED_MAP = None
 
-    #2119: `backtest_change` asks Prometheus for `<metric key>{tenant="..."}`.
-    A dimensioned key (`mysql_connections{db="a"}`) narrows that to some
-    label values, which that selector does not, so it is listed in the
-    report as not backtested. Building selectors for it is not done here.
+
+def _observed_map():
+    """The committed observed-map's `keys` (`load_observed_map`), loaded once
+    per run. Raises `ObservedMapError` when it cannot be used: `main` turns
+    that into rc 2 — a backtest with no record of what the alerts compare
+    would be the #3002 guess again, not a smaller backtest."""
+    global _OBSERVED_MAP
+    if _OBSERVED_MAP is None:
+        _OBSERVED_MAP = observed_map_lib.load_observed_map()
+    return _OBSERVED_MAP
+
+
+# The severities a threshold recording rule selects (`severity="warning"` for
+# `tenant:alert_threshold:<key>`, `severity="critical"` for `<key>_critical`).
+_COMPARED_SEVERITIES = ("warning", "critical")
+
+
+def parse_threshold_value(key, raw):
+    """`(value, severity)` as the exporter reads one threshold value written
+    for `key`, or None when it is switched off; raises ValueError for a value
+    this backtest cannot read the way the exporter does (#3017).
+
+    Mirrors `pkg/config/resolve.go`: a disabled value (`is_disabled`) serves
+    nothing; a `<base>_critical` key's whole value is the number and its row
+    is critical (`resolveCriticalRows`); any other key's value is split once
+    at `:` into number and severity (`"70:critical"`; no suffix is
+    `warning`), each trimmed. The number is read with Python's `float`
+    only where it agrees with Go's `ParseFloat` (measured, go1.x):
+
+    * refused, Go refuses too: a non-ASCII digit; a signed NaN (`+nan`);
+      an overflow (`1e400` — Go returns ErrRange, so the exporter treats the
+      value as unreadable, while `float` answers inf);
+    * refused although Go accepts — conservative, it only costs a backtest:
+      an underscore (`1_000`), a hex float (`0x1p4`);
+    * accepted, both agree: decimals, `NaN`, `Inf` / `-inf` / `infinity`.
+
+    A value the exporter itself cannot read is replaced with the default or
+    dropped, which this tool cannot see from the value alone."""
+    if raw is None or is_disabled(str(raw)):
+        return None
+    text = str(raw)
+    if key.endswith("_critical"):
+        number, severity = text, "critical"
+    else:
+        number, sep, suffix = text.partition(":")
+        severity = suffix.strip() if sep else "warning"
+    number = number.strip()
+    if not number.isascii() or "_" in number:
+        raise ValueError(raw)
+    value = float(number)
+    spelled = number.lower().lstrip("+-")
+    if math.isnan(value) and number.lower() != "nan":
+        raise ValueError(raw)  # `+nan` / `-nan`: Go refuses a signed NaN
+    if math.isinf(value) and spelled not in ("inf", "infinity"):
+        raise ValueError(raw)  # overflow: Go's ErrRange
+    return value, severity
+
+
+def _written_alert_key(change):
+    """`(key, None)`: the threshold key whose alert compares a change written
+    as `--git-diff` / `--tenant` give it — or `(None, reason)`.
+
+    The key as written: a retired spelling goes through the alias table
+    (the exporter's own), and `N:critical` on a base key is a critical row,
+    compared by the `<key>_critical` alert. Values that are not read as
+    written, values of two severities (two different alerts), or a severity
+    no threshold rule selects, are reasons."""
+    key = canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
+    severities = []
+    for raw in (change["old_value"], change["new_value"]):
+        try:
+            parsed = parse_threshold_value(key, raw)
+        except ValueError:
+            return None, f"value {str(raw)!r}: this backtest cannot read it the way the exporter does"
+        if parsed is not None and parsed[1] not in severities:
+            severities.append(parsed[1])
+    if len(severities) > 1:
+        return None, (f"severity changes ({' -> '.join(severities)}): the two values "
+                      "are compared by different alerts")
+    severity = severities[0] if severities else "warning"
+    if severity not in _COMPARED_SEVERITIES:
+        return None, f"severity {severity!r} is selected by no threshold rule"
+    if severity == "critical" and not key.endswith("_critical"):
+        key += "_critical"
+    return key, None
+
+
+def _alert_keys(change):
+    """`(keys, None)`: the threshold keys whose alerts compare this change,
+    in canonical spelling, each once — or `(None, reason)`.
+
+    A change read from two trees names them by its /metrics series (#2750):
+    a critical row is compared by the `<metric_key>_critical` alert (a window
+    overridden to `N:critical` too), a warning row by `metric_key`'s; a row
+    of any other severity (`60:high`, `60:Critical` — the rules select
+    `severity="warning"` / `"critical"` exactly) by none, the same reason
+    `_written_alert_key` gives. A legacy twin is the same row under a
+    retired name and is never read.
+    ⛔ A non-critical row whose `metric_key` itself ends in `_critical` is a
+    `<base>_critical` key served on its own (its base is not declared in the
+    root `defaults:`): its metric label is `<x>_critical`, which no threshold
+    rule selects, so no alert compares it. A change from `--git-diff` /
+    `--tenant` is `_written_alert_key`."""
+    if "series" not in change:
+        key, reason = _written_alert_key(change)
+        return ([key], None) if key else (None, reason)
+    out = []
+    for s in change["series"]:
+        if s.legacy_twin:
+            continue
+        severity = s.labels.get("severity")
+        if severity not in _COMPARED_SEVERITIES:
+            return None, f"severity {severity!r} is selected by no threshold rule"
+        critical = severity == "critical"
+        if not critical and s.metric_key.endswith("_critical"):
+            return None, (f"served as a non-critical row of {s.metric_key} (its base is not "
+                          "declared in the root defaults:), which no alert compares")
+        key = s.metric_key + "_critical" if critical else s.metric_key
+        if key not in out:
+            out.append(key)
+    return out, None
+
+
+def alert_comparison(change):
+    """`(series, "above" | "below", None)`: the recording rule the change's
+    alert compares against its threshold and the way it compares, from the
+    observed-map (#3017 / #3002) — or `(None, None, reason)`.
+
+    ⛔ Nothing is guessed. A key the map has no entry for (no shipped alert
+    compares it, or KNOWN_DEFERRED), or whose entry a backtest cannot replay
+    (`usable_for_backtest`: needs review, composite, unresolved direction,
+    not per-tenant), has a reason and is not backtested; so is a change
+    whose rows are compared by alerts that disagree on the series or the
+    direction (one replay cannot stand for both). A reason about a key other
+    than the change's own (a critical row's `_critical` alert) names it."""
+    observed = _observed_map()
+    keys, reason = _alert_keys(change)
+    if reason is not None:
+        return None, None, reason
+    found = []
+    for key in keys:
+        entry, reason = observed_map_lib.lookup(observed, key)
+        if entry is not None:
+            series, direction, reason = observed_map_lib.usable_for_backtest(entry)
+        if reason is not None:
+            return None, None, (reason if key == change["metric"] else f"{key}: {reason}")
+        if (series, direction) not in found:
+            found.append((series, direction))
+    if not found:  # no non-twin row: `not_backtestable` says so first
+        return None, None, "served-values gave no non-twin /metrics series"
+    if len(found) > 1:
+        return None, None, ("rows compared differently: "
+                            + "; ".join(f"{s} ({d})" for s, d in found))
+    return found[0][0], found[0][1], None
+
+
+def not_backtestable(change):
+    """Why a threshold change cannot be backtested, or None.
+
+    #2119: a dimensioned key (`mysql_connections{db="a"}`) narrows its
+    alert to some label values, which the per-tenant query asked does not,
+    so it is listed in the report as not backtested. Building selectors for
+    it is not done here.
 
     #2750: a change read from two trees (`extract_changes_from_dirs`)
     carries the /metrics series served-values reports for it, and is judged
     by those fields alone: dimensioned when a series has `dimensions` or
-    `dimensions_regex`. Its severity is no reason: a critical row is queried
-    by its `metric_key` (`backtest_change`). A change from `--git-diff` or
-    `--tenant` names a key as written, with no series; there the key's `{`
-    is what marks it dimensioned."""
+    `dimensions_regex`. A change from `--git-diff` or `--tenant` names a key
+    as written, with no series; there the key's `{` is what marks it
+    dimensioned.
+
+    #3017: a served change with `dimensioned_siblings` (the alert's
+    threshold is the max over them too) is not backtested. A change from
+    `--git-diff` / `--tenant` cannot know its siblings — a known
+    approximation, like `for:`.
+
+    #3017 / #3002: then `alert_comparison`'s reason — a key whose alert the
+    observed-map does not record as one per-tenant series compared one way
+    is not backtested, rather than replayed against a guessed query."""
     if "series" not in change:
-        return "dimensioned key" if "{" in change["metric"] else None
-    # Fail closed: with no series to name the data (none at all, or only a
-    # legacy twin, which `_query_metrics` never asks about) nothing would be
-    # queried, and `backtest_change` would report that as "no data".
-    # `extract_changes_from_dirs` never yields such a change today.
-    if not _query_metrics(change):
-        return "served-values gave no non-twin /metrics series"
-    if any(s.dimensions or s.dimensions_regex for s in change["series"]):
-        return "dimensioned key"
-    return None
+        if "{" in change["metric"]:
+            return "dimensioned key"
+    else:
+        # Fail closed: with no series to name the data (none at all, or only
+        # a legacy twin, which is never read) nothing would be queried, and
+        # `backtest_change` would report that as "no data".
+        # `extract_changes_from_dirs` never yields such a change today.
+        if all(s.legacy_twin for s in change["series"]):
+            return "served-values gave no non-twin /metrics series"
+        if any(s.dimensions or s.dimensions_regex for s in change["series"]):
+            return "dimensioned key"
+        # #3017: the alert's threshold is `max by(tenant)` over this row AND
+        # the dimensioned rows of the same metric and severity, so replaying
+        # the changed value alone would compare against the wrong number.
+        if change.get("dimensioned_siblings"):
+            return ("dimensioned rows share this alert's threshold (max by tenant): "
+                    + ", ".join(change["dimensioned_siblings"]))
+    return alert_comparison(change)[2]
 
 
-def _query_metrics(change):
-    """The metric names `backtest_change` asks Prometheus about: the
-    `metric_key` of each /metrics series served-values reports for the
-    change (#2750: `X` for `X_critical`), each once — or, for a change with
-    no series (`--git-diff`, `--tenant`), the key as given.
-
-    ⛔ A legacy twin (`legacy_twin`, the resolver's mark) is never asked
-    about: it is the same row under the retired name (#1231 renamed
-    `mysql_cpu` because it read as host CPU%), so data found under that name
-    is not this threshold's data. With only the twin's name in Prometheus the
-    change is `no_data`, not analyzed against it."""
-    if "series" not in change:
-        return [change["metric"]]
-    out = []
-    for s in change["series"]:
-        if not s.legacy_twin and s.metric_key not in out:
-            out.append(s.metric_key)
-    return out
+def _not_backtested(change, reason):
+    return {
+        "tenant": change["tenant"],
+        "metric": change["metric"],
+        "old_value": change["old_value"],
+        "new_value": change["new_value"],
+        "status": "not_backtested",
+        "risk": "UNKNOWN",
+        "backtest": f"skipped: {reason}",
+        "message": f"Not backtested: {reason}",
+    }
 
 
 def backtest_change(prom_url, change, lookback_seconds):
     """Backtest a single threshold change against historical data.
 
-    Returns analysis dict with breach counts and risk assessment.
+    Returns analysis dict with breach counts and risk assessment; `query` is
+    the PromQL asked (#3002 B). A change `not_backtestable` refuses is
+    returned as `not_backtested` without asking Prometheus anything.
     """
     metric = change["metric"]
     tenant = change["tenant"]
     old_value = change["old_value"]
     new_value = change["new_value"]
 
-    # Build PromQL query for this metric + tenant
-    # Try common recording rule patterns, for each metric name the change's
-    # /metrics series name (#2750), in order.
-    queries = [q for name in _query_metrics(change) for q in (
-        f'{name}{{tenant="{tenant}"}}',
-        f'tenant:{name}:max{{tenant="{tenant}"}}',
-        f'{name}{{namespace="{tenant}"}}',
-    )]
+    skip = not_backtestable(change)
+    if skip:
+        return _not_backtested(change, skip)
+    # #3017 / #3002: ONE query — the series the alert compares, per tenant —
+    # and the alert's own direction. It used to try three guessed names
+    # (`<key>`, `tenant:<key>:max`, `<key>{namespace=}`), none of which is
+    # what 31 of 64 alerts compare, and count every breach as `>`.
+    series, direction, _ = alert_comparison(change)
+    query = f'{series}{{tenant="{tenant}"}}'
 
     values = []
-    used_query = None
-    for q in queries:
-        result = query_range(prom_url, q, lookback_seconds)
-        if result:
-            # Collect all values from all series
-            for series in result:
-                values.extend(series.get("values", []))
-            used_query = q
-            break
+    for row in query_range(prom_url, query, lookback_seconds):
+        values.extend(row.get("values", []))
 
     if not values:
         return {
@@ -1103,6 +1307,7 @@ def backtest_change(prom_url, change, lookback_seconds):
             "new_value": new_value,
             "status": "no_data",
             "risk": "UNKNOWN",
+            "query": query,
             "message": "No historical data found in Prometheus",
         }
 
@@ -1110,6 +1315,7 @@ def backtest_change(prom_url, change, lookback_seconds):
     # comparison against it is false, so it would read as analyzed/LOW (or
     # MEDIUM for a disable) on no evidence at all. Same `no_data` verdict as an
     # empty result, with its own message so the two stay distinguishable.
+    # There is no other query to fall back to: the alert compares this one.
     if all(_is_nan_sample(v) for _, v in values):
         return {
             "tenant": tenant,
@@ -1118,6 +1324,7 @@ def backtest_change(prom_url, change, lookback_seconds):
             "new_value": new_value,
             "status": "no_data",
             "risk": "UNKNOWN",
+            "query": query,
             "message": "Only NaN samples in lookback window",
         }
 
@@ -1130,9 +1337,13 @@ def backtest_change(prom_url, change, lookback_seconds):
     # ±Inf stays too: it is a real sample that does fire.
     total_points = len(values)
 
-    # Handle disable transitions
-    old_disabled = old_value is None or is_disabled(str(old_value))
-    new_disabled = new_value is None or is_disabled(str(new_value))
+    # #3017: the numbers as the exporter reads them (`70:critical` is 70 on
+    # the critical row); `not_backtestable` already refused a value it cannot
+    # read. None is a switched-off side: the disable / enable transitions.
+    key = canonical_key(metric, DEPRECATED_KEY_ALIASES).partition("{")[0]
+    old_t, new_t = (parse_threshold_value(key, v) for v in (old_value, new_value))
+    old_t, new_t = (t and t[0] for t in (old_t, new_t))
+    old_disabled, new_disabled = old_t is None, new_t is None
 
     if new_disabled and not old_disabled:
         return {
@@ -1141,16 +1352,17 @@ def backtest_change(prom_url, change, lookback_seconds):
             "old_value": old_value,
             "new_value": new_value,
             "status": "analyzed",
+            "query": query,
             "risk": "MEDIUM",
             "data_points": total_points,
-            "old_breach_count": count_threshold_breaches(values, old_value),
+            "old_breach_count": count_threshold_breaches(values, old_t, direction),
             "new_breach_count": 0,
             "impact_pct": -100.0,
             "message": "Metric disabled — all alerts silenced",
         }
 
     if old_disabled and not new_disabled:
-        new_breaches = count_threshold_breaches(values, new_value)
+        new_breaches = count_threshold_breaches(values, new_t, direction)
         pct = (new_breaches / total_points * 100) if total_points > 0 else 0
         risk = "HIGH" if pct > 10 else "MEDIUM" if pct > 0 else "LOW"
         return {
@@ -1159,6 +1371,7 @@ def backtest_change(prom_url, change, lookback_seconds):
             "old_value": old_value,
             "new_value": new_value,
             "status": "analyzed",
+            "query": query,
             "risk": risk,
             "data_points": total_points,
             "old_breach_count": 0,
@@ -1168,8 +1381,8 @@ def backtest_change(prom_url, change, lookback_seconds):
         }
 
     # Normal threshold change
-    old_breaches = count_threshold_breaches(values, old_value)
-    new_breaches = count_threshold_breaches(values, new_value)
+    old_breaches = count_threshold_breaches(values, old_t, direction)
+    new_breaches = count_threshold_breaches(values, new_t, direction)
 
     if old_breaches == 0 and new_breaches == 0:
         impact_pct = 0.0
@@ -1189,8 +1402,8 @@ def backtest_change(prom_url, change, lookback_seconds):
         else:
             risk = "LOW"
 
-        direction = "more" if new_breaches > old_breaches else "fewer"
-        message = f"{abs(new_breaches - old_breaches)} {direction} firing points ({impact_pct:+.1f}%)"
+        more = "more" if new_breaches > old_breaches else "fewer"
+        message = f"{abs(new_breaches - old_breaches)} {more} firing points ({impact_pct:+.1f}%)"
 
     return {
         "tenant": tenant,
@@ -1198,6 +1411,7 @@ def backtest_change(prom_url, change, lookback_seconds):
         "old_value": old_value,
         "new_value": new_value,
         "status": "analyzed",
+        "query": query,
         "risk": risk,
         "data_points": total_points,
         "old_breach_count": old_breaches,
@@ -1291,6 +1505,8 @@ def print_text_report(report):
               f"{safe_label(change['metric'])}: "
               f"{old_v} -> {new_v}{window}")
         print(f"           {safe_label(change['message'])}")
+        if change.get("query"):  # #3002 B: the PromQL this verdict rests on
+            print(f"           query: {safe_label(change['query'])}")
 
     print()
 
@@ -1311,15 +1527,17 @@ def generate_markdown(report):
         lines.append(f"\n> **{rs['HIGH']} HIGH risk change(s) detected.**")
 
     lines.append("")
-    lines.append("| Risk | Tenant | Metric | Old | New | Impact |")
-    lines.append("|------|--------|--------|-----|-----|--------|")
+    lines.append("| Risk | Tenant | Metric | Old | New | Impact | Query |")
+    lines.append("|------|--------|--------|-----|-----|--------|-------|")
 
     for c in sorted(report["changes"], key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3}.get(x["risk"], 9)):
         old_v = c["old_value"] or "—"
         new_v = c["new_value"] or "—"
         window = f" ({', '.join(c['window'])} UTC)" if c.get("window") else ""
+        # #3002 B: the PromQL the verdict rests on; "—" when none was asked.
+        query = f"`{c['query']}`" if c.get("query") else "—"
         lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window} | "
-                     f"{old_v} | {new_v} | {c['message']} |")
+                     f"{old_v} | {new_v} | {c['message']} | {query} |")
 
     lines.append("")
     lines.append("---")
@@ -1359,6 +1577,19 @@ def _exit_served_values_error(exc, args):
     sys.exit(EXIT_CALLER_ERROR)
 
 
+def _exit_observed_map_error(exc, args):
+    """#3017: the observed-map is missing, unreadable or empty → rc 2, the
+    line `exit_on_observed_map_error` prints, plus the `--json`
+    ``caller_error`` envelope this tool owes on every terminal path (that
+    decorator stays on `main` as the backstop for any other load)."""
+    print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)  # #1538
+    if args.json:
+        print(format_json_report(empty_report(
+            args.lookback, "caller_error", "observed_map_unavailable")))
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+@observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main():
     """CLI entry point: Backtest threshold changes against historical Prometheus data."""
     try_utf8_stdout()
@@ -1517,6 +1748,15 @@ def main():
         except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
             _exit_served_values_error(exc, args)
 
+    # #3017: the observed-map says what every alert compares; without it no
+    # change can be backtested, so an unusable map is rc 2 — and BEFORE the
+    # Prometheus check, for the reason the two checks above are: a
+    # `--skip-if-unavailable` green must not hide it.
+    try:
+        _observed_map()
+    except observed_map_lib.ObservedMapError as exc:
+        _exit_observed_map_error(exc, args)
+
     # Check Prometheus availability
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
@@ -1581,20 +1821,9 @@ def main():
     lookback_seconds = parse_lookback(args.lookback)
     results = []
     for change in changes:
-        skip = not_backtestable(change)
-        if skip:
-            result = {
-                "tenant": change["tenant"],
-                "metric": change["metric"],
-                "old_value": change["old_value"],
-                "new_value": change["new_value"],
-                "status": "not_backtested",
-                "risk": "UNKNOWN",
-                "backtest": f"skipped: {skip}",
-                "message": f"Not backtested: {skip}",
-            }
-        else:
-            result = backtest_change(args.prometheus, change, lookback_seconds)
+        # `not_backtestable` is asked inside: a change it refuses is listed
+        # as not backtested and Prometheus is not asked about it.
+        result = backtest_change(args.prometheus, change, lookback_seconds)
         if change.get("window"):  # #2119: the part of the day the values hold in
             result["window"] = change["window"]
         results.append(result)

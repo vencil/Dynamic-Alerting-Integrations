@@ -137,16 +137,14 @@ keys:
     pack: rule-pack-kafka.yaml
     scope: tenant
     direction: <
-    candidates:
-    - tenant:kafka_active_controllers:max
+    observed_series: tenant:kafka_active_controllers:max
     recommendation_mode: not-applicable
     reason: by-design not-applicable — 期望值==1 不變量 (#916)
   kafka_broker_count:
     pack: rule-pack-kafka.yaml
     scope: tenant
     direction: <
-    candidates:
-    - tenant:kafka_broker_count:max
+    observed_series: tenant:kafka_broker_count:max
     recommendation_mode: not-applicable
     reason: by-design not-applicable — 拓撲下限 (#916)
   kafka_consumer_lag:
@@ -310,8 +308,7 @@ keys:
     pack: rule-pack-rabbitmq.yaml
     scope: tenant
     direction: <
-    candidates:
-    - tenant:rabbitmq_consumers:max
+    observed_series: tenant:rabbitmq_consumers:max
     recommendation_mode: not-applicable
     reason: by-design not-applicable — 整數 count 下限 (#916)
   rabbitmq_node_mem_percent:

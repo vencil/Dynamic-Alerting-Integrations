@@ -3,7 +3,7 @@
 測試涵蓋：
   - 百分位數計算（P50/P95/P99，已知分佈驗證）
   - 信心等級（樣本數門檻）
-  - 推薦邏輯（正常/noisy/低樣本/非數值/delta < 5%）
+  - 推薦邏輯（正常/低樣本/非數值/delta < 5%）
   - Reserved key 過濾
   - Prometheus 查詢（mock HTTP）
   - Dry-run 模式
@@ -188,13 +188,6 @@ class TestRecommendThreshold:
         assert rec.recommended == 95
         assert rec.confidence == tr.CONFIDENCE_MEDIUM
         assert rec.delta_pct == pytest.approx(18.75, abs=0.1)
-
-    def test_noisy_alert_recommends_p99(self):
-        """BAD noise grade 推薦 P99（放寬）。"""
-        pcts = {"p50": 50.0, "p95": 85.0, "p99": 95.0}
-        rec = tr.recommend_threshold("cpu", 80, pcts, 500, 100, noise_grade="BAD")
-        assert rec.recommended == 95
-        assert "P99" in rec.reason
 
     def test_within_margin_no_change(self):
         """Delta < 5% 不建議變更。"""
@@ -658,6 +651,28 @@ class TestCLI:
             with pytest.raises(SystemExit) as exc_info:
                 tr.main()
             assert exc_info.value.code == EXIT_CALLER_ERROR
+
+    def test_missing_observed_map_exits_caller_error(self, tmp_path, monkeypatch, capsys):
+        """#3017：map 缺檔不再把每個 key 靜默 skip、rc 0；改 rc 2 並點名檔案。"""
+        missing = tmp_path / "metric_observed_map.yaml"
+        monkeypatch.setattr(tr.observed_map_lib, "DEFAULT_MAP_PATH", str(missing))
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
+        with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path), "--dry-run"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and str(missing) in err
+
+    def test_missing_observed_map_with_unmatched_tenant_still_fails(self, tmp_path, monkeypatch):
+        """--tenant 對不到任何租戶時也先載入 map：「什麼都沒找到」不能掩蓋缺 map。"""
+        monkeypatch.setattr(tr.observed_map_lib, "DEFAULT_MAP_PATH", str(tmp_path / "absent.yaml"))
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
+        with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
+                                 "--dry-run", "--tenant", "no-such-tenant"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_dry_run_cli(self, tmp_path):
         """CLI --dry-run 正常完成。"""
@@ -1707,12 +1722,119 @@ class TestUpperBoundFloor2964:
         rec = self._rec("80", _gauss())
         assert rec.reason.startswith("relaxed to P99 (increase ")
 
-    # ── current = 0 ────────────────────────────────────────────────────
-    def test_zero_current_with_activity_keeps_old_behaviour(self):
+    # ── current = 0 (#2997: manual review, never a proposed value) ────
+    @staticmethod
+    def _zero_why(raw, up, top=None):
+        shown = raw if raw == up else f"{raw} (rounded up to current's precision: {up})"
+        seen = f", max {top}" if top is not None else ""
+        return ("current threshold is 0 (fires on any positive value) — manual "
+                f"review; observed P99 {shown}{seen}")
+
+    def test_zero_current_with_activity_goes_to_manual_review(self):
+        """#2997: 0 → P95 at a made-up delta of 100% always passed the
+        --min-delta-pct gate. A 0 threshold fires on any positive value and
+        is often meant, so it is routed to manual review instead."""
+        import threshold_govern as tg
         values = _gauss()
         rec = self._rec("0", values)
-        assert rec.recommended == tr.compute_percentiles(values)["p95"]
-        assert rec.delta_pct == 100.0
+        p99 = tr.percentile(sorted(values), 0.99)
+        why = self._zero_why(f"{p99:.6g}", str(math.ceil(p99)),
+                             tr._format_threshold_value(max(values)))
+        assert rec.force_manual is True
+        assert rec.recommended is None
+        assert rec.delta_pct is None
+        assert rec.reason == why
+        assert rec.guardrail_reason == why
+        # Confidence is kept as the sample-count grade (not used for gating).
+        assert rec.confidence == tr.grade_confidence(len(values), tr.SAMPLE_THRESHOLD_MEDIUM)
+        assert rec.confidence == tr.CONFIDENCE_HIGH
+        assert not tr._exportable(rec)
+        assert tg.is_governance_actionable(rec, 0.0) is False
+
+    @pytest.mark.parametrize("current,up", [
+        ("0", "1"),        # whole-number current → an int, rounded UP (not 0)
+        ("0.0", "0.13"),   # 2 places, rounded UP (not 0.12)
+        ("0.000", "0.124"),
+    ])
+    def test_zero_current_p99_is_rounded_up_in_current_format(self, current, up):
+        values = [0.0] * (_N_7D - 300) + [0.1234] * 300    # P95 > 0
+        rec = self._rec(current, values)
+        assert rec.reason == self._zero_why("0.1234", up, "0.1234")
+
+    def test_zero_current_p99_already_at_precision_shown_once(self):
+        """No `(rounded up …)` note when rounding up changes nothing."""
+        values = [0.0] * (_N_7D - 300) + [0.25] * 300
+        rec = self._rec("0.0", values)
+        assert rec.reason == ("current threshold is 0 (fires on any positive value) "
+                              "— manual review; observed P99 0.25, max 0.25")
+
+    def test_zero_current_direct_call_without_values_names_no_max(self):
+        rec = tr.recommend_threshold("k", 0, {"p50": 0.0, "p95": 0.3, "p99": 0.42},
+                                     500, 100)
+        assert rec.force_manual is True and rec.delta_pct is None
+        assert rec.reason == ("current threshold is 0 (fires on any positive value) "
+                              "— manual review; observed P99 0.42 (rounded up to "
+                              "current's precision: 1)")
+
+    def test_zero_current_skips_the_coverage_low_suffix(self):
+        """#2941 appends `→ LOW` to a short-history key's reason; a force_manual
+        key carries no recommendation to downgrade, and the suffix would land
+        in the text govern shows as the manual-review reason."""
+        values = [0.0] * 900 + [0.3] * 100
+        pairs = _ts_pairs(values, step=36.0)          # 1000 points in 10 hours
+        with patch("threshold_recommend.query_prometheus_range_ts",
+                   return_value=(pairs, None)):
+            rec = tr.analyze_tenant("db-x", {"connections": "0"},
+                                    prometheus_url="http://p:9090",
+                                    observed_map=self._MAP).keys[0]
+        assert rec.force_manual is True
+        assert "→ LOW" not in rec.reason
+        assert rec.reason == rec.guardrail_reason == self._zero_why("0.3", "1", "0.3")
+        # Not downgraded either: the confidence stays the sample-count grade.
+        assert rec.confidence == tr.grade_confidence(1000, tr.SAMPLE_THRESHOLD_MEDIUM)
+        assert rec.confidence != tr.CONFIDENCE_LOW
+
+    def test_zero_current_all_zero_unchanged(self):
+        """#2964's all-zero case keeps its own reason and is not force_manual."""
+        rec = self._rec("0", [0.0] * _N_7D)
+        assert rec.force_manual is False
+        assert rec.recommended is None and rec.delta_pct is None
+        assert rec.reason == "P95 is non-positive (max in window 0) — no recommendation"
+
+    def test_zero_current_in_govern_manual_review_section(self):
+        """Listed and counted under manual review, with no `% miss` tail
+        (that suffix is for lower-bound miss-rate deltas)."""
+        import threshold_govern as tg
+        report = tr.TenantRecommendation(tenant="db-x", total_keys=1,
+                                         keys=[self._rec("0", _gauss())])
+        fm = tg.collect_force_manual([report])
+        assert [(u.tenant, u.key) for u in fm] == [("db-x", "connections")]
+        assert fm[0].delta_pct is None
+        assert tg.build_governance_plan([report], 0.0) == []
+        text = tg.format_text_report([], [], applied=False, force_manual=fm)
+        line = next(ln for ln in text.splitlines() if "db-x / connections" in ln)
+        assert line.strip() == f"db-x / connections: {fm[0].guardrail_reason}"
+        assert "miss" not in text
+        # The header names no cause: a zero current is no guardrail trip.
+        head = next(ln for ln in text.splitlines()
+                    if "need manual review" in ln or "需人工 review" in ln)
+        assert head in ("⚠ 1 threshold(s) need manual review "
+                        "(no value proposed — reason per line):",
+                        "⚠ 1 個閾值需人工 review（不提供建議值，原因見各行）：")
+        out = json.loads(tg.format_json_report([], [], False, force_manual=fm))
+        assert out["summary"]["force_manual"] == 1
+        assert out["force_manual"][0]["delta_pct"] is None
+
+    def test_zero_current_in_reports_and_export_patch(self):
+        rec = self._rec("0", _gauss())
+        report = tr.TenantRecommendation(tenant="db-x", total_keys=1, keys=[rec])
+        assert f"└─ {rec.reason}" in tr.format_text_report([report])
+        assert f"| {rec.reason} |" in tr.format_markdown_report([report])
+        assert (f"(manual) connections: {rec.guardrail_reason}"
+                in tr.format_export_patch([report]))
+        data = json.loads(tr.format_json_report([report]))
+        assert set(data["tenants"][0]["keys"][0]) == set(
+            tr.asdict(tr.KeyRecommendation(key="k", current_value=1)))
 
     # ── multi-round: each recommendation becomes the next current ─────
     @staticmethod
@@ -1745,8 +1867,10 @@ class TestUpperBoundFloor2964:
         rec = self._rec("200", values)
         monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [
             {"values": [[i, str(v)] for i, v in enumerate(values)]}])
-        change = {"tenant": "db-x", "metric": "connections", "old_value": "200",
+        # #3017: a key a shipped alert compares (`>`); a made-up key is not backtested.
+        change = {"tenant": "db-x", "metric": "mysql_connections", "old_value": "200",
                   "new_value": tr._format_threshold_value(rec.recommended)}
         result = bt.backtest_change("http://prom", change, 7 * 86400)
+        assert result["status"] == "analyzed"
         assert result["risk"] == "LOW"
         assert result["new_breach_count"] == result["old_breach_count"] == 1

@@ -908,14 +908,14 @@ repos:
 
       # --- Optional heavier checks (enable with SKIP= override) ---
       - id: schema-check
-        name: Schema/Go/Python reserved-key drift (3-way)
+        name: Reserved-key lists generated from the registry (ADR-038)
         entry: python3 -X utf8 scripts/tools/dx/sync_schema.py --check
         language: python
         pass_filenames: false
-        # 3-way (#658): also trigger on the Python reserved-key SSOT, not just
-        # the Go source (components/) + schema (docs/). The authoritative CI gate
-        # is the pytest tests/dx/test_sync_schema.py; this stays manual-stage as
-        # a fast local mirror.
+        # The registry (pkg/config/reserved_keys.json) and the four files
+        # generated from it. The authoritative CI gate is the pytest
+        # tests/dx/test_sync_schema.py; this stays manual-stage as a fast
+        # local mirror.
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py)
         stages: [manual]
 
@@ -1479,9 +1479,9 @@ repos:
         # Fires when the map OR any rule pack changes — a renamed recording rule
         # / new alert can stale the committed map. FAIL on hard drift (errors):
         # stale pick, scope/direction/scaled drift, or a KNOWN_DEFERRED exit-lock
-        # breach (#916 Item B). known-deferred INFO listings + orphan/coverage
-        # warns still never red-gate (Gemini final-check) — only the deferral
-        # *itself* rotting is an error. Fix: `da-tools threshold-recommend
+        # breach (#916 Item B), or a coverage gap (#3017). known-deferred INFO
+        # listings + orphan warns still never red-gate (Gemini final-check) —
+        # only the deferral *itself* rotting is an error. A missing map exits 2. Fix: `da-tools threshold-recommend
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
         files: ^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.yaml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$
 

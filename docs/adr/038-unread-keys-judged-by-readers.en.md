@@ -14,6 +14,8 @@ lang: en
 
 ✅ **Accepted** (drafted 2026-10-16 and approved by the owner).
 
+Revised 2026-10-16 (corrected from measurement while implementing the registry): one more reader class, `policy_engine`; one more layer, a subdirectory's `_defaults.yaml`; the probe checks both directions, for every reader whose output can be compared (decisions 2 and 3).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -105,8 +107,8 @@ No separate piece of code describing "which keys the generator reads" is written
 
 Facts that cannot be measured go in one JSON registry, kept inside the exporter's Go module (`components/threshold-exporter/app/pkg/config/`). Its content is limited to the top-level `_` namespace:
 
-- Which **reader class** each reserved key and prefix (`_silent_mode`, `_routing`, `_state_` …) belongs to: `exporter`, `generator`, `custom_alert_compiler`, `annotation` (annotations only for people or tools, for example `_namespaces`). One key can belong to several readers.
-- **Which layers** each key may appear in: the tenant file, `tenants:` in a root platform file, a profile, the top level of defaults.
+- Which **reader class** each reserved key and prefix (`_silent_mode`, `_routing`, `_state_` …) belongs to: `exporter`, `generator`, `custom_alert_compiler`, `policy_engine` (Policy-as-Code, which reads `_policies` from the root `_defaults.yaml`), `annotation` (annotations only for people or tools, for example `_namespaces`). One key can belong to several readers.
+- **In which layers each reader reads the key**: the tenant file, `tenants:` in a root platform file, a profile, `defaults:` of a subdirectory's `_defaults.yaml`, the top level of a root platform file. Readers of one key can read it in different layers: measured, `_custom_alerts` written in a profile is read by the exporter and not by the compiler.
 - **Retired keys** and the hint text for users.
 - Description text (for the schema description and the explain output).
 
@@ -135,11 +137,12 @@ This boundary tells readers where to change a given list: top-level reserved key
 
 ### 3. Keeping the registry and the code from drifting
 
-Use a black-box probe: from the registry, generate a minimal config for each key at each layer, run the generator and served-values on it, and check whether the output changes because of that key.
+Use a black-box probe: from the registry, generate a minimal config for each key at each layer, run served-values, the generator, the custom alert compiler and Policy-as-Code on it, and check whether the output changes because of that key.
 
-- The registry says "this reader reads the key" → that reader's output must change. This catches "registered, but the code no longer reads it".
-- The registry says "the exporter does not read it" → the key must not appear in the values the exporter serves.
+- The registry says "this reader reads the key in this layer" → that reader's output must change. This catches "registered, but the code no longer reads it".
+- The registry does not say a reader reads it in this layer → that reader's output must not change. This catches "the code reads it, the registry does not say so"; a missing layer would make the shared verdict call a key that is read "read by nothing".
 - The probe cannot tell "annotation" from "nobody reads it", nor see "read but the output does not change" (for example, the generator reads `_metadata` but does not use it). These two kinds are marked explicitly in the registry and are not verified by the probe.
+- Besides reading `_policies` by name, Policy-as-Code reads any key a deployment's rule names as `target`. Such reads are decided by the rules, so the registry cannot list them; the probe's trees hold no rule naming the key, so for Policy-as-Code the probe only checks that it reads no key on its own. The shared verdict must therefore count a key a rule names as read.
 
 The probe looks only at output, not at how the code reads internally, so it does not need to be redone when a reader rewrites how it loads config.
 
@@ -287,7 +290,8 @@ The input and today's measured output are in "Background"; this table is the ver
 
 ## Where it is implemented
 
-- Registry: `components/threshold-exporter/app/pkg/config/` (file name decided during implementation); generation and diffing follow the approach of `scripts/tools/dx/sync_schema.py`.
+- Registry: `components/threshold-exporter/app/pkg/config/reserved_keys.json`; `scripts/tools/dx/sync_schema.py --update` generates, `--check` diffs (run in CI by `tests/dx/test_sync_schema.py`).
+- Probe: `tests/shared/test_reserved_key_probes.py`.
 - Shared function: a new module under `scripts/tools/`, called by validate-config, the generator and the generator container.
 - Exporter measurement: `da-guard served-values` (`components/threshold-exporter/app/cmd/da-guard/served_values.go`).
 - Rule read index: `scripts/tools/ops/_threshold_alerts.py`, `rule-packs/threshold-registry.yaml`.

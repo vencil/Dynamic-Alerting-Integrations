@@ -496,8 +496,10 @@ def load_guard_findings(
     the report still lists the findings it could make; the callers that need
     the tree whole fail on it through `load_effective_tree`). Anything else, or
     output that is not its JSON, raises `GuardCheckError`; a missing binary
-    `DaGuardNotFoundError`. ⚠️ With no tenant in the tree da-guard writes an
-    empty report (vacuously safe), so no finding is returned then."""
+    `DaGuardNotFoundError`. With no tenant in the tree da-guard still runs
+    every check (#2991): the findings that need no tenant (platform files,
+    threshold profiles, the defaults carriers) are returned as with tenants;
+    only a run with no finding at all is the empty, vacuously safe report."""
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
@@ -1100,12 +1102,11 @@ def load_key_refs(
 
 def is_tenant_reserved_key(key: str) -> bool:
     """A reserved key a tenant may carry: `VALID_RESERVED_KEYS` or a
-    `VALID_RESERVED_PREFIXES` key (the Python copy of the exporter's list,
-    pinned to Go by tests/shared/test_reserved_key_py_go_parity.py), minus
-    the platform-level keys another reader takes from the top of a defaults
-    file (`TOP_LEVEL_READ_ELSEWHERE`: `_routing_defaults`,
-    `_routing_enforced`) that are not themselves tenant keys. `_policies`
-    and any other root-only `_` key is not one."""
+    `VALID_RESERVED_PREFIXES` key (generated, as Go's are, from the
+    reserved-key registry; ADR-038), minus the platform-level keys another
+    reader takes from the top of a defaults file (`TOP_LEVEL_READ_ELSEWHERE`:
+    `_routing_defaults`, `_routing_enforced`) that are not themselves tenant
+    keys. `_policies` and any other root-only `_` key is not one."""
     if key in VALID_RESERVED_KEYS:
         return True
     return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
