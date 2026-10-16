@@ -186,6 +186,7 @@ da-tools <command> --help
 | `threshold-recommend` | 閾值推薦引擎（基於歷史 P50/P95/P99 數據） | `--config-dir <dir>` + `--prometheus <url>` |
 | `threshold-govern` | 閾值治理迴路：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR（#656） | `--config-dir <dir>` + `--prometheus <url>` + `--apply` |
 | `explain-route` | 路由合併管線除錯器（四層展開 + 設定檔擴展，ADR-007） | `--config-dir <dir>` |
+| `explain-keys` | 逐鍵列出來源、讀取端、判決與 `disable` 的作用；`--assert` 對照預期結果（ADR-038 決定 9） | `--config-dir <dir>` |
 | `discover-mappings` | 自動發現 1:N 實例-租戶映射（掃描 exporter /metrics，ADR-006） | `--endpoint <url>` 或 `--prometheus <url>` |
 
 ---
@@ -3250,6 +3251,44 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alert
 
 # 用自己的 base Alertmanager 設定當 root（root 的 timing 會被沒寫 timing 的路由繼承）
 da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --severity critical --base-config base-alertmanager.yaml
+```
+
+#### explain-keys
+
+逐鍵說明租戶設定（[ADR-038](adr/038-unread-keys-judged-by-readers.md) 決定 9）。對每個租戶列出設定裡的每個 key：來源層與檔案（`da-guard effective`）、哪些讀取端讀它（exporter 以 `da-guard served-values` 實測；路由產生器、自訂告警編譯器、Policy-as-Code 與標註依保留鍵登錄表在該層的宣告；`_policies` 規則以 `target` 指名的 key 算 Policy-as-Code 讀了）、判決與等級、`disable` 的作用（以拿掉它重算一次判斷）、寫下的值與 `/metrics` 實際送出的值。判決來自共用判決函式，與其他閘門同一份。工具會盡量把問題報出來，值是否符合你的預期，請用這個輸出自己檢查，並用 `--assert` 放進自己的 CI。
+
+```bash
+da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]
+```
+
+**主要參數**
+
+| 參數 | 用途 |
+|------|------|
+| `--config-dir <dir>` | conf.d 根目錄（必須） |
+| `--tenant <name>` | 只列這個租戶（可重複）；預設全部 |
+| `--at <RFC3339>` | 讀排程與時效的時間點；預設現在。放進 CI 的 `--assert` 請固定一個時間，否則排程值會隨執行時間變 |
+| `--assert <file>` | 預期結果（與 `--json` 同形狀）；有任何不同即結束碼 1，差異逐行印在 stderr（`--json` 時另在 `assert_differences`） |
+| `--json` | 輸出一份 JSON（schema `da-tools.explain-keys/v1`）到 stdout |
+| `--da-guard-binary <path>` | da-guard 路徑；未給則依序找 `$DA_GUARD_BINARY`、`$PATH` 上的 `da-guard`（da-tools 映像已內建） |
+| `--timeout <秒>` | 每次執行 da-guard 的上限（預設 600） |
+
+**每個 key 的欄位**（`--json` 的 `tenants.<租戶>[]`）：`key`、`layer`／`file`（來源）、`read_by`、`verdict`（`read`／`unread`／`undecidable`／`platform_violation`）、`severity`（各閘門改成「判到就擋」之後的等級：`error`／`warning`／`notice`）、`reason`、`disable`（`effective`／`partial`／`noop`）、`served_family`、`value`（寫下的值）、`served`（`/metrics` 送出的值）。`findings` 是去重後的問題清單：平台檔或 profile 的同一個問題只列一筆，附受影響的租戶。
+
+**`--assert` 的預期檔**：列在 `tenants` 裡的每個租戶，要列出它全部的 key（多一個、少一個都算不同）；每個 key 只比對預期檔寫出的欄位，例如只寫 `key` 與 `verdict` 就只釘判決。沒列的租戶不比。
+
+**Exit codes**
+
+| Code | 含義 |
+|------|------|
+| 0 | 完成；`--assert` 時結果與預期相符 |
+| 1 | `--assert` 的結果與預期不同 |
+| 2 | caller error（`--config-dir` 不存在、找不到 da-guard 或 da-guard 失敗、`--assert` 檔讀不了、`--tenant` 不存在），或沒讀到任何根平台檔、閾值鍵無從判斷（`undecidable`，結果照樣印出）；`--json` 時 stdout 仍是一份 JSON，caller error 帶 `status: "caller_error"` 與 `reason` |
+
+```bash
+da-tools explain-keys --config-dir conf.d/ --tenant db-a
+da-tools explain-keys --config-dir conf.d/ --tenant db-a --at 2026-07-01T03:00:00Z --json > expected.json
+da-tools explain-keys --config-dir conf.d/ --at 2026-07-01T03:00:00Z --assert expected.json
 ```
 
 ---

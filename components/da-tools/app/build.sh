@@ -144,6 +144,8 @@ TOOL_FILES=(
     ops/silencer_drift_check.py
     # #2898 — ADR-036 §8 migration audit (PyYAML vs `da-guard parse-tree`)
     ops/migration_audit.py
+    # #3016 — ADR-038 decision 9: `da-tools explain-keys` (per-key verdict)
+    ops/explain_keys.py
     # #2901 — ADR-036 §3 generator container service and its two helpers
     # (the judgement process; request checks / result frames / cache store).
     ops/generator_service.py
@@ -223,6 +225,10 @@ TOOL_FILES=(
     # flat-layout image ImportErrors on startup. Imports _lib_io,
     # _lib_exitcodes and ops/guard_dispatch (all above).
     _lib_tenant_values.py
+    # #3016 — ADR-038's shared verdict on unread keys; imported by
+    # ops/explain_keys. Imports _lib_confd, _lib_tenant_values (above) and
+    # ops/policy_engine.
+    _lib_key_verdict.py
     # #1516 — which receiver fields hold a credential and how a report
     # prints them; imported by ops/config_diff. Stdlib-only.
     _lib_redact.py

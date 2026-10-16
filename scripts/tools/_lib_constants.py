@@ -94,6 +94,50 @@ RETIRED_RESERVED_KEYS: Final[dict[str, str]] = {
     "_routing_receiver_type":
         "no longer read: set the receiver type as `_routing.receiver.type`",
 }
+# Each key's and prefix's readers, reader -> the layers it reads it in.
+RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
+    "_custom_alerts": {
+        "exporter": ("tenant", "platform_tenants", "profile"),
+        "custom_alert_compiler": ("tenant", "platform_tenants", "platform_top"),
+    },
+    "_metadata": {
+        "exporter": ("tenant", "platform_tenants", "profile"),
+    },
+    "_namespaces": {
+        "annotation": ("tenant", "platform_tenants"),
+    },
+    "_policies": {
+        "policy_engine": ("platform_top",),
+    },
+    "_profile": {
+        "exporter": ("tenant", "platform_tenants"),
+    },
+    "_routing": {
+        "generator": ("tenant", "platform_tenants"),
+    },
+    "_routing_defaults": {
+        "generator": ("platform_top",),
+    },
+    "_routing_enforced": {
+        "generator": ("platform_top",),
+    },
+    "_routing_profile": {
+        "generator": ("tenant", "platform_tenants"),
+    },
+    "_severity_dedup": {
+        "exporter": ("tenant", "platform_tenants", "subtree_defaults"),
+        "generator": ("tenant", "platform_tenants"),
+    },
+    "_silent_mode": {
+        "exporter": ("tenant", "platform_tenants", "profile"),
+    },
+}
+RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...]] = (
+    ("_state_", {
+        "exporter": ("tenant", "platform_tenants", "profile", "subtree_defaults"),
+    }),
+    ("_routing", {}),
+)
 # END GENERATED reserved keys
 
 # ============================================================

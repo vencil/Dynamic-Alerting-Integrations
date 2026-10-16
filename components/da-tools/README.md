@@ -95,7 +95,7 @@ docker run --rm \
 | **Validate** | Platform（custom rules 含 Domain） | Commit / PR 前驗 schema、routing、cardinality、policy | `validate-config`、`guard`、`evaluate-policy`、`opa-evaluate`、`lint`、`analyze-gaps`、`config-diff`、`drift-detect` |
 | **Cutover** | Platform | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
 | **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast`、`maintenance-scheduler` |
-| **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route` |
+| **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route`、`explain-keys` |
 | **GitOps** | Platform | 產 Alertmanager fragment、批次 PR、快照比對 | `generate-routes`、`generator-service`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
 | **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check`、`migration-audit` |
 | **Decommission** | Platform | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
@@ -162,6 +162,7 @@ docker run --rm \
 | `threshold-govern` | 閾值治理迴路（#656）：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR | `--config-dir <dir> --apply --tenant-api-url <url>` |
 | `patch-config` | ConfigMap 局部更新（`--diff` 模式預覽） | `<tenant> <metric> <value>` 或 `--diff` |
 | `explain-route` | 路由 merge pipeline 除錯器（四層展開 + profile） | `--tenant <name>` |
+| `explain-keys` | 逐鍵列出來源、讀取端、判決與 `disable` 的作用；`--assert` 對照預期結果（ADR-038）；需要 da-guard | `--config-dir <dir>` |
 
 ### 4.7 GitOps
 

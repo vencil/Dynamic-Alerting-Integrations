@@ -138,7 +138,8 @@ class TestANewKeyReachesEveryCopy:
         py = _read(root, ss.PY_REL)
         top = py[py.index("TOP_LEVEL_READ_ELSEWHERE: Final"):py.index("RETIRED_RESERVED_KEYS: Final")]
         assert '"_probe_top"' in top
-        assert py.count('"_probe_top"') == 1  # not a reserved tenant key
+        tenant_keys = py[py.index("VALID_RESERVED_KEYS: Final"):py.index("VALID_RESERVED_PREFIXES: Final")]
+        assert '"_probe_top"' not in tenant_keys  # not a reserved tenant key
         tenant = json.loads(_read(root, ss.TENANT_SCHEMA_REL))["definitions"]["tenantConfig"]
         assert "_probe_top" not in tenant["properties"]
         assert not re.search(tenant["propertyNames"]["pattern"], "_probe_top")

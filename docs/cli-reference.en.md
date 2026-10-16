@@ -185,6 +185,7 @@ These tools operate on local YAML files and don't require network.
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | `--config-dir <dir>` + `--prometheus <url>` |
 | `threshold-govern` | Threshold governance loop: recommend→gate→open per-tenant proposed-PR via tenant-api (#656) | `--config-dir <dir>` + `--prometheus <url>` + `--apply` |
 | `explain-route` | Routing merge pipeline debugger (four-layer expansion + profile, ADR-007) | `--config-dir <dir>` |
+| `explain-keys` | Per key: source, readers, verdict and what a `disable` does; `--assert` checks it (ADR-038 decision 9) | `--config-dir <dir>` |
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (scrape exporter /metrics, ADR-006) | `--endpoint <url>` or `--prometheus <url>` |
 
 ---
@@ -3264,6 +3265,44 @@ da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --alert
 
 # Use your own base Alertmanager config as the root (routes without timings inherit the root's)
 da-tools explain-route --config-dir conf.d/ --tenant demo-tenant --trace --severity critical --base-config base-alertmanager.yaml
+```
+
+#### explain-keys
+
+Explain a tenant's keys ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md) decision 9). For each tenant it lists every key of its config: the layer and file it comes from (`da-guard effective`), which readers read it (the exporter as measured by `da-guard served-values`; the route generator, the custom-alert compiler, Policy-as-Code and annotations as the reserved-key registry declares for that layer; a key a `_policies` rule names as `target` counts as read by Policy-as-Code), the verdict and its severity, what a `disable` does (judged by resolving again without it), the value as written and what `/metrics` serves. The verdict is the shared one every gate uses. The tools report what they can; whether a value is what you meant is yours to check with this output, and to pin in your own CI with `--assert`.
+
+```bash
+da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [--assert <file>] [--json]
+```
+
+**Main parameters**
+
+| Parameter | Purpose |
+|------|------|
+| `--config-dir <dir>` | conf.d root (required) |
+| `--tenant <name>` | Only this tenant (repeatable); default every tenant |
+| `--at <RFC3339>` | Instant to read schedules and time-boxes at; default now. Fix it for an `--assert` in CI, or scheduled values follow the clock |
+| `--assert <file>` | Expected document (same shape as `--json`); any difference is exit 1, each printed on stderr (and in `assert_differences` with `--json`) |
+| `--json` | Print one JSON document (schema `da-tools.explain-keys/v1`) on stdout |
+| `--da-guard-binary <path>` | Path to da-guard; without it `$DA_GUARD_BINARY`, then `da-guard` on `$PATH` (shipped in the da-tools image) |
+| `--timeout <seconds>` | Limit for each da-guard run (default 600) |
+
+**Fields of each key** (`--json`: `tenants.<tenant>[]`): `key`, `layer` / `file` (the source), `read_by`, `verdict` (`read` / `unread` / `undecidable` / `platform_violation`), `severity` (the severity once the gates block on it: `error` / `warning` / `notice`), `reason`, `disable` (`effective` / `partial` / `noop`), `served_family`, `value` (as written), `served` (what `/metrics` serves). `findings` is the deduplicated list of problems: one entry for the same problem in a platform file or profile, with the tenants it reaches.
+
+**The `--assert` file**: every tenant it lists under `tenants` lists all of its keys (one more or one fewer is a difference); each key is compared on the fields the file gives, so `key` and `verdict` alone pin only the verdict. Tenants it does not list are not compared.
+
+**Exit codes**
+
+| Code | Meaning |
+|------|------|
+| 0 | Done; with `--assert`, the result matches |
+| 1 | `--assert`: the result differs from the expected document |
+| 2 | Caller error (`--config-dir` missing, no da-guard or da-guard failed, unreadable `--assert` file, unknown `--tenant`), or no root platform file was read so the threshold keys are `undecidable` (the result is still printed); with `--json`, stdout is still one JSON document, a caller error with `status: "caller_error"` and a `reason` |
+
+```bash
+da-tools explain-keys --config-dir conf.d/ --tenant db-a
+da-tools explain-keys --config-dir conf.d/ --tenant db-a --at 2026-07-01T03:00:00Z --json > expected.json
+da-tools explain-keys --config-dir conf.d/ --at 2026-07-01T03:00:00Z --assert expected.json
 ```
 
 ---

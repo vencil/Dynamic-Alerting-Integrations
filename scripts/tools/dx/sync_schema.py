@@ -11,7 +11,8 @@ keys with their hints. Every other copy is GENERATED from it:
              scripts/tools/_lib_constants.py (VALID_RESERVED_KEYS,
              VALID_RESERVED_PREFIXES, TENANT_ROUTING_KEYS,
              PLATFORM_ROUTING_KEYS, TOP_LEVEL_READ_ELSEWHERE,
-             RETIRED_RESERVED_KEYS)
+             RETIRED_RESERVED_KEYS, RESERVED_KEY_READERS,
+             RESERVED_PREFIX_READERS)
   - Go     : components/threshold-exporter/app/pkg/config/reserved_keys_gen.go
   - Schema : the `_` keys of docs/schemas/tenant-config.schema.json
              (tenantConfig.properties and the propertyNames pattern that
@@ -173,6 +174,21 @@ def render_python(d):
     prefixes = ", ".join(json.dumps(p) for p in d["reserved_prefixes"])
     retired = "".join(f"    {json.dumps(k)}:\n        {json.dumps(v, ensure_ascii=False)},\n"
                       for k, v in d["retired"].items())
+
+    def layers(ls):
+        body = ", ".join(json.dumps(l) for l in ls)
+        return f"({body},)" if len(ls) == 1 else f"({body})"
+
+    def readers(read_by, indent):
+        if not read_by:
+            return "{}"
+        body = "".join(f"{indent}    {json.dumps(r)}: {layers(ls)},\n" for r, ls in read_by.items())
+        return "{\n" + body + indent + "}"
+
+    key_readers = "".join(f"    {json.dumps(k)}: {readers(rb, '    ')},\n"
+                          for k, rb in sorted(d["read_by"].items()))
+    prefix_readers = "".join(f"    ({json.dumps(p)}, {readers(rb, '    ')}),\n"
+                             for p, rb in d["prefix_read_by"].items())
     return (
         f"{PY_BEGIN} — scripts/tools/dx/sync_schema.py --update writes this\n"
         f"# block from {REGISTRY_REL}. DO NOT EDIT.\n"
@@ -182,6 +198,9 @@ def render_python(d):
         + fset("PLATFORM_ROUTING_KEYS", d["platform_routing_keys"])
         + fset("TOP_LEVEL_READ_ELSEWHERE", d["top_level_read_elsewhere"])
         + f"RETIRED_RESERVED_KEYS: Final[dict[str, str]] = {{\n{retired}}}\n"
+        + "# Each key's and prefix's readers, reader -> the layers it reads it in.\n"
+        + f"RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {{\n{key_readers}}}\n"
+        + f"RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...]] = (\n{prefix_readers})\n"
         + PY_END + "\n"
     )
 

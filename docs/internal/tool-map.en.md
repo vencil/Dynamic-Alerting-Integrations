@@ -36,6 +36,7 @@ lang: en
 | `diagnose.py` | Quick health check for a tenant's MariaDB and monitoring stack. |
 | `discover_instance_mappings.py` | Auto-discover 1:N instance-tenant mappings. |
 | `drift_detect.py` | Cross-Cluster Configuration Drift Detection |
+| `explain_keys.py` | `da-tools explain-keys`: per tenant, who reads each key and what it does. |
 | `explain_route.py` | Routing merge pipeline debugger (ADR-007). |
 | `federation_check.py` | Multi-cluster federation integration verification. |
 | `federation_keygen.py` | federation JWT 簽章金鑰的生成 / 輪替工具。 |
@@ -249,6 +250,7 @@ lang: en
 - `scripts/tools/_lib_exitcodes.py`: Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
+- `scripts/tools/_lib_key_verdict.py`: The one verdict on "does any reader read this key" (ADR-038 decisions 4–7).
 - `scripts/tools/_lib_parse_cache.py`: conf.d parse entry point with a content-addressed cache.
 - `scripts/tools/_lib_parse_tree.py`: read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_prometheus.py`: HTTP and Prometheus query helpers for Dynamic Alerting platform.

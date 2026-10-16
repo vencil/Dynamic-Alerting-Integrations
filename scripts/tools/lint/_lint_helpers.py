@@ -67,6 +67,8 @@ BUILD_EXEMPT = frozenset({
     # analyze_rule_pack_gaps, policy_engine and policy_opa_bridge.
     # Library, not CLI.
     "_lib_tenant_values.py",
+    # #3016 — ADR-038's shared verdict on unread keys (library for explain_keys)
+    "_lib_key_verdict.py",
     # #1516 — credential-field redaction shared by config_diff and
     # _render_diff (list mirrors tenant-api credmask). Library, not CLI.
     "_lib_redact.py",
