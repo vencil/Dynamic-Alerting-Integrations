@@ -85,13 +85,19 @@ class TestExtraction:
         assert m["foo"]["scope"] == "tenant"
         assert not m["foo"].get("needs_review")
 
-    def test_lower_bound_needs_review(self, tmp_path):
+    def test_unclassified_lower_bound_records_the_fact(self, tmp_path):
+        """#3017：map 記事實。沒分類的 `<` key 照樣記下比較的序列與方向，
+        推薦器仍以 lower-bound marker 略過（govern 列為未治理下界），backtest
+        讀得到；分類缺漏改由 drift-guard 擋（見 TestConsistency）。"""
         p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
         m = L.build_map([p])
-        assert m["bar"].get("needs_review") is True
-        assert m["bar"]["direction"] == "<"
-        assert "lower-bound" in m["bar"]["reason"]  # semantic, not a brittle issue-ref pin
-        assert "observed_series" not in m["bar"]
+        e = m["bar"]
+        assert e["observed_series"] == "tenant:bar_count:max"
+        assert e["direction"] == "<"
+        assert not e.get("needs_review") and L.MODE_FIELD not in e
+        series, why = L.usable_for_recommend(e)
+        assert series is None and "lower-bound (<)" in why
+        assert L.usable_for_backtest(e) == ("tenant:bar_count:max", "below", None)
 
     def test_composite_needs_review_with_candidates(self, tmp_path):
         p = _write_pack(tmp_path, "rule-pack-composite.yaml", PACK_COMPOSITE)
@@ -177,7 +183,14 @@ class TestConsistency:
         p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
         m = L.build_map([p])
         res = L.check_consistency(m, [p])
-        assert res["errors"] == []
+        # The only error is the unclassified '<' key (#3017 gate below).
+        assert [e for e in res["errors"] if not e.startswith("bar:")] == []
+
+    def test_unclassified_lower_bound_is_error(self, tmp_path):
+        """#3017：`<` key 不再以 needs_review 隱含「未分類」；沒分類就是 drift。"""
+        p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
+        res = L.check_consistency(L.build_map([p]), [p])
+        assert any(e.startswith("bar:") and "not classified" in e for e in res["errors"])
 
     def test_stale_observed_series_is_error(self, tmp_path):
         p = _write_pack(tmp_path, "rule-pack-clean.yaml", PACK_CLEAN)
@@ -292,6 +305,46 @@ class TestLoadFailsClosed:
         monkeypatch.setattr(L, "DEFAULT_MAP_PATH", str(tmp_path / "absent.yaml"))
         with pytest.raises(L.ObservedMapError, match="not found"):
             L.load_observed_map()
+
+
+class TestLookupAndPolicies:
+    """#3017：同一份事實、兩種政策——recommend 與 backtest 各自決定能不能用。"""
+
+    def test_lookup_entry_and_reasons(self):
+        m = L.load_observed_map()
+        assert L.lookup(m, "mysql_connections") == (m["mysql_connections"], None)
+        entry, why = L.lookup(m, "container_cpu")
+        assert entry is None and "KNOWN_DEFERRED" in why
+        entry, why = L.lookup(m, "mongodb_connections_current_critical")
+        assert entry is None and why.startswith("no shipped alert compares")
+
+    def test_backtest_policy_on_committed_lower_bound_keys(self):
+        """#3017 的 4 個下界 key 全都能回測，且方向是 below。"""
+        m = L.load_observed_map()
+        for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",
+                  "kafka_broker_count", "rabbitmq_consumers"):
+            series, direction, why = L.usable_for_backtest(m[k])
+            assert (direction, why) == ("below", None) and series, k
+
+    @pytest.mark.parametrize("entry, needle", [
+        ({"needs_review": True, "reason": "pick one", "direction": ">"}, "needs review: pick one"),
+        ({"scope": "tenant_version", "direction": ">", "observed_series": "x"}, "unsupported scope"),
+        ({"scope": "tenant", "observed_series": "x"}, "direction"),
+        ({"scope": "tenant", "direction": ">", "candidates": ["a", "b"]}, "composite"),
+    ])
+    def test_backtest_policy_refuses_with_a_reason(self, entry, needle):
+        series, direction, why = L.usable_for_backtest(entry)
+        assert series is None and direction is None and needle in why
+
+    def test_recommend_policy_ignores_the_fact_shape(self):
+        """改記事實（#3017）不改推薦判定：每個出廠條目換回舊形狀
+        （candidates 而非 observed_series）時，usable_for_recommend 結果相同。"""
+        for key, entry in L.load_observed_map().items():
+            if not entry.get(L.MODE_FIELD) == "not-applicable":
+                continue
+            old_shape = {k: v for k, v in entry.items() if k != "observed_series"}
+            old_shape["candidates"] = [entry["observed_series"]]
+            assert L.usable_for_recommend(old_shape) == L.usable_for_recommend(entry), key
 
 
 class TestCommittedMap:
@@ -770,7 +823,8 @@ groups:
 """
 
 # Same key but the observed series was RENAMED away from the dict pick → the
-# resolved classification must NOT honor it (fail-loud needs_review).
+# resolved classification must NOT honor it (no mode; the drift-guard fails,
+# naming the stale pick — #3017).
 PACK_RESOLVED_KEY_RENAMED = """
 groups:
   - name: g
@@ -786,6 +840,63 @@ groups:
 """
 
 
+def _lb_pack(key: str, exprs: list[str]) -> str:
+    """A pack with one '<' alert per expr on threshold key ``key``."""
+    rules = [f"      - record: tenant:alert_threshold:{key}\n"
+             f"        expr: max by(tenant) (user_threshold{{metric=\"{key}\"}})"]
+    for i, ex in enumerate(exprs):
+        rules.append(f"      - alert: A{i}\n        expr: |\n          {ex}")
+    return "groups:\n  - name: g\n    rules:\n" + "\n".join(rules) + "\n"
+
+
+class TestLowerBoundGateOnAmbiguousAlerts:
+    """#3017 審查：`<` 的分類守門不能在 alert 有歧義（composite／scaled）時消失。"""
+
+    COMPOSITE = ["(tenant:q_a:max < on(tenant) group_left tenant:alert_threshold:{k}) or "
+                 "(tenant:q_b:max < on(tenant) group_left tenant:alert_threshold:{k})"]
+    SCALED = ["tenant:q_a:max * 100 < on(tenant) group_left tenant:alert_threshold:{k}"]
+
+    @pytest.mark.parametrize("exprs", [COMPOSITE, SCALED], ids=["composite", "scaled"])
+    def test_unclassified_ambiguous_lower_bound_is_error(self, tmp_path, exprs):
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack("qux", [e.format(k="qux") for e in exprs]))
+        m = L.build_map([p])
+        assert m["qux"].get("needs_review") is True and "observed_series" not in m["qux"]
+        errs = L.check_consistency(m, [p])["errors"]
+        assert any(x.startswith("qux:") and "not classified" in x for x in errs), errs
+
+    @pytest.mark.parametrize("exprs", [COMPOSITE, SCALED], ids=["composite", "scaled"])
+    def test_not_applicable_ambiguous_alert_keeps_candidates(self, tmp_path, monkeypatch, exprs):
+        """composite／scaled 的 N/A key 不得把 cands[0] 當成比較序列。"""
+        monkeypatch.setitem(L.NOT_APPLICABLE_KEYS, "qux", "test")
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack("qux", [e.format(k="qux") for e in exprs]))
+        e = L.build_map([p])["qux"]
+        assert e[L.MODE_FIELD] == "not-applicable"
+        assert "observed_series" not in e and e["candidates"]
+        assert L.usable_for_backtest(e)[0] is None
+
+    def test_resolved_pick_correct_but_not_regenerated_says_regenerate(self, tmp_path, monkeypatch):
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack(
+            "qux", ["tenant:q_a:min < on(tenant) group_left tenant:alert_threshold:qux"]))
+        m = L.build_map([p])                       # not yet in the allowlist: no mode
+        monkeypatch.setitem(L.LOWER_BOUND_RESOLVED, "qux", "tenant:q_a:min")
+        errs = [x for x in L.check_consistency(m, [p])["errors"] if x.startswith("qux:")]
+        assert errs and "regenerate" in errs[0] and "rename" not in errs[0], errs
+
+    def test_regenerate_applies_a_new_classification_to_a_manual_pick(self, tmp_path, monkeypatch):
+        """手動 resolve 的 composite `<` key 後來加進 NOT_APPLICABLE_KEYS：
+        照守門的「regenerate」提示重產一次就要綠（mode 取 fresh 的）。"""
+        p = _write_pack(tmp_path, "rule-pack-q.yaml", _lb_pack(
+            "qux", [e.format(k="qux") for e in self.COMPOSITE]))
+        fresh0 = L.build_map([p])
+        manual = {**fresh0["qux"], "observed_series": "tenant:q_a:max", "resolved_via": "manual"}
+        manual.pop("needs_review"); manual.pop("reason")
+        monkeypatch.setitem(L.NOT_APPLICABLE_KEYS, "qux", "test")
+        merged, _w, stats = L.merge_maps({"qux": manual}, L.build_map([p]))
+        assert stats["preserved"] == 1
+        assert merged["qux"][L.MODE_FIELD] == "not-applicable"
+        assert [x for x in L.check_consistency(merged, [p])["errors"] if x.startswith("qux:")] == []
+
+
 class TestLowerBoundClassification:
     def test_not_applicable_key_gets_mode_and_keeps_fields(self, tmp_path):
         m = L.build_map([_write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)])
@@ -793,10 +904,15 @@ class TestLowerBoundClassification:
         assert e[L.MODE_FIELD] == "not-applicable"
         assert not e.get("needs_review")
         assert e["direction"] == "<"                    # direction kept
-        assert e["candidates"] == ["tenant:kafka_active_controllers:max"]  # candidates kept
+        # #3017: the compared series is a fact (backtest replays it); the mode
+        # is recommender policy only. observed_series XOR candidates.
+        assert e["observed_series"] == "tenant:kafka_active_controllers:max"
+        assert "candidates" not in e
         assert L._NOT_APPLICABLE_MARKER in e["reason"]
         assert "lower-bound (<)" not in e["reason"]      # must not collide with T3 marker
-        assert "observed_series" not in e
+        series, why = L.usable_for_recommend(e)
+        assert series is None and L._NOT_APPLICABLE_MARKER in why
+        assert L.usable_for_backtest(e) == ("tenant:kafka_active_controllers:max", "below", None)
 
     def test_resolved_key_gets_series_and_percentile_lower(self, tmp_path):
         m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY)])
@@ -807,16 +923,27 @@ class TestLowerBoundClassification:
         assert not e.get("needs_review")
         assert "candidates" not in e                     # resolved → series XOR candidates
 
-    def test_resolved_series_mismatch_falls_back_to_needs_review(self, tmp_path):
+    def test_resolved_series_mismatch_fails_the_drift_guard(self, tmp_path):
         # the pack renamed the series away from LOWER_BOUND_RESOLVED's pick → the
-        # generator must NOT honor a stale pick; fail-loud to needs_review.
-        m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml",
-                                     PACK_RESOLVED_KEY_RENAMED)])
+        # generator must NOT honor a stale pick (no percentile-lower mode, so the
+        # recommender skips it); the fact is still recorded (#3017) and the
+        # drift-guard fails loud, naming the stale pick.
+        p = _write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY_RENAMED)
+        m = L.build_map([p])
         e = m["db2_bufferpool_hit_ratio"]
-        assert e.get("needs_review") is True
         assert L.MODE_FIELD not in e
-        assert "observed_series" not in e
-        assert "lower-bound (<)" in e["reason"]
+        assert e["observed_series"] == "tenant:db2_bufferpool_hit_ratio:avg"
+        series, why = L.usable_for_recommend(e)
+        assert series is None and "lower-bound (<)" in why
+        errs = L.check_consistency(m, [p])["errors"]
+        assert any("LOWER_BOUND_RESOLVED pick" in x and ":min" in x for x in errs), errs
+
+    def test_not_applicable_key_without_its_mode_is_error(self, tmp_path):
+        p = _write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)
+        m = L.build_map([p])
+        del m["kafka_active_controllers"][L.MODE_FIELD]
+        errs = L.check_consistency(m, [p])["errors"]
+        assert any("NOT_APPLICABLE_KEYS but recommendation_mode" in x for x in errs), errs
 
     def test_committed_map_classification_pin(self):
         # DATA-PIN: the committed map's four `<` entries carry exactly the #916

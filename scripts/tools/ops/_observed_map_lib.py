@@ -19,8 +19,10 @@ Guardrails baked in (#719 / Gemini adversarial review):
   - R1 multi-candidate: a composite alert referencing >1 observed series ->
     ``needs_review`` (don't auto-pick), unless a clean ``<key>_critical`` sibling
     disambiguates it.
-  - R2 direction: capture ``>`` / ``<``. Lower-bound (``<``) metrics get
-    ``needs_review`` (P95-upper recommendation is wrong for them; #916).
+  - R2 direction: capture ``>`` / ``<``. A lower-bound (``<``) key's compared
+    series is recorded like any other (#3017); whether the recommender may use
+    it is its ``recommendation_mode`` (#916), and the drift-guard fails a ``<``
+    key that is not classified.
   - R3 denylist: only ``tenant:`` / ``tenant_version:`` colon-delimited recording
     rules count as observed; ``tenant_metadata_info`` / ``user_state_filter`` /
     ``tenant:alert_threshold:*`` are excluded.
@@ -134,7 +136,8 @@ MODE_FIELD = "recommendation_mode"
 # #916 Item A — lower-bound (``<``) classification (code-level dicts, mirroring
 # KNOWN_DEFERRED). A ``<`` threshold is NOT a blanket needs_review anymore; it is
 # routed into one of three states by these two allowlists (any ``<`` key in
-# NEITHER dict falls through to the fail-loud needs_review path):
+# NEITHER dict gets no mode — the recommender skips it as unsupported — and the
+# drift-guard fails it as unclassified, #3017):
 #
 #   NOT_APPLICABLE_KEYS   -> ``recommendation_mode: not-applicable`` (no percentile
 #       recommendation is ever meaningful — an expected-value invariant or a
@@ -143,7 +146,8 @@ MODE_FIELD = "recommendation_mode"
 #       lower percentile floor the engine can tune). The value is the observed
 #       series the ``<`` alert compares against; build_map validates it is among
 #       the freshly-extracted candidates (and ``<`` / not scaled) before honoring
-#       it, so a rule-pack rename falls back to needs_review (fail-loud).
+#       it, so after a rule-pack rename the mode is not applied and the
+#       drift-guard fails, naming the stale pick (#3017).
 NOT_APPLICABLE_KEYS: dict[str, str] = {
     "kafka_active_controllers": "期望值==1 不變量",
     "kafka_broker_count": "拓撲下限",
@@ -180,12 +184,21 @@ def _scope_of_many(series_iter) -> str:
 def build_map(pack_paths: list[str]) -> dict[str, Any]:
     """Build the observed-map (one entry per threshold key across all packs).
 
+    The map records FACTS — the series each key's alert compares and the
+    direction it compares in (#3017: backtest reads them, not only the
+    recommender). Recommender policy lives in ``recommendation_mode`` alone and
+    is applied by its consumer (``resolve_observed``); the drift-guard fails a
+    ``<`` key whose classification is missing or stale.
+
     Resolution order per key:
-      1. single candidate, single ``>`` direction, not scaled -> clean.
-      2. multi-candidate but a clean ``<key>_critical`` sibling pins the series
-         (and that series is among this key's candidates) -> resolved clean.
-      3. otherwise -> needs_review with candidates + reason.
-    Lower-bound (``<``) keys are always needs_review (R2).
+      1. single candidate, single direction (``>`` or ``<``), not scaled,
+         supported scope -> ``observed_series``.
+      2. ``>`` multi-candidate but a clean ``<key>_critical`` sibling pins the
+         series (and that series is among this key's candidates) -> resolved.
+      3. ``<`` multi-candidate: the LOWER_BOUND_RESOLVED pick, if a candidate.
+      4. otherwise -> needs_review with candidates + reason.
+    ``<`` keys additionally get their #916 ``recommendation_mode`` from
+    NOT_APPLICABLE_KEYS / LOWER_BOUND_RESOLVED.
     """
     raw: dict[str, dict[str, Any]] = {}
     pack_of: dict[str, str] = {}
@@ -235,10 +248,15 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
         # other ``<`` key falls through to the generic needs_review path below.
         if dirs == ["<"] and scope in SUPPORTED_SCOPES:
             if key in NOT_APPLICABLE_KEYS:
-                # Keep candidates + direction so the drift-guard's stale/scope
-                # checks still bind (else a pack that drops the key leaves a
-                # zombie N/A entry). No needs_review; fixed by-design reason.
-                entry["candidates"] = cands
+                # The compared series is a fact like any other key's (#3017:
+                # backtest needs it); "not-applicable" is only recommender
+                # policy. observed_series XOR candidates, as everywhere, so the
+                # drift-guard's stale/scope checks still bind. No needs_review;
+                # fixed by-design reason.
+                if len(cands) == 1 and not e["scaled"]:
+                    entry["observed_series"] = cands[0]
+                else:
+                    entry["candidates"] = cands
                 entry[MODE_FIELD] = "not-applicable"
                 entry["reason"] = (
                     f"{_NOT_APPLICABLE_MARKER} — {NOT_APPLICABLE_KEYS[key]} (#916)"
@@ -259,7 +277,9 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
                 out[key] = entry
                 continue
             # else (``<`` not in either dict, or a resolved key whose series no
-            # longer matches the packs) -> fall through -> needs_review fail-loud.
+            # longer matches the packs) -> fall through: the fact is recorded
+            # (single candidate) or needs_review (composite), with no mode —
+            # the drift-guard fails an unclassified or stale ``<`` key.
 
         # Only auto-resolve a single observed_series for SUPPORTED (tenant) scope.
         # Unsupported-scope (e.g. tenant_version) alerts are often compound
@@ -268,7 +288,7 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
         resolved: Optional[str] = None
         if scope not in SUPPORTED_SCOPES:
             resolved = None
-        elif len(cands) == 1 and direction == ">" and not e["scaled"]:
+        elif len(cands) == 1 and direction in (">", "<") and not e["scaled"]:
             resolved = cands[0]
         elif direction == ">" and not e["scaled"]:
             # sibling disambiguation: <key>_critical clean series, if a candidate.
@@ -293,7 +313,7 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
             reasons.append("could not determine comparison direction")
         elif len(dirs) > 1:
             reasons.append(f"ambiguous direction {dirs}")
-        elif dirs == ["<"]:
+        elif dirs == ["<"] and not resolved:
             reasons.append("lower-bound (<) metric — P95-upper recommendation not applicable (#916)")
         if not resolved and len(cands) != 1:
             reasons.append(f"{len(cands)} observed candidates in composite alert — pick one")
@@ -439,8 +459,10 @@ def _is_manual(old_e: dict[str, Any]) -> bool:
          filling ``observed_series`` WITHOUT deleting ``candidates`` — a shape
          no generated entry has (build_map emits candidates XOR observed_series).
 
-    All 61 committed generated entries score 0 here (verified), so the guard
-    never misfires on a machine entry.
+    No generated entry scores here: build_map emits observed_series XOR
+    candidates (since #3017 a single-candidate not-applicable entry too), and
+    never ``refs`` or ``resolved_via: manual``. (Pinned by
+    test_idempotent_pin_on_committed_map: a misfire would PRESERVE and warn.)
 
     Note ``resolved_via`` values other than "manual" (e.g. the generated
     ``<key>_critical sibling``) are NOT manual — only the literal "manual".
@@ -558,7 +580,12 @@ def merge_maps(
                     "observed_series": old_e["observed_series"],
                     "resolved_via": "manual",
                 }
-                if MODE_FIELD in old_e:
+                # The #916 classification is policy the generator owns (the
+                # allowlists): take the fresh one, else the drift-guard's
+                # "regenerate" hint could never clear a missing mode (#3017).
+                if MODE_FIELD in fresh_e:
+                    rebuilt[MODE_FIELD] = fresh_e[MODE_FIELD]
+                elif MODE_FIELD in old_e:
                     rebuilt[MODE_FIELD] = old_e[MODE_FIELD]
                 merged[key] = rebuilt
                 warns.append(
@@ -747,6 +774,55 @@ def resolve_observed(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str
     return series, None
 
 
+# The recommender's usability policy for a map entry (#3017: named apart from
+# the backtest's, which reads the same facts).
+usable_for_recommend = resolve_observed
+
+_BACKTEST_DIRECTIONS = {">": "above", "<": "below"}
+
+
+def lookup(observed_map: dict[str, dict[str, Any]], key: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """``(entry, None)`` for a threshold key in canonical spelling (a caller
+    canonicalizes retired aliases and drops a ``{...}`` dimension part), or
+    ``(None, reason)`` when the map has no entry: a KNOWN_DEFERRED key, whose
+    alerts compare a version-aware recording rule the map does not record, or
+    a key no shipped alert compares. A ``<base>_critical`` key is its own entry
+    (a pack that normalizes only severity="warning" has none for it)."""
+    entry = observed_map.get(key)
+    if entry is not None:
+        return entry, None
+    if key in KNOWN_DEFERRED:
+        return None, ("its alerts compare a version-aware recording rule the "
+                      f"observed-map does not record (KNOWN_DEFERRED: {KNOWN_DEFERRED[key]})")
+    return None, "no shipped alert compares this key (not in metric_observed_map.yaml)"
+
+
+def usable_for_backtest(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """``(observed_series, "above" | "below", None)`` for an entry a backtest
+    can replay — the series the alert compares and the way it compares — or
+    ``(None, None, reason)``. Unlike ``usable_for_recommend`` this ignores
+    ``recommendation_mode``: a by-design not-applicable floor still fires, and
+    replaying it is exactly what a threshold change needs.
+
+    ⚠️ The series is the alert's comparison operand, not the alert: a key
+    resolved via its ``_critical`` sibling (``resolved_via``) or by hand may
+    also feed composite AND alerts, and ``for:`` / maintenance filters are not
+    in the map — a replay of the operand approximates when the alert fires.
+    A scaled alert (``scaled``) never carries ``observed_series``."""
+    if entry.get("needs_review"):
+        return None, None, f"observed-map entry needs review: {entry.get('reason', 'needs_review')}"
+    scope = entry.get("scope", "?")
+    if scope not in SUPPORTED_SCOPES:
+        return None, None, f"unsupported scope '{scope}' — only per-tenant series are queried"
+    direction = _BACKTEST_DIRECTIONS.get(entry.get("direction"))
+    if direction is None:
+        return None, None, "alert comparison direction is not resolved in the observed-map"
+    series = entry.get("observed_series")
+    if not series:
+        return None, None, "no single observed series (composite alert) in the observed-map"
+    return series, direction, None
+
+
 def alert_referenced_keys(pack_paths: list[str]) -> set[str]:
     """Threshold keys that are actually referenced inside an ``- alert:`` expr.
 
@@ -877,6 +953,38 @@ def check_consistency(
                 f"NOT_APPLICABLE_KEYS (_observed_map_lib.py) — mode spoofed; "
                 f"remove the mode or add the key to the allowlist"
             )
+        # #3017: the map records the compared series as a fact for every key,
+        # so a '<' key's #916 classification is no longer implied by
+        # needs_review — it must be applied, or the recommender quietly
+        # treats the key as unsupported.
+        # Composite or scaled '<' entries (needs_review) are classified too:
+        # the fail-loud must not vanish exactly when the key is ambiguous.
+        if entry.get("direction") == "<":
+            if key in LOWER_BOUND_RESOLVED and mode != "percentile-lower":
+                pick = LOWER_BOUND_RESOLVED[key]
+                compared = entry.get("observed_series") or entry.get("candidates")
+                if entry.get("observed_series") == pick:
+                    errors.append(
+                        f"{key}: in LOWER_BOUND_RESOLVED but recommendation_mode is "
+                        f"{mode!r} — regenerate the observed-map"
+                    )
+                else:
+                    errors.append(
+                        f"{key}: LOWER_BOUND_RESOLVED pick '{pick}' is not the series "
+                        f"its alert compares ({compared!r}) — update the allowlist "
+                        f"(_observed_map_lib.py); did a rule pack rename it?"
+                    )
+            elif key in NOT_APPLICABLE_KEYS and mode != "not-applicable":
+                errors.append(
+                    f"{key}: in NOT_APPLICABLE_KEYS but recommendation_mode is "
+                    f"{mode!r} — regenerate the observed-map"
+                )
+            elif key not in LOWER_BOUND_RESOLVED and key not in NOT_APPLICABLE_KEYS:
+                errors.append(
+                    f"{key}: alert compares with '<' but the key is not classified "
+                    f"— add it to NOT_APPLICABLE_KEYS or LOWER_BOUND_RESOLVED "
+                    f"(_observed_map_lib.py, #916)"
+                )
 
     all_keys = all_threshold_keys(pack_paths)
     alert_keys = alert_referenced_keys(pack_paths)
