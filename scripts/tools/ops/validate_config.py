@@ -2344,10 +2344,8 @@ _CUSTOM_ALERT_SOURCES_HINT = (
     "different places (#3042). A rule with no served threshold never fires; "
     "a served threshold with no rule never alerts. Once the compiler builds "
     "from what the exporter serves (#3042, the next stage), the first are no "
-    "longer compiled and the second start to fire. Today the two agree on a "
-    "tenant's own entry and on the `tenants:` of a root platform file other "
-    "than `_defaults.yaml`; from that stage on, a profile and the root "
-    "`_defaults.yaml` `tenants:` too. Reported only, not yet blocking.")
+    "longer compiled and the second start to fire. Reported only, not yet "
+    "blocking.")
 _CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT = (
     "Nothing was compared; the line above names why. The exporter's side "
     "needs da-guard (in the repo `make da-guard-build`, or set "
@@ -2444,8 +2442,7 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
                 groups.setdefault(("not_compiled", _where(t), name, rid, ""), set()).add(t)
         elif len(names) > 1:
             # Several served recipes of one shape and severity in one tenant:
-            # the compiler takes one per tenant, shape and severity and
-            # quarantines the rest. Which one it took is not re-derived here
+            # the compiler takes at most one per tenant, shape and severity. Which one it took is not re-derived here
             # (a switched-off one serves no row; names are spelt per side).
             groups.setdefault(("shared", _where(t), ", ".join(f"`{n}`" for n in sorted(names)),
                                rid, sev), set()).add(t)
@@ -2465,8 +2462,8 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
                            f"for it — it never alerts — tenant(s) {_tenants(ts)}")
         else:
             details.append(f"{where}: {name} ({rid}, {kept}) are served for one tenant with the "
-                           "same shape and severity — the compiler takes one recipe per tenant, "
-                           f"shape and severity and quarantines the rest — tenant(s) {_tenants(ts)}")
+                           "same shape and severity — the compiler takes at most one recipe per "
+                           f"tenant, shape and severity — tenant(s) {_tenants(ts)}")
     if details:
         return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
     return _make_result("custom_alert_sources", PASS, [

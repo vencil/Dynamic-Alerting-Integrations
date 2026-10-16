@@ -196,8 +196,8 @@ def test_a_switched_off_recipe_still_compiles_the_rule(tmp_path):
 
 
 _SHARED = ("team/t1.yaml: {names} (threshold__m__gt__w5m__for1m, warning) are served for one "
-           "tenant with the same shape and severity — the compiler takes one recipe per tenant, "
-           "shape and severity and quarantines the rest — tenant(s) t1")
+           "tenant with the same shape and severity — the compiler takes at most one recipe per "
+           "tenant, shape and severity — tenant(s) t1")
 
 
 @pytest.mark.parametrize("recipes, names", [
@@ -231,3 +231,14 @@ def test_the_pass_line_counts_per_tenant_and_severity(tmp_path):
                               + _rec("b", "m", threshold="20:critical")}))
     assert r["details"] == ["2 compiled custom alert(s), counted per tenant and severity, "
                             "each with a served threshold; every served one has a rule"]
+
+
+def test_a_root_platform_recipe_beside_the_tenants_own_never_fires(tmp_path):
+    """The exporter takes one source per tenant, its own entry first; the
+    compiler takes both."""
+    r = _row(_tree(tmp_path, {
+        "_platform.yaml": "tenants:\n  t1:\n    _custom_alerts:\n" + _rec("a", "m"),
+        "team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("b", "m2")}))
+    assert r["details"] == ["_platform.yaml: `a` (threshold__m__gt__w5m__for1m) is compiled, but "
+                            "the exporter serves no threshold for it — the rule never fires — "
+                            "tenant(s) t1"]
