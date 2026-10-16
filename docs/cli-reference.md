@@ -2559,6 +2559,14 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 `required`、`forbidden`、`equals`、`not_equals`、`gte`、`lte`、`gt`、`lt`、`matches`、`one_of`、`contains`
 
+**哪些寫法會被拒**（[#2987](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2987)；主規則與 `when` 同一套，任一條命中即結束碼 `2`、不評估任何規則，訊息指名第幾條規則、哪個欄位、為什麼）：
+
+- `required`／`forbidden` 只看有沒有值，不收 `value`（沒寫 `operator` 時缺省為 `required`，`value` 會被默默忽略）。
+- 其他運算子都要有 `value`：沒有時原本拿 null 比——`not_equals` 永遠成立、`when` 永遠不成立而跳過規則、主規則的 `gte`／`matches`／`contains` 每個租戶都報違規。
+- `one_of` 的 `value` 必須是非空清單（單一值也寫成 `[mariadb]`），項目為純量；`equals`／`not_equals`／`contains`／`matches` 與 `gte`／`lte`／`gt`／`lt` 的 `value` 是純量，後四者必須是有限的數字或 duration（`5m`），`inf` 不算。
+- `matches` 的 `value` 必須能編譯成 regex，且不是空字串、不超過 200 字、沒有 `(a+)+` 這類巢狀量詞（防護擋下兩種寫法：可重複超過一次的群組裡有次數不固定的量詞，例如 `(a+)+`、`((a+))+`、`(a+){2,}`、`(a?)+`；以及群組裡有 `+`／`*`、群組本身又帶量詞，連可選群組 `^(\d+)?$` 也算，改寫成 `^\d*$` 或改用 `one_of`。固定次數的 `(a{2})+` 不擋；引擎的 ReDoS 防護不會執行它們，規則等於永不匹配）；`contains` 的 `value` 不可為空字串。
+- 萬用字元 `target`（含 `*`）只比對頂層鍵：帶 `.` 的（例如 `_metadata.*`）原本被當字面路徑、找不到就跳過，現在拒收——改寫成具體欄位（`_metadata.owner`）。萬用字元 `when` 只收 `required`／`forbidden`。
+
 **規則讀的是哪一個值**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`--config-dir` 讀生效值，不是租戶檔的字面內容；`target` 與 `when` 依 key 種類讀：
 
 - **閾值**（不以 `_` 開頭）：exporter 在 `/metrics` 實際發出的數字（經 `da-guard served-values --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄 `_defaults.yaml` 都一樣，子目錄裡的租戶也會評估。排程閾值逐時段比對，任一時段違規即違規（訊息附 UTC 時段）；某時段 `disable` 時該段只有 `required` 算違規。整天都不發出的鍵（`disable`、沒有預設值）視同沒有：`required` 對有寫但 exporter 不發的鍵報「已配置（值: …）但 exporter 不發出」，`when` 不論精確或萬用字元 target 都當它不存在，其他運算子略過。萬用字元 target 的 `when` 只支援 `required`／`forbidden`（取值運算子對一組鍵沒有意義）。數字以數值比較（`equals: 80` 等於發出的 `80.0`）。`target` 寫舊拼法（例如 `mysql_cpu`）時以 exporter 的別名表換成現行拼法；寫成 `<key>_critical` 鍵的 critical 列以 `<key>_critical` 比對，寫成 `"95:critical"` 的值仍以 `<key>` 比對（該列 severity 為 critical）。`when` 對排程閾值：任一時段成立即成立。
@@ -2586,7 +2594,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|------|
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
-| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／**規則讀不懂**（[#2961](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2961)；`_policies` 或 `--policy` 檔裡任一條規則：不認得的鍵（例如 `check:`）、不認得的 `operator`／`severity`、缺 `target`、`exclude_tenants` 不是 id 清單（寫成單一字串會變成子字串比對）、`when` 不是 mapping 或帶不認得的鍵／缺 `target`／不認得的運算子、規則不是 mapping、`policies` 不是清單——不評估任何規則，stderr 逐條點名，`--json` 的 `reason` 為 `policy_rule_invalid`；先前這些規則被跳過或改讀成 `required`，結果算通過）／`--policy` 檔有 `policies:`（或 `_policies:`）以外的頂層鍵（例如拼錯的 `polices:`），或兩者同時出現（`reason` 為 `policy_file_invalid`；先前算「沒有規則」或只讀其一，回 0）。⚠️ v2.9.0 映像跳過或改讀這些規則 <!-- image-caveat: v2.9.0 -->／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／（只在有 policy 規則時才讀租戶，沒有規則時回 0）沒有任何設定檔的目錄（例如空目錄配 `--policy`；原本回 0）、exporter 解析失敗而整份跳過的檔、讀不到的檔或子目錄（`ERROR` 行指名，da-guard 的 stderr 附在下面）、整棵樹被 da-guard 拒收、規則讀 `_routing` 而路由產生器拒收這棵樹、找不到 da-guard（`--json` 時 `reason` 為 `yaml_file_unreadable`／`da_guard_failed`／`routing_tree_refused`，#2115）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
+| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／**規則讀不懂**（[#2961](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2961)；`_policies` 或 `--policy` 檔裡任一條規則：不認得的鍵（例如 `check:`）、不認得的 `operator`／`severity`、缺 `target`、`exclude_tenants` 不是 id 清單（寫成單一字串會變成子字串比對）、`when` 不是 mapping 或帶不認得的鍵／缺 `target`／不認得的運算子、規則不是 mapping、`policies` 不是清單、運算子與 `value`／`target` 不搭（見上方「哪些寫法會被拒」，#2987）——不評估任何規則，stderr 逐條點名，`--json` 的 `reason` 為 `policy_rule_invalid`；先前這些規則被跳過或改讀成 `required`，結果算通過）／`--policy` 檔有 `policies:`（或 `_policies:`）以外的頂層鍵（例如拼錯的 `polices:`），或兩者同時出現（`reason` 為 `policy_file_invalid`；先前算「沒有規則」或只讀其一，回 0）。⚠️ v2.9.0 映像跳過或改讀這些規則 <!-- image-caveat: v2.9.0 -->／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／（只在有 policy 規則時才讀租戶，沒有規則時回 0）沒有任何設定檔的目錄（例如空目錄配 `--policy`；原本回 0）、exporter 解析失敗而整份跳過的檔、讀不到的檔或子目錄（`ERROR` 行指名，da-guard 的 stderr 附在下面）、整棵樹被 da-guard 拒收、規則讀 `_routing` 而路由產生器拒收這棵樹、找不到 da-guard（`--json` 時 `reason` 為 `yaml_file_unreadable`／`da_guard_failed`／`routing_tree_refused`，#2115）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
 
 #### opa-evaluate
 

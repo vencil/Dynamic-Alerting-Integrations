@@ -241,6 +241,126 @@ class InvalidPolicyRules(ValueError):
         super().__init__(f"{source}: {len(problems)} invalid policy rule(s)")
 
 
+#: Operators that test presence only; every other operator compares the found
+#: value with the rule's `value` (#2987).
+PRESENCE_OPERATORS = frozenset({"required", "forbidden"})
+_ORDER_OPERATORS = frozenset({"gte", "lte", "gt", "lt"})
+_SCALAR = (str, int, float, bool)
+# The `matches` ReDoS guard (shared by the rule check and `_evaluate_operator`).
+_REGEX_MAX_LEN = 200
+_NESTED_QUANTIFIER = re.compile(r'\([^)]*[+*][^)]*\)[+*?]')
+
+
+def _has_nested_repeat(pattern: str) -> bool:
+    """A variable repeat (`+`, `*`, `?`, `{n,}`, …) inside another repeat that
+    can run more than once, read off the parsed pattern — the textual heuristic above
+    misses `((a+))+` and `(a+){2,}` (#2987 review). Unparseable → False; the
+    compile check reports it."""
+    try:
+        import re._parser as parser  # Python ≥ 3.11 (CI and images pin 3.13)
+        tree = parser.parse(pattern)
+    except Exception:  # noqa: BLE001 — a pattern re cannot parse is not nested
+        return False
+    repeats = (parser.MAX_REPEAT, parser.MIN_REPEAT, parser.POSSESSIVE_REPEAT)
+
+    def _repeat_in(items, under_repeat):
+        for op, av in items:
+            if op in repeats:
+                lo, hi, sub = av
+                if hi != lo and under_repeat:  # a fixed count (`a{2}`) cannot backtrack
+                    return True
+                if _repeat_in(sub, under_repeat or hi > 1):
+                    return True
+            elif op is parser.SUBPATTERN:
+                if _repeat_in(av[-1], under_repeat):
+                    return True
+            elif op is parser.BRANCH:
+                if any(_repeat_in(alt, under_repeat) for alt in av[1]):
+                    return True
+            elif op in (parser.ASSERT, parser.ASSERT_NOT):
+                if _repeat_in(av[1], under_repeat):
+                    return True
+        return False
+
+    return _repeat_in(tree, False)
+
+
+def _regex_refusal(pattern: str) -> Optional[str]:
+    """Why `matches` will not run *pattern* (it then never matches), or None."""
+    if len(pattern) > _REGEX_MAX_LEN:
+        return f"is longer than {_REGEX_MAX_LEN} characters (ReDoS guard)"
+    if _NESTED_QUANTIFIER.search(pattern) or _has_nested_repeat(pattern):
+        return ("has a nested quantifier: a quantified group that holds a quantifier, "
+                "such as `(a+)+`, `((a+))+`, `(a+){2,}` or an optional `(\\d+)?` (ReDoS guard; it refuses all "
+                "-- drop the group's quantifier, e.g. `^\\d*$`, or use `one_of`)")
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        return f"is not a valid regular expression ({exc})"
+    return None
+
+
+def _target_problem(target: str, field_name: str) -> Optional[str]:
+    """#2987: a wildcard is matched against top-level keys only, so a dotted
+    target with `*` (`_metadata.*`) was looked up as a literal path, found
+    nothing and the rule was skipped."""
+    if "*" in target and "." in target:
+        return (f"`{field_name}` {target!r}: a wildcard matches top-level keys only, so a "
+                "dotted path with `*` is read as a literal key and never found (the rule would "
+                "be skipped) — name the nested field (`_metadata.owner`) or use a top-level "
+                "pattern (`container_*`)")
+    return None
+
+
+def _value_problem(op: str, has_value: bool, value: Any, prefix: str) -> Optional[str]:
+    """#2987: why `value` cannot serve operator *op*, or None. *prefix* is
+    `""` for the rule and `"when."` for its condition; an unknown *op* is
+    left to the operator check. Each shape below used to evaluate anyway:
+    a condition that could never hold skipped the rule, `not_equals` with
+    no value always held, and a main rule reported every tenant."""
+    field_op, field_val = f"`{prefix}operator: {op}`", f"`{prefix}value`"
+    if op not in VALID_OPERATORS:
+        return None
+    if op in PRESENCE_OPERATORS:
+        if has_value and value is not None:
+            return (f"{field_op} takes no {field_val} (it would be ignored and only presence "
+                    f"checked; {prefix}operator defaults to `required`) — drop {field_val} or "
+                    "name the comparison in `operator:`")
+        return None
+    if value is None:
+        return (f"{field_op} compares against {field_val}, and none is given (it would be "
+                "compared with null)")
+    if op == "one_of":
+        if not isinstance(value, list) or not value:
+            return (f"{field_op} needs {field_val} to be a non-empty list, got {value!r} "
+                    "(a single value is still a list: `[mariadb]`)")
+        bad = [v for v in value if not isinstance(v, _SCALAR)]
+        if bad:
+            return f"{field_op}: {field_val} items must be scalars, got {bad!r}"
+        return None
+    if not isinstance(value, _SCALAR):
+        return f"{field_op} needs {field_val} to be a scalar, got {type(value).__name__} {value!r}"
+    if op in _ORDER_OPERATORS:
+        cmp = None if isinstance(value, bool) else _to_comparable(value)
+        if not isinstance(cmp, float) or not math.isfinite(cmp):
+            return (f"{field_op} needs {field_val} to be a number or a duration (`5m`), "
+                    f"got {value!r} (every comparison would fail)")
+        return None
+    if op == "matches":
+        if isinstance(value, bool):
+            return f"{field_op} needs {field_val} to be a regular expression, got {value!r}"
+        pattern = str(value)
+        if pattern == "":
+            return f"{field_op}: {field_val} is empty, which matches every value"
+        refusal = _regex_refusal(pattern)
+        if refusal:
+            return f"{field_op}: {field_val} {pattern!r} {refusal}; it would never match"
+        return None
+    if op == "contains" and str(value) == "":
+        return f"{field_op}: {field_val} is empty, which every value contains"
+    return None
+
+
 def _rule_problem(i: int, r: Any) -> Optional[str]:
     """Why rule *i* cannot be read as written, or None."""
     if not isinstance(r, dict):
@@ -258,6 +378,11 @@ def _rule_problem(i: int, r: Any) -> Optional[str]:
     if not isinstance(excl, list) or not all(isinstance(t, str) for t in excl):
         return (f"{label}: `exclude_tenants` must be a list of tenant ids, got {excl!r} "
                 "(a single id is still a list: `[t1]`)")
+    problem = (_target_problem(target, "target")
+               or _value_problem(str(r.get("operator", "required")), "value" in r,
+                                 r.get("value"), ""))
+    if problem:
+        return f"{label}: {problem}"
     if "when" in r:
         w = r["when"]
         if not isinstance(w, dict):
@@ -271,6 +396,14 @@ def _rule_problem(i: int, r: Any) -> Optional[str]:
         if op not in VALID_OPERATORS:
             return (f"{label}: `when.operator` {op!r} is not an operator "
                     f"(valid: {sorted(VALID_OPERATORS)})")
+        problem = _target_problem(w["target"], "when.target")
+        if problem is None and _is_wildcard(w["target"]) and op not in PRESENCE_OPERATORS:
+            problem = (f"`when.target` {w['target']!r} is a wildcard, and a wildcard `when` "
+                       f"supports only `required` / `forbidden`: `when.operator: {op}` would "
+                       "compare a set of keys with one value, never hold, and skip the rule")
+        problem = problem or _value_problem(op, "value" in w, w.get("value"), "when.")
+        if problem:
+            return f"{label}: {problem}"
     return None
 
 
@@ -289,6 +422,13 @@ def rules_from_policy_data(data: Any, source: str = "policies") -> list[PolicyRu
     that is not a list of ids, a `when` that is not a mapping or has an
     unknown key / no `target` / an unknown operator, an unknown operator or
     severity. ``_policies:`` with no value is no rules, as before.
+
+    #2987, the rule and its `when` alike (`_value_problem`, `_target_problem`):
+    a comparison operator with no `value`, `required`/`forbidden` with one,
+    a `one_of` value that is not a non-empty list, a `matches` value that
+    does not compile (or that the ReDoS guard refuses), an order operator
+    whose value is not a number or duration, a dotted target with `*`, and a
+    wildcard `when` with an operator other than `required`/`forbidden`.
     """
     if not isinstance(data, dict):
         return []
@@ -562,7 +702,10 @@ def _to_comparable(value: Any) -> Union[float, str]:
     支援 Prometheus duration 字串（如 ``5m`` → ``300``）。
     """
     if isinstance(value, (int, float)):
-        return float(value)
+        try:
+            return float(value)
+        except OverflowError:  # an int past float range (#2987 review)
+            return math.inf if value > 0 else -math.inf
     if isinstance(value, str):
         # Try numeric
         try:
@@ -625,11 +768,10 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
 
     if operator == "matches":
         pattern = str(expected)
-        # ReDoS 防護：限制長度 + 偵測巢狀量詞（catastrophic backtracking）
-        if len(pattern) > 200:
+        # ReDoS 防護：限制長度 + 偵測巢狀量詞（catastrophic backtracking）。
+        # 規則載入時已拒收這類 pattern（#2987）；這裡留給直接建 PolicyRule 的呼叫端。
+        if _regex_refusal(pattern) is not None:
             return False
-        if re.search(r'\([^)]*[+*][^)]*\)[+*?]', pattern):
-            return False  # 拒絕巢狀量詞如 (a+)+
         try:
             return bool(re.search(pattern, str(actual)))
         except re.error:
