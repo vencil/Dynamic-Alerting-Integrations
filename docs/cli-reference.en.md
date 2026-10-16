@@ -3156,7 +3156,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 Multi-channel notification connectivity testing — verify reachability of all configured receivers and report status.
 
-The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual; to check whether the generator accepts the config, run `generate-routes --validate`.
+The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual. A receiver is held back (`INVALID_URL` / `INVALID_CONFIG`) only when the generator (`build_receiver_config`) refuses the receiver's **own config**; what it skips at the routing level is not covered yet and those receivers are tested as usual (tracked in [#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)): an `overrides` or `routes` entry the generator skips (for example an override with no `alertname` / `metric_group`, or `routes[i]` with an unsupported key), and a tenant's whole `overrides` / `routes` set, which is not rendered when its main receiver is refused. to check whether the generator accepts the config, run `generate-routes --validate`.
 
 **Usage**
 
@@ -3170,7 +3170,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 |-----------|-------------|---------|
 | `--config-dir` | Path to conf.d/ directory (required) | - |
 | `--tenant` | Test only this tenant (omit to test all) | all |
-| `--dry-run` | Validate URL format only, do not send | - |
+| `--dry-run` | Check receiver config and URL format by the route generator's verdict and the port range 1-65535, do not send (hostname encoding is checked only when a request is sent) | - |
 | `--json` | JSON output | - |
 | `--ci` | CI mode: exit 1 if any receiver fails | - |
 | `--timeout` | Timeout per receiver in seconds, applied to both connecting and waiting for the response; a timeout in either phase is reported as `TIMEOUT` ([#2965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2965)). Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2957](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2957)) | `10` |
@@ -3187,7 +3187,7 @@ Each receiver's result is one of the following (the status column of the text ou
 | Status | Meaning |
 |--------|---------|
 | `OK` | The receiver returned a successful HTTP response |
-| `DRY_RUN` | `--dry-run`: config and URL are valid; nothing was sent |
+| `DRY_RUN` | `--dry-run`: the route generator (`build_receiver_config`) accepts the receiver's own config and the port is 1-65535; nothing was sent (this does not mean the generator renders it into a route; see the ⚠️ above). Whether the hostname can be encoded (IDNA) is checked only when a request is sent, so a dry run does not cover it |
 | `SKIPPED` | No testable URL (for example `email`) |
 | `TIMEOUT` | Connecting or waiting for the response took longer than `--timeout` |
 | `CONNECTION_REFUSED` | The peer refused the connection (nothing listening on the port, or a firewall rejecting with RST) |
@@ -3195,8 +3195,8 @@ Each receiver's result is one of the following (the status column of the text ou
 | `TLS_ERROR` | TLS error: certificate verification failed, https to a plain-http port, handshake failure |
 | `AUTH_ERROR` | HTTP `401` / `403` |
 | `HTTP_ERROR` | Any other HTTP error status, or a malformed or truncated response (detail starts with `malformed response:`) |
-| `INVALID_URL` | The URL is invalid or its scheme is not `http` / `https` |
-| `INVALID_CONFIG` | The receiver config is invalid (for example a missing required field or an unknown `type`) |
+| `INVALID_URL` | The route generator (`build_receiver_config`) refuses the receiver's own config because its URL field (`smarthost` for email) is given but malformed or not a string, the port is not 1-65535, or at send time the hostname cannot be encoded or the URL is refused (no request was sent) |
+| `INVALID_CONFIG` | The route generator (`build_receiver_config`) refuses the receiver's own config for another reason (for example a missing required field — a URL field that is missing, empty or null included, an unknown `type`, an optional field of the wrong type), matching the generator's verdict |
 
 For `TIMEOUT`, `CONNECTION_REFUSED`, `CONNECTION_ERROR` and `TLS_ERROR` the detail is cut at 80 characters (the `via proxy: ` prefix included); longer error messages are truncated. With `https_proxy` / `http_proxy` set, these statuses may describe the hop to the proxy: a closed proxy port is `CONNECTION_REFUSED`, an unresolvable proxy host is `CONNECTION_ERROR`, and an `HTTP 502` an http receiver gets through the proxy is `HTTP_ERROR`. Only a failed HTTPS CONNECT carries the `via proxy: ` prefix (including a proxy answering `504 Connection Timed Out`, which is then not `TIMEOUT`).
 
