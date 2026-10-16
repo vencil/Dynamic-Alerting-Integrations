@@ -538,7 +538,7 @@ func TestUndetermined_EvidenceOrderIsPinned(t *testing.T) {
 	}
 	for run := 0; run < 20; run++ {
 		var errOut bytes.Buffer
-		got := reasonsOf(undeterminedEvidence(tmp, &errOut))
+		got := reasonsOf(undeterminedEvidence(tmp, false, &errOut))
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("run %d: evidence\n%q\nwant\n%q", run, got, want)
 		}
@@ -554,12 +554,21 @@ func TestUndetermined_UnscannableTreeIsUndetermined(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "missing")
 	var errOut bytes.Buffer
-	got := undeterminedEvidence(root, &errOut)
+	got := undeterminedEvidence(root, false, &errOut)
 	want := []undeterminedItem{{File: ".", Field: "read_failure", Reason: undeterminedGeneratorUnreadable}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("evidence %+v, want %+v", got, want)
 	}
 	if !strings.Contains(errOut.String(), "cannot read the tree as the route generator does") {
 		t.Errorf("stderr %q, want the reason", errOut.String())
+	}
+	// The root the exporter's walk already reported: same evidence, the
+	// reason not printed a second time (#2627: named once).
+	var again bytes.Buffer
+	if got := undeterminedEvidence(root, true, &again); !reflect.DeepEqual(got, want) {
+		t.Errorf("rootReported: evidence %+v, want %+v", got, want)
+	}
+	if again.Len() != 0 {
+		t.Errorf("rootReported: stderr %q, want none", again.String())
 	}
 }

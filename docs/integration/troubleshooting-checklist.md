@@ -1450,7 +1450,7 @@ docker run --rm -v "$(pwd):/work:ro" -w /work \
 # 再跑 da-tools generate-routes --config-dir conf.d/ --validate --strict（CI 兩步都跑，見 §2.2.2）
 ```
 
-`make dc-run` 在 vibe 開發環境已對齊 CI 行為；本地綠 = CI 綠（除非 image cache 與 main HEAD 落差大）。
+`make dc-run` 在 vibe 開發環境已對齊 CI 行為：上面兩步（da-guard 與 `generate-routes --validate --strict`）都通過，才等於 CI 綠；da-guard 單獨回 4 只代表路由未判定（image cache 與 main HEAD 落差大時例外）。
 
 ---
 

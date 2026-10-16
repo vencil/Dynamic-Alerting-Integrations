@@ -317,7 +317,7 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			}
 			// The evidence is the whole tree's, so the stopped run still lists
 			// it (the exit code stays 3).
-			undetermined := undeterminedEvidence(f.configDir, errOut)
+			undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadable), errOut)
 			if werr := writeDecodeStopReport(stdout, errOut, f, de, unreadable, undetermined); werr != nil {
 				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
 				return exitCallerErr
@@ -335,7 +335,7 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, scoped.RootListErr)
 	}
 	withGeneratorDuplicates(f.configDir, scoped, errOut)
-	undetermined := undeterminedEvidence(f.configDir, errOut)
+	undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadableEntries(scoped.Unreadable)), errOut)
 
 	// #2043: without an explicit --cardinality-limit, predict against the cap
 	// the exporter will actually enforce for this tree, not a constant. The
@@ -936,6 +936,17 @@ func reportParseFailed(errOut io.Writer, files []string) {
 // unreadableEntries is the JSON form of the walk's unreadable entries
 // (served-values, effective and the guard report share it): never nil, so a
 // field that is always present encodes as [] when there is none.
+// rootUnreadable reports whether entries name the --config-dir root itself
+// ("."), whose reason the walk has already printed.
+func rootUnreadable(entries []skippedFile) bool {
+	for _, e := range entries {
+		if e.File == "." {
+			return true
+		}
+	}
+	return false
+}
+
 func unreadableEntries(us []config.UnreadableFile) []skippedFile {
 	out := make([]skippedFile, 0, len(us))
 	for _, u := range us {

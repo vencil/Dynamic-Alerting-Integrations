@@ -1455,7 +1455,7 @@ docker run --rm -v "$(pwd):/work:ro" -w /work \
 # (CI runs both, see §2.2.2)
 ```
 
-`make dc-run` in the vibe dev environment is aligned with CI behaviour; local green = CI green (unless the image cache lags far behind main HEAD).
+`make dc-run` in the vibe dev environment is aligned with CI behaviour: local green equals CI green only when both steps above (da-guard and `generate-routes --validate --strict`) pass; da-guard's exit 4 alone means routing is not judged (unless the image cache lags far behind main HEAD).
 
 ---
 

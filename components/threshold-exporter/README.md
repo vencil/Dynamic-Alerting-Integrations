@@ -138,7 +138,7 @@
 | 0 | clean | parse OK | 全部目標成功 |
 | 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） | 一個以上目標失敗 |
 | 2 | caller error（旗標 / 路徑） | caller error | caller error |
-| 3 | exporter 無法 decode 的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
+| 3 | exporter 無法 decode 或讀不到的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
 | 4 | 未判定：樹上有只能由 route generator 判的路由／domain policy 內容（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；優先序 3 > 1 > 4 > 0，見 [cli-reference §guard](../../docs/cli-reference.md#guard)） | — | — |
 
 ---

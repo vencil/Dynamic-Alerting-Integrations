@@ -142,12 +142,12 @@ on:
       # The cardinality cap da-guard uses when --cardinality-limit is omitted
       # (#2043) — the call below omits it, so a change here changes every run.
       - "components/threshold-exporter/app/pkg/config/max_metrics.go"
-      # #2280: the routing checks resolve each tenant's routing and judge the
-      # domain policies through pkg/routingpolicy, which reads the conf.d
-      # root's platform files through RootPlatformFiles. A PR changing only
-      # them changes every guard verdict on routing.
+      # #2904: da-guard no longer judges routing or domain policy, but its
+      # default check still calls pkg/routingpolicy (MergeShapeError, for the
+      # files the route generator refuses whole: exit 3) and reads the conf.d
+      # root's platform files through RootPlatformFiles, until ADR-036 step 3.
       - "components/threshold-exporter/app/pkg/routingpolicy/**"
-      # #2295: the receiver contract the routing checks judge every receiver by.
+      # #2295: the receiver contract, still built into da-guard until ADR-036 step 3.
       - "components/threshold-exporter/app/pkg/receiverspec/**"
       - "components/threshold-exporter/app/pkg/config/root_platform_files.go"
       # #2904: the route generator this workflow runs beside da-guard, what it

@@ -86,8 +86,10 @@ type undeterminedItem struct {
 // only the route generator can judge, sorted (file, field, reason); never
 // nil, so the JSON field encodes as [] when there is none. A tree the walk
 // cannot scan at all is one generator_unreadable item for "." (fail toward
-// undetermined), its reason on errOut.
-func undeterminedEvidence(configDir string, errOut io.Writer) []undeterminedItem {
+// undetermined), its reason on errOut unless rootReported: the exporter's own
+// walk already named the root as unreadable and printed that same reason, and
+// stderr names the root and its reason once (exit 3, #2627).
+func undeterminedEvidence(configDir string, rootReported bool, errOut io.Writer) []undeterminedItem {
 	out := []undeterminedItem{}
 	scan, err := config.ScanDirTreeFiles(configDir, log.New(io.Discard, "", 0))
 	var doc *parseTreeDoc
@@ -95,7 +97,9 @@ func undeterminedEvidence(configDir string, errOut io.Writer) []undeterminedItem
 		doc, err = parseTreeOf(scan)
 	}
 	if err != nil {
-		fmt.Fprintf(errOut, "%s: cannot read the tree as the route generator does: %v\n", programName, err)
+		if !rootReported {
+			fmt.Fprintf(errOut, "%s: cannot read the tree as the route generator does: %v\n", programName, err)
+		}
 		return append(out, undeterminedItem{File: ".", Field: string(parsetree.KindReadFailure), Reason: undeterminedGeneratorUnreadable})
 	}
 	return append(out, undeterminedFromParseTree(doc)...)
