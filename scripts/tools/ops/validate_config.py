@@ -2344,9 +2344,10 @@ _CUSTOM_ALERT_SOURCES_HINT = (
     "different places (#3042). A rule with no served threshold never fires; "
     "a served threshold with no rule never alerts. Once the compiler builds "
     "from what the exporter serves (#3042, the next stage), the first are no "
-    "longer compiled and the second start to fire. A recipe meant to fire "
-    "belongs in the tenant's own entry, a root platform file's `tenants:` or "
-    "a profile. Reported only, not yet blocking.")
+    "longer compiled and the second start to fire. Today the two agree on a "
+    "tenant's own entry and on the `tenants:` of a root platform file other "
+    "than `_defaults.yaml`; from that stage on, a profile and the root "
+    "`_defaults.yaml` `tenants:` too. Reported only, not yet blocking.")
 _CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT = (
     "Nothing was compared; the line above names why. The exporter's side "
     "needs da-guard (in the repo `make da-guard-build`, or set "
@@ -2394,8 +2395,10 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
     """
     side = "exporter"
     try:
-        served = load_served_tree(config_dir).tenants
+        # The shared effective run first: when it fails, the row stops here
+        # and runs no da-guard of its own (as unread_keys).
         sources = _effective_tree(config_dir).tenants
+        served = load_served_tree(config_dir).tenants
         side = "compiler"
         accepted: list[dict] = []
         (loader or _custom_alert_compiler()).build_shapes(Path(config_dir), accepted=accepted)
@@ -2440,12 +2443,12 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
             for name in names:
                 groups.setdefault(("not_compiled", _where(t), name, rid, ""), set()).add(t)
         elif len(names) > 1:
-            # Two served recipes of one shape and severity in one tenant: the
-            # compiler took one and quarantined the rest.
-            kept = compiled[(t, rid, sev)]["name"] if (t, rid, sev) in compiled else names[0]
-            for name in names:
-                if name != kept:
-                    groups.setdefault(("shared", _where(t), name, rid, kept), set()).add(t)
+            # Several served recipes of one shape and severity in one tenant:
+            # the compiler takes one per tenant, shape and severity and
+            # quarantines the rest. Which one it took is not re-derived here
+            # (a switched-off one serves no row; names are spelt per side).
+            groups.setdefault(("shared", _where(t), ", ".join(f"`{n}`" for n in sorted(names)),
+                               rid, sev), set()).add(t)
 
     def _tenants(ts: set[str]) -> str:
         ts = sorted(ts)
@@ -2461,9 +2464,9 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
             details.append(f"{where}: `{name}` ({rid}) is served, but no rule is compiled "
                            f"for it — it never alerts — tenant(s) {_tenants(ts)}")
         else:
-            details.append(f"{where}: `{name}` ({rid}) is served beside `{kept}`, which has the "
-                           "same shape and severity — the compiler quarantined it (one alert per "
-                           f"shape and severity per tenant) — tenant(s) {_tenants(ts)}")
+            details.append(f"{where}: {name} ({rid}, {kept}) are served for one tenant with the "
+                           "same shape and severity — the compiler takes one recipe per tenant, "
+                           f"shape and severity and quarantines the rest — tenant(s) {_tenants(ts)}")
     if details:
         return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
     return _make_result("custom_alert_sources", PASS, [

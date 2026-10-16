@@ -195,16 +195,34 @@ def test_a_switched_off_recipe_still_compiles_the_rule(tmp_path):
     assert r["status"] == vc.PASS, r
 
 
-def test_two_served_recipes_of_one_shape_and_severity_are_said(tmp_path):
-    """The exporter serves both; the compiler takes one."""
+_SHARED = ("team/t1.yaml: {names} (threshold__m__gt__w5m__for1m, warning) are served for one "
+           "tenant with the same shape and severity — the compiler takes one recipe per tenant, "
+           "shape and severity and quarantines the rest — tenant(s) t1")
+
+
+@pytest.mark.parametrize("recipes, names", [
+    ([("a", "10:warning"), ("b", "20:warning")], "`a`, `b`"),
+    # The one the compiler keeps is switched off (serves no row): both served
+    # ones are quarantined — the line names them without picking a "kept" one.
+    ([("a", "disable:warning"), ("b", "10:warning"), ("c", "20:warning")], "`b`, `c`"),
+], ids=["two", "kept-one-switched-off"])
+def test_served_recipes_of_one_shape_and_severity_are_said(tmp_path, recipes, names):
+    """The exporter serves each; the compiler takes one per tenant, shape and
+    severity."""
     r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              + _rec("a", "m", threshold="10:warning")
-                              + _rec("b", "m", threshold="20:warning")}))
+                              + "".join(_rec(n, "m", threshold=th) for n, th in recipes)}))
     assert r["status"] == vc.WARN
-    assert r["details"] == [
-        "team/t1.yaml: `b` (threshold__m__gt__w5m__for1m) is served beside `a`, which has the "
-        "same shape and severity — the compiler quarantined it (one alert per shape and "
-        "severity per tenant) — tenant(s) t1"]
+    assert r["details"] == [_SHARED.format(names=names)]
+
+
+def test_the_served_names_are_the_exporters_spelling(tmp_path):
+    """Unquoted `on` is "on" to the exporter (True to PyYAML): the line names
+    what is served, so no recipe is named that the exporter does not serve."""
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
+                              "      - {recipe: threshold, name: on, metric: m, op: '>', "
+                              "window: 5m, threshold: '10:warning'}\n"
+                              + _rec("b", "m", threshold="20:warning")}))
+    assert r["details"] == [_SHARED.format(names="`b`, `on`")]
 
 
 def test_the_pass_line_counts_per_tenant_and_severity(tmp_path):
