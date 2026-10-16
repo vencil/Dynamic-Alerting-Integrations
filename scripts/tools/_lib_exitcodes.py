@@ -58,6 +58,12 @@ extensions today:
   like 1 (fix the file, re-run), but not a finding about the
   tenants the guard DID check — which is why it is not 1. Contract in the
   comment at the top of cmd/da-guard/main.go; docs/cli-reference.md §guard.
+* da-guard's exitUndetermined = 4 (#2904, ADR-036 §9; `da-tools guard`
+  passes it through): the tree holds routing or domain policy, which the
+  default check no longer judges — "not judged", kept apart from 0
+  ("judged, nothing wrong"). Neither a finding (1) nor a caller error (2):
+  the remedy is to run `da-tools generate-routes --validate --strict`.
+  Precedence 3 > 1 > 4 > 0. Same contract places as exit 3.
 
 One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification
 finding, exit 1 = caller error) as a sanctioned pre-SSOT exception: its

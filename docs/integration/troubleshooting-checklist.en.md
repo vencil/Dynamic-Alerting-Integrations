@@ -1426,7 +1426,7 @@ diff <(sort /tmp/orphans-before.txt) <(sort /tmp/orphans-after.txt)
 **Cross-ref**:
 - playbook §12 Phase 0: Tier A surfaces 100+ orphan rules
 - playbook §3 Phase 0 narrative "Common Phase 0 surprises" (orphan is the most common customer surprise)
-- §2.2 da-guard 4-layer (the Schema layer also catches receiver-mismatch-like orphans)
+- §2.2 da-guard 4-layer (receivers and routing are judged by `generate-routes --validate --strict` since #2904; da-guard exits 4)
 
 ---
 
@@ -1450,10 +1450,12 @@ make dc-run CMD="da-tools guard defaults-impact --config-dir conf.d/"
 # Or Docker (no dev-container environment)
 docker run --rm -v "$(pwd):/work:ro" -w /work \
     ghcr.io/vencil/da-tools:latest guard defaults-impact --config-dir conf.d/
-# expected: 4-layer PASS / FAIL report, equivalent to CI
+# expected: a schema / cardinality / redundant-override report; exit 4 means the tree holds
+# routing or domain policy, so also run da-tools generate-routes --config-dir conf.d/ --validate --strict
+# (CI runs both, see §2.2.2)
 ```
 
-`make dc-run` in the vibe dev environment is aligned with CI behaviour; local green = CI green (unless the image cache lags far behind main HEAD).
+`make dc-run` in the vibe dev environment is aligned with CI behaviour: local green equals CI green only when both steps above (da-guard and `generate-routes --validate --strict`) pass; da-guard's exit 4 alone means routing is not judged (unless the image cache lags far behind main HEAD).
 
 ---
 
@@ -1467,7 +1469,7 @@ docker run --rm -v "$(pwd):/work:ro" -w /work \
 # See specifically which file, which field. The schema layer is driven by
 # --required-fields; leaving it empty disables that check (see
 # `da-tools guard defaults-impact --help`).
-da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds.cpu,routing.receiver.type
+da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
 # expected: the report's Schema section lists the file path + missing dotted path
 ```
 
@@ -1483,22 +1485,24 @@ da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds
 cat docs/schemas/tenant-config.schema.json
 # Compare and modify the yaml — add field / fix spelling
 
-# Re-run (one pass covers schema + routing + cardinality)
+# Re-run (one pass covers schema + cardinality; routing: see 2.2.2)
 da-tools guard defaults-impact --config-dir conf.d/
 ```
 
 #### 2.2.2 Routing-layer failure
 
-**Symptom**: `Domain X has no matching tenant` or `Tenant Y has no domain anchor`
+⚠️ Since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) da-guard **judges no routing or domain policy**: a tree carrying them gets a "Routing and domain policy: not judged" section and **exit 4**; the route generator judges them.
+
+**Symptom**: da-guard exit 4; or `generate-routes --validate --strict` reports a domain-policy violation or a receiver error
 
 **Most likely cause**: added a tenant yaml but didn't define the domain in `_defaults.yaml` or an upper-level directory; or a domain rename wasn't synced to the tenant side.
 
 **Fix**:
 
 ```bash
-# Re-run the guard and read the report's Routing section
-da-tools guard defaults-impact --config-dir conf.d/
-# Find isolated nodes; add the corresponding domain entry or tenant assignment
+# Routing and domain policy are the generator's to judge
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+# Fix each finding it lists: add the domain entry or tenant assignment
 ```
 
 #### 2.2.3 Cardinality-layer failure

@@ -1,12 +1,29 @@
 package main
 
+// receiver_pyyaml_test.go — #2295 / #2431 / #2960: the receivers as PyYAML
+// reads them. Before #2904 the CLI re-read each tenant file the way the route
+// generator's PyYAML does and judged the receivers on that reading. Since
+// #2904 (ADR-036 §9 step 2) the generator judges them itself — it IS that
+// reading — and the CLI judges no routing. Each tree below is the pre-#2904
+// fixture, and each test's comment says what it probed then; the run must
+// now be undetermined (exit 4), with no finding at all.
+// The Go reading stays held to the generator by the parity matrix
+// (routing_policy_parity_test.go) until #2905.
+
 import (
 	"strings"
 	"testing"
-
-	"github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
+
+// assertReceiverTreeNotJudged: the tree holds only routing-plane problems,
+// so the run is exit 4 with no finding and with evidence.
+func assertReceiverTreeNotJudged(t *testing.T, label string, files map[string]string) {
+	t.Helper()
+	got := runJudged(t, files, "")
+	if got.code != exitUndetermined || len(got.findings) != 0 || len(got.undetermined) == 0 {
+		t.Errorf("%s: exit %d, findings %v, undetermined %v; want 4, none, some", label, got.code, got.findings, got.undetermined)
+	}
+}
 
 // TestRun_ReceiverReadAsPyYAMLReadsIt (#2295): in every layer the route
 // generator merges — the tenant file, the root platform overlay, a routing
@@ -54,23 +71,7 @@ func TestRun_ReceiverReadAsPyYAMLReadsIt(t *testing.T) {
 		}{
 			{"on", true}, {"1:30", true}, {`"on"`, false}, {"'1:30'", false}, {`"2024-01-01"`, false},
 		} {
-			code, got := runRoutingTree(t, build(tc.token), "")
-			var bad []string
-			for _, f := range got {
-				if strings.HasPrefix(f, "error invalid_receiver_field tx ") {
-					bad = append(bad, f)
-				}
-			}
-			want := 0
-			if tc.bad {
-				want = 3
-				if name == "routing-defaults" {
-					want = 2
-				}
-			}
-			if len(bad) != want || (want == 0) != (code == 0) {
-				t.Errorf("%s token %s: exit %d, invalid_receiver_field %v; want %d of them", name, tc.token, code, got, want)
-			}
+			assertReceiverTreeNotJudged(t, name+" token "+tc.token, build(tc.token))
 		}
 	}
 }
@@ -118,55 +119,9 @@ func TestRun_ReceiverReadBesideNonStringKeys(t *testing.T) {
 			token string
 			bad   bool
 		}{{"on", true}, {`"on"`, false}} {
-			code, got := runRoutingTree(t, map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": s.tenant(tc.token)}, "")
-			var bad []string
-			for _, f := range got {
-				if strings.HasPrefix(f, "error invalid_receiver_field tx ") || strings.HasPrefix(f, "error missing_receiver_field tx ") {
-					bad = append(bad, f)
-				}
-			}
-			want := []string(nil)
-			if tc.bad {
-				want = []string{"error invalid_receiver_field tx " + s.field + ".http_config.bearer_token"}
-			}
-			// #2960: a `1:` / `on:` key is a key the generator does not read
-			// (it reads keys as text) — named, and the run fails; a null key's
-			// pair is dropped by the generator's loader, so `~:` is not.
-			ignored := false
-			for _, f := range got {
-				ignored = ignored || strings.HasPrefix(f, "error routing_key_ignored tx ")
-			}
-			wantIgnored := (strings.HasPrefix(s.name, "routing ") && !strings.Contains(s.name, "~")) ||
-				strings.HasPrefix(s.name, "override ")
-			if strings.Join(bad, "|") != strings.Join(want, "|") || (tc.bad || ignored) == (code == 0) ||
-				ignored != wantIgnored {
-				t.Errorf("%s token %s: exit %d, findings %v; want receiver findings %v", s.name, tc.token, code, got, want)
-			}
+			assertReceiverTreeNotJudged(t, s.name+" token "+tc.token,
+				map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": s.tenant(tc.token)})
 		}
-	}
-}
-
-// TestPyYAMLOwn_FailsClosedWithoutThePyYAMLReading: a tenant whose `_routing`
-// has no PyYAML reading (its file unreadable, the tenant not found in it) is
-// not judged as yaml.v3 read it — the receiver is routingpolicy.Unmatched,
-// which the receiver check refuses.
-func TestPyYAMLOwn_FailsClosedWithoutThePyYAMLReading(t *testing.T) {
-	t.Parallel()
-	ec := &config.EffectiveConfig{TenantID: "tx", SourceFile: "tx.yaml", TenantOverridesRaw: map[string]any{
-		"_routing": map[string]any{"receiver": map[string]any{"type": "webhook", "url": "https://t.example/h"}},
-	}}
-	for name, py := range map[string]map[string]map[string]any{
-		"file unreadable":  {"tx.yaml": nil},
-		"tenant not found": {"tx.yaml": {"other": map[string]any{}}},
-		"file not read":    {},
-	} {
-		r, _ := pyyamlOwn(ec, py)["_routing"].(map[string]any)
-		if r["receiver"] != routingpolicy.Unmatched {
-			t.Errorf("%s: receiver = %#v, want routingpolicy.Unmatched", name, r["receiver"])
-		}
-	}
-	if _, ok := ec.TenantOverridesRaw["_routing"].(map[string]any)["receiver"].(map[string]any); !ok {
-		t.Error("pyyamlOwn modified ec.TenantOverridesRaw")
 	}
 }
 
@@ -198,9 +153,8 @@ func TestRun_PlatformIntKey(t *testing.T) {
 			"_platform.yaml": "tenants:\n  tx:\n    1: x\n    _routing:\n      receiver: " + good + "\n"}, 0},
 	} {
 		tc.files["_defaults.yaml"] = rsDefaults
-		if code, got := runRoutingTree(t, tc.files, ""); code != tc.want {
-			t.Errorf("%s: exit %d, findings %v; want exit %d", tc.name, code, got, tc.want)
-		}
+		_ = tc.want // the pre-#2904 exit, kept as the fixture's record
+		assertReceiverTreeNotJudged(t, tc.name, tc.files)
 	}
 }
 
@@ -210,18 +164,5 @@ func TestRun_PlatformIntKey(t *testing.T) {
 func TestRun_IgnoredReceiverKeyNamedAsWritten(t *testing.T) {
 	t.Parallel()
 	tenant := rsTenant + "    _routing:\n      receiver:\n        type: webhook\n        url: https://t.example/h\n        on: x\n"
-	code, got := runRoutingTree(t, map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": tenant}, "")
-	want := "error routing_key_ignored tx receiver.on"
-	found := false
-	for _, f := range got {
-		if strings.HasPrefix(f, "error routing_key_ignored ") {
-			if f != want {
-				t.Errorf("finding %q, want %q", f, want)
-			}
-			found = true
-		}
-	}
-	if !found || code == 0 {
-		t.Errorf("exit %d, findings %v; want %q", code, got, want)
-	}
+	assertReceiverTreeNotJudged(t, "receiver key on:", map[string]string{"_defaults.yaml": rsDefaults, "tx.yaml": tenant})
 }

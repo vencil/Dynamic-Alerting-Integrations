@@ -50,7 +50,7 @@ echo $?      # → 1（errors > 0 即 block merge）
 這就是 da-guard 的價值：在配置進 Prometheus**之前**，於 CI 算出它會撐爆 per-tenant cardinality 預算、並以非零 exit code 擋下 merge——把一場「半夜被 call 起床」的事故消滅在 PR 階段。
 
 ## 各子工具一句定位
-- **`da-guard`** — conf.d 安全把關：schema + routing + **cardinality** guard（上面 demo 的就是它）
+- **`da-guard`** — conf.d 安全把關：schema + **cardinality** guard（上面 demo 的就是它；路由與 domain policy 自 #2904 起交給 `generate-routes --validate --strict`，樹上有這類內容時 exit 4）
 - **`da-parser`** — PromRule → conf.d 解析匯入
 - **`da-batchpr`** — hierarchy-aware 批次 PR
 - **`fed-key`** — federation JWT 金鑰簽發（ops-only）
