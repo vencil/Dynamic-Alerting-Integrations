@@ -184,31 +184,63 @@ func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 		Tenants:           m.own,
 	}
 	v := tenantLayer.validateTenantKeys()
-	if len(m.platform) > 0 {
-		tenants := make([]string, 0, len(m.platform))
-		for tid := range m.platform {
-			tenants = append(tenants, tid)
-		}
-		sort.Strings(tenants)
-		for _, tid := range tenants {
-			for _, sup := range m.platform[tid] {
-				layer := ThresholdConfig{
-					Defaults:          m.Defaults,
-					OptionalOverrides: m.OptionalOverrides,
-					Profiles:          m.Profiles,
-					Tenants:           map[string]map[string]ScheduledValue{tid: sup.keys},
-				}
-				pv := layer.validateOverrideKeys()
-				msgs := append(append([]string(nil), pv.Errors...), pv.Notices...)
-				sort.Strings(msgs)
-				for _, msg := range msgs {
-					v.Notices = append(v.Notices, platformLayerNotice(sup.file, tid, msg))
-				}
-			}
-		}
+	tenants := make([]string, 0, len(m.platform))
+	for tid := range m.platform {
+		tenants = append(tenants, tid)
+	}
+	sort.Strings(tenants)
+	for _, tid := range tenants {
+		v.Notices = append(v.Notices, m.platformLayerNotices(tid)...)
 	}
 	v.Notices = append(v.Notices, m.profileLayerNotices()...)
 	return v
+}
+
+// ValidateTenantKeysByTenant is ValidateTenantKeys split by tenant: the
+// same messages, each under the tenant it is about (tenant-api tells a
+// reader only about the tenants it may read, #3039). Shadowed for the same
+// reason as ValidateTenantKeys: the promoted one would judge the platform and
+// profile keys as the tenant's.
+func (m *TenantMerge) ValidateTenantKeysByTenant() KeyValidationByTenant {
+	out := KeyValidationByTenant{
+		Platform: KeyValidation{Notices: m.defaultsKeyNotices()},
+		Tenants:  make(map[string]KeyValidation, len(m.own)),
+	}
+	canonDeclared := canonicalizeOptionalOverrides(m.OptionalOverrides)
+	for tid, keys := range m.own {
+		layer := ThresholdConfig{
+			Defaults:          m.Defaults,
+			OptionalOverrides: m.OptionalOverrides,
+			Profiles:          m.Profiles,
+			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
+		}
+		v := layer.validateOverrideKeys()
+		v.Notices = append(v.Notices, m.platformLayerNotices(tid)...)
+		v.Notices = append(v.Notices, m.profileLayerNoticesFor(tid, canonDeclared)...)
+		out.Tenants[tid] = v
+	}
+	return out
+}
+
+// platformLayerNotices is ValidateTenantKeys' notices about the root
+// platform files' entries for tid, in merge order.
+func (m *TenantMerge) platformLayerNotices(tid string) []string {
+	var out []string
+	for _, sup := range m.platform[tid] {
+		layer := ThresholdConfig{
+			Defaults:          m.Defaults,
+			OptionalOverrides: m.OptionalOverrides,
+			Profiles:          m.Profiles,
+			Tenants:           map[string]map[string]ScheduledValue{tid: sup.keys},
+		}
+		pv := layer.validateOverrideKeys()
+		msgs := append(append([]string(nil), pv.Errors...), pv.Notices...)
+		sort.Strings(msgs)
+		for _, msg := range msgs {
+			out = append(out, platformLayerNotice(sup.file, tid, msg))
+		}
+	}
+	return out
 }
 
 // profileLayerNotices is one notice per problem in the part of an elected
@@ -242,60 +274,68 @@ func (m *TenantMerge) profileLayerNotices() []string {
 	canonDeclared := canonicalizeOptionalOverrides(m.OptionalOverrides)
 	var out []string
 	for _, tid := range tenants {
-		// The layer ApplyProfiles read: the tenant's own keys and what the
-		// platform files supply (never a key the tenant writes).
-		layer := make(map[string]ScheduledValue, len(m.own[tid]))
-		for k, v := range m.own[tid] {
+		out = append(out, m.profileLayerNoticesFor(tid, canonDeclared)...)
+	}
+	return out
+}
+
+// profileLayerNoticesFor is profileLayerNotices for one tenant; canonDeclared
+// is canonicalizeOptionalOverrides(m.OptionalOverrides).
+func (m *TenantMerge) profileLayerNoticesFor(tid string, canonDeclared map[string]struct{}) []string {
+	// The layer ApplyProfiles read: the tenant's own keys and what the
+	// platform files supply (never a key the tenant writes).
+	layer := make(map[string]ScheduledValue, len(m.own[tid]))
+	for k, v := range m.own[tid] {
+		layer[k] = v
+	}
+	for _, sup := range m.platform[tid] {
+		for k, v := range sup.keys {
 			layer[k] = v
 		}
-		for _, sup := range m.platform[tid] {
-			for k, v := range sup.keys {
-				layer[k] = v
-			}
+	}
+	sv, ok := layer["_profile"]
+	if !ok {
+		return nil
+	}
+	name := strings.TrimSpace(sv.Default)
+	profile, found := m.Profiles[name]
+	if name == "" || !found {
+		return nil // unknown: the tenant layer's Error or a platform notice says so
+	}
+	byFile := make(map[string]map[string]ScheduledValue)
+	declaredBy := make(map[string][]string)
+	fileOf := m.profileKeyFiles(name)
+	var out []string
+	fill := profileFill(canonicalView(profile), layer, canonDeclared, func(key string) {
+		f := fileOf[key]
+		declaredBy[f] = append(declaredBy[f], key)
+	})
+	for k, v := range fill {
+		f := fileOf[k]
+		if byFile[f] == nil {
+			byFile[f] = make(map[string]ScheduledValue)
 		}
-		sv, ok := layer["_profile"]
-		if !ok {
-			continue
+		byFile[f][k] = v
+	}
+	for _, f := range m.profileFileOrder {
+		var msgs []string
+		if keys := byFile[f]; len(keys) > 0 {
+			pl := ThresholdConfig{
+				Defaults:          m.Defaults,
+				OptionalOverrides: m.OptionalOverrides,
+				Profiles:          m.Profiles,
+				Tenants:           map[string]map[string]ScheduledValue{tid: keys},
+			}
+			pv := pl.validateOverrideKeys()
+			msgs = append(append(msgs, pv.Errors...), pv.Notices...)
 		}
-		name := strings.TrimSpace(sv.Default)
-		profile, found := m.Profiles[name]
-		if name == "" || !found {
-			continue // unknown: the tenant layer's Error or a platform notice says so
+		for _, k := range declaredBy[f] {
+			msgs = append(msgs, fmt.Sprintf(
+				"key %q is declared without a platform value (optional_overrides), which a profile cannot fill in — it is not applied", k))
 		}
-		byFile := make(map[string]map[string]ScheduledValue)
-		declaredBy := make(map[string][]string)
-		fileOf := m.profileKeyFiles(name)
-		fill := profileFill(canonicalView(profile), layer, canonDeclared, func(key string) {
-			f := fileOf[key]
-			declaredBy[f] = append(declaredBy[f], key)
-		})
-		for k, v := range fill {
-			f := fileOf[k]
-			if byFile[f] == nil {
-				byFile[f] = make(map[string]ScheduledValue)
-			}
-			byFile[f][k] = v
-		}
-		for _, f := range m.profileFileOrder {
-			var msgs []string
-			if keys := byFile[f]; len(keys) > 0 {
-				pl := ThresholdConfig{
-					Defaults:          m.Defaults,
-					OptionalOverrides: m.OptionalOverrides,
-					Profiles:          m.Profiles,
-					Tenants:           map[string]map[string]ScheduledValue{tid: keys},
-				}
-				pv := pl.validateOverrideKeys()
-				msgs = append(append(msgs, pv.Errors...), pv.Notices...)
-			}
-			for _, k := range declaredBy[f] {
-				msgs = append(msgs, fmt.Sprintf(
-					"key %q is declared without a platform value (optional_overrides), which a profile cannot fill in — it is not applied", k))
-			}
-			sort.Strings(msgs)
-			for _, msg := range msgs {
-				out = append(out, profileLayerNotice(f, name, tid, msg))
-			}
+		sort.Strings(msgs)
+		for _, msg := range msgs {
+			out = append(out, profileLayerNotice(f, name, tid, msg))
 		}
 	}
 	return out

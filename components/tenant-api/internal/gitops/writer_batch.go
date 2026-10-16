@@ -428,7 +428,7 @@ func (w *Writer) stagingScan(st *stagingTree) func() (*cfg.TreeScan, error) {
 //
 // target is the op's tenant file, conf.d-relative ("" when it was not
 // resolved), for applyBatch's whole-tree verdict.
-func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) (out BatchOpOutcome, target string) {
+func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (out BatchOpOutcome, target string) {
 	if err := guardTenantID(op.TenantID); err != nil {
 		return BatchOpOutcome{Err: err}, ""
 	}
@@ -444,7 +444,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp) (out BatchOpOutcome, 
 	if err != nil {
 		return BatchOpOutcome{Err: err}, target
 	}
-	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge)
+	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge, names)
 	if errors.Is(err, ErrMergeNoOp) {
 		// B2: the merge changes nothing — accepted, nothing written, its
 		// notices kept (#1231 F5).
@@ -506,7 +506,7 @@ func (w *Writer) applyBatch(ctx context.Context, st *stagingTree, ops []BatchOp,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		outcomes[i], opTargets[i] = w.applyBatchOp(st, op)
+		outcomes[i], opTargets[i] = w.applyBatchOp(st, op, TenantNamesOf(ctx))
 		refused = refused || outcomes[i].Err != nil
 	}
 	if err := ctx.Err(); err != nil {

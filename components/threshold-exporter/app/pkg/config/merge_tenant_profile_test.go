@@ -393,3 +393,59 @@ func TestMergeTenantProfileNoticeWitnesses(t *testing.T) {
 		})
 	}
 }
+
+// #3039: ValidateTenantKeysByTenant is ValidateTenantKeys split by tenant —
+// the same messages, none lost or added, each under the tenant it names —
+// on a body declaring two tenants, with a tenant layer, a platform entry and
+// an elected profile each giving a message for both. tenant-api withholds a
+// tenant's messages from a reader who may not read that tenant, so a message
+// filed under the wrong tenant is a disclosure.
+func TestMergeTenantKeyValidationByTenant(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_cpu: 5\n  mysql_threads_running: 6\n",
+		"_profiles.yaml": "profiles:\n  strict:\n    bogus_profile_key: \"1\"\n",
+		"_platform.yaml": "tenants:\n  ta:\n    bogus_platform_key: \"1\"\n  tb:\n    bogus_platform_key: \"1\"\n",
+	}
+	body := "tenants:\n  ta:\n    _profile: strict\n    bogus_ta: \"1\"\n    mysql_cpu: \"3\"\n" +
+		"  tb:\n    _profile: strict\n    bogus_tb: \"1\"\n    mysql_cpu: \"3\"\n"
+	dir := t.TempDir()
+	writeMergeTree(t, dir, files)
+	parsed, err := ParseConfigFile([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := MergeParsedTenantWithRootDefaults(dir, parsed)
+	all := m.ValidateTenantKeys()
+	by := m.ValidateTenantKeysByTenant()
+
+	errs := append([]string(nil), by.Platform.Errors...)
+	notices := append([]string(nil), by.Platform.Notices...)
+	for _, v := range by.Tenants {
+		errs = append(errs, v.Errors...)
+		notices = append(notices, v.Notices...)
+	}
+	if sortedJoin(errs) != sortedJoin(all.Errors) || sortedJoin(notices) != sortedJoin(all.Notices) {
+		t.Fatalf("split differs from ValidateTenantKeys:\nsplit   %q %q\nwhole   %q %q", errs, notices, all.Errors, all.Notices)
+	}
+	if len(by.Platform.Notices) != 1 || !strings.Contains(by.Platform.Notices[0], "NOTICE: defaults:") {
+		t.Errorf("platform: %q, want the one defaults notice", by.Platform.Notices)
+	}
+	for tid, other := range map[string]string{"ta": "tb", "tb": "ta"} {
+		v := by.Tenants[tid]
+		// Must fire: the tenant layer's error, and a renamed-key, a
+		// platform-entry and a profile notice.
+		if len(v.Errors) != 1 || len(v.Notices) != 3 {
+			t.Errorf("%s: errors %q notices %q, want 1 and 3", tid, v.Errors, v.Notices)
+		}
+		for _, msg := range append(append([]string(nil), v.Errors...), v.Notices...) {
+			if !strings.Contains(msg, "tenant="+tid+":") && !strings.Contains(msg, "tenants."+tid+":") &&
+				!strings.Contains(msg, "elected by tenant "+tid+" ") {
+				t.Errorf("%s: message does not name %s: %q", tid, tid, msg)
+			}
+			if strings.Contains(msg, other) {
+				t.Errorf("%s: message names %s: %q", tid, other, msg)
+			}
+		}
+	}
+}

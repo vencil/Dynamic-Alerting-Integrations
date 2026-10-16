@@ -165,7 +165,7 @@ func TestValidate_BrokenBaseDoesNotBlockReplacement(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte(defaults), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if errs, _ := validateReplacing(dir, eolTestTenant, path, eolBody(), true); len(errs) > 0 {
+			if errs, _ := validateReplacing(dir, eolTestTenant, path, eolBody(), true, nil); len(errs) > 0 {
 				t.Errorf("validate refused a valid replacement of a broken file: %q", errs)
 			}
 			errs, _ := validate(dir, eolTestTenant, path, eolBody())

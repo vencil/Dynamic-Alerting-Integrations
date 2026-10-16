@@ -29,8 +29,10 @@ type ValidateResponse struct {
 // Dry-run validation without writing: the verdict comes from the same gitops
 // validation function PUT runs in the configured write mode (#2124) — the full
 // pre-write sequence in direct mode, the body-only pre-flight in PR mode.
-// Authorization and domain policy are not part of it. Body checks belong in
-// gitops, never here.
+// Authorization is not part of it, and neither are routing and the domain
+// policy: the route generator judges those on the write (PUT's 422
+// GENERATOR_FINDINGS, #2903), and the dry-run does not call it. Body checks
+// belong in gitops, never here.
 //
 // @Summary     Validate tenant config
 // @Description Dry-run validation of a tenant YAML without writing to disk.
@@ -76,7 +78,7 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			if wr == nil {
 				wr = gitops.NewWriter(d.ConfigDir, "")
 			}
-			errs, notices, err = wr.DryRunValidate(withReplaceUnparseable(r, d).Context(), tenantID, string(body))
+			errs, notices, err = wr.DryRunValidate(withTenantNames(withReplaceUnparseable(r, d), d).Context(), tenantID, string(body))
 		}
 		if err != nil {
 			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}

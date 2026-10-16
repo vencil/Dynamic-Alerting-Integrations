@@ -296,7 +296,7 @@ func TestBatchPatchMerge_OfflineDiffAgainstGenerator(t *testing.T) {
 		if unset == nil {
 			unset = []string{}
 		}
-		merged, err := mergePatchYAML([]byte(c.base), c.tenant, patch, unset)
+		merged, err := mergePatchYAML([]byte(c.base), c.tenant, patch, unset, nil)
 		var mergedArg any
 		switch {
 		case err == nil:
@@ -372,13 +372,14 @@ func TestBatchPatchMerge_OfflineDiffAgainstGenerator(t *testing.T) {
 }
 
 // verifyPartialWrite names the first difference only inside the written
-// tenant's own block; anywhere else — another tenant's block may be one the
-// caller cannot read — it says "another place in the file".
+// tenant's own block or the block of a tenant the caller may read
+// (tenantNamesFor, #3039); anywhere else it says "another place in the file".
 func TestVerifyPartialWrite_NamesOnlyTheOwnBlock(t *testing.T) {
 	for _, c := range []struct {
 		name, base, want, never string
 		unset                   []string
 		patch                   map[string]string
+		names                   gitops.TenantNames
 	}{
 		{name: "own block", unset: []string{"_routing"},
 			base: "x: &s\n  _routing: disable\ntenants:\n  t1:\n    <<: *s\n    _routing:\n      receiver: {type: webhook, url: \"https://a.example/x\"}\n",
@@ -386,12 +387,16 @@ func TestVerifyPartialWrite_NamesOnlyTheOwnBlock(t *testing.T) {
 		{name: "other tenant", patch: map[string]string{"z": "1"},
 			base: "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n",
 			want: "first difference: another place in the file", never: "t2"},
+		{name: "other tenant the caller may read", patch: map[string]string{"z": "1"},
+			base:  "tenants:\n  t1: {}\n  t2:\n    d: |-\n\n      a\n",
+			names: func(id string) bool { return id == "t2" },
+			want:  "first difference: tenants.t2.d"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if c.patch == nil {
 				c.patch = map[string]string{}
 			}
-			_, err := mergePatchYAML([]byte(c.base), "t1", c.patch, c.unset)
+			_, err := mergePatchYAML([]byte(c.base), "t1", c.patch, c.unset, c.names)
 			if err == nil || !strings.Contains(err.Error(), c.want) || (c.never != "" && strings.Contains(err.Error(), c.never)) {
 				t.Errorf("err = %v; want it to contain %q (and not %q)", err, c.want, c.never)
 			}
@@ -419,7 +424,7 @@ func TestVerifyPartialWrite_ChecksTheEditedValues(t *testing.T) {
 		{"set plain", "tenants:\n  t1:\n    a: x\n    b: \"2\"\n", []partialEdit{{key: "a", set: true, checkValue: true, value: "x"}}, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", c.edits)
+			err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", c.edits, nil)
 			if (err == nil) != c.ok {
 				t.Errorf("err = %v, want ok=%v", err, c.ok)
 			}
@@ -430,7 +435,7 @@ func TestVerifyPartialWrite_ChecksTheEditedValues(t *testing.T) {
 	// alias pair is untouched — only the key count refuses it.
 	const aliasBase = "k: &k z\ntenants:\n  t1:\n    *k : \"old\"\n"
 	err := verifyPartialWrite([]byte(aliasBase), []byte(aliasBase+"    z: \"1\"\n"), "t1",
-		[]partialEdit{{key: "z", set: true, checkValue: true, value: "1"}})
+		[]partialEdit{{key: "z", set: true, checkValue: true, value: "1"}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "tenants.t1.z") {
 		t.Errorf("z beside an alias key z: err = %v, want a refusal naming tenants.t1.z", err)
 	}
@@ -449,14 +454,14 @@ func TestVerifyPartialWrite_ComparesTheWrittenNode(t *testing.T) {
 		{"anchor", "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!str 5\n    q: 'a'\n    v: x\n    s: &t y\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			if err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", edit); err == nil ||
+			if err := verifyPartialWrite([]byte(base), []byte(c.merged), "t1", edit, nil); err == nil ||
 				strings.Contains(err.Error(), "t2") {
 				t.Errorf("err = %v; want a refusal that does not name t2", err)
 			}
 		})
 	}
 	same := "tenants:\n  t1: {z: \"1\"}\n  t2:\n    k: !!str 5\n    q: 'a'\n    v: x\n    s: &s y\n"
-	if err := verifyPartialWrite([]byte(base), []byte(same), "t1", edit); err != nil {
+	if err := verifyPartialWrite([]byte(base), []byte(same), "t1", edit, nil); err != nil {
 		t.Errorf("unchanged elsewhere: %v", err)
 	}
 }

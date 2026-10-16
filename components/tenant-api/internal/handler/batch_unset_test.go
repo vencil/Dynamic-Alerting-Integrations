@@ -272,7 +272,7 @@ func TestMergePatchYAML_Unset(t *testing.T) {
 	existing := "# head\ntenants:\n  t-a:\n    # keep me\n    cpu_usage_percent: '85'\n" +
 		"    _routing:\n      receiver:\n        type: pagerduty\n        service_key: k\n" +
 		"    _routing_profile: domain-ok\n"
-	out, err := mergePatchYAML([]byte(existing), "t-a", nil, []string{"_routing"})
+	out, err := mergePatchYAML([]byte(existing), "t-a", nil, []string{"_routing"}, nil)
 	if err != nil {
 		t.Fatalf("mergePatchYAML: %v", err)
 	}
@@ -294,14 +294,14 @@ func TestMergePatchYAML_Unset(t *testing.T) {
 		{"neither, no file", "", "t-a", nil, nil},
 	}
 	for _, tc := range noOps {
-		if got, err := mergePatchYAML([]byte(tc.existing), tc.tenant, tc.patch, tc.unset); !errors.Is(err, gitops.ErrMergeNoOp) {
+		if got, err := mergePatchYAML([]byte(tc.existing), tc.tenant, tc.patch, tc.unset, nil); !errors.Is(err, gitops.ErrMergeNoOp) {
 			t.Errorf("%s: got %q, %v; want gitops.ErrMergeNoOp", tc.name, got, err)
 		}
 	}
-	if _, err := mergePatchYAML([]byte("tenants:\n  t-a: oops\n"), "t-a", nil, []string{"_routing"}); err == nil || errors.Is(err, gitops.ErrMergeNoOp) {
+	if _, err := mergePatchYAML([]byte("tenants:\n  t-a: oops\n"), "t-a", nil, []string{"_routing"}, nil); err == nil || errors.Is(err, gitops.ErrMergeNoOp) {
 		t.Errorf("a non-mapping section must stay a structural error, got %v", err)
 	}
-	both, err := mergePatchYAML([]byte(existing), "t-a", map[string]string{"cpu_usage_percent": "90"}, []string{"_routing"})
+	both, err := mergePatchYAML([]byte(existing), "t-a", map[string]string{"cpu_usage_percent": "90"}, []string{"_routing"}, nil)
 	if err != nil || strings.Contains(both, "_routing:") || !strings.Contains(both, "cpu_usage_percent: \"90\"") {
 		t.Errorf("patch + unset: err %v\n%s", err, both)
 	}

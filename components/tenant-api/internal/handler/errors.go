@@ -50,6 +50,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // Common error codes. Add new ones here as new error classes appear;
@@ -1044,40 +1045,60 @@ func writeGeneratorError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 // tenant the caller may not read — a group member reassigned to another
 // org while the batch ran.
 func disclosedFindings(d *Deps, r *http.Request, all []generator.Finding) ([]generator.Finding, int) {
-	var p *rbac.VerifiedPrincipal
-	if d != nil && r != nil {
-		p = rbac.RequestPrincipal(r)
-		if treePathsVisible(d.RBAC, p) {
-			return nonNilFindings(all), 0
-		}
+	if d == nil {
+		return []generator.Finding{}, len(all)
 	}
+	var p *rbac.VerifiedPrincipal
+	if r != nil {
+		p = rbac.RequestPrincipal(r)
+	}
+	if r != nil && treePathsVisible(d.RBAC, p) {
+		return nonNilFindings(all), 0
+	}
+	names := tenantNamesFor(d.RBAC, d.TenantOrg, p)
 	shown := make([]generator.Finding, 0, len(all))
 	for _, f := range all {
-		if f.Related && d != nil && findingReadable(d, p, f) {
+		if f.Related && findingReadable(names, f) {
 			shown = append(shown, f)
 		}
 	}
 	return shown, len(all) - len(shown)
 }
 
-// findingReadable reports whether f names nothing p may not read: its
+// findingReadable reports whether f names nothing names withholds: its
 // tenant, and the tenant its file is named after (<id>.yaml / <id>.yml —
 // a file-only finding names its tenant that way).
-func findingReadable(d *Deps, p *rbac.VerifiedPrincipal, f generator.Finding) bool {
-	if d.RBAC == nil {
-		return true // no RBAC configured: nothing is scoped
-	}
-	readable := func(id string) bool { return OrgAllowedRead(d.RBAC, d.TenantOrg, p, id, rbac.PermRead) }
-	if f.Tenant != nil && *f.Tenant != "" && !readable(*f.Tenant) {
+func findingReadable(names gitops.TenantNames, f generator.Finding) bool {
+	if f.Tenant != nil && *f.Tenant != "" && !names.Shown(*f.Tenant) {
 		return false
 	}
 	if f.File != nil {
 		base := path.Base(filepath.ToSlash(*f.File))
-		if id := strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml"); id != base && !strings.HasPrefix(id, "_") && !readable(id) {
+		if id := strings.TrimSuffix(strings.TrimSuffix(base, ".yaml"), ".yml"); id != base && !strings.HasPrefix(id, "_") && !names.Shown(id) {
 			return false
 		}
 	}
 	return true
+}
+
+// tenantNamesFor is the one answer to "may a message to caller p name tenant
+// id" (#1530): yes when p may read the tenant (OrgAllowedRead, PermRead), or
+// when no RBAC is configured (nothing is scoped). It decides which generator
+// findings a refusal carries (disclosedFindings), which path a partial-write
+// refusal names (describePath) and which tenants a validation message names
+// (gitops.DiscloseKeyValidation, via withTenantNames) — a message about any
+// other tenant says only "another place in the file", and the details go to
+// the log.
+func tenantNamesFor(m *rbac.Manager, orgs *tenantorg.Manager, p *rbac.VerifiedPrincipal) gitops.TenantNames {
+	return func(id string) bool {
+		return m == nil || OrgAllowedRead(m, orgs, p, id, rbac.PermRead)
+	}
+}
+
+// withTenantNames marks r's context with the caller's tenantNamesFor, for
+// the validation the Writer runs on its behalf.
+func withTenantNames(r *http.Request, d *Deps) *http.Request {
+	return r.WithContext(gitops.WithTenantNames(r.Context(), tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r))))
 }
 
 func nonNilFindings(f []generator.Finding) []generator.Finding {

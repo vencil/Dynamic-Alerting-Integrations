@@ -441,3 +441,27 @@ func TestValidateFailsClosedWhenConfigDirIsEmpty(t *testing.T) {
 		t.Fatalf("rejected for the wrong reason: %v", errs)
 	}
 }
+
+// #3039: validate judges every section of the file, so a section the write
+// may keep (grandfathered) can carry another tenant's problems. Without a
+// TenantNames — validate's nil, or a request path that forgot to set one —
+// they are never named and still block; with one that shows the
+// tenant, they are named as before.
+func TestValidateNamesAnotherTenantOnlyWhenShown(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "db-a.yaml")
+	base := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    secret_key_b: \"1\"\n"
+	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errs, _ := validateReplacing(dir, "db-a", path, base, false, nil)
+	if got := strings.Join(errs, "; "); len(errs) != 1 || !strings.Contains(got, "another place in the file has problems") ||
+		strings.Contains(got, "tenant=other") || strings.Contains(got, "secret_key_b") {
+		t.Errorf("nil TenantNames: errs = %q, want one line naming nothing", errs)
+	}
+	errs, _ = validateReplacing(dir, "db-a", path, base, false, func(id string) bool { return id == "other" })
+	if got := strings.Join(errs, "; "); len(errs) != 1 || !strings.Contains(got, "tenant=other") || !strings.Contains(got, "secret_key_b") {
+		t.Errorf("shown: errs = %q, want the other tenant's message", errs)
+	}
+}

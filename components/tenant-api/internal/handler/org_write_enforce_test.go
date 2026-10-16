@@ -58,6 +58,7 @@ import (
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 const (
@@ -796,5 +797,127 @@ func TestOrgWriteEnforce_StarSemantics_ViewsWriteUnchanged(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// #3039 (#1530): a file can declare several tenants, and validation reads the
+// whole file — a batch PATCH merges into it, GET and the dry-run judge it,
+// PUT writes it. A message about a tenant the caller may not read names
+// neither the tenant nor its keys: it says only "another place in the
+// file" (the details go to the log). A tenant the caller may read is named.
+// The rule is tenantNamesFor, the one describePath and disclosedFindings use.
+func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
+	t.Parallel()
+	const flat = "tenants:\n" +
+		"  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
+		"  " + orgEnfTenantOut + ":\n    _routing_receiver_type: webhook\n    secret_key_b: \"1\"\n    mysql_cpu: \"3\"\n"
+	// The routing key and secret_key_b are errors; mysql_cpu is a renamed-key
+	// notice, which only the dry-run and GET carry.
+	hidden := []string{orgEnfTenantOut, "_routing_receiver_type", "secret_key_b", "mysql_cpu"}
+	files := map[string]string{
+		"_defaults.yaml":         "defaults:\n  mysql_threads_running: 5\n",
+		orgEnfTenantIn + ".yaml": flat,
+	}
+	batchBody := func(t *testing.T) *bytes.Buffer {
+		b, err := json.Marshal(BatchRequest{Operations: []BatchOperation{
+			{TenantID: orgEnfTenantIn, Patch: map[string]string{"_silent_mode": "warning"}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return bytes.NewBuffer(b)
+	}
+	calls := []struct {
+		name string
+		call func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder
+		code int
+		// notices: the answer carries notices as well as errors.
+		notices bool
+	}{
+		{"batch PATCH", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := httptest.NewRequest("POST", "/api/v1/tenants/batch", batchBody(t))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(BatchTenants(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusUnprocessableEntity, false},
+		{"PUT", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(flat))
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(PutTenant(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusBadRequest, false},
+		{"custom alerts", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			b, err := json.Marshal(PutCustomAlertsRequest{CustomAlerts: &[]map[string]any{}, BaseHash: cfg.ComputeSourceHash([]byte(flat))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn+"/custom-alerts", "id", orgEnfTenantIn, bytes.NewBuffer(b))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(PutTenantCustomAlerts(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusBadRequest, false},
+		{"dry-run", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+orgEnfTenantIn+"/validate", "id", orgEnfTenantIn, bytes.NewBufferString(flat))
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(ValidateTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusOK, true},
+		{"GET", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("GET", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, nil)
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(GetTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			return w
+		}, http.StatusOK, true},
+	}
+	// answer is the text checked: the whole body, except GET's, whose
+	// raw_yaml is the file itself (every reader of a tenant reads its whole
+	// file) — there only the validation fields.
+	answer := func(t *testing.T, name string, w *httptest.ResponseRecorder) string {
+		if name != "GET" {
+			return w.Body.String()
+		}
+		var d TenantDetail
+		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+			t.Fatalf("unmarshal: %v: %s", err, w.Body.String())
+		}
+		return strings.Join(append(append([]string(nil), d.Warnings...), d.Notices...), "\n")
+	}
+	for _, c := range calls {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newOrgEnfFixture(t, files)
+			w := c.call(t, f)
+			body := answer(t, c.name, w)
+			if w.Code != c.code || !strings.Contains(body, "another place in the file") {
+				t.Fatalf("status %d (want %d), want the other tenant said to be another place: %s", w.Code, c.code, body)
+			}
+			for _, h := range hidden {
+				if strings.Contains(body, h) {
+					t.Errorf("the answer names %q, which only a reader of %s may see: %s", h, orgEnfTenantOut, body)
+				}
+			}
+			if n := f.writes.Load(); n != 0 {
+				t.Errorf("writer commits = %d, want 0", n)
+			}
+
+			// Must fire: once the caller may read the other tenant, its
+			// messages are named in full.
+			f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+				orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+			w = c.call(t, f)
+			body = answer(t, c.name, w)
+			if strings.Contains(body, "another place in the file") {
+				t.Errorf("readable: still said to be another place: %s", body)
+			}
+			for _, h := range hidden {
+				if h == "mysql_cpu" && !c.notices {
+					continue
+				}
+				if !strings.Contains(body, h) {
+					t.Errorf("readable: the answer does not name %q: %s", h, body)
+				}
+			}
+		})
 	}
 }

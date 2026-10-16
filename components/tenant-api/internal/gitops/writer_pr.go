@@ -251,7 +251,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// notices come from HERE, not Step 1, for the same reason the batch path
 	// discards its pre-flight's: they describe the body as merged against the
 	// base it lands on, and collecting them twice would duplicate them.
-	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx))
+	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	if len(errs) > 0 {
 		w.abortFeatureBranch(base, branchName)
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))

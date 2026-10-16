@@ -270,6 +270,10 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 // or 422 for a rejected batch) for the caller to write (the group endpoint
 // wraps it with its group id). The caller must have verified d.prWritePath().
 func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, meta batchPRMeta) (BatchResponse, int, bool) {
+	// #3039: the answer goes to this caller, so it may name the tenants the
+	// caller may read.
+	r = withTenantNames(r, d)
+	names := gitops.TenantNamesOf(r.Context())
 	// Pre-validate all ops (RBAC) before creating any branch
 	var batchOps []gitops.PRBatchOp
 	var batchResults []BatchResult
@@ -309,7 +313,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			if op.skipAbsent && tenantAbsentIn(existing, op.TenantID) {
 				return "", gitops.ErrMergeNoOp
 			}
-			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset, names)
 		}
 		// #2882: set only by FreshMerge, the in-lock merge onto the fresh
 		// base; the pre-flight Merge above reads the local tree and decides
@@ -589,8 +593,17 @@ type directBatchRun struct {
 // may name conf.d entries in a TENANT_TREE_UNREADABLE result, and only to a
 // caller treePathsVisible admits: stored results never do, whoever submitted
 // — the poller is not the submitter (#2939 D3a). The log always names them.
+//
+// The same split decides which other tenants a validation message or a
+// partial-write refusal may name (#3039): an answer, those the caller may
+// read (tenantNamesFor); stored results, none.
 func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, results batchResultsUse) directBatchRun {
 	treeVisible := results == batchResultsAnswer && treePathsVisible(rbacMgr, p)
+	var names gitops.TenantNames
+	if results == batchResultsAnswer {
+		names = tenantNamesFor(rbacMgr, tenantOrg, p)
+	}
+	ctx = gitops.WithTenantNames(ctx, names)
 	return executeBatchOpsShown(ctx, w, configDir, ops, email, p, rbacMgr, tenantOrg, treeVisible)
 }
 
@@ -651,6 +664,7 @@ func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, 
 	// #2882: judged inside the merge, i.e. under the writer lock on the base
 	// the write lands on, not on a read taken before it.
 	absent := make([]bool, len(ops))
+	names := gitops.TenantNamesOf(ctx) // the Writer's validation reads the same off ctx
 	batch := make([]gitops.BatchOp, len(ops))
 	for i, op := range ops {
 		batch[i] = gitops.BatchOp{TenantID: op.TenantID, Merge: func(existing []byte) (string, error) {
@@ -658,7 +672,7 @@ func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, 
 			if absent[i] {
 				return "", gitops.ErrMergeNoOp
 			}
-			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset, names)
 		}}
 	}
 	outcomes, err := w.WriteBatch(ctx, batch, email)
@@ -983,7 +997,8 @@ func tenantAbsentIn(existing []byte, tenantID string) bool {
 // unset-only op would CREATE the tenant (`<id>: {}`) or re-encode an
 // unchanged file into a reformatting commit. An empty patch with an empty
 // unset is the same no-op (the pre-B2 tenant batch accepted it with 200).
-func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, unset []string) (string, error) {
+// names is the caller's tenantNamesFor (verifyPartialWrite).
+func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, unset []string, names gitops.TenantNames) (string, error) {
 	if len(bytes.TrimSpace(existing)) == 0 {
 		if len(patch) == 0 {
 			return "", gitops.ErrMergeNoOp
@@ -1079,7 +1094,7 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 	for _, k := range unset {
 		edits = append(edits, partialEdit{key: k})
 	}
-	if err := verifyPartialWrite(existing, buf.Bytes(), tenantID, edits); err != nil {
+	if err := verifyPartialWrite(existing, buf.Bytes(), tenantID, edits, names); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

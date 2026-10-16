@@ -1437,8 +1437,17 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 // tenant key any more; the hook and its "not applied" notice were removed
 // rather than left describing a merge that no longer happens.
 func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
-	var v KeyValidation
+	v := KeyValidation{Notices: c.defaultsKeyNotices()}
+	o := c.validateOverrideKeys()
+	v.Errors = append(v.Errors, o.Errors...)
+	v.Notices = append(v.Notices, o.Notices...)
+	return v
+}
 
+// defaultsKeyNotices is ValidateTenantKeys' defaults-side check: the
+// messages about c.Defaults, which name no tenant.
+func (c *ThresholdConfig) defaultsKeyNotices() []string {
+	var out []string
 	// Defaults-side conflict: both spellings of the same threshold present.
 	// Resolve lets the canonical entry win and ignores the deprecated one —
 	// say so, or the losing value would just silently never apply.
@@ -1450,16 +1459,43 @@ func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
 			continue
 		}
 		if _, hasCanon := c.Defaults[canon]; hasCanon {
-			v.Notices = append(v.Notices, fmt.Sprintf(
+			out = append(out, fmt.Sprintf(
 				"NOTICE: defaults: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
 				legacy, canon, legacy))
 		}
 	}
+	return out
+}
 
-	o := c.validateOverrideKeys()
-	v.Errors = append(v.Errors, o.Errors...)
-	v.Notices = append(v.Notices, o.Notices...)
-	return v
+// KeyValidationByTenant is ValidateTenantKeys split by what each message is
+// about, for a caller that may tell a reader only about some tenants
+// (tenant-api, #3039): a file can declare several tenants, and a message
+// about one names it and its keys.
+type KeyValidationByTenant struct {
+	// Platform is the messages about the platform defaults; they name no
+	// tenant.
+	Platform KeyValidation
+	// Tenants is, per tenant c.Tenants declares, the messages about it.
+	Tenants map[string]KeyValidation
+}
+
+// ValidateTenantKeysByTenant is ValidateTenantKeys split by tenant: the same
+// messages, each under the tenant it is about.
+func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
+	out := KeyValidationByTenant{
+		Platform: KeyValidation{Notices: c.defaultsKeyNotices()},
+		Tenants:  make(map[string]KeyValidation, len(c.Tenants)),
+	}
+	for tid, keys := range c.Tenants {
+		one := ThresholdConfig{
+			Defaults:          c.Defaults,
+			OptionalOverrides: c.OptionalOverrides,
+			Profiles:          c.Profiles,
+			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
+		}
+		out.Tenants[tid] = one.validateOverrideKeys()
+	}
+	return out
 }
 
 // validateOverrideKeys is ValidateTenantKeys without the defaults-side

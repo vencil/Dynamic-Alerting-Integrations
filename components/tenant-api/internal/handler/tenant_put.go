@@ -143,6 +143,9 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// permission on all tenants; the Writer checks the bit under its lock,
 		// on the file the write lands on (both modes).
 		r = withReplaceUnparseable(r, d)
+		// #3039: which other tenants the file declares a validation message
+		// may name.
+		r = withTenantNames(r, d)
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
 		if d.prWritePath() {

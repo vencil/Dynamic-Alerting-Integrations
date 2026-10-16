@@ -50,8 +50,10 @@ import (
 // would wrap in ErrValidation — the pre-flight's, or else validate()'s — and
 // notices is validate()'s advisory set; a structural failure is reported alone.
 //
-// ctx carries only the #2405 WithReplaceUnparseable bit, so the verdict on a
-// current file that cannot be parsed is the one this caller's Write would get.
+// ctx carries the #2405 WithReplaceUnparseable bit, so the verdict on a
+// current file that cannot be parsed is the one this caller's Write would get,
+// and the caller's TenantNames (#3039), so the text is what that Write would
+// return.
 func (w *Writer) DryRunValidate(ctx context.Context, tenantID, yamlContent string) (errs, notices []string, err error) {
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, nil, err
@@ -63,7 +65,7 @@ func (w *Writer) DryRunValidate(ctx context.Context, tenantID, yamlContent strin
 	if err != nil {
 		return nil, nil, err
 	}
-	errs, notices = validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx))
+	errs, notices = validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	return errs, notices, nil
 }
 
