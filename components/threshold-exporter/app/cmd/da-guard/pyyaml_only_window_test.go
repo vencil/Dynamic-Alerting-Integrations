@@ -14,46 +14,45 @@ package main
 // earns its keep — da-guard's condition for 4 would still be a prediction of
 // the generator.
 //
-// The files are not copied here: they are rows of
-// tests/shared/parse_tree_corpus.json (category pyyaml_only, generator
-// "rejected"), the corpus the parse-tree and migration-audit tests read, so
-// the two cannot drift. The Python half — the same trees refused by
+// ⛔ NO HAND-COPIED LIST. The window is MEASURED: every `rows` entry of
+// tests/shared/parse_tree_corpus.json that today's generator rejects is run
+// through da-guard, and the rows da-guard passes (exit 0, nothing undetermined,
+// nothing in parse_failed) must be exactly the rows the corpus itself defines
+// as the window — category pyyaml_only and a file name not starting with `_`
+// (a tenant file: an `_` file the generator reads is undetermined evidence by
+// name). A corpus row that enters or leaves the window turns this red instead
+// of slipping past. The corpus's merge_key_rows are all `_domain_policy.yaml`,
+// always undetermined by name, so they cannot be in the window and are not run.
+//
+// The Python half — every window row refused by
 // `generate_alertmanager_routes.py --validate --strict` — is
 // test_pyyaml_only_window_is_refused_by_generate_routes in
-// tests/shared/test_parse_tree_corpus.py; keep the two name lists equal.
+// tests/shared/test_parse_tree_corpus.py, over the same predicate.
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 )
-
-// pyyamlOnlyWindowRows: the ADR-036 §2 spellings only PyYAML refuses (its list
-// of examples), each a parse_tree_corpus.json row name.
-var pyyamlOnlyWindowRows = []string{
-	"duplicate-anchor",           // the same anchor name defined twice
-	"tab-after-colon",            // a TAB separator
-	"invalid-calendar-timestamp", // a date that does not exist (2001-13-45)
-	"single-quote-escape",        // `\'` in a double-quoted string
-	"block-header-comment",       // `#` right after a block scalar header
-	"flow-plain-ending-colon",    // a flow value ending in a colon ({b: 1:})
-}
 
 type windowCorpusRow struct {
 	Name      string `json:"name"`
 	File      string `json:"file"`
 	Doc       string `json:"doc"`
+	Encoding  string `json:"encoding"`
 	Category  string `json:"category"`
 	Generator string `json:"generator"`
-	Encoding  string `json:"encoding"`
 }
 
-// loadWindowRows reads pyyamlOnlyWindowRows out of parse_tree_corpus.json.
-func loadWindowRows(t *testing.T) []windowCorpusRow {
+// loadWindowCorpus reads the `rows` of parse_tree_corpus.json.
+func loadWindowCorpus(t *testing.T) []windowCorpusRow {
 	t.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
 	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "..",
@@ -68,54 +67,98 @@ func loadWindowRows(t *testing.T) []windowCorpusRow {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		t.Fatalf("decode corpus: %v", err)
 	}
-	byName := make(map[string]windowCorpusRow, len(c.Rows))
-	for _, r := range c.Rows {
-		byName[r.Name] = r
-	}
-	out := make([]windowCorpusRow, 0, len(pyyamlOnlyWindowRows))
-	for _, name := range pyyamlOnlyWindowRows {
-		r, ok := byName[name]
-		if !ok {
-			t.Fatalf("parse_tree_corpus.json has no row %q", name)
-		}
-		// The window exists only while today's generator refuses the file and
-		// parse-tree reads it; a row that stops being that is not this window.
-		if r.Category != "pyyaml_only" || r.Generator != "rejected" || r.Encoding != "" {
-			t.Fatalf("row %q: category %q, generator %q, encoding %q; want pyyaml_only, rejected, UTF-8",
-				name, r.Category, r.Generator, r.Encoding)
-		}
-		out = append(out, r)
-	}
-	return out
+	return c.Rows
 }
 
-// TestPyYAMLOnlyReject_WindowBeforeStep4: each tree holds only thresholds and
-// no routing key — conf.d/_defaults.yaml, a threshold tenant, and the corpus
-// file — and da-guard's default run is exit 0 with nothing undetermined.
+// windowEncode is the file a corpus row stands for (internal/parsetree's
+// corpus_test.go encode; test_merge_key_policy_corpus._encode in Python).
+func windowEncode(t *testing.T, r windowCorpusRow) string {
+	t.Helper()
+	switch r.Encoding {
+	case "":
+		return r.Doc
+	case "latin-1":
+		out := make([]byte, 0, len(r.Doc))
+		for _, c := range r.Doc {
+			if c > 0xFF {
+				t.Fatalf("row %s: latin-1 row holds %q", r.Name, c)
+			}
+			out = append(out, byte(c))
+		}
+		return string(out)
+	case "utf-16-le-bom", "utf-16-be-bom":
+		le := r.Encoding == "utf-16-le-bom"
+		out := []byte{0xFE, 0xFF}
+		if le {
+			out = []byte{0xFF, 0xFE}
+		}
+		for _, u := range utf16.Encode([]rune(r.Doc)) {
+			if le {
+				out = append(out, byte(u), byte(u>>8))
+			} else {
+				out = append(out, byte(u>>8), byte(u))
+			}
+		}
+		return string(out)
+	}
+	t.Fatalf("row %s: unknown encoding %q", r.Name, r.Encoding)
+	return ""
+}
+
+// inPyYAMLOnlyWindow is the corpus's own definition of the window.
+func inPyYAMLOnlyWindow(r windowCorpusRow) bool {
+	return r.Category == "pyyaml_only" && !strings.HasPrefix(r.File, "_")
+}
+
+// passesDefaultRun: da-guard's default run over conf.d/_defaults.yaml, a
+// threshold-only tenant, and the row's file is exit 0 with nothing
+// undetermined and nothing in parse_failed.
+func passesDefaultRun(t *testing.T, r windowCorpusRow) bool {
+	t.Helper()
+	if r.File == "_defaults.yaml" || r.File == "tenant-x.yaml" {
+		t.Fatalf("row %s: file %s collides with the tree's own files", r.Name, r.File)
+	}
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": rsDefaults,
+		"conf.d/tenant-x.yaml":  rsTenant,
+		"conf.d/" + r.File:      windowEncode(t, r),
+	})
+	code, stdout, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"), "--format", "json")
+	var doc struct {
+		ParseFailed  []string           `json:"parse_failed"`
+		Undetermined []undeterminedItem `json:"undetermined"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("row %s: exit %d, report is not JSON: %v\nstdout=%s\nstderr=%s", r.Name, code, err, stdout, stderr)
+	}
+	return code == exitOK && len(doc.Undetermined) == 0 && len(doc.ParseFailed) == 0
+}
+
+// TestPyYAMLOnlyReject_WindowBeforeStep4: the rows da-guard passes, among
+// those today's generator rejects, are exactly the corpus's window rows.
 func TestPyYAMLOnlyReject_WindowBeforeStep4(t *testing.T) {
 	t.Parallel()
-	for _, r := range loadWindowRows(t) {
-		t.Run(r.Name, func(t *testing.T) {
-			t.Parallel()
-			tmp := t.TempDir()
-			testutil.WriteTree(t, tmp, map[string]string{
-				"conf.d/_defaults.yaml": rsDefaults,
-				"conf.d/tenant-x.yaml":  rsTenant,
-				"conf.d/" + r.File:      r.Doc,
-			})
-			code, stdout, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"), "--format", "json")
-			var doc struct {
-				ParseFailed  []string           `json:"parse_failed"`
-				Undetermined []undeterminedItem `json:"undetermined"`
-			}
-			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-				t.Fatalf("exit %d, report is not JSON: %v\nstdout=%s\nstderr=%s", code, err, stdout, stderr)
-			}
-			if code != exitOK || len(doc.Undetermined) != 0 || len(doc.ParseFailed) != 0 {
-				t.Errorf("exit %d, undetermined %v, parse_failed %v; want exit 0 and both empty "+
-					"(the ADR-036 §9 window before step 4)\nstdout=%s\nstderr=%s",
-					code, doc.Undetermined, doc.ParseFailed, stdout, stderr)
-			}
-		})
+	var measured, defined []string
+	for _, r := range loadWindowCorpus(t) {
+		if r.Generator != "rejected" {
+			continue
+		}
+		if passesDefaultRun(t, r) {
+			measured = append(measured, r.Name)
+		}
+		if inPyYAMLOnlyWindow(r) {
+			defined = append(defined, r.Name)
+		}
+	}
+	sort.Strings(measured)
+	sort.Strings(defined)
+	if len(defined) == 0 {
+		t.Fatal("the corpus defines no window row (category pyyaml_only, file not `_`); the predicate or the corpus changed")
+	}
+	if strings.Join(measured, "\n") != strings.Join(defined, "\n") {
+		t.Errorf("rows the generator rejects that da-guard passes (exit 0, nothing undetermined):\n  %v\n"+
+			"rows the corpus defines as the ADR-036 §9 window (pyyaml_only, file not `_`):\n  %v",
+			measured, defined)
 	}
 }
