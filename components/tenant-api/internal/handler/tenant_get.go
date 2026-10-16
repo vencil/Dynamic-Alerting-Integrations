@@ -78,8 +78,9 @@ type TenantDetail struct {
 	// empty, when the file is not shown to the caller: it declares a tenant
 	// the caller may not read (#3050; a conf.d file can declare several, and
 	// the file is shown whole or not at all), or its tenants cannot be listed
-	// with certainty (not YAML; an alias, a merge key or a non-scalar key at
-	// the top level or in tenants:) and the caller may not read every tenant;
+	// with certainty (not YAML; an alias, a merge key, a non-scalar key or a
+	// key tagged other than !!str at the top level or in tenants:) and the
+	// caller may not read every tenant;
 	// or the caller would be shown the masked form but the file cannot be
 	// masked with certainty: it is not YAML, holds more than one document, or
 	// uses an anchor, alias or merge key (a credential can be placed outside
@@ -155,8 +156,8 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Description A conf.d file can declare several tenants: when it declares one the caller may not read (#3050), raw_yaml,
 // @Description custom_alerts and source_hash are empty with raw_yaml_withheld: true for every caller, on the config_error
 // @Description answer too — the file is shown whole or not at all, never re-encoded to the caller's own section. When its
-// @Description tenants cannot be listed with certainty (not YAML; an alias, a merge key or a non-scalar key at the top level
-// @Description or in tenants:), it is shown only to a caller with read permission on all tenants (an RBAC rule with
+// @Description tenants cannot be listed with certainty (not YAML; an alias, a merge key, a non-scalar key or a key tagged
+// @Description other than !!str, e.g. !!binary, at the top level or in tenants:), it is shown only to a caller with read permission on all tenants (an RBAC rule with
 // @Description tenants: ["*"] and no org-scope, environments or domains).
 // @Tags        tenants
 // @Produce     json

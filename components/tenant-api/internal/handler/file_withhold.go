@@ -62,15 +62,28 @@ func fileTenantsShown(data []byte, own string, names gitops.TenantNames, unrestr
 // mapping — a superset of what threshold-exporter decodes, which reads only
 // the first document — each id once. ok is false when the list cannot be
 // stated with certainty: not YAML, a document whose root is not a mapping,
-// or an alias, a merge key or a non-scalar key at the top level or in
-// `tenants:` (through any of them a tenant can be declared without its id
-// being a plain key there). An empty file declares none.
+// or, at the top level or in `tenants:`, an alias, a merge key, a non-scalar
+// key or a key with an explicit tag other than !!str (through any of them a
+// tenant can be declared without its id being a plain key there: yaml.v3
+// decodes `? !!binary dGVuYW50cw==` to the key "tenants"). An empty file
+// declares none.
+//
+// ⛔ AN ID IS WHAT THE EXPORTER'S DECODER READS, not the node's text: each key
+// is decoded into a string as the typed decode into map[string] does, and
+// the first document's ids from cfg.ParseTenantFile itself are added, so the
+// list is never smaller than the exporter's (#3050 round 2).
 func declaredTenantIDs(data []byte) (ids []string, ok bool) {
 	docs, err := parseAllDocs(data)
 	if err != nil {
 		return nil, false
 	}
 	seen := map[string]bool{}
+	add := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
 	for _, doc := range docs {
 		if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 			continue
@@ -84,10 +97,11 @@ func declaredTenantIDs(data []byte) (ids []string, ok bool) {
 		}
 		for i := 0; i+1 < len(root.Content); i += 2 {
 			k, v := root.Content[i], root.Content[i+1]
-			if !isPlainKey(k) {
+			name, plain := plainKey(k)
+			if !plain {
 				return nil, false
 			}
-			if k.Value != "tenants" {
+			if name != "tenants" {
 				continue
 			}
 			if isYAMLNull(v) {
@@ -97,24 +111,39 @@ func declaredTenantIDs(data []byte) (ids []string, ok bool) {
 				return nil, false
 			}
 			for j := 0; j+1 < len(v.Content); j += 2 {
-				tk := v.Content[j]
-				if !isPlainKey(tk) {
+				id, plain := plainKey(v.Content[j])
+				if !plain {
 					return nil, false
 				}
-				if !seen[tk.Value] {
-					seen[tk.Value] = true
-					ids = append(ids, tk.Value)
-				}
+				add(id)
 			}
+		}
+	}
+	// The authority on the first document: whatever the exporter's own
+	// parse declares is declared, whatever this walk read.
+	if c, err := cfg.ParseTenantFile(data); err == nil {
+		for id := range c.Tenants {
+			add(id)
 		}
 	}
 	return ids, true
 }
 
-// isPlainKey reports whether k is a mapping key that names itself: a scalar
-// that is not a merge key (`<<`, however tagged).
-func isPlainKey(k *yaml.Node) bool {
-	return k.Kind == yaml.ScalarNode && k.Tag != "!!merge" && k.Value != "<<"
+// plainKey returns the string a mapping key decodes to, and whether k names
+// itself: a scalar with no explicit tag other than !!str that is not a merge
+// key (`<<`, however tagged) and decodes into a string.
+func plainKey(k *yaml.Node) (string, bool) {
+	if k.Kind != yaml.ScalarNode || k.Tag == "!!merge" || k.Value == "<<" {
+		return "", false
+	}
+	if k.Style&yaml.TaggedStyle != 0 && k.Tag != "!!str" {
+		return "", false
+	}
+	var s string
+	if err := k.Decode(&s); err != nil {
+		return "", false
+	}
+	return s, true
 }
 
 // isYAMLNull reports whether n is an empty or null scalar.

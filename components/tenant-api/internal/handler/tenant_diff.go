@@ -52,7 +52,7 @@ type DiffResponse struct {
 // @Description not YAML, holds several documents, or uses an anchor, alias or merge key.
 // @Description Every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant the caller may not read
 // @Description (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty (not YAML; an alias,
-// @Description a merge key or a non-scalar key at the top level or in tenants:) and the caller lacks read permission on all
+// @Description a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:) and the caller lacks read permission on all
 // @Description tenants: the diff would carry that file's lines, and has_diff would confirm a guess of it.
 // @Tags        tenants
 // @Accept      json

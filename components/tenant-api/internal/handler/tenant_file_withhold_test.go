@@ -213,6 +213,17 @@ func TestDeclaredTenantIDs(t *testing.T) {
 		{"merge key at the top", "x: &t\n  tenants: {b: {}}\n<<: *t\n", nil, false},
 		{"alias as a tenant key", "x: &k b\ntenants:\n  *k : {}\n", nil, false},
 		{"non-scalar tenant key", "tenants:\n  ? [b]\n  : {}\n", nil, false},
+		// #3050 round 2: yaml.v3 decodes a !!binary key, so the text is not
+		// the id — `dGVuYW50cw==` is "tenants", `ZGItYg==` is "db-b".
+		{"!!binary tenants key", "? !!binary dGVuYW50cw==\n: {a: {x: \"1\"}, b: {y: \"2\"}}\n", nil, false},
+		{"!!binary tenants key, second document", "tenants:\n  a: {}\n---\n? !!binary dGVuYW50cw==\n: {b: {}}\n", nil, false},
+		{"!!binary tenant id", "tenants:\n  !!binary ZGItYg==: {x: \"1\"}\n  a: {}\n", nil, false},
+		{"!!binary tenant id, second document", "tenants:\n  a: {}\n---\ntenants:\n  !!binary ZGItYg==: {}\n", nil, false},
+		{"!!int tenant id", "tenants:\n  !!int 123: {x: \"1\"}\n", nil, false},
+		{"local tag on a tenant id", "tenants:\n  !custom b: {}\n", nil, false},
+		{"!!timestamp tenant id", "tenants:\n  !!timestamp 2001-12-14: {}\n", nil, false},
+		{"!!str tags are plain", "!!str tenants:\n  !!str b: {}\n", []string{"b"}, true},
+		{"untagged non-string ids decode to their text", "tenants:\n  123: {}\n  true: {}\n  0x1F: {}\n", []string{"123", "true", "0x1F"}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -221,6 +232,57 @@ func TestDeclaredTenantIDs(t *testing.T) {
 				t.Errorf("declaredTenantIDs = %v, %v; want %v, %v", ids, ok, c.ids, c.ok)
 			}
 		})
+	}
+}
+
+// #3050 round 2, property: on every shape this file and its neighbours
+// probe, the tenants threshold-exporter decodes (cfg.ParseTenantFile, first
+// document) are a subset of what declaredTenantIDs lists — or it says it
+// cannot list them. A smaller list is the fail-open this guards.
+func TestDeclaredTenantIDs_NeverFewerThanTheExporter(t *testing.T) {
+	t.Parallel()
+	shapes := []string{
+		"? !!binary dGVuYW50cw==\n: {db-a: {x: \"1\"}, db-b: {secret: \"2\"}}\n",
+		"tenants:\n  !!binary ZGItYg==: {x: \"1\"}\n  db-a: {x: \"1\"}\n",
+		"tenants:\n  !!int 123: {x: \"1\"}\n",
+		"tenants:\n  123: {x: \"1\"}\n  true: {}\n  0x1F: {}\n  1e3: {}\n  2001-12-14: {}\n",
+		"tenants:\n  ~: {x: \"1\"}\n",
+		"tenants:\n  !!str db-b: {}\n  !custom db-c: {}\n  !!float 1.0: {}\n",
+		"!!str tenants:\n  db-b: {}\n",
+		"tenants:\n  \"db-b\": {}\n  'db-c': {}\n",
+		"tenants:\n  db-a: &b\n    x: \"1\"\n  db-z: *b\n",
+		"tenants:\n  db-a: {}\n---\ntenants:\n  db-z: {}\n",
+		"x: &t\n  b: {}\ntenants:\n  a: {}\n  <<: *t\n",
+		"tenants:\n  !!binary dP8=:\n    x: \"10\"\n  db-a: {}\n",
+		"tenants:\n  db-a: {}\n  db-a: {}\n",
+	}
+	for _, f := range wFiles {
+		shapes = append(shapes, f.body)
+	}
+	for _, f := range rejFiles {
+		shapes = append(shapes, f.body)
+	}
+	for _, f := range roundTripRejFiles {
+		shapes = append(shapes, f.body)
+	}
+	for _, data := range shapes {
+		c, err := cfg.ParseTenantFile([]byte(data))
+		if err != nil {
+			continue // the exporter declares nothing from a file it rejects
+		}
+		ids, ok := declaredTenantIDs([]byte(data))
+		if !ok {
+			continue
+		}
+		listed := map[string]bool{}
+		for _, id := range ids {
+			listed[id] = true
+		}
+		for id := range c.Tenants {
+			if !listed[id] {
+				t.Errorf("%q: the exporter declares %q, declaredTenantIDs lists only %q", data, id, ids)
+			}
+		}
 	}
 }
 
@@ -355,5 +417,30 @@ func TestPutTenant_StaleBaseHashConflictWithholdsHash(t *testing.T) {
 	w = wServe(f, PutTenant(f.deps()), rbac.PermWrite, "PUT", body, stale)
 	if w.Code != http.StatusConflict || decodeDetail(t, w)["current_source_hash"] != cfg.ComputeSourceHash([]byte(file)) {
 		t.Errorf("readable: %d %s, want 409 with current_source_hash as today", w.Code, w.Body.String())
+	}
+}
+
+// #3050 round 2: the `tenants:` key written as `? !!binary dGVuYW50cw==`
+// is "tenants" to the exporter, which then declares both tenants. GET must
+// not read it as a file without tenants.
+func TestGetTenant_BinaryTaggedTenantsKeyIsWithheld(t *testing.T) {
+	t.Parallel()
+	file := "? !!binary dGVuYW50cw==\n:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" + wOutBlock
+	c, err := cfg.ParseTenantFile([]byte(file))
+	if err != nil || len(c.Tenants) != 2 {
+		t.Fatalf("exporter: %v %v — want both tenants declared (else this test proves nothing)", c.Tenants, err)
+	}
+	for _, role := range []string{"writer", "reader"} {
+		f := wFixture(t, role, file)
+		w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
+		if d := decodeDetail(t, w); d["raw_yaml_withheld"] != true {
+			t.Errorf("%s: want withheld: %s", role, w.Body.String())
+		}
+		assertNoOtherTenant(t, role+" GET", w.Body.Bytes(), file)
+	}
+	u := wFixture(t, "unrestricted", file)
+	w := wServe(u, GetTenant(u.deps()), rbac.PermRead, "GET", "", nil)
+	if d := decodeDetail(t, w); d["raw_yaml_withheld"] != nil || d["raw_yaml"] != file {
+		t.Errorf("unrestricted: want the file verbatim: %s", w.Body.String())
 	}
 }
