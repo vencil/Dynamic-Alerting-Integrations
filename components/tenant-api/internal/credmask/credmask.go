@@ -11,7 +11,7 @@
 // predicate as the PUT gate (handler.canSeeCredentials): a caller who sees
 // the placeholder can never PUT, so a read-modify-write cannot carry it back
 // over the real value. The writer refuses the placeholder anyway
-// (gitops.ReceiverPreflight), for a client that reads under one identity and
+// (gitops.PlaceholderPreflight), for a client that reads under one identity and
 // writes under another.
 //
 // ⛔ MATCHED BY KEY NAME, ANYWHERE IN THE DOCUMENT — not by receiver path. A

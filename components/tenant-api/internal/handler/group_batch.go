@@ -22,8 +22,8 @@ type GroupBatchRequest struct {
 	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" and
 	// "_routing_receiver_type" are accepted: removing `_routing` resets the member to
 	// `_routing_defaults` and its routing profile, which turns routing back on for a member a
-	// disabling `_routing` turned off (the change is judged by domain policy like a `_routing`
-	// patch); removing `_routing_receiver_type` drops the flat key tenant-api used to write,
+	// disabling `_routing` turned off (the route generator judges the result, as every
+	// write); removing `_routing_receiver_type` drops the flat key tenant-api used to write,
 	// which nothing renders (#2983). A key the member does not carry makes it
 	// a no-op. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`
@@ -56,8 +56,9 @@ type GroupBatchResponse struct {
 //
 // Applies a patch operation to all members of a group. The group is expanded
 // into one BatchOperation per member and runs the POST /tenants/batch
-// pipeline (#2339): the same patch-value check, per-member RBAC, domain
-// policy, and — in PR write-back mode — one PR/MR for the whole group.
+// pipeline (#2339): the same patch-value check, per-member RBAC, the route
+// generator's verdict (#2903), and — in PR write-back mode — one PR/MR for
+// the whole group.
 // Supports async mode via ?async=true query parameter (direct mode only; PR
 // mode is synchronous, like /tenants/batch).
 //
@@ -68,8 +69,8 @@ type GroupBatchResponse struct {
 //
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
-// @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
-// @Description unset removes keys from every member (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400).
+// @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission; the route generator container judges the tree with every member's change applied (#2903).
+// @Description unset removes keys from every member (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for members a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400).
 // @Description All or nothing, in one commit, as POST /api/v1/tenants/batch: when any member is refused nothing is written (422, status rejected, the refused members with status error, the others not_applied);
 // @Description otherwise every changed member file is in one commit (direct mode) or one PR/MR with one commit (PR write-back mode). A rejected async run ends the task as failed with the same results.
 // @Description Results and summary list only the members the caller may read; a refusal of a member the caller cannot read still rejects the batch.
@@ -79,6 +80,7 @@ type GroupBatchResponse struct {
 // @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
 // @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
+// @Description Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
 // @Tags        groups
 // @Accept      json
 // @Produce     json
@@ -88,14 +90,14 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
-// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A member refused by the domain policy or the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
+// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR. (A member refused by the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
 // @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. With committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} GroupBatchResponse "Batch rejected (status rejected): at least one member was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch — so nothing was written and no PR/MR was opened. results lists the members the caller may read: status error (message, code) for the refused ones, not_applied for the rest; the messages name no member index. Codes TENANT_TREE_UNREADABLE and TENANT_CONFIG_NOT_LOADABLE as on POST /api/v1/tenants/batch (#2939). Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results."
 // @Failure     429  {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them"
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE; the batch is rejected). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -219,14 +221,6 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Hub #2486 Q7-2: as POST /tenants/batch — refused whole (503) in
-		// direct mode while the domain policy is unavailable, if the patch
-		// is one the policy judges; an async run is judged again per op.
-		if err := batchPolicyUnavailable(d.Policy, ops); err != nil {
-			writePolicyUnavailable(w, r, err)
-			return
-		}
-
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, batchTaskFunc(d, ops, email, p))
@@ -236,7 +230,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		// Synchronous mode (default). #2900: all or nothing, as
 		// POST /tenants/batch.
-		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy, batchResultsAnswer)
+		run := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, batchResultsAnswer)
 		if run.Err != nil && generatorRejectsBatch(run.Err) {
 			// #2903: refused by the generator — a rejected batch, as any.
 			results := visibleGroupBatchResults(d, p, run.Results)

@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,6 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
 )
@@ -192,6 +192,21 @@ var ErrTenantTreeScan = errors.New("cannot scan conf.d to check where the tenant
 // is on origin with no PR/MR opened for it.
 var ErrBaseRestore = errors.New("failed to return the config worktree to the base branch after a PR-mode write")
 
+// yamlDecodeMessage is what a caller is told about a YAML decode error: what
+// failed and on which line, never the parser's own text (#2903). That text
+// quotes the value it choked on, and the file may be one several tenants
+// share — a batch merges into it — so it could hand one tenant another's
+// value. The full text goes to the server log.
+func yamlDecodeMessage(what string, err error) string {
+	slog.Warn("tenant config does not decode", "what", what, "error", err)
+	if m := yamlErrorLine.FindStringSubmatch(err.Error()); m != nil {
+		return fmt.Sprintf("%s (line %s; the details are in the server log)", what, m[1])
+	}
+	return what + " (the details are in the server log)"
+}
+
+var yamlErrorLine = regexp.MustCompile(`\bline (\d+)\b`)
+
 // yamlDocumentShapeErrors is the whole-body YAML gate behind validateShape
 // (#1681, #1721). It exists because Write commits the body VERBATIM while the
 // struct yaml.Unmarshal in validateShape reads only the FIRST document and only
@@ -237,7 +252,7 @@ func yamlDocumentShapeErrors(yamlContent string) []string {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return []string{fmt.Sprintf("invalid YAML in document %d: %v", i+1, err)}
+			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
 		}
 		// Before the generic decode: a complex root key makes that decode fail
 		// with a message about the key's value, not about the rule it broke.
@@ -248,7 +263,7 @@ func yamlDocumentShapeErrors(yamlContent string) []string {
 		}
 		var doc any
 		if err := node.Decode(&doc); err != nil {
-			return []string{fmt.Sprintf("invalid YAML in document %d: %v", i+1, err)}
+			return []string{yamlDecodeMessage(fmt.Sprintf("invalid YAML in document %d", i+1), err)}
 		}
 		if i > 0 && doc != nil {
 			extra++
@@ -1862,8 +1877,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
 	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
 	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
-	// caller below parses yamlContent five times (Unmarshal here,
-	// FindDuplicateKeyIn, CheckTenantRootKeys, yamlDocumentShapeErrors,
+	// caller below parses yamlContent four times (Unmarshal here,
+	// CheckTenantRootKeys, yamlDocumentShapeErrors,
 	// TenantWritesStringMetadata).
 	//
 	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
@@ -1878,15 +1893,7 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 		return tcfg, errs
 	}
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
-		return tcfg, []string{"invalid YAML: " + err.Error()}
-	}
-	// A key the route generator counts as written twice and the Unmarshal
-	// above does not (an alias key beside its anchor; two `<<` only in a
-	// mapping that typed decode skips — inside `tenants:` it refuses them
-	// itself): the generator's StrictLoader refuses the whole file (#2295), so
-	// it is refused here as a plain repeated key is by the Unmarshal above.
-	if d := pyyamlcompat.FindDuplicateKeyIn([]byte(yamlContent)); d != nil {
-		return tcfg, []string{"invalid YAML: " + d.Error()}
+		return tcfg, []string{yamlDecodeMessage("invalid YAML", err)}
 	}
 	// Reject any non-`tenants` top-level key before anything else (#705).
 	if rootErrs := cfg.CheckTenantRootKeys([]byte(yamlContent)); len(rootErrs) > 0 {
@@ -1912,8 +1919,8 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// tenant ids from the file's `tenants:` KEYS — so without this the two
 	// planes disagree about who the file declares. CheckTenantRootKeys above
 	// only walks the ROOT map; a second `tenants.<other>` block passes it, and
-	// both remaining gates (RequireOrgWrite, Policy.CheckWrite via
-	// extractPatchKeys) read the URL id alone and never see it (#1681).
+	// the write gate (RequireOrgWrite) reads the URL id alone and never sees
+	// it (#1681).
 	// This function joins tenantID into a path below, and it is reachable from
 	// callers that have not run the id past guardTenantID (WriteMerged's merge
 	// step, and any future one). Re-asserting it here costs a string compare and

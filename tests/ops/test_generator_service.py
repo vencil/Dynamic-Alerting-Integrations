@@ -8,7 +8,8 @@ socket 打請求。
   結束）、排隊中到期、佇列滿、記憶體上限、沒有完整結果、git 讀兩次都失敗。
 - 容器不可用（503）：找不到 amtool、產生器比 policy 要求的舊、部署端 policy
   檔不可用；每次判定都重查。
-- git 讀取失敗重試一次；symlink 與 gitlink 依 tree entry mode 實體化。
+- git 讀取失敗重試一次；只實體化一般檔（100644／100755），symlink、gitlink
+  等其他 mode 一律判 not_regular_file（#2981）。
 - 快取：同一棵樹只改一個檔時，只解析那個檔。
 - fork 時常駐程序只有一個執行緒；socket 權限 0600；HTTP 大小與格式錯誤。
 
@@ -434,8 +435,9 @@ def test_git_read_is_retried_once(tmp_path, world, mode, want):
 
 
 def test_tree_entries_are_written_by_mode(tmp_path):
-    """100644 / 100755 files, a 120000 symlink with its target text as
-    stored, a 160000 gitlink as an empty directory."""
+    """100644 / 100755 files are written; a 120000 symlink and a 160000
+    gitlink are not — they come back as not regular files (#2981), except a
+    hidden one, which no reader reads."""
     repo = h.init_repo(tmp_path / "r")
     d = repo / "conf.d"
     (d / "sub").mkdir(parents=True)
@@ -444,6 +446,7 @@ def test_tree_entries_are_written_by_mode(tmp_path):
     (d / "run.sh").chmod(0o755)
     symlink_or_skip("alpha.yaml", d / "link.yml")
     symlink_or_skip("../../nowhere", d / "sub" / "dangling.yaml")
+    symlink_or_skip("alpha.yaml", d / ".hidden.yaml")
     h.run_git(repo, "add", "-A")
     other = h.run_git(repo, "hash-object", "-t", "commit", "--stdin", "-w",
                       stdin=b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
@@ -462,14 +465,15 @@ def test_tree_entries_are_written_by_mode(tmp_path):
     modes = {rel: mode for mode, _o, rel, _c in tree}
     assert modes == {"alpha.yaml": "100644", "run.sh": "100755",
                      "link.yml": "120000", "sub/dangling.yaml": "120000",
-                     "vendor": "160000"}
+                     ".hidden.yaml": "120000", "vendor": "160000"}
     root = job_dir / "conf.d"
-    _gsvc_child.materialise(str(root), tree)
+    irregular = _gsvc_child.materialise(str(root), tree)
+    assert irregular == {"link.yml": "120000", "sub/dangling.yaml": "120000",
+                         "vendor": "160000"}
     assert (root / "alpha.yaml").read_text(encoding="utf-8") == cases._tenant("alpha")
     assert (root / "run.sh").read_text(encoding="utf-8") == "#!/bin/sh\n"
-    assert os.readlink(root / "link.yml") == "alpha.yaml"
-    assert os.readlink(root / "sub" / "dangling.yaml") == "../../nowhere"
-    assert (root / "vendor").is_dir() and not os.listdir(root / "vendor")
+    for rel in ("link.yml", "sub/dangling.yaml", ".hidden.yaml", "vendor"):
+        assert not os.path.lexists(root / rel), rel
     # read_tree's object ids are git's own blob ids (pinning uses content
     # SHA-256, computed from these contents)
     listed = [line.split()[:3] for line in
@@ -478,11 +482,23 @@ def test_tree_entries_are_written_by_mode(tmp_path):
         oid for _mode, kind, oid in listed if kind == "blob"}
 
 
-def test_a_symlink_and_gitlink_tree_judges_like_the_cli(tmp_path, world):
+def _unreadable(doc: dict) -> dict:
+    return {f["file"]: f["message"] for f in doc["findings"]["findings"]
+            if f["kind"] == "tenant_file_unreadable"}
+
+
+def test_a_symlink_or_gitlink_entry_is_not_a_regular_file(tmp_path, world):
+    """#2981 (ADR-036 §3): read from git objects, a symlink (whatever its
+    link text — here one that would parse as a mapping, and one to a real
+    file) and a gitlink are judged not_regular_file, blocking, with the fix;
+    a filesystem read of the same tree follows the link and passes."""
     repo = h.init_repo(tmp_path / "r")
     files = dict(cases.FIXTURES["clean"])
+    files["zz-target.txt"] = cases._tenant("db-z")  # not config-named: no reader reads it
     commit_files = h.write_tree(repo / "conf.d", files)
-    symlink_or_skip("_defaults.yaml", commit_files / "_defaults.yml")  # 2 carriers
+    symlink_or_skip("db-x: a", commit_files / "zz-maplike.yaml")
+    symlink_or_skip("zz-target.txt", commit_files / "zz-real.yaml")
+    symlink_or_skip("_defaults.yaml", commit_files / ".zz-hidden.yaml")
     h.run_git(repo, "add", "-A")
     h.run_git(repo, "update-index", "--add", "--cacheinfo",
               f"160000,{'1' * 40},conf.d/vendor")
@@ -490,13 +506,102 @@ def test_a_symlink_and_gitlink_tree_judges_like_the_cli(tmp_path, world):
     commit = h.run_git(repo, "rev-parse", "HEAD")
     with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
         status, doc = svc.validate(commit)
+        assert status == 200 and doc["result"] == "findings" and doc["rc"] == 1, doc
+        got = _unreadable(doc)
+        assert set(got) == {"zz-maplike.yaml", "zz-real.yaml", "vendor"}, got
+        for rel, mode, what in (("zz-maplike.yaml", "120000", "a symlink"),
+                                ("zz-real.yaml", "120000", "a symlink"),
+                                ("vendor", "160000", "a gitlink (submodule)")):
+            assert (f"is not a regular file (not_regular_file): git tree mode {mode}, {what}"
+                    in got[rel]), got[rel]
+            assert f"commit {rel} as a regular file" in got[rel], got[rel]
+        # tenant-api writes a regular file over the link: that path is no
+        # longer judged as one; a write below a link is refused.
+        status, doc = svc.validate(commit, [
+            {"path": "zz-maplike.yaml", "content_b64": h.b64(cases._tenant("db-y"))}])
+        assert status == 200 and set(_unreadable(doc)) == {"zz-real.yaml", "vendor"}, doc
+        status, doc = svc.validate(commit, [{"path": "zz-real.yaml/x.yaml",
+                                             "content_b64": h.b64("x")}])
+        assert status == 400 and "not a directory" in doc["message"], doc
+    # The CLI over a real directory follows the file symlinks (a ConfigMap
+    # mount is made of them): the same tree without the link texts passes.
     tree = h.write_tree(tmp_path / "cli" / "conf.d", files)
-    symlink_or_skip("_defaults.yaml", tree / "_defaults.yml")
-    (tree / "vendor").mkdir()
+    symlink_or_skip("zz-target.txt", tree / "zz-real.yaml")
     rc, cli = h.run_cli(tree, world["bin"], tmp_path / "f.json")
-    assert status == 200
-    assert (doc["rc"], _norm(doc["findings"], Path(doc["findings"]["config_dir"]))) \
-        == (rc, _norm(cli, tree))
+    assert rc == 0 and not [f for f in cli["findings"] if f["kind"] == "tenant_file_unreadable"], cli
+
+
+def test_an_irregular_entry_occupies_its_path_for_writes(tmp_path, world):
+    """#2981 (ADR-036 §3): an entry that is not a regular file is still the
+    tree entry at its path. Writes see it in request order: below it is 400
+    (however deep, a directory symlink too) until a write or delete of that
+    path takes it out; the directory holding it is a directory, so writing
+    a file there is 400 as for a regular file. Any name is judged (a
+    README.md too), unless the path is hidden."""
+    repo = h.init_repo(tmp_path / "r")
+    files = dict(cases.FIXTURES["clean"])
+    files["zz-target.txt"] = "not config\n"
+    files["zz-dir/zz-note.txt"] = "not config\n"
+    commit_files = h.write_tree(repo / "conf.d", files)
+    symlink_or_skip("zz-dir", commit_files / "zz-dirlink")
+    symlink_or_skip("nowhere", commit_files / "zz-a")
+    symlink_or_skip("zz-target.txt", commit_files / "README.md")
+    (commit_files / "zz-d").mkdir()
+    symlink_or_skip("../zz-target.txt", commit_files / "zz-d" / "s.yaml")
+    (commit_files / ".x").mkdir()
+    symlink_or_skip("../zz-target.txt", commit_files / ".x" / "l.yaml")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    tenant = {"content_b64": h.b64(cases._tenant("db-q"))}
+    links = {"zz-dirlink", "zz-a", "README.md", "zz-d/s.yaml"}
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+        assert status == 200 and set(_unreadable(doc)) == links, doc
+        for writes, why in (
+                ([{"path": "zz-dirlink/x.yaml", **tenant}], "not a directory"),
+                ([{"path": "zz-a/b/c/d.yaml", **tenant}], "not a directory"),
+                ([{"path": "zz-a/x.yaml", **tenant}, {"path": "zz-a", "delete": True}],
+                 "not a directory"),
+                ([{"path": "zz-d", **tenant}], "is a directory")):
+            status, doc = svc.validate(commit, writes)
+            assert status == 400 and why in doc["message"], (writes, doc)
+        status, doc = svc.validate(commit, [{"path": "zz-a", "delete": True},
+                                            {"path": "zz-a/x.yaml", **tenant}])
+        assert status == 200 and set(_unreadable(doc)) == links - {"zz-a"}, doc
+        # Writing a file over it does not make it a directory: below it is
+        # still a 400 — only deleting it does.
+        status, doc = svc.validate(commit, [{"path": "zz-a", **tenant},
+                                            {"path": "zz-a/x.yaml", **tenant}])
+        assert status == 400 and "not a directory" in doc["message"], doc
+        # A hidden path is no tree entry any reader reads: not judged, and
+        # nothing stops a write below it.
+        status, doc = svc.validate(commit, [{"path": ".x/l.yaml/y.yaml", **tenant}])
+        assert status == 200 and set(_unreadable(doc)) == links, doc
+
+
+def test_an_irregular_policy_file_is_an_unusable_policy(tmp_path, world):
+    """#2981 (ADR-036 §3): an irregular entry is classified as any other
+    file that cannot be read — by its name. A `_domain_policy.yaml` symlink
+    is domain_policy_unusable (not tenant_file_unreadable), and it refuses
+    the write all the same."""
+    repo = h.init_repo(tmp_path / "r")
+    files = dict(cases.FIXTURES["clean"])
+    files["zz-target.txt"] = "not config\n"
+    commit_files = h.write_tree(repo / "conf.d", files)
+    symlink_or_skip("zz-target.txt", commit_files / "_domain_policy.yaml")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-qm", "x")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+    assert status == 200 and doc["result"] == "findings" and doc["rc"] == 1, doc
+    found = doc["findings"]["findings"]
+    assert not _unreadable(doc), doc
+    policy = [f for f in found if f["kind"] == "domain_policy_unusable"]
+    assert len(policy) == 1, found
+    assert "is not a regular file (not_regular_file): git tree mode 120000" \
+        in json.dumps(policy[0]), policy
 
 
 def test_sha256_repository(tmp_path, world):

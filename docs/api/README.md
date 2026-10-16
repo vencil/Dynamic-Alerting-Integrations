@@ -10,7 +10,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./README.en.md)
 
-Threshold Exporter 是 Multi-Tenant Dynamic Alerting 平台的核心元件，負責將租戶配置轉換為 Prometheus 指標、狀態過濾器和嚴重度去重標誌。本文件詳細說明所有 API 端點、請求/回應格式、範例和 Kubernetes 整合方式。
+Threshold Exporter 是 Multi-Tenant Dynamic Alerting 平台的核心元件，負責將租戶配置轉換為 Prometheus 指標、狀態過濾器和嚴重度去重標誌。本頁是各 GET 端點給人看的說明；給機器讀的契約在 [OpenAPI spec](./threshold-exporter-openapi.yaml)。
 
 ## 服務規格
 
@@ -63,178 +63,71 @@ curl -s http://localhost:8080/metrics | grep -E '^(user_|tenant_|da_)'
 
 ## 2. GET /health - 存活探針
 
-### 說明
-
-檢查服務是否正在運行。用於 Kubernetes `livenessProbe`。即使設定未加載，此端點也應回應。
-
-### 請求
+給 Kubernetes `livenessProbe` 用。行程起來就回應，與設定有沒有載入無關。
 
 ```bash
 curl -s http://localhost:8080/health
 ```
 
-### 回應
-
-**狀態碼**: 200 OK  
-**Content-Type**: `text/plain`
-
-```
-ok
-```
-
-### Kubernetes 設定範例
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /health
-    port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 10
-  timeoutSeconds: 3
-  failureThreshold: 3
-```
+| 情況 | 狀態碼 | 內文 |
+|------|--------|------|
+| 行程在跑 | 200 | `ok` |
 
 ---
 
 ## 3. GET /ready - 就緒探針
 
-### 說明
-
-檢查服務是否已加載設定。返回 200 表示就緒（已加載設定），返回 503 表示未就緒（設定未加載或正在重新載入）。用於 Kubernetes `readinessProbe`。
-
-### 請求
+給 Kubernetes `readinessProbe` 用。第一次成功載入設定之前回 503；之後一律回 200，之後的 reload 失敗不會讓它變回 503（exporter 繼續服務上一版設定）。
 
 ```bash
 curl -s http://localhost:8080/ready
 ```
 
-### 成功回應（已就緒）
+| 情況 | 狀態碼 | 內文 |
+|------|--------|------|
+| 已載入過設定 | 200 | `ready` |
+| 還沒載入過設定 | 503 | `config not loaded` |
 
-**狀態碼**: 200 OK  
-**Content-Type**: `text/plain`
-
-```
-ready
-```
-
-### 失敗回應（未就緒）
-
-**狀態碼**: 503 Service Unavailable  
-**Content-Type**: `text/plain`
-
-```
-config not loaded
-```
-
-### Kubernetes 設定範例
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /ready
-    port: 8080
-  initialDelaySeconds: 5
-  periodSeconds: 5
-  timeoutSeconds: 3
-  failureThreshold: 2
-```
-
-### 完整 Pod 健康探針設定
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: threshold-exporter
-spec:
-  containers:
-  - name: threshold-exporter
-    image: ghcr.io/vencil/threshold-exporter:v2.9.0
-    ports:
-    - containerPort: 8080
-      name: metrics
-    
-    # 存活探針 - 檢查服務是否仍在運行
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 8080
-      initialDelaySeconds: 10
-      periodSeconds: 10
-      timeoutSeconds: 3
-      failureThreshold: 3
-    
-    # 就緒探針 - 檢查設定是否已加載
-    readinessProbe:
-      httpGet:
-        path: /ready
-        port: 8080
-      initialDelaySeconds: 5
-      periodSeconds: 5
-      timeoutSeconds: 3
-      failureThreshold: 2
-    
-    # 資源限制
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
-    
-    # 掛載設定
-    volumeMounts:
-    - name: config
-      mountPath: /etc/threshold-exporter/conf.d
-      readOnly: true
-  
-  volumes:
-  - name: config
-    configMap:
-      name: threshold-config
-```
+§2、§3 這兩張表有測試比對 handler（`api_readme_examples_parity_test.go`）；兩端點的 Content-Type 見 [OpenAPI spec](./threshold-exporter-openapi.yaml)。Helm chart 的探針設定（liveness、readiness、startup）在 [`values.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/helm/threshold-exporter/values.yaml)，這裡不再複製。
 
 ---
 
-## 4. GET /api/v1/config - Configuration State Debug Endpoint
+## 4. GET /api/v1/config - 設定除錯頁
 
-### 說明
-
-Debug 端點，暴露目前加載的設定狀態以純文字格式。支援 RFC3339 時間戳記查詢參數，用於檢查排程式覆寫在特定時間點的狀態。
-
-### 請求
-
-#### 查詢目前設定
+給人看的純文字頁：目前載入的預設值、各租戶的值、解析後的閾值。格式不是契約，程式要讀請用 §5。
 
 ```bash
-curl -s http://localhost:8080/api/v1/config | head -50
+curl -s http://localhost:8080/api/v1/config
 ```
 
-#### 查詢特定時間點的設定
+加 `?at=<RFC 3339 時間>` 可以看排程式覆寫（時間窗）在那個時間點解析成什麼值，不用等到那個時間。
 
-```bash
-# 查詢 2026-03-12T03:30:00Z 時的排程式覆寫狀態（即下方回應範例）
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z" | head -50
+### 範例
+
+conf.d 裡有這兩個檔：
+
+```yaml
+# _defaults.yaml
+defaults:
+  container_cpu: 80
+  mysql_connections: 80
 ```
 
-### 查詢參數
-
-| 參數 | 型別 | 說明 | 範例 |
-|------|------|------|------|
-| `at` | string (RFC3339) | 檢查設定狀態的時間點。省略時返回目前狀態。 | `2026-03-12T14:30:00Z` |
-
-### 回應
-
-**狀態碼**: 200 OK  
-**Content-Type**: `text/plain`
-
-### 回應範例
-
-以下是輸出（`handlers.go` 的 `configViewHandler`；一個 `_defaults.yaml` 加一個租戶檔、帶 `?at=` 時）。
-
+```yaml
+# tenant-a.yaml
+tenants:
+  tenant-a:
+    container_cpu:
+      default: "85"
+      overrides:
+        - window: "01:00-09:00"
+          value: "95"
+    mysql_connections: "70"
 ```
+
+`curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z"` 的輸出（03:30 落在時間窗內，所以 `container_cpu` 解析成 95；各段內的行序不固定）：
+
+```text
 Config loaded: true
 Last reload:   2026-03-12T10:05:30Z
 Config mode:   directory
@@ -254,25 +147,7 @@ Resolved thresholds:
   tenant=tenant-a metric=connections value=70 severity=warning component=mysql
 ```
 
-### 常見用途
-
-#### 1. 驗證租戶設定已正確載入
-
-```bash
-curl -s http://localhost:8080/api/v1/config | grep -A 20 "^Tenants"
-```
-
-#### 2. 檢查排程式覆寫在特定時間點的狀態
-
-```bash
-curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T10:30:00Z" | grep -A 50 "^Resolved thresholds"
-```
-
-#### 3. 確認最後重新載入時間與載入模式
-
-```bash
-curl -s http://localhost:8080/api/v1/config | head -3
-```
+這個範例有測試實跑：把上面兩個 yaml 放進空目錄載入，再比對輸出（`api_readme_examples_parity_test.go`）。
 
 ---
 
@@ -308,100 +183,41 @@ curl -s http://localhost:8080/api/v1/config/identity
 
 ---
 
-## Prometheus Scrape Configuration
+## Prometheus 抓取設定
 
-### 簡單設定
-
-```yaml
-scrape_configs:
-  - job_name: threshold-exporter
-    static_configs:
-      - targets: ['localhost:8080']
-    scrape_interval: 30s
-    scrape_timeout: 10s
-```
-
-### Kubernetes 服務發現設定
-
-```yaml
-scrape_configs:
-  - job_name: threshold-exporter
-    kubernetes_sd_configs:
-      - role: pod
-        namespaces:
-          names:
-            - monitoring
-    relabel_configs:
-      # 只抓取標有 'app=threshold-exporter' 的 Pod
-      - source_labels: [__meta_kubernetes_pod_label_app]
-        action: keep
-        regex: threshold-exporter
-      
-      # 使用 Pod 名稱作為實例標籤
-      - source_labels: [__meta_kubernetes_pod_name]
-        action: replace
-        target_label: instance
-      
-      # 添加叢集標籤
-      - source_labels: [__meta_kubernetes_namespace]
-        action: replace
-        target_label: cluster
-    
-    scrape_interval: 30s
-    scrape_timeout: 10s
-```
+- Helm chart 在 `rules.mode: operator` 時會建立 ServiceMonitor（[`servicemonitor.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/helm/threshold-exporter/templates/servicemonitor.yaml)）。
+- 自管的 Prometheus 照 [BYOP 整合指南](../integration/byo-prometheus-integration.md)「步驟 2：抓取 threshold-exporter」。
 
 ---
 
 ## 故障排查
 
-### 問題：readinessProbe 返回 503，"config not loaded"
+### `/ready` 一直回 503
 
-**原因：** 設定檔未被正確掛載或加載失敗。
+exporter 還沒成功載入過設定。看 log 裡的錯誤，並確認 conf.d 有掛進去（Helm chart 掛在 `/etc/threshold-exporter/conf.d`）：
 
-**解決方案：**
 ```bash
-# 檢查 Pod 日誌
 kubectl logs <pod-name> -n monitoring
-
-# 驗證 ConfigMap 是否存在
-kubectl get configmap threshold-config -n monitoring
-
-# 檢查 ConfigMap 內容
-kubectl get configmap threshold-config -n monitoring -o yaml
-
-# 驗證掛載路徑
 kubectl exec <pod-name> -n monitoring -- ls -la /etc/threshold-exporter/conf.d/
 ```
 
-### 問題：/metrics 端點返回空結果或缺少預期指標
+### `/metrics` 少了預期的指標
 
-**原因：** 租戶設定未加載或設定有語法錯誤。
+先看設定裡有沒有那個租戶與 key：
 
-**解決方案：**
 ```bash
-# 檢查設定除錯端點
-curl -s http://<pod-ip>:8080/api/v1/config | head -100
-
-# 查看 Pod 事件日誌
-kubectl describe pod <pod-name> -n monitoring
-
-# 檢查設定驗證日誌
-kubectl logs <pod-name> -n monitoring | grep -i "validation\|error"
+curl -s http://<pod-ip>:8080/api/v1/config | grep -A 20 "^Tenants"
 ```
 
-### 問題：設定變更後指標未更新
+### 改了設定，指標沒變
 
-**原因：** 設定重新載入失敗或尚未觸發。
+先看 exporter 目前服務的是哪一版，以及有沒有檔案因為 parse 失敗被排除（欄位意義見 §5）：
 
-**解決方案：**
 ```bash
-# 檢查 ConfigMap 的更新時間
-kubectl get configmap threshold-config -n monitoring -o wide
-
-# 查看設定重新載入日誌
-kubectl logs <pod-name> -n monitoring | tail -50
+curl -s http://<pod-ip>:8080/api/v1/config/identity
 ```
+
+`last_reload` 沒變表示還沒有新版設定裝上，可能是：ConfigMap 的變更還沒被 kubelet 同步進 Pod、還沒到下一次輪詢（`-reload-interval`），或這次載入失敗（錯誤在 log 裡）。`parse_failed` 列出的檔案沒有被採用，原因在 log 裡。
 
 ---
 

@@ -49,23 +49,21 @@ import (
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // Common error codes. Add new ones here as new error classes appear;
 // keeping them in a single var block makes the catalog grep-able.
 const (
-	CodeInvalidBody     = "INVALID_BODY"
-	CodePolicyViolation = "POLICY_VIOLATION"
-	CodeRateLimited     = "RATE_LIMITED"
-	CodePendingPR       = "PENDING_PR_EXISTS"
-	CodeTaskNotFound    = "TASK_NOT_FOUND"
-	CodeForbidden       = "FORBIDDEN"
-	CodeNotFound        = "NOT_FOUND"
-	CodeConflict        = "CONFLICT"
-	CodeBadRequest      = "BAD_REQUEST"
-	CodeInternal        = "INTERNAL_ERROR"
+	CodeInvalidBody  = "INVALID_BODY"
+	CodeRateLimited  = "RATE_LIMITED"
+	CodePendingPR    = "PENDING_PR_EXISTS"
+	CodeTaskNotFound = "TASK_NOT_FOUND"
+	CodeForbidden    = "FORBIDDEN"
+	CodeNotFound     = "NOT_FOUND"
+	CodeConflict     = "CONFLICT"
+	CodeBadRequest   = "BAD_REQUEST"
+	CodeInternal     = "INTERNAL_ERROR"
 	// CodeConfigDecode marks a 500 whose text describes conf.d content the
 	// server could not decode or merge — /effective's `parse defaults[i]: …`,
 	// a tenant file the custom-alerts or PR-mode write cannot merge, an
@@ -168,14 +166,6 @@ const (
 	// TENANT_TREE_UNREADABLE; tenant_api_store_unreadable_entries counts the
 	// entries, alert TenantApiStoreUnreadable.
 	CodeTenantStoreFault = "TENANT_STORE_FAULT"
-	// CodePolicyUnavailable marks an HTTP 503 from a direct-mode write that
-	// reads the domain policy (PUT /tenants/{id}, a routing op of a tenant or
-	// group batch) while a `_domain_policy.yaml` / `.yml` is present but
-	// cannot be used and has no last good content (hub #2486 Q7-2,
-	// policy.Manager.CheckAvailable). Nothing was written; the write succeeds
-	// once the file is repaired (or removed). Also carried per op on a
-	// direct-mode async batch (BatchResult.Code), judged at execution time.
-	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
 	// CodeMaskedPreviewUnavailable marks a 422 from POST /tenants/{id}/diff
 	// for a caller who may read the tenant but not write it (#1560): the
 	// preview shown to such a caller is computed on the masked form of both
@@ -227,29 +217,6 @@ const (
 	// through the same way with that code.
 	CodeValidatorUnavailable = "VALIDATOR_UNAVAILABLE"
 )
-
-// policyUnavailableRetryAfterS is the Retry-After hint (seconds) on the
-// POLICY_UNAVAILABLE 503: the policy watcher re-reads the files on this
-// order of time (--reload-interval's default), so a repaired file is picked
-// up by then.
-const policyUnavailableRetryAfterS = 30
-
-// msgPolicyUnavailable is the fixed client text of a POLICY_UNAVAILABLE
-// refusal; the file and the reason go to the log only.
-const msgPolicyUnavailable = "the domain policy file cannot be read or parsed and has no last good version, " +
-	"so writes that the domain policy judges are refused; nothing was written — repair the policy file and retry"
-
-// writePolicyUnavailable renders the POLICY_UNAVAILABLE 503 (see
-// CodePolicyUnavailable).
-func writePolicyUnavailable(w http.ResponseWriter, r *http.Request, err error) {
-	slog.Warn("write refused: domain policy unavailable (hub #2486 Q7-2)", "error", err)
-	w.Header().Set("Retry-After", strconv.Itoa(policyUnavailableRetryAfterS))
-	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
-		Error:       msgPolicyUnavailable,
-		Code:        CodePolicyUnavailable,
-		RetryAfterS: policyUnavailableRetryAfterS,
-	})
-}
 
 // notRegularText is the text of a TENANT_CONFIG_NOT_LOADABLE refusal of a
 // tenant file that is not a regular file — the handler's early refusal and
@@ -442,14 +409,13 @@ func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, d *Deps, 
 // previously hid three legacy emitters (access.go / me.go / rbac
 // middleware, migrated in the same change that added the required marks).
 type ErrorResponse struct {
-	Error       string             `json:"error" binding:"required"`
-	Code        string             `json:"code,omitempty" binding:"required"`
-	RequestID   string             `json:"request_id,omitempty"`
-	Violations  []Violation        `json:"violations,omitempty"`
-	PolicyV     []policy.Violation `json:"-"` // marshaled into "violations" key when set
-	RetryAfterS int                `json:"retry_after_s,omitempty"`
-	Help        string             `json:"help,omitempty"`
-	Action      string             `json:"action,omitempty"`
+	Error       string      `json:"error" binding:"required"`
+	Code        string      `json:"code,omitempty" binding:"required"`
+	RequestID   string      `json:"request_id,omitempty"`
+	Violations  []Violation `json:"violations,omitempty"`
+	RetryAfterS int         `json:"retry_after_s,omitempty"`
+	Help        string      `json:"help,omitempty"`
+	Action      string      `json:"action,omitempty"`
 
 	// Extra carries per-error custom fields (existing_pr_url,
 	// pr_number, hint, etc.). Inlined at the top level via the
@@ -467,11 +433,6 @@ type ErrorResponse struct {
 // MarshalJSON inlines Extra at the top level so clients reading
 // e.g. `existing_pr_url` find it next to `error`, matching the
 // pre-PR-9 inline shape.
-//
-// Either Violations (body-validation) or PolicyV (domain policy)
-// can be set, never both. Both render under the same JSON key
-// "violations" — clients parsing the array don't need to know
-// which subsystem produced it.
 func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 	out := map[string]any{"error": e.Error}
 	if e.Code != "" {
@@ -482,8 +443,6 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 	}
 	if len(e.Violations) > 0 {
 		out["violations"] = e.Violations
-	} else if len(e.PolicyV) > 0 {
-		out["violations"] = e.PolicyV
 	}
 	if e.RetryAfterS > 0 {
 		out["retry_after_s"] = e.RetryAfterS
@@ -737,80 +696,6 @@ func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []
 	})
 }
 
-// writePolicyViolation writes a 403 response with domain policy
-// violations. The pre-PR-9 shape included a `help` URL and an
-// actionable `action` string; both preserved.
-func writePolicyViolation(w http.ResponseWriter, r *http.Request, violations []policy.Violation) {
-	WriteErrorEnvelope(w, r, http.StatusForbidden, policyViolationEnvelope("domain policy violation", violations))
-}
-
-// policyViolationEnvelope is the 403 POLICY_VIOLATION body shared by
-// writePolicyViolation and writeFreshBasePolicyViolation.
-func policyViolationEnvelope(msg string, violations []policy.Violation) ErrorResponse {
-	return ErrorResponse{
-		Error:   msg,
-		Code:    CodePolicyViolation,
-		PolicyV: violations,
-		Help:    "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/internal/test-coverage-matrix.md",
-		Action:  "Review the _domain_policy.yaml constraints for this tenant's domain. Contact a platform admin to update the policy if this change is necessary.",
-	}
-}
-
-// freshBasePolicyError is a PR-mode write the domain policy refuses on the
-// FRESH base the feature branch is cut from, after the pre-check on the pod's
-// local tree let it through: a batch op (B2 F1, #2341) or a PUT (Put, #2486).
-// Op is a batch op's index in the request (for /groups/{id}/batch, the
-// member's index in the expansion); a PUT has none.
-//
-// LoadErr set: the base's domain policy file could not be read or parsed,
-// so the write could not be judged and is refused (fail-closed).
-type freshBasePolicyError struct {
-	TenantID   string
-	Op         int
-	Put        bool
-	Violations []policy.Violation
-	LoadErr    error
-}
-
-func (e *freshBasePolicyError) Error() string {
-	subject := fmt.Sprintf("operations[%d] (tenant %s)", e.Op, e.TenantID)
-	check, nothing := "the per-operation check", "Nothing in this batch was written and no PR/MR was opened"
-	if e.Put {
-		subject = fmt.Sprintf("the configuration of tenant %s", e.TenantID)
-		check, nothing = "the first check", "Nothing was written and no PR/MR was opened"
-	}
-	if e.LoadErr != nil {
-		// Fixed text: LoadErr names the server's conf.d path, which only the
-		// server log may see (writeFreshBasePolicyViolation logs it).
-		return fmt.Sprintf("the domain policy file (_domain_policy.yaml or .yml) on the latest base branch cannot be loaded, "+
-			"so %s cannot be judged against it. %s; repair the policy file on the base branch.",
-			subject, nothing)
-	}
-	msgs := make([]string, len(e.Violations))
-	for i, v := range e.Violations {
-		msgs[i] = v.Message
-	}
-	return fmt.Sprintf("domain policy violation on the latest base branch: %s would break it: %s. "+
-		"This server's local config is behind the base branch, so %s did not catch it. %s.",
-		subject, strings.Join(msgs, "; "), check, nothing)
-}
-
-// writeFreshBasePolicyViolation answers a freshBasePolicyError with the
-// same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the
-// tenant and, for a batch, the op.
-func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *freshBasePolicyError) {
-	if e.LoadErr != nil {
-		slog.Error("PR write refused: domain policy on the fresh base cannot be loaded",
-			"tenant", e.TenantID, "error", e.LoadErr)
-	}
-	env := policyViolationEnvelope(e.Error(), e.Violations)
-	env.Extra = map[string]any{"tenant_id": e.TenantID}
-	if !e.Put {
-		env.Extra["operation"] = e.Op
-	}
-	WriteErrorEnvelope(w, r, http.StatusForbidden, env)
-}
-
 // freshBaseScopeError is a PR-mode write the metadata write scope refuses on
 // the FRESH base the feature branch is cut from (#2857), although the check
 // on the pod's local tree let it through. Two halves:
@@ -820,8 +705,8 @@ func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *fr
 //   - otherwise the post-state: the content this write would leave places
 //     the tenant outside the caller's scope.
 //
-// Put marks a single-tenant PUT; otherwise Op is the batch op's index, as in
-// freshBasePolicyError.
+// Put marks a single-tenant PUT; otherwise Op is the batch op's index in the
+// request (for /groups/{id}/batch, the member's index in the expansion).
 type freshBaseScopeError struct {
 	TenantID string
 	Op       int

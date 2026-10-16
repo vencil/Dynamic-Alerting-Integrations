@@ -2,10 +2,10 @@ package handler
 
 // B2 (#2341): a batch op's `unset` removes keys from the tenant block — only
 // `_routing`, which turns routing back on for a tenant a disabling
-// `_routing` turned off. That removal is a routing change, so it is judged by
-// domain policy like a `_routing` patch, on /tenants/batch and
-// /groups/{id}/batch, in both write modes, and in PR mode stacked over the
-// same tenant's earlier ops of the request (batchRoutingViolations' prior).
+// `_routing` turned off, on /tenants/batch and /groups/{id}/batch, in both
+// write modes. tenant-api does not judge the routing that results (#2903:
+// the route generator judges the tree with the whole batch applied; these
+// fixtures run without one), so the ops below are written as merged.
 
 import (
 	"encoding/json"
@@ -67,50 +67,26 @@ func TestBatchTenants_UnsetRoutingReenables(t *testing.T) {
 	}
 }
 
-// Re-enabling a disabled tenant whose profile breaks the domain policy is
-// refused, and nothing is written (PR mode: no PR, the only op is refused).
-func TestBatchTenants_UnsetRoutingJudgedByPolicy(t *testing.T) {
-	for _, mode := range bothModes {
-		t.Run(string(mode), func(t *testing.T) {
-			results, file := runOffBatch(t, mode, offDisabledChat, "["+unsetRoutingOp+"]")
-			if len(results) != 1 || results[0].Status != "error" || !strings.Contains(results[0].Message, "policy violation") ||
-				!strings.Contains(results[0].Message, "routing profile 'team-chat'") {
-				t.Fatalf("results = %+v, want the op refused naming the profile", results)
-			}
-			want := ""
-			if mode == WriteModeDirect {
-				want = "tenants:\n  t-off:\n    cpu_usage_percent: '85'\n" + offDisabledChat
-			}
-			if file != want {
-				t.Errorf("refused op wrote t-off.yaml:\n%s", file)
-			}
-		})
-	}
-}
-
-// Two ops on one tenant in one request: both write modes judge each over the
-// ones before it (direct mode since #2900; before, it read the file back
-// after writing). The verdicts are the same; a refused op2 rejects the batch,
-// so op1 does not land either.
+// Two ops on one tenant in one request: both write modes merge each over the
+// ones before it (direct mode since #2900), and every one lands.
 func TestBatchTenants_UnsetRoutingStacked(t *testing.T) {
 	cases := []struct {
 		name, ops, want string // want: statuses, "ok" standing for okStatus(mode)
 		file            func(string) bool
 	}{
-		// op1 is allowed (still disabled); op2 re-enables over op1's profile.
+		// op1 sets a profile; op2 re-enables routing over it.
 		{"profile then unset", `[
 			{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},` + unsetRoutingOp + `]`,
-			"not_applied,error", func(f string) bool {
-				return !strings.Contains(f, "team-chat")
+			"ok,ok", func(f string) bool {
+				return !hasRoutingKey(f) && strings.Contains(f, "team-chat")
 			}},
-		// op1 re-enables (compliant); op2 then points the ENABLED tenant at
-		// the violating profile.
+		// op1 re-enables; op2 then points the enabled tenant at a profile.
 		{"unset then profile", `[` + unsetRoutingOp + `,
 			{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`,
-			"not_applied,error", func(f string) bool {
-				return !strings.Contains(f, "team-chat")
+			"ok,ok", func(f string) bool {
+				return !hasRoutingKey(f) && strings.Contains(f, "team-chat")
 			}},
-		// An unrelated op after the re-enable is not judged.
+		// An unrelated op after the re-enable.
 		{"unset then unrelated", `[` + unsetRoutingOp + `,
 			{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}}]`,
 			"ok,ok", func(f string) bool {
@@ -147,7 +123,7 @@ func TestBatchTenants_DisableStackedUnderProfile(t *testing.T) {
 			if got := statuses(results); got != want {
 				t.Fatalf("statuses = %s, want %s: %+v", got, want, results)
 			}
-			if !strings.Contains(file, "team-chat") || !strings.Contains(file, "_routing: disable") {
+			if !strings.Contains(file, "team-chat") || !strings.Contains(file, `_routing: "disable"`) {
 				t.Errorf("t-off.yaml must carry both ops:\n%s", file)
 			}
 		})
@@ -252,8 +228,7 @@ func TestGroupBatch_UnsetValidation(t *testing.T) {
 	}
 }
 
-// unsetGroupTree: g-fin = a disabled member on the compliant profile and a
-// disabled member on the violating one.
+// unsetGroupTree: g-fin = two disabled members on different profiles.
 func unsetGroupTree() map[string]string {
 	files := routingPolicyTree()
 	files["_domain_policy.yaml"] = "domain_policies:\n  finance:\n    tenants: [t-g-ok, t-g-chat]\n" +
@@ -274,23 +249,19 @@ func TestGroupBatch_UnsetRouting(t *testing.T) {
 			for _, r := range resp.Results {
 				got[r.TenantID] = r
 			}
-			// #2900: the refused member rejects the whole group batch.
-			if resp.Status != batchStatusRejected {
-				t.Errorf("status = %q, want rejected", resp.Status)
-			}
-			if r := got["t-g-ok"]; r.Status != resultNotApplied {
-				t.Errorf("t-g-ok = %+v, want not_applied", r)
-			}
-			if r := got["t-g-chat"]; r.Status != "error" || !strings.Contains(r.Message, "policy violation") {
-				t.Errorf("t-g-chat = %+v, want refused for domain policy", r)
-			}
-			if f.head != "" {
-				t.Errorf("rejected group batch opened a PR on %s", f.head)
-			}
-			for _, name := range []string{"t-g-ok.yaml", "t-g-chat.yaml"} {
-				if b, _ := os.ReadFile(filepath.Join(f.configDir, name)); string(b) != files[name] {
-					t.Errorf("rejected group batch changed %s:\n%s", name, b)
+			for _, id := range []string{"t-g-ok", "t-g-chat"} {
+				if r := got[id]; r.Status != okStatus(mode) {
+					t.Errorf("%s = %+v, want %s", id, r, okStatus(mode))
 				}
+			}
+			if mode == WriteModeDirect {
+				for _, name := range []string{"t-g-ok.yaml", "t-g-chat.yaml"} {
+					if b, _ := os.ReadFile(filepath.Join(f.configDir, name)); hasRoutingKey(string(b)) {
+						t.Errorf("%s still carries _routing:\n%s", name, b)
+					}
+				}
+			} else if f.head == "" {
+				t.Error("no PR opened")
 			}
 		})
 	}

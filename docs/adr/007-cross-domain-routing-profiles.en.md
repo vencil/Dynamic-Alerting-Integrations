@@ -116,7 +116,7 @@ Once a tenant complies, every non-PagerDuty destination that can still receive a
 
 Whether the main receiver is PagerDuty does not change the verdict for a sub-route: the critical alerts a sub-route catches would otherwise have reached a later escalation destination. The WARN says critical alerts land on the main receiver only when N is the main receiver itself. The check is exact only within the tenant route's sub-tree and only for equality matchers. Two things fall outside its model. First, platform routes placed ahead of the tenant route (e.g. `alertname="Watchdog"` or the `component="sentinel"` route) are not considered, so a sub-route whose match names those values may be reported although it never receives an alert; this part can only over-report. Second, a sub-route whose receiver content is invalid, which the generator does not render, is still treated as present: it may itself be over-reported, and it may make a later N look already caught and so be under-reported. The custom sub-tree carries the same sub-routes, so the verdict holds there too (#2342).
 
-Both Go planes enforce the same constraint with the same criterion (#2325, `pkg/routingpolicy`, pinned to the generator by the `escalation` column of `tests/shared/routing_policy_parity_matrix.json`): da-guard reports non-compliance as `critical_escalation_missing` (error) and each WARN above as `critical_escalation_leak` (warn); tenant-api refuses a non-compliant PUT (403 `POLICY_VIOLATION`) or batch op (that op's `status: error`), and returns a leak only in a successful response's `warnings` without blocking the write. tenant-api judges a tenant only when that tenant is written, so editing a routing profile or the domain policy file itself does not re-judge existing tenants.
+da-guard enforces the same constraint with the same criterion (#2325, `pkg/routingpolicy`, pinned to the generator by the `escalation` column of `tests/shared/routing_policy_parity_matrix.json`): it reports non-compliance as `critical_escalation_missing` (error) and each WARN above as `critical_escalation_leak` (warn). tenant-api does not judge it itself: every write is judged by the generator over the whole tree after the write, and non-compliance is a 422 `GENERATOR_FINDINGS` ([ADR-036](036-single-parser-effective-config.en.md) §4); a WARN does not block the write. Because the whole tree is judged, after a routing profile or the domain policy file changes, any write through tenant-api meets the existing tenants' non-compliance.
 
 ### Why Reject Three-Layer Contact Profile Model
 
@@ -290,8 +290,9 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 generator, `check_routing_profiles` and da-guard (`pkg/routingpolicy.LoadTree`) read
 `_routing_profiles.yaml` and `_domain_policy.yaml` at every level. A profile name defined twice
 is refused with the other blocking tree errors (generator exit 2; the first definition in
-root-first name order is kept and the later file is named). ⚠️ tenant-api serves tenant files
-at the root only; its write-time policy check still reads the root `_domain_policy.yaml` only.
+root-first name order is kept and the later file is named). tenant-api serves tenant files
+at the root only; its write-time policy judgement is the generator's over the whole tree, reading
+`_domain_policy.yaml` at every level ([ADR-036](036-single-parser-effective-config.en.md) §4).
 
 In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md)):
 

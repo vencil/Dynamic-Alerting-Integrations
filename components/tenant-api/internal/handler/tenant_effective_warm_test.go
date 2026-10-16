@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -147,7 +146,7 @@ func TestGetTenantEffective_SeesThePutBeforeIt(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "t1.yaml"), "tenants:\n  t1:\n    mysql_connections: \"61\"\n")
 	initGitRepo(t, dir)
 	ageConfDir(t, dir)
-	d := &Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, dir), Policy: policy.NewManager(dir), WriteMode: WriteModeDirect}
+	d := &Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, dir), WriteMode: WriteModeDirect}
 	get, put := GetTenantEffective(d), PutTenant(d)
 	value := func() string {
 		t.Helper()

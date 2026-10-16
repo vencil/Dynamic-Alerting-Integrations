@@ -25,8 +25,9 @@ package routingpolicy
 //
 //	UPDATE_GO_VERDICTS=1 go test ./pkg/routingpolicy/ -run TestMergeKeyCorpus -count=1
 //
-// and the regenerated diff then has to pass the catalog test. tenant-api's
-// half is components/tenant-api/internal/policy/merge_key_corpus_test.go.
+// and the regenerated diff then has to pass the catalog test. (tenant-api
+// had a half of its own until #2903 took routing / policy judgement out of
+// it.)
 
 import (
 	"bytes"
@@ -218,9 +219,8 @@ func readGoVerdicts(t *testing.T) goVerdictsFile {
 }
 
 // writeGoVerdicts renders the snapshot deterministically: `_comment`, then
-// each reader sorted by name, its rows sorted by id, one row a line. The
-// tenant-api test renders the same way, so either rewrites the other's
-// entries byte for byte.
+// each reader sorted by name, its rows sorted by id, one row a line, so a
+// rewrite leaves any other reader's entries byte for byte.
 func writeGoVerdicts(t *testing.T, f goVerdictsFile) {
 	t.Helper()
 	var b strings.Builder

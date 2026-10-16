@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +28,8 @@ import (
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // wantNotLoadableCode is the error code of the refusal (#2373 review round 3,
@@ -571,6 +574,131 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 			}
 			if after != broken {
 				t.Errorf("file changed on a refused PUT:\n%s", after)
+			}
+		})
+	}
+}
+
+// #2903 (ADR-036 §4): a file threshold-exporter loads (GET reports no
+// config_error) whose re-encode would change content a partial write does
+// not edit (verifyPartialWrite) is refused by every partial write,
+// config_error not_round_trippable, and its bytes stay.
+// batch_patch_diff_test.go holds the invariant to the generator itself.
+var roundTripRejFiles = []struct {
+	name, body string
+}{
+	{"multiple_documents", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
+		"---\ntenants:\n  db-z:\n    mysql_connections: \"1\"\n"},
+	{"shared_block", "tenants:\n  db-a: &b\n    mysql_connections: \"70\"\n" + rejExistingAlert + "  db-z: *b\n"},
+	{"block_scalar_leading_blank", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
+		"  db-z:\n    _metadata:\n      owner: |-\n\n        team\n"},
+}
+
+func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, c := range roundTripRejFiles {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := rejDir(t, c.body)
+			path := filepath.Join(dir, "db-a.yaml")
+			before := mustRead(t, path)
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+
+			// GET still serves it: the exporter loads the file.
+			gw := servePopulatingRBAC(t, GetTenant(deps),
+				newRequestWithChiParam("GET", "/api/v1/tenants/db-a", "id", "db-a", nil), "alice@example.com", []string{"dba"})
+			var got struct {
+				SourceHash   string           `json:"source_hash"`
+				CustomAlerts []map[string]any `json:"custom_alerts"`
+				ConfigError  string           `json:"config_error"`
+			}
+			if err := json.Unmarshal(gw.Body.Bytes(), &got); err != nil || gw.Code != http.StatusOK || got.ConfigError != "" {
+				t.Fatalf("GET = %d %s (%v); want 200 without config_error", gw.Code, gw.Body.String(), err)
+			}
+
+			// PUT .../custom-alerts: 409 with the generator's reason.
+			list := append(got.CustomAlerts, map[string]any{
+				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
+			})
+			body, _ := json.Marshal(map[string]any{"base_hash": got.SourceHash, "custom_alerts": list})
+			resp := putCustomAlerts(t, deps, "db-a", string(body), "alice@example.com", []string{"dba"})
+			rb, _ := readBody(resp)
+			var env map[string]any
+			if err := json.Unmarshal([]byte(rb), &env); err != nil {
+				t.Fatalf("unmarshal %s: %v", rb, err)
+			}
+			if resp.StatusCode != http.StatusConflict || env["code"] != wantNotLoadableCode ||
+				env["tenant_id"] != "db-a" || env["config_error"] != "not_round_trippable" {
+				t.Errorf("custom-alerts: %d %v; want 409 %s, config_error not_round_trippable", resp.StatusCode, env, wantNotLoadableCode)
+			}
+			if msg, _ := env["error"].(string); strings.Contains(msg, "db-z") {
+				t.Errorf("the refusal names another tenant: %q", msg)
+			}
+			if msg, _ := env["error"].(string); !strings.Contains(msg, "change content the update does not edit") {
+				t.Errorf("custom-alerts message does not say the file would not round-trip: %q", msg)
+			}
+
+			// The batch patch (POST /tenants/batch direct mode, the group batch).
+			res := applyPatch(context.Background(), newTestWriter(dir), dir,
+				BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}}, "op@example.com")
+			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "config_error: not_round_trippable") {
+				t.Errorf("batch: result = %+v, want %s naming config_error not_round_trippable", res, wantNotLoadableCode)
+			}
+			if after := mustRead(t, path); after != before {
+				t.Errorf("file changed:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+		})
+	}
+}
+
+// PR mode judges the base the PR branches from: the same refusal, no PR.
+func TestBatchTenants_PRMode_RefusesBaseThatCannotRoundTrip(t *testing.T) {
+	for _, c := range roundTripRejFiles {
+		t.Run(c.name, func(t *testing.T) {
+			dir := setupConfigDir(t, map[string]string{"db-a.yaml": c.body, "db-b.yaml": rejHealthyB, "_defaults.yaml": caDefaults})
+			initGitRepo(t, dir)
+			runGit(t, dir, "branch", "-M", "main")
+			w, created := prBatchRun(t, dir, rejTwoOps)
+			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: not_round_trippable")
+			if created {
+				t.Error("a PR was created over a base that cannot round-trip")
+			}
+		})
+	}
+}
+
+// #2903: no refusal of a partial write quotes another tenant's value. The
+// file db-a shares with db-z holds, in db-z's block, values a decoder or the
+// round-trip check chokes on; the custom-alerts PUT and the batch (direct
+// and PR mode) for db-a must answer without any of them.
+func TestPartialWrites_NeverQuoteAnotherTenantsValue(t *testing.T) {
+	for i, other := range []string{
+		"    secret_x: !!int SECRETINT\n",
+		"    _routing:\n      receiver: {type: webhook, url: !!timestamp \"SECRETTS\"}\n",
+		"    k: !!binary \"@@SECRETBIN@@\"\n",
+		"    b: |\n\n      SECRETMULTI\n",
+		"    k: [1:20, SECRETFLOW]\n",
+		"    secret_y: SECRETDUP\n    secret_y: SECRETDUP2\n",
+		"    _metadata: {owner: SECRETMETA, owner: x}\n",
+	} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			file := "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert + "  db-z:\n" + other
+			dir := rejDir(t, file)
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+			body, _ := json.Marshal(map[string]any{"base_hash": cfg.ComputeSourceHash([]byte(file)),
+				"custom_alerts": []map[string]any{{"recipe": "threshold", "name": "n", "metric": "m", "threshold": "2", "window": "5m"}}})
+			resp := putCustomAlerts(t, deps, "db-a", string(body), "alice@example.com", []string{"dba"})
+			ca, _ := readBody(resp)
+			res := applyPatch(context.Background(), newTestWriter(dir), dir,
+				BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "warning"}}, "op@example.com")
+			pdir := setupConfigDir(t, map[string]string{"db-a.yaml": file, "db-b.yaml": rejHealthyB, "_defaults.yaml": caDefaults})
+			initGitRepo(t, pdir)
+			runGit(t, pdir, "branch", "-M", "main")
+			w, _ := prBatchRun(t, pdir, rejTwoOps)
+			for name, txt := range map[string]string{"custom-alerts": ca, "batch": res.Message, "pr batch": w.Body.String()} {
+				if strings.Contains(txt, "SECRET") {
+					t.Errorf("%s quotes db-z's value: %s", name, txt)
+				}
 			}
 		})
 	}

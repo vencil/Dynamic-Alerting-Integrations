@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/vencil/tenant-api/internal/policy"
 )
 
 // requestWithID returns a *http.Request whose context carries the
@@ -89,40 +88,6 @@ func TestWriteValidationErrors_Shape(t *testing.T) {
 	}
 	if len(vs) != 2 {
 		t.Errorf("violations len = %d, want 2", len(vs))
-	}
-}
-
-func TestWritePolicyViolation_Shape(t *testing.T) {
-	t.Parallel()
-	w := httptest.NewRecorder()
-	r := requestWithID("PUT", "/x", "req-policy")
-	violations := []policy.Violation{
-		{Domain: "finance", Constraint: "forbidden_receiver_types", Message: "slack forbidden"},
-	}
-	writePolicyViolation(w, r, violations)
-
-	if w.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", w.Code)
-	}
-	var resp map[string]any
-	_ = json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp["error"] != "domain policy violation" {
-		t.Errorf("error = %q", resp["error"])
-	}
-	if resp["code"] != CodePolicyViolation {
-		t.Errorf("code = %q", resp["code"])
-	}
-	// help + action preserved (pre-PR-9 shape).
-	if resp["help"] == "" || resp["help"] == nil {
-		t.Error("help missing")
-	}
-	if resp["action"] == "" || resp["action"] == nil {
-		t.Error("action missing")
-	}
-	// violations array still rendered under "violations" key
-	// (caller can't tell it came from policy.Violation vs Violation).
-	if _, ok := resp["violations"].([]any); !ok {
-		t.Errorf("violations not array: %T", resp["violations"])
 	}
 }
 

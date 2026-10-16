@@ -44,7 +44,6 @@ import (
 var domainPackages = []string{
 	"internal/customalerts",
 	"internal/groups",
-	"internal/policy",
 	"internal/rbac",
 	"internal/views",
 }

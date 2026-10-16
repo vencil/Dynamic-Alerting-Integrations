@@ -43,7 +43,6 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // Violation describes one body-validation failure. Exported because
@@ -190,7 +189,6 @@ var reservedKeyValidators = map[string]reservedKeyValidator{
 	"_timeout_ms":      validateNonNegativeIntCap(3_600_000), // ≤ 1h
 	"_routing_profile": validateProfileReference,
 	"_profile":         validateProfileReference,
-	"_routing":         validateRoutingPatch,
 	"_metadata":        rejectMetadataPatch,
 }
 
@@ -244,21 +242,6 @@ func validateNonNegativeIntCap(maxVal int64) reservedKeyValidator {
 		}
 		return ""
 	}
-}
-
-// validateRoutingPatch (#2341): a flat patch value is a string scalar, so the
-// only `_routing` it can write that the route generator reads is a disabling
-// string — routingpolicy.IsDisabled, the same set as the generator's
-// _lib_validation.is_disabled. Anything else (`on`, `slack`, an empty or
-// blank string — and a JSON null, which decodes to "") would write a
-// `_routing` the generator refuses and renders nothing for.
-func validateRoutingPatch(value string) string {
-	if routingpolicy.IsDisabled(value) {
-		return ""
-	}
-	return fmt.Sprintf("a batch patch can only turn routing off: _routing must be a disabling string "+
-		"(disable, disabled, off, false), got %q; to turn routing back on, PUT the tenant with a _routing "+
-		"mapping, or remove _routing with unset: [\"_routing\"] in the batch", value)
 }
 
 // validateProfileReference enforces the length cap on a profile-name
@@ -316,8 +299,8 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 		}
 		// #2983: a `_routing`-prefixed key the route generator does not read
 		// (`_routing_profle`, the flat `_routing_receiver_type`) — refused
-		// here, before the domain policy is consulted, so the answer names
-		// the key rather than a policy verdict on a value nothing renders.
+		// here, so the answer names the key rather than a generator finding
+		// on a value nothing renders.
 		if cfg.IsUnknownRoutingKey(k, false) {
 			violations = append(violations, Violation{
 				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
@@ -346,8 +329,8 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 // allowlist, unlike the patch's soft one: removing a key is not judged by any
 // value rule, so each key admitted here must be one whose removal the write
 // path is known to handle — `_routing`, whose removal resets the tenant to
-// `_routing_defaults` + its profile and is judged by domain policy
-// (touchesRouting). Widening it is one entry here plus the docs — and, for
+// `_routing_defaults` + its profile (the route generator judges the result,
+// #2903). Widening it is one entry here plus the docs — and, for
 // `_metadata` or `_profile`, touchesScopeMetadata, which judges only the patch.
 var unsetAllowedKeys = map[string]bool{
 	"_routing": true,
@@ -434,19 +417,3 @@ func validateFilterMap(filters map[string]string, fieldPrefix string) []Violatio
 
 // WriteValidationErrors and the canonical error envelope live in
 // errors.go (PR-9/11 unification).
-
-// flatReceiverTypeViolations refuses a PUT body whose tenant block writes
-// the flat `_routing_receiver_type` (#2903): nothing reads it — the
-// receiver type is `_routing.receiver.type` — and the generator refuses a
-// tree that carries it. A batch patch is refused for it by validatePatchMap.
-// A body that does not parse is left to the checks that own it.
-func flatReceiverTypeViolations(body []byte, tenantID string) []Violation {
-	const key = "_routing_receiver_type"
-	if _, has := extractTenantBlock(body, tenantID)[key]; !has {
-		return nil
-	}
-	return []Violation{{
-		Field:  fmt.Sprintf("tenants.%s.%s", tenantID, key),
-		Reason: "not a key the route generator reads (" + cfg.UnknownRoutingKeyHint(key, false) + "); it has no effect",
-	}}
-}

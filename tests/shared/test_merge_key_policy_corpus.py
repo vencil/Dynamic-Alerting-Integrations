@@ -62,14 +62,12 @@ cannot tell a blocked file from one that enforces nothing. The Go halves
 hold such a row to "unusable": a Go reader that neither refuses it nor
 reports a blocking problem is looser.
 
-The Go halves read the same rows:
-- components/threshold-exporter/app/pkg/routingpolicy/merge_key_corpus_test.go:
-  da-guard's ParseDomainPolicies says what PyYAML says, or what
-  tests/shared/merge_key_go_verdicts.json records for that row.
-- components/tenant-api/internal/policy/merge_key_corpus_test.go: tenant-api's
-  parseConfig says what PyYAML says or what that snapshot records — a
-  refusal of a row PyYAML reads is recorded "unusable" (go_refuses).
-The snapshot holds only the rows where a Go reader differs; each is matched
+The Go half reads the same rows:
+components/threshold-exporter/app/pkg/routingpolicy/merge_key_corpus_test.go:
+da-guard's ParseDomainPolicies says what PyYAML says, or what
+tests/shared/merge_key_go_verdicts.json records for that row. (tenant-api's
+half went with its policy reader in #2903: every write is the generator's
+to judge.) The snapshot holds only the rows where a Go reader differs; each is matched
 to an entry of tests/shared/reader_divergence_catalog.yaml, and its direction
 computed, by tests/shared/test_reader_divergence_catalog.py.
 

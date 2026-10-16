@@ -16,6 +16,7 @@ package customalerts
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -66,6 +67,7 @@ func MergeCustomAlerts(rawYAML, tenantID string, recipes []map[string]any) (stri
 		setMapValue(tenantVal, key, seq)
 	}
 
+	DropImplicitTags(&doc)
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	// SetIndent(2) matches the platform's 2-space conf.d convention, under
@@ -127,21 +129,58 @@ func recipeNode(r map[string]any) *yaml.Node {
 	return m
 }
 
-// valueNode renders a recipe field value. String scalars containing a colon
-// (e.g. `value:severity`) or other quote-worthy chars are force double-quoted
-// to match the source convention + stay unambiguous for downstream parsers;
-// nested maps (selectors / selectors_re) and non-strings encode naturally.
+// valueNode renders a recipe field value. Every string is quoted or a block
+// (#2903), whatever it holds: a plain scalar is read by each YAML reader by
+// its own rules (`1:20` is an integer to PyYAML, `2001-12-14t21:59:43` a
+// datetime), so only a quoted one or a block scalar is a string to all of
+// them. A string with a line break is a literal block (`|`), so a diff shows
+// its lines, when that block reads back as the same text (see
+// literalBlockKeeps); any other string is double-quoted. Numbers
+// and bools encode as their type; nested maps (selectors / selectors_re) are
+// rendered with the same rule for their string values.
 func valueNode(v any) *yaml.Node {
 	if s, ok := v.(string); ok {
-		n := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}
-		if strings.ContainsAny(s, ":#") || s == "" || strings.TrimSpace(s) != s {
-			n.Style = yaml.DoubleQuotedStyle
+		style := yaml.DoubleQuotedStyle
+		if strings.Contains(s, "\n") && literalBlockKeeps(s) {
+			style = yaml.LiteralStyle
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: style}
+	}
+	if m, ok := v.(map[string]any); ok {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		for _, k := range keys {
+			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, valueNode(m[k]))
 		}
 		return n
 	}
 	var n yaml.Node
-	_ = n.Encode(v) // numbers / bools / nested maps (selectors)
+	_ = n.Encode(v) // numbers / bools
 	return &n
+}
+
+// literalBlockKeeps reports whether s, written as a literal block where a
+// recipe value sits, parses and reads back as s. Some texts do not: one
+// opening with a line break loses it (`|2-` reads back without it), and one
+// opening with a tab is written as YAML that does not parse. (A text a block
+// cannot carry at all, e.g. one with trailing spaces, the encoder itself
+// writes double-quoted.)
+func literalBlockKeeps(s string) bool {
+	// An encode error leaves out short, and a text that does not parse leaves
+	// back without it: either way the comparison fails, so neither error is
+	// checked on its own. The block is probed at the top level; the indent
+	// a block scalar carries is relative, so the recipe's nesting reads the
+	// same (TestMerge_MultilineStringIsALiteralBlock reads the file back).
+	out, _ := yaml.Marshal(&yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "v"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.LiteralStyle}}})
+	var back map[string]string
+	_ = yaml.Unmarshal(out, &back)
+	return reflect.DeepEqual(back, map[string]string{"v": s})
 }
 
 // stringTypedContractFields are the recipe fields whose TEXT enters the
@@ -228,5 +267,23 @@ func deleteMapKey(m *yaml.Node, key string) {
 			m.Content = append(m.Content[:i], m.Content[i+2:]...)
 			return
 		}
+	}
+}
+
+// DropImplicitTags clears the tag of every node whose tag was not written
+// (no explicit `!!x`), before a re-encode (#2903). yaml.v3 fills in the tag
+// it resolved, and its encoder writes some of those back out explicitly —
+// a `<<` merge key comes back as `!!merge <<` — so a file would not be
+// re-emitted as it was written. With the tag cleared the encoder resolves
+// it again and writes the node as it came.
+func DropImplicitTags(n *yaml.Node) {
+	if n == nil {
+		return
+	}
+	if n.Kind != yaml.AliasNode && n.Style&yaml.TaggedStyle == 0 {
+		n.Tag = ""
+	}
+	for _, c := range n.Content {
+		DropImplicitTags(c)
 	}
 }
