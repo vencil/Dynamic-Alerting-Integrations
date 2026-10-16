@@ -27,7 +27,7 @@ lang: zh
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (37)
+### accepted (36)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -66,7 +66,6 @@ lang: zh
 | `ADR-035` | adr | ADR-035: tenant id 合法字元集的單一來源 | platform | — | [docs/adr/035-tenant-id-single-source.md](../adr/035-tenant-id-single-source.md) |
 | `ADR-036` | adr | ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
 | `ADR-037` | adr | ADR-037: config-diff 改為比較渲染結果 | platform | — | [docs/adr/037-config-diff-compares-rendered-output.md](../adr/037-config-diff-compares-rendered-output.md) |
-| `ADR-038` | adr | ADR-038: Keys No Reader Reads Are Judged by Measurement; Reserved Keys Are Declared in One Registry | platform | — | [docs/adr/038-unread-keys-judged-by-readers.en.md](../adr/038-unread-keys-judged-by-readers.en.md) |
 | `ADR-038` | adr | ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告 | platform | — | [docs/adr/038-unread-keys-judged-by-readers.md](../adr/038-unread-keys-judged-by-readers.md) |
 
 ### proposed (16)
