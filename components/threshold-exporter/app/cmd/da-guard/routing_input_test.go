@@ -137,6 +137,10 @@ func withRoutingInput(in guard.CheckInput, scoped *config.ScopedTenants, configD
 // guard over the exporter's resolution of configDir with the routing inputs
 // above. stop is non-nil when the exporter refuses the tree before any check
 // (a duplicate tenant id: ScopeEffective's error).
+//
+// ⛔ Test-only since #2904: the CLI no longer runs these checks. This helper
+// and withRoutingInput go with the Go routing code (internal/guard routing,
+// pkg/routingpolicy) in ADR-036 step 3 (#2905).
 func routingGuardFindings(t *testing.T, configDir string) (findings []jsonFinding, parseFailed []string, stop error) {
 	t.Helper()
 	scoped, err := config.ScopeEffective(configDir, "")

@@ -28,7 +28,7 @@ Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped �
 | 工具 | 介面 | 用途 |
 |---|---|---|
 | `da-tools` | Python CLI | 既有 41+ 個運維 / 配置生成 / 政策評估子命令；新增 `guard` + `batch-pr` + `parser` 子命令 wrapping da-guard / da-batchpr / da-parser |
-| `da-guard` | Go binary | Dangling Defaults Guard CLI（schema / routing / cardinality / redundant-override 四層檢查）|
+| `da-guard` | Go binary | Dangling Defaults Guard CLI（schema / cardinality / redundant-override 檢查；路由與 domain policy 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起交給 `da-tools generate-routes --validate --strict`，樹上有這類內容時 exit 4）|
 | `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI（apply / refresh / refresh-source 子命令；plan → 開 PR → Base merge 後 rebase / data-layer hot-fix）|
 | `da-parser` | Go binary | PromRule parser CLI（import / allowlist 子命令；strict-PromQL 相容性檢查 + dialect / VM-only 函數分類；anti-vendor-lock-in）|
 
@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` caller error / `3` exporter 無法 decode 的設定檔（見 [cli-reference §guard](cli-reference.md#guard)）。完整 flag 參考見 `components/threshold-exporter/README.md` § da-guard CLI（位於 MkDocs site 範圍外，請從 GitHub 端開啟）。
+Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` caller error / `3` exporter 無法 decode 或讀不到的設定檔 / `4` 未判定（樹上有路由或 domain policy，da-guard 不判，改跑 `da-tools generate-routes --validate --strict`）；優先序與完整定義見 [cli-reference §guard](cli-reference.md#guard)。完整 flag 參考見 `components/threshold-exporter/README.md` § da-guard CLI（位於 MkDocs site 範圍外，請從 GitHub 端開啟）。
 
 ---
 
@@ -325,7 +325,7 @@ cd <customer-repo>/conf.d
 da-guard --config-dir . --required-fields cpu --format md
 ```
 
-預期輸出：`✅ No findings — defaults change is safe to merge.`（或 `❌ N errors found, M warnings`）
+預期輸出：`✅ No findings — defaults change is safe to merge.`（exit 0）；有 error 級 finding 時報告列出 `### Errors (block merge)` 表（exit 1）；樹上有路由鍵、`_domain_policy` 等只能由 route generator 判的內容時，報告開頭列出 `### Routing and domain policy: not judged`，結尾為 `No threshold findings; routing and domain policy, listed above, are not judged here (exit 4).`——這時再跑 `da-tools generate-routes --config-dir . --validate --strict`
 
 CI 整合範例見 [`.github/workflows/guard-defaults-impact.yml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/guard-defaults-impact.yml)（da-guard 的 customer template，可整份 copy 過去）。
 

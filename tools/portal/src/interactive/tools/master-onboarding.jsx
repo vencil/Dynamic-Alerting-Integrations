@@ -77,8 +77,8 @@ const IMPORT_STEPS = [
     id: 'guard',
     title: () => t('5. Guard 驗證 Base PR', '5. Guard validates Base PR'),
     desc: () => t(
-      'C-12 Dangling Defaults Guard 自動 PR-time 驗證：(i) Schema validator (ii) ADR-016/017 routing guardrails (iii) Cardinality guard。任一 tenant orphan / cycle / cardinality 超標 → block merge。',
-      'C-12 Dangling Defaults Guard auto-runs at PR time: (i) Schema validator (ii) ADR-016/017 routing guardrails (iii) Cardinality guard. Any orphan tenant / route cycle / cardinality breach → block merge.'
+      'C-12 Dangling Defaults Guard 自動 PR-time 驗證：(i) Schema validator (ii) ADR-016/017 routing guardrails（同一個 workflow 跑 route generator 判；da-guard 自 ADR-036 §9 起不判路由，回 exit 4）(iii) Cardinality guard。任一 tenant orphan / cycle / cardinality 超標 → block merge。',
+      'C-12 Dangling Defaults Guard auto-runs at PR time: (i) Schema validator (ii) ADR-016/017 routing guardrails (judged by the route generator in the same workflow; da-guard no longer judges routing since ADR-036 §9 and exits 4) (iii) Cardinality guard. Any orphan tenant / route cycle / cardinality breach → block merge.'
     ),
     cta: () => t('查看 guard workflow', 'View guard workflow'),
     href: `${REPO_BASE}/.github/workflows/guard-defaults-impact.yml`,

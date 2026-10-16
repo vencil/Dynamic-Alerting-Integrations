@@ -505,3 +505,61 @@ func TestUndetermined_DuplicateTenantOutsideTheScope(t *testing.T) {
 		t.Errorf("scoped: exit %d, undetermined %v; want 4 naming b/tx.yaml", got.code, got.undetermined)
 	}
 }
+
+// The evidence is sorted (file, field, reason), the same list on every run:
+// a tree whose items come from every source (unreadable files, the file loop
+// over a map, nested maps, the duplicate pass after it), with a file and a
+// field that tie on the earlier keys, so no insertion order passes for it.
+func TestUndetermined_EvidenceOrderIsPinned(t *testing.T) {
+	t.Parallel()
+	tenants := "tenants:\n  Tx_1:\n    mysql_connections: \"50\"\n  tx:\n    mysql_connections: \"50\"\n" +
+		"    _routing: {receiver: {type: webhook, url: \"https://t.example/h\"}}\n    _severity_dedup: disable\n"
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"_defaults.yaml":              udDefaults,
+		"_domain_policy.yaml":         "domain_policies: {}\n",
+		"a/tx.yaml":                   tenants,
+		"b/tx.yaml":                   tenants,
+		"team/_notes.yaml":            "note: ! 1\n",
+		"team/_routing_profiles.yaml": "routing_profiles: {}\n",
+	})
+	want := []string{
+		"_domain_policy.yaml  domain_policy",
+		"a/tx.yaml tenants.Tx_1 invalid_tenant_id",
+		"a/tx.yaml tenants.tx._routing routing_key",
+		"a/tx.yaml tenants.tx._severity_dedup routing_key",
+		"b/tx.yaml tenants.Tx_1 duplicate_tenant",
+		"b/tx.yaml tenants.Tx_1 invalid_tenant_id",
+		"b/tx.yaml tenants.tx duplicate_tenant",
+		"b/tx.yaml tenants.tx._routing routing_key",
+		"b/tx.yaml tenants.tx._severity_dedup routing_key",
+		"team/_notes.yaml non_specific_tag generator_unreadable",
+		"team/_routing_profiles.yaml  routing_profiles_file",
+	}
+	for run := 0; run < 20; run++ {
+		var errOut bytes.Buffer
+		got := reasonsOf(undeterminedEvidence(tmp, &errOut))
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d: evidence\n%q\nwant\n%q", run, got, want)
+		}
+		if errOut.Len() != 0 {
+			t.Fatalf("run %d: stderr %q, want none", run, errOut.String())
+		}
+	}
+}
+
+// A tree the walk cannot scan at all is one generator_unreadable item for
+// ".", never an empty list (fail toward undetermined), the reason on stderr.
+func TestUndetermined_UnscannableTreeIsUndetermined(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "missing")
+	var errOut bytes.Buffer
+	got := undeterminedEvidence(root, &errOut)
+	want := []undeterminedItem{{File: ".", Field: "read_failure", Reason: undeterminedGeneratorUnreadable}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("evidence %+v, want %+v", got, want)
+	}
+	if !strings.Contains(errOut.String(), "cannot read the tree as the route generator does") {
+		t.Errorf("stderr %q, want the reason", errOut.String())
+	}
+}

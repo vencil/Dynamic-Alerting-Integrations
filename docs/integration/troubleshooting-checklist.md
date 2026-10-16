@@ -1422,7 +1422,7 @@ diff <(sort /tmp/orphans-before.txt) <(sort /tmp/orphans-after.txt)
 **Cross-ref**：
 - playbook §12 Phase 0: Tier A 撈到 100+ orphan rules
 - playbook §3 Phase 0 narrative「Phase 0 通常的 surprise」（orphan 是最常見的客戶 surprise）
-- §2.2 da-guard 4-layer（Schema 層也會抓 receiver mismatch 之類的 orphan）
+- §2.2 da-guard 4-layer（receiver 與路由自 #2904 起交 `generate-routes --validate --strict` 判，da-guard 回 exit 4）
 
 ---
 
@@ -1446,7 +1446,8 @@ make dc-run CMD="da-tools guard defaults-impact --config-dir conf.d/"
 # 或 Docker（無 dev container 環境）
 docker run --rm -v "$(pwd):/work:ro" -w /work \
     ghcr.io/vencil/da-tools:latest guard defaults-impact --config-dir conf.d/
-# expected: 4 layer 各自 PASS / FAIL 報告，與 CI 等價
+# expected: schema / cardinality / 冗餘 override 的報告；exit 4 表示樹上有路由或 domain policy，
+# 再跑 da-tools generate-routes --config-dir conf.d/ --validate --strict（CI 兩步都跑，見 §2.2.2）
 ```
 
 `make dc-run` 在 vibe 開發環境已對齊 CI 行為；本地綠 = CI 綠（除非 image cache 與 main HEAD 落差大）。
@@ -1462,7 +1463,7 @@ docker run --rm -v "$(pwd):/work:ro" -w /work \
 ```bash
 # 看具體哪個檔、哪個欄位。schema 檢查由 --required-fields 驅動，
 # 留空等於停用該層（見 `da-tools guard defaults-impact --help`）。
-da-tools guard defaults-impact --config-dir conf.d/ --required-fields thresholds.cpu,routing.receiver.type
+da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
 # expected: 報告的 Schema 段落列出檔案路徑 + 缺少的 dotted path
 ```
 
