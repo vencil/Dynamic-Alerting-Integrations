@@ -688,6 +688,11 @@ def load_observed_map(path: Optional[str] = None) -> dict[str, dict[str, Any]]:
     passed with every alert key a WARN-only gap — a packaging or path slip
     looked like a clean run (the #1501 shape: "found nothing" is not "nothing
     to find"). The generator itself only loads a map that exists.
+
+    An entry that is not a mapping, or whose ``observed_series`` /
+    ``direction`` / ``scope`` is not a string or ``candidates`` not a list of
+    strings, is ``"unreadable"`` too (one line naming the key), so the
+    generator refuses to overwrite it like any other unreadable map.
     """
     if yaml is None:
         raise RuntimeError("pyyaml required")
@@ -714,7 +719,35 @@ def load_observed_map(path: Optional[str] = None) -> dict[str, dict[str, Any]]:
     if not keys:
         raise ObservedMapError(
             f"{p}: observed-map has no keys ({regen})", "empty")
+    for key, entry in keys.items():
+        why = _entry_shape_error(key, entry)
+        if why:
+            raise ObservedMapError(
+                f"{p}: observed-map entry {key!r} {why}; fix or delete it, then "
+                "regenerate", "unreadable")
     return keys
+
+
+# The fields a consumer reads as a value of one type (#3017): a hand edit that
+# gives one another type would otherwise surface as a traceback (`.get` on an
+# int) or as a bogus PromQL query (a list where a series name belongs).
+_STR_FIELDS = ("observed_series", "direction", "scope")
+
+
+def _entry_shape_error(key: Any, entry: Any) -> Optional[str]:
+    """Why a ``keys`` entry is not one a consumer can read, or None."""
+    if not isinstance(key, str):
+        return "is not keyed by a string"
+    if not isinstance(entry, dict):
+        return f"is a {type(entry).__name__}, not a mapping"
+    for field in _STR_FIELDS:
+        if field in entry and not isinstance(entry[field], str):
+            return f"has a non-string {field!r} ({type(entry[field]).__name__})"
+    cands = entry.get("candidates")
+    if "candidates" in entry and not (
+            isinstance(cands, list) and all(isinstance(c, str) for c in cands)):
+        return "has a 'candidates' that is not a list of strings"
+    return None
 
 
 def exit_on_observed_map_error(fn):

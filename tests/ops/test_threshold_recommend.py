@@ -1867,8 +1867,10 @@ class TestUpperBoundFloor2964:
         rec = self._rec("200", values)
         monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [
             {"values": [[i, str(v)] for i, v in enumerate(values)]}])
-        change = {"tenant": "db-x", "metric": "connections", "old_value": "200",
+        # #3017: a key a shipped alert compares (`>`); a made-up key is not backtested.
+        change = {"tenant": "db-x", "metric": "mysql_connections", "old_value": "200",
                   "new_value": tr._format_threshold_value(rec.recommended)}
         result = bt.backtest_change("http://prom", change, 7 * 86400)
+        assert result["status"] == "analyzed"
         assert result["risk"] == "LOW"
         assert result["new_breach_count"] == result["old_breach_count"] == 1

@@ -678,7 +678,14 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
-   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。查 Prometheus 用的 metric 名稱取自 served-values 對該 key 回報的 `/metrics` series 的 `metric_key`（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`（即使租戶把 `<base>` 本身 `disable`）與時段內覆寫成 `N:critical` 的 key，都以 `<base>` 的資料回測；舊拼法別名的 twin（`legacy_twin: true`）不查，舊名底下的資料不算這個門檻的資料。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`），文字與 Markdown 報告列出未回測幾筆。
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。每一列由哪支告警比較，取自 served-values 對該 key 回報的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（例如 `60:high`、`60:Critical`——規則只選 `severity="warning"`／`"critical"`，大小寫也要一致）沒有告警比較，不回測（`severity '...' is selected by no threshold rule`，與 `--git-diff`／`--tenant` 同一個理由）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不讀，舊名底下的資料不算這個門檻的資料。一列的 row 若由比較不同 series 或不同方向的告警比較，一次回放代表不了兩者，該列不回測（`rows compared differently`）。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。
+
+**回測查什麼**（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017)、[#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002)）
+
+- 每筆變更只查一次 Prometheus：該 key 的告警拿來和門檻比較的那條 recording rule（[`metric_observed_map.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/metric_observed_map.yaml) 的 `observed_series`），加上 `{tenant="<租戶>"}`。越界照告警的比較方向計數：`>` 的告警數高於門檻的點，`<` 的告警（下界，例如 `db2_bufferpool_hit_ratio`、`kafka_broker_count`）數低於門檻的點。先前一律以 `>` 計數，並依序猜 `<key>`、`tenant:<key>:max`、`<key>{namespace=...}` 三種名稱——將近一半的 key，告警比的不是其中任何一條。
+- `--git-diff`／`--tenant` 給的是檔裡寫的 key 與值：退役拼法先經別名表換成正名（例如 `mysql_cpu` → `mysql_threads_running`）。`--tenant` 給含 `{` 的 key 時不回測（`dimensioned key`）；⚠️ `--git-diff` 的 diff 解析根本看不到帶維度（加引號）的 key，只改這種 key 的 PR 會得到「No threshold changes found.」、結束碼 0。值照 exporter 的讀法：第一個 `:` 前是數字、後是 severity（`70:critical`；沒寫是 warning），`<base>_critical` key 的整個值就是數字。有值的那一邊（或兩邊）是 critical 時查 `<key>_critical` 的告警、比數字；新舊值 severity 不同（兩支不同的告警）、severity 不是 warning／critical，或值這裡無法照 exporter 的讀法讀（`7O` 這種 exporter 也讀不懂的值，exporter 會改用預設值或丟掉那一列，從值本身看不出來；另有幾種 exporter 讀得懂、但這裡保守不讀的寫法，例如 `1_000`、`0x1p4`）時不回測。
+- 下列變更標為 `not_backtested`（風險 `UNKNOWN`、不影響結束碼、不查 Prometheus），`backtest` 為 `skipped: <理由>`、訊息為 `Not backtested: <理由>`：observed-map 沒有該 key（沒有出廠告警比較它；`container_cpu` 等 KNOWN_DEFERRED key 的告警比的是 observed-map 不收錄的 version-aware recording rule，理由另寫）；條目無法回放（待人工確認、複合告警沒有單一 series、方向未解析、不是 per-tenant series）；目錄比對模式下一列的 row 由不同告警比較。理由講的若不是該列自己的 key（critical row 的 `_critical` 告警），前面冠上那個 key。
+- ⚠️ 已知近似：回放的是告警的比較運算元，不是告警本身——`for:`、維護期過濾、複合 AND 告警的其他條件都不模擬，所以計出的是「比較成立的點數」，不等於告警實際觸發的次數。`--git-diff`／`--tenant` 看不到租戶有沒有同 metric 的帶維度 row，門檻的 `max by(tenant)` 在這兩種模式下也不模擬；`<base>` 有沒有在根目錄 `defaults:` 宣告同樣看不到。
 
 **選項**
 
@@ -691,7 +698,9 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 對比報告，顯示各項 threshold 變更在歷史數據上的影響（可能增加/減少的 alert）。
 
-觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。`+Inf`／`-Inf` 是真實樣本，照常比較。
+觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。每筆 `analyzed`／`no_data` 結果帶 `query` 欄位，即實際送出的 PromQL；文字報告在訊息下一行印 `query: ...`，Markdown 表格多一欄 `Query`（`not_backtested` 沒有查詢，該欄為 `—`）。
+
+查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。只查一次，所以沒有別的查詢可換。`+Inf`／`-Inf` 是真實樣本，照常比較。
 
 **範例**
 
@@ -713,7 +722,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|------|
 | `0` | 成功 |
 | `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
-| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119） |
+| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119）；observed-map（`metric_observed_map.yaml`）缺檔、讀不了、沒有 key 或有型別不對的條目（帶 `--skip-if-unavailable` 也一樣；`--json` 的 envelope `reason` 為 `observed_map_unavailable`，#3017） |
 
 ---
 
