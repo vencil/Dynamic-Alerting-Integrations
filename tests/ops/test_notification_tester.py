@@ -18,6 +18,7 @@ import os
 import shutil
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import threading
@@ -325,19 +326,20 @@ class TestHttpTests:
 
     @patch("notification_tester.urllib.request.urlopen")
     def test_connection_refused(self, mock_urlopen):
-        """連線拒絕應返回 CONNECTION_REFUSED。"""
-        mock_urlopen.side_effect = urllib.error.URLError(reason="Connection refused")
+        """連線拒絕應返回 CONNECTION_REFUSED（依 reason 的型別判斷，#2995）。"""
+        mock_urlopen.side_effect = urllib.error.URLError(
+            ConnectionRefusedError(111, "Connection refused"))
         recv = {"type": "webhook", "url": "https://hooks.example.com", "_label": "down"}
         result = nt.test_receiver(recv)
         assert result.status == nt.STATUS_CONNECTION_REFUSED
 
     @patch("notification_tester.urllib.request.urlopen")
     def test_os_error(self, mock_urlopen):
-        """OSError 應返回 CONNECTION_REFUSED。"""
+        """其他 OSError 應返回 CONNECTION_ERROR，不是 CONNECTION_REFUSED（#2995）。"""
         mock_urlopen.side_effect = OSError("Network unreachable")
         recv = {"type": "webhook", "url": "https://hooks.example.com", "_label": "net-err"}
         result = nt.test_receiver(recv)
-        assert result.status == nt.STATUS_CONNECTION_REFUSED
+        assert result.status == nt.STATUS_CONNECTION_ERROR
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -396,9 +398,8 @@ def _no_proxy(monkeypatch):
     monkeypatch.setattr(urllib.request, "_opener", None)
 
 
-@pytest.fixture
-def _self_signed_tls(tmp_path, monkeypatch):
-    """產生 127.0.0.1 的自簽憑證；client 端以它為信任根（不關閉驗證）。"""
+def _make_self_signed(tmp_path):
+    """產生 127.0.0.1 的自簽憑證；回傳 (server SSLContext, 憑證路徑)。"""
     openssl = shutil.which("openssl")
     if openssl is None:
         pytest.skip("openssl not available")
@@ -413,6 +414,13 @@ def _self_signed_tls(tmp_path, monkeypatch):
         pytest.skip(f"openssl req failed: {proc.stderr.strip()[:200]}")
     server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_ctx.load_cert_chain(str(cert), str(key))
+    return server_ctx, cert
+
+
+@pytest.fixture
+def _self_signed_tls(tmp_path, monkeypatch):
+    """產生 127.0.0.1 的自簽憑證；client 端以它為信任根（不關閉驗證）。"""
+    server_ctx, cert = _make_self_signed(tmp_path)
     real_factory = ssl.create_default_context
 
     def _client_ctx(*args, **kwargs):
@@ -471,22 +479,23 @@ class TestReadTimeoutClassification:
         assert result.detail == "timed out"
 
     @patch("notification_tester.urllib.request.urlopen")
-    def test_connection_reset_keeps_connection_refused(self, mock_urlopen):
-        """範圍釘：非逾時的 OSError 維持原標籤（另票處理）。"""
+    def test_connection_reset_is_not_timeout(self, mock_urlopen):
+        """非逾時的裸 OSError 不得被放寬成 TIMEOUT（分類見 TestConnectionErrorClassification）。"""
         mock_urlopen.side_effect = ConnectionResetError("reset by peer")
         result = nt.test_receiver(self._recv("https://hooks.example.com"))
-        assert result.status == nt.STATUS_CONNECTION_REFUSED
+        assert result.status == nt.STATUS_CONNECTION_ERROR
 
-    @pytest.mark.parametrize("reason", [
-        ConnectionRefusedError(111, "Connection refused"),
-        socket.gaierror(-2, "Name or service not known"),
+    @pytest.mark.parametrize("reason, expected", [
+        (ConnectionRefusedError(111, "Connection refused"), "CONNECTION_REFUSED"),
+        (socket.gaierror(-2, "Name or service not known"), "CONNECTION_ERROR"),
     ])
     @patch("notification_tester.urllib.request.urlopen")
-    def test_urlerror_wrapping_non_timeout_oserror_is_not_timeout(self, mock_urlopen, reason):
+    def test_urlerror_wrapping_non_timeout_oserror_is_not_timeout(
+            self, mock_urlopen, reason, expected):
         """URLError 包的是非逾時的 OSError 物件時，型別判斷不得放寬成 TIMEOUT。"""
         mock_urlopen.side_effect = urllib.error.URLError(reason)
         result = nt.test_receiver(self._recv("https://hooks.example.com"))
-        assert result.status == nt.STATUS_CONNECTION_REFUSED
+        assert result.status == expected
 
 
 @contextlib.contextmanager
@@ -567,10 +576,164 @@ class TestMalformedResponse:
 
     def test_close_without_response_stays_connection_error(self):
         """RemoteDisconnected 同時是 OSError 與 BadStatusLine：維持連線錯誤的
-        標籤，不被新的 HTTPException 分支搶走（第 1 類的分類另票處理）。"""
+        標籤，不被 HTTPException 分支搶走。"""
         with _raw_server(b"") as url:
             result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_CONNECTION_ERROR, result.detail
+
+
+@contextlib.contextmanager
+def _reset_server():
+    """讀完整個請求後以 SO_LINGER 0 關線，送出 RST：client 端拿到裸的
+    ConnectionResetError（urllib 不包成 URLError）。回傳 URL。"""
+    srv = socket.create_server(("127.0.0.1", 0))
+    srv.settimeout(5)
+
+    def _serve():
+        with contextlib.suppress(OSError):
+            conn, _ = srv.accept()
+            conn.settimeout(5)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n")[1:]:
+                name, _, value = line.partition(b":")
+                if name.strip().lower() == b"content-length":
+                    length = int(value.strip())
+            while len(body) < length:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                body += chunk
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
+                            struct.pack("ii", 1, 0))
+            conn.close()
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{srv.getsockname()[1]}/hook"
+    finally:
+        thread.join(timeout=5)
+        srv.close()
+
+
+def _closed_port():
+    """取一個剛釋放、沒有人在聽的本機 port。"""
+    with socket.create_server(("127.0.0.1", 0)) as s:
+        return s.getsockname()[1]
+
+
+@pytest.mark.usefixtures("_no_proxy")
+class TestConnectionErrorClassification:
+    """連線階段錯誤依例外型別分類，CONNECTION_REFUSED 只留給真的被拒絕連線
+    （#2995 第 1 類）。"""
+
+    def _recv(self, url):
+        return {"type": "webhook", "url": url, "_label": "conn"}
+
+    # ── 真 socket ──────────────────────────────────────────────────────
+    def test_real_refused_connection_is_connection_refused(self):
+        result = nt.test_receiver(
+            self._recv(f"http://127.0.0.1:{_closed_port()}/hook"), timeout=5)
         assert result.status == nt.STATUS_CONNECTION_REFUSED, result.detail
+
+    def test_real_connection_reset_is_connection_error(self):
+        with _reset_server() as url:
+            result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_CONNECTION_ERROR, result.detail
+
+    def test_https_to_plain_http_server_is_tls_error(self):
+        """https 連到純 http 埠：URLError(SSLError)。"""
+        with _slow_server(delay=0) as url:
+            result = nt.test_receiver(
+                self._recv(url.replace("http://", "https://", 1)), timeout=5)
+        assert result.status == nt.STATUS_TLS_ERROR, result.detail
+
+    def test_untrusted_certificate_is_tls_error(self, tmp_path):
+        """自簽憑證、client 不信任：URLError(SSLCertVerificationError)。"""
+        server_ctx, _ = _make_self_signed(tmp_path)
+        with _slow_server(delay=0, tls_context=server_ctx) as url:
+            result = nt.test_receiver(self._recv(url), timeout=5)
+        assert result.status == nt.STATUS_TLS_ERROR, result.detail
+        assert len(result.detail) <= 80  # owner：80 字上限不放寬
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_proxy_timeout_status_is_the_proxy_not_a_timeout(self, mock_urlopen):
+        """proxy 回 504 Connection Timed Out：失敗的是 proxy 這一段，
+        不是 receiver 逾時。"""
+        mock_urlopen.side_effect = urllib.error.URLError(
+            OSError("Tunnel connection failed: 504 Connection Timed Out"))
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_CONNECTION_ERROR
+        assert result.detail.startswith("via proxy: ")
+
+    # ── 實務上造不出的情況：mock urlopen ──────────────────────────────
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_dns_failure_is_connection_error(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError(
+            socket.gaierror(-2, "Name or service not known"))
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_CONNECTION_ERROR
+        assert "Name or service not known" in result.detail
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_proxy_tunnel_failure_is_marked_via_proxy(self, mock_urlopen):
+        """走 HTTPS proxy 時，DNS 失敗與拒絕連線都變成 Tunnel connection failed：
+        測到的是 proxy，不是 receiver。"""
+        mock_urlopen.side_effect = urllib.error.URLError(
+            OSError("Tunnel connection failed: 502 Bad Gateway"))
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_CONNECTION_ERROR
+        assert result.detail == "via proxy: Tunnel connection failed: 502 Bad Gateway"
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_proxy_detail_is_still_capped_at_80(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError(
+            OSError("Tunnel connection failed: 502 " + "x" * 200))
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.detail.startswith("via proxy: Tunnel connection failed")
+        assert len(result.detail) == 80
+
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_string_reason_is_not_matched_on_text(self, mock_urlopen):
+        """reason 不是例外物件時不比對訊息字串：urllib 真的拒絕連線一定給
+        ConnectionRefusedError 物件，字串 reason 只會是 URL 本身的問題。"""
+        mock_urlopen.side_effect = urllib.error.URLError(reason="Connection refused")
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == nt.STATUS_CONNECTION_ERROR
+
+    @pytest.mark.parametrize("exc, expected", [
+        (ConnectionRefusedError(111, "Connection refused"), "CONNECTION_REFUSED"),
+        (ssl.SSLError(1, "[SSL] record layer failure"), "TLS_ERROR"),
+    ], ids=["refused", "ssl"])
+    @patch("notification_tester.urllib.request.urlopen")
+    def test_bare_oserror_uses_the_same_classification(self, mock_urlopen, exc, expected):
+        """沒被 urllib 包成 URLError 的 OSError 走同一套分類。"""
+        mock_urlopen.side_effect = exc
+        result = nt.test_receiver(self._recv("https://hooks.example.com"))
+        assert result.status == expected
+
+    def test_every_status_has_a_symbol(self):
+        """新狀態沒登記會在文字報告裡顯示成 ?。"""
+        statuses = {v for k, v in vars(nt).items() if k.startswith("STATUS_")}
+        assert statuses - set(nt._STATUS_SYMBOLS) == set()
+
+    @pytest.mark.parametrize("status", ["CONNECTION_ERROR", "TLS_ERROR"])
+    def test_new_statuses_count_as_failed(self, status):
+        """結束碼不變：只有 OK／DRY_RUN 算通過。"""
+        fake = nt.ReceiverTestResult(receiver_name="r", receiver_type="webhook",
+                                     status=status)
+        recv = make_receiver("webhook", url="https://hooks.example.com")
+        with patch("notification_tester.extract_receivers", return_value=[recv]), \
+                patch("notification_tester.test_receiver", return_value=fake):
+            report = nt.test_tenant_receivers("t", {}, rate_limit=0)
+        assert (report.passed, report.failed, report.skipped) == (0, 1, 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════
