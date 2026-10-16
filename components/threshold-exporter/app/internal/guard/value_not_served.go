@@ -15,8 +15,8 @@ package guard
 // keeps the reasons whose cause is a written value, on threshold keys
 // (config.ValueNotServedAsWritten: a reserved key a subtree `_defaults.yaml`
 // writes is subtree_default_reserved_key's, or the route generator's for a
-// routing key); the other
-// reasons have findings of their own (parse_failed is exit 3, undeliverable is
+// routing key); the other reasons have findings of their own (parse_failed
+// is exit 3, undeliverable is
 // subtree_default_undeliverable, root_null_undeclared is
 // root_default_null_undeclared, root_defaults_unwrapped is the
 // finding of that name).

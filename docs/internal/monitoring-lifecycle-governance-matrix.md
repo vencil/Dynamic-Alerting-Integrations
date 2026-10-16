@@ -51,7 +51,7 @@ lang: zh
 
 | 角色 | 動作 | 工具/機制 | Gate（已存在） | Disp | Reuse/Gap |
 |---|---|---|---|---|---|
-| PE | 調 defaults/routing | `patch_config` · `generate_alertmanager_routes` · `explain_route` · `config_diff` | `guard/routing.go`（5 檢查）· `blast_radius` PR 留言 · GitOps PR | 🟡 | reuse |
+| PE | 調 defaults/routing | `patch_config` · `generate_alertmanager_routes` · `explain_route` · `config_diff` | `generate-routes --validate --strict`（路由判定）· `blast_radius` PR 留言 · GitOps PR | 🟡 | reuse |
 | TA | 調自己 threshold/routing | tenant-api PUT · portal | admission validators · SHA-256 hot-reload | 🟢🟡 | reuse |
 | SRE | 健康/診斷/品質 | `diagnose` · `batch_diagnose` · `alert_quality` · `alert_correlate` · `runtime_audit` · `check_alert` | （唯讀為主） | 🟡 | reuse |
 | DE | threshold 治理 | `threshold_recommend` · `backtest_threshold` · **`threshold_govern` CronJob**（recommend→gate→PR） | `ha-max-threshold-aggregation` · `guard/cardinality.go` | 🟢 | reuse（自動調參迴路**典範**，他階段可仿） |

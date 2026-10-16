@@ -438,8 +438,8 @@ def test_routing_profiles_lint_reads_the_tree(tmp_path):
 
 def test_f1_enforced_in_the_unselected_carrier_spelling_is_refused(tmp_path):
     """(b) is about ANY file below the root: the carrier spelling the chain
-    does not read is still refused for `_routing_enforced`. Its other keys stay unread — a `receiver: null` there is
-    not the (a) finding."""
+    does not read is still refused for `_routing_enforced`. Its other keys
+    stay unread — a `receiver: null` there is not the (a) finding."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "team/_defaults.yaml": _SLACK_RD,
@@ -593,8 +593,7 @@ def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
     1; validate-config's routing rows too). #2341: the line is blocking, so
     `--validate --strict` and validate-config fail on it (rc 1, no traceback).
     The parity matrix row `hier-a-root-routing-defaults-not-a-mapping` pins
-    the same; a level below still
-    contributes its own."""
+    the same; a level below still contributes its own."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": f"_routing_defaults: {value}\n",
         "t-root.yaml": _tenant("t-root"),

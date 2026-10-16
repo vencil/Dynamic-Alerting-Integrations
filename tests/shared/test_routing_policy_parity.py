@@ -28,7 +28,7 @@ What this half measures, per tree written to a tmp dir:
   (`_grar_routes.enforced_group_by_problems`), parsed back to (field, kind)
   with the line's context (`_routing_enforced` / `_routing_enforced
   (<tenant>)`) in the field; the line names no file, so the file column is
-  the Go readers' alone;
+  not compared;
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
@@ -550,12 +550,12 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # line belongs to a listed tenant, and the line count is the table's.
     assert set(got.routing_configs) <= set(tree["expect"]), (tree["name"], set(got.routing_configs))
     # #2519: a `{{tenant}}` enforced route expands over every tenant, routed
-    # or not — the Go halves judge expect's tenants, so expect lists them all.
+    # or not, so expect lists every tenant it expands over.
     if got.enforced_routing:
         assert set(got.dedup_configs) <= set(tree["expect"]), (tree["name"], set(got.dedup_configs))
         # And the other way (#2519 F2): every valid tenant of expect is one the
-        # generator loads — a null body it skips must not be listed, or the Go
-        # halves (which judge expect's tenants) would judge a route never rendered.
+        # generator loads — a null body it skips must not be listed, or the
+        # table would claim a route the generator never renders.
         valid = {t for t in tree["expect"] if is_valid_tenant_id(t)}
         assert valid <= set(got.dedup_configs), (tree["name"], valid - set(got.dedup_configs))
     expected_total = sum(len(_want(w, "policy")) for w in tree["expect"].values())

@@ -670,11 +670,11 @@ def _e_reader_stricter() -> list[str]:
 
 
 def _known_stricter_2759() -> list[str]:
-    """Known stricter (#2759): the generator reads these, da-guard refuses.
+    """Known stricter (#2759): the generator reads these.
 
-    da-guard's load.go is the 2eb4181b1 version: hand-modelling how PyYAML
-    builds `!!omap` / `!!pairs` items kept opening new divergences, so these
-    rows pin what the generator reads instead (#2759).
+    The Go reader that refused them was deleted (ADR-036 step 3, #2905):
+    hand-modelling how PyYAML builds `!!omap` / `!!pairs` items kept opening
+    new divergences, so these rows pin what the generator reads (#2759).
     """
     return [
         # An `!!omap` / `!!pairs` item is taken apart, not built by
