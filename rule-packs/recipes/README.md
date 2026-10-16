@@ -1,6 +1,6 @@
 # Custom Alert Recipes（ADR-024 能力 B，#741）
 
-平台 authored 的**參數化告警 recipe 庫**。各階層（platform / domain / tenant）填表即可自訂告警，**永不寫 PromQL**（守住宣告式地基）。
+平台 authored 的**參數化告警 recipe 庫**。平台與租戶填表即可自訂告警，**永不寫 PromQL**（守住宣告式地基）。
 
 ## 七個核心 recipe
 
@@ -20,7 +20,7 @@
 
 ## 宣告語法（`_custom_alerts`）
 
-宣告在 `conf.d/` 的哪一層決定 **scope**：
+exporter 為每個租戶只從一處取 `_custom_alerts`，依序是租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、租戶綁定的 profile，**不合併**。`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` 不會送出；一組租戶共用的告警寫在 profile——但目前編譯器還不為 profile 與根 `_defaults.yaml` 的 `tenants:` 產生規則，寫在那裡的不能指望告警（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。在那之前請寫在租戶自己的條目或 `_platform.yaml` 的 `tenants:`，兩處擇一（兩處都寫，編譯器兩處都編、exporter 只取租戶自己的）；搬進租戶條目時，同時刪掉 `_defaults.yaml` 裡的同名 recipe——同名時編譯器隔離租戶自己那條，它就只有門檻、沒有規則。（規則見 [ADR-024 §3「宣告位置」](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)）：
 
 ```yaml
 # tenant leaf（只作用該租戶）
@@ -36,9 +36,12 @@ tenants:
         window: 5m
         threshold: "50:warning"     # value:severity（severity 預設 warning）
 
-# _defaults.yaml 頂層（platform L0 / domain L1 → 蓋整子樹，租戶不可覆寫）
-_custom_alerts:
-  - {recipe: absence, name: heartbeat_gone, metric: app_heartbeat_total, window: 10m, threshold: "0:critical"}
+# 根目錄平台檔（_platform.yaml）的 tenants: 條目——租戶沒有自己的 _custom_alerts
+# 時取這份；兩處都寫則 exporter 只取租戶自己的
+tenants:
+  shop-b:
+    _custom_alerts:
+      - {recipe: threshold, name: queue_depth_high, metric: queue_depth, op: ">", window: 5m, threshold: "500:warning"}
 ```
 
 ## 安全與向量化

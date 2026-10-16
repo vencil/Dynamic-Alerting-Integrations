@@ -52,11 +52,17 @@ emitted_shape: |
   #
   # ⚠️ CAP + OVERRIDE COST — one declaration counts 2 toward the own-recipe cap
   # (it IS two alert rules: distinct (tenant, recipe_id, severity)). The
-  # recommended mode is domain-inherited (domain declares the recipe, tenants
-  # inherit → uncapped, vectorized, single shape). A tenant OVERRIDING an
-  # inherited default's min_events (or any shape param) is an OWN declaration:
-  # it spends 2 of the tenant's cap AND forks the shape (+~12 rules). There is
-  # no free override — expected to be rare; budget for it consciously.
+  # recommended mode is a shared profile (the profile declares the recipe,
+  # tenants bind it → vectorized, single shape). A tenant that wants another
+  # objective or min_events writes its OWN _custom_alerts: it spends 2 of the
+  # tenant's cap and REPLACES the profile's whole list (copy the profile's other
+  # recipes too); changing min_events (or any shape param) also forks the shape
+  # (+~12 rules). There is no free override — expected to be rare; budget for it
+  # consciously. _custom_alerts in a _defaults.yaml is not served (ADR-024 §3).
+  # Until the compiler builds profile recipes (#3042) do not count on a profile
+  # one alerting: declare it in each tenant's own entry, with the same min_events
+  # (one shape), and delete any same-named recipe from _defaults.yaml (the
+  # compiler quarantines the tenant's own on a name clash).
   #
   # ⚠️ LOW-TRAFFIC BOUNDARY — with the default min_events=10 the fast tier
   # needs >10 bad events in 5m and the slow tier >60 in 30m: the ×6 floor over
@@ -67,7 +73,7 @@ emitted_shape: |
   # what the slow tier adds: NOT sustained-low-traffic coverage; it covers
   # BURSTY / INTERMITTENT failure shapes, where the 30m aggregate smooths the
   # 5m gaps that keep resetting the fast gate. For genuinely tiny services,
-  # consciously lower min_events (best set once at the DOMAIN level so the
+  # consciously lower min_events (best the same value for every tenant so the
   # shape stays single) — or accept that sustained low traffic is uncovered.
 example:
   recipe: slo_burn_rate

@@ -47,8 +47,8 @@ tenants:
 
       # absence: fire (critical) when shop-a's heartbeat counter stops over 10m.
       # Self-scoped: only tenants with this recipe's user_threshold series are
-      # candidates, so it cannot storm other tenants (unlike a platform-L0
-      # absence — see _defaults.yaml note).
+      # candidates, so it cannot storm other tenants (unlike an absence shared
+      # by every tenant — see _defaults.yaml note).
       - recipe: absence
         name: heartbeat_gone
         metric: app_heartbeat_total

@@ -149,7 +149,7 @@ _custom_alerts:
 
 編譯器把它展開成 §4 的完整配方：4 窗 SLI recording（1h／5m／6h／30m）＋ fast（1h∧5m、14.4×、critical）／slow（6h∧30m、6×、warning）雙檔告警，倍率隨 `slo_period` 自動換算（28d→13.44×／5.6×，§4.2 的推導）。§4.3 偽 PromQL 的第三行 `N_min` 在這裡有了名字、預設值與 slow 檔換算：`min_events`（預設 10）——fast 檔的 5m 短窗內壞事件絕對數要超過它才觸發，slow 檔樓層由編譯器按窗長等比導出（×6 over 30m，兩檔事件率門檻因此同率）——2 個請求錯 1 個是 50% 錯誤率，但不該半夜叫醒任何人。
 
-誠實邊界三條：v1 只支援 availability／error-ratio 型（latency／freshness 的宣告介面表達不了，硬塞會產生永不觸發的死告警——instrumentation 先行路徑見 [recipe 文件](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/README.md)）；兩檔事件率門檻同為 >2 bad events/min，**持續**低流量的服務兩檔都不會觸發——可下調 `min_events`（宜在 domain 層一次設定，避免 per-tenant 覆寫的 cap 與 shape 分岔成本）或沿用 §4.2 的替代路徑；`objective` 改值與 `slo_period` 換檔都不改變規則形狀——「調目標」是**形狀**零風險的操作（觸發面當然隨值改變），這正是宣告式的紅利。
+誠實邊界三條：v1 只支援 availability／error-ratio 型（latency／freshness 的宣告介面表達不了，硬塞會產生永不觸發的死告警——instrumentation 先行路徑見 [recipe 文件](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/README.md)）；兩檔事件率門檻同為 >2 bad events/min，**持續**低流量的服務兩檔都不會觸發——可下調 `min_events`（宜讓各租戶用同一個值，避免 shape 分岔）或沿用 §4.2 的替代路徑；`objective` 改值與 `slo_period` 換檔都不改變規則形狀——「調目標」是**形狀**零風險的操作（觸發面當然隨值改變），這正是宣告式的紅利。
 
 ## 6. 帶走的 checklist
 
