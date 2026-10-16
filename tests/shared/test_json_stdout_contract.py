@@ -31,7 +31,7 @@ never codified, so it rotted.  This file is that gate; its harness shape
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* All 39 in-scope tools: 35 spell the flag ``--json``, 4 spell it
+* All 40 in-scope tools: 36 spell the flag ``--json``, 4 spell it
   ``--json-output`` (``blind_spot_discovery`` / ``config_diff`` /
   ``cutover_tenant`` / ``maintenance_scheduler``).  Same contract, both spellings.
   ``test_recipe_table_covers_every_json_tool`` fails if a new tool grows a JSON
@@ -93,7 +93,7 @@ The HTTP stub is an *out-of-process server* rather than the in-process
 ``shadow_verify`` / ``threshold_govern`` / ``discover_instance_mappings``).  One
 real socket covers every one of them uniformly, and subprocess execution gives us
 the *actual, complete* stdout byte stream — which is the thing under test — with
-no import-time module-namespace crosstalk between 39 tools.
+no import-time module-namespace crosstalk between 40 tools.
 
 SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
 ------------------------------------------------------------
@@ -1200,6 +1200,17 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],
       expect_caller_error=True, doc_check=_status_doc("caller_error")),
 
+    # ── explain_keys ───────────────────────────────────────────────────────
+    # #3016 (ADR-038 decision 9): the per-key report (exit 0) and the
+    # caller-error envelope (no such --config-dir), both one document.
+    R("explain_keys", "report",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
+      doc_check=lambda d: None if isinstance(d, dict) and d.get("status") == "ok"
+      and d.get("schema") == "da-tools.explain-keys/v1" else f"not the explain report: {str(d)[:80]}"),
+    R("explain_keys", "missing-config-dir",
+      lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],
+      expect_caller_error=True, doc_check=_status_doc("caller_error")),
+
     # ── policy_engine ──────────────────────────────────────────────────────
     R("policy_engine", "no-policies",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"]),
@@ -1376,7 +1387,7 @@ def test_validate_config_optional_keys_are_all_produced_somewhere():
 def test_recipe_table_covers_every_json_tool():
     """A tool that grows a --json flag must gain a recipe, or this gate rots.
 
-    (35 tools spell it `--json`, 4 spell it `--json-output`; all 39 are in scope.)
+    (36 tools spell it `--json`, 4 spell it `--json-output`; all 40 are in scope.)
     """
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)
@@ -1386,8 +1397,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 39, (
-        f"expected 39 JSON-flag tools (35 --json + 4 --json-output), "
+    assert len(JSON_TOOLS) == 40, (
+        f"expected 40 JSON-flag tools (36 --json + 4 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 
