@@ -34,8 +34,9 @@ read as a moved route; siblings with identical matchers are paired in order
 matcher on its path, else to `PLATFORM`. A receiver whose definition changed
 belongs to every tenant whose route (on either side) points at it; fields that
 may carry credentials are reported as changed with both values masked — in a
-receiver and in served-values alike (`values._routing` carries the tenant's
-receiver; `unserved` may carry a routing key as written).
+receiver and in served-values alike (`routing` carries the tenant's
+receiver, compared as the key `_routing`; `unserved` may carry a routing key
+as written).
 `RenderDiff.secrets` holds what the credential fields of every render held
 (both sides, both views, whichever rendered), so a report can mask the same
 string where it shows up in a field not named like a credential — a YAML
@@ -85,7 +86,8 @@ EMPTY_ROUTES: dict[str, Any] = {"route": {}, "receivers": [], "inhibit_rules": [
 # the exporter does not serve, the whole text is taken as a credential.
 ROUTING_TEXT_KEYS = frozenset({"_routing", "_routing_defaults", "_routing_enforced"})
 ROUTE_ATTRS = ("receiver", "group_by", "group_wait", "group_interval", "repeat_interval", "continue")
-SERVED_FIELDS = ("values", "severities", "state_filters", "time_boxes", "unserved", "dropped", "schedules")
+SERVED_FIELDS = ("values", "routing", "severities", "state_filters", "time_boxes", "unserved", "dropped",
+                 "schedules")
 _TENANT_MATCHER = re.compile(r'^\s*tenant\s*=\s*"?(.*?)"?\s*$')
 # One Alertmanager matcher: name, operator, value (quoted or not).
 _MATCHER = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*(?:"((?:[^"\\]|\\.)*)"|(.*?))\s*$')
@@ -317,6 +319,14 @@ def credentials(render: Any) -> set[str]:
     return credential_values(render, text_key=ROUTING_TEXT_KEYS.__contains__)
 
 
+def _served_field(t: tv.TenantValues, field: str) -> dict[str, Any]:
+    """One field of a tenant's served values, keyed: `routing` is the one
+    value of the key `_routing`, so its changes read `_routing.<leaf>`."""
+    if field == "routing":
+        return {} if t.routing is None else {"_routing": t.routing}
+    return getattr(t, field) or {}
+
+
 def diff_served(base: dict[str, tv.TenantValues], pr: dict[str, tv.TenantValues]) -> list[ValueChange]:
     out: list[ValueChange] = []
     for tenant in sorted(set(base) | set(pr)):
@@ -325,7 +335,7 @@ def diff_served(base: dict[str, tv.TenantValues], pr: dict[str, tv.TenantValues]
             out.append(ValueChange(tenant, "tenant", tenant, b is not None or None, p is not None or None))
             continue
         for field in SERVED_FIELDS:
-            bm, pm = getattr(b, field) or {}, getattr(p, field) or {}
+            bm, pm = _served_field(b, field), _served_field(p, field)
             for key in sorted(set(bm) | set(pm), key=str):
                 bv, pv = bm.get(key), pm.get(key)
                 if _canon(bv) == _canon(pv):

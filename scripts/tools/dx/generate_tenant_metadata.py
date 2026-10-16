@@ -306,7 +306,10 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
         at = now_at()
     tree = load_served_tree(config_dir, at=at)
     print_load_warnings(tree)
-    tenant_configs = {tid: tv.values for tid, tv in tree.tenants.items()}
+    # `_routing` is not a key /metrics serves: served-values carries the
+    # exporter module's reading of it apart (TenantValues.routing).
+    tenant_configs = {tid: {**tv.values, **({"_routing": tv.routing} if tv.routing is not None else {})}
+                      for tid, tv in tree.tenants.items()}
 
     # Process each tenant
     for tenant_name, tenant_config in sorted(tenant_configs.items()):
