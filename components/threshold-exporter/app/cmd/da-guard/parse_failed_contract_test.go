@@ -5,9 +5,11 @@ package main
 //
 // The contract (docs/cli-reference.md §guard): da-guard exits 3 and names
 // exactly the files the exporter's own load drops — config.LoadDir's
-// parseFailed — plus the files da-guard itself cannot decode, plus the files
-// it reads that the route generator refuses for a repeated key (#2295),
-// restricted to the files that bear on --scope. Both halves are derived here independently
+// parseFailed — plus the files da-guard itself cannot decode, restricted to
+// the files that bear on --scope. A file only the route generator refuses (a
+// key it counts twice that yaml.v3 lets through, #2295) is no longer in it:
+// since ADR-036 step 3 (#2905) that file is undetermined evidence (exit 4,
+// generator_duplicates_test.go), not exit 3. Both halves are derived here independently
 // of da-guard's output (LoadDir; the untyped yaml decode its chain merge
 // uses), so a guard that starts judging "broken" on its own (another decode,
 // a missed path, a flag that skips a read) turns it red instead of drifting.
@@ -23,7 +25,6 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
-	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -147,39 +148,6 @@ func guardUndecodable(tree map[string]string, scopeRel string) []string {
 	return out
 }
 
-// generatorRefused is the third half (#2295): the files da-guard reads for
-// the scope that the route generator refuses whole for a repeated mapping
-// key — pyyamlcompat.FindDuplicateKeyIn, which its oracle table pins to the
-// generator's StrictLoader. Read for the scope: each tenant file under it
-// (every one in these trees declares a tenant), every `_defaults.yaml`
-// bearing on it, the root's other platform files and every other nested `_`
-// file (#2439) — the `_domain_policy` / `_routing_profiles` files included
-// since #2904 (the routing loader that named those as a Problem no longer
-// runs in da-guard).
-func generatorRefused(tree map[string]string, scopeRel string) []string {
-	var out []string
-	for rel, body := range tree {
-		ext := strings.ToLower(path.Ext(rel))
-		if strings.HasSuffix(rel, "/") || (ext != ".yaml" && ext != ".yml") {
-			continue
-		}
-		base := path.Base(rel)
-		read := false
-		switch {
-		case !strings.HasPrefix(base, "_"):
-			read = scopeRel == "" || strings.HasPrefix(rel, scopeRel+"/")
-		case base == "_defaults.yaml":
-			read = bearsOnScope(rel, scopeRel)
-		default:
-			read = true
-		}
-		if read && pyyamlcompat.FindDuplicateKeyIn([]byte(body)) != nil {
-			out = append(out, rel)
-		}
-	}
-	return out
-}
-
 // bearsOnScope is the scope half of the contract, and only that half — what
 // counts as broken is LoadDir's answer, never this function's. A dropped
 // file bears on a run scoped to scopeRel ("" = whole tree) when it lies
@@ -220,9 +188,6 @@ func TestExitThree_NamesExactlyTheFilesTheExporterDrops(t *testing.T) {
 					expected[k] = true
 				}
 				for _, k := range guardUndecodable(tree, scopeRel) {
-					expected[k] = true
-				}
-				for _, k := range generatorRefused(tree, scopeRel) {
 					expected[k] = true
 				}
 				want := []string{}

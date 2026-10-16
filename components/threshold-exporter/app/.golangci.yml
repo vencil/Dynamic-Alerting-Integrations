@@ -44,9 +44,7 @@ linters:
             - "**/internal/parser/**"
             - "**/internal/confdlayout/**"
             - "**/internal/guard/**"
-            - "**/pkg/routingpolicy/**"
             - "**/pkg/receiverspec/**"
-            - "**/pkg/pyyamlcompat/**"
             - "**/pkg/tenantid/**"
           deny:
             - pkg: net/http

@@ -5,10 +5,12 @@ package main
 // is when the scope has some. The "no tenants → vacuously safe" exit 0 holds
 // only for a run with no finding and nothing undetermined.
 //
-// #2904: the routing-tree problems (one row per routingpolicy Problem kind,
-// read from the whole tree at --config-dir) and the `_routing_enforced`
-// route are no longer judged by the default check; on a scope with no tenant
-// each of those trees is undetermined (exit 4), never the vacuous 0.
+// #2904: the routing-tree problems (one row per Problem kind the Go routing
+// loader had, read from the whole tree at --config-dir) and the
+// `_routing_enforced` route are no longer judged by the default check; on a
+// scope with no tenant each of those trees is undetermined (exit 4), never
+// the vacuous 0. #2905 deleted that loader (pkg/routingpolicy) and its
+// finding kinds; the trees stay, each row naming the kind it used to report.
 
 import (
 	"path/filepath"
@@ -20,110 +22,94 @@ import (
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
-	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // zeroTenantPlatformCase is one tree on a scope with no tenant: the files of
 // the conf.d tree, the --scope (relative to it; "" = the whole tree) and the
-// finding the run must carry — for a routing row, the finding the CLI
-// carried before #2904, kept as the row's record.
+// finding the run must carry — or, for a routing row, was: the finding kind
+// the CLI carried before #2904, kept as the row's record (#2905 deleted the
+// kind itself).
 type zeroTenantPlatformCase struct {
 	files   map[string]string
 	scope   string
 	finding findingkind.Kind
+	was     string
 }
 
 const webhookReceiver = "{type: webhook, url: \"https://w.example/h\"}"
 
-// zeroTenantPlatformCases: one row per routingpolicy Problem kind, keyed by
-// it. TestGuard_ZeroTenantPlatformCasesCoverEveryKind holds the keys to the
-// kinds pkg/routingpolicy declares, so a new kind fails until it has a row.
-// Two kinds need a tenant somewhere in the tree (a duplicate id, a policy
-// naming a tenant outside its subtree); their tree has tenants, but the
-// --scope has none.
+// zeroTenantPlatformCases: one row per Problem kind the deleted Go routing
+// loader declared (pkg/routingpolicy, #2905), keyed by the finding kind it
+// was reported as. Two kinds need a tenant somewhere in the tree (a
+// duplicate id, a policy naming a tenant outside its subtree); their tree
+// has tenants, but the --scope has none.
 var zeroTenantPlatformCases = map[string]zeroTenantPlatformCase{
-	routingpolicy.ProblemDomainPolicyUnusable: {
-		files:   map[string]string{"_domain_policy.yaml": "domain_policies:\n- fin\n"},
-		finding: findingkind.FindingDomainPolicyUnusable,
+	"domain_policy_unusable": {
+		files: map[string]string{"_domain_policy.yaml": "domain_policies:\n- fin\n"},
+		was:   "domain_policy_unusable",
 	},
-	routingpolicy.ProblemRoutingProfilesUnusable: {
-		files:   map[string]string{"_routing_profiles.yaml": "routing_profiles:\n- p-team\n"},
-		finding: findingkind.FindingRoutingProfilesUnusable,
+	"routing_profiles_unusable": {
+		files: map[string]string{"_routing_profiles.yaml": "routing_profiles:\n- p-team\n"},
+		was:   "routing_profiles_unusable",
 	},
-	routingpolicy.ProblemRoutingDefaultsRoutes: {
+	"routing_defaults_routes_ignored": {
 		files: map[string]string{"_defaults.yaml": "_routing_defaults:\n  receiver: " + webhookReceiver +
 			"\n  routes:\n  - receiver: " + webhookReceiver + "\n"},
-		finding: findingkind.FindingRoutingDefaultsRoutesIgnored,
+		was: "routing_defaults_routes_ignored",
 	},
-	routingpolicy.ProblemRoutingInUnreadLocation: {
+	"routing_in_unread_location": {
 		files: map[string]string{"_profiles.yaml": "profiles:\n  p1:\n    cpu: 60\n    _routing:\n" +
 			"      receiver: " + webhookReceiver + "\n"},
-		finding: findingkind.FindingRoutingInUnreadLocation,
+		was: "routing_in_unread_location",
 	},
-	routingpolicy.ProblemRoutingEnforcedBelowRoot: {
+	"routing_enforced_below_root": {
 		files: map[string]string{"team/_defaults.yaml": "_routing_enforced:\n  enabled: true\n" +
 			"  receiver: " + webhookReceiver + "\n"},
-		finding: findingkind.FindingRoutingEnforcedBelowRoot,
+		was: "routing_enforced_below_root",
 	},
-	routingpolicy.ProblemRoutingDefaultsNullBelowRoot: {
-		files:   map[string]string{"team/_defaults.yaml": "_routing_defaults:\n  receiver: null\n"},
-		finding: findingkind.FindingRoutingDefaultsNullBelowRoot,
+	"routing_defaults_null_below_root": {
+		files: map[string]string{"team/_defaults.yaml": "_routing_defaults:\n  receiver: null\n"},
+		was:   "routing_defaults_null_below_root",
 	},
-	routingpolicy.ProblemRoutingProfileDuplicate: {
+	"routing_profile_duplicate": {
 		files: map[string]string{
 			"_routing_profiles.yaml": "routing_profiles:\n  p2:\n    receiver: " + webhookReceiver + "\n",
 			"_routing_profiles.yml":  "routing_profiles:\n  p2:\n    receiver: " + webhookReceiver + "\n",
 		},
-		finding: findingkind.FindingRoutingProfileDuplicate,
+		was: "routing_profile_duplicate",
 	},
-	routingpolicy.ProblemDuplicateTenant: {
+	"duplicate_tenant": {
 		files: map[string]string{
 			"t-x.yaml":      "tenants:\n  t-x:\n    cpu: 1\n",
 			"team/t-x.yaml": "tenants:\n  t-x:\n    cpu: 2\n",
 			"empty/":        "",
 		},
-		scope:   "empty",
-		finding: findingkind.FindingDuplicateTenant,
+		scope: "empty",
+		was:   "duplicate_tenant",
 	},
-	routingpolicy.ProblemDomainPolicyOutOfScope: {
+	"domain_policy_out_of_scope": {
 		files: map[string]string{
 			"t-root.yaml": "tenants:\n  t-root:\n    cpu: 1\n",
 			"team/_domain_policy.yaml": "domain_policies:\n  fin:\n    tenants: [t-root]\n" +
 				"    constraints: {forbidden_receiver_types: [slack]}\n",
 			"empty/": "",
 		},
-		scope:   "empty",
-		finding: findingkind.FindingDomainPolicyOutOfScope,
+		scope: "empty",
+		was:   "domain_policy_out_of_scope",
 	},
-	routingpolicy.ProblemRoutingDefaultsNotMapping: {
-		files:   map[string]string{"_defaults.yaml": "_routing_defaults: [1, 2]\n"},
-		finding: findingkind.FindingRoutingDefaultsNotMapping,
+	"routing_defaults_not_mapping": {
+		files: map[string]string{"_defaults.yaml": "_routing_defaults: [1, 2]\n"},
+		was:   "routing_defaults_not_mapping",
 	},
-	routingpolicy.ProblemRoutingKeyIgnored: {
-		files:   map[string]string{"_defaults.yaml": "_routing_defaults:\n  continue: true\n"},
-		finding: findingkind.FindingRoutingKeyIgnored,
+	"routing_key_ignored": {
+		files: map[string]string{"_defaults.yaml": "_routing_defaults:\n  continue: true\n"},
+		was:   "routing_key_ignored",
 	},
-	routingpolicy.ProblemRoutingEnforcedMatchInvalid: {
+	"routing_enforced_match_invalid": {
 		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
 			"\n  match: {severity: critical}\n"},
-		finding: findingkind.FindingRoutingEnforcedMatchInvalid,
+		was: "routing_enforced_match_invalid",
 	},
-}
-
-func TestGuard_ZeroTenantPlatformCasesCoverEveryKind(t *testing.T) {
-	t.Parallel()
-	declared := map[string]bool{}
-	for name, kind := range testutil.RoutingPolicyProblemKinds(t) {
-		declared[kind] = true
-		if _, ok := zeroTenantPlatformCases[kind]; !ok {
-			t.Errorf("routingpolicy.%s (%q) has no row in zeroTenantPlatformCases: add a zero-tenant tree that reports it", name, kind)
-		}
-	}
-	for kind := range zeroTenantPlatformCases {
-		if !declared[kind] {
-			t.Errorf("zeroTenantPlatformCases row %q is not a Problem kind pkg/routingpolicy declares", kind)
-		}
-	}
 }
 
 // zeroTenantTreeLevelCases: the findings judged without a tenant — the
@@ -167,8 +153,8 @@ const (
 // when every finding of it judges a tenant in scope (none can come out of a
 // scope with no tenant), kindTreeLevel when some finding of it is judged
 // without one. TestGuard_EveryFindingKindIsClassifiedForZeroTenants holds
-// it to findingkind.All() — the PlaneRouting kinds excepted, which the CLI
-// reports on no tree since #2904 — and holds every kindTreeLevel kind to a
+// it to findingkind.All() (the routing kinds, which the CLI reported on no
+// tree since #2904, left the registry with #2905) and holds every kindTreeLevel kind to a
 // row of zeroTenantTreeLevelCases — so a new kind is red until someone says
 // which it is, and a tree-level one until a zero-tenant run is shown to
 // report it.
@@ -210,12 +196,6 @@ func TestGuard_EveryFindingKindIsClassifiedForZeroTenants(t *testing.T) {
 	for _, e := range findingkind.All() {
 		name := e.Kind.String()
 		registered[name] = true
-		if e.Kind.Plane() == findingkind.PlaneRouting {
-			if _, listed := zeroTenantKindClass[name]; listed {
-				t.Errorf("%q is a routing-plane kind, which the CLI reports on no tree (#2904): drop it from zeroTenantKindClass", name)
-			}
-			continue
-		}
 		switch zeroTenantKindClass[name] {
 		case kindNeedsTenant:
 		case kindTreeLevel:
@@ -291,7 +271,7 @@ var zeroTenantRoutingCases = map[string]zeroTenantPlatformCase{
 	"enforced group_by, single shape": {
 		files: map[string]string{"_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver: " + webhookReceiver +
 			"\n  group_by: [\"alertname\", 5]\n"},
-		finding: findingkind.FindingRoutingGroupByInvalid,
+		was: "routing_group_by_invalid",
 	},
 }
 
@@ -313,7 +293,7 @@ func TestGuard_RoutingProblemOnZeroTenantScopeIsUndetermined(t *testing.T) {
 			got := runJudged(t, tc.files, tc.scope)
 			if got.code != exitUndetermined || len(got.findings) != 0 || len(got.undetermined) == 0 {
 				t.Errorf("exit %d, findings %v, undetermined %v; want 4, none, some (was %s)\nstderr=%s",
-					got.code, got.findings, got.undetermined, tc.finding, got.stderr)
+					got.code, got.findings, got.undetermined, tc.was, got.stderr)
 			}
 		})
 	}

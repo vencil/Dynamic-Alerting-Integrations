@@ -7,16 +7,14 @@ need EXACTLY ONE field set — is declared in:
     whose branches each require one non-empty field)
   - Python:      scripts/tools/_lib_constants.py RECEIVER_TYPES
                  (`required` + `exactly_one_of`)
-  - Go:          components/threshold-exporter/app/pkg/receiverspec/spec.go
-                 specs (Required + ExactlyOneOf), used by da-guard, tenant-api
-                 and pkg/config
 
-The schema is the hub. This test pins the Python copy to it; the Go copy is
-pinned to it by TestSpecs_MatchSchema / TestHTTPConfig_MatchSchema in
-pkg/receiverspec. Each side reads the schema as JSON and its own copy as a
-value, so no copy is parsed out of another language's source text.
+The schema is the hub. This test pins the Python copy to it, reading the
+schema as JSON and the copy as a value. Until ADR-036 step 3 (#2905) a Go copy
+(pkg/receiverspec Check, used by da-guard) was pinned to the same schema; it
+was deleted with da-guard's routing checks, and pkg/receiverspec keeps only
+the list of receiver types the exporter looks up (TestKnown_MatchesSchema).
 
-Emptiness is part of the contract. Python and Go treat "" and null as unset,
+Emptiness is part of the contract. Python treats "" and null as unset,
 as Alertmanager does (its config is a Go struct; both decode to the zero
 value — a YAML `service_key:` with no value is null), so the schema reader
 demands a single pinned type plus `minLength >= 1` (`minItems` for arrays) on
@@ -24,8 +22,7 @@ every required field and every exactly-one branch — otherwise an empty or
 null key would count as "given" in the schema only, and
 {service_key: "" | null, routing_key: "r"} would match both branches.
 
-Shared case table (also read by pkg/receiverspec TestPresenceCases and the Go
-guard's TestReceiverPresenceCases):
+Shared case table:
 components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json
 Its `am` column is Alertmanager's own verdict, asserted by
 tests/alertmanager-inhibit/receiver_cases_test.go with config.Load (#2180).
@@ -40,17 +37,15 @@ property referencing `definitions.yamlBool` must be a boolean, null or a YAML 1.
 boolean word (the enum is read from the schema at run time), and http_config
 follows Alertmanager's HTTPClientConfig / ProxyConfig rules — at most one auth
 method (`HTTP_CONFIG_AUTH_FIELDS`), string-only tokens and proxy_url. Whether a
-proxy_url parses as a URL is left to amtool (the generator's --validate gate);
-the Go side checks it itself, so those rows carry `python_differs` (the Python
-verdict and why), as tests/shared/routing_policy_parity_matrix.json does. What is
-nested inside http_config (tls_config, oauth2, authorization, basic_auth, the
-header mappings; #2984) only the schema and Alertmanager judge: those rows carry
-`python_differs` and `go_differs` (the Go checks' verdict, asserted by
-pkg/receiverspec and the guard). A row may carry its receiver
-as YAML text (`yaml`) instead of JSON: it is read with PyYAML here and, on the Go
-side, with pkg/pyyamlcompat over the yaml.v3 node, which types a plain scalar the
-way PyYAML does (plain `on` a boolean, quoted `"on"` a string; see the
-plain-scalar table below). `schema_valid`
+proxy_url parses as a URL is left to amtool (the generator's --validate gate),
+so those rows carry `python_differs` (the Python verdict and why), as
+tests/shared/routing_policy_parity_matrix.json does. What is nested inside
+http_config (tls_config, oauth2, authorization, basic_auth, the header
+mappings; #2984) only the schema and Alertmanager judge: those rows carry
+`python_differs` too (and a `go_differs` no reader asserts since #2905: the
+verdict of the deleted Go copy, still in the table). A row may carry its receiver as YAML text (`yaml`)
+instead of JSON: it is read with PyYAML here (plain `on` a boolean, quoted
+`"on"` a string; see the plain-scalar candidates below). `schema_valid`
 records a row where the schema cannot judge like the pipeline (proxy_url parsing,
 a yaml row's plain-string `to`); `strict` names each row
 Alertmanager accepts but the platform refuses on purpose.
@@ -87,7 +82,7 @@ _UNMODELLED = ("anyOf", "allOf", "not", "if", "dependencies", "dependentRequired
 
 
 def _rejects_empty(prop: dict | None) -> bool:
-    """True when the property rejects "" and null, which Python/Go read as unset.
+    """True when the property rejects "" and null, which Python reads as unset.
 
     The type must be pinned to one type: minLength / minItems do not apply to
     null, so `type: ["string", "null"]` + minLength would still let null in.
@@ -124,7 +119,7 @@ def _schema_receivers() -> dict[str, dict]:
             groups.append(sorted(group))
         out[rtype] = {
             "required": required,
-            # Python/Go truthiness: an empty value never satisfies presence.
+            # Python truthiness: an empty value never satisfies presence.
             "required_rejects_empty": {f: _rejects_empty(d["properties"].get(f)) for f in required},
             "exactly_one_of": [[f for f, _ in g] for g in groups],
             "group_rejects_empty": {f: e for g in groups for f, e in g},
@@ -175,12 +170,12 @@ def test_python_matches_schema(rtype, aspect):
 
 
 @pytest.mark.parametrize("rtype", sorted(SCHEMA))
-def test_schema_rejects_empty_like_python_and_go(rtype):
-    """Python and Go read "" and null as unset; the schema must too."""
+def test_schema_rejects_empty_like_python(rtype):
+    """Python reads "" and null as unset; the schema must too."""
     accepts_empty = [f for f, ok in {**SCHEMA[rtype]["required_rejects_empty"],
                                      **SCHEMA[rtype]["group_rejects_empty"]}.items() if not ok]
     assert not accepts_empty, (
-        f"{rtype}: schema lets {accepts_empty} be empty, but Python and the Go guard "
+        f"{rtype}: schema lets {accepts_empty} be empty, but Python "
         "treat empty and null as unset — pin `type` and add minLength: 1 (minItems for arrays)")
 
 
@@ -230,7 +225,7 @@ def test_shared_case_table_am_column():
 
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
 def test_shared_case_table_schema_and_python_agree(case):
-    """Same rows as the Go guard's TestReceiverPresenceCases."""
+    """The schema and the generator's receiver build, row by row."""
     receiver = _receiver(case)
     doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
     schema_errors = [e.message for e in _VALIDATOR.iter_errors(doc)]
@@ -242,7 +237,7 @@ def test_shared_case_table_schema_and_python_agree(case):
 
 
 def test_python_differs_rows_say_why():
-    """#2295: a row where Python and Go part ways names the reason."""
+    """#2295: a row where the generator departs from `valid` names the reason."""
     bad = [c["name"] for c in CASES if "python_differs" in c
            and (set(c["python_differs"]) != {"valid", "reason"} or not c["python_differs"]["reason"]
                 or c["python_differs"]["valid"] == c["valid"])]
@@ -262,17 +257,12 @@ def test_pipeline_writes_yaml_bool_words_as_booleans():
 # --- PyYAML's implicit typing of plain scalars (#2295) ----------------------
 #
 # bearer_token / bearer_token_file / proxy_url / no_proxy must be strings.
-# yaml.v3 alone hands plain `on` or `1:30` over as a string, while PyYAML (the
-# route generator) reads a boolean or an integer — the generator would skip a
-# receiver da-guard and tenant-api accepted. So the Go readers decode
-# receivers with pkg/pyyamlcompat, which types a plain scalar as PyYAML does
-# and keeps a quoted one a string. Which plain text PyYAML retypes comes from
-# PyYAML itself, not from memory: the table below is PyYAML's SafeLoader
-# verdict on each candidate, and pkg/pyyamlcompat's TestDecode_MatchesPyYAML
-# reads it.
-
-_PLAIN_SCALARS = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "pkg",
-                              "pyyamlcompat", "testdata", "pyyaml_plain_scalars.json")
+# PyYAML (the route generator) reads plain `on` or `1:30` as a boolean or an
+# integer, which the generator refuses there. Which plain text PyYAML retypes
+# comes from PyYAML itself, not from memory: _plain_scalar_table is PyYAML's
+# SafeLoader verdict on each candidate, computed at run time. (Until #2905 it
+# was also committed as pkg/pyyamlcompat/testdata/pyyaml_plain_scalars.json
+# for the Go decoder that copied PyYAML's typing; both are deleted.)
 
 
 def _plain_scalar_candidates() -> list[str]:
@@ -312,19 +302,6 @@ def _pyyaml_verdict(text: str) -> str:
 
 def _plain_scalar_table() -> list[dict]:
     return [{"text": t, "pyyaml": _pyyaml_verdict(t)} for t in _plain_scalar_candidates()]
-
-
-def test_plain_scalar_table_is_pyyamls_verdict():
-    """The committed table is what PyYAML says today. Regenerate with
-    REGEN_PYYAML_SCALARS=1 when PyYAML or the candidates change."""
-    table = _plain_scalar_table()
-    if os.environ.get("REGEN_PYYAML_SCALARS"):
-        with open(_PLAIN_SCALARS, "w", encoding="utf-8") as fh:
-            fh.write("[\n" + ",\n".join(json.dumps(r, ensure_ascii=False) for r in table) + "\n]\n")
-    with open(_PLAIN_SCALARS, encoding="utf-8") as fh:
-        committed = json.load(fh)
-    assert committed == table, (
-        "pyyaml_plain_scalars.json differs from PyYAML's verdict; rerun with REGEN_PYYAML_SCALARS=1")
 
 
 def test_plain_scalar_table_covers_every_implicit_resolver():

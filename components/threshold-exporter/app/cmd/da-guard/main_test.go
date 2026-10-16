@@ -978,3 +978,96 @@ func TestRun_RoutingOnlyTreesAreUndetermined(t *testing.T) {
 		})
 	}
 }
+
+// --- fixture trees shared by the CLI tests ---------------------------------
+
+// parityTree is one tree of tests/shared/routing_policy_parity_matrix.json,
+// read here as a fixture only: its name and its files. The matrix's
+// expectations are the route generator's
+// (tests/shared/test_routing_policy_parity.py); da-guard's own half of it
+// went with its routing checks (#2905).
+type parityTree struct {
+	Name  string            `json:"name"`
+	Files map[string]string `json:"files"`
+}
+
+// loadRoutingPolicyMatrix reads the parity matrix's trees.
+func loadRoutingPolicyMatrix(t *testing.T) []parityTree {
+	t.Helper()
+	_, thisFile, _, _ := runtime.Caller(0)
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "..",
+		"tests", "shared", "routing_policy_parity_matrix.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- repo test fixture
+	if err != nil {
+		t.Fatalf("read matrix: %v", err)
+	}
+	var m struct {
+		Trees []parityTree `json:"trees"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("parse matrix: %v", err)
+	}
+	if len(m.Trees) == 0 {
+		t.Fatal("matrix has no trees — a vacuous corpus passes nothing")
+	}
+	for _, tree := range m.Trees {
+		if tree.Name == "" || len(tree.Files) == 0 {
+			t.Fatalf("matrix tree %q has no name or no files", tree.Name)
+		}
+	}
+	return m.Trees
+}
+
+type jsonFinding struct {
+	Severity string `json:"severity"`
+	Kind     string `json:"kind"`
+	TenantID string `json:"tenant_id"`
+	Field    string `json:"field"`
+}
+
+// writeParityTree writes files (root-relative slash paths, any depth —
+// #2326) under a fresh conf.d and returns it.
+func writeParityTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "conf.d")
+	for rel, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// runTreeJSON writes files under a fresh conf.d and returns the exit code and
+// the report's findings.
+func runTreeJSON(t *testing.T, files map[string]string) (int, []jsonFinding, []string) {
+	t.Helper()
+	dir := writeParityTree(t, files)
+	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--format", "json")
+	var doc struct {
+		ParseFailed []string `json:"parse_failed"`
+		Report      struct {
+			Findings []jsonFinding `json:"findings"`
+		} `json:"report"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("exit %d, report is not JSON: %v\nstdout=%s\nstderr=%s", code, err, stdout, stderr)
+	}
+	return code, doc.Report.Findings, doc.ParseFailed
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
