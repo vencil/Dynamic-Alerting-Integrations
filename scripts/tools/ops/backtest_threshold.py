@@ -557,11 +557,13 @@ def _minute(hhmm):
 
 
 def _served_day(tenant_values, key, side):
-    """`[(start_minute, end_minute, rendered value, series)]` for one key's
-    whole UTC day as /metrics serves it (`schedules`; `series` the segment's
-    /metrics series, #2750); a key or tenant /metrics never serves is one
-    segment of None. A segment in which /metrics cannot be
-    gathered at all is refused: a diff across it would be a guess."""
+    """`[(start_minute, end_minute, (rendered value, severity), series)]` for
+    one key's whole UTC day as /metrics serves it (`schedules`; `series` the
+    segment's /metrics series, #2750); a key or tenant /metrics never serves
+    is one segment of None. The severity is part of what is compared
+    (#3060): it decides which alert, if any, compares the row. A segment in
+    which /metrics cannot be gathered at all is refused: a diff across it
+    would be a guess."""
     if tenant_values is None or key not in (tenant_values.schedules or {}):
         return [(0, _DAY_MINUTES, None, None)]
     out = []
@@ -570,8 +572,8 @@ def _served_day(tenant_values, key, side):
             raise ServedValuesError(
                 f"da-guard served-values: {side} /metrics cannot be gathered "
                 f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
-        out.append((_minute(seg.start), _minute(seg.end), _render_served(seg.value),
-                    seg.series))
+        served = None if seg.value is None else (_render_served(seg.value), seg.severity)
+        out.append((_minute(seg.start), _minute(seg.end), served, seg.series))
     return out
 
 
@@ -611,6 +613,49 @@ def _differing_runs(old_day, new_day):
         else:
             runs.append((start, end) + pair)
     return [r for r in runs if r[2] != r[3]]
+
+
+def _change_pair(old, new):
+    """What groups the differing runs of one key into changes (#3060): the
+    served values and, per side, whether a threshold rule selects its
+    severity — so a severity boundary between two compared severities does
+    not split a value change in two. With equal values the severities
+    themselves are what changed, and they are part of the pair."""
+    (old_v, old_s), (new_v, new_s) = (side or (None, None) for side in (old, new))
+    pair = (old_v, new_v, old_s in _COMPARED_SEVERITIES, new_s in _COMPARED_SEVERITIES)
+    return pair + ((old_s, new_s) if old_v == new_v else ())
+
+
+def _joined(spans):
+    """`spans` (day order) with the ones that touch joined: a severity
+    boundary inside one change's part of the day is not a new part of it.
+    Not joined across midnight, as `_differing_runs`."""
+    out = []
+    for start, end in spans:
+        if out and out[-1][1] == start:
+            out[-1] = (out[-1][0], end)
+        else:
+            out.append((start, end))
+    return out
+
+
+def _severity_list(severities):
+    """One side's severities as `old_severity` / `new_severity` carry them:
+    the one, or several "/"-joined with an empty one spelled `""`."""
+    if len(severities) == 1:
+        return severities[0]
+    return "/".join(s or '""' for s in severities)
+
+
+def _severities_in(day, spans):
+    """The severities a side is served with in `spans`, in day order, each
+    once ("" included; a part of the day with no row adds none)."""
+    out = []
+    for start, end in spans:
+        for s, e, served, _series in day:
+            if served is not None and s < end and start < e and served[1] not in out:
+                out.append(served[1])
+    return out
 
 
 def _print_tree_warnings(trees):
@@ -664,8 +709,18 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     a `_defaults.yaml`, a profile or a sub-directory is a change, and a
     `tenants:` wrapper is a tenant, not a metric called `tenants`. Rows are
     per tenant and threshold key (the exporter's canonical spelling) whose
-    served value differs; a severity-only change is not one (the firing
-    count this tool measures does not depend on it).
+    served value or severity differs.
+
+    * #3060: the severity decides which alert compares a row — a
+      `severity="warning"` row the `metric_key` alert, a critical one the
+      `<metric_key>_critical` alert, any other (`high`, `""`) none — and the
+      value alone decides when it fires. A side whose severity no rule
+      selects is `old_compared` / `new_compared` False: `backtest_change`
+      reads it as no threshold (`70` -> `70:high` silences the alert). When
+      the severities differ, `old_severity` / `new_severity` name them
+      ("/"-joined when a side has several in the change's parts of the day);
+      the same value under another compared severity (`70` -> `70:critical`)
+      is a change of its own, which fires on the same points.
 
     * `series`: every /metrics series (`Series`, #2750) the key is served
       as on either side in any part of the day the pair holds in, as
@@ -713,11 +768,19 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
         dimensioned = _dimensioned_rows(days)
         for key, (old_day, new_day) in days.items():
             pairs = {}
-            for start, end, old_v, new_v in _differing_runs(old_day, new_day):
-                pairs.setdefault((old_v, new_v), []).append((start, end))
-            for (old_v, new_v), spans in pairs.items():
+            for start, end, old, new in _differing_runs(old_day, new_day):
+                pairs.setdefault(_change_pair(old, new), []).append((start, end))
+            for (old_v, new_v, old_c, new_c, *_), spans in pairs.items():
+                spans = _joined(spans)
                 change = {"tenant": tenant, "metric": key,
                           "old_value": old_v, "new_value": new_v}
+                for side, compared in (("old", old_c), ("new", new_c)):
+                    if not compared and change[f"{side}_value"] is not None:
+                        change[f"{side}_compared"] = False
+                old_s, new_s = (_severities_in(day, spans) for day in (old_day, new_day))
+                if old_s and new_s and old_s != new_s:
+                    change["old_severity"], change["new_severity"] = (
+                        _severity_list(old_s), _severity_list(new_s))
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
                 change["series"] = _series_in((old_day, new_day), spans)
@@ -1128,33 +1191,50 @@ def parse_threshold_value(key, raw):
     return value, severity
 
 
-def _written_alert_key(change):
-    """`(key, None)`: the threshold key whose alert compares a change written
-    as `--git-diff` / `--tenant` give it — or `(None, reason)`.
+def _written_severities(change):
+    """`[old severity, new severity]` of a change written as `--git-diff` /
+    `--tenant` give it, as the exporter reads the values (None for a side
+    without one, or one this backtest cannot read)."""
+    key = canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
+    out = []
+    for raw in (change["old_value"], change["new_value"]):
+        try:
+            parsed = parse_threshold_value(key, raw)
+        except ValueError:
+            parsed = None
+        out.append(parsed and parsed[1])
+    return out
+
+
+def _written_alert_keys(change):
+    """`(keys, None)`: the threshold keys whose alerts compare a change
+    written as `--git-diff` / `--tenant` give it — or `(None, reason)`.
 
     The key as written: a retired spelling goes through the alias table
     (the exporter's own), and `N:critical` on a base key is a critical row,
-    compared by the `<key>_critical` alert. Values that are not read as
-    written, values of two severities (two different alerts), or a severity
-    no threshold rule selects, are reasons."""
+    compared by the `<key>_critical` alert. #3060: each side is compared by
+    the alert of its own severity, so `70` -> `50:critical` is compared by
+    both; a side of a severity no threshold rule selects is compared by none
+    (`backtest_change` reads it as no threshold). A value that is not read
+    as written, or no side any rule selects, is a reason."""
     key = canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
-    severities = []
+    keys, uncompared = [], []
     for raw in (change["old_value"], change["new_value"]):
         try:
             parsed = parse_threshold_value(key, raw)
         except ValueError:
             return None, f"value {str(raw)!r}: this backtest cannot read it the way the exporter does"
-        if parsed is not None and parsed[1] not in severities:
-            severities.append(parsed[1])
-    if len(severities) > 1:
-        return None, (f"severity changes ({' -> '.join(severities)}): the two values "
-                      "are compared by different alerts")
-    severity = severities[0] if severities else "warning"
-    if severity not in _COMPARED_SEVERITIES:
-        return None, f"severity {severity!r} is selected by no threshold rule"
-    if severity == "critical" and not key.endswith("_critical"):
-        key += "_critical"
-    return key, None
+        if parsed is None:
+            continue
+        if parsed[1] not in _COMPARED_SEVERITIES:
+            uncompared.append(parsed[1])
+            continue
+        alert = key + "_critical" if parsed[1] == "critical" and not key.endswith("_critical") else key
+        if alert not in keys:
+            keys.append(alert)
+    if not keys:
+        return None, f"severity {(uncompared or ['warning'])[0]!r} is selected by no threshold rule"
+    return keys, None
 
 
 def _alert_keys(change):
@@ -1165,24 +1245,26 @@ def _alert_keys(change):
     a critical row is compared by the `<metric_key>_critical` alert (a window
     overridden to `N:critical` too), a warning row by `metric_key`'s; a row
     of any other severity (`60:high`, `60:Critical` — the rules select
-    `severity="warning"` / `"critical"` exactly) by none, the same reason
-    `_written_alert_key` gives. A legacy twin is the same row under a
+    `severity="warning"` / `"critical"` exactly) by none: #3060, such a row
+    is skipped (`backtest_change` reads its side as no threshold), and with
+    no row any rule selects the change is not backtested, the same reason
+    `_written_alert_keys` gives. A legacy twin is the same row under a
     retired name and is never read.
     ⛔ A non-critical row whose `metric_key` itself ends in `_critical` is a
     `<base>_critical` key served on its own (its base is not declared in the
     root `defaults:`): its metric label is `<x>_critical`, which no threshold
     rule selects, so no alert compares it. A change from `--git-diff` /
-    `--tenant` is `_written_alert_key`."""
+    `--tenant` is `_written_alert_keys`."""
     if "series" not in change:
-        key, reason = _written_alert_key(change)
-        return ([key], None) if key else (None, reason)
-    out = []
+        return _written_alert_keys(change)
+    out, uncompared = [], []
     for s in change["series"]:
         if s.legacy_twin:
             continue
         severity = s.labels.get("severity")
         if severity not in _COMPARED_SEVERITIES:
-            return None, f"severity {severity!r} is selected by no threshold rule"
+            uncompared.append(severity)
+            continue
         critical = severity == "critical"
         if not critical and s.metric_key.endswith("_critical"):
             return None, (f"served as a non-critical row of {s.metric_key} (its base is not "
@@ -1190,6 +1272,8 @@ def _alert_keys(change):
         key = s.metric_key + "_critical" if critical else s.metric_key
         if key not in out:
             out.append(key)
+    if not out and uncompared:
+        return None, f"severity {uncompared[0]!r} is selected by no threshold rule"
     return out, None
 
 
@@ -1287,6 +1371,26 @@ def _not_backtested(change, reason):
 _QUERY_ERROR_MAX = 300
 
 
+def _side_compared(change, side, parsed):
+    """Whether a threshold rule selects this side's severity (#3060). A
+    change read from two trees says so (`<side>_compared`); one written as
+    `--git-diff` / `--tenant` give it carries the severity in its value."""
+    if "series" in change:
+        return change.get(f"{side}_compared", True)
+    return parsed is None or parsed[1] in _COMPARED_SEVERITIES
+
+
+def severity_change(change):
+    """`(old, new)`: the severities of a change whose two sides differ in
+    it, or None (#3060). A side without a threshold has none to compare."""
+    if "series" in change:
+        if "old_severity" in change:
+            return change["old_severity"], change["new_severity"]
+        return None
+    old_s, new_s = _written_severities(change)
+    return (old_s, new_s) if old_s is not None and new_s is not None and old_s != new_s else None
+
+
 def backtest_change(prom_url, change, lookback_seconds):
     """Backtest a single threshold change against historical data.
 
@@ -1375,7 +1479,9 @@ def backtest_change(prom_url, change, lookback_seconds):
     # read. None is a switched-off side: the disable / enable transitions.
     key = canonical_key(metric, DEPRECATED_KEY_ALIASES).partition("{")[0]
     old_t, new_t = (parse_threshold_value(key, v) for v in (old_value, new_value))
-    old_t, new_t = (t and t[0] for t in (old_t, new_t))
+    # #3060: a side whose severity no threshold rule selects is no threshold.
+    old_t, new_t = (t and t[0] if _side_compared(change, side, t) else None
+                    for side, t in (("old", old_t), ("new", new_t)))
     old_disabled, new_disabled = old_t is None, new_t is None
 
     if new_disabled and not old_disabled:
@@ -1522,6 +1628,19 @@ def _not_backtested_counts(changes):
     return ", ".join(f"{n} ({r})" for r, n in reasons.items())
 
 
+def _shown_value(change, side, none):
+    """A side's value as the reports show it: `none` without one, and its
+    severity beside it when the two sides' severities differ (#3060) and
+    the value does not already carry it (`--tenant 70:high` does)."""
+    value = change[f"{side}_value"]
+    if value is None:
+        return none
+    severity = change.get(f"{side}_severity")
+    if severity is None or ":" in str(value):
+        return str(value)
+    return f"{value} ({safe_label(severity) or '\"\"'})"
+
+
 def print_text_report(report):
     """Print human-readable backtest report."""
     print()
@@ -1547,8 +1666,7 @@ def print_text_report(report):
     for change in report["changes"]:
         risk = change["risk"]
         marker = "!!!" if risk == "HIGH" else " ! " if risk == "MEDIUM" else "   "
-        old_v = change["old_value"] or "(none)"
-        new_v = change["new_value"] or "(none)"
+        old_v, new_v = (_shown_value(change, side, "(none)") for side in ("old", "new"))
         window = f" ({', '.join(change['window'])} UTC)" if change.get("window") else ""
         print(f"  {marker} [{risk:6s}] {safe_label(change['tenant'])}/"
               f"{safe_label(change['metric'])}: "
@@ -1584,8 +1702,7 @@ def generate_markdown(report):
     lines.append("|------|--------|--------|-----|-----|--------|-------|")
 
     for c in sorted(report["changes"], key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3}.get(x["risk"], 9)):
-        old_v = c["old_value"] or "—"
-        new_v = c["new_value"] or "—"
+        old_v, new_v = (_shown_value(c, side, "—").replace("|", "\\|") for side in ("old", "new"))
         window = f" ({', '.join(c['window'])} UTC)" if c.get("window") else ""
         # #3002 B: the PromQL the verdict rests on; "—" when none was asked.
         query = f"`{c['query']}`" if c.get("query") else "—"
@@ -1906,6 +2023,9 @@ def main():
         result = backtest_change(args.prometheus, change, lookback_seconds)
         if change.get("window"):  # #2119: the part of the day the values hold in
             result["window"] = change["window"]
+        severities = severity_change(change)
+        if severities:  # #3060: `70 -> 70` alone does not say what changed
+            result["old_severity"], result["new_severity"] = severities
         results.append(result)
 
     # Generate report
