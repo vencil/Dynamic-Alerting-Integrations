@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """threshold_recommend.py — 閾值推薦引擎。
 
-根據 Prometheus 歷史 metrics 的 P50/P95/P99 百分位數，結合 alert_quality Noise Score，
+根據 Prometheus 歷史 metrics 的 P50/P95/P99 百分位數，
 為每個 tenant 的每個 metric key 產生閾值推薦。
 
 #719 資料源（重要）：本工具查每個閾值 key 在 rule-pack alert 中**實際比對**的
@@ -390,7 +390,6 @@ def recommend_threshold(
     pcts: dict[str, float],
     sample_count: int,
     min_samples: int,
-    noise_grade: Optional[str] = None,
     values: Optional[list[float]] = None,
 ) -> KeyRecommendation:
     """Generate a threshold recommendation for one upper-bound (``>``) key.
@@ -407,7 +406,6 @@ def recommend_threshold(
         points over; rounding to the nearest could land at or under current).
       - Rounding keeps current's style: an int for a whole number (``"1e3"``
         too), else current's own decimal places, at least 2 (``_decimals``).
-      - noise_grade == BAD: P99 instead of P95 (relax a noisy alert).
       - current == 0 with P95 > 0 (#2997): no recommendation; ``force_manual``
         with ``delta_pct`` None (a change from 0 has no relative size). The
         reason names the observed P99 (and its round-up to current's
@@ -420,7 +418,6 @@ def recommend_threshold(
         pcts: Dict with p50, p95, p99 values (2-dp, as shown).
         sample_count: Number of data points.
         min_samples: Minimum sample threshold for confidence.
-        noise_grade: Optional noise grade from alert_quality.
         values: The raw points ``pcts`` came from. Gives the unrounded
             P95 / P99 and the window max; without them the 2-dp ``pcts`` are
             used and the tighten floor is half of current alone.
@@ -511,24 +508,20 @@ def recommend_threshold(
     def _round(x: float) -> Any:
         return round(x) if places == 0 else round(x, places)
 
-    noisy = noise_grade == "BAD"
-    base = p99 if noisy else p95
     floored = ""
-    if base > current_float:
+    if p95 > current_float:
         # Up, never to the nearest: rounding P99 to current's precision could
         # land at or under current (0.001 → 0.0 was a "-100% relax").
         target = _ceil_to(p99, places)
-        reason_prefix = ("noisy alert (BAD noise grade) → relaxed to P99" if noisy
-                         else "relaxed to P99")
+        reason_prefix = "relaxed to P99"
         if target <= current_float:
             # Defence only (ceil keeps target >= P99 > current): a relax
             # must never come out as a decrease.
             target = current_float
     else:
-        target = _round(base)
-        reason_prefix = ("noisy alert (BAD noise grade) → recommended at P99"
-                         if noisy else "recommended at P95")
-        if base < current_float:
+        target = _round(p95)
+        reason_prefix = "recommended at P95"
+        if p95 < current_float:
             half = _ceil_to(Decimal(str(current_float)) * Decimal("0.5"), places)
             holds = {("one round tightens at most 50% (half of current, rounded up, "
                       f"is {_format_threshold_value(half)})"): half}
@@ -543,7 +536,7 @@ def recommend_threshold(
                        else current_float)
                 target = min(floor, cap)
                 reason_prefix = (f"tighten floored at {_format_threshold_value(target)} above "
-                                 f"P{99 if noisy else 95} {base:.6g}")
+                                 f"P95 {p95:.6g}")
                 floored = ": " + "; ".join(w for w, v in holds.items() if v == floor)
 
     if target <= 0:
