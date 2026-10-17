@@ -340,13 +340,13 @@ func TestEnsureNotDeclaredElsewhere_ScanFailureFailsClosed(t *testing.T) {
 	}
 
 	// End to end on the PR path: nothing written, no branch left behind. The
-	// PR path judges a checkout of the fresh base (openFreshBase, #2972), which
-	// cannot be opened for a conf.d that does not exist, so it fails closed
-	// there — before the walk, as WritePRBatch does.
+	// PR path judges a checkout of the fresh base (openFreshBase, #2972),
+	// which cannot be opened for a conf.d that does not exist — reported as
+	// the walk failing to run.
 	repo := initRepoOnMain(t)
 	w := NewWriter(filepath.Join(repo, "conf.d-does-not-exist"), repo)
-	if _, err := w.WritePR(context.Background(), "fresh-t", "op@example.com", tenantBody("fresh-t")); err == nil {
-		t.Fatal("WritePR err = nil, want it to fail closed")
+	if _, err := w.WritePR(context.Background(), "fresh-t", "op@example.com", tenantBody("fresh-t")); !errors.Is(err, ErrTenantTreeScan) {
+		t.Fatalf("WritePR err = %v, want ErrTenantTreeScan", err)
 	}
 	assertCleanOnBase(t, repo, "main", "tenant-api/")
 }

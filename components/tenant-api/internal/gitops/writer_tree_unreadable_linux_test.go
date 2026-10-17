@@ -383,3 +383,35 @@ func TestTreeUnreadable_PRModesJudgeTheGitBaseNotTheServingTree(t *testing.T) {
 		})
 	}
 }
+
+// #2972 review: the one entry of the serving tree a PR-mode write touches is
+// its own tenant file, which Step 4 replaces there. An untracked FIFO at that
+// path is not on the fresh base, so every verdict passes — and replacing it,
+// then returning to the base, would silently delete it. It is refused as
+// direct mode refuses such a tenant file (TargetUnreadableError,
+// TENANT_CONFIG_NOT_LOADABLE), and left in place; nothing is pushed.
+func TestWritePR_UntrackedNonRegularTargetIsRefusedAndKept(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"prk-o.yaml": tenantBody("prk-o")})
+	target := filepath.Join(dir, "prk-t.yaml")
+	mkfifoReleased(t, target)
+	done := make(chan error, 1)
+	go func() { done <- writeVia(t, "WritePR", NewWriter(dir, dir), "prk-t") }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("blocked")
+	}
+	var te *TargetUnreadableError
+	if !errors.As(err, &te) || !errors.Is(err, confd.ErrNotRegularFile) || te.RelKey != "prk-t.yaml" {
+		t.Fatalf("err = %v, want *TargetUnreadableError (not_regular_file) for prk-t.yaml", err)
+	}
+	if fi, lerr := os.Lstat(target); lerr != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the FIFO is gone or replaced (err=%v)", lerr)
+	}
+	if b := gitOut(t, dir, "ls-remote", "origin", "refs/heads/tenant-api/*"); b != "" {
+		t.Errorf("a refused write pushed a branch: %s", b)
+	}
+	// git status does not list a FIFO, so the FIFO staying is checked above.
+	assertCleanOnBase(t, dir, "main", "tenant-api/")
+}

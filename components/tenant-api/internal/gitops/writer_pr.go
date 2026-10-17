@@ -12,13 +12,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/platform"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // PRWriteResult contains the result of a PR-mode write operation.
@@ -213,6 +216,12 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
 	}
+	// Step 3b'': the serving tree's own entry at filePath, which Step 4
+	// replaces there — the one thing of the serving tree this write touches.
+	if err := w.refuseUntrackedNonRegular(filePath, tenantID); err != nil {
+		w.abortFeatureBranch(base, branchName)
+		return nil, err
+	}
 
 	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
 	// judges the branch point — the feature branch's HEAD, nothing committed
@@ -333,6 +342,15 @@ func (w *Writer) openFreshBase(rev, branch string) (*stagingTree, error) {
 func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck) (filePath string, notices []string, err error) {
 	st, err := w.openFreshBase(branchPoint, "")
 	if err != nil {
+		// A conf.d that cannot be reached is the walk failing to run, which
+		// the #2078 guard fails closed on (ErrTenantTreeScan), as the walk
+		// itself would report it. ⛔ Only then: openFreshBase also fails on
+		// git (index.lock contention is ErrWriteOverloaded, a retryable 503),
+		// and the handlers map ErrTenantTreeScan to a 500 before they look
+		// at ErrWriteOverloaded (writeWriteFlowError).
+		if _, serr := os.Stat(w.configDir); serr != nil {
+			return "", nil, fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
+		}
 		return "", nil, err
 	}
 	defer w.closeStaging(st)
@@ -388,6 +406,62 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 		return "", nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 	return filepath.Join(w.configDir, filepath.FromSlash(confRelKey(st.configDir, basePath))), notices, nil
+}
+
+// refuseUntrackedNonRegular refuses a PR-mode write whose tenant file, in
+// the SERVING tree, is an entry git does not track and that is not a regular
+// file: a FIFO, a socket, a device, a directory, or a symlink to one. Caller
+// holds w.mu, with the feature branch checked out.
+//
+// ⚠️ THE ONE PLACE PR MODE LOOKS AT THE SERVING TREE (#2972). Every verdict is
+// taken on the fresh base (prResolveOnBase), where such an entry does not
+// exist, so the write would go through: Step 4 renames the body over it and
+// the return to base removes the file the base does not have — the entry, an
+// operator's trace of a fault on tenant-api's copy, silently gone. So it is
+// refused instead, with the TargetUnreadableError direct mode refuses such a
+// tenant file with (TENANT_CONFIG_NOT_LOADABLE), and left where it is.
+//
+// Allowed, as before: nothing there; a tracked path (the checkout put git's
+// content there); an untracked regular file; an unresolvable symlink (no
+// content — ADR-036 §4's repair path). Any other failed stat is refused
+// too: what is there cannot be told apart from content.
+func (w *Writer) refuseUntrackedNonRegular(filePath, tenantID string) error {
+	li, err := os.Lstat(filePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	reason := cfg.UnreadableSpecialFile
+	if err == nil {
+		if li.Mode().IsRegular() {
+			return nil
+		}
+		if li.Mode()&fs.ModeSymlink != 0 {
+			fi, serr := os.Stat(filePath)
+			switch {
+			case serr == nil && fi.Mode().IsRegular():
+				return nil
+			case serr != nil && isUnresolvableLink(filePath):
+				return nil
+			case serr != nil:
+				reason = cfg.UnreadableStatError
+			}
+		}
+	} else {
+		reason = cfg.UnreadableStatError
+	}
+	rel, err := w.confRel()
+	if err != nil {
+		return err
+	}
+	tracked, err := w.gitOutput(w.gitDir, "ls-files", "-z", "--",
+		":(top)"+filepath.ToSlash(filepath.Join(rel, filepath.Base(filePath))))
+	if err != nil {
+		return fmt.Errorf("check whether the tenant file is tracked: %w", err)
+	}
+	if len(tracked) > 0 {
+		return nil
+	}
+	return &TargetUnreadableError{TenantID: tenantID, RelKey: confRelKey(w.configDir, filePath), Reason: reason}
 }
 
 // WritePRBatch merges and writes multiple tenant configs to a single feature branch.
