@@ -124,14 +124,18 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 | 端點 | v2.7.0 行為 | v2.8.0 行為 |
 |---|---|---|
-| `PUT /api/v1/groups/{id}` | 任何 `PermWrite` user 可編輯任意 group 的 `members` | 必須對請求帶來的**每個** member tenant 有 `PermWrite`；更新既有 group 時，也必須對它**既有的每個** member 有 `PermWrite`（[#1529](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1529)：整份替換等於移除沒帶上的成員，與 DELETE 同一條規則；`members: []` 也一樣）；缺者列入 403 訊息（列法見 §3.6）|
+| `PUT /api/v1/groups/{id}` | 任何 `PermWrite` user 可編輯任意 group 的 `members` | 必須對請求帶來的**每個** member tenant 有 `PermWrite`；更新既有 group 時，也必須對它**既有的每個** member 有 `PermWrite`（[#1529](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1529)：整份替換等於移除沒帶上的成員，與 DELETE 同一條規則）；缺者列入 403 訊息（列法見 §3.6）。`members` 至少一個（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)；清空群組請用 DELETE）；id 已被 caller 看不到的 group 佔用時回 409 `GROUP_ID_UNAVAILABLE`（見下方「group 可見性」）|
 | `DELETE /api/v1/groups/{id}` | 任何 `PermWrite` user 可刪除任意 group | 必須對 group 既有**每個** member 有 `PermWrite`（防 DoS）；caller 看不到的 group 回 404（見下方「group 可見性」）|
 | `POST /api/v1/groups/{id}/batch` | 回應列出 group 的全部成員 | `results[]` 只列 caller 可讀的成員，`summary` 也只算這些（[#1530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1530)；同步、非同步、PR 模式皆同）；caller 看不到的 group 回 404 |
-| `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 過濾 `Results[]` 為 caller 可讀的子集，`summary` 依過濾後的結果重算；已有結果但一筆都不可讀時回 403（還沒有結果的 task 照回 200）|
-| `GET /api/v1/prs` | 回傳所有 pending PR/MR | bulk 模式：自動過濾不可讀租戶；`?tenant=<id>` 模式：不可讀回**空列表**（不 403，避免 existence oracle）|
+| `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 只有提交者看得到自己的 task；其他人一律拿到與「task 不存在」逐位元組相同的 404。task id 是 128-bit 隨機值。提交者看到的 `Results[]` 仍依其**當下**的讀取權限過濾，`summary` 依過濾後的結果重算（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
+| `GET /api/v1/prs` | 回傳所有 pending PR/MR | bulk 模式：自動過濾不可讀租戶；`?tenant=<id>` 模式：不可讀回**空列表**（不 403，避免 existence oracle）。批次 PR/MR 只給讀得到它涵蓋的**每個**租戶的 caller；不知道涵蓋哪些租戶的（例如重啟前開的）只給讀得到全部租戶的 caller（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
+| `GET /api/v1/events` | 每筆寫入都推給每個訂閱者 | 每個訂閱者只收到它讀得到的租戶的事件，事件送出當下以最新的 RBAC 判斷；不屬於單一租戶的 state 紀錄（groups、views、federation policy、AccountID 帳本）只送給讀得到全部租戶的 caller（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
+| `DELETE /api/v1/federation/tokens/{id}` | 無權撤銷時回 403，訊息帶 token 所屬租戶 | 無權撤銷時回與「token 不存在」逐位元組相同的 404（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
 | `PUT /api/v1/tenants/{id}` | 只要求對 `{id}` 有寫入權限，body 整檔寫入 `{id}` 所在的檔；同檔其他租戶的段落可被刪掉或改寫 | body **宣告**的每個租戶都要有寫入權限，只替換這些段落，其餘原樣保留（**breaking**，[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)，見下方「共用檔的 `PUT`」）|
 
-**group 可見性**：`GET /groups`、`GET /groups/{id}`、`DELETE /groups/{id}`、`POST /groups/{id}/batch` 共用同一個判斷——group 沒有成員，或 caller 至少能讀一個成員，才算看得到。看不到的 group 一律回與「不存在」逐位元組相同的 404，而且在讀 body 之前就回，所以任何一個端點都不會證實它存在。沒有成員的 group 對所有人可見（它沒有成員可洩漏；先前它對所有人都是 404，連平台管理員也刪不掉）。⚠️ 已知限制：`PUT` 是 upsert，對看不到的既有 group 回 403、對新 id 回 200，這個差異仍會透露 group id 已被使用；要消除得把 group id 依 org 分區，不在本次範圍。
+**group 可見性**：`GET /groups`、`GET /groups/{id}`、`DELETE /groups/{id}`、`POST /groups/{id}/batch` 共用同一個判斷——caller 至少能讀一個成員，才算看得到。看不到的 group 一律回與「不存在」逐位元組相同的 404，而且在讀 body 之前就回，所以任何一個端點都不會證實它存在。沒有成員的 group（`PUT` 已不能建立，只會是先前留下的）只有規則對 org、environments、domains 都不設限的平台管理員看得到、刪得掉；open mode 照舊全部看得到（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）。`PUT` 是 upsert：id 已被 caller 看不到的 group 佔用時，回固定內容的 409 `GROUP_ID_UNAVAILABLE`，不論那個 group 有哪些成員都逐位元組相同（不可重試，請換 id；與狀態寫入搶輸時的 409 `CONFLICT` 不同）。⚠️ 已接受的揭露：這仍透露「這個 id 已被使用」一個位元——group id 是所有 caller 共用的命名空間，Kubernetes 物件名稱、S3 bucket 名稱也是同樣的取捨；它不再透露該 group 的任何內容。
+
+**逐租戶判斷用的是哪個述詞，擋得住什麼**（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）：上表 `/events`、`/prs`、`/tasks/{id}` 的結果過濾，與 group 可見性，用的都是讀取平面所有列表過濾共用的同一個述詞（`OrgAllowedRead`）。它只判斷兩件事：規則的 `tenants` 是否涵蓋該租戶，以及 org 軸。org 軸上，對標了別的 org 的租戶，org-scoped 呼叫者在 shadow 與 enforce 下都被濾掉；沒標 org 的租戶要開 `--rbac-org-scope-enforce` 才會被濾掉，shadow 下照樣看得到。⚠️ `environments`／`domains` **不是**讀取平面的邊界：這個述詞不看它們，只限制了 environment 或 domain 的 `tenants: ["*"]` 呼叫者，在這些端點上照樣看得到每個租戶的項目。「讀得到全部租戶」（不屬於單一租戶的事件、租戶不明的批次 PR）的門檻則是規則對 `"*"` 有讀取權、且不帶 org-scope、environments、domains，所以上述呼叫者收不到這類項目。
 
 **共用檔的 `PUT`**（[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)，breaking）：conf.d 一份檔可以宣告多個租戶，而 `PUT /tenants/{id}` 寫的是 `{id}` 所在的那份檔。
 

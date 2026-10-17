@@ -80,16 +80,20 @@ func hasAccessibleMember(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p 
 // plane says is not there, and the denial can name the members the read plane
 // hid.
 //
-// A group with NO members is visible to every caller. hasAccessibleMember is
-// false for an empty list, so without this case an empty group was a 404 to
-// everyone once _rbac.yaml had rules, platform admins included, and moving that
-// 404 to DELETE would leave an empty group nobody could remove. An empty group
-// has no member to leak.
+// A group with NO members (#3123) is visible only to a platform admin
+// restricted on no axis (rbac.PlatformAdminUnrestricted — NOT
+// PlatformAdminNonOrgScoped, which ignores environments / domains). It has no
+// member to authorize against, so it used to be visible to — and overwritable
+// and deletable by — every caller; a PUT can no longer create one (members:
+// min=1), and the admin is who can still see and remove one left from before.
 //
 // Open mode (no RBAC rules) sees everything, as before.
 func groupVisible(d *Deps, p *rbac.VerifiedPrincipal, members []string) bool {
-	if len(d.RBAC.Get().Groups) == 0 || len(members) == 0 {
+	if len(d.RBAC.Get().Groups) == 0 {
 		return true
+	}
+	if len(members) == 0 {
+		return d.RBAC.PlatformAdminUnrestricted(p)
 	}
 	return hasAccessibleMember(d.RBAC, d.TenantOrg, p, members)
 }
@@ -99,6 +103,26 @@ func groupVisible(d *Deps, p *rbac.VerifiedPrincipal, members []string) bool {
 func writeGroupNotFound(w http.ResponseWriter, r *http.Request, groupID string) {
 	WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
 }
+
+// msgGroupIDUnavailable is the text of writeGroupIDUnavailable's 409.
+const msgGroupIDUnavailable = "group id is not available; choose another id"
+
+// writeGroupIDUnavailable answers a PUT /groups/{id} whose id is held by a
+// group the caller cannot see (groupVisible false) — the same body whatever
+// that group's members are, naming none of them (#3123).
+//
+// ⚠️ Accepted disclosure: the answer differs from a free id's (which a PUT
+// creates), so a writer learns ONE bit — "this id is taken". Group ids are one
+// namespace shared by every caller, so a create on a taken id cannot succeed
+// silently; Kubernetes object names and S3 bucket names make the same trade.
+// What it no longer tells is anything about the group: its members, whether
+// the caller could see some of them, or that it is empty.
+func writeGroupIDUnavailable(w http.ResponseWriter, r *http.Request) {
+	WriteJSONErrorWithCode(w, r, http.StatusConflict, CodeGroupIDUnavailable, msgGroupIDUnavailable)
+}
+
+// errGroupIDUnavailable is PutGroup's transform error for writeGroupIDUnavailable.
+var errGroupIDUnavailable = errors.New("group id is held by a group the caller cannot see")
 
 // filterAccessibleMembers returns only the members the user has read
 // access to. Members are tenant IDs themselves (so the identity
@@ -177,7 +201,9 @@ type PutGroupRequest struct {
 	Label       string            `json:"label" validate:"required,min=1,max=256"`
 	Description string            `json:"description" validate:"max=4096"`
 	Filters     map[string]string `json:"filters" validate:"max=20"`
-	Members     []string          `json:"members" validate:"max=1000,dive,min=1,max=256"`
+	// At least one member (#3123): an empty group has nothing to authorize a
+	// reader or writer against. Emptying a group is a DELETE.
+	Members []string `json:"members" validate:"min=1,max=1000,dive,min=1,max=256"`
 }
 
 // PutGroup handles PUT /api/v1/groups/{id}
@@ -198,6 +224,12 @@ type PutGroupRequest struct {
 // does what DELETE refuses. Stored members the caller cannot read are
 // not named in the 403 (writeGroupMemberForbidden).
 //
+// #3123: an id held by a group the caller cannot see (groupVisible) is a 409
+// GROUP_ID_UNAVAILABLE that says nothing about that group
+// (writeGroupIDUnavailable — it discloses only that the id is taken). A
+// visible group the caller may not write keeps the 403. `members` must be
+// non-empty.
+//
 // @Summary     Create or update a group
 // @Tags        groups
 // @Accept      json
@@ -205,9 +237,9 @@ type PutGroupRequest struct {
 // @Param       id   path     string          true "Group ID"
 // @Param       body body     PutGroupRequest true "Group definition"
 // @Success     200  {object} map[string]string
-// @Failure     400  {object} ErrorResponse
-// @Failure     403  {object} ErrorResponse
-// @Failure     409  {object} ErrorResponse
+// @Failure     400  {object} ErrorResponse "Invalid id or body; members must list at least one tenant (an empty group is removed with DELETE)"
+// @Failure     403  {object} ErrorResponse "The caller may not write a member tenant (of the request, or of the visible stored group)"
+// @Failure     409  {object} ErrorResponse "Code GROUP_ID_UNAVAILABLE: the id is held by a group the caller cannot see — choose another id; do not retry. The body is the same whatever that group holds; it discloses only that the id is taken. Otherwise a state write lost a race (CONFLICT; retry)"
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
@@ -285,6 +317,11 @@ func PutGroup(d *Deps) http.HandlerFunc {
 					return nil, perr
 				}
 				if stored, present := cfg.Groups[groupID]; present {
+					// #3123: a group the caller cannot see is answered before
+					// its members are looked at, so nothing about them leaks.
+					if !groupVisible(d, p, stored.Members) {
+						return nil, errGroupIDUnavailable
+					}
 					if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(f) > 0 {
 						forbiddenOnDisk = f
 						return nil, errGroupMemberForbidden
@@ -298,6 +335,10 @@ func PutGroup(d *Deps) http.HandlerFunc {
 				}
 				return groups.MarshalConfig(cfg)
 			}); err != nil {
+			if errors.Is(err, errGroupIDUnavailable) {
+				writeGroupIDUnavailable(w, r)
+				return
+			}
 			if errors.Is(err, errGroupMemberForbidden) {
 				writeGroupMemberForbidden(w, r, d, p, "write", nil, forbiddenOnDisk)
 				return

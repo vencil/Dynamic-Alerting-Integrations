@@ -81,7 +81,12 @@ const (
 	// CodeStateFull marks an HTTP 507: the write would push tenant-api's
 	// state store past its size budget (#2856). Retrying does not help.
 	CodeStateFull = "STATE_FULL"
-	CodeUpstream  = "UPSTREAM_ERROR"
+	// CodeGroupIDUnavailable marks the 409 of a PUT /groups/{id} whose id is
+	// held by a group the caller cannot see (#3123). It is NOT CONFLICT:
+	// clients retry a CONFLICT (a state write that lost a race), and retrying
+	// this one cannot succeed — the caller must pick another id.
+	CodeGroupIDUnavailable = "GROUP_ID_UNAVAILABLE"
+	CodeUpstream           = "UPSTREAM_ERROR"
 	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
 	// middleware's 401 mirrors this value in its own package-local const
 	// (internal/rbac/middleware.go) — the depguard domain-no-handler ratchet

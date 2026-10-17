@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -212,6 +213,13 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 	}
 	if !claimed {
 		existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
+		// #3123: the PR/MR named here must be one the caller could see on
+		// GET /prs. A batch PR/MR covering tenantID also covers others; for a
+		// caller who cannot read all of them the 409 stands but names no PR —
+		// the same body as the in-flight-claim case, where there is none yet.
+		if !prVisibleTo(d, rbac.RequestPrincipal(r), existingPR) {
+			existingPR = platform.PRInfo{}
+		}
 		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
 			Error: "pending_pr_exists",
 			Code:  CodePendingPR,

@@ -29,7 +29,7 @@ type routerDeps struct {
 	Deps *handler.Deps // handler dependency container (also drives the
 	// conditional registrations: Deps.PRTracker / Deps.Federation)
 	RBAC   *rbac.Manager    // route-level RBAC middleware factory
-	Events http.HandlerFunc // SSE hub endpoint (eventHub.ServeHTTP)
+	Events http.HandlerFunc // SSE endpoint (handler.EventStream: hub filtered per subscriber, #3123)
 
 	// dev-auth-bypass (ADR-022, Layer 1 = default off).
 	DevBypass       bool

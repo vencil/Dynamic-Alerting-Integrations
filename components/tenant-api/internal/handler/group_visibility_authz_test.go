@@ -104,15 +104,17 @@ func TestPutGroup_StoredMembersGateTheReplace(t *testing.T) {
 
 // #1529: `members: []` used to skip the member check entirely
 // (tenantsLackingPermission returns nil for an empty list), so it could empty a
-// group the caller cannot even see.
+// group the caller cannot even see. #3123: an empty member list is now refused
+// outright (400); TestIssue3123_PutGroup_InvisibleExistingGroupIs409 covers a
+// non-empty PUT over a group the caller cannot see.
 func TestPutGroup_EmptyMembersCannotStripAForeignGroup(t *testing.T) {
 	t.Parallel()
 	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": visGroupsYAML})
 	d := f.deps()
 
 	w := visCall(t, f, d, PutGroup(d), rbac.PermWrite, "PUT", "g-out", `{"label":"x","members":[]}`)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), orgEnfTenantOut) {
 		t.Errorf("403 names a member the caller cannot read: %s", w.Body.String())
@@ -133,11 +135,11 @@ func TestPutGroup_WritableStoredMembersStillReplace(t *testing.T) {
 	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": "groups:\n  g-in:\n    label: In\n    members: [" + orgEnfTenantIn + "]\n"})
 	d := f.deps()
 
-	if w := visCall(t, f, d, PutGroup(d), rbac.PermWrite, "PUT", "g-in", `{"label":"y","members":[]}`); w.Code != http.StatusOK {
+	if w := visCall(t, f, d, PutGroup(d), rbac.PermWrite, "PUT", "g-in", `{"label":"y","members":["`+orgEnfTenantIn+`","`+orgEnfTenantIn+`"]}`); w.Code != http.StatusOK {
 		t.Fatalf("replace with writable stored members: status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
-	if got := storedMembers(t, f, "g-in"); len(got) != 0 {
-		t.Errorf("g-in members on disk = %v, want []", got)
+	if got := storedMembers(t, f, "g-in"); len(got) != 2 {
+		t.Errorf("g-in members on disk = %v, want the replaced list", got)
 	}
 	if w := visCall(t, f, d, PutGroup(d), rbac.PermWrite, "PUT", "g-new", `{"label":"n","members":["`+orgEnfTenantIn+`"]}`); w.Code != http.StatusOK {
 		t.Errorf("create: status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -271,23 +273,49 @@ func TestGroupInvisible_AnsweredLikeMissing(t *testing.T) {
 // and deletable. Before, it was a 404 to everyone once _rbac.yaml had rules —
 // platform admins included — and putting the GET predicate on DELETE as-is
 // would have left it impossible to delete.
-func TestListGroups_EmptyGroupVisible(t *testing.T) {
+// #3123 (owner decision D2): an empty group left from before members became
+// mandatory is visible — and removable — only by a platform admin restricted
+// on no axis; every other caller gets the missing-group answer
+// (TestIssue3123_EmptyGroup_HiddenFromScopedCaller).
+func TestListGroups_EmptyGroupVisibleToUnrestrictedAdminOnly(t *testing.T) {
 	t.Parallel()
 	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": "groups:\n  g-empty:\n    label: E\n    members: []\n"})
 	d := f.deps()
+	d.RBAC = newRBACManagerWithClaims(t, orgEnfRBACYAML+`  - name: platform-admins
+    tenants: ["*"]
+    permissions: [read, write, admin]
+  - name: staging-admins
+    tenants: ["*"]
+    environments: [staging]
+    permissions: [read, write, admin]
+`, map[string]string{"org": orgEnfClaimHeader})
+	as := func(group string) func(*http.Request) *http.Request {
+		return func(r *http.Request) *http.Request {
+			r.Header.Set("X-Forwarded-Email", "admin@example.com")
+			r.Header.Set("X-Forwarded-Groups", group)
+			return r
+		}
+	}
+	call := func(h http.HandlerFunc, perm rbac.Permission, method, path, group string) *httptest.ResponseRecorder {
+		req := newRequestWithChiParam(method, path, "id", "g-empty", nil)
+		req = as(group)(req)
+		w := httptest.NewRecorder()
+		wrapWithRBACMiddleware(h, d.RBAC, perm, nil).ServeHTTP(w, req)
+		return w
+	}
 
-	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
-	req = orgEnfIdentity(req, orgEnfMemberOrg)
-	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(ListGroups(d), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"g-empty"`) {
-		t.Errorf("LIST = %d %s, want g-empty listed", w.Code, w.Body.String())
+	// An environment-restricted admin is NOT unrestricted (PlatformAdminUnrestricted).
+	if w := call(GetGroup(d), rbac.PermRead, "GET", "/api/v1/groups/g-empty", "staging-admins"); w.Code != http.StatusNotFound {
+		t.Errorf("GET as an environment-restricted admin = %d %s, want 404", w.Code, w.Body.String())
 	}
-	if w := visCall(t, f, d, GetGroup(d), rbac.PermRead, "GET", "g-empty", ""); w.Code != http.StatusOK {
-		t.Errorf("GET = %d %s, want 200", w.Code, w.Body.String())
+	if w := call(ListGroups(d), rbac.PermRead, "GET", "/api/v1/groups", "platform-admins"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"g-empty"`) {
+		t.Errorf("LIST as unrestricted admin = %d %s, want g-empty listed", w.Code, w.Body.String())
 	}
-	if w := visCall(t, f, d, DeleteGroup(d), rbac.PermWrite, "DELETE", "g-empty", ""); w.Code != http.StatusOK {
-		t.Errorf("DELETE = %d %s, want 200", w.Code, w.Body.String())
+	if w := call(GetGroup(d), rbac.PermRead, "GET", "/api/v1/groups/g-empty", "platform-admins"); w.Code != http.StatusOK {
+		t.Errorf("GET as unrestricted admin = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if w := call(DeleteGroup(d), rbac.PermWrite, "DELETE", "/api/v1/groups/g-empty", "platform-admins"); w.Code != http.StatusOK {
+		t.Errorf("DELETE as unrestricted admin = %d %s, want 200", w.Code, w.Body.String())
 	}
 }
 

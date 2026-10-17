@@ -572,7 +572,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	defer w.unlockTree()
 
 	ts := time.Now().UTC().Format("20060102-150405")
-	branchName := platform.BranchPrefix + "batch/" + ts
+	branchName := platform.BatchBranchPrefix + ts
 
 	// Anchor the serving tree on a clean base (#638 — see WritePR Step 3):
 	// the PR-mode invariant between writes. The batch itself never touches

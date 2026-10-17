@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
@@ -195,8 +194,8 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		taskID := fmt.Sprintf("batch-%s-%04d",
-			time.Now().UTC().Format("20060102"), len(req.Operations))
+		// #3123: an opaque random id (it used to be batch-<date>-<op count>).
+		taskID := async.NewTaskID()
 
 		// v2.6.0: PR-based write-back mode for batch operations (ADR-011)
 		// All operations are consolidated into a single PR/MR.
@@ -208,8 +207,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
-			task := d.Tasks.Submit(taskID, batchTaskFunc(d, req.Operations, email, p))
-			write202Pending(rw, task)
+			submitTask(rw, r, d, taskID, p, batchTaskFunc(d, req.Operations, email, p))
 			return
 		}
 
