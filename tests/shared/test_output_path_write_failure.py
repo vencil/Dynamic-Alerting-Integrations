@@ -458,10 +458,15 @@ class Row:
     # value itself — which the fixture populated — and would stay green for a
     # tool that wrote nothing at all.
     produces: Callable[[Path], Path] | None = None
+    # A second row for the same (tool, flag) that reaches the write by a
+    # different terminal path (#3089: backtest's skip / no_changes) — part of
+    # the id so the two stay distinguishable.
+    variant: str = ""
 
     @property
     def id(self) -> str:
-        return f"{Path(self.tool).stem}[{self.flag}]"
+        base = f"{Path(self.tool).stem}[{self.flag}]"
+        return f"{base}-{self.variant}" if self.variant else base
 
 
 R = Row
@@ -630,6 +635,24 @@ ROWS: list[Row] = [
                       "--old-value", "100", "--new-value", "150",
                       "--prometheus", c.stub, "--markdown-output", str(out)],
       reach="local Prometheus stub (empty range vector)", out_name="backtest.md"),
+    # #3089: the two paths that run no backtest write both outputs too, and
+    # an unwritable one is rc 2 there as well (it used to be rc 0, unwritten).
+    *(R("ops/backtest_threshold.py", flag, "file",
+        (lambda a, f: lambda c, out: [*a(c), f, str(out)])(argv, opt),
+        reach=reach, out_name=name, variant=variant,
+        shapes=("missing_parent", "parent_is_file", "target_is_dir"))
+      for variant, argv, reach in (
+          ("skip", lambda c: ["--tenant", "alpha", "--metric", "max_connections",
+                              "--old-value", "100", "--new-value", "150",
+                              "--prometheus", "http://127.0.0.1:1",
+                              "--skip-if-unavailable"],
+           "--skip-if-unavailable against a port nothing listens on"),
+          ("no-changes", lambda c: ["--config-dir", str(_jsc.SEED_CONF_D),
+                                    "--baseline", str(_jsc.SEED_CONF_D),
+                                    "--prometheus", c.stub],
+           "in-repo seed conf.d as both trees (zero changes) + local Prometheus stub"))
+      for flag, opt, name in (("-o/--output", "--output", "backtest.json"),
+                              ("--markdown-output", "--markdown-output", "backtest.md"))),
     R("ops/batch_diagnose.py", "-o/--output", "file",
       lambda c, out: ["--tenants", "alpha,beta", "--prometheus", c.stub,
                       "--output", str(out)],
