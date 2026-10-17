@@ -306,7 +306,7 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 
 刻意比 Alertmanager 嚴格的形狀，以共享表 [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json) 中標 `strict` 的列為準。
 
-這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋，`proxy_url` 能否解析除外），以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。⚠️ 產生器的「擋」是印 WARN、略過該租戶的 receiver 與 route，產出照寫、rc 0（加 `--strict` 也一樣）；只有 `--validate` 會以 rc 1 結束，所以 CI 要跑 `--validate`。
+這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋，`proxy_url` 能否解析除外），以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。⚠️ 產生器的「擋」分兩種。布林欄位（`send_resolved`、`require_tls`、`proxy_from_environment`）的值型別不對時，所有模式都拒收整棵樹、rc 1、不寫出任何產出（見上方第一項）。其餘規則是印 WARN、略過該租戶的 receiver 與 route，產出照寫、rc 0（加 `--strict` 也一樣）；只有 `--validate` 會以 rc 1 結束，所以 CI 要跑 `--validate`。
 
 ### 訊息模板（Go Template）
 

@@ -312,7 +312,7 @@ Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alert
 
 The shapes deliberately stricter than Alertmanager are the rows marked `strict` in the shared table [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json).
 
-`generate_alertmanager_routes` (also without amtool on PATH, except whether `proxy_url` parses) and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes. ⚠️ For the generator, "rejected" means a WARN and that tenant's receiver and route are skipped; the output is still written with rc 0 (`--strict` does not change that). Only `--validate` exits 1, so CI must run `--validate`.
+`generate_alertmanager_routes` (also without amtool on PATH, except whether `proxy_url` parses) and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes. ⚠️ For the generator, "rejected" means one of two things. A boolean field (`send_resolved`, `require_tls`, `proxy_from_environment`) holding a value of the wrong type refuses the whole tree in every mode: rc 1 and no output written (the first item above). For every other rule it means a WARN and that tenant's receiver and route are skipped; the output is still written with rc 0 (`--strict` does not change that). Only `--validate` exits 1, so CI must run `--validate`.
 
 ### Message Templates (Go Template)
 
