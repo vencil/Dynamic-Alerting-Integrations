@@ -18,16 +18,16 @@ lang: zh
 ## 你的上手路徑
 
 1. **先把整套跑起來**（看大圖像）→ [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)：`docker compose up da-portal tenant-api`，開瀏覽器看 Tenant Manager。
-2. **深入你的主要介面** → [da-portal QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/QUICKSTART.md)（瀏覽器自助調閾值 / Saved View）。
+2. **深入你的主要介面** → [da-portal QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/QUICKSTART.md)（瀏覽器試算閾值、管理自訂告警 / Saved View）。
 3. **實際配置你的 tenant** → 本指南下方的「30 秒快速配置」與常見操作。
 
 ## 你需要知道的三件事
 
 **1. 你的監控已經啟用了。** 平台預載的 Rule Pack 涵蓋 MariaDB、PostgreSQL、Redis、MongoDB、Elasticsearch、Kafka 等。只要你的 exporter 在跑，alert rules 就已經生效。
 
-**2. 你只需要管理一個 YAML 檔案（或用 Web UI）。** 所有自訂都在 `conf.d/<tenant>.yaml`，包括閾值調整、通知路由、維護窗口。如果 Platform Team 部署了 Self-Service Portal（tenant-manager UI），你可以直接在瀏覽器中管理，無需編輯 YAML。
+**2. 你只需要管理一個 YAML 檔案（或用 Web UI）。** 你自己的自訂都在 `conf.d/<tenant>.yaml`，包括閾值調整、通知路由、維護窗口。如果 Platform Team 部署了 Self-Service Portal（tenant-manager UI），自訂告警可以直接在瀏覽器裡改；維護／靜默模式由 UI 產生 YAML 片段，貼進你的租戶檔；閾值與路由仍然改 YAML。
 
-**3. 預設值很合理，你不一定需要改。** 除非你的業務場景需要更嚴格或更寬鬆的閾值，否則 `_defaults.yaml` 的預設已足夠。
+**3. 有預設值的 key，你不一定需要改。** 除非你的業務場景需要更嚴格或更寬鬆的閾值，否則 `_defaults.yaml` 的預設已足夠；但有一批 key 平台刻意不給預設，不填就不告警，見下方 ⚠️。
 
 ## 30 秒快速配置
 

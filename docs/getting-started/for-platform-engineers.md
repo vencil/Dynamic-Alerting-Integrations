@@ -306,12 +306,7 @@ python3 scripts/tools/ops/validate_config.py \
 
 > 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
 
-檢查項目（schema validation 預設啟用，無需額外 flag）：
-- YAML 語法正確性
-- 參數 schema 符合
-- Route 轉換成功
-- Policy 檢查通過
-- 版本一致性（加 `--version-check` 啟用）
+schema 驗證預設就跑，不用加旗標；有些檢查要帶旗標才出現（例如 `--policy`、`--rule-packs`、`--version-check`）。每一列檢查什麼、哪些要旗標，見 [CLI 參考 validate-config](../cli-reference.md#validate-config)。
 
 ### Alert Quality Scoring (v2.1.0)
 
@@ -487,7 +482,7 @@ Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設�
 
 > **部署方式**見上方 [§部署 tenant-api + da-portal](#部署-tenant-api--da-portaltenant-manager)。
 
-平台提供 Web UI（tenant-manager）讓 Domain Expert 自助管理 tenant 配置，無需直接編輯 YAML：
+平台提供 Web UI（tenant-manager）讓 Domain Expert 自助管理部分 tenant 配置：自訂告警直接在 UI 改，維護／靜默模式由 UI 產生 YAML 片段貼進租戶檔；閾值與路由仍改 YAML（或由自動化呼叫 tenant-api 寫入）。
 
 - **tenant-api**：Go HTTP server，透過 oauth2-proxy 認證，commit-on-write 保留完整 Git 審計軌跡
 - **RBAC**：`_rbac.yaml` 控制哪些 team 可管理哪些 tenant
