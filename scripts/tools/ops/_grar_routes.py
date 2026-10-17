@@ -241,13 +241,27 @@ def _note_rendered(verdicts: list[SlotVerdict] | None, tenant: str, slot: str,
 def _note_skipped(verdicts: list[SlotVerdict] | None, tenant: str, slot: str,
                   receiver: object, stage: str, warnings: list[str],
                   start: int) -> None:
-    """Record *slot* as dropped at *stage*; the reason is the first
-    ``SkippedEntryWarning`` emitted while it was processed (``warnings[start:]``)."""
+    """Record *slot* as dropped at *stage*, with the line that dropped it.
+
+    The reason is chosen among the ``SkippedEntryWarning`` lines emitted while
+    the slot was processed (``warnings[start:]``) whose ``field`` is the slot
+    itself or lies under it — never merely the first line since *start*. A
+    ``--policy`` domain refusal is preferred: the domain check runs only after
+    the receiver was accepted, so when one is there it is what dropped the
+    slot, whatever else the slot reported first."""
     if verdicts is None:
         return
-    reason = next((w for w in warnings[start:]
-                   if isinstance(w, SkippedEntryWarning)), None)
+    own = [w for w in warnings[start:]
+           if isinstance(w, SkippedEntryWarning) and _field_in_slot(w.field, slot)]
+    reason = next((w for w in own if w.kind == "receiver_domain_not_allowed"),
+                  own[0] if own else None)
     verdicts.append(SlotVerdict(tenant, slot, receiver, None, stage, reason))
+
+
+def _field_in_slot(field: str | None, slot: str) -> bool:
+    """Whether a finding's ``field`` is *slot* or a path under it
+    (``receiver`` / ``receiver.url``, ``overrides[0]`` / ``overrides[0].receiver``)."""
+    return field is not None and (field == slot or field.startswith(slot + "."))
 
 
 def _child_slots(cfg: dict) -> list[tuple[str, str, object]]:

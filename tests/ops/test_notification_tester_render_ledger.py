@@ -320,6 +320,12 @@ def test_tested_set_equals_generator_receivers_across_parity_matrix(tmp_path):
         tree_obj = gar.load_tenant_tree(str(root))
         _r, receivers, _w = gar._build_tenant_routes(tree_obj.routing_configs)
         generated = {r["name"] for r in receivers}
+        for tenant, routing in tree_obj.routing_configs.items():
+            for v in gar.tenant_slot_verdicts(tenant, routing):
+                if not v.rendered:  # every drop carries the slot's own line
+                    assert v.reason is not None, (tree["name"], tenant, v.slot)
+                    assert (v.reason.field == v.slot
+                            or v.reason.field.startswith(v.slot + ".")), (tree["name"], v)
         tested = {_generator_name(r.receiver_name, rep.tenant)
                   for rep in reports for r in rep.receivers
                   if r.status == nt.STATUS_DRY_RUN}
@@ -380,7 +386,7 @@ def _slot_ref(label: str, tenant: str) -> str:
 
 
 # explain-route --json crashes on these trees on main already (a YAML date
-# value in `final` is not JSON serializable; rc 2) — not this ticket's.
+# value in `final` is not JSON serializable; rc 2) — tracked in #3144.
 _EXPLAIN_JSON_CRASHES = {"routing-values-yaml11"}
 
 
@@ -453,3 +459,23 @@ def test_explain_route_keeps_group_by_drops_of_a_rendered_child():
     sub_routes, skipped = er.effective_sub_routes("t1", routing)
     assert [s["source"] for s in sub_routes] == ["overrides[0]"]
     assert [w.field for w in skipped] == ["overrides[0].group_by[1]"]
+
+
+@pytest.mark.parametrize("where", ["receiver", "overrides[0]", "routes[0]"])
+def test_domain_refusal_is_the_reason_of_the_slot_it_drops(where):
+    """--policy allowed_domains 拒收的 slot，原因是那一行 domain 拒收，不是別的行。"""
+    bad = {"type": "webhook", "url": "https://evil.example.org/hook"}
+    routing = {"receiver": bad if where == "receiver" else _OK,
+               "overrides": [{"alertname": "A",
+                              "receiver": bad if where == "overrides[0]" else _OK_O}],
+               "routes": [{"match": {"severity": "critical"},
+                           "receiver": bad if where == "routes[0]" else _OK_R}]}
+    verdicts = gar.tenant_slot_verdicts("t1", routing, ["*.example.com"])
+    (v,) = [v for v in verdicts if v.slot == where]
+    assert (v.rendered, v.stage) == (False, "receiver")
+    assert v.reason.kind == "receiver_domain_not_allowed"
+    assert v.reason.field == ("receiver.url" if where == "receiver"
+                              else f"{where}.receiver.url")
+    if where == "receiver":
+        assert [(c.stage, c.reason.kind) for c in verdicts if c.slot != "receiver"] == [
+            ("parent", "parent_receiver_not_rendered")] * 2
