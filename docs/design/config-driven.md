@@ -173,7 +173,7 @@ Phase 4: Incremental Merge
   └─ 否則 → 全量 merge 所有 partial configs
 ```
 
-**壞掉的租戶檔**（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）：CHANGED 的檔若解析失敗（語法錯、租戶 body 型別錯）或讀不到，視同它不再宣告任何租戶——該檔宣告的租戶從這一版移除（除非另一個可解析的檔也宣告它），結果與全量載入、階層式 reload、重啟一致。不保留「最後正確值」；之前的版本會保留，且壞檔之後被刪除時租戶仍繼續服務（[#2022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2022)）。訊號：解析失敗時，每次掃描都會印 `WARN: skip unparseable file "<路徑>": <錯誤>` 並累加 `da_config_parse_failure_total{file_basename}`，`GET /api/v1/config/identity` 的 `parse_failed` 列出該檔；讀不到時則印 `WARN: cannot read <路徑>: <錯誤>`、`da_config_unreadable_files{reason="read_error"}` 非 0，該檔不進 `parse_failed`。
+**壞掉的租戶檔**（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）：CHANGED 的檔若解析失敗（語法錯、租戶 body 型別錯、泛型解碼失敗，如顯式 tag 與內容不符的純量 `!!int abc`、未知頂層 key 內的重複 key，[#3063](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3063) 起；`_` 開頭的平台檔不套用，見 [#3131](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3131)）或讀不到，視同它不再宣告任何租戶——該檔宣告的租戶從這一版移除（除非另一個可解析的檔也宣告它），結果與全量載入、階層式 reload、重啟一致。不保留「最後正確值」；之前的版本會保留，且壞檔之後被刪除時租戶仍繼續服務（[#2022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2022)）。訊號：解析失敗時，每次掃描都會印 `WARN: skip unparseable file "<路徑>": <錯誤>` 並累加 `da_config_parse_failure_total{file_basename}`，`GET /api/v1/config/identity` 的 `parse_failed` 列出該檔；讀不到時則印 `WARN: cannot read <路徑>: <錯誤>`、`da_config_unreadable_files{reason="read_error"}` 非 0，該檔不進 `parse_failed`。
 
 **Atomic Swap**：`RWMutex` 保護 config / hash / cache 的原子更新。讀端（Prometheus scrape）用 `RLock()`，reload 用 `Lock()`，確保 scrape 期間不會讀到半更新的狀態。
 

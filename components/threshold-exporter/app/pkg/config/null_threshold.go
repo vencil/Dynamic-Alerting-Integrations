@@ -126,7 +126,12 @@ func dropNullThresholds(cfg *ThresholdConfig, data []byte) {
 		Profiles map[string]map[string]any `yaml:"profiles"`
 	}
 	if yaml.Unmarshal(data, &raw) != nil {
-		return // cannot happen: the typed decode of the same bytes succeeded
+		// Cannot happen for a tenant file: ParseTenantFile's generic decode
+		// of the same node succeeded first (#3063). A file read through
+		// ParseConfigFile alone can get here — a scalar in a body whose
+		// explicit tag its text does not satisfy (the typed decode never
+		// resolves it) — and keeps its nulls undropped, as before.
+		return
 	}
 	for _, k := range nullDefaultKeys(raw.Defaults) {
 		delete(cfg.Defaults, k)

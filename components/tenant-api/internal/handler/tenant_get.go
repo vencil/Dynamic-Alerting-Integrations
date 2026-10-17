@@ -265,12 +265,21 @@ func GetTenant(d *Deps) http.HandlerFunc {
 
 		customAlerts, err := customalerts.Extract(string(data), tenantID)
 		if err != nil {
-			// Unreachable since #2373: Extract fails only on bytes that are not
-			// YAML, which tenantConfigError answers above with config_error.
-			// Kept as a guard should Extract grow another failure. Surface it rather than returning a 200 with silently-empty
-			// custom_alerts. Keep the raw parser error (which can echo file
-			// contents) in the server log only; return a stable, non-sensitive
-			// message to clients.
+			// Unreachable since #3063. Extract decodes `tenants:` into generic
+			// maps, so it fails only where a generic decode of the file does,
+			// and tenantConfigError above answers every such file with
+			// config_error: confd.YAMLProblem catches bytes that are not
+			// YAML, and cfg.ParseTenantFile — the typed decode AND, since
+			// #3063, the generic decode of the same document — rejects the
+			// rest as invalid_config. Between #2373 and #3063 this was
+			// reachable: ParseTenantFile used only the typed decode, which
+			// accepts a scalar whose explicit tag its text does not satisfy
+			// (`!!int abc`), so such a file reached here and answered 500.
+			// Kept as a guard should Extract grow a failure ParseTenantFile
+			// does not share. Surface it rather than returning a 200 with
+			// silently-empty custom_alerts. Keep the raw parser error (which
+			// can echo file contents) in the server log only; return a
+			// stable, non-sensitive message to clients.
 			slog.Error("failed to parse tenant custom alerts", "tenant", tenantID, "err", err)
 			WriteJSONError(w, r, http.StatusInternalServerError, msgCustomAlertsUnparseable)
 			return

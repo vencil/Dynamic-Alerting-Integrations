@@ -364,16 +364,33 @@ func TestGetTenantEffective_SourceHashWithheld(t *testing.T) {
 
 // A yaml.v3 type error in the other tenant's block quotes its value; the
 // writer of this tenant gets a fixed text instead.
+//
+// Since #3063 a TENANT file of that shape never reaches the decode:
+// ParseTenantFile refuses it whole, so /effective answers 404 and carries
+// nothing of the file. The root `_defaults.yaml` is the file that still gets
+// there — its `tenants:` block can name the other tenant — so the withheld
+// text is pinned on it.
 func TestGetTenantEffective_DecodeErrorWithheld(t *testing.T) {
 	t.Parallel()
 	file := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
 		"  " + orgEnfTenantOut + ":\n    mysql_connections: !!int " + wOutOwner + "\n"
 	f := wFixture(t, "writer", file)
 	w := wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) {
-		t.Fatalf("%d %s, want 500 %s", w.Code, w.Body.String(), CodeConfigDecode)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("tenant file: %d %s, want 404 (the file is rejected whole, #3063)", w.Code, w.Body.String())
 	}
-	assertNoOtherTenant(t, "effective decode error", w.Body.Bytes(), file)
+	assertNoOtherTenant(t, "effective, rejected tenant file", w.Body.Bytes(), file)
+
+	root := "defaults:\n  mysql_connections: 5\ntenants:\n  " + orgEnfTenantOut + ":\n    mysql_connections: !!int " + wOutOwner + "\n"
+	f = newOrgEnfFixture(t, map[string]string{
+		"_defaults.yaml":         root,
+		orgEnfTenantIn + ".yaml": "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n",
+	})
+	w = wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), CodeConfigDecode) {
+		t.Fatalf("root defaults: %d %s, want 500 %s", w.Code, w.Body.String(), CodeConfigDecode)
+	}
+	assertNoOtherTenant(t, "effective decode error", w.Body.Bytes(), root)
 	makeOutReadable(f)
 	w = wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
 	if !strings.Contains(w.Body.String(), wOutOwner) {
