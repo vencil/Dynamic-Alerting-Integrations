@@ -211,7 +211,8 @@ class PolicyResult:
 # ---------------------------------------------------------------------------
 # Policy loading
 # ---------------------------------------------------------------------------
-def load_policies(source: str, config_dir: Optional[str] = None) -> list[PolicyRule]:
+def load_policies(source: str, config_dir: Optional[str] = None, *,
+                  reader: Any = None) -> list[PolicyRule]:
     """從 YAML 檔案或 _defaults.yaml 載入策略規則。
 
     Args:
@@ -232,8 +233,9 @@ def load_policies(source: str, config_dir: Optional[str] = None) -> list[PolicyR
     """
     if config_dir is not None:
         # A conf.d file (ADR-036 step 4): parse-tree's reading of it.
-        return rules_from_policy_data(load_confd_file(config_dir, source, mode=POLICY_READ),
-                                      source=str(source))
+        return rules_from_policy_data(
+            load_confd_file(config_dir, source, mode=POLICY_READ, reader=reader),
+            source=str(source))
     return rules_from_policy_data(load_yaml_file_strict_exporter_keys(
         source, raw_text_sequences=POLICY_TENANT_LISTS), source=str(source))
 

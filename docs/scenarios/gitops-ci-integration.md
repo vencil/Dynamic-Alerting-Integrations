@@ -524,6 +524,8 @@ python3 scripts/tools/ops/assemble_config_dir.py \
   --validate
 ```
 
+⚠️ **需要 da-guard**（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：租戶唯一性檢查經 `validate-config` 讀 conf.d、`--validate` 讀組裝出的目錄，兩者都經 `da-guard parse-tree`（與 exporter 同一種讀法）。先 `make da-guard-build`、設 `DA_GUARD_BINARY=.build/da-guard`（或改用 `make sharded-assemble`，它會自己建）；沒有時結束碼 2。
+
 搭配 CI pipeline，各團隊只修改自己的 conf.d/，合併階段自動偵測衝突（如同一 tenant 出現在多個來源）。⛔ **偵測到就拒絕組裝**：同一個租戶 id 被兩個檔宣告時 exporter 會拒絕**整棵** config-dir，所以這一步非零退出、**不寫本輪的產物**，由你決定哪一個檔擁有那個租戶（[#1794](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1794)）。
 
 ⚠️ **這支工具不會清空 `--output`。** 它只複製進去，所以在 CI 裡反覆寫同一個目錄時，上一輪的載體會留著——**exporter 也會讀它們**。後果有兩種：來源端下架的租戶不會從產物消失（工具會列出這些殘留並把它們算進租戶唯一性的判定，但仍然組裝並回 0）；而拒絕的那一輪雖然不寫新東西，上一輪那份**完整、可 apply 的產物仍在原地**。建議每輪先清空輸出目錄，或把它視為只增不減。

@@ -756,10 +756,12 @@ repos:
       # job (pre-commit run confd-schema-check) like routing-profiles-check.
       - id: confd-schema-check
         name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard + #2245)
-        entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
+        # ADR-036 step 4 (#2906): the lint reads conf.d through `da-guard
+        # parse-tree` (with_da_guard.sh, as for routing-profiles-check).
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
         # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
         # fail the hook, and pre-commit prints a passing hook's output only when
@@ -792,13 +794,13 @@ repos:
       # that a hook no workflow calls by name has ZERO CI enforcement.
       - id: confd-schema-check-shipped
         name: shipped conf.d trees (try-local / recipe + da-tools examples) ↔ tenant-config schema
-        entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py
           --config-dir try-local/seed/conf.d
           --config-dir rule-packs/recipes/examples/conf.d
           --config-dir components/da-tools/app/examples/cardinality-demo/conf.d
         language: python
         pass_filenames: false
-        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
+        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
         # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
         # fail the hook, and pre-commit prints a passing hook's output only when

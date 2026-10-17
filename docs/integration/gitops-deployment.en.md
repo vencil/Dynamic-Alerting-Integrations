@@ -109,9 +109,11 @@ GitOps sync requires converting the `conf.d/` directory into a K8s ConfigMap.
 ### Method A: Makefile target (threshold-config)
 
 ```bash
-make configmap-assemble CONFDIR=/path/to/your/conf.d
+make configmap-assemble CONFDIR=/path/to/your/conf.d DA_GUARD_BINARY=/path/to/da-guard
 # Output: .build/threshold-config.yaml (tenant config for threshold-exporter)
 ```
+
+⚠️ **It needs da-guard** ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)): the tenant-uniqueness check before the artifact is written reads conf.d through `validate-config`, which reads it through `da-guard parse-tree` (the exporter's own reading). The da-tools image ships it (`/usr/local/bin/da-guard`); from a checkout of this repo, run `make da-guard-build` (it builds `.build/da-guard`) and pass `DA_GUARD_BINARY=`, or put `da-guard` on `$PATH`. Without one the exit code is 2, nothing is written, and the message says why.
 
 ⛔ **`CONFDIR` must be set explicitly.** Its built-in default is
 `components/threshold-exporter/config/conf.d` — **this repo's development

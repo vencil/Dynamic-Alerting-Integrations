@@ -130,7 +130,8 @@ def _slack_tenant(channel: str) -> str:
             f"        channel: {channel}\n")
 
 
-@pytest.mark.parametrize("channel", ["yes", "off", "123", "~"])
+# #2906: what yaml.v3 reads as non-string (`yes` / `off` are strings to it).
+@pytest.mark.parametrize("channel", ["true", "1e3", "123", "~"])
 def test_validate_config_yaml_quoting_row_fails(channel, tmp_path, cli_argv, capsys):
     d = tmp_path / "conf.d"
     d.mkdir()
@@ -143,10 +144,10 @@ def test_validate_config_yaml_quoting_row_fails(channel, tmp_path, cli_argv, cap
     assert row["status"] == vc.FAIL
     assert len(row["details"]) == 1
     assert row["details"][0].startswith(
-        "t1.yaml:8: /tenants/t1/_routing/receiver/channel: "), row["details"]
+        "t1.yaml: /tenants/t1/_routing/receiver/channel: "), row["details"]
 
 
-@pytest.mark.parametrize("channel", ['"yes"', "'off'", '"123"', "y", "n"])
+@pytest.mark.parametrize("channel", ['"yes"', "'off'", '"123"', "y", "n", "yes", "off"])
 def test_validate_config_yaml_quoting_row_passes(channel, tmp_path, cli_argv, capsys):
     d = tmp_path / "conf.d"
     d.mkdir()
@@ -163,10 +164,10 @@ def test_validate_config_yaml_quoting_covers_defaults_routing(tmp_path, cli_argv
     (d / "_defaults.yaml").write_text(
         "defaults:\n  mysql_connections: 80\n"
         "_routing_defaults:\n  receiver:\n    type: pagerduty\n"
-        "    service_key: yes\n", encoding="utf-8")
+        "    service_key: 123\n", encoding="utf-8")
     (d / "t1.yaml").write_text("tenants:\n  t1:\n    mysql_connections: \"70\"\n",
                                encoding="utf-8")
     rc, rows = _vc_rows(str(d), cli_argv, capsys)
     assert rc == 1
     assert rows["yaml_quoting"]["details"][0].startswith(
-        "_defaults.yaml:6: /_routing_defaults/receiver/service_key: "), rows
+        "_defaults.yaml: /_routing_defaults/receiver/service_key: "), rows

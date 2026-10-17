@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -62,10 +64,25 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 import guard_dispatch  # noqa: E402
 
 SUBCOMMAND = "parse-tree"
-# The Go runtime's fatal out-of-memory line (runtime.throw), at a line start.
-_GO_OUT_OF_MEMORY = re.compile(
-    r"^fatal error: (?:runtime: )?(?:out of memory|cannot allocate memory)", re.M)
 SCHEMA = "da-guard.parse-tree/v1"
+
+#: Set by :func:`run_under_memory_limit` in a process that limited its own
+#: memory (the generator container's judgement, ADR-036 §3).
+_MEMORY_LIMITED = False
+
+
+def run_under_memory_limit() -> None:
+    """Declare that this process runs under a memory limit (RLIMIT_DATA) that
+    every da-guard it starts inherits. From then on each da-guard runs with
+    ``GOTRACEBACK=crash``, so a Go runtime that fails — out of memory, an
+    allocation failure that faults inside the runtime (SIGSEGV), a thread it
+    cannot create — ends by a signal (SIGABRT) instead of exiting 2; and a
+    da-guard ended by a signal is this process's memory limit, raised as
+    ``MemoryError`` naming the signal. Judged by the process status, not by
+    its words. Without this call a da-guard ended by a signal stays a
+    ``ParseTreeError``. The caller sets RLIMIT_CORE to 0: no core file."""
+    global _MEMORY_LIMITED
+    _MEMORY_LIMITED = True
 
 
 class ParseTreeError(Exception):
@@ -114,19 +131,22 @@ def _run(args: list[str], binary: Optional[str], timeout: float,
             msg = msg.removeprefix(prefix)
         raise BinaryMissing(msg)
     cmd = [exe, *args]
+    env = {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
     try:
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
-                              input=stdin if stdin is not None else b"")
+                              input=stdin if stdin is not None else b"", env=env)
     except subprocess.TimeoutExpired as e:
         raise ParseTreeError(f"da-guard {SUBCOMMAND} did not finish within {timeout}s") from e
     except OSError as e:
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
-    if proc.returncode != 0 and _GO_OUT_OF_MEMORY.search(stderr):
-        # The Go runtime's own fatal line: da-guard hit the memory limit it
-        # inherited (the generator container's RLIMIT_DATA of a judgement,
-        # ADR-036 §3) — the caller's memory limit, not a da-guard defect.
-        raise MemoryError(f"da-guard {SUBCOMMAND} ran out of memory")
+    if _MEMORY_LIMITED and proc.returncode < 0:
+        # Ended by a signal under the memory limit it inherited (the
+        # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):
+        # the caller's memory limit, not a da-guard defect.
+        raise MemoryError(f"da-guard {SUBCOMMAND} was ended by "
+                          f"{_signal_name(-proc.returncode)} under this process's "
+                          f"memory limit (RLIMIT_DATA)")
     if proc.returncode != 0:
         older = ""
         if proc.returncode == 2 and not _accepts(cmd, timeout):
@@ -145,6 +165,13 @@ def _run(args: list[str], binary: Optional[str], timeout: float,
         raise ParseTreeError(f"da-guard {SUBCOMMAND} wrote no document this tool can "
                              f"read ({e}); nothing of it is used") from e
     return doc
+
+
+def _signal_name(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal {signum}"
 
 
 def check_shape(doc: dict) -> None:

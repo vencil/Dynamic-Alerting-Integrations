@@ -17,11 +17,11 @@ Checks:
                     named `x.yaml` is invisible to it while the routing
                     reader does see it, so that one shape is a stderr WARN
                     and a PASS row here. Tracked separately.)
-  1b. Quoting      — An unquoted value in a field the JSON Schema types as a
-                    string, that PyYAML reads as a boolean / number / null
-                    (`channel: yes` → True, while the Go readers and
-                    Alertmanager read "yes"). The resolver's verdict and the
-                    schema's types decide; no word list (#2164)
+  1b. Quoting      — A value in a field the JSON Schema types as a string,
+                    that yaml.v3 (every reader of conf.d, #2906) reads as a
+                    boolean / number / timestamp / null (`channel: 1e3` →
+                    1000.0; `channel: yes` is the string "yes"). parse-tree's
+                    tag and the schema's types decide; no word list (#2164)
   1c. JSON Schema  — conf.d against tenant-config / platform-defaults /
                     routing-profiles JSON Schema, by calling
                     `lint/check_confd_schema.py`'s verdict; a misread scalar
@@ -201,7 +201,8 @@ from _lib_io import YamlFileError  # noqa: E402  (#2297)
 # generator these rows ask reads it — never a PyYAML reading beside it.
 from _lib_io import load_confd_file  # noqa: E402
 import _lib_parse_cache  # noqa: E402
-from _lib_parse_tree import ParseTreeError  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 # #2115 0-B: the tenants as threshold-exporter reads them (`check_profiles`,
 # and the error row `check_policy_dsl` shares with it).
 from _lib_tenant_values import (  # noqa: E402
@@ -622,38 +623,29 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
 
 
 def check_yaml_quoting(config_dir: str) -> dict[str, object]:
-    """An UNQUOTED scalar in a string-typed field that PyYAML reads as
-    something else — `channel: yes` is True here, "yes" to the Go readers
-    and to Alertmanager (#2164). Tenant files are held to
-    tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
+    """A value in a string-typed field that yaml.v3 — every reader of conf.d
+    (ADR-036 step 4, #2906) — reads as something else: `channel: 1e3` is the
+    float 1000, `name: 2024-01-02` a timestamp (#2164). Tenant files are held
+    to tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
     and `_routing_profiles.y(a)ml` to routing-profiles.schema.json (#2245;
     the same selection `check_confd_schema` makes); other `_*` files have
-    no schema and are not read. Which words are ambiguous is PyYAML's own
-    resolver's verdict and which fields are strings is the schema's — see
-    `_lib_io.find_misread_scalars`; nothing is listed here.
+    no schema and are not read. Which values are not strings is yaml.v3's
+    verdict (parse-tree's tag) and which fields are strings is the schema's —
+    see `_lib_io.find_misread_scalars`; nothing is listed here. `channel: yes`
+    is the string "yes" to yaml.v3 and is no finding.
 
     A file that cannot be read is skipped: `yaml_syntax` already names it.
 
-    #2509: an unquoted YAML 1.1 boolean word (`yes` / `no` / `on` / `off`)
-    in a field that takes a boolean is listed too, as WARN (the row is WARN
-    when that is all it found): PyYAML reads a boolean, some of the
-    exporter's readers the string — `_lib_io.find_yaml11_bool_words`. An
-    explicit `!!bool yes` (yaml.v3 does not accept it) is the same WARN;
-    whether the exporter can still read that file is not this row's
-    verdict but da-guard's — a file its load drops FAILs the rows that read
-    the tree through it, with the exporter's reason (`da-guard effective`'s
-    stderr carries it since #2115). #2740: so the WARN is kept only for a file
-    `da-guard effective`'s parse_failed names, the run `profiles` reads
-    (`_effective_tree`); a file it does not name — a `_routing_profiles.yaml`,
-    which the exporter does not load and whose Go reader takes `!!bool yes`
-    — gets none. No Python list of the files the exporter reads (#2509).
-    With no da-guard verdict (none found, too old, failed) every hit is
-    kept, as before #2740 — `_explicit_bool_verdict`. A root `_defaults*` file's
+    #2509: a YAML 1.1 boolean word (`yes` / `no` / `on` / `off`), quoted or
+    not, in a field that takes a boolean is listed too, as WARN (the row is
+    WARN when that is all it found): it is a string to yaml.v3, which the
+    field refuses — `_lib_io.find_yaml11_bool_words`. An explicit
+    `!!bool yes` makes the whole file unreadable to parse-tree
+    (`decode_error`), which `yaml_syntax` reports. A root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
     nested one is not (the exporter does not read it).
     """
-    from _lib_io import (compose_all_nodes, find_go_rejected_bool_tags,
-                         find_misread_scalars, find_yaml11_bool_words)
+    from _lib_io import find_misread_scalars, find_yaml11_bool_words
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
         path = _find_schema(name)
@@ -664,37 +656,26 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
                  f"— the quoting check cannot run"], caller_error=True)
         with open(path, encoding="utf-8") as fh:
             schemas[name] = json.load(fh)
+    reader = _lib_parse_cache.reader_for(config_dir)
     errors: list[str] = []
-    # A str, or (label, hit) for an explicit `!!bool` hit: those wait for
-    # da-guard's verdict, asked only when there is one (#2740).
-    warnings: list[object] = []
+    warnings: list[str] = []
     checked = 0
     for fpath, label, schema_name in _quoting_scope(config_dir):
         try:
-            text = fpath.read_text(encoding="utf-8")
-            roots = list(compose_all_nodes(io.StringIO(text)))
-        except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError):
+            root = reader.node(fpath)
+        except FileUnreadable:
             continue
         checked += 1
-        for root in roots:
-            # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
-            # is held to the tenant schema too (same rule as check_confd_schema).
-            names = [schema_name]
-            if schema_name == _PLATFORM_SCHEMA and "/" not in label:
-                names.append(_TENANT_SCHEMA)
-            for name_ in names:
-                for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
-                    errors.append(f"{label}:{hit.line}: {hit.message()}")
-                for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
-                    warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
-        # Same order as check_confd_schema: after the per-document findings.
-        warnings.extend((label, tag) for root in roots for tag in find_go_rejected_bool_tags(root))
-    if any(isinstance(w, tuple) for w in warnings):
-        parse_failed = _explicit_bool_verdict(config_dir)
-        warnings = [w if isinstance(w, str)
-                    else f"WARN: {w[0]}:{w[1].line}: {w[1].message(w[1].PROFILES_ROW_POINTER)}"
-                    for w in warnings
-                    if isinstance(w, str) or parse_failed is None or w[0] in parse_failed]
+        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
+        # is held to the tenant schema too (same rule as check_confd_schema).
+        names = [schema_name]
+        if schema_name == _PLATFORM_SCHEMA and "/" not in label:
+            names.append(_TENANT_SCHEMA)
+        for name_ in names:
+            for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
+                errors.append(f"{label}: {hit.message()}")
+            for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
+                warnings.append(f"WARN: {label}: {word.message()}")
     # #2509 blind review 5: each line carries its own remedy; the row's hint
     # only points back at them (a per-kind hint contradicted the lines).
     if errors:
@@ -703,8 +684,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
         return _make_result("yaml_quoting", WARN, warnings)
     return _make_result(
         "yaml_quoting", PASS,
-        [f"{checked} files checked: no unquoted value in a string field "
-         f"is read as a non-string"])
+        [f"{checked} files checked: no value in a string field "
+         f"is read by yaml.v3 as a non-string"])
 
 
 # ============================================================
@@ -717,23 +698,6 @@ JSON_SCHEMA_NOT_CHECKED_HINT = (
     "conf.d against its JSON Schemas — without them, a value of the "
     "wrong shape (e.g. `group_by: alertname` where a list is required) is "
     "not detected here.")
-
-
-def _explicit_bool_verdict(config_dir: str) -> set[str] | None:
-    """The files `da-guard effective` names in parse_failed (root-relative,
-    as `_quoting_scope` labels them) — the set an explicit-`!!bool` WARN is
-    kept for (#2740) — or None when there is no verdict: da-guard missing,
-    older than this tool, or failing another way. Then the caller keeps
-    every WARN with its neutral wording; the `profiles` row, reading the
-    same run, says why there was no verdict. A run that loads cleanly is
-    the empty set."""
-    try:
-        _effective_tree(config_dir)
-    except ParseFailedError as exc:
-        return set(exc.parse_failed)
-    except (DaGuardNotFoundError, DaGuardError):
-        return None
-    return set()
 
 
 def check_json_schema(config_dir: str) -> dict[str, object]:
@@ -1856,7 +1820,7 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object,
     """One FAIL line for a `_routing*` key under the root `defaults:`.
 
     *dropped_raw* is the value's source text when the exporter's decoder
-    (``deprecate_rule.exporter_verdicts``) rejects it, None when it decodes.
+    (``_root_defaults_verdicts``) rejects it, None when it decodes.
     """
     if key == "_routing":
         move = ("move its contents to a top-level `_routing_defaults:` block "
@@ -1901,7 +1865,7 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     """One FAIL line for a value the exporter drops or treats as unwritten
     (#1414, #2518).
 
-    *key* and *raw* are one item of ``deprecate_rule.exporter_verdicts`` (key
+    *key* and *raw* are one item of ``_root_defaults_verdicts`` (key
     None = the whole document); *null* is whether its kind is
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
@@ -2376,6 +2340,14 @@ def _custom_alert_compiler():
     return loader
 
 
+def _confd_values_reader(config_dir: str):
+    """A file of *config_dir* as Python values, from this run's parse-tree
+    reader (`_lib_parse_tree.to_python`; an empty file is `{}`) — the read
+    the custom-alert compiler is handed (`build_shapes(read=...)`)."""
+    reader = _lib_parse_cache.reader_for(config_dir)
+    return lambda path: reader.read(path)
+
+
 def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object]:
     """#3042: the custom alerts the compiler builds a rule for, per tenant,
     beside the ones the exporter serves a threshold for — the two readers of
@@ -2406,7 +2378,11 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
         served = load_served_tree(config_dir).tenants
         side = "compiler"
         accepted: list[dict] = []
-        (loader or _custom_alert_compiler()).build_shapes(Path(config_dir), accepted=accepted)
+        # ADR-036 step 4 (#2906): the compiler reads each file through this
+        # run's parse-tree reader, not its own PyYAML read — one reading of
+        # conf.d per validate-config run.
+        (loader or _custom_alert_compiler()).build_shapes(
+            Path(config_dir), accepted=accepted, read=_confd_values_reader(config_dir))
     except Exception as exc:  # noqa: BLE001 — any failure is "not compared", never a refusal
         return _make_result("custom_alert_sources", WARN, [
             f"comparison incomplete: the {side}'s custom alerts were not read "
@@ -2478,6 +2454,41 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
         "a served threshold; every served one has a rule"])
 
 
+def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
+    """How the exporter decodes the root carrier's `defaults:` into
+    `map[string]float64`, read off the file's parse-tree nodes (yaml.v3's
+    tags, aliases and `<<` merges expanded): `[(key, source text, kind), …]`
+    with *dr*'s kinds (``deprecate_rule``), key None for the whole block.
+
+    yaml.v3 decodes a scalar into a float64 when its tag is `!!int` or
+    `!!float`; `!!null` leaves the key unwritten (#2518,
+    ``NULL_NOT_DECLARED``); any other scalar (`"70"`, `disable`, `yes`, a
+    timestamp, `!!bool`), a mapping or a list fails the decode and the
+    exporter drops the whole block (``UNPARSEABLE``). A file parse-tree
+    cannot read (a repeated key, several documents …) never gets here: its
+    read fails first. The truth table is
+    ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the Go test
+    ``TestDefaultsCarrierOracle`` judges against the exporter."""
+    block = root.get("defaults")
+    if block is None or (_lib_parse_tree.is_scalar(block) and block["tag"] == "!!null"):
+        return []                              # absent, or `defaults:` with no value
+    if _lib_parse_tree.is_scalar(block) or not isinstance(block, dict):
+        return [(None, "defaults is not a mapping", dr.UNPARSEABLE)]
+    out: list[tuple[str | None, str, str]] = []
+    for key, node in block.items():
+        if not _lib_parse_tree.is_scalar(node):
+            out.append((key, "<mapping>" if isinstance(node, dict) else "<list>",
+                        dr.UNPARSEABLE))
+        elif node["tag"] == "!!null":
+            out.append((key, node["text"], dr.NULL_NOT_DECLARED))
+        elif node["tag"] == "!!str":
+            # Shown as the string it is: `"70"` (quoted or not in the file).
+            out.append((key, json.dumps(node["text"], ensure_ascii=False), dr.UNPARSEABLE))
+        elif node["tag"] not in ("!!int", "!!float"):
+            out.append((key, node["text"], dr.UNPARSEABLE))
+    return out
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
@@ -2490,11 +2501,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       threshold, while the load is reported as successful; a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
-      not judged here. Both FAIL. The verdict is
-      ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
-      table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
-      by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
-      Every kind in its ``BLOCKING_KINDS`` is a FAIL here too.
+      not judged here. Both FAIL. The verdict is ``_root_defaults_verdicts``
+      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906:
+      yaml.v3's own tags), checked against the truth table
+      ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
+      ``TestDefaultsCarrierOracle`` judges. Every kind in
+      ``deprecate_rule.BLOCKING_KINDS`` is a FAIL here too.
     * #2291 — no ``_routing*`` key, whatever its value (below). A
       ``_routing*`` key gets that rule's line only, never a second one from
       the value rule.
@@ -2507,8 +2519,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       A ``defaults:`` mapping beside ignored top-level keys is the
       ``defaults_wrapper`` row's finding, at every level.
 
-    ⚠️ A file PyYAML cannot read at all still fails through
-    ``load_yaml_file_strict`` and ``_run_check``'s input-error row, as before;
+    ⚠️ A file parse-tree cannot read at all fails through
+    ``load_confd_file`` and ``_run_check``'s input-error row;
     a top level that is not a mapping stays ``yaml_syntax``'s finding. The
     value rule speaks about files that load.
 
@@ -2559,11 +2571,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     if not isinstance(raw, dict):
         return _make_result("root_defaults", PASS,
                             [f"{rel}: no `defaults:` mapping — nothing to check"])
-    # #1414: the one yaml.v3 mirror, imported in-process like
-    # `generate_alertmanager_routes` above — a sibling tool shipped beside
-    # this one in both layouts, not a second copy of the decode rules.
+    # #1414 → ADR-036 step 4 (#2906): yaml.v3's own reading of the file
+    # (parse-tree's tags), the same read as `raw` above — not a PyYAML
+    # mirror of yaml.v3's decode. The verdict kinds stay deprecate_rule's.
     import deprecate_rule as dr
-    verdicts = dr.exporter_verdicts(carrier.read_bytes())
+    verdicts = _root_defaults_verdicts(
+        _lib_parse_cache.reader_for(config_dir).node(carrier), dr)
     dropped = {k: r for k, r, kind in verdicts
                if k is not None and kind in dr.BLOCKING_KINDS}
     details = [_root_defaults_value_detail(rel, k, r,
@@ -2647,10 +2660,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/getting-started/for-platform-engineers.md",
     ),
     "yaml_quoting": (
-        "Fix each value listed above as its own line says. A plain yes / no / on / "
-        "off / true / 123 in a field the schema types as a string is read "
-        "as a boolean or number by PyYAML but as text by the exporter and "
-        "Alertmanager, so the tools disagree about your config.",
+        "Fix each value listed above as its own line says. A plain true / 123 / "
+        "1e3 / 2024-01-02 in a field the schema types as a string is read as "
+        "a boolean, number or timestamp by yaml.v3 — by every reader of "
+        "conf.d — so quote it; yes / no / on / off are strings to yaml.v3 and "
+        "a field that takes a boolean refuses them: write true / false.",
         "docs/cli-reference.md#validate-config",
     ),
     # #2695: placed before `schema` — that row is the generator's key check.

@@ -56,6 +56,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import generate_alertmanager_routes as gar  # noqa: E402
 import _grar_parse  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
     STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
 )
@@ -425,6 +426,11 @@ def run_child(job: ChildJob, result_fd: int) -> None:
     try:
         os.setsid()
         resource.setrlimit(resource.RLIMIT_DATA, (job.memory_limit, job.memory_limit))
+        # Every da-guard this judgement starts inherits that limit; one ended
+        # by a signal is this judgement's memory (#2906), and it leaves no
+        # core file behind.
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        _lib_parse_tree.run_under_memory_limit()
         # ⛔ Close every inherited descriptor but stdio and the result pipe:
         # a fork copies the service's open client connections and its
         # listening socket, and a judgement (or warming run) holding a

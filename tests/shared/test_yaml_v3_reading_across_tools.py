@@ -72,10 +72,6 @@ _VARIANTS = {"plain": "yes", "quoted": '"yes"', "bool": "true"}
 # tool → (script, argv ({d} = the conf.d, {out} = a scratch dir), tree,
 #         files under {out} that are output, why it is still expected to fail
 #         — "" once it reads the yaml.v3 way)
-_VALIDATE_CONFIG_PENDING = (
-    "two rows still read conf.d with PyYAML through the tools they delegate to: "
-    "json_schema (lint/check_confd_schema.validate_dir) and yaml_quoting (PyYAML's own "
-    "composed nodes, by design); they switch with check_confd_schema (4c)")
 _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] = {
     # ── switched to parse-tree in this step (#2906) ──
     "ops/generate_alertmanager_routes.py": (
@@ -83,8 +79,7 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
         ["--config-dir", "{d}", "--validate", "--strict", "--findings-json", "{out}/f.json"],
         _ENFORCED, ("f.json",), ""),
     "ops/validate_config.py": (
-        "ops/validate_config.py", ["--config-dir", "{d}", "--json"], _ENFORCED, (),
-        _VALIDATE_CONFIG_PENDING),
+        "ops/validate_config.py", ["--config-dir", "{d}", "--json"], _ENFORCED, (), ""),
     "ops/explain_route.py": (
         "ops/explain_route.py", ["--config-dir", "{d}", "--tenant", "tenant-a", "--json"],
         _ENFORCED, (), ""),
@@ -97,10 +92,8 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
     "lint/check_routing_profiles.py": (
         "lint/check_routing_profiles.py", ["--config-dir", "{d}", "--strict"],
         _PROFILE_REF, (), ""),
-    # ── not switched yet (4c): expected to fail ──
     "lint/check_confd_schema.py": (
-        "lint/check_confd_schema.py", ["--config-dir", "{d}"], _ENFORCED, (),
-        "reads conf.d with PyYAML (4c)"),
+        "lint/check_confd_schema.py", ["--config-dir", "{d}"], _ENFORCED, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -148,11 +141,11 @@ _NOT_PROBED: dict[str, str] = {
     "lint/check_threshold_observed_map.py": _PENDING,
     "lint/check_threshold_reachability.py": _PENDING,
     "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _PENDING,
-    "ops/analyze_rule_pack_gaps.py": _PENDING, "ops/assemble_config_dir.py": _PENDING,
+    "ops/analyze_rule_pack_gaps.py": _PENDING, "ops/assemble_config_dir.py": _GO,
     "ops/backtest_threshold.py": _PENDING, "ops/batch_diagnose.py": _PENDING,
     "ops/config_history.py": _PENDING, "ops/da_assembler.py": _PENDING,
     "ops/deprecate_rule.py": _PENDING, "ops/diagnose.py": _PENDING,
-    "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _PENDING,
+    "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,
     "ops/generate_tenant_mapping_rules.py": _PENDING, "ops/gitops_check.py": _PENDING,
     "ops/init_project.py": _PENDING, "ops/migrate_rule.py": _PENDING,
     "ops/migrate_to_operator.py": _PENDING, "ops/offboard_tenant.py": _PENDING,

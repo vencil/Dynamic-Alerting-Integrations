@@ -308,6 +308,40 @@ class TestValidateMerged:
         issues = validate_merged(Path(config_dir))
         assert any("empty" in i for i in issues)
 
+    @pytest.mark.parametrize("body", ["# only a comment\n", "~\n", "---\nnull\n"])
+    def test_a_document_with_no_value_is_empty(self, config_dir, body):
+        """#2906: parse-tree reads these as `{}`; still the placeholder WARN."""
+        _write_file(os.path.join(config_dir, "empty.yaml"), body)
+        issues = validate_merged(Path(config_dir))
+        assert issues == ["WARN: empty.yaml is empty"], issues
+
+    def test_an_explicit_empty_mapping_is_no_finding(self, config_dir):
+        _write_file(os.path.join(config_dir, "a.yaml"), "{}\n")
+        assert validate_merged(Path(config_dir)) == []
+
+    @pytest.mark.parametrize("body,kind", [
+        ("tenants:\n  t-a: {}\n  t-a: {}\n", "duplicate_key"),
+        ("tenants:\n  t-a: {}\n---\ntenants: {}\n", "multiple_documents"),
+        ("tenants:\n  t-a:\n    x: !!binary ODA=\n", "tag_not_allowed"),
+    ])
+    def test_the_artifact_is_read_as_the_exporter_reads_it(self, config_dir, body, kind):
+        """#2906: through `da-guard parse-tree` — a file the exporter's yaml.v3
+        refuses is an ERROR naming parse-tree's kind."""
+        _write_file(os.path.join(config_dir, "a.yaml"), body)
+        issues = validate_merged(Path(config_dir))
+        assert len(issues) == 1 and issues[0].startswith(
+            f"ERROR: a.yaml parse error ({kind}): "), issues
+
+    def test_no_da_guard_raises_not_a_clean_result(self, config_dir, monkeypatch):
+        """#2906: no usable da-guard is `ParseTreeError` (main: exit 2), never
+        an empty issue list."""
+        import _lib_parse_tree
+        _write_file(os.path.join(config_dir, "a.yaml"), "tenants:\n  t-a: {}\n")
+        monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+        monkeypatch.setenv("PATH", os.devnull)
+        with pytest.raises(_lib_parse_tree.BinaryMissing):
+            validate_merged(Path(config_dir))
+
     def test_non_dict_yaml(self, config_dir):
         """頂層非 dict 的 YAML 報告 ERROR。"""
         _write_file(os.path.join(config_dir, "list.yaml"), "- item1\n- item2\n")

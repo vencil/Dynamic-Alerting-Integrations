@@ -1,16 +1,20 @@
-"""#2164: an UNQUOTED scalar in a string-typed field that PyYAML reads as
-something other than a string (`_lib_io.find_misread_scalars`).
+"""#2164 → ADR-036 step 4 (#2906): a value in a string-typed field that yaml.v3
+reads as something other than a string (`_lib_io.find_misread_scalars`).
 
-The two things the rule must NOT carry are pinned here too:
+The verdict is yaml.v3's — the tag `da-guard parse-tree` gives the scalar —
+because every reader of conf.d reads it that way: `channel: 1e3` is a float,
+`channel: yes` the string "yes" (no finding). The two things the rule must NOT
+carry are pinned here too:
 
-* no word list — what a scalar "is" comes from PyYAML's resolver, so `y` / `n`
-  (strings to PyYAML, unlike YAML 1.1's spec) are NOT reported;
+* no word list — what a scalar "is" comes from parse-tree's tag;
 * no field list — which fields are strings comes from the schema, so the same
-  bytes flip verdict when only the schema changes.
+  nodes flip verdict when only the schema changes.
+
+parse-tree does not say whether a scalar was quoted, nor its line: a finding
+names the value's path.
 """
 from __future__ import annotations
 
-import io
 import json
 import os
 import sys
@@ -20,7 +24,8 @@ import pytest
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO, "scripts", "tools"))
 
-from _lib_io import compose_all_nodes, find_misread_scalars  # noqa: E402
+import _lib_parse_tree as lpt  # noqa: E402
+from _lib_io import find_misread_scalars  # noqa: E402
 from _lib_io import misread_scalar_nodes  # noqa: E402
 
 _TENANT = "tenant-config.schema.json"
@@ -36,11 +41,22 @@ def schemas() -> dict:
     return out
 
 
-def _hits(text: str, schemas: dict, name: str = _TENANT):
-    out = []
-    for root in compose_all_nodes(io.StringIO(text)):
-        out.extend(find_misread_scalars(root, schemas[name], schemas, name))
-    return out
+@pytest.fixture(scope="module")
+def nodes_of(tmp_path_factory):
+    """*text* as the file `t.yaml` reads through `da-guard parse-tree`
+    (file mode): its nodes."""
+    root = tmp_path_factory.mktemp("conf.d")
+
+    def read(text: str):
+        return lpt.load_file(root, "t.yaml", text.encode("utf-8"), None, 60).node("t.yaml")
+    return read
+
+
+@pytest.fixture
+def hits(schemas, nodes_of):
+    def run(text: str, name: str = _TENANT):
+        return find_misread_scalars(nodes_of(text), schemas[name], schemas, name)
+    return run
 
 
 def _slack(channel: str) -> str:
@@ -50,111 +66,94 @@ def _slack(channel: str) -> str:
             f"        channel: {channel}\n")
 
 
-# token -> the tag PyYAML's resolver gives it when written plain
-_MISREAD = {"yes": "bool", "no": "bool", "on": "bool", "off": "bool",
-            "~": "null", "null": "null", "123": "int", "1.0": "float"}
+# token -> the tag yaml.v3 gives it when written plain
+_MISREAD = {"123": "int", "0x1F": "int", "1.0": "float", "1e3": "float",
+            "true": "bool", "~": "null", "null": "null", "2024-01-02": "timestamp"}
 
 
 @pytest.mark.parametrize("token", sorted(_MISREAD))
-def test_plain_non_string_in_a_string_field_is_reported(token, schemas):
-    hits = _hits(_slack(token), schemas)
-    assert len(hits) == 1, hits
-    hit = hits[0]
-    assert (hit.line, hit.path, hit.text, hit.resolved) == (
-        7, "/tenants/t1/_routing/receiver/channel", token, _MISREAD[token])
+def test_a_non_string_in_a_string_field_is_reported(token, hits):
+    (hit,) = hits(_slack(token))
+    assert (hit.path, hit.text, hit.resolved) == (
+        "/tenants/t1/_routing/receiver/channel", token, _MISREAD[token])
     if _MISREAD[token] != "null":
-        assert f'quote it: channel: "{token}"' in hit.message()
+        assert f'quote it, without a tag: channel: "{token}"' in hit.message()
+        assert "yaml.v3" in hit.message()
 
 
-@pytest.mark.parametrize("token", sorted(_MISREAD) + ["y", "n"])
+@pytest.mark.parametrize("token", sorted(_MISREAD) + ["yes", "no", "on", "off", "y", "n"])
 @pytest.mark.parametrize("quote", ['"', "'"])
-def test_the_quoted_control_passes(token, quote, schemas):
-    assert _hits(_slack(f"{quote}{token}{quote}"), schemas) == []
+def test_the_quoted_control_passes(token, quote, hits):
+    assert hits(_slack(f"{quote}{token}{quote}")) == []
 
 
-@pytest.mark.parametrize("token", ["y", "n", "Y", "N"])
-def test_y_and_n_are_strings_to_pyyaml_so_nothing_is_reported(token, schemas):
-    """The resolver decides, not a YAML 1.1 word list: PyYAML's bool regexp
-    has no `y`/`n`, so a list-based rule would report these and this one does
-    not."""
-    assert _hits(_slack(token), schemas) == []
+@pytest.mark.parametrize("token", ["yes", "no", "on", "off", "Yes", "OFF", "y", "n"])
+def test_yaml11_words_are_strings_to_yaml_v3_so_nothing_is_reported(token, hits):
+    """#2906: `channel: yes` was PyYAML's True (#2164's original finding). To
+    yaml.v3 — every reader of conf.d now — it is the string "yes": no
+    finding, the same as `"yes"`."""
+    assert hits(_slack(token)) == []
 
 
-@pytest.mark.parametrize("token", ["yes", "no", "on", "off", "y", "n"])
-def test_a_boolean_field_is_not_a_string_field(token, schemas):
+@pytest.mark.parametrize("token", ["true", "false", "yes", "no"])
+def test_a_boolean_field_is_not_a_string_field(token, hits):
     text = ("tenants:\n  t1:\n    _routing:\n      receiver:\n"
             "        type: webhook\n        url: \"https://a.example.com/h\"\n"
             f"        send_resolved: {token}\n")
-    assert _hits(text, schemas) == []
+    assert hits(text) == []
 
 
-def test_null_is_not_reported_where_the_schema_allows_it(schemas):
+def test_null_is_not_reported_where_the_schema_allows_it(hits):
     """`group_wait: ~` is an explicit opt-out (#1339: type [string, null])."""
     text = "tenants:\n  t1:\n    _routing:\n      group_wait: ~\n"
-    assert _hits(text, schemas) == []
+    assert hits(text) == []
 
 
-def test_enum_and_sequence_items_are_string_fields(schemas):
+def test_enum_and_sequence_items_are_string_fields(hits):
     text = ("tenants:\n  t1:\n    _severity_dedup: no\n"
             "    _routing:\n      receiver:\n        type: webhook\n"
             "        url: \"https://a.example.com/h\"\n"
-            "      group_by: [alertname, on]\n")
-    got = {(h.path, h.resolved) for h in _hits(text, schemas)}
-    # #2906: `_severity_dedup` takes a boolean too (definitions.severityDedup),
-    # so `no` is no misread string; the YAML 1.1 boolean-word WARN names it.
-    assert got == {("/tenants/t1/_routing/group_by/1", "bool")}
-    seq = [h for h in _hits(text, schemas) if h.path.endswith("/1")][0]
-    assert 'quote it: - "on"' in seq.message()
+            "      group_by: [alertname, true]\n")
+    got = [(h.path, h.resolved) for h in hits(text)]
+    # `_severity_dedup` takes a boolean too (definitions.severityDedup), so it
+    # is no string-only field.
+    assert got == [("/tenants/t1/_routing/group_by/1", "bool")]
+    assert 'quote it, without a tag: - "true"' in hits(text)[0].message()
 
 
+def test_an_explicit_tag_is_the_tag_yaml_v3_reads(hits, nodes_of):
+    """`channel: !!int 5` is the int 5 to yaml.v3: reported as an int, the
+    remedy drops the tag. A tag yaml.v3 cannot apply (`!!bool yes`) makes the
+    whole file unreadable to parse-tree — never a value here."""
+    (hit,) = hits(_slack("!!int 5"))
+    assert (hit.text, hit.resolved) == ("5", "int")
+    assert "without a tag" in hit.message()
+    with pytest.raises(lpt.FileUnreadable) as e:
+        nodes_of(_slack("!!bool yes"))
+    assert e.value.kind == "decode_error"
 
-def test_explicit_tag_names_the_tag_not_quoting_alone(schemas):
-    """#2509 盲審第 5 輪：`channel: !!bool yes` 只加引號仍是布林，建議要先拿掉 tag。"""
-    text = ("tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
-            "        channel: !!bool yes\n")
-    (hit,) = _hits(text, schemas)
-    assert hit.explicit, hit
-    msg = hit.message()
-    assert "explicit `!!bool yes`" in msg and "unquoted" not in msg, msg
-    assert 'remove the tag and quote it: channel: "yes"' in msg, msg
 
-
-@pytest.mark.parametrize("written, shown", [
-    ("!foo yes", "!foo yes"),
-    ("!foo:bar yes", "!foo:bar yes"),
-    ("!<tag:example.com,2000:x> yes", "!<tag:example.com,2000:x> yes"),
-    ("!<tag:yaml.org,2002:int> 5", "!!int 5"),
-    ("!!python/str yes", "!!python/str yes"),
-])
-def test_explicit_tag_is_named_as_written(schemas, written, shown):
-    """盲審續輪 1／2：tag 照作者寫法印出（本地 tag 不加 `!!`，含 `:` 的 tag 不被截斷）。"""
-    text = ("tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
-            f"        channel: {written}\n")
-    (hit,) = _hits(text, schemas)
-    assert f"explicit `{shown}`" in hit.message(), hit.message()
-
-def test_defaults_routing_blocks_follow_the_cross_file_ref(schemas):
+def test_defaults_routing_blocks_follow_the_cross_file_ref(hits):
     """`_routing_defaults` / `_routing_enforced` in `_defaults.yaml` are typed
     by `$ref` into tenant-config.schema.json (#2164)."""
     text = ("_routing_defaults:\n  receiver:\n    type: pagerduty\n"
-            "    service_key: yes\n"
-            "_routing_enforced:\n  enabled: yes\n  receiver:\n"
+            "    service_key: 123\n"
+            "_routing_enforced:\n  enabled: true\n  receiver:\n"
             "    type: webhook\n    url: \"https://noc.example.com/h\"\n"
-            "  match: [on]\n")
-    got = {(h.line, h.path) for h in _hits(text, schemas, _PLATFORM)}
-    assert got == {(4, "/_routing_defaults/receiver/service_key"),
-                   (10, "/_routing_enforced/match/0")}
+            "  match: [1.5]\n")
+    got = {h.path for h in hits(text, _PLATFORM)}
+    assert got == {"/_routing_defaults/receiver/service_key",
+                   "/_routing_enforced/match/0"}
 
 
 def test_which_fields_are_strings_comes_from_the_schema_alone():
-    """Same bytes, two schemas: the verdict follows the schema's `type`."""
-    text = "a: yes\n"
+    """Same nodes, three schemas: the verdict follows the schema's `type`."""
+    root = {"a": {"text": "5", "tag": "!!int", "value": "5"}}
     as_string = {"type": "object", "properties": {"a": {"type": "string"}}}
-    as_bool = {"type": "object", "properties": {"a": {"type": "boolean"}}}
-    mixed = {"type": "object", "properties": {"a": {"type": ["string", "boolean"]}}}
-    root = next(compose_all_nodes(io.StringIO(text)))
+    as_int = {"type": "object", "properties": {"a": {"type": "integer"}}}
+    mixed = {"type": "object", "properties": {"a": {"type": ["string", "integer"]}}}
     assert [h.path for h in find_misread_scalars(root, as_string)] == ["/a"]
-    assert find_misread_scalars(root, as_bool) == []
+    assert find_misread_scalars(root, as_int) == []
     # A mixed scalar type accepts the non-string reading; left alone (#1017
     # tightened the schema to string instead of having a lint guess).
     assert find_misread_scalars(root, mixed) == []
@@ -163,42 +162,26 @@ def test_which_fields_are_strings_comes_from_the_schema_alone():
 def test_an_unloaded_cross_file_ref_is_an_error_not_a_silent_skip():
     schema = {"type": "object",
               "properties": {"a": {"$ref": "other.schema.json#/definitions/x"}}}
-    root = next(compose_all_nodes(io.StringIO("a: yes\n")))
+    root = {"a": {"text": "5", "tag": "!!int", "value": "5"}}
     with pytest.raises(KeyError):
         find_misread_scalars(root, schema, {}, "self.json")
 
 
-def test_an_alias_bomb_is_walked_once_per_schema_position(schemas):
-    text = ("tenants:\n  t1:\n    _routing:\n      group_by: &g [on, off]\n"
-            "      overrides:\n" + "".join(
-                f"        - alertname: A{i}\n          group_by: *g\n"
-                "          receiver: {type: webhook, url: \"https://a.example.com/h\"}\n"
-                for i in range(3)))
-    hits = _hits(text, schemas)
-    # Each hit points at the line where the list is WRITTEN. It is judged once
-    # per schema position (routing.group_by, routingOverride.group_by): the
-    # 2nd and 3rd alias uses reach the same node under the same schema and
-    # are not walked again.
-    assert {h.line for h in hits} == {4}
-    assert sorted(h.path for h in hits) == [
-        "/tenants/t1/_routing/group_by/0", "/tenants/t1/_routing/group_by/1",
-        "/tenants/t1/_routing/overrides/0/group_by/0",
-        "/tenants/t1/_routing/overrides/0/group_by/1"]
-
-
-def test_the_nodes_are_the_reported_scalars_each_once(schemas):
-    """#2695: `misread_scalar_nodes` is the same walk as
-    `find_misread_scalars`, handing back the scalar NODES — each once, an
-    aliased one reported at two schema positions included (the caller
-    re-tags it, and one node re-tagged covers every use)."""
-    text = ("tenants:\n  t1:\n    _routing:\n      group_by: &g [on, off]\n"
+def test_an_alias_is_judged_at_every_place_it_is_used(hits, schemas, nodes_of):
+    """parse-tree expands an alias where it is used, so each use is judged at
+    its own schema position (routing.group_by, routingOverride.group_by), and
+    `misread_scalar_nodes` hands back the nodes of the same walk (#2695)."""
+    text = ("tenants:\n  t1:\n    _routing:\n      group_by: &g [true, 1]\n"
             "      overrides:\n"
             "        - alertname: A0\n          group_by: *g\n"
             "          receiver: {type: webhook, url: \"https://a.example.com/h\"}\n")
-    root = next(compose_all_nodes(io.StringIO(text)))
-    hits = find_misread_scalars(root, schemas[_TENANT], schemas, _TENANT)
+    got = hits(text)
+    assert [h.path for h in got] == [
+        "/tenants/t1/_routing/group_by/0", "/tenants/t1/_routing/group_by/1",
+        "/tenants/t1/_routing/overrides/0/group_by/0",
+        "/tenants/t1/_routing/overrides/0/group_by/1"]
+    root = nodes_of(text)
     nodes = misread_scalar_nodes(root, schemas[_TENANT], schemas, _TENANT)
-    assert len(hits) == 4
-    assert [(n.start_mark.line + 1, n.start_mark.column + 1) for n in nodes] \
-        == sorted({(h.line, h.column) for h in hits})
-    assert [n.value for n in nodes] == ["on", "off"]
+    assert [n["text"] for n in nodes] == ["true", "1", "true", "1"]
+    assert [h.text for h in find_misread_scalars(root, schemas[_TENANT], schemas, _TENANT)] \
+        == [n["text"] for n in nodes]

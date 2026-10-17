@@ -2731,7 +2731,7 @@ class TestRootDefaultsValues:
 
     @pytest.mark.parametrize("value, shown", [
         ('"70"', '`"70"`'),
-        ("disable", "`disable`"),
+        ("disable", '`"disable"`'),  # #2906: a string, shown as one
         ("\n    default: 30", "a mapping"),
         ("\n    - 30", "a list"),
         ("true", "`true`"),
@@ -3285,15 +3285,16 @@ class TestJsonSchemaRow:
         assert not [x for x in quoting if "group_by" in x], quoting
         assert rc == 1
 
+    # #2906: a value yaml.v3 reads as non-string (`yes` is a string to it).
     _SLACK = ("    _routing:\n      receiver:\n        type: slack\n"
               "        api_url: https://hooks.slack.com/services/x\n"
-              "        channel: yes\n")
+              "        channel: 1e3\n")
 
     def test_a_misread_value_under_a_receiver_oneof_is_not_reported(
             self, tmp_path, capsys, cli_argv):
         """The receiver `oneOf` reports the misread field one level ABOVE it
         (`@ /tenants/ta/_routing/receiver`, itself inside the `_routing`
-        object/null `oneOf`); judged as quoted, `"yes"` is a valid channel
+        object/null `oneOf`); judged as quoted, `"1e3"` is a valid channel
         and nothing is left to report."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
@@ -3311,9 +3312,9 @@ class TestJsonSchemaRow:
     # the ranking and hide the real one — the round-2 findings of #2695.
     @pytest.mark.parametrize("body,named", [
         (_SLACK + "      foo: 1\n", "'foo' was unexpected"),
-        (_RECEIVER + "      overrides:\n        - alertname: yes\n"
+        (_RECEIVER + "      overrides:\n        - alertname: 1e3\n"
                      "          group_by: alertname\n", "group_by"),
-        (_RECEIVER + "      overrides:\n        - alertname: yes\n"
+        (_RECEIVER + "      overrides:\n        - alertname: 1e3\n"
                      "          receiver:\n            type: webhok\n"
                      "            url: https://hooks.example.com/b\n",
          "webhok"),
@@ -3357,8 +3358,8 @@ class TestJsonSchemaRow:
         # `"123"` is not a URL either; it outranks the sibling `foo`.
         ("    _routing:\n      receiver:\n        type: webhook\n"
          "        url: 123\n      foo: 1\n", "'123' does not match"),
-        # `"yes"` is not a silent mode.
-        ("    _silent_mode: yes\n", "'yes' is not one of"),
+        # `"true"` is not a silent mode.
+        ("    _silent_mode: true\n", "'true' is not one of"),
         # An empty url, quoted, is still not a URL.
         ("    _routing:\n      receiver:\n        type: webhook\n"
          "        url:\n", "'' should be non-empty"),
@@ -3400,9 +3401,10 @@ class TestJsonSchemaRow:
                                               schemas[1], schemas[2])
         assert len([v for v in violations if "mysql_connections" in v]) == 2
 
-    def test_each_document_and_alias_is_read_as_quoted(self, tmp_path):
-        """Per document of a multi-document file, and through an alias: the
-        aliased node is one node, so marking it once covers every use."""
+    def test_each_use_of_an_alias_is_read_as_quoted(self, tmp_path):
+        """Through an alias: parse-tree expands it where it is used, and each
+        use is a misread value of its own, read as quoted. (A file of several
+        documents is unreadable to parse-tree — `multiple_documents`.)"""
         import jsonschema
         lint_dir = os.path.join(_REPO_ROOT, "scripts", "tools", "lint")
         if lint_dir not in sys.path:
@@ -3418,10 +3420,9 @@ class TestJsonSchemaRow:
             "tenants:\n  ta:\n    mysql_connections: 70\n"
             "    _routing: &r\n      receiver:\n        type: slack\n"
             "        api_url: https://hooks.slack.com/services/x\n"
-            "        channel: yes\n"
+            "        channel: 1e3\n"
             "  tb:\n    _routing: *r\n"
-            "---\n"
-            "tenants:\n  tc:\n    mysql_connections: 70\n"
+            "  tc:\n    mysql_connections: 70\n"
             + self._RECEIVER + "      group_by: alertname\n")})
         _n, violations, _s = ccs.validate_dir(
             d, schemas[0], jsonschema, schemas[1], schemas[2],
@@ -3429,10 +3430,15 @@ class TestJsonSchemaRow:
         assert len(violations) == 1, violations
         assert "/tenants/tc/_routing/group_by" in violations[0], violations
         # Unchanged without the caller's list: every misread value is a
-        # quoting line AND a type error.
+        # quoting line (both alias uses among them), and the schema judges
+        # the values as yaml.v3 read them.
         _n, alone, _s = ccs.validate_dir(d, schemas[0], jsonschema,
                                          schemas[1], schemas[2])
-        assert any("is not of type" in v for v in alone), alone
+        quoting = [v for v in alone if "is read by yaml.v3" in v]
+        assert {v.split(": ")[2] for v in quoting} >= {
+            "/tenants/ta/_routing/receiver/channel",
+            "/tenants/tb/_routing/receiver/channel"}, alone
+        assert any(v.endswith("@ /tenants/tc/mysql_connections") for v in alone), alone
 
     def test_without_jsonschema_the_row_says_it_did_not_check(
             self, tmp_path, monkeypatch, capsys, cli_argv):

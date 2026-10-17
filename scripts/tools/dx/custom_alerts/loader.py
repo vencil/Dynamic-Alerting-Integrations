@@ -19,7 +19,7 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
@@ -105,7 +105,8 @@ def _file_skip(origin: str, exc: Exception) -> dict:
     return _file_record(origin, f"{type(exc).__name__}: {exc}")
 
 
-def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path, List[dict]]:
+def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
+                         read: "Optional[Callable[[Path], dict]]" = None) -> Dict[Path, List[dict]]:
     """Map each directory → its _defaults.yaml top-level `_custom_alerts` list. A
     _defaults.yaml that fails to load is quarantined into `file_errors` (#1008 Part B),
     not raised."""
@@ -146,7 +147,7 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         # describe_tenant's words, rather than dropped in silence.
         warn_multi_carrier(Path(root), readable)
         try:
-            data = _load_yaml(chosen)
+            data = (read or _load_yaml)(chosen)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
             file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
             continue
@@ -175,7 +176,9 @@ def _inherited_for(leaf_dir: Path, config_dir: Path,
     return inherited
 
 
-def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool]], List[dict]]:
+def collect_instances(config_dir: Path,
+                      read: "Optional[Callable[[Path], dict]]" = None,
+                      ) -> Tuple[List[Tuple[str, dict, str, bool]], List[dict]]:
     """Return (triples, file_errors): (tenant, instance, origin, is_own) tuples for every
     effective decl, PLUS skip records for conf.d files that failed to load.
 
@@ -190,7 +193,7 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     """
     config_dir = Path(config_dir)
     file_errors: List[dict] = []
-    dir_alerts = _dir_defaults_alerts(config_dir, file_errors)
+    dir_alerts = _dir_defaults_alerts(config_dir, file_errors, read)
     triples: List[Tuple[str, dict, str, bool]] = []
 
     # ⚠️ Same third axis as `operator_generate`, and here it is louder:
@@ -283,7 +286,7 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
         if is_defaults_name(path.name):
             continue
         try:
-            data = _load_tenant_yaml(path)
+            data = (read or _load_tenant_yaml)(path)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
             file_errors.append(_file_skip(path.relative_to(config_dir).as_posix(), exc))
             continue
@@ -376,12 +379,18 @@ def _skip_record(tenant: str, origin, inst, exc: Exception) -> dict:
 def build_shapes(config_dir: Path,
                  max_custom_recipes: int = MAX_CUSTOM_RECIPES_DEFAULT,
                  accepted: Optional[List[dict]] = None,
+                 read: "Optional[Callable[[Path], dict]]" = None,
                  ) -> Tuple[List[dict], Dict[str, int], List[dict]]:
     """Group all effective instances into shapes; return (shapes, per_tenant_count, skipped).
 
     Each shape dict carries the representative params + recipe_id + sorted severities
     union. per_tenant_count is the EFFECTIVE count (own + inherited) of the recipes that
     COMPILED.
+
+    `read`, given, reads one conf.d file as a mapping in place of this
+    module's PyYAML read (`_load_yaml` / `_load_tenant_yaml`): validate-config
+    hands its `da-guard parse-tree` reader in (ADR-036 step 4, #2906), so one
+    run reads conf.d one way. A file it raises on is quarantined the same way.
 
     `accepted`, given, receives one dict per recipe instance that COMPILED —
     `tenant`, `name`, `recipe_id`, `severities`, `origin`, `own` and
@@ -406,7 +415,7 @@ def build_shapes(config_dir: Path,
         raise CustomAlertConfigError(
             f"max_custom_recipes must be >= 0 (got {max_custom_recipes})"
         )
-    triples, file_errors = collect_instances(config_dir)
+    triples, file_errors = collect_instances(config_dir, read)
 
     # validation accumulators
     name_seen: Dict[Tuple[str, str], str] = {}              # (tenant, name) → origin
