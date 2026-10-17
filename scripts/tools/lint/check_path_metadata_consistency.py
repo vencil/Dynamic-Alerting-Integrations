@@ -300,13 +300,12 @@ def _main() -> int:
         print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
         return EXIT_CALLER_ERROR
     for rel, (kind, message) in sorted(tree.unreadable.items()):
-        # The `_` name filter is for FILES only. An entry the walk does not
-        # descend is named whatever it is called: the exporter descends
-        # `_`-prefixed directories, so a `_shared` directory link hides
-        # tenants too (#1972).
+        # The `_` name filter is for FILES only. A directory the walk does
+        # not descend is named whatever it is called: the exporter descends
+        # `_`-prefixed directories, so a locked `_arch/` (#2081) or a
+        # `_shared` directory link (#1972) hides tenants too.
         entry = config_dir / rel
-        if (not rel.rsplit("/", 1)[-1].startswith("_")
-                or (entry.is_symlink() and entry.is_dir())):
+        if not rel.rsplit("/", 1)[-1].startswith("_") or entry.is_dir():
             print(f"{safe_label(str(entry))}:0: warning: not checked — "
                   f"{safe_label(message)} ({kind})",
                   file=sys.stderr)
