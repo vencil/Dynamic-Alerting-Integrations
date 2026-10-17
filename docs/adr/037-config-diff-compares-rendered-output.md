@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-10
-updated_at: 2026-10-14
+updated_at: 2026-10-17
 ---
 
 # ADR-037: config-diff 改為比較渲染結果
@@ -18,7 +18,7 @@ updated_at: 2026-10-14
 
 ## 狀態
 
-✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。2026-10-14 決定 3 改由 parse-tree 逐鍵說出讀取位置，「完整涵蓋、渲染結果沒有差異只附註」自此啟用。
+✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。2026-10-13 決定 3 補上由 CI 檢查負責的載體，以及兩支渲染程式都不讀的檔怎麼列。2026-10-14 決定 3 改由 parse-tree 逐鍵說出讀取位置，「完整涵蓋、渲染結果沒有差異只附註」自此啟用。2026-10-17 決定 3 的延後載體表更新：`_` 檔頂層的 `_custom_alerts` 已沒有讀取端。
 
 ## 摘要
 
@@ -95,7 +95,7 @@ updated_at: 2026-10-14
 
 | 載體 | 延後理由 | 什麼時候做 |
 |---|---|---|
-| 平台層的 `_custom_alerts`（`_` 檔頂層的 recipe） | 由 custom-alert 編譯器讀，不在兩支渲染程式裡 | 編譯器有可比較的輸出，或第一次出現漏報 |
+| 平台層的 `_custom_alerts`（`_` 檔頂層的 recipe） | 沒有讀取端：exporter 不送出，custom-alert 編譯器照 exporter 的讀法編譯、也不編它（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3） | 有讀取端讀它時 |
 | `instance_tenant_mapping` | 由 tenant mapping 產生器讀 | 該產生器有穩定的輸出格式 |
 | `max_metrics_per_tenant` | served-values 不輸出上限值本身 | 有人需要時 |
 

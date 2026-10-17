@@ -20,6 +20,8 @@ Revised 2026-10-17: no `_` key produces a threshold row any more, and the export
 
 Revised 2026-10-17: `disable_partial` is reported only when the sibling still served is not written in the tenant's own file, and names the file it comes from; `disable` is to turn off the whole family later (decision 8).
 
+Revised 2026-10-17: the custom alert compiler compiles the exporter's own reading, so the two read `_custom_alerts` in the same layers (decision 2).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -112,7 +114,7 @@ No separate piece of code describing "which keys the generator reads" is written
 Facts that cannot be measured go in one JSON registry, kept inside the exporter's Go module (`components/threshold-exporter/app/pkg/config/`). Its content is limited to the top-level `_` namespace:
 
 - Which **reader class** each reserved key and prefix (`_silent_mode`, `_routing`, `_state_` …) belongs to: `exporter`, `generator`, `custom_alert_compiler`, `policy_engine` (Policy-as-Code, which reads `_policies` from the root `_defaults.yaml`), `annotation` (annotations only for people or tools, for example `_namespaces`). One key can belong to several readers.
-- **In which layers each reader reads the key**: the tenant file, `tenants:` in a root platform file, a profile, `defaults:` of a subdirectory's `_defaults.yaml`, the top level of a root platform file. Readers of one key can read it in different layers: measured, `_custom_alerts` written in a profile is read by the exporter and not by the compiler.
+- **In which layers each reader reads the key**: the tenant file, `tenants:` in a root platform file, a profile, `defaults:` of a subdirectory's `_defaults.yaml`, the top level of a root platform file. Readers of one key can read it in different layers: for example, the registry declares `_severity_dedup` under `defaults:` of a subdirectory's `_defaults.yaml` as read by the exporter and not by the generator.
 - **Retired keys** and the hint text for users.
 - Description text (for the schema description and the explain output).
 
@@ -279,7 +281,6 @@ The input and today's measured output are in "Background"; this table is the ver
 - **The probe does not cover two kinds**: annotation keys (`_namespaces`), and keys that are read but do not change the output. These rely on explicit marks in the registry.
 - **Cost of counterfactual recomputation**: the number of recomputation rounds equals the most `disable`s any single tenant has, and each round is one served-values. It does not go into the write check.
 - **Problems found while measuring, handled separately**:
-  - The custom alert compiler and the exporter use different source rules for `_custom_alerts`: the compiler picks up tenants in `_` files in sub-directories that are not selected; the exporter does not read them ([#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)).
   - The generator reads `_metadata` but does not use it ([#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)).
   - `_severity_dedup` is read only from the tenant file, while other reserved keys inherit from profiles; whether this is intended needs confirming ([#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)).
   - `disable` does not also turn off `_critical` and dimension keys (see decision 8, [#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)).

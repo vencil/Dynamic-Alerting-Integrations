@@ -88,16 +88,14 @@ func unwrappedDefaultsFiles(input CheckInput) map[string]bool {
 
 // writtenInsideDefaults drops from files the unwrapped ones.
 //
-// ⛔ ONLY FOR TopLevelReadElsewhere KEYS (#2388 r1b). Another reader takes
-// such a key from the TOP level of a defaults file, at every level: measured
-// with the repo's own rule-packs/recipes/examples/conf.d, whose
-// `finance/_defaults.yaml` carries `_custom_alerts` at the top level with no
-// `defaults:` wrapper — compile_custom_alerts.py compiled 12 shapes (pay-a: 2
-// recipes); the same list moved under `defaults:` compiled 11 (pay-a: 1),
-// and no other finding named either. pkg/config's chain view
-// (subtreeReservedKeys) cannot tell the top level from `defaults:` in an
-// unwrapped file, so this check, which holds the files' bytes, does. A key
-// under a `defaults:` mapping is still reported: nothing reads it there.
+// ⛔ ONLY FOR TopLevelReadElsewhere KEYS (#2388 r1b): another reader takes
+// such a key from the TOP level of a defaults file, so only a copy under a
+// `defaults:` mapping is reported — nothing reads it there. pkg/config's
+// chain view (subtreeReservedKeys) cannot tell the top level from
+// `defaults:` in an unwrapped file, so this check, which holds the files'
+// bytes, does. (`_custom_alerts` was such a key until #3042: the
+// custom-alert compiler read it from a `_defaults.yaml` top level; it now
+// compiles what the exporter serves, and both places are reported.)
 // A file not in DefaultsFiles is kept (reported), not guessed.
 func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 	var out []string
@@ -127,6 +125,16 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 // one of these files (sharedApplied).
 func subtreeReservedMessage(input CheckInput, applied appliedBySource, tenant, k string, files []string) string {
 	declared := input.DeclaredStateFilters
+	if k == "_custom_alerts" {
+		// #3042: no reader takes a custom-alert list from a `_defaults.yaml`,
+		// at its top level or under `defaults:` — the exporter has never
+		// served one, and the compiler compiles what the exporter serves. Not
+		// a key the exporter stops applying: it never did.
+		return fmt.Sprintf("`_custom_alerts` is written in a subtree `_defaults.yaml` (%s) that this tenant "+
+			"inherits from; no reader takes custom alerts from a `_defaults.yaml`: the exporter serves none of "+
+			"them and the custom-alert compiler compiles none (#3042). Write the list in each tenant's own entry "+
+			"under `tenants:`, in a root platform file's `tenants:`, or in a profile its tenants select.", quoteJoin(files))
+	}
 	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
 	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
 		"`_defaults.yaml`, and this warning becomes an error (#2388)."
@@ -425,7 +433,7 @@ func reservedKeyFix(k string) string {
 			"tenant in the tree; to change only this subtree's tenants, set the key in each tenant's own entry.",
 			k, filterPath(strings.TrimPrefix(k, "_state_")))
 	}
-	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level
+	if readElsewhere[k] { // a TopLevelReadElsewhere key: its reader takes it from the top level
 		return fmt.Sprintf("To have it take effect, move `%s` out of `defaults:` to the top level of the file, "+
 			"where it is read, or set it in each tenant's own entry under `tenants:`.", k)
 	}

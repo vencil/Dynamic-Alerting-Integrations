@@ -85,7 +85,6 @@ PLATFORM_ROUTING_KEYS: Final[frozenset[str]] = frozenset({
     "_routing_enforced",
 })
 TOP_LEVEL_READ_ELSEWHERE: Final[frozenset[str]] = frozenset({
-    "_custom_alerts",
     "_policies",
     "_routing_defaults",
     "_routing_enforced",
@@ -98,7 +97,7 @@ RETIRED_RESERVED_KEYS: Final[dict[str, str]] = {
 RESERVED_KEY_READERS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     "_custom_alerts": {
         "exporter": ("tenant", "platform_tenants", "profile"),
-        "custom_alert_compiler": ("tenant", "platform_tenants", "platform_top"),
+        "custom_alert_compiler": ("tenant", "platform_tenants", "profile"),
     },
     "_metadata": {
         "exporter": ("tenant", "platform_tenants", "profile"),

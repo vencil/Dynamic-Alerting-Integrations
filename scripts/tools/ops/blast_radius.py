@@ -529,11 +529,11 @@ def _pages(recipe: dict) -> bool:
 
     ⚠️ "Reaches this tool", not "legitimately", which is what this said before.
     The duplicate is real on the input side — `describe_tenant` merges by union
-    and emits both — but the CI compiler does not accept it: `loader.py`'s
-    `build_shapes` quarantines one of the two into `skipped` with the reason
-    `duplicate custom-alert name … names must be unique per tenant` (pinned by
-    `tests/dx/test_compile_custom_alerts.py`). So this is a config error the
-    customer will be told about, and handling it here is still required —
+    and emits both — but tenant-api's write check refuses a name written
+    twice in one tenant's list (`ValidateTenantCustomAlerts`), and the
+    exporter serves one list per tenant, not the union (#3042). So this is a
+    config error the customer will be told about, and handling it here is
+    still required —
     blast_radius runs on the PR, BEFORE the compiler has said anything — but
     calling it legitimate told the next reader the platform is fine with it.
 
