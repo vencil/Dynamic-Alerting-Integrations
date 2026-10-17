@@ -1539,12 +1539,21 @@ CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
 # handler, so green here is NOT coverage for them. Tracked in #3115.
 CRASH_SWALLOWED_BY_OWN_HANDLER = {"config_diff": "#3115", "operator_generate": "#3115"}
 
+# Known gap: these tools' --json document is an ARRAY, but the crash envelope
+# is an object. Whether to normalise envelope shapes is an owner decision in
+# #3115; until then a consumer tells the crash apart by the top-level type.
+CRASH_ENVELOPE_TYPE_DIFFERS = {
+    "validate_config": "#3115", "analyze_rule_pack_gaps": "#3115",
+    "blind_spot_discovery": "#3115", "explain_route": "#3115",
+}
+
 
 def test_every_json_tool_has_a_crash_recipe():
     """Anti-vacuity: the crash gate below reaches every --json tool."""
     assert sorted(r.tool for r in CRASH_RECIPES) == JSON_TOOLS
-    assert set(CRASH_SWALLOWED_BY_OWN_HANDLER) <= set(JSON_TOOLS), (
-        "the known-gap list names a tool that is no longer a --json tool")
+    for gaps in (CRASH_SWALLOWED_BY_OWN_HANDLER, CRASH_ENVELOPE_TYPE_DIFFERS):
+        assert set(gaps) <= set(JSON_TOOLS), (
+            "a known-gap list names a tool that is no longer a --json tool")
 
 
 @pytest.mark.parametrize("recipe", CRASH_RECIPES, ids=[r.tool for r in CRASH_RECIPES])
@@ -1590,8 +1599,18 @@ def test_crash_in_json_mode_emits_one_envelope(
     rejecting = next((r for r in RECIPES
                       if r.tool == recipe.tool and r.expect_caller_error), None)
     if rejecting is not None:
-        own = json.loads(_run(rejecting, tmp_path, stub_url, sandbox_repo,
+        own_tmp = tmp_path / "own"
+        own_tmp.mkdir()
+        own = json.loads(_run(rejecting, own_tmp, stub_url, sandbox_repo,
                               fake_kubectl_dir).stdout)
-        missing = sorted(set(own) - set(doc)) if isinstance(own, dict) else []
-        assert not missing, (f"crash envelope lacks keys of the tool's own "
-                             f"caller_error document {missing}: {where}")
+        if recipe.tool in CRASH_ENVELOPE_TYPE_DIFFERS:
+            assert isinstance(own, list), (
+                f"{recipe.tool} is listed as array-shaped but its document is "
+                f"{type(own).__name__}; drop it from CRASH_ENVELOPE_TYPE_DIFFERS")
+        else:
+            assert isinstance(own, dict), (
+                f"the tool's own caller_error document is "
+                f"{type(own).__name__}, the crash envelope an object: {where}")
+            missing = sorted(set(own) - set(doc))
+            assert not missing, (f"crash envelope lacks keys of the tool's own "
+                                 f"caller_error document {missing}: {where}")

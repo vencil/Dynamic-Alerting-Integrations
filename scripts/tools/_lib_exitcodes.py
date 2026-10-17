@@ -253,8 +253,14 @@ def _print_crash_envelope(exc: BaseException) -> None:
     if armed is None:
         return
     build, fields = armed
+    base = None
+    if build is not None:
+        try:
+            base = build()
+        except Exception:  # noqa: BLE001 — the three keys still print
+            base = None
     import json  # deferred: only a crash in --json mode needs it
-    text = json.dumps(crash_envelope(exc, build() if build else None, **fields),
+    text = json.dumps(crash_envelope(exc, base, **fields),
                       ensure_ascii=False, indent=2, default=str)
     try:
         print(text, flush=True)

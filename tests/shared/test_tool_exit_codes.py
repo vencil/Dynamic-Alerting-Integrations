@@ -359,6 +359,20 @@ def test_armed_crash_envelope_builds_the_tools_zeroed_report_at_crash_time(tmp_p
         "error": "ERROR: unexpected internal error (ValueError): late"}
 
 
+def test_failing_build_still_prints_the_three_key_envelope(tmp_path):
+    """A build() that raises must not leave stdout empty: rc 2 keeps its envelope."""
+    proc = _run_crash_script(
+        tmp_path,
+        "_lib_exitcodes.arm_crash_envelope(lambda: {}['x'], tool='t')\n"
+        "raise RuntimeError('boom')\n")
+    assert proc.returncode == 2, proc.stderr
+    assert json.loads(proc.stdout) == {
+        "tool": "t", "status": "caller_error", "reason": "internal_error",
+        "error": "ERROR: unexpected internal error (RuntimeError): boom"}
+    assert _stderr_lines(proc)[-2] == \
+        "ERROR: unexpected internal error (RuntimeError): boom", proc.stderr
+
+
 def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path):
     """`tool --json | head -c1`: stdout is gone, so the envelope is dropped
     quietly — the crash report on stderr is the only one, rc stays 2."""
