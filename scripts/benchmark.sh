@@ -397,7 +397,9 @@ if [[ "${ROUTING_BENCH}" == true ]]; then
   # #2906 (ADR-036 step 4) moves the route generator onto da-guard parse-tree;
   # from then on it exits 2 without one. Build it from this checkout unless $DA_GUARD_BINARY
   # is set, as demo-showcase.sh does; a failed build stops here by name.
-  if [[ -z "${DA_GUARD_BINARY:-}" ]]; then
+  # A blank value counts as unset, as with_da_guard.sh reads it.
+  _dg="${DA_GUARD_BINARY:-}"
+  if [[ -z "${_dg//[[:space:]]/}" ]]; then
     if ! make -C "${SCRIPT_DIR}/.." --no-print-directory da-guard-build; then
       err "could not build da-guard (see above) — set DA_GUARD_BINARY to one, or install Go"
       exit 2

@@ -336,8 +336,8 @@ def build_da_guard(workdir: Path) -> str:
     (ADR-036 step 4) lands: `$DA_GUARD_BINARY` when set, else built from this
     checkout — without one the service then fails every write with exit 2
     (run_failed)."""
-    preset = os.environ.get("DA_GUARD_BINARY")
-    if preset:
+    preset = os.environ.get("DA_GUARD_BINARY", "")
+    if preset.strip():  # a blank value counts as unset, as _lib_parse_tree reads it
         return preset
     binary = workdir / "da-guard"
     print(f"[contract] building da-guard → {binary}")
