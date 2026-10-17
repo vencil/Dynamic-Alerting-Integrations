@@ -376,12 +376,10 @@ _ROWS = [
     ("threshold_recommend", OPS / "threshold_recommend.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
-    # envelope tools: their own load-site handlers, not the decorator
-    ("backtest --config-dir", OPS / "backtest_threshold.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
-                "--prometheus", _PROM, "--skip-if-unavailable"], None, "alpha.yaml",
-     lambda f: ["--config-dir", str(f["confd_ok"]), "--baseline", str(f["confd_ok"]),
-                "--prometheus", _PROM, "--skip-if-unavailable"], EXIT_OK),
+    # envelope tools: their own load-site handlers, not the decorator.
+    # (backtest left this table with #3111: it reads no file itself — da-guard
+    # names an undecodable file on either side, pinned by
+    # test_backtest_served_values_matrix::test_a_tree_da_guard_refuses_exits_2.)
     ("policy_engine _defaults", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad_defaults"])], None, "_defaults.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--policy", str(f["files"] / "policy.yaml")],
@@ -470,7 +468,7 @@ def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, nam
     ("backtest --config-dir", OPS / "backtest_threshold.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
                 "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
-     None, "conf_file_unreadable"),
+     None, "served_values_unavailable"),
     ("policy_engine tenant", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--policy",
                 str(f["files"] / "policy.yaml"), "--json"], None, "yaml_file_unreadable"),

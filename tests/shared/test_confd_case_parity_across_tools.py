@@ -1883,7 +1883,14 @@ def test_config_dir_recipe_scan_sees_either_casing(
     """
     def _recipe_body(tenant: str) -> str:
         return (f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
-                f"    _custom_alerts:\n      - recipe: threshold\n")
+                f"    _custom_alerts:\n      - recipe: threshold\n        name: q\n"
+                "        metric: m\n        op: '>'\n        window: 5m\n"
+                "        threshold: '150:warning'\n")
+
+    def _plain_body(tenant: str) -> str:
+        # #3111: the NOTE names the tenants whose recipes CHANGED, so the
+        # baseline holds the same tenants without them.
+        return f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
 
     bodies = _recipe_body("acme")
     seen = {}
@@ -1892,7 +1899,7 @@ def test_config_dir_recipe_scan_sees_either_casing(
         cur.mkdir(parents=True)
         base.mkdir(parents=True)
         (cur / carrier).write_text(bodies, encoding="utf-8")
-        (base / carrier).write_text(bodies, encoding="utf-8")
+        (base / carrier).write_text(_plain_body("acme"), encoding="utf-8")
         # ⛔ Three neighbours whose tenants must NOT reach the notice, one
         # per filter this site applies. Blind review deleted this site's
         # extension filter outright and the suite stayed green while a
@@ -1914,7 +1921,7 @@ def test_config_dir_recipe_scan_sees_either_casing(
                              ("db-c.yml", "yml_carrier"),
                              ("_defaults.yaml", "ghost_reserved")):
             (cur / name).write_text(_recipe_body(tenant), encoding="utf-8")
-            (base / name).write_text(_recipe_body(tenant), encoding="utf-8")
+            (base / name).write_text(_plain_body(tenant), encoding="utf-8")
         r = subprocess.run(
             [sys.executable, "-X", "utf8",
              str(TOOLS_DIR / "ops" / "backtest_threshold.py"),

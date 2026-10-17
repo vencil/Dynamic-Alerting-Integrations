@@ -3,6 +3,16 @@ on:
   pull_request:
     paths:
       - 'components/threshold-exporter/config/conf.d/**'
+      # #3111: the tool, the files it reads and this workflow, so a change to
+      # how the backtest runs is run here too (as config-diff-advisory.yml
+      # lists its own). A PR that changes none of conf.d/ gets "no threshold
+      # changes found." in the sticky comment.
+      - 'scripts/tools/ops/backtest_threshold.py'
+      - 'scripts/tools/ops/_observed_map_lib.py'
+      - 'scripts/tools/ops/metric_observed_map.yaml'
+      - 'scripts/tools/_lib_tenant_values.py'
+      - 'scripts/tools/_lib_validation.py'
+      - '.github/workflows/backtest.yaml'
 
 permissions:
   contents: read
@@ -48,8 +58,24 @@ jobs:
           make da-guard-build
           echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
 
+      # #3111: a PR that adds the first conf.d/ has no base tree to compare
+      # with; say so in the comment instead of ending rc 2
+      # `served_values_unavailable`.
+      - name: Check the PR base has a conf.d/
+        id: base
+        run: |
+          if [ -d .backtest-base/components/threshold-exporter/config/conf.d ]; then
+            echo "has_confd=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the PR base has no conf.d/ to compare against; backtest skipped"
+            printf '%s\n' '## Threshold Backtest Results' '' \
+              '> **Backtest not run:** the PR base has no `conf.d/` to compare against.' \
+              > /tmp/backtest-comment.md
+          fi
+
       - name: Run backtest
         id: backtest
+        if: steps.base.outputs.has_confd == 'true'
         env:
           PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
         # PR 的 conf.d/ 對 PR base 的 conf.d/（上一步另外 checkout 到

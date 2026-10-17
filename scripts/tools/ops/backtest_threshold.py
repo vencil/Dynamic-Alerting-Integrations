@@ -35,6 +35,7 @@ Usage:
 """
 import argparse
 import errno
+import json
 import math
 import os
 import re
@@ -58,7 +59,6 @@ from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
-from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
     arm_crash_envelope, disarm_crash_envelope,
@@ -82,10 +82,6 @@ from _lib_tenant_values import (  # noqa: E402
 # spelling goes through the alias table first.
 import _observed_map_lib as observed_map_lib  # noqa: E402
 from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
-from _lib_confd import (  # noqa: E402
-    list_config_tree,
-    is_hidden_name,
-)
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -474,59 +470,33 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 # report instead. Recipe would-fire preview: #657.
 # ---------------------------------------------------------------------------
 
-def load_conf_files(paths):
-    """Parse tenant conf.d files into {tenant: parsed_dict}.
-
-    Skips platform files (`_`-prefixed), hidden ones and anything that
-    isn't a YAML mapping; a path that is not a file is skipped silently.
-    """
-    parsed = {}
-    for p in paths:
-        path = Path(p)
-        # The hidden axis as well as the reserved one: the exporter's
-        # scanner skips `.`-prefixed entries, so a hidden file declares no
-        # tenant this report should name.
-        if (path.name.startswith("_") or is_hidden_name(path.name)
-                or not path.is_file()):
-            continue
-        # The caller's own spelling, not `str(path)` (#2558): an unreadable
-        # file is named in the form the caller gave.
-        # #2216: tenant ids are the keys' source text, as the exporter reads
-        # them — `find_custom_alert_tenants` reports `010:` as "010", not 8.
-        data = load_yaml_file_strict_exporter_keys(os.fspath(p), default={})
-        if isinstance(data, dict):
-            parsed[path.stem] = data
-    return parsed
-
-
-def find_custom_alert_tenants(parsed):
-    """Tenant IDs that declare a non-empty `_custom_alerts` block.
-
-    conf.d wraps tenants as `tenants: {<id>: {<metric>: <value>,
-    _custom_alerts: [...]}}`, so recipes live at `tenants.<id>._custom_alerts`
-    (NOT top-level) and the tenant id is the KEY (not the filename). These
-    recipes are evaluated by the compiler+promtool eval home, NOT by this
-    flat-threshold backtest. Surfacing them keeps a "no flat changes" result
-    from being mistaken for "nothing to review". See issue #657.
-    """
-    found = []
-    for file_data in parsed.values():
-        tenants = file_data.get("tenants")
-        if not isinstance(tenants, dict):
-            continue
-        for tid, tconf in tenants.items():
-            if isinstance(tconf, dict) and tconf.get("_custom_alerts"):
-                found.append(tid)
-    return sorted(set(found))
+def changed_recipe_tenants(config_dir, baseline_dir):
+    """The tenants whose custom-alert recipes changed between the two trees,
+    sorted: a tenant whose custom-alert rows (`_custom_alerts` as the
+    exporter serves it, `da-guard served-values` — any file it takes a
+    tenant from, `_platform.yaml` and sub-directories included; a recipe's
+    shape, window, `for:`, name, mode, severity and value are all in its
+    rows) differ, a recipe added or removed included. A tenant moved to
+    another file with the same recipes is not one (#3111, #3155). Raises
+    what `load_served_tree` raises."""
+    at = now_at()
+    rows = []
+    for conf_d in (baseline_dir, config_dir):
+        tree = load_served_tree(conf_d, at=at)
+        rows.append({t: json.dumps(tv.values.get("_custom_alerts") or [], sort_keys=True)
+                     for t, tv in tree.tenants.items()})
+    old, new = rows
+    return sorted(t for t in set(old) | set(new) if old.get(t, "[]") != new.get(t, "[]"))
 
 
 def custom_alert_notice(tenants):
-    """stderr notice listing tenants with custom-alert recipes (or '' if none)."""
+    """stderr notice listing the tenants whose custom-alert recipes changed
+    (or '' if none); each id escaped (`safe_label`)."""
     if not tenants:
         return ""
-    listed = ", ".join(tenants)
+    listed = ", ".join(safe_label(t) for t in tenants)
     return (
-        f"NOTE: {len(tenants)} tenant(s) declare custom-alert recipes "
+        f"NOTE: {len(tenants)} tenant(s) changed custom-alert recipes "
         f"(_custom_alerts): {listed}\n"
         "      Recipes are evaluated by the compiler+promtool eval home, "
         "not by this flat-threshold backtest.\n"
@@ -535,12 +505,13 @@ def custom_alert_notice(tenants):
 
 
 def custom_alert_markdown(tenants):
-    """Markdown block surfacing recipe changes in the PR comment."""
-    listed = ", ".join(f"`{t}`" for t in tenants)
+    """Markdown block surfacing recipe changes in the PR comment; each
+    tenant id as a fenced, escaped code cell (`_code_cell`)."""
+    listed = ", ".join(_code_cell(t) for t in tenants)
     return (
         "## Custom-Alert Recipes (not flat-backtested)\n"
         "\n"
-        f"{len(tenants)} tenant(s) declare custom-alert recipes "
+        f"{len(tenants)} tenant(s) changed custom-alert recipes "
         f"(`_custom_alerts`): {listed}\n"
         "\n"
         "> Recipes are evaluated by the **compiler + promtool** eval home, "
@@ -1193,20 +1164,6 @@ def generate_markdown(report):
     return "\n".join(lines)
 
 
-def _exit_unreadable_conf(exc, args):
-    """#1654: a conf.d file whose CONTENT cannot be read → rc 2, file named.
-
-    The content axis of #1911 (the name axis is #1634): a pure-ASCII
-    ``db-a.yaml`` with one ``\\xff`` byte used to escape ``load_conf_files``
-    as a ``UnicodeDecodeError`` traceback — rc 1, and 0 bytes of stdout under
-    ``--json``. Not the shared ``exit_on_yaml_file_error`` wrapper, because
-    this tool owes ``--json`` its ``caller_error`` envelope on every terminal
-    path.
-    """
-    print(f"ERROR: cannot read {safe_label(exc)}", file=sys.stderr)  # #1538
-    _end_not_run(args, "caller_error", "conf_file_unreadable", EXIT_CALLER_ERROR)
-
-
 def _exit_served_values_error(exc, args, recipe_tenants=()):
     """#2119: da-guard missing, stale or failing, or a file of either tree
     the exporter cannot decode or read → rc 2, named (`print_load_error`, the
@@ -1342,8 +1299,8 @@ def _end_not_run(args, status, reason, rc, recipe_tenants=()):
 GIT_DIFF_REMOVED = (
     "ERROR: --git-diff was removed (#3111): check the base out yourself and compare "
     "the two trees, e.g. `git worktree add /tmp/base HEAD~1` then `--config-dir conf.d "
-    "--baseline /tmp/base/<path from the repo root>/conf.d` (in CI, check the PR base "
-    "out into a separate path)")
+    "--baseline /tmp/base/<path from the repo root>/conf.d`, and `git worktree remove "
+    "/tmp/base` afterwards (in CI, check the PR base out into a separate path)")
 
 
 @observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
@@ -1359,8 +1316,11 @@ def main():
     # #3111: removed. Still PARSED (hidden from --help, as init_project's
     # retired GitOps flags are) only so that an old invocation gets the
     # refusal naming its replacement instead of argparse's bare
-    # "unrecognized arguments".
-    source.add_argument("--git-diff", action="store_true", help=argparse.SUPPRESS)
+    # "unrecognized arguments" — outside the source group, and taking an
+    # optional value, so that neither the group's "not allowed with" nor
+    # `--git-diff=x` answers first.
+    parser.add_argument("--git-diff", nargs="?", const=True, default=None,
+                        help=argparse.SUPPRESS)
     source.add_argument(
         "--config-dir",
         help="Current config directory (requires --baseline)",
@@ -1414,7 +1374,7 @@ def main():
     # #3059: argument errors first — before the Prometheus check, so
     # `--skip-if-unavailable` cannot turn them into a green skip — and with
     # the `--json` envelope (argparse's own usage errors still print none).
-    if args.git_diff:
+    if args.git_diff is not None:
         print(GIT_DIFF_REMOVED, file=sys.stderr)
         if args.json:
             print(format_json_report(empty_report(
@@ -1448,37 +1408,21 @@ def main():
     # observed-map or Prometheus work — every path below writes the outputs.
     _preflight_outputs(args)
 
-    # Surface custom-alert recipes (parsed from disk; Prometheus-independent),
-    # BEFORE the availability gate — a recipe-only change must not pass
-    # silently just because the flat backtest has nothing to do or Prometheus
-    # is unreachable. Recipes use the compiler+promtool eval home, not this
-    # flat-threshold tool. (#657)
-    if args.config_dir:
-        # #3111: the whole tree, as the exporter walks it (`list_config_tree`:
-        # sub-directories included, hidden entries and other extensions
-        # left out), so a recipe tenant declared in a nested file is named
-        # too (#3155). One file at a time: two nested files may share a stem.
-        try:
-            parsed = [load_conf_files([str(p)])
-                      for p in list_config_tree(args.config_dir).files]
-        except YamlFileError as exc:
-            _exit_unreadable_conf(exc, args)
-        recipe_tenants = sorted({t for one in parsed for t in find_custom_alert_tenants(one)})
-    else:
-        recipe_tenants = []
-    if recipe_tenants:
-        print(custom_alert_notice(recipe_tenants), file=sys.stderr)
-
-    dir_changes = None
     # #2119: the two trees are read by da-guard, and this runs BEFORE the
     # Prometheus check: `--skip-if-unavailable` is about Prometheus, and must
     # not turn "a tree the exporter refuses" into a green skip.
+    # #657: the tenants whose custom-alert recipes changed are named on that
+    # same side of the check — a recipe-only change must not pass silently
+    # because the flat backtest has nothing to do or Prometheus is down.
+    dir_changes, recipe_tenants = None, []
     if args.config_dir:
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
-            _end_not_run(args, "caller_error", "baseline_missing", EXIT_CALLER_ERROR,
-                         recipe_tenants)
+            _end_not_run(args, "caller_error", "baseline_missing", EXIT_CALLER_ERROR)
         try:
+            recipe_tenants = changed_recipe_tenants(args.config_dir, args.baseline)
+            if recipe_tenants:
+                print(custom_alert_notice(recipe_tenants), file=sys.stderr)
             dir_changes = extract_changes_from_dirs(args.config_dir, args.baseline)
         except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
             _exit_served_values_error(exc, args, recipe_tenants)
