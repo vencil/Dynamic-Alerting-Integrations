@@ -29,6 +29,7 @@ Verifies that every registered tool:
              exit 0. See #1642 for the measurement.
 """
 import json
+import os
 import subprocess
 import sys
 import pytest
@@ -203,12 +204,12 @@ _CRASH_PRELUDE = (
 )
 
 
-def _run_crash_script(tmp_path, body, *, prelude=_CRASH_PRELUDE):
+def _run_crash_script(tmp_path, body, *, prelude=_CRASH_PRELUDE, env=None):
     script = tmp_path / "crash_tool.py"
     script.write_text(prelude.format(tools=str(TOOLS_DIR)) + body, encoding="utf-8")
     return subprocess.run(
         [sys.executable, str(script)], capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=30,
+        encoding="utf-8", errors="replace", timeout=30, env=env,
     )
 
 
@@ -373,13 +374,19 @@ def test_failing_build_still_prints_the_three_key_envelope(tmp_path):
         "ERROR: unexpected internal error (RuntimeError): boom", proc.stderr
 
 
-def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path):
+@pytest.mark.parametrize("unbuffered", ["1", None])
+def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path, unbuffered):
     """`tool --json | head -c1`: stdout is gone, so the envelope is dropped
-    quietly — the crash report on stderr is the only one, rc stays 2."""
+    quietly — the crash report on stderr is the only one, rc stays 2. Run
+    with and without PYTHONUNBUFFERED: a write left in a block-buffered
+    stdout fails again at interpreter exit and makes the rc 120."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    if unbuffered:
+        env["PYTHONUNBUFFERED"] = unbuffered
     proc = _run_crash_script(
         tmp_path,
         "import os\n_lib_exitcodes.arm_crash_envelope()\n"
-        "os.close(1)\nraise RuntimeError('x')\n")
+        "os.close(1)\nraise RuntimeError('x')\n", env=env)
     assert proc.returncode == 2, proc.stderr
     assert "crash envelope failed" not in proc.stderr
     assert proc.stderr.count("Traceback") == 1, proc.stderr
@@ -432,12 +439,13 @@ class TestMainDecoratorInProcess:
         monkeypatch.setattr(ec, "_crash_envelope_armed", None)
         return ec
 
-    def test_armed_envelope_fires_at_most_once(self, monkeypatch, capsys):
+    def test_armed_envelope_fires_at_most_once(self, monkeypatch, capfd):
+        # capfd, not capsys: the envelope goes straight to fd 1
         ec = self._ec(monkeypatch)
         ec.arm_crash_envelope()
         ec._print_crash_envelope(RuntimeError("a"))
         ec._print_crash_envelope(RuntimeError("b"))
-        out = capsys.readouterr().out
+        out = capfd.readouterr().out
         assert json.loads(out)["error"].endswith("(RuntimeError): a")
 
     def test_bare_decorator_exits_crash_code(self, monkeypatch, capsys):

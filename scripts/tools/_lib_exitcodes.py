@@ -260,11 +260,19 @@ def _print_crash_envelope(exc: BaseException) -> None:
         except Exception:  # noqa: BLE001 — the three keys still print
             base = None
     import json  # deferred: only a crash in --json mode needs it
-    text = json.dumps(crash_envelope(exc, base, **fields),
-                      ensure_ascii=False, indent=2, default=str)
+    import os
+    data = (json.dumps(crash_envelope(exc, base, **fields), ensure_ascii=False,
+                       indent=2, default=str) + "\n").encode(
+        getattr(sys.stdout, "encoding", None) or "utf-8", "replace")
+    # Straight to the fd, never through the stdout buffer: on a closed pipe a
+    # write left in the buffer fails again at interpreter exit and turns the
+    # exit code into 120. A stdout that cannot even flush gets no envelope.
     try:
-        print(text, flush=True)
-    except OSError:  # stdout is gone (closed pipe): nobody is left to read it
+        sys.stdout.flush()
+        fd = sys.stdout.fileno()
+        while data:
+            data = data[os.write(fd, data):]
+    except (OSError, ValueError):  # closed pipe / closed or fd-less stdout
         pass
 
 
