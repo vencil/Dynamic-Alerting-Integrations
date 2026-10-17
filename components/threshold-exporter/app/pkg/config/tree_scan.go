@@ -864,6 +864,12 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			entries = append(entries, entry{})
 			copy(entries[at+1:], entries[at:])
 			entries[at] = entry{abs: filepath.Clean(abs), rel: overlay.Rel}
+		} else if _, rerr := ReadConfFile(entries[at].abs); rerr != nil {
+			// Listed by name, yet not a file phase 2 reads (a config-named
+			// symlink to a directory, a file it may not read): substituting
+			// it would resolve a tree the exporter never serves.
+			return nil, fmt.Errorf("%w: path %q: exists but is not a file the walk lists (a directory, a symlink to one, a special or unreadable file): %v",
+				ErrOverlay, overlay.Rel, rerr)
 		}
 		overlayAt = at
 	}

@@ -136,6 +136,9 @@ func TestEffectiveOverlay_Refusals(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "team"), filepath.Join(dir, "linked")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink(filepath.Join(dir, "team"), filepath.Join(dir, "linkdir.yaml")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "notes"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +159,10 @@ func TestEffectiveOverlay_Refusals(t *testing.T) {
 		"no file":             {"tenant-b.yaml=", "want <rel-path>=<file>"},
 		"file cannot be read": {"tenant-b.yaml=" + filepath.Join(t.TempDir(), "missing.yaml"), "--overlay file"},
 		"empty path":          {"=" + draft, "relative to --config-dir"},
+		"dot-dot inside tree": {"team/../tenant-b.yaml=" + draft, "must be a clean path"},
+		"dot segment":         {"./tenant-b.yaml=" + draft, "must be a clean path"},
+		"doubled slash":       {"team//x.yaml=" + draft, "must be a clean path"},
+		"symlink to a dir":    {"linkdir.yaml=" + draft, "not a file the walk lists"},
 	} {
 		code, stdout, stderr := runOnce(t, effectiveCmd, "--config-dir", dir, "--overlay", tc.spec)
 		if code != exitCallerErr {

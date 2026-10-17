@@ -23,6 +23,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 
@@ -147,6 +148,11 @@ func readOverlay(spec string) (*config.FileOverlay, error) {
 	clean, err := cleanRelPath(rel)
 	if err != nil {
 		return nil, fmt.Errorf("--overlay path %q: %v", rel, err)
+	}
+	// Refused, not normalised: `a/../b.yaml` naming b.yaml is a path that
+	// holds `..`, which the flag documents as exit 2.
+	if clean != filepath.ToSlash(rel) {
+		return nil, fmt.Errorf("--overlay path %q: must be a clean path inside --config-dir (no '..' or '.' segment, no repeated '/')", rel)
 	}
 	data, err := os.ReadFile(file) // #nosec G304 -- the caller names the file to read
 	if err != nil {
