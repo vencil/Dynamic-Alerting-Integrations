@@ -40,6 +40,9 @@ package config
 //   - spelling_duplicate: the winning layer's map writes the threshold
 //     under another spelling too, and the decode keeps that one
 //     (normalizeKeys, #2031; keyed by the losing spelling as written).
+//   - unregistered: a `_` key the reserved-key registry does not list,
+//     which every row phase skips (IsUnregisteredUnderscoreKey through
+//     baseRowsSkipKey / criticalRowBase / resolveDimensionalRows, #3045).
 //
 // ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
 // serves what effective shows": a profile-layer value applyProfiles discards
@@ -76,6 +79,9 @@ const (
 	// dimensional key, or both #1231 spellings); /metrics serves one of them
 	// (keySpellings.dups).
 	NotServedSpellingDuplicate = "spelling_duplicate"
+	// NotServedUnregistered (#3045): a `_` key the reserved-key registry does
+	// not list (IsUnregisteredUnderscoreKey); /metrics serves it in no layer.
+	NotServedUnregistered = "unregistered"
 )
 
 // NotServedKey is why /metrics does not serve one key of an effective config
@@ -440,15 +446,20 @@ func (v *servedVerdicts) chainFileUnread(rel string) bool {
 	return !v.gate && v.parseFailed[rel]
 }
 
-// candidates reports whether any table could name a key of this tenant, so
-// a tenant with none skips the attribution (keySources) entirely.
-func (v *servedVerdicts) candidates(tenantID string, chain []string, unparsed map[string]string) bool {
+// candidates reports whether any table could name a key of this tenant's
+// view, so a tenant with none skips the attribution (keySources) entirely.
+func (v *servedVerdicts) candidates(tenantID string, chain []string, unparsed map[string]string, view map[string]any) bool {
 	if len(v.parseFailed) > 0 || len(v.rootUnread) > 0 || len(unparsed) > 0 ||
 		len(v.undeliverable[tenantID]) > 0 || len(v.rootNull[tenantID]) > 0 {
 		return true
 	}
 	for _, f := range chain {
 		if len(v.rejected[f]) > 0 {
+			return true
+		}
+	}
+	for k := range view {
+		if IsUnregisteredUnderscoreKey(k) {
 			return true
 		}
 	}
@@ -474,6 +485,8 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 		switch {
 		case v.parseFailed[src.File]:
 			reason = NotServedParseFailed
+		case IsUnregisteredUnderscoreKey(k):
+			reason = NotServedUnregistered
 		case atRoot && v.rootUnread[k]:
 			reason = NotServedRootDefaultsUnwrapped
 		case src.Layer == KeyLayerDefaults && !atRoot && v.rejected[src.File][k] && !v.tenantSets[tenantID][src.File][k]:

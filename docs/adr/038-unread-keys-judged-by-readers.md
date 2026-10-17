@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-10-16
+updated_at: 2026-10-17
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -21,6 +21,8 @@ updated_at: 2026-10-16
 ✅ **Accepted**（2026-10-16 起草並由 owner 核可）。
 
 2026-10-16 修訂（實作登錄表時依實測修正）：讀取端多一類 `policy_engine`；層多一層子目錄 `_defaults.yaml`；探針改為雙向，涵蓋所有比對得到輸出的讀取端（決定 2、3）。決定 8 的成本說明更新。
+
+2026-10-17 修訂：exporter 不再送出登錄表沒有的 `_` 鍵，與 JSON schema 一致（決定 2）；判決因此不再有 `platform_violation`，這類鍵判為 `unread`（決定 4、6）。
 
 ## 摘要
 
@@ -91,7 +93,7 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 「哪些鍵合法」今天由幾處各自判斷：產生器的保留鍵檢查、exporter 載入時的檢查、tenant-api 的寫入檢查，以及 `_state_`／`_routing` 的前綴規則。保留鍵清單本身也有三份：Python 常數、Go 常數與 JSON schema，靠比對測試保持一致。逐一補齊做不到，原因是同一個鍵合不合法，取決於讀取端怎麼讀，而不是它叫什麼名字：
 
 - **維度鍵**：`es_heap_usage_percent{node="es-hot-01"}` 的 base 不在 defaults 裡，產生器的鍵名檢查判它不合法；exporter 載入時的鍵名檢查也判它不合法，但只寫一行 log，照樣送出它。主 conf.d 上產生器有 17 條這類警告，其中 15 條的鍵 exporter 實際有送出（另外 2 條的值是 `disable`）。這 15 個鍵有送出，所以不是「沒人讀」；它們的問題是沒有任何告警規則讀（見決定 10）。
-- **`_` 開頭但沒有登記的鍵**：根 defaults 宣告了 `_myth`，租戶寫 `_myth: "7"`，exporter 照樣送出 7；JSON schema 卻拒收 `_myth`。
+- **`_` 開頭但沒有登記的鍵**：JSON schema 拒收 `_myth`；產生器 `--validate` 只在根 defaults 沒宣告它時警告；exporter 則在根 defaults 宣告了它時，把租戶寫的 `_myth: "7"` 當成閾值送出 7。三者對同一個鍵的結論不同；決定 2 讓 exporter 改以登錄表為準。
 - **profile 帶來的錯字**：exporter 算在租戶頭上，產生器不檢查。
 - **`_state_` 前綴**：任何拼法都算合法。
 
@@ -139,7 +141,7 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 這條分界讓讀者知道某個清單該去哪裡改：頂層保留鍵改登錄表，子鍵改讀取它的那支程式。
 
-**登錄表和實測不一致時**：以實測為準。例如 `_myth` 沒有登記，但根 defaults 宣告了它、exporter 也送出了。此時判為「平台檔違反 `_` 命名空間規則」，報在平台檔上，不算租戶拼錯（見決定 6）。長期會讓 exporter 不再送出沒有登記的 `_` 鍵，使三方一致；那是 breaking change，見 [#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)。
+**`_` 命名空間以登錄表為準**：登錄表沒有的 `_` 鍵，exporter 在任何一層都不送，根 defaults 宣告了也一樣，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
 
 ### 3. 防止登錄表與程式漂移
 
@@ -163,9 +165,8 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 | verdict | 意義 | 等級 |
 |---|---|---|
 | `read` | 至少一個讀取端讀它；登記為 `annotation` 的鍵也算 | — |
-| `unread` | 沒有任何讀取端讀它 | 寫在租戶檔：error；來自平台檔或 profile：notice，並指名檔案；只因 `disable_noop` 而未讀：warning（見決定 8） |
+| `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`） | 寫在租戶檔：error；來自平台檔或 profile：notice，並指名檔案；只因 `disable_noop` 而未讀：warning（見決定 8） |
 | `undecidable` | 沒有讀到任何根平台檔，租戶寫的閾值鍵在 exporter 那半無從判斷；保留鍵照常判（見決定 7） | 判決輸出回 rc 2 |
-| `platform_violation` | 沒有登記的 `_` 鍵被 exporter 送出 | 報在平台檔；不歸給租戶的變更，也不擋無關租戶的寫入 |
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 
@@ -188,7 +189,7 @@ da-guard 本身只輸出事實：exporter 實測的 `read_by` 與原因，以及
 
 ### 6. 平台側的問題不算在租戶頭上
 
-決定 4 的 `platform_violation` 與「來自平台檔的 `unread`」每次判定都會出現，不歸給正在修改的租戶。tenant-api 的寫入檢查不因平台檔既有的這類問題，擋下無關租戶的寫入。
+決定 4 中「來自平台檔或 profile 的 `unread`」（例如根 defaults 宣告了登錄表沒有的 `_` 鍵）每次判定都會出現，不歸給正在修改的租戶。tenant-api 的寫入檢查不因平台檔既有的這類問題，擋下無關租戶的寫入。
 
 ### 7. 無從判斷的情況
 
@@ -274,6 +275,7 @@ db-a
 ## 後果與已知限制
 
 - **保留鍵清單只剩一個來源**：新增保留鍵只改登錄表，再重新產生；各讀取端各自的鍵名判斷改由共用判決取代。
+- **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。剩下的差異：根 defaults 宣告了這種鍵時，產生器 `--validate` 對租戶寫的同名鍵仍不警告；共用判決照樣把它判為 `unread`。
 - **判決需要兩支程式**：完整的「沒有讀取端讀」需要 da-guard 與產生器都能跑。只有 da-guard 的環境得到 exporter 那半，產生器那半回 exit 4（未判定）。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。
 - **規則讀取以 repo 內的規則包為準**：客戶自己的規則讀了某個閾值，除非宣告為外部讀取端，否則會被報成「沒有規則讀」。這一項因此永遠只是建議。
@@ -283,7 +285,6 @@ db-a
   - 自訂告警編譯器與 exporter 對 `_custom_alerts` 的來源規則不同：編譯器收子目錄非選中的 `_` 檔裡的租戶，exporter 不讀（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
   - 產生器讀了 `_metadata` 卻沒有使用（[#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)）。
   - `_severity_dedup` 只讀租戶檔，其他保留鍵會繼承 profile；需要確認是否刻意（[#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)）。
-  - exporter 送出沒有登記的 `_` 鍵，與 schema 不一致（見決定 2，[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
   - `disable` 不連帶關掉 `_critical` 與維度鍵（見決定 8，[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)）。
 
 ## 考慮過但否決

@@ -184,35 +184,38 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				"  redis_u: Disable\n  redis_v: \" DISABLE \"\n"),
 		},
 		{
-			// The review's t6.
+			// The review's t6. #3045: a `_` key the registry does not list
+			// serves no row in any layer, so declaring the subtree's `_myth2`
+			// at the root is no fix: it is reported as a key nothing reads
+			// (subtree_default_reserved_key, as `_silent_bogus`), not as
+			// undeliverable. The root's own `_myth` serves the tenant no row
+			// either, and is in its `unserved` with the root's value.
 			name:         "unrecognised-underscore-key",
 			files:        subtree(root+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
-			wantFindings: []string{"_myth2"},
-			wantUnserved: map[string]any{"_myth2": "7"},
+			wantReserved: []string{"_myth2"},
+			wantUnserved: map[string]any{"_myth": 5.0},
 		},
 		{
-			// The review's t7 without tenant-b: `_myth2` declared at the root
-			// is delivered (the subtree's 7). `_silent_bogus` declared at the
-			// root lands in the tenant's map but serves no row, so it is in
-			// `unserved` through the merged-map path that predates #1976 (no
-			// finding: it is not refused).
+			// The review's t7 without tenant-b. Declared at the root, `_myth2`
+			// and `_silent_bogus` both land in the tenant's map (the
+			// subtree's 7) but serve no row (#3045 for `_myth2`; before it,
+			// the root declaration served `_myth2`'s 7), so both are in
+			// `unserved` through the merged-map path that predates #1976.
 			name:         "unrecognised-underscore-key-declared",
 			files:        subtree(root+"  _myth2: 1\n  _silent_bogus: 1\n", "defaults:\n  _myth2: 7\n  _silent_bogus: 7\n"),
-			wantUnserved: map[string]any{"_silent_bogus": "7"},
-			wantValues:   map[string]float64{"_myth2": 7},
-			wantReserved: []string{"_silent_bogus"},
+			wantUnserved: map[string]any{"_myth2": "7", "_silent_bogus": "7"},
+			wantReserved: []string{"_myth2", "_silent_bogus"},
 		},
 		{
 			// A non-reserved `_` key listed in optional_overrides does not
 			// count for the build's reachability test (#2707):
-			// resolveDeclaredRows skips every `_` key, so the subtree's value
-			// is refused and reported like an undeclared one. This is also
-			// why the finding's message names only the root for a `_` key.
+			// resolveDeclaredRows skips every `_` key. Since #3045 no layer
+			// serves it at all, so it is reported as a key nothing reads, not
+			// as undeliverable.
 			name: "unrecognised-underscore-key-in-optional-overrides",
 			files: subtree(root+"optional_overrides:\n  - _myth\n",
 				"defaults:\n  _myth: 7\n"),
-			wantFindings: []string{"_myth"},
-			wantUnserved: map[string]any{"_myth": "7"},
+			wantReserved: []string{"_myth"},
 		},
 		{
 			// `_metadata`, a scheduled `_state_maintenance` and `_profile`,

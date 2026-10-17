@@ -439,12 +439,13 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // baseRowsSkipKey reports whether resolveBaseRows skips a defaults key
 // without producing a row: the _state_ / _silent_ / _severity_dedup /
 // _routing keys, handled by ResolveStateFilters() / ResolveSilentModes() /
-// ResolveSeverityDedup() / ResolveRouting() respectively. Named so the #1976
-// report (undeliverableThresholds) asks the row generator itself which keys
-// never become a base row.
+// ResolveSeverityDedup() / ResolveRouting() respectively, and a `_` key the
+// reserved-key registry does not list (IsUnregisteredUnderscoreKey, #3045),
+// which nothing reads. Named so the #1976 report (undeliverableThresholds)
+// asks the row generator itself which keys never become a base row.
 func baseRowsSkipKey(metricKey string) bool {
 	return strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
-		IsRoutingLayerKey(metricKey)
+		IsRoutingLayerKey(metricKey) || IsUnregisteredUnderscoreKey(metricKey)
 }
 
 // BaseRowsSkipKey is baseRowsSkipKey, for da-guard.
@@ -688,9 +689,11 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 // criticalRowBase is resolveCriticalRows' entry test: whether an override
 // key is one it serves as a critical row, and that row's base metric key
 // ("mysql_connections_critical" → "mysql_connections"). The build's
-// root-null report (rootNullUndeclared, #2518) asks the same function.
+// root-null report (rootNullUndeclared, #2518) asks the same function. A `_`
+// key the registry does not list is none (`_myth_critical`, #3045).
 func criticalRowBase(key string) (string, bool) {
-	if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
+	if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
+		IsUnregisteredUnderscoreKey(key) {
 		return "", false
 	}
 	return strings.TrimSuffix(key, "_critical"), true
@@ -775,7 +778,8 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, v := range defaults {
-		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) {
+		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) ||
+			IsUnregisteredUnderscoreKey(key) {
 			continue
 		}
 		// Its parse failure is warnUnparsedRootDims' line, once per resolve.
@@ -785,8 +789,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if !strings.Contains(key, "{") {
 			continue // not a dimensional key
 		}
-		if strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
-			IsRoutingLayerKey(key) {
+		if baseRowsSkipKey(key) { // incl. an unregistered `_` key (#3045)
 			continue
 		}
 		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
