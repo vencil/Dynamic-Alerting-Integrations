@@ -348,9 +348,6 @@ NOT_A_CELL: dict[str, str] = {
         "walks only docs/ itself; its fixed conf.d dirs are listed by da-guard "
         "parse-tree (#2906); hidden axis pinned by "
         "test_hidden_carriers_are_not_linted (#1630)",
-    "ops/backtest_threshold.py":
-        "needs a git repo with HEAD~1; its `.hidden.yaml` neighbour is "
-        "pinned by test_confd_case_parity_across_tools's backtest tests",
     "_lib_parse_cache.py":
         "lists only through `_lib_confd.iter_config_files` (library cell): "
         "a directory's carriers, for the cache-mode `not_read` verdict",
