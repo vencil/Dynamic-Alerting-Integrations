@@ -310,7 +310,7 @@ class ConfdReader:
         defaults-named file in the directory. Raises ParseTreeError."""
         d = self.rel(directory)
         if _ACTIVE is None:
-            chosen = self.tree().defaults_carriers.get(d)
+            chosen = defaults_carriers(self.tree()).get(d)
         else:
             chosen = None
             for name in self._carrier_names("_" if d == "." else d + "/_"):
@@ -379,7 +379,7 @@ class ConfdReader:
             if cache is not None:
                 cache.parses += 1  # a parse-tree run, as a read's miss
             tree = _lib_parse_tree.load_file(self.root, rel, data, self.binary, self.timeout)
-            value = (tree.not_read.get(rel), dict(tree.defaults_carriers))
+            value = (tree.not_read.get(rel), dict(defaults_carriers(tree)))
             if cache is not None:
                 cache.store(key, value)
         self._verdicts[rel] = value
@@ -452,3 +452,144 @@ def reader_for(root: "str | os.PathLike[str]") -> ConfdReader:
     if reader is None:
         reader = _SESSION[key] = ConfdReader(root)
     return reader
+
+
+# ── parse-tree's file selection, for the read-only tools (#2906 E1) ─────
+#
+# A tool that asks "which files are there" asks the same document it reads
+# the content from: parse-tree's `selected`, `defaults_carriers` and
+# `not_read` — never a Python walk of the directory, which is a second
+# answer to the exporter's own (ADR-036 §2).
+
+def defaults_carriers(tree: Tree) -> "Mapping[str, str]":
+    """Directory ("." for the root) → the one defaults carrier its chain
+    reads, as parse-tree's `defaults_carriers` says. A directory with no
+    carrier is absent. Raises ParseTreeError for a document without the
+    field (a da-guard older than this tool)."""
+    if tree.defaults_carriers is None:
+        raise ParseTreeError(
+            f"da-guard {_lib_parse_tree.SUBCOMMAND} wrote no \"defaults_carriers\": this "
+            "da-guard is older than this tool; upgrade or rebuild it")
+    return tree.defaults_carriers
+
+
+def root_defaults_carrier(tree: Tree) -> Optional[str]:
+    """The root's defaults carrier (root-relative), or None when the root has
+    none. Raises as :func:`defaults_carriers`."""
+    return defaults_carriers(tree).get(".")
+
+
+def nested_defaults_carriers(tree: Tree) -> list[str]:
+    """Every defaults carrier below the root (sorted, root-relative)."""
+    return sorted(p for d, p in defaults_carriers(tree).items() if d != ".")
+
+
+def tenant_files(tree: Tree) -> list[str]:
+    """The files a tenant can be declared in: every file parse-tree selects
+    whose name has no `_` prefix (a `_` file is a platform file, read for
+    no tenant), sorted, root-relative — readable or not (`node` names an
+    unreadable one's kind)."""
+    return sorted(rel for rel in tree.selected
+                  if not rel.rsplit("/", 1)[-1].startswith("_"))
+
+
+def declared_tenants(reader: ConfdReader, files: "Iterable[str] | None" = None
+                     ) -> "tuple[dict[str, list[str]], list[FileUnreadable]]":
+    """``({tenant id: [file, ...]}, unreadable)``: the keys of the
+    mapping-shaped ``tenants:`` of each of *files* (default: every
+    :func:`tenant_files` file), keyed by their source text as yaml.v3 keys
+    the exporter's ``map[string]``. *unreadable* is each file parse-tree
+    cannot read — its content, and so what it declares, is unknown; the
+    caller names it — but a file whose top level is not a mapping, which
+    declares nothing. Raises ParseTreeError / NotSelected."""
+    declared: dict[str, list[str]] = {}
+    unreadable: list[FileUnreadable] = []
+    for rel in (tenant_files(reader.tree()) if files is None else files):
+        try:
+            data = reader.read(rel)
+        except FileUnreadable as exc:
+            if exc.kind != "top_level_not_mapping":
+                unreadable.append(exc)
+            continue
+        tenants = data.get("tenants")
+        if isinstance(tenants, dict):
+            for tenant in tenants:
+                declared.setdefault(tenant, []).append(rel)
+    return declared, unreadable
+
+
+def read_text_as(root: "str | os.PathLike[str]", rel: str, data: bytes,
+                 mode: ParseMode = VALUES, *, binary: Optional[str] = None,
+                 timeout: float = DEFAULT_TIMEOUT) -> Any:
+    """*data* read as the file at *rel* (root-relative, '/') of the conf.d at
+    *root* — parse-tree's file mode, for content that is not on disk (a
+    `git show` of an earlier commit). Raises FileUnreadable (its ``file`` is
+    *rel*) and ParseTreeError."""
+    tree = _lib_parse_tree.load_file(root, rel, data, binary, timeout)
+    return mode.convert(tree.node(rel))
+
+
+def read_file_alone(path: "str | os.PathLike[str]", mode: ParseMode = VALUES, *,
+                    binary: Optional[str] = None,
+                    timeout: float = DEFAULT_TIMEOUT) -> Any:
+    """A YAML file that belongs to no conf.d tree (a standalone policy file
+    named on the command line) as yaml.v3 reads it: parse-tree's file mode,
+    its bytes judged in an empty directory, so no tree is walked. Raises
+    OSError (the file cannot be read), FileUnreadable (``file`` is *path*)
+    and ParseTreeError."""
+    import tempfile
+    p = Path(path)
+    data = p.read_bytes()
+    with tempfile.TemporaryDirectory(prefix="da-parse-") as empty:
+        try:
+            return read_text_as(empty, p.name, data, mode, binary=binary, timeout=timeout)
+        except FileUnreadable as exc:
+            raise FileUnreadable(str(path), exc.kind, exc.message) from None
+
+
+def parse_tree_error_line(exc: BaseException) -> str:
+    """The one `ERROR:` line for no usable `da-guard parse-tree` (no binary,
+    a failing one, one older than this tool): its reason on one line, every
+    character a terminal could act on escaped."""
+    from _lib_io import safe_label  # lazy: _lib_io imports this module lazily too
+    return (f"ERROR: cannot read the conf.d through `da-guard parse-tree` (ADR-036): "
+            f"{safe_label(' '.join(str(exc).split()))}")
+
+
+def exit_on_parse_tree_error(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorate a CLI `main`: no usable `da-guard parse-tree` (a
+    `ParseTreeError` that is not a `FileUnreadable` — a file it cannot read
+    is the tool's own finding) exits 2 (`EXIT_CALLER_ERROR`) with
+    :func:`parse_tree_error_line` on stderr — the tree was not read, so
+    there is no verdict."""
+    import functools
+    import sys
+
+    @functools.wraps(fn)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except FileUnreadable:
+            raise
+        except ParseTreeError as exc:
+            from _lib_exitcodes import EXIT_CALLER_ERROR
+            print(parse_tree_error_line(exc), file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    return _wrapped
+
+
+def warn_skipped_nested_carriers(tree: Tree, *, tool: str, note: str) -> None:
+    """For a reader that takes something from the ROOT defaults carrier only
+    (`_policies`, OPA's `input.defaults`): one stderr line naming the
+    defaults carriers below the root that parse-tree selects and the reader
+    does not read, behind *note* — the `resolve_defaults_file(skipped_note=)`
+    line, from parse-tree's `defaults_carriers`. Nothing for a flat tree."""
+    import sys
+    from _lib_confd import WARN_LIMIT, printable_name
+    missed = nested_defaults_carriers(tree)
+    if not missed:
+        return
+    shown = ", ".join(printable_name(p) for p in missed[:WARN_LIMIT])
+    more = f" (+{len(missed) - WARN_LIMIT} more)" if len(missed) > WARN_LIMIT else ""
+    print(f"WARN: {tool}: {note} {len(missed)} defaults file(s) in subdirectories: "
+          f"{shown}{more}", file=sys.stderr)

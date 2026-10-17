@@ -128,6 +128,11 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+# ADR-036 step 4 (#2906): the tracked defaults artifacts (conf.d files) are
+# read by `da-guard parse-tree`; the chart values and the generators' output
+# are not conf.d and keep PyYAML.
+from _lib_parse_tree import FileUnreadable as _FileUnreadable  # noqa: E402
+from _lib_parse_tree import ParseTreeError as _ParseTreeError  # noqa: E402
 
 class _GateViolation(RuntimeError):
     """A floor breach: the tool ran fine, the REPOSITORY is in a state to fix.
@@ -1362,6 +1367,11 @@ def _assert_defaults_artifacts_match_schema(
         read: "Callable[[str], str] | None" = None) -> int:
     """Every TRACKED defaults artifact must satisfy platform-defaults.schema.json.
 
+    Each artifact is read by `da-guard parse-tree` (`_parse_artifact`, ADR-036
+    step 4, #2906): one document per file, an empty or comment-only file the
+    empty mapping (judged, and clean), several documents a file it cannot
+    read (a problem, as any other parse failure).
+
     `read` defaults to reading the file at `PROJECT_ROOT / rel`, the same seam
     shape `_assert_every_root_contributes` uses for `tracked_roots`: the real
     run takes the real tree, and a hermetic caller hands in text. ⛔ The seam is
@@ -1521,7 +1531,6 @@ def _assert_defaults_artifacts_match_schema(
     # declared and chart faces and its own supply/demand extractors. The
     # conclusion survives, the reason did not.)
     import json  # noqa: E402
-    import yaml  # noqa: E402
     try:
         import jsonschema  # noqa: E402
     except ImportError as exc:  # pragma: no cover — env, not tree
@@ -1569,7 +1578,13 @@ def _assert_defaults_artifacts_match_schema(
         # YAML 1.1 boolean key (`on:`) escaped as a jsonschema `TypeError` —
         # in both cases `rel` was in hand and not in the message.
         try:
-            docs = list(yaml.safe_load_all(read(rel)))
+            docs = [_parse_artifact(rel, read(rel).encode("utf-8"))]
+        except _ParseTreeError as exc:
+            if not isinstance(exc, _FileUnreadable):
+                raise  # no usable da-guard: the environment, not this file
+            problems.append(f"ERROR: {rel}: cannot read/parse YAML: {exc.kind}: {exc.message}")
+            offenders.add(rel)
+            continue
         except Exception as exc:  # noqa: BLE001 — see below
             # ⛔ `Exception`, matching `_read_artifact_keys` one screen up, and
             # NOT the `(OSError, yaml.YAMLError)` pair this started as. Blind
@@ -1609,10 +1624,12 @@ def _assert_defaults_artifacts_match_schema(
 
     # ⛔ RETURNS DOCUMENTS JUDGED, and the strong floor on it lives at the CALL
     # SITE rather than here. The distinction between "files handed in" and
-    # "documents judged" is not hypothetical: one tracked artifact is
-    # comment-only, so `safe_load_all` yields ZERO documents for it and the loop
-    # body never runs — which is why "0 violations across all 17 artifacts" was
-    # a claim about 17 files of which 16 were ever looked at.
+    # "documents judged" was not hypothetical: under PyYAML a comment-only
+    # artifact yielded ZERO documents and the loop body never ran — "0
+    # violations across all 17 artifacts" was a claim about 17 files of which
+    # 16 were ever looked at. Since #2906 parse-tree reads such a file as the
+    # empty mapping (one document, judged), and a file it cannot read is a
+    # problem, so the two counts differ only by the files that failed.
     # ⛔ A floor of `_DEFAULTS_ARTIFACT_FLOOR` *inside* this function would be
     # measuring whatever population the caller passed, and every hermetic caller
     # passes a handful — so it would either be vacuous or force tests to pad
@@ -1905,11 +1922,29 @@ def _defaults_section(text: str, *, unwrap_chart: bool = False) -> dict[str, Key
     everything else silently vanished, rc=0. A conf.d file has no
     `thresholdConfig:` in its schema, so for those the top level IS the root.
     """
-    import yaml  # local import: only the artifact faces need it
+    import yaml  # local import: only the generator faces need it
 
     doc = yaml.safe_load(text) or {}
     root = (doc.get("thresholdConfig") or doc) if unwrap_chart else doc
     return _walk_defaults_keys(root.get("defaults") or {})
+
+
+def _parse_artifact(rel: str, data: bytes) -> dict:
+    """A tracked defaults artifact's content as `da-guard parse-tree` reads it
+    (ADR-036 step 4, #2906): yaml.v3 — the exporter's parser — in parse-tree's
+    file mode. *rel* is repo-relative; the bytes are read as the file at its
+    path under its conf.d root (the whole of *rel* when it has none), judged
+    in an empty directory: WHICH artifacts are read is this gate's own
+    question (tracked files, a `_defaults` PREFIX wider than the loader's),
+    not the loader's selection, so no tree is walked. Raises
+    `_lib_parse_tree.FileUnreadable` (bad syntax, several documents, a key
+    written twice, a top level that is not a mapping …) and ParseTreeError."""
+    import tempfile  # noqa: PLC0415
+    import _lib_parse_cache  # noqa: PLC0415
+    root = conf_d_root(rel)
+    inner = rel[len(root) + 1:] if root else rel
+    with tempfile.TemporaryDirectory(prefix="da-reach-") as empty:
+        return _lib_parse_cache.read_text_as(empty, inner, data)
 
 
 def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str, KeyInfo]]]:
@@ -2126,8 +2161,8 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
 def _read_artifact_keys(path: Path) -> dict[str, KeyInfo]:
     """One artifact's `defaults:` keys, with the FILE NAMED on any failure.
 
-    ⛔ The reader names the file. `read_text` raises with the path attached, but
-    `yaml.safe_load` does not — its error says `<unicode string>`, and with the
+    ⛔ The reader names the file. `read_bytes` raises with the path attached, but
+    a parser error need not — PyYAML's said `<unicode string>`, and with the
     scope derived rather than 2 hardcoded paths, "which file" is precisely the
     information that was missing (blind review, round 4).
 
@@ -2137,7 +2172,8 @@ def _read_artifact_keys(path: Path) -> dict[str, KeyInfo]:
     """
     rel = path.relative_to(PROJECT_ROOT).as_posix()
     try:
-        return _defaults_section(path.read_text(encoding="utf-8"))
+        doc = _parse_artifact(rel, path.read_bytes())
+        return _walk_defaults_keys(doc.get("defaults") or {})
     except Exception as exc:  # noqa: BLE001 — re-raised with provenance
         raise RuntimeError(f"{rel}: {exc}") from exc
 
