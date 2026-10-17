@@ -24,7 +24,7 @@ func nullGateErrs(t *testing.T, root, body string) []string {
 		"_defaults.yaml": root,
 		"tx.yaml":        "tenants:\n  tx:\n    mysql_slow_queries: \"5\"\n",
 	})
-	errs, _, err := previewDryRun(context.Background(), NewWriter(dir, dir), "tx", body)
+	errs, _, err := previewDryRun(context.Background(), newTestWriter(dir, dir), "tx", body)
 	if err != nil {
 		t.Fatalf("DryRunValidate: %v", err)
 	}

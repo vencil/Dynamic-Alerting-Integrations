@@ -36,7 +36,7 @@ func TestWrite_YmlTenantIsUpdatedInPlace(t *testing.T) {
 	const tenant = "db-a"
 	seedCommitted(t, dir, tenant+".yml", "tenants:\n  "+tenant+":\n    mysql_threads_running: \"70\"\n")
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	const updated = "tenants:\n  " + tenant + ":\n    mysql_threads_running: \"90\"\n"
 	if _, err := w.Write(context.Background(), tenant, "op@example.com", updated); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -62,7 +62,7 @@ func TestWrite_AmbiguousSpellingIsRefused(t *testing.T) {
 	seedCommitted(t, dir, tenant+".yml", body)
 	seedCommitted(t, dir, tenant+".yaml", body)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.Write(context.Background(), tenant, "op@example.com", body)
 	if !errors.Is(err, confd.ErrAmbiguousTenantFile) {
 		t.Fatalf("Write err = %v, want confd.ErrAmbiguousTenantFile", err)
@@ -75,7 +75,7 @@ func TestDiff_ReadsTheTenantsActualFile(t *testing.T) {
 	const tenant = "db-a"
 	seedCommitted(t, dir, tenant+".yml", "tenants:\n  "+tenant+":\n    mysql_threads_running: \"70\"\n")
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	diff, err := w.Diff(tenant, "tenants:\n  "+tenant+":\n    mysql_threads_running: \"90\"\n")
 	if err != nil {
 		t.Fatalf("Diff: %v", err)
@@ -122,7 +122,7 @@ func TestWritePR_ReResolvesAfterFreshBaseRename(t *testing.T) {
 	gitRun(t, authorDir, "commit", "-m", "rename db-a.yml -> db-a.yaml")
 	gitRun(t, authorDir, "push", "origin", "main")
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	res, err := w.WritePR(context.Background(), "db-a", "bob@example.com",
 		"tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	if err != nil {

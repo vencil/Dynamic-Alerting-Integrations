@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -82,7 +83,7 @@ func derivedNow(t *testing.T, dir string) map[string]ConfigDerivedState {
 func TestWireTenantSnapshots_WriteInvalidates(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
 
 	if got := derivedByID(t, getList(t, d))[snapTenant]; len(got.SilentTargets) != 0 {
@@ -97,22 +98,31 @@ func TestWireTenantSnapshots_WriteInvalidates(t *testing.T) {
 	}
 }
 
-// P3: a write that replaced the file and then failed to commit still changed
-// the disk; the cache must not keep the old reading.
+// P3: a write that replaced the file and then failed to commit still held
+// the tree; the cache must not keep its old reading. Since #1535 every
+// write is judged and a failed one puts its own file back, so the change
+// the list must show is another one made on disk meanwhile (an operator's
+// uncommitted file), which only the failed write's invalidation surfaces
+// inside the TTL.
 func TestWireTenantSnapshots_FailedCommitStillInvalidates(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
 	_ = getList(t, d) // populate the cache
 
-	// Empty author identity: the file is written, then `git commit` refuses.
+	const other = "t-snap-oob"
+	if err := os.WriteFile(filepath.Join(work, other+".yaml"),
+		[]byte("tenants:\n  "+other+":\n    cpu: \"70\"\n    _silent_mode: all\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Empty author identity: the file is written, then commit-tree refuses.
 	if _, err := w.Write(context.Background(), snapTenant, "", snapSilentYAML); err == nil {
 		t.Fatal("expected the commit to fail with an empty author")
 	}
 	disk := derivedNow(t, work)
-	if len(disk[snapTenant].SilentTargets) == 0 {
-		t.Fatalf("precondition: the failed write was expected to leave the new file on disk, disk = %+v", disk)
+	if len(disk[other].SilentTargets) == 0 || len(disk[snapTenant].SilentTargets) != 0 {
+		t.Fatalf("precondition: want the operator's file silenced and the failed write put back, disk = %+v", disk)
 	}
 	if got := derivedByID(t, getList(t, d)); !reflect.DeepEqual(got, disk) {
 		t.Errorf("list after a failed commit = %+v, want the disk's %+v", got, disk)
@@ -168,7 +178,7 @@ func openSearch(t *testing.T, d *Deps) *SearchResponse {
 func TestWireTenantSnapshots_NeverCachesAnUnmergedPRBranch(t *testing.T) {
 	t.Parallel()
 	work, bare := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 
 	done := startHeldPR(t, w, bare, "sleep 2\n")
@@ -198,7 +208,7 @@ func TestWireTenantSnapshots_ReadersDoNotWaitForAPush(t *testing.T) {
 	const push = 4 * time.Second
 	const bound = time.Second
 	work, bare := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 	done := startHeldPR(t, w, bare, "sleep 4\n")
 
@@ -285,7 +295,7 @@ func TestWireTenantSnapshots_ReadersDoNotWaitForAPush(t *testing.T) {
 func TestWireTenantSnapshots_NoSnapshotDuringAPushIsUnknown(t *testing.T) {
 	t.Parallel()
 	work, bare := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: wireTenantSnapshots(w, true)} // not primed
 
 	done := startHeldPR(t, w, bare, "sleep 3\n")
@@ -316,7 +326,7 @@ func TestWireTenantSnapshots_TreeOffBaseIsNeverDerived(t *testing.T) {
 	work, bare := snapshotRepo(t)
 	lock := filepath.Join(work, ".git", "index.lock")
 	t.Cleanup(func() { _ = os.Remove(lock) })
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 
 	done := startHeldPR(t, w, bare, "touch '"+lock+"'\n")
@@ -398,7 +408,7 @@ func silentTargetsOf(items []TenantSummary, id string) ([]string, bool) {
 func TestTenantSnapshots_ReadAfterWriteWaitsForAnotherReadersReload(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 	if _, err := w.Write(context.Background(), snapTenant, "alice@example.com", snapSilentYAML); err != nil {
@@ -423,7 +433,7 @@ func TestTenantSnapshots_ReadAfterWriteWaitsForAnotherReadersReload(t *testing.T
 func TestTenantSnapshots_ColdConcurrentReadersAllDerive(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false) // not primed
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 	loaded, release := holdNextLoad(cache)
@@ -452,7 +462,7 @@ func TestTenantSnapshots_ColdConcurrentReadersAllDerive(t *testing.T) {
 func TestTenantSnapshots_InvalidateDuringReloadLeavesItStale(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 	cache.Invalidate() // make the next request reload
@@ -488,7 +498,7 @@ func TestTenantSnapshots_PRModeTreeCheck(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			work, _ := snapshotRepo(t)
-			w := gitops.NewWriter(work, work)
+			w := gitopstest.NewWriter(work, work)
 			cache := WireTenantSnapshots(w, work, true)
 			d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 			if err := os.WriteFile(filepath.Join(work, c.rel), []byte(c.body), 0o644); err != nil {
@@ -509,25 +519,17 @@ func TestTenantSnapshots_PRModeTreeCheck(t *testing.T) {
 // holdWrite makes the NEXT direct-mode commit in work hang in a pre-commit
 // hook until release; started closes once the hook runs (the write then holds
 // the tree lock).
-func holdWrite(t *testing.T, work string) (started <-chan struct{}, release func()) {
+func holdWrite(t *testing.T, w *gitops.Writer) (started <-chan struct{}, release func()) {
 	t.Helper()
-	dir := t.TempDir()
-	marker, gate := filepath.Join(dir, "started"), filepath.Join(dir, "gate")
-	hook := "#!/bin/sh\ntouch '" + marker + "'\nwhile [ ! -e '" + gate + "' ]; do sleep 0.05; done\nrm -f \"$0\"\n"
-	if err := os.WriteFile(filepath.Join(work, ".git", "hooks", "pre-commit"), []byte(hook), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ch := make(chan struct{})
-	go func() {
-		for {
-			if _, err := os.Stat(marker); err == nil {
-				close(ch)
-				return
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-	}()
-	return ch, func() { _ = os.WriteFile(gate, nil, 0o644) }
+	// The next write parks in its generator verdict, which runs under the
+	// writer lock (a direct write runs no pre-commit hook since #1535: it
+	// commits with commit-tree).
+	v := &parkingValidator{entered: make(chan struct{}), release: make(chan struct{})}
+	w.SetValidator(v)
+	var once sync.Once
+	rel := func() { once.Do(func() { close(v.release) }) }
+	t.Cleanup(rel)
+	return v.entered, rel
 }
 
 // S1: write A returned (the snapshot is now older than A), write B holds the
@@ -536,12 +538,12 @@ func holdWrite(t *testing.T, work string) (started <-chan struct{}, release func
 func TestTenantSnapshots_StaleSnapshotIsNotKnownWhileAWriteRuns(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
 	if _, err := w.Write(context.Background(), snapTenant, "alice@example.com", snapSilentYAML); err != nil {
 		t.Fatalf("write A: %v", err)
 	}
-	started, release := holdWrite(t, work)
+	started, release := holdWrite(t, w)
 	writeB := make(chan error, 1)
 	go func() {
 		_, err := w.Write(context.Background(), "t-other", "alice@example.com", "tenants:\n  t-other:\n    cpu: \"1\"\n")
@@ -566,7 +568,7 @@ func TestTenantSnapshots_StaleSnapshotIsNotKnownWhileAWriteRuns(t *testing.T) {
 func TestTenantSnapshots_WaitTimeoutOnAStaleSnapshotIsUnknown(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
 	cache.loadDeadline = 10 * reloadWaitBound
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
@@ -590,7 +592,7 @@ func TestTenantSnapshots_WaitTimeoutOnAStaleSnapshotIsUnknown(t *testing.T) {
 func TestTenantSnapshots_PanicInLoadIsRecovered(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false) // not primed
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 	var once sync.Once
@@ -613,7 +615,7 @@ func TestTenantSnapshots_PanicInLoadIsRecovered(t *testing.T) {
 func TestTenantSnapshots_PanicInReloadIsRecovered(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 	cache.tryReadTree = func(func()) bool { panic("injected") }
@@ -631,7 +633,7 @@ func TestTenantSnapshots_PanicInReloadIsRecovered(t *testing.T) {
 func TestTenantSnapshots_WaitHonoursTheRequestContext(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false) // cold: no snapshot to fall back on
 	cache.loadDeadline = time.Minute
 	loaded, release := holdNextLoad(cache)
@@ -661,7 +663,7 @@ func TestTenantSnapshots_WaitHonoursTheRequestContext(t *testing.T) {
 func TestTenantSnapshots_JoinerSkipsAReloadOlderThanItsInvalidate(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
 	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
 	cache.Invalidate()

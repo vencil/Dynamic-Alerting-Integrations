@@ -366,7 +366,7 @@ func TestTenantDocBytesFromEnv(t *testing.T) {
 // the thing it exists to bound.
 func TestWritePR_OversizeRefusedWithoutTouchingGit(t *testing.T) {
 	work := probeSizeRepo(t)
-	w := NewWriter(work, work)
+	w := newTestWriter(work, work)
 
 	_, err := w.WritePR(context.Background(), "db-a", "p@p", oversizeDoc(t, "db-a"))
 	if err == nil {
@@ -395,7 +395,7 @@ func TestWritePR_OversizeRefusedWithoutTouchingGit(t *testing.T) {
 // to measure the request instead, this test must be the thing that says so.
 func TestWritePRBatch_CapMeasuresTheMergedDocument(t *testing.T) {
 	work := probeSizeRepo(t)
-	w := NewWriter(work, work)
+	w := newTestWriter(work, work)
 
 	// A tiny merge whose RESULT is over the cap.
 	big := oversizeDoc(t, "db-a")

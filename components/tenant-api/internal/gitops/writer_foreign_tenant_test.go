@@ -188,7 +188,7 @@ func contains(hay []string, needle string) bool {
 	return false
 }
 
-func newW(dir string) *Writer { return NewWriter(dir, dir) }
+func newW(dir string) *Writer { return newTestWriter(dir, dir) }
 
 // --- multi-document bodies (#1681, found blind-reviewing the gate above) ---
 

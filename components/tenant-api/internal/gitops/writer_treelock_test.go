@@ -59,7 +59,7 @@ func TestTreeLock_OnlyTheHelpersLockDirectly(t *testing.T) {
 // config dir fails after the feature branch was cut.
 func TestTreeLock_ReleaseHookFiresOnFailure(t *testing.T) {
 	repo := initRepoOnMain(t)
-	w := NewWriter(filepath.Join(repo, "missing"), repo)
+	w := newTestWriter(filepath.Join(repo, "missing"), repo)
 	var fired atomic.Int32
 	w.SetOnTreeRelease(func() { fired.Add(1) })
 	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML); err == nil {
