@@ -58,6 +58,7 @@ from _grar_validate import (  # noqa: E402
     PlatformProbeSetUnverifiable,
     ROUTING_TREE_ERROR_PREFIX,
     check_policy_scope,
+    domain_policy_problems,
     duplicate_tenant_errors,
     invalid_tenant_id_text,
     routing_defaults_not_mapping_text,
@@ -749,24 +750,24 @@ def summarize_tree(root: dict) -> list[str]:
 def _level_policies_for_tenant(domain_policies: dict, tenant: str
                                ) -> tuple[list[tuple[str, set, set]], list[str]]:
     """The policies of ONE level's ``domain_policies`` that list *tenant*,
-    read the way the generator's ``check_domain_policies`` reads them
-    (non-strict). Returns ``(applicable, inert)`` as ``_policies_for_tenant``.
+    read the way the generator's ``check_domain_policies`` reads them.
+    Returns ``(applicable, inert)`` as ``_policies_for_tenant``.
+
+    #3116: a policy with a ``domain_policy_problems`` entry refuses the whole
+    tree, and ``_policy_step`` reads no policy of a refused tree; one is
+    skipped here all the same, so this reader has no lenient reading of its
+    own.
     """
     applicable, inert = [], []
     for name, policy in sorted(domain_policies.items()):
-        if not isinstance(policy, dict):
+        if not isinstance(policy, dict) or domain_policy_problems(policy):
             continue
-        tenants = policy.get("tenants", [])
-        if not isinstance(tenants, list):
-            inert.append(f"'{name}': 'tenants' is not a list, so the policy "
-                         f"applies to no tenant")
-            continue
-        if tenant not in tenants:
+        if tenant not in policy.get("tenants", []):
             continue
         constraints = policy.get("constraints", {})
-        if not isinstance(constraints, dict):
+        if constraints is None:
             inert.append(f"'{name}' lists '{tenant}' but its 'constraints' "
-                         f"is not a mapping, so nothing is enforced")
+                         f"is null, so nothing is enforced")
             continue
 
         def _types(field: str) -> set:
@@ -795,8 +796,8 @@ def _policies_for_tenant(parsed: dict, tenant: str
     Returns ``(applicable, inert)``: ``applicable`` is ``(name, forbidden
     types, allowed types)`` of every reaching policy whose ``tenants`` list
     names the tenant; ``inert`` says, per policy, why one that may concern
-    the tenant is not applied (``tenants`` not a list, ``constraints`` not a
-    mapping, out of its subtree's scope).
+    the tenant is not applied (null ``constraints``, out of its subtree's
+    scope).
     """
     tenant_dirs = parsed.get("tenant_dirs") or {}
     applicable, inert = [], []

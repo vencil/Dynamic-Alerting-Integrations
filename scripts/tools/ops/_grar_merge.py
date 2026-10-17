@@ -87,9 +87,10 @@ FINDING_KINDS: dict[str, str] = {
         "A tenant's resolved routing (main route or a sub-route) breaks a "
         "domain policy constraint.",
     "domain_policy_unusable":
-        "A domain policy file, policy or constraint cannot be read, so it is "
-        "not enforced. A require_critical_escalation that is not a boolean "
-        "refuses the whole tree in every mode instead.",
+        "A domain policy file, policy or constraint cannot be enforced as "
+        "written (wrong shape or type, an entry that is no receiver type or "
+        "tenant id, an unreadable duration bound, a file that cannot be "
+        "used); the whole tree is refused in every mode.",
     "domain_policy_out_of_scope":
         "A subtree domain policy names a tenant outside its subtree; that "
         "entry is not enforced.",
