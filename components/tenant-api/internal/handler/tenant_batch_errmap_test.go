@@ -35,12 +35,14 @@ func runGit(t *testing.T, dir string, args ...string) {
 
 func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	t.Parallel()
-	// On-disk file unparseable → the merge fails and must NOT fall back to an
-	// overwrite. Since #2373 (review F1) the merge refuses it as a file
-	// threshold-exporter rejects: code TENANT_CONFIG_NOT_LOADABLE, config_error in
-	// the message.
+	// On-disk file the exporter rejects → the merge fails and must NOT fall
+	// back to an overwrite. Since #2373 (review F1) the merge refuses it as a
+	// file threshold-exporter rejects: code TENANT_CONFIG_NOT_LOADABLE,
+	// config_error in the message. (#3064: the file is db-a's own; one that
+	// is not YAML at all is git-managed, TENANT_GIT_MANAGED.)
+	const broken = "tenants:\n  db-a:\n    mysql_connections: !!int zz\n"
 	configDir := setupConfigDir(t, map[string]string{
-		"db-a.yaml": "{{not yaml",
+		"db-a.yaml": broken,
 	})
 	initGitRepo(t, configDir) // a batch runs in a staging worktree (#2900)
 	gw := newTestWriter(configDir)
@@ -51,12 +53,12 @@ func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	if res.Status != "error" {
 		t.Fatalf("status = %q, want error for an unparseable on-disk file", res.Status)
 	}
-	if res.TenantID != "db-a" || res.Code != "TENANT_CONFIG_NOT_LOADABLE" || !strings.Contains(res.Message, "config_error: malformed_yaml") {
-		t.Errorf("result = %+v, want tenant db-a, code TENANT_CONFIG_NOT_LOADABLE, message naming config_error: malformed_yaml", res)
+	if res.TenantID != "db-a" || res.Code != "TENANT_CONFIG_NOT_LOADABLE" || !strings.Contains(res.Message, "config_error: invalid_config") {
+		t.Errorf("result = %+v, want tenant db-a, code TENANT_CONFIG_NOT_LOADABLE, message naming config_error: invalid_config", res)
 	}
 	// The corrupt file must be untouched (no overwrite fallback).
 	got, err := os.ReadFile(filepath.Join(configDir, "db-a.yaml"))
-	if err != nil || string(got) != "{{not yaml" {
+	if err != nil || string(got) != broken {
 		t.Errorf("on-disk file changed after a failed merge (err=%v):\n%s", err, got)
 	}
 }

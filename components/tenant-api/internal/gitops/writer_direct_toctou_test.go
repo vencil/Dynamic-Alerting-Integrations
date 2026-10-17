@@ -3,10 +3,9 @@ package gitops
 // #1681 (direct-write timing half): Write / WriteIfUnchanged must decide on the
 // tree their bytes land on, not on the tree they saw BEFORE queueing for the
 // single-writer token. Deciding early fails in both directions, and each has
-// a test here: three requests that each pass their own checks commit, in
-// order, one tenant id declared by two files (bypass); and a write that is
-// legal where it lands is refused on the tree an earlier queued write is
-// about to change (over-reject).
+// a test here (#3064: on whether the tenant is git-managed): a write queued
+// while its file becomes shared must be refused (bypass), and a write queued
+// while its shared file is split must go through (over-reject).
 //
 // The interleaving is forced through the admission queue itself, not a sleep:
 // the test holds the one execution token, so every request runs whatever it
@@ -27,7 +26,6 @@ import (
 	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"gopkg.in/yaml.v3"
 )
 
 // holdExecToken takes the writer's single execution token, so every write
@@ -86,124 +84,53 @@ func waitParkedInAcquireUnless(t *testing.T, n int, done func() bool) bool {
 	}
 }
 
-// filesDeclaring lists the top-level conf.d files whose `tenants:` map carries
-// id. Deliberately its own YAML read rather than anything the writer uses to
-// decide (addedTenantKeys, the #2078 walk): it is the oracle for them.
-func filesDeclaring(t *testing.T, dir, id string) []string {
+// commitFile replaces name in dir and commits it — an operator's change in git
+// reaching the serving tree while writes are queued.
+func commitFile(t *testing.T, dir, name, body string) {
 	t.Helper()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var out []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var doc struct {
-			Tenants map[string]any `yaml:"tenants"`
-		}
-		if err := yaml.Unmarshal(raw, &doc); err != nil {
-			continue
-		}
-		if _, ok := doc.Tenants[id]; ok {
-			out = append(out, e.Name())
-		}
-	}
-	return out
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "operator edits "+name)
 }
 
-// TestDirectWrite_StaleOutOfLockCheckCannotReAddASection is the reviewer's
-// three-request interleaving on #1681. mv-x.yaml starts out declaring both
-// mv-x and mv-y:
-//
-//	T1 Write(mv-x)        body declares mv-x only        → removes mv-y
-//	T2 WriteMerged(mv-y)  (walk under the lock: nobody declares mv-y) → creates mv-y.yaml
-//	T3 Write(mv-x)        body still declares mv-y, checked BEFORE T1 ran
-//
-// If T3's verdict is the one it reached before queueing, mv-y is still in its
-// baseline, the section is "grandfathered", and T3 writes it back into
-// mv-x.yaml: two files declare mv-y and the exporter refuses the tree. The
-// verdict that counts is the one against the tree T3's bytes land on, where
-// mv-y is an addition — so T3 must fail with ErrValidation and change nothing.
-func TestDirectWrite_StaleOutOfLockCheckCannotReAddASection(t *testing.T) {
-	both := "tenants:\n" +
-		"  mv-x:\n    _silent_mode: \"warning\"\n" +
-		"  mv-y:\n    _silent_mode: \"warning\"\n"
-	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": both})
-	w := NewWriter(dir, dir)
-	ctx := context.Background()
+// sharedMvX is mv-x.yaml shared with mv-y: git-managed (#3064).
+const sharedMvX = "tenants:\n" +
+	"  mv-x:\n    _silent_mode: \"warning\"\n" +
+	"  mv-y:\n    _silent_mode: \"warning\"\n"
 
-	// Hold the single execution token: every request below runs up to
-	// acquireWrite and parks there, in the order it is started.
+// TestDirectWrite_GitManagedIsJudgedUnderTheLock is #3064's timing half: the
+// git-managed verdict is taken under the writer lock, on the file the write
+// replaces — not on the file as it was when the request queued. A write
+// started while mv-x.yaml is the tenant's own, and queued while an operator
+// turns it into a file shared with mv-y, must be refused and change nothing:
+// the body would otherwise overwrite mv-y's section.
+func TestDirectWrite_GitManagedIsJudgedUnderTheLock(t *testing.T) {
+	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": tenantBody("mv-x")})
+	w := NewWriter(dir, dir)
 	release := holdExecToken(t, w)
 
-	type result struct {
-		name string
-		err  error
-	}
-	results := make(chan result, 3)
-	start := func(name string, fn func() error) {
-		go func() { results <- result{name, fn()} }()
-	}
-
-	start("T1 Write(mv-x) drops mv-y", func() error {
-		_, err := w.Write(ctx, "mv-x", "t1@example.com", tenantBody("mv-x"))
-		return err
-	})
+	done := make(chan error, 1)
+	body := "tenants:\n  mv-x:\n    _silent_mode: \"critical\"\n"
+	go func() {
+		_, err := w.Write(context.Background(), "mv-x", "t1@example.com", body)
+		done <- err
+	}()
 	waitParkedInAcquire(t, 1)
-	start("T2 WriteMerged(mv-y)", func() error {
-		_, err := w.WriteMerged(ctx, "mv-y", "t2@example.com",
-			func([]byte) (string, error) { return tenantBody("mv-y"), nil })
-		return err
-	})
-	waitParkedInAcquire(t, 2)
-	t3Body := "tenants:\n" +
-		"  mv-x:\n    _silent_mode: \"critical\"\n" +
-		"  mv-y:\n    _silent_mode: \"warning\"\n"
-	start("T3 Write(mv-x) keeps mv-y", func() error {
-		_, err := w.Write(ctx, "mv-x", "t3@example.com", t3Body)
-		return err
-	})
-	waitParkedInAcquire(t, 3)
-
-	// Release the token: T1, T2, T3 now run one at a time, in that order.
+	commitFile(t, dir, "mv-x.yaml", sharedMvX)
 	release()
-	errs := map[string]error{}
-	for i := 0; i < 3; i++ {
-		r := <-results
-		errs[r.name] = r.err
-	}
-	for name, err := range errs {
-		if strings.HasPrefix(name, "T3") {
-			continue
-		}
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
 
-	t3Err := errs["T3 Write(mv-x) keeps mv-y"]
-	decl := filesDeclaring(t, dir, "mv-y")
-	_, _, loadErr := cfg.LoadDir(dir, nil)
-	t.Logf("T3 err = %v; files declaring mv-y = %v; exporter LoadDir err = %v", t3Err, decl, loadErr)
-	if len(decl) != 1 {
-		t.Errorf("mv-y is declared by %d files %v, want exactly 1", len(decl), decl)
+	err := <-done
+	var gm *GitManagedError
+	if !errors.As(err, &gm) || gm.Reason != "tenant_count" || !errors.Is(err, ErrTenantGitManaged) {
+		t.Fatalf("err = %v, want the git-managed refusal (tenant_count)", err)
 	}
-	if loadErr != nil {
-		t.Errorf("exporter refuses the tree the three writes left: %v", loadErr)
+	if strings.Contains(err.Error(), "mv-y") {
+		t.Errorf("the refusal names the other tenant: %v", err)
 	}
-	if got, err := os.ReadFile(filepath.Join(dir, "mv-x.yaml")); err != nil || string(got) != tenantBody("mv-x") {
-		t.Errorf("mv-x.yaml = %q (%v), want T1's body — a refused T3 must change nothing", got, err)
-	}
-	if t3Err == nil {
-		t.Errorf("T3 re-added mv-y to mv-x.yaml and reported success")
-	} else if !errors.Is(t3Err, ErrValidation) || !strings.Contains(t3Err.Error(), "adds tenant section") {
-		t.Errorf("T3 err = %v, want the added-section refusal", t3Err)
+	if got, rerr := os.ReadFile(filepath.Join(dir, "mv-x.yaml")); rerr != nil || string(got) != sharedMvX {
+		t.Errorf("mv-x.yaml = %q (%v), want the operator's shared file unchanged", got, rerr)
 	}
 }
 
@@ -211,49 +138,31 @@ func TestDirectWrite_StaleOutOfLockCheckCannotReAddASection(t *testing.T) {
 // (#1718's shape on the direct path): nothing decided before queueing may
 // REFUSE a write that is legal on the tree it lands on.
 func TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree(t *testing.T) {
-	both := "tenants:\n" +
-		"  mv-x:\n    _silent_mode: \"warning\"\n" +
-		"  mv-y:\n    _silent_mode: \"warning\"\n"
-
-	// T1 Write(mv-x) is queued to drop mv-y from the shared file; T2
-	// Write(mv-y) is started after it. On the tree T2 lands on, mv-x.yaml no
-	// longer declares mv-y, so creating mv-y.yaml is legal — sent one after the
-	// other, both succeed. Queued, T2 must succeed too, not be refused with
-	// ErrTenantDeclaredElsewhere on the tree as it was before T1 ran.
-	t.Run("queued behind the write that frees the id", func(t *testing.T) {
-		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": both})
+	// The file is shared (git-managed) when the write queues, and the
+	// tenant's own once the operator splits it: the write lands on the
+	// tenant's own file and goes through.
+	t.Run("queued while the operator splits the shared file", func(t *testing.T) {
+		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": sharedMvX})
 		w := NewWriter(dir, dir)
-		ctx := context.Background()
 		release := holdExecToken(t, w)
-
-		t1 := make(chan error, 1)
+		done := make(chan error, 1)
+		body := "tenants:\n  mv-x:\n    _silent_mode: \"critical\"\n"
 		go func() {
-			_, err := w.Write(ctx, "mv-x", "t1@example.com", tenantBody("mv-x"))
-			t1 <- err
+			_, err := w.Write(context.Background(), "mv-x", "t1@example.com", body)
+			done <- err
 		}()
-		waitParkedInAcquire(t, 1)
-		t2 := make(chan error, 1)
-		go func() {
-			_, err := w.Write(ctx, "mv-y", "t2@example.com", tenantBody("mv-y"))
-			t2 <- err
-		}()
-		if !waitParkedInAcquireUnless(t, 2, func() bool { return len(t2) > 0 }) {
+		if !waitParkedInAcquireUnless(t, 1, func() bool { return len(done) > 0 }) {
 			release()
-			err := <-t2
-			<-t1
-			t.Fatalf("T2 Write(mv-y) returned before queueing: %v — refused on the tree "+
-				"T1 had not changed yet (ErrTenantDeclaredElsewhere=%v)",
-				err, errors.Is(err, ErrTenantDeclaredElsewhere))
+			t.Fatalf("Write(mv-x) returned before queueing: %v — refused on the tree as it was", <-done)
 		}
+		commitFile(t, dir, "mv-x.yaml", tenantBody("mv-x"))
+		commitFile(t, dir, "mv-y.yaml", tenantBody("mv-y"))
 		release()
-		if err := <-t1; err != nil {
-			t.Fatalf("T1 Write(mv-x): %v", err)
+		if err := <-done; err != nil {
+			t.Fatalf("Write(mv-x): %v", err)
 		}
-		if err := <-t2; err != nil {
-			t.Fatalf("T2 Write(mv-y): %v", err)
-		}
-		if decl := filesDeclaring(t, dir, "mv-y"); len(decl) != 1 || decl[0] != "mv-y.yaml" {
-			t.Errorf("files declaring mv-y = %v, want [mv-y.yaml]", decl)
+		if got, err := os.ReadFile(filepath.Join(dir, "mv-x.yaml")); err != nil || string(got) != body {
+			t.Errorf("mv-x.yaml = %q (%v), want the body", got, err)
 		}
 		if _, _, err := cfg.LoadDir(dir, nil); err != nil {
 			t.Errorf("exporter refuses the resulting tree: %v", err)
@@ -262,26 +171,39 @@ func TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree(t *testing.T) {
 
 	// A WriteIfUnchanged whose base is stale must hear ErrPrecondition —
 	// "refresh and retry" — not a validation verdict about a file it has not
-	// seen. Its body still carries mv-y, which the current file no longer
-	// declares; judged on the current file that is an added section.
+	// seen.
 	t.Run("stale base hears ErrPrecondition", func(t *testing.T) {
-		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": both})
+		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": tenantBody("mv-x")})
 		w := NewWriter(dir, dir)
 		ctx := context.Background()
-		staleHash := cfg.ComputeSourceHash([]byte(both))
-		if _, err := w.Write(ctx, "mv-x", "t1@example.com", tenantBody("mv-x")); err != nil {
+		staleHash := cfg.ComputeSourceHash([]byte(tenantBody("mv-x")))
+		changed := "tenants:\n  mv-x:\n    _silent_mode: \"disable\"\n"
+		if _, err := w.Write(ctx, "mv-x", "t1@example.com", changed); err != nil {
 			t.Fatalf("Write(mv-x): %v", err)
 		}
-		body := "tenants:\n" +
-			"  mv-x:\n    _silent_mode: \"critical\"\n" +
-			"  mv-y:\n    _silent_mode: \"warning\"\n"
+		body := "tenants:\n  mv-x:\n    _silent_mode: \"critical\"\n"
 		_, err := w.WriteIfUnchanged(ctx, "mv-x", "t2@example.com", body, staleHash)
 		if !errors.Is(err, ErrPrecondition) {
-			t.Fatalf("WriteIfUnchanged on a stale base: err = %v (ErrValidation=%v), want ErrPrecondition",
-				err, errors.Is(err, ErrValidation))
+			t.Fatalf("WriteIfUnchanged on a stale base: err = %v, want ErrPrecondition", err)
 		}
-		if got, rerr := os.ReadFile(filepath.Join(dir, "mv-x.yaml")); rerr != nil || string(got) != tenantBody("mv-x") {
+		if got, rerr := os.ReadFile(filepath.Join(dir, "mv-x.yaml")); rerr != nil || string(got) != changed {
 			t.Errorf("mv-x.yaml = %q (%v), want unchanged", got, rerr)
+		}
+	})
+
+	// #3064: on a git-managed file the precondition is never judged — even a
+	// base hash that matches the shared file is answered with the
+	// git-managed refusal, so CONFLICT versus not cannot confirm a guess of
+	// a file tenant-api does not show.
+	t.Run("git-managed is judged before the base hash", func(t *testing.T) {
+		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": sharedMvX})
+		w := NewWriter(dir, dir)
+		body := "tenants:\n  mv-x:\n    _silent_mode: \"critical\"\n"
+		for _, hash := range []string{cfg.ComputeSourceHash([]byte(sharedMvX)), "0000000000000000"} {
+			_, err := w.WriteIfUnchanged(context.Background(), "mv-x", "t2@example.com", body, hash)
+			if !errors.Is(err, ErrTenantGitManaged) || errors.Is(err, ErrPrecondition) {
+				t.Errorf("base hash %s: err = %v, want the git-managed refusal", hash, err)
+			}
 		}
 	})
 }

@@ -179,8 +179,10 @@ func TestWriteErrorIsForClient(t *testing.T) {
 func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		// db-b's file is a list: refused as a file the client must repair.
-		"db-b.yaml": "- not a tenant mapping\n",
+		// db-b's file is db-b's own (#3064: API-shaped, else the op would be
+		// TENANT_GIT_MANAGED) but not loadable: refused as a file the client
+		// must repair.
+		"db-b.yaml": "tenants:\n  db-b:\n    mysql_connections: !!int zz\n",
 		// db-c is claimed by two files: a conf.d layout the operator fixes.
 		"db-c.yaml": "tenants:\n  db-c:\n    _silent_mode: \"warning\"\n",
 		"db-c.yml":  "tenants:\n  db-c:\n    _silent_mode: \"warning\"\n",

@@ -19,7 +19,6 @@ import os
 import sys
 from pathlib import Path
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -27,7 +26,11 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import YamlFileError, detect_cli_lang  # noqa: E402
 # #2123: a key written twice in one mapping is a YamlFileError like bad syntax.
 # #2114: tenant ids as the exporter keys them (raw text), on that same strict read.
-from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402
+# ADR-036 step 4 (#2906): conf.d content is `da-guard parse-tree`'s, as the
+# route generator reads it (this lint shares its tenant set, below).
+from _lib_io import load_confd_file  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -35,7 +38,6 @@ from _lib_confd import (  # noqa: E402
     is_reserved_name,
     list_config_tree,
     overlay_platform_tenants,
-    unselected_carriers,
     unusable_reason,
 )
 sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'ops'))
@@ -57,6 +59,9 @@ def _collect_data(config_dir: str) -> dict:
     tenant may live at any depth. File names are relative to the root (a root
     file keeps its bare name).
     """
+    # One reader for every read below (#2906 review): the session's when
+    # `main` runs one, else this call's own — one parse-tree document either way.
+    reader = _lib_parse_cache.reader_for(config_dir)
     profiles: dict = {}
     policies: dict = {}
     tenant_ids: set[str] = set()
@@ -73,7 +78,6 @@ def _collect_data(config_dir: str) -> dict:
     # extension folded). The `_`-prefixed control files matched by exact name
     # below are what this tool exists to READ.
     listing = list_config_tree(root)
-    files = [p.relative_to(root).as_posix() for p in listing.files]
 
     unreadable: list[str] = []
     unreadable_files: list[str] = []
@@ -86,15 +90,14 @@ def _collect_data(config_dir: str) -> dict:
         unreadable_files.append(rel)
     entries: list[tuple[str, object, dict]] = []
     # The unselected carrier spelling is read by no plane (#1674); its
-    # `tenants:` block used to reach tenant_ids / profile_refs here.
-    by_dir: dict[Path, list[Path]] = {}
-    for p in listing.files:
-        by_dir.setdefault(p.parent, []).append(p)
-    skip = {(d / n).relative_to(root).as_posix()
-            for d, ps in by_dir.items() for n in unselected_carriers(ps)}
+    # `tenants:` block used to reach tenant_ids / profile_refs here. Which
+    # file that is, is parse-tree's verdict (`not_read`), never a Python
+    # re-selection: one that read a file parse-tree lists there died rc 2
+    # on `NotSelected` (#2906 review). Named in `not_read`, not dropped.
+    read_paths, skipped = reader.split_not_read(listing.files)
+    not_read = [f"{p.relative_to(root).as_posix()} ({why})" for p, why in skipped]
+    files = [p.relative_to(root).as_posix() for p in read_paths]
     for fname in files:
-        if fname in skip:
-            continue
         path = os.path.join(config_dir, fname)
         base = os.path.basename(fname)
         level = Path(fname).parent.as_posix()
@@ -103,14 +106,13 @@ def _collect_data(config_dir: str) -> dict:
         # (#1008 convention), not an abort that hides their findings.
         # The file NAME is kept as well as the message: `validate` needs
         # it to skip the checks whose input this file was (re-review).
-        # #2114: tenant ids are the keys' source TEXT, as the exporter keys
-        # them — `123:` in `_defaults.yaml` and `"123":` in a tenant file
-        # are one tenant — and a domain policy's `tenants:` list is read
-        # the same way so it compares text to text. Strict (#2123) and the
-        # same pure parser / YamlFileError as `load_yaml_file_strict`.
+        # Tenant ids are keys, so source TEXT in parse-tree's reading (as the
+        # exporter keys them), and a domain policy's `tenants:` list is read
+        # as text too (TENANT_LISTS_AS_TEXT) so it compares text to text. A
+        # file parse-tree cannot read is a YamlFileError naming its kind.
         try:
-            data = load_yaml_file_strict_exporter_keys(
-                path, raw_text_sequences=("tenants",))
+            data = load_confd_file(config_dir, path,
+                                   mode=_lib_parse_cache.TENANT_LISTS_AS_TEXT, reader=reader)
         except YamlFileError as exc:
             unreadable.append(str(exc))
             unreadable_files.append(fname)
@@ -160,7 +162,7 @@ def _collect_data(config_dir: str) -> dict:
         if not is_reserved_name(os.path.basename(fname)):
             tenant_dirs.setdefault(tenant, Path(fname).parent.as_posix())
     merged, platform_orphans = overlay_platform_tenants(
-        entries, lambda: declared_tenant_ids(config_dir))
+        entries, lambda: declared_tenant_ids(config_dir, reader))
     for tenant, overrides in merged.items():
         tenant_ids.add(tenant)
         ref = overrides.get("_routing_profile")
@@ -175,6 +177,7 @@ def _collect_data(config_dir: str) -> dict:
         "profile_refs": profile_refs,
         "unreadable": unreadable,
         "unreadable_files": unreadable_files,
+        "not_read": not_read,
         # #2326: directory scope of profiles / policies / tenants.
         "profiles_by_dir": profiles_by_dir,
         "profile_origin": profile_origin,
@@ -349,7 +352,18 @@ def main() -> None:
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    data = _collect_data(args.config_dir)
+    with _lib_parse_cache.session():
+        try:
+            _lib_parse_cache.reader_for(args.config_dir).require()
+            data = _collect_data(args.config_dir)
+        except ParseTreeError as exc:
+            print(f"ERROR: cannot read {safe_label(args.config_dir)} through `da-guard "
+                  f"parse-tree` (ADR-036): {safe_label(' '.join(str(exc).split()))}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    if data.get("not_read"):
+        print(f"skipped {len(data['not_read'])} file(s) no reader reads (da-guard "
+              f"parse-tree's not_read): {safe_label(', '.join(data['not_read']))}")
     messages = [f"ERROR: cannot read {u}" for u in data.get("unreadable", [])]
     messages += validate(data, strict=args.strict)
 

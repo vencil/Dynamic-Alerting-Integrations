@@ -141,14 +141,6 @@ type PRBaseCheck func(configDir string) error
 // authoritative check here — the metadata write scope (#2857) — because its
 // pre-check reads the pod's local tree, which may lag the base. A nil check is WritePR.
 func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
-	return w.WritePRSpliced(ctx, tenantID, authorEmail, yamlContent, check, nil)
-}
-
-// WritePRSpliced is WritePRChecked for PUT /tenants/{id} (#3062): what the
-// feature branch commits is splice's result on the tenant file as the fresh
-// base holds it (prResolveOnBase), the body judged as WritePRChecked judges
-// it. A nil splice is WritePRChecked.
-func (w *Writer) WritePRSpliced(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck, splice SpliceFunc) (*PRWriteResult, error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -156,7 +148,7 @@ func (w *Writer) WritePRSpliced(ctx context.Context, tenantID, authorEmail, yaml
 	// Step 1: PRE-FLIGHT validate, before anything touches git.
 	//
 	// ⛔ THIS IS NOT THE AUTHORITATIVE RUN — Step 3c is. Everything stateful in
-	// validate (the addedTenantKeys baseline, the eol-expansion guard) reads the
+	// validate (the eol-expansion guard, the merged key validation) reads the
 	// tenant file on the tree as it is RIGHT NOW, and Step 3 replaces that tree
 	// with the fresh origin/<base>. Keeping this pre-flight anyway mirrors
 	// WritePRBatch, and for its reason: it maps a bad body to ErrValidation→400
@@ -219,7 +211,7 @@ func (w *Writer) WritePRSpliced(ctx context.Context, tenantID, authorEmail, yaml
 	// authoritative validate — all on the fresh base as git holds it
 	// (prResolveOnBase, #2972). filePath is the file in the serving tree,
 	// which is where Step 4 writes it.
-	filePath, content, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check, splice)
+	filePath, content, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
@@ -348,11 +340,10 @@ func (w *Writer) openFreshBase(rev, branch string) (*stagingTree, error) {
 // the base, which the feature branch carries — and the authoritative
 // validate's notices. Caller holds w.mu and drops the branch on an error.
 //
-// content is what Step 4 writes: yamlContent, or splice's result on the
-// tenant file as the fresh base holds it (#3062) — the same commit the
-// feature branch is cut from, so the bytes spliced into are the bytes the
-// branch replaces.
-func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck, splice SpliceFunc) (filePath, content string, notices []string, err error) {
+// content is what Step 4 writes: yamlContent. A tenant git-managed on the
+// fresh base is refused there (#3064, resolvePut), whatever the serving tree
+// holds.
+func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck) (filePath, content string, notices []string, err error) {
 	st, err := w.openFreshBase(branchPoint, "")
 	if err != nil {
 		// A conf.d that cannot be reached is the walk failing to run, which
@@ -385,9 +376,11 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	//
 	// ⛔ RE-RESOLVING THE PATH WAS ONLY HALF OF #1673. The path now describes the
 	// fresh base, but the DECISION was still Step 1's — taken against the tree as
-	// it was before the checkout. `addedTenantKeys` derives its baseline from the
-	// tenant file's existing `tenants:` keys, so the two trees disagreeing about
-	// that file makes the gate answer a question nobody asked:
+	// it was before the checkout. The #1681 added-section gate derived its
+	// baseline from the tenant file's existing `tenants:` keys (since #3064 the
+	// question is whether that file is API-managed, judged on the fresh base),
+	// so the two trees disagreeing about that file makes the gate answer a
+	// question nobody asked:
 	//
 	//   - stale base declares `other`, fresh base does not → BYPASS: the section
 	//     is grandfathered against a tree the write does not land on, and the
@@ -406,14 +399,14 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	// discards its pre-flight's: they describe the body as merged against the
 	// base it lands on, and collecting them twice would duplicate them.
 	//
-	// #3062: the splice first, on the base's tenant file, as WriteSpliced
-	// orders it (the precondition has no PR-mode form). resolvePut is the one
-	// copy of steps 3b–3c, shared with the direct write and the previews.
+	// #3062: resolvePut is the one copy of steps 3b–3c, shared with the
+	// direct write and the previews; #3064: it refuses a tenant git-managed
+	// on the base before the caller's check.
 	var afterResolve func(string) error
 	if check != nil {
 		afterResolve = func(string) error { return check(st.configDir) }
 	}
-	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve, splice, nil)
+	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -559,7 +552,8 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			// #2939: so is a tenant file the local tree cannot read; on the
 			// base it lands on, judgeTree refuses it (TargetUnreadableError)
 			// or the read succeeds.
-			if errors.Is(err, ErrMergeBaseNotLoadable) || errors.Is(err, errReadTenantFile) {
+			// #3064: so is a tenant git-managed on the local tree.
+			if errors.Is(err, ErrMergeBaseNotLoadable) || errors.Is(err, errReadTenantFile) || errors.Is(err, ErrTenantGitManaged) {
 				continue
 			}
 			return nil, err

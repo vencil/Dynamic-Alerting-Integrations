@@ -737,10 +737,14 @@ repos:
 
       - id: routing-profiles-check
         name: Routing profiles & domain policies lint
-        entry: python3 -X utf8 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
+        # ADR-036 step 4 (#2906): the lint reads conf.d through `da-guard
+        # parse-tree`, as the route generator does; the wrapper uses
+        # $DA_GUARD_BINARY when set, else builds .build/da-guard (as for
+        # platform-data-check). Without da-guard the lint exits 2.
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles|scripts/tools/_lib_(parse_tree|parse_cache|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/)
         additional_dependencies: ['pyyaml']
 
       # #880 Day-3 hardening: validate every tenant-shaped conf.d file against
@@ -752,10 +756,12 @@ repos:
       # job (pre-commit run confd-schema-check) like routing-profiles-check.
       - id: confd-schema-check
         name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard + #2245)
-        entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
+        # ADR-036 step 4 (#2906): the lint reads conf.d through `da-guard
+        # parse-tree` (with_da_guard.sh, as for routing-profiles-check).
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
         # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
         # fail the hook, and pre-commit prints a passing hook's output only when
@@ -788,13 +794,13 @@ repos:
       # that a hook no workflow calls by name has ZERO CI enforcement.
       - id: confd-schema-check-shipped
         name: shipped conf.d trees (try-local / recipe + da-tools examples) ↔ tenant-config schema
-        entry: python3 -X utf8 scripts/tools/lint/check_confd_schema.py
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py
           --config-dir try-local/seed/conf.d
           --config-dir rule-packs/recipes/examples/conf.d
           --config-dir components/da-tools/app/examples/cardinality-demo/conf.d
         language: python
         pass_filenames: false
-        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
+        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
         # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
         # fail the hook, and pre-commit prints a passing hook's output only when
@@ -1563,7 +1569,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule)\.py|scripts/tools/_lib_(compat|confd|constants|exitcodes|io|parse_cache|prometheus|python|validation|yaml_keys)\.py|scripts/ops/guard_defaults_scopes\.py|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json)$
+        files: ^(rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(compat|confd|constants|exitcodes|godispatch|io|parse_cache|parse_tree|prometheus|python|validation|yaml_keys)\.py|scripts/ops/guard_defaults_scopes\.py|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

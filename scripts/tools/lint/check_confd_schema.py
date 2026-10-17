@@ -24,23 +24,29 @@ SCOPE:
   validators; they are SKIPPED and listed explicitly so coverage is never silently
   capped.
 
-WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
-  (`yes` / `no` / `on` / `off`, three spellings each) in a field that takes a
-  boolean — PyYAML, and so this schema check, reads a boolean; some of the
-  exporter's readers keep the string. Each one is printed as
-  `WARN: <file>:<line>: …`. A root `_defaults*` file's `tenants:` block is
-  held to the tenant schema for this and #2164. An explicit `!!bool yes`
-  (yaml.v3 does not accept that tag on that text) is the same WARN, wherever
-  it is: whether the exporter can still read the file is da-guard's verdict,
-  which validate-config's `profiles` row reports — this lint makes no claim about it.
-  A value PyYAML cannot construct (`!!bool y`, `!!int x`) is a named ERROR
-  (not a traceback) saying this lint could not schema-check the file.
+READ (ADR-036 step 4, #2906): every file is read through `da-guard parse-tree`
+  (yaml.v3, the exporter's own reading; `$DA_GUARD_BINARY`, else `da-guard` on
+  `$PATH`) — the values the schema judges are yaml.v3's. A file parse-tree
+  cannot read (a syntax error, a repeated or null key, several documents, a
+  tag it does not take such as `!!binary` or `!!bool yes`, …) is rc 2 with its
+  `kind`; a top level that is not a mapping stays a violation (rc 1).
+
+ERROR (#2164): a value in a string-typed field that yaml.v3 reads as
+  something else (`channel: 1e3` is a float, `name: 2024-01-02` a timestamp)
+  — `<file>: <path>: …`. `channel: yes` is the string "yes" to yaml.v3 and is
+  no finding.
+WARN (#2509, never changes the exit code): a YAML 1.1 boolean word (`yes` /
+  `no` / `on` / `off`, three spellings each), quoted or not, in a field that
+  takes a boolean — a string to yaml.v3, which the field refuses. Printed as
+  `WARN: <file>: <path>: …`. A root `_defaults*` file's `tenants:` block is
+  held to the tenant schema for this and #2164.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
   1  >=1 schema violation (user fixes the YAML or the schema)
   2  bad invocation / unreadable schema / jsonschema missing / malformed YAML /
-     a platform-schema cross-file `$ref` the given --schema cannot resolve (#2232)
+     a platform-schema cross-file `$ref` the given --schema cannot resolve (#2232) /
+     no usable da-guard (missing, failing)
 
 Usage:
   python3 check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
@@ -51,24 +57,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import sys
-
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
-from _lib_io import StrictExporterKeyLoader  # noqa: E402  (#2695 keys as the exporter reads them)
 from _lib_io import (  # noqa: E402  (#2164, #2509)
-    compose_all_nodes, find_go_rejected_bool_tags, find_misread_scalars,
-    find_yaml11_bool_words)
+    find_misread_scalars, find_yaml11_bool_words)
 from _lib_io import misread_scalar_nodes  # noqa: E402  (#2695)
+import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the conf.d reader)
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_document_name,
@@ -315,72 +318,58 @@ def _iter_yaml_files(config_dir: str) -> list[str]:
     return sorted(out)
 
 
-def misread_scalar_violations(rel: str, roots: list, schema: dict,
+def misread_scalar_violations(rel: str, root: object, schema: dict,
                               schemas: dict, schema_name: str) -> list[str]:
-    """#2164: one ERROR per unquoted scalar in a string-typed field that
-    PyYAML reads as non-string (`channel: yes` → True). The judgement is
-    `_lib_io.find_misread_scalars` — the resolver decides what the scalar
-    is, *schema* decides which fields are strings; nothing is listed here.
-    *roots*: the file's composed documents (`compose_all_nodes`)."""
-    return [f"ERROR: {rel}:{hit.line}: {hit.message()}"
-            for root in roots
+    """#2164: one ERROR per value in a string-typed field that yaml.v3 reads
+    as non-string (`channel: 1e3` → 1000.0). The judgement is
+    `_lib_io.find_misread_scalars` — parse-tree's tag decides what the
+    scalar is, *schema* decides which fields are strings; nothing is listed
+    here. *root*: the file's parse-tree nodes."""
+    return [f"ERROR: {rel}: {hit.message()}"
             for hit in find_misread_scalars(root, schema, schemas, schema_name)]
 
 
-def go_rejected_bool_tag_warnings(rel: str, roots: list) -> list[str]:
-    """#2509: one WARN per explicit `!!bool` whose text yaml.v3 does not
-    accept (`!!bool yes`), any file, any position
-    (`_lib_io.find_go_rejected_bool_tags`). This lint has no da-guard, so
-    the line points at validate-config, not at a `profiles` row it cannot
-    promise (#2740: none names a `_routing_profiles.yaml`)."""
-    return [f"WARN: {rel}:{hit.line}: {hit.message()}"
-            for root in roots for hit in find_go_rejected_bool_tags(root)]
-
-
-def yaml11_bool_word_warnings(rel: str, roots: list, schema: dict,
+def yaml11_bool_word_warnings(rel: str, root: object, schema: dict,
                               schemas: dict, schema_name: str) -> list[str]:
-    """#2509: one WARN per unquoted YAML 1.1 boolean word (`yes` / `no` /
-    `on` / `off`, three spellings each) in a field that takes a boolean.
-    `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR: nothing on
-    the read side changed (owner decision ②)."""
-    return [f"WARN: {rel}:{hit.line}: {hit.message()}"
-            for root in roots
+    """#2509: one WARN per YAML 1.1 boolean word (`yes` / `no` / `on` /
+    `off`, three spellings each), quoted or not, in a field that takes a
+    boolean. `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR —
+    the schema's own boolean type is what fails the value."""
+    return [f"WARN: {rel}: {hit.message()}"
             for hit in find_yaml11_bool_words(root, schema, schemas, schema_name)]
 
 
-def _load_all_reading_misread_as_quoted(text: str,
-                                        quoting: list[tuple[dict, str]],
-                                        schemas: dict) -> list:
-    """Every document of *text*, built by the same `StrictExporterKeyLoader`
-    as the plain read, except that each scalar `find_misread_scalars` names
-    is read as the string it would be QUOTED (#2695) — what a user who took
-    `yaml_quoting`'s advice would have written. The schema then judges that
-    document by the usual steps; no error is filtered afterwards.
+def _to_python_reading_misread_as_quoted(root: object,
+                                         quoting: list[tuple[dict, str]],
+                                         schemas: dict) -> object:
+    """The file's values (`_lib_parse_tree.to_python`), except that each
+    scalar `find_misread_scalars` names is read as the string it would be
+    QUOTED (#2695) — what a user who took `yaml_quoting`'s advice would have
+    written. The schema then judges that document by the usual steps; no
+    error is filtered afterwards.
 
     *quoting*: the (schema, schema name) pairs the #2164 judgement applies
     to this file — the same list `validate_dir` reports misread scalars for
     (#2509 review F3 adds the tenant schema for a root `_defaults*` file),
     so exactly the values `yaml_quoting` names are the ones read as quoted.
 
-    ⛔ Done on the node tree, before anything is constructed, and by node
-    identity (`misread_scalar_nodes`): not by filtering jsonschema's errors
-    by path. That was tried and failed (#2695 round 2) — `best_match`
-    descends into `oneOf` context and can surface the misread value over a
-    real violation, and a path prefix of `/x` swallows the key `x/y`. An
-    aliased scalar is one node, so one re-tag covers every use of it.
+    ⛔ Done on the nodes, by node identity (`misread_scalar_nodes`), not by
+    filtering jsonschema's errors by path: that was tried and failed (#2695
+    round 2) — `best_match` descends into `oneOf` context and can surface the
+    misread value over a real violation, and a path prefix of `/x` swallows
+    the key `x/y`. The reader's nodes are shared, so each one is put back.
     """
-    loader = StrictExporterKeyLoader(io.StringIO(text))
-    docs = []
+    saved: list[tuple[dict, dict]] = []
     try:
-        while loader.check_node():
-            root = loader.get_node()
-            for q_schema, q_name in quoting:
-                for node in misread_scalar_nodes(root, q_schema, schemas, q_name):
-                    node.tag = yaml.resolver.BaseResolver.DEFAULT_SCALAR_TAG
-            docs.append(loader.construct_document(root))
+        for q_schema, q_name in quoting:
+            for node in misread_scalar_nodes(root, q_schema, schemas, q_name):
+                saved.append((node, dict(node)))
+                node.update(tag="!!str", value=node["text"])
+        return _lib_parse_tree.to_python(root)
     finally:
-        loader.dispose()
-    return docs
+        for node, was in reversed(saved):
+            node.clear()
+            node.update(was)
 
 
 def validate_dir(config_dir: str, schema: dict, validator,
@@ -388,8 +377,15 @@ def validate_dir(config_dir: str, schema: dict, validator,
                  profiles_schema: dict | None = None,
                  warnings: list[str] | None = None, *,
                  quoting_reported_for: frozenset[str] | None = None,
+                 not_read: list[str] | None = None,
                  ) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
+
+    `not_read`, when given, collects `<rel> (<reason>)` for each file
+    parse-tree says no reader reads (its `not_read` list: the `_defaults`
+    spelling a directory does not select) — skipped here, not checked: the
+    route generator names it (`unselected_defaults_carrier`). Without the
+    list such a file is still skipped.
 
     `warnings`, when given, collects the `WARN:` lines (#2509: a YAML 1.1
     boolean word in a boolean field) — findings that do not fail the gate,
@@ -408,7 +404,7 @@ def validate_dir(config_dir: str, schema: dict, validator,
     them) whose misread scalars the CALLER reports in its own row —
     `validate-config`'s `yaml_quoting`. Those files get no #2164 quoting
     line here, and are validated as if each misread scalar had been quoted
-    (`_load_all_reading_misread_as_quoted`), so the value is not reported a
+    (`_to_python_reading_misread_as_quoted`), so the value is not reported a
     second time as a type error — while a value that is wrong even quoted
     (`group_wait: 30` → `"30"`, no unit) still is. Every other file is
     judged as without it; `None` (this lint's own run) changes nothing.
@@ -423,6 +419,7 @@ def validate_dir(config_dir: str, schema: dict, validator,
         schemas[PROFILES_SCHEMA_NAME] = profiles_schema
     extra = [s for s in (platform_schema, profiles_schema) if s is not None]
     registry = schema_registry(schema, *extra) if extra else None
+    reader = _lib_parse_cache.reader_for(config_dir)
     for path in _iter_yaml_files(config_dir):
         rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
         basename = os.path.basename(path)
@@ -448,53 +445,53 @@ def validate_dir(config_dir: str, schema: dict, validator,
         as_quoted = (quoting_reported_for is not None
                      and rel in quoting_reported_for)
         try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-            roots = list(compose_all_nodes(io.StringIO(text)))
-            try:
-                # #2695: keys as the exporter reads them — raw text, a null
-                # key (`~:`) dropped at every level. JSON Schema judges string
-                # keys only: with PyYAML's `None` / int keys
-                # `patternProperties` raised TypeError, and the whole run died
-                # with a traceback.
-                if as_quoted:
-                    docs = _load_all_reading_misread_as_quoted(
-                        text, quoting, schemas)
-                else:
-                    docs = list(strict_safe_load_all(
-                        io.StringIO(text), loader=StrictExporterKeyLoader))
-                construct_error = None
-            except (KeyError, ValueError) as exc:
-                # #2509 blind review 2 (C): an explicit tag PyYAML cannot
-                # build (`!!bool y` → KeyError, `!!int x` → ValueError) was
-                # a traceback. Named below, after the node checks — as this
-                # lint's own limit (it cannot schema-check the file).
-                docs, construct_error = [], exc
-        except (OSError, yaml.YAMLError) as exc:
-            # Unreadable file or malformed YAML is an environment/caller error, not
-            # a schema violation — surface it as exit 2 (open() can raise OSError
-            # too, not only yaml.YAMLError). A key written twice in one mapping is
-            # malformed YAML too (#2123: the exporter's yaml.v3 rejects the file;
-            # safe_load_all would have validated the LAST value only).
-            raise _CallerError(f"{rel}: cannot read/parse YAML: {exc}")
-        # #2164: quoting, judged on the node tree (the only place a plain
-        # `yes` and a quoted "yes" still differ). Tenant files AND
-        # `_defaults*` — the latter is where `_routing_defaults` lives.
+            # #2906 review: parse-tree decides which files are read, not this
+            # walk — a file it lists as `not_read` is read by nothing.
+            why = reader.not_read(path)
+            if why is not None:
+                if not_read is not None:
+                    not_read.append(f"{rel} ({why})")
+                continue
+            root = reader.node(path)
+        except FileUnreadable as exc:
+            if exc.kind == "top_level_not_mapping":
+                # A tenant-shaped or platform file whose top document is a
+                # list / scalar is malformed — a violation, not a skip, or it
+                # would escape this gate entirely.
+                violations.append(
+                    f"ERROR: {rel}: top-level YAML document must be a mapping "
+                    f"({exc.message})")
+                continue
+            # Unreadable file or malformed YAML is an environment/caller
+            # error, not a schema violation — exit 2, with parse-tree's kind
+            # (a repeated key, several documents, a tag yaml.v3 does not
+            # take: the exporter does not read that file either).
+            raise _CallerError(f"{rel}: cannot read/parse YAML ({exc.kind}): "
+                               f"{' '.join(exc.message.split())}")
+        except ParseTreeError as exc:
+            raise _CallerError(f"{rel}: cannot read the conf.d through "
+                               f"`da-guard parse-tree` (ADR-036): {' '.join(str(exc).split())}")
+        # #2164: quoting, judged on parse-tree's tags (yaml.v3's verdict).
+        # Tenant files AND `_defaults*` — the latter is where
+        # `_routing_defaults` lives.
         for q_schema, q_name in quoting:
             if not as_quoted:
                 violations.extend(misread_scalar_violations(
-                    rel, roots, q_schema, schemas, q_name))
+                    rel, root, q_schema, schemas, q_name))
             if warnings is not None:
-                warnings.extend(yaml11_bool_word_warnings(rel, roots, q_schema, schemas, q_name))
-        if warnings is not None:
-            warnings.extend(go_rejected_bool_tag_warnings(rel, roots))
-        if construct_error is not None:
-            # A limit of THIS lint, not a verdict on the exporter's reading.
-            violations.append(
-                f"ERROR: {rel}: PyYAML cannot construct a value in this file "
-                f"({type(construct_error).__name__}: {construct_error}); this file "
-                f"was not schema-checked")
-            continue
+                warnings.extend(yaml11_bool_word_warnings(rel, root, q_schema, schemas, q_name))
+        try:
+            doc = (_to_python_reading_misread_as_quoted(root, quoting, schemas)
+                   if as_quoted else _lib_parse_tree.to_python(root))
+        except ValueError as exc:
+            raise _CallerError(f"{rel}: cannot read the conf.d through "
+                               f"`da-guard parse-tree` (ADR-036): {exc}")
+        # An empty / comment-only / null document is `{}` in parse-tree. For
+        # `_defaults*` and `_routing_profiles` that is a placeholder (nothing
+        # read from it), as before; a tenant file is judged by the schema.
+        if doc == {} and (is_defaults or is_profiles):
+            doc = None
+        docs = [doc]
         for doc in docs:
             if is_profiles:
                 # #2245: an empty / comment-only `_routing_profiles.yaml` is a
@@ -632,13 +629,24 @@ def main() -> int:
     violations: list[str] = []
     warnings: list[str] = []
     skipped: list[str] = []
+    not_read_all: list[str] = []
     multi = len(args.config_dir) > 1
     for config_dir in args.config_dir:
+        # ADR-036 step 4: no usable da-guard is rc 2 on every tree, an empty
+        # one too — not a pass because no file asked for a read.
+        try:
+            _lib_parse_cache.reader_for(config_dir).require()
+        except ParseTreeError as exc:
+            print(f"ERROR: {safe_label(config_dir)}: cannot read the conf.d through "
+                  f"`da-guard parse-tree` (ADR-036): {safe_label(' '.join(str(exc).split()))}",
+                  file=sys.stderr)
+            return EXIT_CALLER_ERROR
         d_warnings: list[str] = []
+        d_not_read: list[str] = []
         try:
             d_checked, d_violations, d_skipped = validate_dir(
                 config_dir, schema, jsonschema, platform_schema, profiles_schema,
-                warnings=d_warnings)
+                warnings=d_warnings, not_read=d_not_read)
         except _CallerError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -647,11 +655,15 @@ def main() -> int:
         violations.extend(v.replace("ERROR: ", f"ERROR: {prefix}", 1) for v in d_violations)
         warnings.extend(w.replace("WARN: ", f"WARN: {prefix}", 1) for w in d_warnings)
         skipped.extend(f"{prefix}{s}" for s in d_skipped)
+        not_read_all.extend(f"{prefix}{s}" for s in d_not_read)
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config, "
               f"platform-defaults or routing-profiles schema (own shape/validator): "
               f"{safe_label(', '.join(skipped))}")
+    if not_read_all:
+        print(f"skipped {len(not_read_all)} file(s) no reader reads (da-guard parse-tree's "
+              f"not_read): {safe_label(', '.join(not_read_all))}")
     # #2509: printed whatever the verdict, and never a failure on their own
     # (the hook runs `verbose: true` so pre-commit shows them on a pass).
     for msg in warnings:
@@ -670,5 +682,11 @@ def main() -> int:
     return EXIT_OK
 
 
+def _main_in_session() -> int:
+    """`main`, with one parse-tree reader per conf.d for the whole run."""
+    with _lib_parse_cache.session():
+        return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_main_in_session())

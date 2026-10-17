@@ -115,18 +115,23 @@ def test_a_da_guard_without_the_subcommand_is_named_too_old(row, tmp_path, monke
 
 
 def test_cli_exits_2_for_a_da_guard_that_cannot_run(tmp_path, monkeypatch, da_guard_binary):
+    """ADR-036 step 4 (#2906): every row reads the conf.d through `da-guard
+    parse-tree`, so a da-guard that cannot run stops the run before any row:
+    one caller-error row, the hint pointing at the binary."""
     conf_d = _tree(tmp_path / "t", _CLEAN)
     monkeypatch.setenv("DA_GUARD_BINARY", _not_executable(tmp_path, da_guard_binary))
     rc, rows = _cli(conf_d, "--policy-dsl", _policy(tmp_path))
-    assert rc == 2, (rc, rows["policy_dsl"])
-    assert rows["policy_dsl"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows["policy_dsl"]
+    assert rc == 2, (rc, rows)
+    assert list(rows) == ["config_dir"], rows
+    assert rows["config_dir"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows
 
 
 @pytest.mark.parametrize("other", ["none", "dangling", "bad-yaml"])
-def test_cli_rc_for_a_too_old_da_guard_follows_the_existing_downgrade(other, tmp_path,
-                                                                      monkeypatch):
-    """既有的 exit-code 規則不改：caller error 是 rc 2，但 `yaml_syntax` 列另有點名的無法使用檔案
-    （其 `unusable_files`）時降為 rc 1（找不到 da-guard 也同樣降）。文件寫的就是這兩個數字。"""
+def test_cli_rc_for_a_too_old_da_guard_is_2_whatever_the_tree(other, tmp_path, monkeypatch):
+    """Before ADR-036 step 4 a caller error was downgraded to rc 1 when the
+    `yaml_syntax` row also named an unusable file. That row reads parse-tree
+    now: with a da-guard older than this tool no row runs, nothing of the
+    tree was judged, so the run is rc 2 whatever the tree holds."""
     conf_d = _tree(tmp_path / "t", _CLEAN)
     if other == "dangling":
         symlink_or_skip("/nonexistent/x.yaml", conf_d / "zz.yaml")
@@ -134,8 +139,8 @@ def test_cli_rc_for_a_too_old_da_guard_follows_the_existing_downgrade(other, tmp
         (conf_d / "bad.yaml").write_text("tenants:\n  b: [\n", encoding="utf-8")
     monkeypatch.setenv("DA_GUARD_BINARY", _script(tmp_path, "dg-old", _OLD))
     rc, rows = _cli(conf_d, "--policy-dsl", _policy(tmp_path))
-    assert rows["policy_dsl"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows["policy_dsl"]
-    assert rc == (2 if other == "none" else 1), (rc, rows["policy_dsl"], rows["yaml_syntax"])
+    assert rows["config_dir"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows
+    assert rc == 2, (rc, rows)
 
 
 def test_a_da_guard_killed_by_a_signal_is_not_classified(tmp_path):

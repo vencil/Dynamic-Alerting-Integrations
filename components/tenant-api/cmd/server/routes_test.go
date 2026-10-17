@@ -59,8 +59,9 @@ const (
 	// (rbac.PlatformAdminNonOrgScoped) at the top of the handler with a
 	// constant 403 — the write-method mirror of gateReadPlatformAdmin.
 	// Deliberately NOT gateReadOp: that label claims the route middleware
-	// enforces PermRead on {id}; here the middleware only authenticates and
-	// the real bar lives in the handler (ADR-027 / LD-6 P7).
+	// enforces PermRead on {id}; here the route mounts the "*" read gate as a
+	// coarse first layer and the real bar lives in the handler (ADR-027 /
+	// LD-6 P7).
 	gateWriteOpPlatformAdmin = "read-op semantics; platform-admin bar in handler (non-org-scoped, constant 403)"
 )
 
@@ -81,13 +82,13 @@ var writeRouteManifest = map[string]string{
 	"POST /api/v1/tenants/{id}/validate": gateReadOp +
 		" — validation preview only; route middleware enforces PermRead on {id}; commits nothing",
 	"PUT /api/v1/groups/{id}/": gateHelperFunnel +
-		" — sites #1/#2: tenantsLackingPermission(PermWrite) over every member tenant",
+		" — sites #1/#2: tenantsLackingPermission(PermWrite) over every member tenant; route gate is the any-tenant WRITE gate (#2520), groupVisible answers a hidden id with 409",
 	"DELETE /api/v1/groups/{id}/": gateHelperFunnel +
-		" — sites #1/#2: tenantsLackingPermission(PermWrite) over the stored member list",
+		" — sites #1/#2: tenantsLackingPermission(PermWrite) over the stored member list; route gate is the any-tenant WRITE gate (#2520), a hidden group is 404",
 	"POST /api/v1/groups/{id}/batch": gateHelperFunnel +
 		" — site #5: one op per member through the /tenants/batch pipeline (runBatchPR inline OrgAllowed in PR mode; executeBatchOps at execution time otherwise)",
 	"PUT /api/v1/views/{id}/": gateNonTenantData +
-		" — saved views hold filter definitions, not tenant config; no per-tenant write decision exists",
+		" — saved views hold filter definitions, not tenant config; no per-tenant write decision exists, so the route keeps the platform-\"*\" write gate (#2520)",
 	"DELETE /api/v1/views/{id}/": gateNonTenantData +
 		" — same as PUT: view definitions are not tenant-scoped data",
 	"POST /api/v1/federation/tokens/": gateInHandler +
@@ -103,23 +104,33 @@ var writeRouteManifest = map[string]string{
 }
 
 // Read-plane gate-mechanism labels (ADR-027 / LD-6 P4c). Reads gate in the
-// SINGLE rbac.Middleware chokepoint, so — unlike the distributed write gates —
-// the manifest records which of two middleware paths a GET route takes.
+// rbac middleware chokepoint, so — unlike the distributed write gates —
+// the manifest records which middleware path a GET route takes.
 const (
 	// gateReadByIDOrg — per-tenant read (PermRead middleware + TenantIDFromPath):
 	// the middleware resolves the tenant's orgs and routes through
 	// AllowedInOrgRead, closing the read-by-id IDOR. Flips atomically with
 	// list+write under --rbac-org-scope-enforce.
 	gateReadByIDOrg = "read-by-id org gate (middleware AllowedInOrgRead)"
-	// gateReadListOrgBlind — list/wildcard read (nil tenantIDFn → tenant "*"):
-	// the middleware is org-blind by design (invariant I6). Row/collection org
-	// visibility is handled elsewhere — ScopeAllowed for the tenant list/search,
-	// the org-aware collection filter (OrgAllowedRead) for group members / PRs /
-	// task results, platform scope for federation policy/tokens.
-	gateReadListOrgBlind = "list/wildcard read — middleware org-blind; row/collection org visibility handled downstream"
+	// gateReadAnyTenant — collection read behind MiddlewareAnyTenant (#2520):
+	// the route admits any caller who may read SOME tenant
+	// (rbac.GrantsSomeTenant), so the handler named in the entry is the ONLY
+	// thing between a ["db-a"] caller and other tenants' data. Every entry
+	// carrying this label must name that handler-level filter. The gate is
+	// org-blind (invariant I6: it judges no tenant); the per-tenant org axis
+	// lives in those filters (ScopeAllowed / OrgAllowedRead). Before #2520
+	// these routes read on "*" (the old gateReadListOrgBlind label).
+	gateReadAnyTenant = "any-tenant read gate (MiddlewareAnyTenant) — handler filters per tenant"
+	// gateReadPlatformStar — read on the platform wildcard "*" (Middleware(PermRead,
+	// nil)): only a rule listing "*" passes. For data with no per-tenant owner.
+	gateReadPlatformStar = "platform-\"*\" read gate (Middleware(PermRead, nil))"
 	// gateReadNoAuth — infra endpoint mounted with no RBAC middleware.
 	gateReadNoAuth = "no-auth infra endpoint"
-	// gateReadPlatformAdmin — route middleware only authenticates (PermRead,
+	// gateReadAuthenticated — identity only (MiddlewareAuthenticated): 401
+	// without an identity, no grant required. Only for a response derived
+	// from the caller's own principal that names nothing else (#2520).
+	gateReadAuthenticated = "authenticated-only gate (MiddlewareAuthenticated) — caller's own principal, no grant required"
+	// gateReadPlatformAdmin — route middleware checks read on "*" (PermRead,
 	// nil); the LOCKED authorization bar (rbac.PlatformAdminNonOrgScoped) runs
 	// at the top of the handler with a constant 403 (ADR-027 / LD-6 P6).
 	// Deliberately tighter than the federation-policy platform-"*" precedent:
@@ -140,18 +151,18 @@ var readRouteManifest = map[string]string{
 	"GET /api/v1/tenants/{id}/access":     gateReadByIDOrg + " — recipe-preview PEP probe (#657); 403 = DENY",
 	"GET /api/v1/tenants/{id}/federation": gateReadByIDOrg + " — per-tenant federation metric subset",
 	// list / wildcard reads — middleware org-blind by design
-	"GET /api/v1/me":                 gateReadListOrgBlind + " — caller's own identity",
-	"GET /api/v1/tenants":            gateReadListOrgBlind + " — ScopeAllowed filters each row (list plane, P4a)",
-	"GET /api/v1/tenants/search":     gateReadListOrgBlind + " — same ScopeAllowed row filter as the list",
-	"GET /api/v1/groups":             gateReadListOrgBlind + " — ListGroups filters members + skips inaccessible groups (hasAccessibleMember/filterAccessibleMembers, org-aware P4c)",
-	"GET /api/v1/groups/{id}/":       gateReadListOrgBlind + " — single group; GetGroup filters members + hides inaccessible groups in-handler (hasAccessibleMember/filterAccessibleMembers, org-aware P4c; mirrors ListGroups). Middleware org-blind '*'; in-handler org filter",
-	"GET /api/v1/views":              gateReadListOrgBlind + " — saved views are not tenant-scoped data",
-	"GET /api/v1/views/{id}/":        gateReadListOrgBlind + " — single view; not tenant-scoped data",
-	"GET /api/v1/tasks/{id}":         gateReadListOrgBlind + " — results org-filtered in-handler (filterTaskResults)",
-	"GET /api/v1/prs":                gateReadListOrgBlind + " — PR list org-filtered in-handler (filterAccessiblePRs / ?tenant=)",
-	"GET /api/v1/events":             gateReadListOrgBlind + " — SSE config-change stream (not per-tenant)",
-	"GET /api/v1/federation/policy/": gateReadListOrgBlind + " — platform-wide whitelist",
-	"GET /api/v1/federation/tokens/": gateReadListOrgBlind + " — token list; per-tenant admin enforced in-handler",
+	"GET /api/v1/me":                 gateReadAuthenticated + " — caller's own identity and rule patterns (RulesMatching); names no tenant beyond the caller's own grants; zero grants → 200 with empty grants",
+	"GET /api/v1/tenants":            gateReadAnyTenant + " — filterTenantsByRBAC: ScopeAllowed / ScopeAllowedUnknownMetadata per row (list plane, P4a)",
+	"GET /api/v1/tenants/search":     gateReadAnyTenant + " — same filterTenantsByRBAC row filter as the list; config_derivation scoped by configDerivedMeta",
+	"GET /api/v1/groups":             gateReadAnyTenant + " — ListGroups filters members + skips inaccessible groups (hasAccessibleMember/filterAccessibleMembers, org-aware P4c)",
+	"GET /api/v1/groups/{id}/":       gateReadAnyTenant + " — single group; GetGroup filters members + hides inaccessible groups in-handler (groupVisible/filterAccessibleMembers, org-aware P4c; mirrors ListGroups)",
+	"GET /api/v1/views":              gateReadPlatformStar + " — saved views have no owner and no per-tenant filter; stays on \"*\" until an ownership model exists (#2520)",
+	"GET /api/v1/views/{id}/":        gateReadPlatformStar + " — single view; same as the list",
+	"GET /api/v1/tasks/{id}":         gateReadAnyTenant + " — submitter-only (taskOwnedBy, else 404) + results org-filtered in-handler (filterTaskResults)",
+	"GET /api/v1/prs":                gateReadAnyTenant + " — PR list filtered in-handler (prVisible via filterAccessiblePRs / ?tenant=)",
+	"GET /api/v1/events":             gateReadAnyTenant + " — SSE stream filtered per subscriber per event (eventVisible)",
+	"GET /api/v1/federation/policy/": gateReadAnyTenant + " — platform metric whitelist, names no tenant; tenant admins need it to choose their subset",
+	"GET /api/v1/federation/tokens/": gateReadAnyTenant + " — token list; per-tenant admin (OrgAllowed) enforced in-handler",
 	// audit surface — platform-admin bar inside the handler (P6)
 	"GET /api/v1/audit/tenants/{id}/access-report": gateReadPlatformAdmin + " — reverse access report; constant 403 for every non-admin caller (no enumeration oracle)",
 	// no-auth infra
@@ -250,7 +261,10 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 // TestReadRoutesMatchOrgGateManifest is the read-plane sibling of the write
 // manifest (ADR-027 / LD-6 P4c): every GET route must declare, in
 // readRouteManifest, whether it is org-gated by the read-by-id middleware path
-// (gateReadByIDOrg) or org-blind by design (gateReadListOrgBlind / gateReadNoAuth).
+// (gateReadByIDOrg), behind the any-tenant gate with a named handler filter
+// (gateReadAnyTenant), on the identity-only gate (gateReadAuthenticated), or
+// on a platform gate (gateReadPlatformStar / gateReadPlatformAdmin /
+// gateReadNoAuth).
 // A new GET route missing from the manifest — a read endpoint added without a
 // conscious org-gate decision, exactly the read-by-id IDOR shape P4c closed — or
 // a stale entry, fails the test in both directions.

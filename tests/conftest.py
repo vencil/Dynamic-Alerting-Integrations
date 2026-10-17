@@ -198,6 +198,9 @@ def da_guard_binary(tmp_path_factory):
     一律 fail、不 skip——量不到 Go 的綠燈等於沒測。每個 xdist worker 建一次。
     """
     import subprocess
+    built = os.environ.get(_SESSION_DA_GUARD_ENV, "")
+    if built and os.path.isfile(built):
+        return built  # pytest_configure built it from this checkout already
     go = shutil.which("go")
     if go is None:
         pytest.fail("`go` is not on PATH: da-guard cannot be built, so the readers that "
@@ -456,8 +459,51 @@ def pytest_collection_modifyitems(config, items):
     items[:] = keep
 
 
+_SESSION_DA_GUARD_ENV = "VIBE_TEST_DA_GUARD_BINARY"
+_SESSION_DA_GUARD_DIR: "str | None" = None
+
+
+def _provide_session_da_guard() -> None:
+    """ADR-036 步驟 4（#2906）：路由產生器與經它讀 conf.d 的工具（validate-config、
+    policy-engine、explain-route、notification-tester、check_routing_profiles、產生器
+    容器）都經 `da-guard parse-tree` 讀 conf.d，沒有 da-guard 就是結束碼 2。呼叫它們
+    的測試遍布各處，還有在收集期（模組層）就讀 conf.d 的，fixture 管不到——所以在
+    pytest_configure 從本 checkout 建一次，設進 `$DA_GUARD_BINARY`（子行程與 xdist
+    worker 都繼承）。沒有 go 就不設：要它的測試照樣以 da-guard 缺失失敗，不 skip。
+    要量「沒有 da-guard」的測試自己 `monkeypatch.delenv`。"""
+    global _SESSION_DA_GUARD_DIR
+    built = os.environ.get(_SESSION_DA_GUARD_ENV, "")
+    if built and os.path.isfile(built):  # an xdist worker: the controller built it
+        os.environ["DA_GUARD_BINARY"] = built
+        return
+    import subprocess
+    go = shutil.which("go")
+    if go is None:
+        return
+    d = tempfile.mkdtemp(prefix="vibe-da-guard-")
+    out = os.path.join(d, "da-guard")
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", out, "./cmd/da-guard"],
+        cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=600)
+    if proc.returncode != 0:
+        shutil.rmtree(d, ignore_errors=True)
+        return  # da_guard_binary fails with go's message where it is asked for
+    _SESSION_DA_GUARD_DIR = d
+    os.environ[_SESSION_DA_GUARD_ENV] = out
+    os.environ["DA_GUARD_BINARY"] = out
+
+
+def pytest_unconfigure(config):
+    if _SESSION_DA_GUARD_DIR is not None:
+        shutil.rmtree(_SESSION_DA_GUARD_DIR, ignore_errors=True)
+
+
 def pytest_configure(config):
-    """Make subprocess-invoked tools visible to coverage, when coverage is on."""
+    """Build the session's da-guard (`_provide_session_da_guard`); make
+    subprocess-invoked tools visible to coverage, when coverage is on."""
+    _provide_session_da_guard()
     plugin = config.pluginmanager.get_plugin("_cov")
     if plugin is None or getattr(plugin, "_disabled", False):
         return

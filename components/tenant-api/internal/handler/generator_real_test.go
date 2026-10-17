@@ -7,9 +7,12 @@ package handler
 // written. The unit tests (generator_gate_test.go) use a fake service; this
 // one proves the two sides agree on the wire.
 //
-// Needs python3 with PyYAML (the CI tenant-api leg installs it). Without
-// them the test skips locally and FAILS under CI, so a runner that lost
-// them cannot pass by skipping.
+// Needs python3 with PyYAML (the CI tenant-api leg installs it) and a
+// da-guard: the generator reads conf.d through `da-guard parse-tree`
+// (ADR-036 step 4) — $DA_GUARD_BINARY, else built once from this checkout's
+// threshold-exporter source (daGuardBinary). Without them the test skips
+// locally and FAILS under CI, so a runner that lost them cannot pass by
+// skipping.
 
 import (
 	"context"
@@ -20,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -46,6 +50,49 @@ func realGeneratorScript(t *testing.T) string {
 		}
 		dir = parent
 	}
+}
+
+var (
+	daGuardOnce sync.Once
+	daGuardPath string
+	daGuardErr  string
+)
+
+// daGuardBinary is the da-guard the Python generator runs: $DA_GUARD_BINARY
+// when set (a relative path is relative to the repository root — `go test`
+// runs in the package directory, so it cannot mean the shell's directory),
+// else one `go build` of components/threshold-exporter/app's cmd/da-guard
+// per test binary (into a directory removed with the process's temp files).
+// requireOrSkip when neither works.
+func daGuardBinary(t *testing.T) string {
+	t.Helper()
+	daGuardOnce.Do(func() {
+		root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(realGeneratorScript(t)))))
+		if p := strings.TrimSpace(os.Getenv("DA_GUARD_BINARY")); p != "" {
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(root, p)
+			}
+			daGuardPath = p
+			return
+		}
+		dir, err := os.MkdirTemp("", "da-guard-bin")
+		if err != nil {
+			daGuardErr = err.Error()
+			return
+		}
+		out := filepath.Join(dir, "da-guard")
+		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", out, "./cmd/da-guard")
+		cmd.Dir = filepath.Join(root, "components", "threshold-exporter", "app")
+		if b, err := cmd.CombinedOutput(); err != nil {
+			daGuardErr = "go build da-guard: " + err.Error() + ": " + strings.TrimSpace(string(b))
+			return
+		}
+		daGuardPath = out
+	})
+	if daGuardPath == "" {
+		requireOrSkip(t, "no da-guard for the generator's conf.d read: "+daGuardErr)
+	}
+	return daGuardPath
 }
 
 func requireOrSkip(t *testing.T, why string) {
@@ -77,7 +124,8 @@ func startRealGenerator(t *testing.T, repo, policy string) string {
 	sock := filepath.Join(sockDir, "g.sock")
 	cmd := exec.Command("python3", script, "--socket", sock, "--repo", repo, "--config-subdir", ".",
 		"--work-dir", filepath.Join(t.TempDir(), "work"), "--policy", policy, "--warm-ref", "")
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"DA_GUARD_BINARY="+daGuardBinary(t))
 	var logs strings.Builder
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if err := cmd.Start(); err != nil {

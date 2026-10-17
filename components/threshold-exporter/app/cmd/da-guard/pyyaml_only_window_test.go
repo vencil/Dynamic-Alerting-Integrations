@@ -1,33 +1,25 @@
 package main
 
-// pyyaml_only_window_test.go — the known window ADR-036 §9 records: until
-// step 4 (#2906) the route generator still reads conf.d with PyYAML, so a file
-// only PyYAML refuses, in a tree with no routing key, passes da-guard's default
-// run (exit 0, nothing undetermined) while `da-tools generate-routes
-// --validate --strict` refuses the whole file. That is why CI must still run
-// the generator beside da-guard before step 4.
+// pyyaml_only_window_test.go — the window ADR-036 §9 recorded, closed by
+// step 4 (#2906): a file only PyYAML refuses, in a tree with no routing key,
+// passes da-guard's default run (exit 0, nothing undetermined). Before step 4
+// the route generator still read conf.d with PyYAML and refused the whole
+// file; since step 4 it reads parse-tree's JSON, so it reads these files as
+// da-guard does. This test still pins da-guard's half — which rows it passes
+// — so a row that enters or leaves the set shows up; the generator's half is
+// test_pyyaml_only_rows_are_read_by_generate_routes in
+// tests/shared/test_parse_tree_corpus.py, over the same predicate, and now
+// asserts that the generator reads each of them too.
 //
-// ⛔ THIS TEST PINS A GAP, NOT A GUARANTEE. Once step 4 makes the generator read
-// parse-tree's JSON, these files are read as yaml.v3 reads them on the
-// generator's side too and the window is gone: flip this test to whatever the
-// generator then decides (or delete it), and re-evaluate whether exit 4 still
-// earns its keep — da-guard's condition for 4 would still be a prediction of
-// the generator.
-//
-// ⛔ NO HAND-COPIED LIST. The window is MEASURED: every `rows` entry of
-// tests/shared/parse_tree_corpus.json that today's generator rejects is run
-// through da-guard, and the rows da-guard passes (exit 0, nothing undetermined,
-// nothing in parse_failed) must be exactly the rows the corpus itself defines
-// as the window — category pyyaml_only and a file name not starting with `_`
-// (a tenant file: an `_` file the generator reads is undetermined evidence by
-// name). A corpus row that enters or leaves the window turns this red instead
-// of slipping past. The corpus's merge_key_rows are all `_domain_policy.yaml`,
-// always undetermined by name, so they cannot be in the window and are not run.
-//
-// The Python half — every window row refused by
-// `generate_alertmanager_routes.py --validate --strict` — is
-// test_pyyaml_only_window_is_refused_by_generate_routes in
-// tests/shared/test_parse_tree_corpus.py, over the same predicate.
+// ⛔ NO HAND-COPIED LIST. The set is MEASURED: every `rows` entry of
+// tests/shared/parse_tree_corpus.json that the generator rejected before
+// step 4 (the corpus's frozen verdict) is run through da-guard, and the rows
+// da-guard passes (exit 0, nothing undetermined, nothing in parse_failed)
+// must be exactly the rows the corpus itself defines — category pyyaml_only
+// and a file name not starting with `_` (a tenant file: an `_` file the
+// generator reads is undetermined evidence by name). The corpus's
+// merge_key_rows are all `_domain_policy.yaml`, always undetermined by name,
+// so they cannot be in the set and are not run.
 
 import (
 	"encoding/json"
@@ -105,7 +97,7 @@ func windowEncode(t *testing.T, r windowCorpusRow) string {
 	return ""
 }
 
-// inPyYAMLOnlyWindow is the corpus's own definition of the window.
+// inPyYAMLOnlyWindow is the corpus's own definition of the (closed) window.
 func inPyYAMLOnlyWindow(r windowCorpusRow) bool {
 	return r.Category == "pyyaml_only" && !strings.HasPrefix(r.File, "_")
 }
@@ -135,9 +127,10 @@ func passesDefaultRun(t *testing.T, r windowCorpusRow) bool {
 	return code == exitOK && len(doc.Undetermined) == 0 && len(doc.ParseFailed) == 0
 }
 
-// TestPyYAMLOnlyReject_WindowBeforeStep4: the rows da-guard passes, among
-// those today's generator rejects, are exactly the corpus's window rows.
-func TestPyYAMLOnlyReject_WindowBeforeStep4(t *testing.T) {
+// TestPyYAMLOnlyRows_PassDaGuardDefaultRun: the rows da-guard passes, among
+// those the PyYAML generator rejected, are exactly the corpus's pyyaml_only
+// tenant-file rows.
+func TestPyYAMLOnlyRows_PassDaGuardDefaultRun(t *testing.T) {
 	t.Parallel()
 	var measured, defined []string
 	for _, r := range loadWindowCorpus(t) {
@@ -158,7 +151,7 @@ func TestPyYAMLOnlyReject_WindowBeforeStep4(t *testing.T) {
 	}
 	if strings.Join(measured, "\n") != strings.Join(defined, "\n") {
 		t.Errorf("rows the generator rejects that da-guard passes (exit 0, nothing undetermined):\n  %v\n"+
-			"rows the corpus defines as the ADR-036 §9 window (pyyaml_only, file not `_`):\n  %v",
+			"rows the corpus defines as pyyaml_only tenant-file rows (file not `_`):\n  %v",
 			measured, defined)
 	}
 }

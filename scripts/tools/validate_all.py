@@ -1255,6 +1255,11 @@ def main():
 
     tools_dir = Path(__file__).parent
     project_root = tools_dir.parent.parent
+    # A relative $DA_GUARD_BINARY means "relative to where I ran this": made
+    # absolute before the chdir below (#2906 review).
+    _da_guard = os.environ.get("DA_GUARD_BINARY", "")
+    if _da_guard.strip() and not os.path.isabs(_da_guard):
+        os.environ["DA_GUARD_BINARY"] = os.path.abspath(_da_guard)
     os.chdir(project_root)
 
     # --watch: enter watch mode

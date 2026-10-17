@@ -10,9 +10,8 @@
 //   - Slow clients (full buffer) are disconnected to prevent blocking broadcasts
 //   - Events include type, tenant_id, timestamp, and optional detail
 //
-// #3123: the route in front of the stream only checks read on "*", which an
-// org- or metadata-scoped rule passes (those axes are shadow-only there), so
-// the route is not an isolation barrier. Every subscriber therefore carries a
+// #3123: the route in front of the stream only checks that the caller may
+// read some tenant (#2520), so the route is not an isolation barrier. Every subscriber therefore carries a
 // filter, built by the caller from the request's principal (Handler), and
 // Broadcast delivers an event only to subscribers whose filter admits it. A
 // subscriber without a filter receives no broadcast event at all — only the

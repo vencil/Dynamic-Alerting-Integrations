@@ -138,8 +138,8 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantO
 	cfg := rbacMgr.Get()
 	if len(cfg.Groups) == 0 {
 		// Path-less open mode only. A configured-but-empty _rbac.yaml never
-		// reaches here: the PermRead route gate (main.go) fail-closes it with
-		// 403 before this filter runs (ADR-027 MED-8).
+		// reaches here: the route gate (MiddlewareAnyTenant, cmd/server/routes.go)
+		// fail-closes it with 403 before this filter runs (ADR-027 MED-8).
 		return tenants // open mode — no filtering
 	}
 
@@ -202,11 +202,14 @@ func tenantConfigError(data []byte) string {
 // real one. The whole-file PUT /tenants/{id} does not go through here.
 //
 // The message names the whole-file PUT as the repair path, which holds for
-// every config_error this refusal carries (#2405): that PUT replaces rather
-// than merges, and its end-of-life guard treats a current file it cannot parse
-// as having no end-of-life usage — so the replacement is not refused merely
-// because the file it replaces is broken (a body adding an end-of-life recipe
-// is still refused, as is one failing any other check). Pinned by
+// every file this refusal reaches: since #3064 a git-managed file (one that is
+// not YAML, say) is refused first with TENANT_GIT_MANAGED and repaired in git,
+// so only an API-shaped file gets here. That PUT replaces rather than merges;
+// when its end-of-life guard cannot decode the current file's tenants: block,
+// a caller with write permission on all tenants may replace it, the file
+// counted as having no end-of-life usage (#2405) — a body adding an
+// end-of-life recipe is still refused, as is one failing any other check —
+// and any other caller is refused with 400. Pinned by
 // TestPutTenant_RepairsFileExporterRejects.
 type tenantFileNotLoadableError struct {
 	TenantID string

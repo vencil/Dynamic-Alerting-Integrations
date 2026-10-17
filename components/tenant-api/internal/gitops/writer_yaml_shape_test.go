@@ -160,7 +160,9 @@ func TestWriteAcceptsLegalYAMLShapes(t *testing.T) {
 			"tenants:\n  db-a:\n    _silent_mode: &m \"warning\"\n    _severity_dedup: *m\n"},
 		{"merge key inside the tenant section",
 			"tenants:\n  db-a:\n    <<: {_silent_mode: \"warning\"}\n"},
-		{"explicitly tagged string root key", "!!str tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"},
+		// #3064: an explicitly tagged root key (`!!str tenants:`) is no longer
+		// legal — a tag where tenants are declared is how a key declares an id
+		// its text does not show (`!!binary`), so every tag is refused there.
 		{"explicitly tagged root mapping", "--- !!map\n" + own},
 		{"flow root", "{tenants: {db-a: {_silent_mode: \"warning\"}}}\n"},
 	} {

@@ -72,6 +72,52 @@ def test_a_failing_binary_is_a_parse_tree_error(tmp_path) -> None:
     assert not isinstance(e.value, lpt.BinaryMissing)
 
 
+def _self_killing_da_guard(tmp_path: Path) -> tuple[Path, Path]:
+    """A da-guard that records its GOTRACEBACK and then ends by SIGABRT —
+    what the Go runtime does under ``GOTRACEBACK=crash`` when it fails
+    (out of memory, a fault inside the runtime)."""
+    seen = tmp_path / "gotraceback"
+    fake = tmp_path / "fake-da-guard"
+    fake.write_text("#!/bin/sh\nprintf '%s' \"${GOTRACEBACK-unset}\" > "
+                    f"'{seen}'\necho 'fatal error: whatever' >&2\nkill -ABRT $$\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    return fake, seen
+
+
+def test_a_signal_without_a_memory_limit_is_a_parse_tree_error(tmp_path, monkeypatch) -> None:
+    """#2906: no memory limit declared — a da-guard ended by a signal is a
+    failing da-guard (rc 2 for the caller), and nothing changes its env."""
+    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    fake, seen = _self_killing_da_guard(tmp_path)
+    with pytest.raises(lpt.ParseTreeError, match="exited -6") as e:
+        lpt.run(root, str(fake), 60)
+    assert not isinstance(e.value, MemoryError)
+    assert seen.read_text(encoding="utf-8") == "unset"
+
+
+def test_a_signal_under_the_memory_limit_is_memory(tmp_path, monkeypatch) -> None:
+    """#2906: under `run_under_memory_limit` (the generator container's
+    judgement) da-guard runs with GOTRACEBACK=crash, and ended by a signal it
+    is the judgement's memory limit — judged by the process status, the
+    stderr text plays no part — named with the signal. Both file mode and
+    tree mode."""
+    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    lpt.run_under_memory_limit()
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    fake, seen = _self_killing_da_guard(tmp_path)
+    for call in (lambda: lpt.run(root, str(fake), 60),
+                 lambda: lpt.run_file(root, "t.yaml", b"a: 1\n", str(fake), 60)):
+        with pytest.raises(MemoryError, match="SIGABRT"):
+            call()
+        assert seen.read_text(encoding="utf-8") == "crash"
+    # An ordinary failure under the limit is still a failing da-guard.
+    fake.write_text("#!/bin/sh\necho boom >&2\nexit 3\n", encoding="utf-8")
+    with pytest.raises(lpt.ParseTreeError, match="exited 3: boom"):
+        lpt.run(root, str(fake), 60)
+
+
 @pytest.mark.parametrize("node, scalar", [
     ({"text": "80", "tag": "!!int", "value": "80"}, True),
     ({"text": "x", "tag": "!!str", "value": None}, True),
@@ -376,3 +422,24 @@ def test_every_corpus_row_through_the_real_binary(tmp_path, da_guard_binary) -> 
             assert isinstance(tree.value(rel), dict), rel
             read += 1
     assert read and refused, (read, refused)
+
+
+def test_a_relative_da_guard_binary_is_the_current_directory_s(tmp_path, monkeypatch,
+                                                               da_guard_binary) -> None:
+    """#2906 review: a relative `$DA_GUARD_BINARY` means what it means in the
+    shell — relative to the working directory at resolution — and a process
+    about to change directory makes it absolute first."""
+    import shutil
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    (tmp_path / "bin").mkdir()
+    shutil.copy2(da_guard_binary, tmp_path / "bin" / "da-guard")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DA_GUARD_BINARY", "bin/da-guard")
+    assert lpt.load(root, None, 60).value("t.yaml") == {"a": 1}
+    env = {"DA_GUARD_BINARY": "bin/da-guard"}
+    lpt.absolute_da_guard_binary(env)
+    assert env["DA_GUARD_BINARY"] == str(tmp_path / "bin" / "da-guard")
+    for unchanged in ({}, {"DA_GUARD_BINARY": " "}, {"DA_GUARD_BINARY": "/abs/da-guard"}):
+        before = dict(unchanged)
+        lpt.absolute_da_guard_binary(unchanged)
+        assert unchanged == before
