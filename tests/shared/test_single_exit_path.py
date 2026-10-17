@@ -807,13 +807,19 @@ def test_a_broken_stderr_under_redirect_stdout_is_not_a_lost_stdout(tmp_path, bu
     assert json.loads(proc.stdout)["reason"] == "progress_failed", proc.stdout
 
 
-def test_the_lost_stdout_exit_honours_an_explicit_code(tmp_path):
-    """N1: `die_caller_error(..., code=7)` from a stdout-loss handler keeps 7."""
-    body = _armed("try:\n    print('x' * 1_000_000)\nexcept OSError:\n"
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("size", ["small", "big"])
+def test_the_lost_stdout_exit_honours_an_explicit_code(tmp_path, size, buffering):
+    """N1: `die_caller_error(..., code=7)` from a stdout-loss handler keeps 7
+    — also with bytes still buffered for the broken stdout (small output,
+    buffered), which the exit must point at the null device or the final
+    flush fails again and replaces 7 with the caller-error code."""
+    n = 100 if size == "small" else 1_000_000
+    body = _armed(f"try:\n    print('x' * {n})\n    sys.stdout.flush()\nexcept OSError:\n"
                   "    _lib_exitcodes.die_caller_error('ERROR: x', reason='r', code=7)\n")
-    rc, err = _run_closed(tmp_path, body, "reader-gone")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert rc == 7, err
-    assert STDOUT_CLOSED_LINE in err, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
 
 
 def test_the_envelope_error_keeps_wide_spaces_and_drops_format_characters(tmp_path):
@@ -897,12 +903,14 @@ def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
     ec.set_caller_error_code(1)
     ec._record_stdout_failure(OSError(32, "Broken pipe"), sys.stdout)
     ec._stdout_closed_reported = True
+    ec._lost_envelope = (OSError(32, "Broken pipe"), sys.stdout)
 
 
 @pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
 def test_probe_sees_clean_exit_state():
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
+    assert ec._lost_envelope is None
     assert (ec._crash_envelope_armed, ec._armed_stdout, ec._stdout_failures,
             ec._stdout_closed_reported, ec.get_crash_exit_code(),
             ec.get_caller_error_code()) == (None, None, [], False,
@@ -995,3 +1003,69 @@ def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
     ec.set_caller_error_code(9)
     ec.reset_exit_state()
     assert (ec.get_crash_exit_code(), ec.get_caller_error_code()) == (70, 3)
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The library's own envelope is stdout output too (final review, finding 1)
+# ═══════════════════════════════════════════════════════════════════════════
+_ENVELOPE_ONLY_EXITS = {
+    "die_caller_error": "_lib_exitcodes.die_caller_error('ERROR: bad input', reason='r')\n",
+    "hand-written": "print('ERROR: bad input', file=sys.stderr)\nreturn 2\n",
+    "crash": "raise RuntimeError('bad input')\n",
+}
+
+
+def _run_envelope_only(tmp_path: Path, body: str, where: str, env: dict[str, str]):
+    script = _script(tmp_path, body)
+    if where == "dev-full":
+        if not os.path.exists("/dev/full"):
+            pytest.skip("/dev/full does not exist here")
+        with open("/dev/full", "wb") as full:
+            proc = _run(script, stdout=full.fileno(), env=env)
+        return proc.returncode, proc.stderr.decode("utf-8", "replace")
+    return _run_closed(tmp_path, body, "reader-gone", env)
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("where", ["dev-full", "reader-gone"])
+@pytest.mark.parametrize("how", sorted(_ENVELOPE_ONLY_EXITS))
+def test_an_envelope_that_cannot_be_written_is_named(tmp_path, how, where, buffering):
+    """The envelope is the only stdout output, and stdout fails while it is
+    written: the tool's own line stays, the named stdout line follows it
+    exactly once, and the exit code is the one the tool was leaving with
+    (here 2; a crash at the crash code)."""
+    body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
+            + _armed(_ENVELOPE_ONLY_EXITS[how]))
+    rc, err = _run_envelope_only(tmp_path, body, where, _BUFFERING[buffering])
+    named = (STDOUT_CLOSED_LINE if where == "reader-gone"
+             else "ERROR: cannot write to stdout: No space left on device")
+    assert rc == (70 if how == "crash" else 2), err
+    assert err.count(named) == 1, err
+    own = err.index(f"{CRASH_MARK} (RuntimeError)" if how == "crash" else "ERROR: bad input")
+    assert own < err.index(named), err
+
+
+@pytest.mark.parametrize("where", ["dev-full", "reader-gone"])
+def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
+    """The reported repro: `onboard_platform --json` with no inputs prints
+    only its envelope on stdout."""
+    if where == "dev-full" and not os.path.exists("/dev/full"):
+        pytest.skip("/dev/full does not exist here")
+    argv = [sys.executable, str(OPS_DIR / "onboard_platform.py"), "-o", str(tmp_path / "o"), "--json"]
+    if where == "dev-full":
+        with open("/dev/full", "wb") as full:
+            proc = subprocess.run(argv, stdout=full.fileno(), stderr=subprocess.PIPE,
+                                  timeout=60, env=_ENV)
+    else:
+        r, w = os.pipe()
+        os.close(r)
+        try:
+            proc = subprocess.run(argv, stdout=w, stderr=subprocess.PIPE, timeout=60, env=_ENV)
+        finally:
+            os.close(w)
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err
+    assert "ERROR: At least one phase input is required." in err, err
+    assert (err.count(STDOUT_CLOSED_LINE)
+            + err.count("ERROR: cannot write to stdout:")) == 1, err

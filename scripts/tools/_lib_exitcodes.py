@@ -354,7 +354,7 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
     _exit_if_stdout_lost(sys.exc_info()[1], code=code)
     _print_armed_envelope(reason or CallerError.reason, error)
     _quiet_failed_streams(sys.exc_info()[1])
-    sys.exit(_caller_error_code if code is None else code)
+    _leave(_caller_error_code if code is None else code)
 
 
 # ── Unexpected crash handling (#3090) ─────────────────────────────────
@@ -564,10 +564,11 @@ def reset_exit_state() -> None:
     values they had when this module was imported). For test
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
-    global _crash_exit_code, _caller_error_code, _stdout_closed_reported
+    global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope
     disarm_crash_envelope()
     _stdout_failures.clear()
     _stdout_closed_reported = False
+    _lost_envelope = None
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
 
@@ -650,13 +651,32 @@ def _print_armed_envelope(reason: str, error: str) -> None:
     # Straight to the fd, never through the stdout buffer: on a closed pipe a
     # write left in the buffer fails again at interpreter exit and turns the
     # exit code into 120. A stdout that cannot even flush gets no envelope.
+    # A write that fails is stdout's failure like any other: recorded, and
+    # named by the one lost-stdout exit when the process leaves (`_leave`).
+    global _lost_envelope
     try:
-        out.flush()
+        out.flush()  # the tap records a failure of this one itself
         fd = out.fileno()
         while data:
             data = data[os.write(fd, data):]
-    except (OSError, ValueError):  # closed pipe / closed or fd-less stdout
+    except OSError as exc:
+        if _recorded_stdout_failure(exc) is None:
+            _record_stdout_failure(exc, out)
+        _lost_envelope = (exc, out)
+    except ValueError:  # closed or fd-less stdout: there is nowhere to write
         pass
+
+
+# The stdout failure met while writing the envelope, for `_leave`.
+_lost_envelope: Optional[tuple[OSError, Any]] = None
+
+
+def _leave(status: Any) -> NoReturn:
+    """Exit with *status* — through the lost-stdout exit when the envelope
+    could not be written, so that is named (once) and *status* kept."""
+    if _lost_envelope is not None and isinstance(status, int) and not isinstance(status, bool):
+        _exit_stdout_failed(*_lost_envelope, at_exit=False, code=status)
+    sys.exit(status)
 
 
 def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
@@ -687,7 +707,7 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
         traceback.print_exception(type(hook_exc), hook_exc,
                                   hook_exc.__traceback__, file=sys.stderr)
     _quiet_failed_streams(exc)
-    sys.exit(_crash_exit_code if code is None else code)
+    _leave(_crash_exit_code if code is None else code)
 
 
 @overload
@@ -779,7 +799,7 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     if (isinstance(status, int) and not isinstance(status, bool)
             and status == _caller_error_code):
         _print_armed_envelope(CallerError.reason, _last_stderr_line())
-    sys.exit(status)
+    _leave(status)
 
 
 # ── stdout lost or failing (#3124) ─────────────────────────────────────
