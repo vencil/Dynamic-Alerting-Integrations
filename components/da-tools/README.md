@@ -138,7 +138,7 @@ docker run --rm \
 |------|------|----------|
 | `validate` | Shadow Monitoring 雙軌比對（含 auto-convergence） | `--mapping <file>` 或 `--old <q> --new <q>` |
 | `shadow-verify` | Shadow Monitoring 雙軌驗證（精簡版，CI 用） | `--mapping <file>` |
-| `backtest` | PR threshold 變更歷史回測 | `--config-dir <dir> --baseline <dir>` 或 `--tenant` |
+| `backtest` | PR threshold 變更歷史回測 | `--config-dir <dir> --baseline <dir>` 或 `--tenant <id> --metric <key> --new-value <v>` |
 | `cutover` | 一鍵切換（停 shadow → 移 recording rules → 移 shadow route → 健康檢驗） | `--readiness-json <file> --tenant <name>` |
 
 ### 4.5 Operate（Day-2）

@@ -121,7 +121,7 @@ da-tools <command> --help
 | `cutover` | Shadow Monitoring 一鍵切換 | `--tenant <name>` |
 | `blind-spot` | 掃描 cluster targets 與 tenant config 交叉比對盲區 | `--config-dir <dir>` |
 | `maintenance-scheduler` | 評估排程式維護窗口，自動建立 Alertmanager silence | `--config-dir <dir>` |
-| `backtest` | PR threshold 變更歷史回測 | `--config-dir` + `--baseline` 或 `--tenant` |
+| `backtest` | PR threshold 變更歷史回測 | `--config-dir` + `--baseline` 或 `--tenant` + `--metric` + `--old-value`／`--new-value` |
 | `shadow-verify` | Shadow Monitoring 就緒度與收斂性驗證（preflight / runtime / convergence） | `<phase>` |
 | `byo-check` | BYO Prometheus & Alertmanager 整合驗證 | `<target>` |
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |

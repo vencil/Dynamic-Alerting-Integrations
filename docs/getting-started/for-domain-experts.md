@@ -227,7 +227,7 @@ python3 scripts/tools/ops/backtest_threshold.py \
   --prometheus https://prometheus:9090
 ```
 
-輸出：用過去 7 天的歷史資料，比較新舊閾值下的告警觸發情況，並給出風險評估。回測的對象是租戶閾值（conf.d 的 key），不讀 Rule Pack 檔。要回測整個 PR 的閾值變更，把 PR 的 base 另外 checkout 出來（例如 `git worktree add /tmp/base HEAD~1`），再用 `--config-dir <PR 的 conf.d> --baseline <base 的 conf.d>`。
+輸出：用過去 7 天的歷史資料，比較新舊閾值下的告警觸發情況，並給出風險評估。回測的對象是租戶閾值（conf.d 的 key），不讀 Rule Pack 檔。要回測整個 PR 的閾值變更，把 PR 的 base 另外 checkout 出來（例如 `git worktree add /tmp/base "$(git merge-base origin/main HEAD)"`；`HEAD~1` 只在 PR 只有一個 commit 時才是 base），再用 `--config-dir <PR 的 conf.d> --baseline <base 的 conf.d>`。
 
 ## Custom Rule 治理
 

@@ -120,7 +120,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `cutover` | Shadow Monitoring one-click cutover | `--tenant <name>` |
 | `blind-spot` | Scan cluster targets vs tenant config blind spots | `--config-dir <dir>` |
 | `maintenance-scheduler` | Evaluate scheduled maintenance windows, auto-create Alertmanager silences | `--config-dir <dir>` |
-| `backtest` | Backtest PR threshold changes against historical data | `--config-dir` + `--baseline` or `--tenant` |
+| `backtest` | Backtest PR threshold changes against historical data | `--config-dir` + `--baseline` or `--tenant` + `--metric` + `--old-value`/`--new-value` |
 | `shadow-verify` | Shadow Monitoring readiness & convergence verification (preflight / runtime / convergence) | `<phase>` |
 | `byo-check` | BYO Prometheus & Alertmanager integration verification | `<target>` |
 | `federation-check` | Multi-cluster federation integration verification (edge / central / e2e) | `<target>` |

@@ -227,7 +227,7 @@ python3 scripts/tools/ops/backtest_threshold.py \
   --prometheus https://prometheus:9090
 ```
 
-Output: using the last 7 days of history, how alert firing compares under the old and new thresholds, with a risk assessment. Backtesting works on tenant thresholds (conf.d keys) and does not read Rule Pack files. To backtest all threshold changes in a PR, check the PR's base out separately (e.g. `git worktree add /tmp/base HEAD~1`), then use `--config-dir <the PR's conf.d> --baseline <the base's conf.d>`.
+Output: using the last 7 days of history, how alert firing compares under the old and new thresholds, with a risk assessment. Backtesting works on tenant thresholds (conf.d keys) and does not read Rule Pack files. To backtest all threshold changes in a PR, check the PR's base out separately (e.g. `git worktree add /tmp/base "$(git merge-base origin/main HEAD)"`; `HEAD~1` is the base only for a single-commit PR), then use `--config-dir <the PR's conf.d> --baseline <the base's conf.d>`.
 
 ## Custom Rule Governance
 

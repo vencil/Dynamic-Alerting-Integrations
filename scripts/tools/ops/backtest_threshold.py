@@ -1347,7 +1347,8 @@ def _end_not_run(args, status, reason, rc, recipe_tenants=()):
 # checkout and got some of it wrong — so the caller makes the base checkout.
 GIT_DIFF_REMOVED = (
     "ERROR: --git-diff was removed (#3111): check the base out yourself and compare "
-    "the two trees, e.g. `git worktree add /tmp/base HEAD~1` then `--config-dir conf.d "
+    "the two trees, e.g. `git worktree add /tmp/base HEAD~1` (the commit --git-diff compared; "
+    "for a whole PR use the merge base) then `--config-dir conf.d "
     "--baseline /tmp/base/<path from the repo root>/conf.d`, and `git worktree remove "
     "/tmp/base` afterwards (in CI, check the PR base out into a separate path)")
 

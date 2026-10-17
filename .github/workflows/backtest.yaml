@@ -29,6 +29,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       # #3111: the tool no longer checks a base out itself; the PR base is
       # checked out here, into its own path, and compared as a second tree.
