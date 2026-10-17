@@ -61,20 +61,20 @@
         "allowed_receiver_types": {
           "type": ["array", "null"],
           "title": "Allowed Receiver Types",
-          "description": "Whitelist of permitted receiver types. If set, any receiver type NOT in this list triggers a violation.",
+          "description": "Whitelist of permitted receiver types. If set, any receiver type NOT in this list triggers a violation. Each item must be a receiver type the route generator renders (the enum, pinned to tenant-config.schema.json's receivers by tests/shared/test_receiver_spec_parity.py); an item that is not refuses the whole conf.d tree in every generator mode.",
           "items": {
             "type": "string",
-            "enum": ["webhook", "email", "slack", "teams", "rocketchat", "pagerduty", "opsgenie"]
+            "enum": ["webhook", "email", "slack", "teams", "rocketchat", "pagerduty"]
           },
-          "examples": [["pagerduty", "email", "opsgenie"]]
+          "examples": [["pagerduty", "email"]]
         },
         "forbidden_receiver_types": {
           "type": ["array", "null"],
           "title": "Forbidden Receiver Types",
-          "description": "Blacklist of prohibited receiver types. Any receiver type in this list triggers a violation.",
+          "description": "Blacklist of prohibited receiver types. Any receiver type in this list triggers a violation. Each item must be a receiver type the route generator renders (same enum as allowed_receiver_types); an item that is not refuses the whole conf.d tree in every generator mode.",
           "items": {
             "type": "string",
-            "enum": ["webhook", "email", "slack", "teams", "rocketchat", "pagerduty", "opsgenie"]
+            "enum": ["webhook", "email", "slack", "teams", "rocketchat", "pagerduty"]
           },
           "examples": [["slack", "webhook"]]
         },

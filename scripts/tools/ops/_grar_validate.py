@@ -1982,6 +1982,37 @@ def value_type_text(value: object) -> str:
     return type(value).__name__
 
 
+# #3116: the domain-policy constraints that list receiver types.
+RECEIVER_TYPE_CONSTRAINTS = ("forbidden_receiver_types", "allowed_receiver_types")
+
+
+def unknown_receiver_type_entries(raw: object) -> list:
+    """#3116: the entries of a receiver-type constraint list that are not a
+    receiver type the generator renders (a ``RECEIVER_TYPES`` key): a name it
+    does not know (``webhok``, ``opsgenie``), or no string at all (``yes`` is
+    the boolean True to PyYAML, ``~`` null, a mapping, a list).
+
+    A list holding any of them is unusable: the generator's reader records it
+    (``_grar_parse._record_policy_type_errors``) and the whole tree is refused
+    in every mode. Before, an unknown name in ``forbidden_receiver_types``
+    forbade nothing at rc 0, and one in ``allowed_receiver_types`` made every
+    receiver a violation without saying why. *raw* that is not a list (null,
+    absent) has no entries here.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [e for e in raw if not (isinstance(e, str) and e in RECEIVER_TYPES)]
+
+
+def unknown_receiver_types_text(field: str, bad: list) -> str:
+    """The field-type message for the *bad* entries of constraint *field*."""
+    return (f"constraint '{field}' lists "
+            f"{', '.join(value_type_text(e) for e in bad)}, which "
+            f"{'is not a receiver type' if len(bad) == 1 else 'are not receiver types'}"
+            f" the generator renders; the receiver types are "
+            f"{', '.join(sorted(RECEIVER_TYPES))}")
+
+
 def receiver_bool_type_errors(obj: object, *, block: str, where: str,
                               field_prefix: str = "") -> list[tuple[str, str]]:
     """#2906: ``(field, message)`` of each receiver boolean field of a routing
@@ -2776,39 +2807,19 @@ def check_domain_policies(
 
     def _receiver_type_set(policy_name: str, constraints: dict,
                            field: str) -> set:
-        """A receiver-type constraint as a set of its entries.
+        """A receiver-type constraint as the set of the types it lists.
 
-        #2758: an entry that is a collection (a mapping, a list, a set —
-        unhashable) names no receiver type: strict ERRORs on it, and it is
-        kept as the non-string placeholder None — it matches no receiver
-        type, yet a non-empty `allowed_receiver_types` stays non-empty and
-        still restricts (as the corpus oracle reads it).
+        #3116: a list with an entry that is not a receiver type
+        (``unknown_receiver_type_entries``) is not judged here — the
+        generator's reader records it and the whole tree is refused in every
+        mode, before any policy is checked. (#2758 kept a collection entry as
+        a None placeholder and reported it under --strict only; both went
+        with that rule.)
         """
-        out: set = set()
-        for entry in _constraint_list(policy_name, constraints, field):
-            try:
-                hash(entry)
-            except TypeError:
-                if strict:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}': '{field}' entry "
-                        f"must be a receiver type, got {type(entry).__name__} "
-                        f"— the entry cannot be enforced",
-                        "list each receiver type as a plain YAML scalar",
-                        kind="domain_policy_unusable", policy=policy_name,
-                        field=f"constraints.{field}"))
-                entry = None
-            out.add(entry)
-        return out
-
-    def _type_names(types: set) -> list:
-        """The string entries of a receiver-type set, sorted, for a message.
-
-        A non-string entry (None from `!!null x` or a collection, True from
-        `yes`) equals no receiver type the generator accepts, and mixed with
-        strings it is unorderable (#2758).
-        """
-        return sorted(t for t in types if isinstance(t, str))
+        entries = _constraint_list(policy_name, constraints, field)
+        if unknown_receiver_type_entries(entries):
+            return set()
+        return set(entries)
 
     for policy_name, policy in sorted(domain_policies.items()):
         if not isinstance(policy, dict):
@@ -2954,16 +2965,16 @@ def check_domain_policies(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
                             f"is forbidden",
-                            f"domain forbids {_type_names(forbidden_types)}; switch "
+                            f"domain forbids {sorted(forbidden_types)}; switch "
                             f"{whose} receiver.type to a compliant type "
                             f"or amend the domain policy", **_at("receiver.type")))
                     if allowed_types and recv_type not in allowed_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
-                            f"not in allowed types {_type_names(allowed_types)}",
+                            f"not in allowed types {sorted(allowed_types)}",
                             f"switch {whose} receiver.type to one of "
-                            f"{_type_names(allowed_types)} or amend the domain policy",
+                            f"{sorted(allowed_types)} or amend the domain policy",
                             **_at("receiver.type")))
 
                 # Check max_repeat_interval / min_group_wait — #2490: ONE

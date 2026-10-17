@@ -65,8 +65,11 @@ from _grar_merge import (  # noqa: E402
 from _grar_validate import (  # noqa: E402
     FIELD_TYPE_ERROR_PREFIX,
     POLICY_ERROR_PREFIX,
+    RECEIVER_TYPE_CONSTRAINTS,
     ROUTING_TREE_ERROR_PREFIX,
     receiver_bool_type_errors,
+    unknown_receiver_type_entries,
+    unknown_receiver_types_text,
     value_type_text,
     _validate_profile_refs,
     check_domain_policies,
@@ -760,7 +763,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
 
 
 def _record_policy_type_errors(fname: str, policies: dict, result: dict) -> None:
-    """#2906: a domain policy's boolean constraint that is not a boolean.
+    """#2906 / #3116: a domain policy constraint of the wrong type or value.
 
     `require_critical_escalation` is true, false or null (not constrained).
     Anything else — `"true"`, `"yes"`, `1` — refuses the WHOLE tree in every
@@ -768,12 +771,27 @@ def _record_policy_type_errors(fname: str, policies: dict, result: dict) -> None
     reported only under `--strict`: without it a quoted `"true"` switched the
     constraint off at rc 0, and so will an unquoted `yes` once the generator
     reads yaml.v3 (ADR-036 step 4).
+
+    #3116: so does an entry of `forbidden_receiver_types` /
+    `allowed_receiver_types` that is not a receiver type the generator renders
+    (`unknown_receiver_type_entries`: an unknown name, or no string at all) —
+    a misspelt forbidden type used to forbid nothing at rc 0.
     """
     for name, policy in policies.items():
         if not isinstance(policy, dict):
             continue
         constraints = policy.get("constraints")
-        if not isinstance(constraints, dict) or "require_critical_escalation" not in constraints:
+        if not isinstance(constraints, dict):
+            continue
+        for fld in RECEIVER_TYPE_CONSTRAINTS:
+            bad = unknown_receiver_type_entries(constraints.get(fld))
+            if bad:
+                _field_type_error(
+                    result, "domain_policy_unusable",
+                    f"{fname}: domain_policy '{name}': "
+                    f"{unknown_receiver_types_text(fld, bad)}",
+                    file=fname, policy=str(name), field=f"constraints.{fld}")
+        if "require_critical_escalation" not in constraints:
             continue
         value = constraints["require_critical_escalation"]
         if value is None or isinstance(value, bool):

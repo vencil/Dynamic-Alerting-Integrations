@@ -53,7 +53,7 @@ const DOMAIN_POLICIES = {
     description: 'Finance domain compliance',
     tenants: ['db-a', 'db-b'],
     constraints: {
-      allowed_receiver_types: ['pagerduty', 'email', 'opsgenie'],
+      allowed_receiver_types: ['pagerduty', 'email'],
       forbidden_receiver_types: ['slack', 'webhook'],
       max_repeat_interval: '1h',
     },

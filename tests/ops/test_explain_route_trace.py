@@ -1161,32 +1161,39 @@ class TestSubtreePolicyScopeNoAmtool:
 
 
 class TestCollectionReceiverTypeEntryNoAmtool:
-    """#2758: a receiver-type entry that is a collection is read as the
-    generator reads it — it names no type (no crash), the string entries are
-    enforced, and a non-empty allowed list of none still restricts."""
+    """#2758 read a collection receiver-type entry leniently here (no type,
+    the string entries enforced). #3116: an entry that is not a receiver
+    type refuses the tree (`tree_refusal`), and step 5 then reads no policy
+    — so a collection entry, `~` or an unknown name never reaches the
+    policy reader, and the step says why it judged nothing."""
 
     @staticmethod
-    def _step(constraints, types):
+    def _step(constraints, types, refused=False):
         parsed = {"domain_policies": {"fin": {"tenants": ["t1"],
                                               "constraints": constraints}}}
-        return er._policy_step(parsed, "t1", types)
+        return er._policy_step(parsed, "t1", types, refused)
 
-    def test_forbidden_string_entry_still_enforced(self):
-        step = self._step({"forbidden_receiver_types": ["email", {"a": 1}]},
+    @pytest.mark.parametrize("entry", [{"a": 1}, ["a"], None, "webhok"],
+                             ids=["dict", "list", "null", "unknown-name"])
+    def test_a_refused_tree_reads_no_policy(self, entry):
+        step = self._step({"forbidden_receiver_types": ["email", entry],
+                           "allowed_receiver_types": [entry]}, ["email"],
+                          refused=True)
+        assert step["passed"] is None
+        assert step["detail"] == ("Receiver-type constraints not evaluated: "
+                                  "the generator refuses this config")
+        assert "violations" not in step
+
+    def test_receiver_types_are_still_enforced(self):
+        step = self._step({"forbidden_receiver_types": ["email"],
+                           "allowed_receiver_types": ["slack", "email"]},
                           ["email"])
         assert step["violations"] == [
             "Domain 'fin' forbids receiver type 'email'"]
-
-    def test_allowed_of_only_collections_still_restricts(self):
-        step = self._step({"allowed_receiver_types": [["a"]]}, ["webhook"])
+        step = self._step({"allowed_receiver_types": ["slack", "email"]},
+                          ["webhook"])
         assert step["violations"] == [
-            "Domain 'fin' only allows [], got 'webhook'"]
-
-    def test_mixed_null_and_string_allowed_does_not_crash(self):
-        step = self._step({"allowed_receiver_types": [None, "email"]},
-                          ["slack"])
-        assert step["violations"] == [
-            "Domain 'fin' only allows ['email'], got 'slack'"]
+            "Domain 'fin' only allows ['email', 'slack'], got 'webhook'"]
 
 
 class TestPolicyStepIcon:

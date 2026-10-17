@@ -531,9 +531,11 @@ def test_f4_a_mapping_in_a_policy_tenants_list_does_not_crash(tmp_path, policy_f
 
 
 @pytest.mark.parametrize("entry", ["{a: 1}", "[a]", "!!set {a}", "!!omap [{a: 1}]"])
-@pytest.mark.parametrize("strict, rc", [(True, EXIT_VIOLATION), (False, EXIT_OK)])
-def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, strict, rc):
-    """#2758: the collection entry is skipped, `email` is still forbidden."""
+@pytest.mark.parametrize("strict", [True, False])
+def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, strict):
+    """#2758: no crash. #3116: the entry is no receiver type, so the whole
+    tree is refused in both modes (it used to be skipped, `email` still
+    forbidden, and named only under --strict)."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "_domain_policy.yaml": ("domain_policies:\n  fin:\n    tenants: [t-team]\n"
@@ -542,10 +544,11 @@ def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, s
     })
     res = _gar("--config-dir", str(d), "--validate", *(["--strict"] if strict else []))
     assert "Traceback" not in res.stderr, res.stderr
-    assert res.returncode == rc, res.stdout + res.stderr
+    assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
     out = res.stdout + res.stderr
-    assert "tenant 't-team': receiver type 'email' is forbidden" in out, out
-    assert ("'forbidden_receiver_types' entry must be a receiver type" in out) == strict, out
+    assert "ERROR (field type): _domain_policy.yaml: domain_policy 'fin': constraint " \
+        "'forbidden_receiver_types' lists" in out, out
+    assert "is forbidden" not in out, out
 
 
 def test_an_unparseable_unselected_carrier_spelling_is_not_refused(tmp_path):

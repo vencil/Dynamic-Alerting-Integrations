@@ -46,7 +46,8 @@ What this half measures, per tree written to a tmp dir:
   blocking non-mapping `_routing_defaults` WARN (#2341), its
   non-boolean `require_critical_escalation` line (#2325; since #2906 it
   refuses the whole tree in every mode — `domain_policy_unusable`, kind and
-  field only), its
+  field only; #3116: so does a `forbidden_receiver_types` /
+  `allowed_receiver_types` entry that is not a receiver type), its
   strict "domain policy file could not be used" line (#2659: the whole file
   dropped — field `domain_policies` when that block is not a mapping, `""`
   when the file does not load, as da-guard names them) and
@@ -519,7 +520,13 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         [f"domain_policies.{m['domain']}.constraints.require_critical_escalation"
          for m in map(_ESC_NOT_BOOL.search, got.schema_warnings) if m]
         + ["domain_policies" if m["reason"].startswith("'domain_policies:' must be a mapping") else ""
-           for m in map(_POLICY_FILE_DROPPED.search, got.schema_warnings) if m])
+           for m in map(_POLICY_FILE_DROPPED.search, got.schema_warnings) if m]
+        # #3116: a receiver-type entry that is not a receiver type, off the
+        # tree's field-type errors (refused in every mode).
+        + [f"domain_policies.{e.policy}.{e.field}" for e in got.field_type_errors
+           if e.kind == "domain_policy_unusable"
+           and e.field in ("constraints.forbidden_receiver_types",
+                           "constraints.allowed_receiver_types")])
     want_unusable = sorted(r[2] for r in tree["platform"] if r[0] == "domain_policy_unusable")
     assert got_unusable == want_unusable, (tree["name"], got_unusable)
 

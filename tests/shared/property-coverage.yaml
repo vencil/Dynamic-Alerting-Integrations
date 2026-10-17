@@ -348,6 +348,8 @@ modules:
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"
       value_type_text: "#2906 message helper (type + value of a decoded value); no law to property-test"
       receiver_bool_type_errors: "#2906 closed walk (routing_block_receivers) over the schema's boolean receiver fields, type test only; every field and block position example-pinned by test_grar_field_types.py"
+      unknown_receiver_type_entries: "#3116 membership filter of a list against the RECEIVER_TYPES keys; every entry shape (unknown name, opsgenie, bool, number, null, mapping) example-pinned by test_grar_policy_receiver_types.py"
+      unknown_receiver_types_text: "#3116 message helper (the bad entries via value_type_text + the sorted RECEIVER_TYPES); no law to property-test"
       check_policy_scope: "#2326 (d) subtree-policy entries outside the subtree; example-covered by test_generate_routes_nested_tree.py (strict ERROR / WARN / unknown tenant left alone) and the hier-d parity tree"
       is_receiver_name_collision: "#2279 one-line prefix test on RECEIVER_NAME_COLLISION_PREFIX; example-pinned by test_grar_receiver_name_collision.py (generate_routes line + not-a-policy-error cases)"
       blocking_generation_errors: "#2279 two-category filter (WARN…skipping | duplicate receiver name) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
