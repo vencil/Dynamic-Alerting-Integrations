@@ -87,8 +87,9 @@ var (
 	// with the not_served reason.
 	FindingValueNotServed = register("value_not_served",
 		"judges a threshold value /metrics does not serve as written")
-	// FindingCustomAlertDuplicateSeries (error; #2031): a `_custom_alerts` entry
-	// the exporter drops because an earlier entry already serves its series.
+	// FindingCustomAlertDuplicateSeries (error; #2031, #3112): a `_custom_alerts`
+	// entry the exporter drops because an earlier entry already serves its
+	// series, or a row of its shape and severity.
 	FindingCustomAlertDuplicateSeries = register("custom_alert_duplicate_series",
 		"judges `_custom_alerts` entries that put the same series on /metrics")
 	// FindingMetricsNotGatherable (error; #2031): the exporter's /metrics cannot

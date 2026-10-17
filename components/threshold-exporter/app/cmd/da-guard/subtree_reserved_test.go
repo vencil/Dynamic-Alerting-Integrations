@@ -269,6 +269,10 @@ func TestGuard_SubtreeReservedGoldenMixedMode(t *testing.T) {
 	}
 	want := []string{
 		"tenant-date _silent_mode",
+		// #3045: `_x`, a `_` key the registry does not list, is read in no
+		// layer, so the subtree's `_x` is named as a key nothing reads.
+		"tenant-keys _x",
+		"tenant-nested _x",
 		"tenant-reserved _severity_dedup",
 		"tenant-reserved _silent_mode",
 	}

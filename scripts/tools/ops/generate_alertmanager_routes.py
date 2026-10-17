@@ -723,16 +723,18 @@ def _refuse_field_type_errors(tree: TenantTree,
 
 
 def field_type_errors_refusal(errors: list) -> list[str]:
-    """The stderr lines of the #2906 refusal; [] = not refused.
+    """The stderr lines of the #2906 / #3116 refusal; [] = not refused.
 
     The judgment `_refuse_field_type_errors` acts on, as data (see
     `unreadable_tenant_files_refusal`).
     """
     if not errors:
         return []
-    return [_refusal_line(f"FAIL: {len(errors)} field value(s) of the wrong type or "
-                          "not recognised — nothing was generated, written or "
-                          "applied:"),
+    # #3116: one header for every kind it carries — a boolean / enum field
+    # of the wrong type (#2906), a domain policy that cannot be enforced as
+    # written, a policy file that cannot be used.
+    return [_refusal_line(f"FAIL: {len(errors)} config problem(s) — nothing was "
+                          "generated, written or applied:"),
             *(f.with_text(safe_label(f)) for f in field_type_findings(errors))]
 
 

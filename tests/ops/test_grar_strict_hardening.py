@@ -24,7 +24,9 @@ from generate_alertmanager_routes import (  # noqa: E402
     check_domain_policies,
     load_tenant_configs,
 )
-from _grar_validate import _parse_policy_duration  # noqa: E402
+from _grar_validate import _parse_policy_duration, domain_policy_problems  # noqa: E402
+from _grar_parse import load_tenant_tree  # noqa: E402
+from _grar_validate import FIELD_TYPE_ERROR_PREFIX  # noqa: E402
 from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
@@ -86,11 +88,27 @@ class TestParsePolicyDuration:
 # strict fail-open 收口（unit 層）
 # ============================================================
 class TestStrictFailOpenClosures:
-    """strict 一律 fail-loud ERROR；非 strict 行為不變（零 policy 訊息）。"""
+    """strict 一律 fail-loud ERROR；非 strict 行為不變（零 policy 訊息）。
+
+    #3116：policy 本身寫壞（形狀、型別、讀不出的 bound）不再是這裡的 strict-only
+    ERROR——`domain_policy_problems` 是唯一判定，reader 把它記成
+    `domain_policy_unusable`、所有模式整棵樹拒收；`check_domain_policies` 兩種模式都
+    略過那個 policy、不報（`_refused`）。租戶端的值（時長、group_by）照舊在這裡判。
+    """
 
     @staticmethod
     def _one_policy(constraints):
         return {"pol": {"tenants": ["tenant-x"], "constraints": constraints}}
+
+    @staticmethod
+    def _refused(routing, policies, text):
+        """#3116: the shared judgment names the problem; this function skips
+        the policy in both modes (the tree is refused before it matters)."""
+        problems = [m for pol in policies.values()
+                    for _f, m in domain_policy_problems(pol)]
+        assert any(text in m for m in problems), problems
+        assert check_domain_policies(routing, policies, strict=True) == []
+        assert check_domain_policies(routing, policies) == []
 
     # ── F1: 邊界值 0s 被 truthiness 靜默跳過 ──
     def test_zero_group_wait_strict_violates(self):
@@ -176,17 +194,13 @@ class TestStrictFailOpenClosures:
     def test_garbage_constraint_value_strict_fails_loud(self):
         routing = {"tenant-x": {"repeat_interval": "4h"}}
         policies = self._one_policy({"max_repeat_interval": "banana"})
-        strict = check_domain_policies(routing, policies, strict=True)
-        assert any("'max_repeat_interval' value 'banana'" in m
-                   and "not a valid duration" in m for m in strict), strict
-        assert check_domain_policies(routing, policies) == []
+        self._refused(routing, policies,
+                      "'max_repeat_interval' value string 'banana' is not a valid duration")
 
     def test_garbage_min_group_wait_strict_fails_loud(self):
         routing = {"tenant-x": {"group_wait": "30s"}}
         policies = self._one_policy({"min_group_wait": "banana"})
-        strict = check_domain_policies(routing, policies, strict=True)
-        assert any("'min_group_wait' value 'banana'" in m for m in strict)
-        assert check_domain_policies(routing, policies) == []
+        self._refused(routing, policies, "'min_group_wait' value string 'banana'")
 
     # ── F3: 型別 fail-open ──
     def test_tenant_group_by_not_list_strict_fails_loud(self):
@@ -199,9 +213,7 @@ class TestStrictFailOpenClosures:
     def test_policy_not_mapping_strict_fails_loud(self):
         routing = {"tenant-x": {}}
         policies = {"pol": "not-a-dict"}
-        strict = check_domain_policies(routing, policies, strict=True)
-        assert any("policy must be a mapping" in m for m in strict), strict
-        assert check_domain_policies(routing, policies) == []
+        self._refused(routing, policies, "policy must be a mapping")
 
     def test_policy_null_is_inert_even_strict(self):
         """schema 允許 policy: null（inert）——strict 不誤殺。"""
@@ -212,9 +224,7 @@ class TestStrictFailOpenClosures:
         routing = {"tenant-x": {}}
         policies = {"pol": {"tenants": ["tenant-x"],
                             "constraints": "not-a-dict"}}
-        strict = check_domain_policies(routing, policies, strict=True)
-        assert any("'constraints' must be a mapping" in m for m in strict)
-        assert check_domain_policies(routing, policies) == []
+        self._refused(routing, policies, "'constraints' must be a mapping")
 
     def test_constraints_null_is_inert_even_strict(self):
         policies = {"pol": {"tenants": ["tenant-x"], "constraints": None}}
@@ -225,20 +235,12 @@ class TestStrictFailOpenClosures:
         """字串 forbidden_receiver_types 舊行為＝逐字元集合（靜默無效）。"""
         routing = {"tenant-x": {"receiver": {"type": "slack"}}}
         policies = self._one_policy({"forbidden_receiver_types": "slack"})
-        strict = check_domain_policies(routing, policies, strict=True)
-        assert any("'forbidden_receiver_types' must be a list" in m
-                   for m in strict), strict
-        assert check_domain_policies(routing, policies) == []
+        self._refused(routing, policies, "'forbidden_receiver_types' must be a list")
 
-    def test_tenants_not_list_strict_becomes_error(self):
-        """既有 WARN（'tenants' must be a list）在 strict 下升 ERROR。"""
+    def test_tenants_not_list_is_refused_not_warned(self):
+        """以前非 strict 是 WARN、strict 升 ERROR；#3116 起兩種模式都由 reader 拒收。"""
         policies = {"pol": {"tenants": "tenant-x"}}
-        strict = check_domain_policies({}, policies, strict=True)
-        assert any(m.lstrip().startswith(POLICY_ERROR_PREFIX)
-                   for m in strict)
-        lenient = check_domain_policies({}, policies)
-        assert lenient == [
-            "  WARN: domain_policy 'pol': 'tenants' must be a list"]
+        self._refused({}, policies, "'tenants' must be a list, got string 'tenant-x'")
 
     # ── F3: 檔案層 fail-open（load_tenant_configs 路徑） ──
     def test_broken_policy_yaml_strict_fails_loud(self):
@@ -246,15 +248,12 @@ class TestStrictFailOpenClosures:
             write_yaml(d, "_domain_policy.yaml",
                        "domain_policies:\n  fin: [unclosed\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(
-                d, strict_policies=True)
-            assert any("failed to parse" in w
-                       and w.lstrip().startswith(POLICY_ERROR_PREFIX)
-                       for w in warnings), warnings
-            # 非 strict：warning stream 無 ERROR（僅 stderr print），照舊全綠
-            _, _, lenient, _, _ = load_tenant_configs(d)
-            assert not any(w.lstrip().startswith(POLICY_ERROR_PREFIX)
-                           for w in lenient)
+            # #3116：以前只有 strict 擋、非 strict 照舊全綠；現在兩種模式都是
+            # 拒收整棵樹的 field-type error。
+            for strict in (True, False):
+                errs = load_tenant_tree(d, strict_policies=strict).field_type_errors
+                assert [e.kind for e in errs] == ["domain_policy_unusable"], errs
+                assert "failed to parse" in errs[0].message, errs
 
     def test_misplaced_domain_policies_strict_fails_loud(self):
         with tempfile.TemporaryDirectory() as d:
@@ -273,14 +272,18 @@ class TestStrictFailOpenClosures:
 
 
 # ============================================================
-# #2758 — receiver-type 項目是集合（mapping / list / set）
+# #2758 → #3116 — receiver-type 項目不是 receiver 類型（集合、null、未知名稱）
 # ============================================================
 class TestReceiverTypeCollectionEntry:
-    """集合項目不可 hash，`set()` 曾直接 TypeError；None 與字串混在一起時
-    違規訊息的 `sorted()` 也會 TypeError。集合項目不指名任何 receiver type：
-    略過、其餘字串項目照常執行；strict 下報具名 ERROR，非 strict 不出聲
-    （同 #2326 F4 的 tenants 項目）。非空的 allowed 清單即使沒有任何字串
-    項目仍然限制（與語料 `_verdict()`、da-guard `AllowedListNonEmpty` 一致）。
+    """集合項目不可 hash，`set()` 曾直接 TypeError（#2758）；當時改成略過該項、
+    strict 才報 ERROR，非空的 allowed 清單即使沒有字串項目仍限制。
+
+    #3116 起規則改了：清單裡只要有一項不是 `RECEIVER_TYPES` 的鍵（集合、null、
+    `yes`、未知名稱），產生器的 reader 就記一筆 `domain_policy_unusable`
+    欄位型別錯誤，所有模式整棵樹拒收（tests/ops/test_grar_policy_unusable.py）。
+    `check_domain_policies` 因此不再判這種清單——不報、不崩潰、也不留 None
+    placeholder 與 strict-only 的那一支。這裡釘的是「不崩潰、不重複報」；
+    拒收本身由 reader 那一側的測試釘。
     """
 
     # !!set {a} → set、!!omap / !!pairs → list of tuples：都不可 hash。
@@ -294,73 +297,31 @@ class TestReceiverTypeCollectionEntry:
     def _routing(recv_type):
         return {"tenant-x": {"receiver": {"type": recv_type}}}
 
-    @pytest.mark.parametrize("entry", COLLECTIONS,
-                             ids=["dict", "list", "set", "omap"])
-    def test_forbidden_strict_names_the_entry_and_still_enforces_slack(
-            self, entry):
-        policies = self._policy({"forbidden_receiver_types": ["slack", entry]})
+    @pytest.mark.parametrize("entry", COLLECTIONS + [None, True, 1, "webhok"],
+                             ids=["dict", "list", "set", "omap", "null",
+                                  "bool", "int", "unknown-name"])
+    @pytest.mark.parametrize("field", ["forbidden_receiver_types",
+                                       "allowed_receiver_types"])
+    @pytest.mark.parametrize("strict", [False, True], ids=["lenient", "strict"])
+    def test_a_list_with_a_bad_entry_is_not_judged_here(self, entry, field,
+                                                         strict):
+        policies = self._policy({field: ["slack", entry]})
+        for recv in ("slack", "webhook"):
+            assert check_domain_policies(self._routing(recv), policies,
+                                         strict=strict) == []
+
+    def test_a_list_of_receiver_types_is_still_judged(self):
+        """Must-succeed 對照：合法清單照常判。"""
+        policies = self._policy({"forbidden_receiver_types": ["slack"],
+                                 "allowed_receiver_types": ["slack", "email"]})
+        assert check_domain_policies(self._routing("email"), policies) == []
         strict = check_domain_policies(self._routing("slack"), policies,
                                        strict=True)
-        kind = type(entry).__name__
-        assert any(
-            m.lstrip().startswith(POLICY_ERROR_PREFIX)
-            and f"'forbidden_receiver_types' entry must be a receiver type, "
-                f"got {kind}" in m
-            and "list each receiver type as a plain YAML scalar" in m
-            for m in strict), strict
-        assert any("receiver type 'slack' is forbidden" in m
-                   and "domain forbids ['slack']" in m for m in strict), strict
-
-    @pytest.mark.parametrize("entry", COLLECTIONS,
-                             ids=["dict", "list", "set", "omap"])
-    def test_forbidden_lenient_is_silent_about_the_entry(self, entry):
-        policies = self._policy({"forbidden_receiver_types": ["slack", entry]})
-        assert check_domain_policies(self._routing("email"), policies) == []
-        lenient = check_domain_policies(self._routing("slack"), policies)
-        assert len(lenient) == 1, lenient
-        assert "receiver type 'slack' is forbidden" in lenient[0]
-
-    def test_a_list_of_only_collections_forbids_nothing(self):
-        policies = self._policy({"forbidden_receiver_types": [{"a": 1}]})
-        assert check_domain_policies(self._routing("slack"), policies) == []
-
-    def test_allowed_of_only_collections_still_restricts(self):
-        policies = self._policy({"allowed_receiver_types": [{"a": 1}]})
+        assert len(strict) == 1, strict
+        assert "domain forbids ['slack']" in strict[0]
         lenient = check_domain_policies(self._routing("webhook"), policies)
         assert len(lenient) == 1, lenient
-        assert "receiver type 'webhook' not in allowed types []" in lenient[0]
-        strict = check_domain_policies(self._routing("webhook"), policies,
-                                       strict=True)
-        assert any("'allowed_receiver_types' entry must be a receiver type, "
-                   "got dict" in m for m in strict), strict
-        assert any("not in allowed types []" in m for m in strict), strict
-
-    def test_allowed_string_entries_still_allowed(self):
-        policies = self._policy({"allowed_receiver_types": ["email", ["a"]]})
-        assert check_domain_policies(self._routing("email"), policies) == []
-        lenient = check_domain_policies(self._routing("slack"), policies)
-        assert len(lenient) == 1, lenient
-        assert "not in allowed types ['email']" in lenient[0]
-
-    def test_mixed_null_and_string_allowed_does_not_crash(self):
-        """`[!!null x, email]` → {None, 'email'}：sorted() 曾 TypeError。"""
-        policies = self._policy({"allowed_receiver_types": [None, "email"]})
-        for strict in (False, True):
-            msgs = check_domain_policies(self._routing("slack"), policies,
-                                         strict=strict)
-            assert len(msgs) == 1, msgs
-            assert "receiver type 'slack' not in allowed types ['email']" \
-                in msgs[0]
-
-    def test_mixed_null_and_string_forbidden_does_not_crash(self):
-        policies = self._policy({"forbidden_receiver_types": [None, "slack"]})
-        for strict in (False, True):
-            msgs = check_domain_policies(self._routing("slack"), policies,
-                                         strict=strict)
-            assert len(msgs) == 1, msgs
-            assert "receiver type 'slack' is forbidden" in msgs[0]
-            if strict:
-                assert "domain forbids ['slack']" in msgs[0]
+        assert "not in allowed types ['email', 'slack']" in lenient[0]
 
 
 # ============================================================
@@ -623,14 +584,21 @@ class TestStrictBypassScenariosCLI:
             assert expect in strict.stderr
             # 非 strict：同一 config 照舊通過（向後相容）——除了 #2490：
             # `-1h` 是 Alertmanager 拒收的時長，產生器自己的阻擋行（不是
-            # policy ERROR）讓 --validate 回 1。
+            # policy ERROR）讓 --validate 回 1；以及 #3116：policy 本身寫壞
+            # （讀不出的 bound、壞掉的 policy 檔）所有模式整棵樹拒收。
             lenient = self._run(d)
             refused = defaults_patch.get("repeat_interval") == "-1h"
-            assert lenient.returncode == (1 if refused else 0), (
+            policy_unusable = raw_policy is not None or (
+                constraints or {}).get("max_repeat_interval") == "banana"
+            assert lenient.returncode == (1 if refused or policy_unusable else 0), (
                 lenient.stdout + lenient.stderr)
             if refused:
                 assert "invalid repeat_interval '-1h'" in lenient.stderr
-            assert "ERROR" not in lenient.stderr
+            if policy_unusable:
+                assert "ERROR (field type):" in lenient.stderr
+                assert expect in lenient.stderr
+            else:
+                assert "ERROR" not in lenient.stderr
 
 
 # ============================================================
@@ -684,6 +652,15 @@ class TestValidateConfigStrictCLI:
 # #1448 — every way a policy file falls out of the scan has to be recorded
 # the same way, because they all have the same consequence.
 # ============================================================
+def _policy_file_blocking(warnings):
+    """#3116: the blocking lines for a policy file that cannot be used. They
+    used to be POLICY_ERROR_PREFIX lines under --strict only; now the file is
+    a `domain_policy_unusable` field-type error and refuses the whole tree in
+    every mode, so the line carries FIELD_TYPE_ERROR_PREFIX in both."""
+    return [w for w in warnings if w.lstrip().startswith(FIELD_TYPE_ERROR_PREFIX)
+            and "domain policy file could not be used" in w]
+
+
 class TestUnusablePolicyFileIsAlwaysRecorded:
     """A ``_domain_policy.yaml`` the reader cannot use drops **every** domain
     policy, whatever stopped it being usable.
@@ -728,14 +705,15 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
 
     @pytest.mark.parametrize("label,body", UNUSABLE,
                              ids=[i for i, _ in UNUSABLE])
-    def test_strict_reports_it(self, label, body):
+    @pytest.mark.parametrize("strict", [True, False], ids=["strict", "lenient"])
+    def test_strict_reports_it(self, label, body, strict):
+        """#3116: reported in both modes now (it was --strict only)."""
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_domain_policy.yaml", body)
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
-            blocking = [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+                                                       strict_policies=strict)
+            blocking = _policy_file_blocking(warnings)
             assert blocking, (
                 f"an unusable _domain_policy.yaml ({label}) dropped every "
                 f"domain policy without --strict saying so: {warnings}")
@@ -756,8 +734,7 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            msg = " ".join(w for w in warnings
-                           if w.lstrip().startswith(POLICY_ERROR_PREFIX))
+            msg = " ".join(_policy_file_blocking(warnings))
             assert "— fix:" in msg, msg
             if label == "broken-yaml":
                 assert "repair the YAML syntax" in msg, msg
@@ -795,8 +772,7 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            assert not [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)], warnings
+            assert not _policy_file_blocking(warnings), warnings
 
 
 class TestNullValuedKeysDoNotKillTheRun:
@@ -861,7 +837,6 @@ class TestEveryWayThePoliciesFallOnTheFloor:
         ("file-is-a-scalar", b"domain_policies\n"),
         # the file and its top level are fine, the block is not a mapping
         ("block-is-a-list", b"domain_policies:\n  - fin\n"),
-        ("block-is-null", b"domain_policies:\n"),
         ("block-is-a-scalar", b"domain_policies: nope\n"),
     ]
 
@@ -873,13 +848,14 @@ class TestEveryWayThePoliciesFallOnTheFloor:
 
     @pytest.mark.parametrize("label,body", UNUSABLE,
                              ids=[i for i, _ in UNUSABLE])
-    def test_strict_refuses_to_stay_quiet(self, label, body):
+    @pytest.mark.parametrize("strict", [True, False], ids=["strict", "lenient"])
+    def test_strict_refuses_to_stay_quiet(self, label, body, strict):
+        """#3116: refused in both modes now (it was --strict only)."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, body)
             _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
-            blocking = [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+                                                       strict_policies=strict)
+            blocking = _policy_file_blocking(warnings)
             assert blocking, (
                 f"{label}: every domain policy was dropped and --strict said "
                 f"nothing: {warnings}")
@@ -897,8 +873,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
             self._tree(d, body)
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            msg = " ".join(w for w in warnings
-                           if w.lstrip().startswith(POLICY_ERROR_PREFIX))
+            msg = " ".join(_policy_file_blocking(warnings))
             assert "— fix:" in msg, msg
             if label == "broken-yaml":
                 assert "repair the YAML syntax" in msg, msg
@@ -910,6 +885,18 @@ class TestEveryWayThePoliciesFallOnTheFloor:
                 assert "UTF-8" in msg, msg
             if label.startswith("block-"):
                 assert "'domain_policies:'" in msg, msg
+
+    @pytest.mark.parametrize("body", [b"domain_policies:\n", b"domain_policies: ~\n"],
+                             ids=["no-value", "tilde"])
+    def test_a_null_block_is_no_policy_not_unusable(self, body):
+        """#3116: the schema allows a null `domain_policies:` ("no policy
+        configured"); it used to be dropped as unusable (block-is-null)."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, body)
+            for strict in (True, False):
+                tree = load_tenant_tree(d, strict_policies=strict)
+                assert tree.field_type_errors == [], tree.field_type_errors
+                assert not [f for f, _ in tree.files_skipped], tree.files_skipped
 
     def test_a_usable_policy_file_records_nothing(self):
         """Must-tolerate control: without it, "record everything" passes
@@ -948,8 +935,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            assert not [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)], warnings
+            assert not _policy_file_blocking(warnings), warnings
 
     def test_measured_gap_a_policy_file_that_parses_to_nothing(self):
         """⚠️ Disclosure, not a contract — and deliberately phrased so it
@@ -966,8 +952,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            assert not [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)], (
+            assert not _policy_file_blocking(warnings), (
                 "this gap is now closed — good; update the disclosure in "
                 "_drop_unusable_policy() and this test's docstring")
 
@@ -995,8 +980,7 @@ class TestTheSharedReaderNamesWhatItCannotRead:
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            blocking = [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+            blocking = _policy_file_blocking(warnings)
             assert blocking, (
                 "an unreadable policy file escaped the reader instead of "
                 f"being recorded: {warnings}")
@@ -1091,8 +1075,7 @@ class TestTenantsBlockShapeGuard:
                     {"tenants": {"tenant-x": {"cpu": "90"}}})
                 _, _, warnings, _, _ = load_tenant_configs(
                     d, strict_policies=True)
-                blocking = [w for w in warnings
-                            if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+                blocking = _policy_file_blocking(warnings)
                 assert blocking, f"body={body!r} slipped through: {warnings}"
 
     def test_a_genuinely_empty_document_stays_exempt(self, capsys):
@@ -1106,8 +1089,7 @@ class TestTenantsBlockShapeGuard:
                     {"tenants": {"tenant-x": {"cpu": "90"}}})
                 _, _, warnings, _, _ = load_tenant_configs(
                     d, strict_policies=True)
-                assert not [w for w in warnings
-                            if w.lstrip().startswith(POLICY_ERROR_PREFIX)], body
+                assert not _policy_file_blocking(warnings), body
 
     def test_a_multi_line_parser_message_stays_on_one_line(self):
         """⛔ YAML parser messages are multi-line; the record is one line.
@@ -1122,8 +1104,7 @@ class TestTenantsBlockShapeGuard:
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)
-            blocking = [w for w in warnings
-                        if w.lstrip().startswith(POLICY_ERROR_PREFIX)]
+            blocking = _policy_file_blocking(warnings)
             assert blocking
             for w in blocking:
                 assert "\n" not in w, repr(w)

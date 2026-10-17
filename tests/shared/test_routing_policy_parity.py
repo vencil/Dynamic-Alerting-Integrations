@@ -46,7 +46,8 @@ What this half measures, per tree written to a tmp dir:
   blocking non-mapping `_routing_defaults` WARN (#2341), its
   non-boolean `require_critical_escalation` line (#2325; since #2906 it
   refuses the whole tree in every mode — `domain_policy_unusable`, kind and
-  field only), its
+  field only; #3116: so does a `forbidden_receiver_types` /
+  `allowed_receiver_types` entry that is not a receiver type), its
   strict "domain policy file could not be used" line (#2659: the whole file
   dropped — field `domain_policies` when that block is not a mapping, `""`
   when the file does not load, as da-guard names them) and
@@ -145,15 +146,6 @@ _POLICY_LINE = re.compile(
 # The blocking WARN _grar_parse records when it drops `_routing_defaults.routes`.
 _DEFAULTS_ROUTES = re.compile(
     r"WARN: _routing_defaults in (?P<file>\S+): 'routes' is not supported here")
-# #2325 / #2906: the line for a `require_critical_escalation` that is not a
-# boolean (as PyYAML reads it) — a field-type refusal in every mode. Its
-# platform row is compared on kind and field only.
-_ESC_NOT_BOOL = re.compile(
-    r"domain_policy '(?P<domain>[^']*)': constraint 'require_critical_escalation' must be a boolean")
-# #2659: the strict line for a policy file the generator dropped whole.
-_POLICY_FILE_DROPPED = re.compile(
-    r"domain policy file could not be used — every domain policy is silently dropped: "
-    r"(?P<file>[^:]+): (?P<reason>.*)")
 # #2431: the strict line for a matcher value PyYAML does not read as a string.
 _NOT_STRING = re.compile(
     r"ERROR: tenant '(?P<tenant>[^']*)': (?P<field>\S+) must be a string, got ")
@@ -521,11 +513,14 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # domain_policy_unusable (#2325) is compared on kind and field below.
     want_platform = sorted(r for r in tree["platform"] if r[0] != "domain_policy_unusable")
     assert got_platform == want_platform, (tree["name"], got_platform)
+    # #3116: every `domain_policy_unusable` is a field-type error on the tree
+    # (refused in every mode), read off its own fields: a policy's
+    # `domain_policies.<domain>[.<field>]`, a file's `domain_policies` (that
+    # block not a mapping) or "" (the file unusable).
     got_unusable = sorted(
-        [f"domain_policies.{m['domain']}.constraints.require_critical_escalation"
-         for m in map(_ESC_NOT_BOOL.search, got.schema_warnings) if m]
-        + ["domain_policies" if m["reason"].startswith("'domain_policies:' must be a mapping") else ""
-           for m in map(_POLICY_FILE_DROPPED.search, got.schema_warnings) if m])
+        (f"domain_policies.{e.policy}" + (f".{e.field}" if e.field else ""))
+        if e.policy is not None else (e.field or "")
+        for e in got.field_type_errors if e.kind == "domain_policy_unusable")
     want_unusable = sorted(r[2] for r in tree["platform"] if r[0] == "domain_policy_unusable")
     assert got_unusable == want_unusable, (tree["name"], got_unusable)
 

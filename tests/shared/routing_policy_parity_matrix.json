@@ -343,7 +343,7 @@
       "name": "adr007-five-tenants",
       "files": {
         "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
-        "_domain_policy.yaml": "domain_policies:\n  finance:\n    description: ADR-007 finance example\n    tenants:\n    - t-sre\n    - t-dba\n    - t-fin\n    - t-ovr\n    - t-livedbb\n    constraints:\n      allowed_receiver_types:\n      - pagerduty\n      - email\n      - opsgenie\n      forbidden_receiver_types:\n      - slack\n      - webhook\n      enforce_group_by:\n      - tenant\n      - alertname\n      - severity\n      max_repeat_interval: 1h\n      min_group_wait: 30s\n      require_critical_escalation: true\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    description: ADR-007 finance example\n    tenants:\n    - t-sre\n    - t-dba\n    - t-fin\n    - t-ovr\n    - t-livedbb\n    constraints:\n      allowed_receiver_types:\n      - pagerduty\n      - email\n      forbidden_receiver_types:\n      - slack\n      - webhook\n      enforce_group_by:\n      - tenant\n      - alertname\n      - severity\n      max_repeat_interval: 1h\n      min_group_wait: 30s\n      require_critical_escalation: true\n",
         "_routing_profiles.yaml": "# _routing_profiles.yaml \u2014 Named Routing Configurations (ADR-007)\n#\n# Define reusable routing profiles that multiple tenants can reference\n# via _routing_profile: \"<name>\" in their tenant YAML.\n#\n# Merge order: _routing_defaults \u2192 routing_profiles[ref] \u2192 tenant _routing \u2192 _routing_enforced\n#\n# Naming convention: team-{team}-{region} or domain-{domain}-{tier}\n#\n# Each profile has the same shape as a tenant's _routing\n# (routing-profiles.schema.json $refs tenant-config.schema.json#/definitions/routing).\n# The merge is shallow: a key the tenant's _routing sets replaces the\n# profile's value wholesale \u2014 including `routes` (write `routes: []` to drop\n# the profile's routes for one tenant).\n#\n# `routes` (ADR-007): label-equality sub-routes. Each entry becomes a child of\n# the tenant's main route, AFTER the tenant's `overrides`:\n#   overrides \u2192 routes \u2192 the main receiver (first match wins)\n# `match` is label: value equality only (no regex, no `continue`); the\n# tenant=\"<id>\" matcher stays on the parent route. Timing / group_by not set on\n# an entry are inherited from the tenant's main route. Domain policies and the\n# --policy webhook allowlist check these receivers too.\n\nrouting_profiles:\n  # SRE team in APAC region\n  team-sre-apac:\n    receiver:\n      type: slack\n      api_url: \"https://hooks.slack.com/services/T00/B00/sre-apac\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 4h\n    routes:\n      # severity=\"critical\" \u2192 PagerDuty, re-notify every 15m; other alerts\n      # stay on the Slack receiver above.\n      - match: { severity: critical }\n        receiver:\n          type: pagerduty\n          service_key: \"sre-apac-critical-key\"\n        repeat_interval: 15m\n\n  # Global DBA team\n  team-dba-global:\n    receiver:\n      type: webhook\n      url: \"https://alerting.internal/dba-global\"\n    group_by: [tenant, alertname, db_type]\n    group_wait: 1m\n    group_interval: 10m\n    repeat_interval: 8h\n\n  # Finance domain \u2014 strict compliance\n  domain-finance-tier1:\n    receiver:\n      type: pagerduty\n      service_key: \"finance-tier1-key\"\n    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 1h\n",
         "t-dba.yaml": "tenants:\n  t-dba:\n    _routing_profile: team-dba-global\n    cpu_usage_percent: '85'\n",
         "t-fin.yaml": "tenants:\n  t-fin:\n    _routing_profile: domain-finance-tier1\n    cpu_usage_percent: '85'\n",
@@ -1144,7 +1144,18 @@
         "t-nonstr.yaml": "tenants:\n  t-nonstr:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
         "t-forb-nonstr.yaml": "tenants:\n  t-forb-nonstr:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies.finance.constraints.allowed_receiver_types"
+        ],
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies.ops.constraints.forbidden_receiver_types"
+        ]
+      ],
       "expect": {
         "t-nonstr": {
           "targets": [
@@ -1153,13 +1164,7 @@
               "type": "pagerduty"
             }
           ],
-          "policy": [
-            [
-              "finance",
-              "receiver",
-              "allowed_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -5443,13 +5448,7 @@
         "_domain_policy.yaml": "domain_policies: null\n",
         "t-null.yaml": "tenants:\n  t-null:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n"
       },
-      "platform": [
-        [
-          "domain_policy_unusable",
-          "_domain_policy.yaml",
-          "domain_policies"
-        ]
-      ],
+      "platform": [],
       "expect": {
         "t-null": {
           "targets": [

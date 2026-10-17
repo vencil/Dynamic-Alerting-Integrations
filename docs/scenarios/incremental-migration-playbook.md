@@ -606,8 +606,6 @@ sum(rate(da_config_debounce_batch_size_sum[5m]))
 sum(rate(da_config_debounce_batch_size_count[5m]))
 ```
 
-**新增 test case（v2.8.0 follow-up，預定排在 Migration Batch PR Pipeline 實作 PR）**：`TestDebouncedReload_RollbackWave` —— 模擬 N 個 git-sync commit 反序 apply、debounce window 100ms，斷言 fire count 永遠 = 1（與 `TestSlowWriteTornStateStress` 同 pattern，差別在「反向時間序列 + cascading defaults 同步退」）。設計細節留待 batch-PR pipeline 實作 PR。
-
 ### Staging rehearsal 強制（cutover 前 2 週）
 
 **未跑過 rehearsal 不准正式 cutover** —— 寫入 cutover checklist 作為 hard gate（Customer Delivery 客戶里程碑日曆）。

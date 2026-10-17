@@ -933,7 +933,7 @@ func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue,
 				d.Index, d.Name, d.OfName = i, spec.Name, specs[d.Of].Name
 				dups = append(dups, d)
 				logCustomAlertError(logf, tenant, spec.Name, fmt.Errorf(
-					"its series %s is the one _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName))
+					"its series %s is of the shape and severity _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName))
 				errCount++
 				continue
 			}
@@ -953,16 +953,18 @@ func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue,
 }
 
 // CustomAlertDuplicate is one `_custom_alerts` entry the exporter drops
-// because a series it would put on /metrics is one an earlier entry of the
-// same list already puts there (#2031): two series with one label set fail
-// the whole Gather (HTTP 500 for every tenant), so the later entry is
-// dropped, counted on da_custom_alert_parse_errors and logged at ERROR.
+// because an earlier entry of the same list already serves a row of its
+// shape and severity, or its user_slo_objective (customSeriesID): the same
+// series twice fails the whole Gather (HTTP 500 for every tenant, #2031);
+// the same shape and severity under another name or mode fails the shape's
+// shared rule for every tenant (#3112). The later entry is dropped, counted
+// on da_custom_alert_parse_errors and logged at ERROR.
 type CustomAlertDuplicate struct {
 	Index  int    // the dropped entry's index in the list
 	Name   string // its name
 	Of     int    // the index of the entry whose series it repeats
 	OfName string // that entry's name
-	Series string // the repeated series: its metric name and labels
+	Series string // the repeated series: its metric name and the labels that collide
 }
 
 // CustomAlertDuplicates is the `_custom_alerts` entries of one tenant's
@@ -974,22 +976,29 @@ func CustomAlertDuplicates(tenant string, overrides map[string]ScheduledValue) [
 	return dups
 }
 
-// customSeriesID is the identity of one series a resolved custom alert of
-// one tenant puts on /metrics — a user_threshold row (component "custom",
-// its metric and severity, and the recipe_id / name / mode labels
-// resolveOneCustomAlert sets) or, with objective set, its
-// user_slo_objective{recipe_id}: the label sets client_golang refuses to see
-// twice. Not the preflight's stricter rules (one name, one shape+severity per
-// tenant): an entry they refuse but /metrics serves is still served
-// (ValidateTenantCustomAlerts keeps them for tenant-api).
+// customSeriesID is what one tenant may serve once per resolved custom
+// alert: a user_threshold row's shape and severity (its metric, severity
+// and recipe_id — not its name or mode) or, with objective set, its
+// user_slo_objective{recipe_id}.
+//
+// A row is keyed without name and mode because the compiled pack has ONE
+// rule per (recipe_id, severity) for every tenant, joined
+// `on(tenant, version) group_left(name, mode)` to
+// `max by(tenant, version, severity, name, mode) (user_threshold{…})`: two
+// rows of one tenant that differ only in name or mode leave two series on
+// that side, and the evaluation fails ("many-to-many matching not allowed")
+// for EVERY tenant of the shape, not just this one (#3112). Two rows with
+// one label set — the same name too — are the narrower case client_golang
+// refuses to gather (#2031). The preflight's other rule (one name per
+// tenant) stays the preflight's: an entry only it refuses is still served
+// (ValidateTenantCustomAlerts keeps it for tenant-api).
 type customSeriesID struct {
-	objective                              bool
-	metric, severity, recipeID, name, mode string
+	objective                  bool
+	metric, severity, recipeID string
 }
 
 func customRowID(r ResolvedThreshold) customSeriesID {
-	return customSeriesID{metric: r.Metric, severity: r.Severity,
-		recipeID: r.CustomLabels["recipe_id"], name: r.CustomLabels["name"], mode: r.CustomLabels["mode"]}
+	return customSeriesID{metric: r.Metric, severity: r.Severity, recipeID: r.CustomLabels["recipe_id"]}
 }
 
 // customAlertSeriesCollision reports whether a series of one resolved
@@ -998,8 +1007,8 @@ func customAlertSeriesCollision(rows []ResolvedThreshold, obj *ResolvedSloObject
 	for _, r := range rows {
 		if of, taken := owner[customRowID(r)]; taken {
 			return CustomAlertDuplicate{Of: of, Series: fmt.Sprintf(
-				"user_threshold{component=%q, metric=%q, severity=%q, recipe_id=%q, name=%q, mode=%q}",
-				r.Component, r.Metric, r.Severity, r.CustomLabels["recipe_id"], r.CustomLabels["name"], r.CustomLabels["mode"])}, true
+				"user_threshold{component=%q, metric=%q, severity=%q, recipe_id=%q}",
+				r.Component, r.Metric, r.Severity, r.CustomLabels["recipe_id"])}, true
 		}
 	}
 	if obj != nil {

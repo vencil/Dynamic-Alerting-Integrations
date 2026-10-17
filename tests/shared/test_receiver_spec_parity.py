@@ -59,6 +59,11 @@ validation even though the pipeline would use it.
 
 The schema reader fails on any presence-shaping keyword or branch shape it
 does not model, so an unmodelled constraint cannot read as "no constraint".
+
+It also pins the receiver-type enums of docs/schemas/domain-policy.schema.json
+(`allowed_receiver_types` / `forbidden_receiver_types`, #3116) to the same
+set, both ways: the generator refuses a policy entry that is not a
+RECEIVER_TYPES key.
 """
 from __future__ import annotations
 
@@ -161,6 +166,31 @@ def test_sources_are_read_not_empty():
     assert len(SCHEMA) >= 6
     assert set(SCHEMA) == set(PYTHON)
     assert len(CASES) >= 7
+
+
+_DOMAIN_POLICY_SCHEMA = os.path.join(_REPO_ROOT, "docs", "schemas",
+                                     "domain-policy.schema.json")
+_POLICY_TYPE_FIELDS = ("allowed_receiver_types", "forbidden_receiver_types")
+
+
+@pytest.mark.parametrize("field", _POLICY_TYPE_FIELDS)
+def test_domain_policy_receiver_type_enum_is_the_receiver_set(field):
+    """#3116: a domain policy's receiver-type lists name the receiver types
+    the generator renders, no more and no fewer. The generator refuses the
+    tree on any other entry (`unknown_receiver_type_entries`, keyed on
+    RECEIVER_TYPES), so an enum value it lacks (`opsgenie` was one) passes
+    schema validation yet refuses every run, and a receiver type the enum
+    lacks cannot be constrained under schema validation."""
+    with open(_DOMAIN_POLICY_SCHEMA, encoding="utf-8") as f:
+        prop = json.load(f)["definitions"]["policyConstraints"]["properties"][field]
+    enum = prop["items"]["enum"]
+    assert len(enum) == len(set(enum)), f"{field}: duplicate enum value in {enum}"
+    assert set(enum) == set(RECEIVER_TYPES) == set(SCHEMA), (
+        f"domain-policy.schema.json {field} enum {sorted(enum)} != generator "
+        f"RECEIVER_TYPES {sorted(RECEIVER_TYPES)} / tenant-config.schema.json "
+        f"receiver types {sorted(SCHEMA)}")
+    for example in prop.get("examples", []):
+        assert set(example) <= set(enum), f"{field}: example {example} outside the enum"
 
 
 @pytest.mark.parametrize("rtype", sorted(SCHEMA))

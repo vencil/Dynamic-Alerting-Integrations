@@ -44,7 +44,7 @@ verified-at-version: v2.8.0
 留在扁平 layout 平台**完全支援**（v2.7.0 起雙模式並存無 EOL 計劃），但你會錯失：
 
 - **Cascading defaults**：threshold 改一處 → 整個 region/env 受影響的 tenants 全部更新；扁平要逐 tenant 改
-- **Blast-radius scope 訊號**：alerts dashboard 上 `da_config_blast_radius_tenants_affected{scope=domain}` 在扁平 mode 永遠是 `tenant`，看不出影響範圍
+- **Blast-radius scope 訊號**：alerts dashboard 上 `da_config_blast_radius_tenants_affected` 的 `scope` 在扁平 mode 只會是 `tenant`（改租戶檔）或 `global`（改根目錄 `_defaults.yaml`），不會出現 `domain`／`region`，看不出改動落在哪一層
 - **GitOps PR 自然分塊**：扁平大型變更只能單一 PR，hierarchy-aware chunking 自動按 domain 切多個小 PR
 - **遷移時的 hierarchy-aware rollback**：incremental migration playbook 的反序退版表預設 hierarchy；扁平只能逐 PR revert
 

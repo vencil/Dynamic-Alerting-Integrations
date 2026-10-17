@@ -56,23 +56,21 @@ FIXTURES: dict[str, dict[str, str]] = {
         "beta.yaml": _tenant("beta", _EMAIL)
         + "    _severity_dedup: disable\n",
     },
-    # ADR-007 domain policy: violations, an escalation miss, a leak, and
-    # malformed constraints only --strict reports.
+    # ADR-007 domain policy: violations, an escalation miss and a leak.
+    # (#3116: the malformed constraints it also held refuse the whole tree
+    # in every mode now — they moved to `policy_unusable`.)
     "policy": {
         "_defaults.yaml": _DEFAULTS,
         "_domain_policy.yaml": (
             "domain_policies:\n"
             "  finance:\n"
-            "    tenants: [alpha, beta, {nested: 1}]\n"
+            "    tenants: [alpha, beta]\n"
             "    constraints:\n"
             "      forbidden_receiver_types: [webhook]\n"
             "      allowed_receiver_types: [email, pagerduty]\n"
             "      max_repeat_interval: 1h\n"
-            "      min_group_wait: banana\n"
             "      enforce_group_by: [tenant, severity]\n"
             "      require_critical_escalation: true\n"
-            "  broken:\n"
-            "    tenants: alpha\n"
         ),
         "alpha.yaml": _tenant("alpha"),
         "beta.yaml": _tenant(
@@ -130,7 +128,25 @@ FIXTURES: dict[str, dict[str, str]] = {
         "alpha.yaml": _tenant("alpha"),
         "Bad_Id.yaml": _tenant("Bad_Id"),
     },
-    # ADR-007 --strict: a domain policy file nothing can be read from.
+    # #3116: policies that cannot be enforced as written — refused in every
+    # mode (a `tenants` entry that names no tenant, an unreadable bound, a
+    # `tenants` that is not a list).
+    "policy_unusable": {
+        "_defaults.yaml": _DEFAULTS,
+        "_domain_policy.yaml": (
+            "domain_policies:\n"
+            "  finance:\n"
+            "    tenants: [alpha, beta, {nested: 1}]\n"
+            "    constraints:\n"
+            "      forbidden_receiver_types: [webhook]\n"
+            "      min_group_wait: banana\n"
+            "  broken:\n"
+            "    tenants: alpha\n"
+        ),
+        "alpha.yaml": _tenant("alpha"),
+    },
+    # ADR-007: a domain policy file nothing can be read from (#3116: refused
+    # in every mode).
     "policy_file": {
         "_defaults.yaml": _DEFAULTS,
         "_domain_policy.yaml": "domain_policies:\n  - one\n  - two\n",

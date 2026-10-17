@@ -160,10 +160,24 @@ def test_strict_policy_violation_document(tmp_path):
     [leak] = _records(doc, kind="critical_escalation_leak")
     assert (leak["tenant"], leak["severity"], leak["blocks"], leak["field"]) == (
         "beta", "warning", "never", "routes[0].receiver.type")
-    unusable = {(r["policy"], r["field"])
+    assert not _records(doc, kind="domain_policy_unusable")
+
+
+@pytest.mark.parametrize("mode", list(cases.MODES))
+def test_policy_unusable_document(tmp_path, mode):
+    """#3116: every `domain_policy_unusable` refuses the whole tree in every
+    mode (it was a strict-only ERROR): the itemised findings, blocks
+    "always", and the refusal's framing — nothing else, since a refused run
+    prints nothing else."""
+    _d, res, doc, _out = _run(tmp_path, "policy_unusable", mode)
+    assert res.returncode == doc["exit_code"] == 1
+    unusable = {(r["policy"], r["field"], r["blocks"], r["severity"])
                 for r in _records(doc, kind="domain_policy_unusable")}
-    assert unusable == {("broken", "tenants"), ("finance", "tenants"),
-                        ("finance", "constraints.min_group_wait")}
+    assert unusable == {("broken", "tenants", "always", "error"),
+                        ("finance", "tenants", "always", "error"),
+                        ("finance", "constraints.min_group_wait", "always", "error")}
+    assert {r["kind"] for r in doc["findings"]} == {
+        "domain_policy_unusable", "refusal_summary"}
 
 
 def test_lenient_policy_violation_is_a_warning_that_blocks_under_strict(tmp_path):
@@ -195,12 +209,17 @@ def test_refusal_documents(tmp_path, fixture, rc, kind, where):
     assert all(r["blocks"] == "always" for r in doc["findings"])
 
 
-def test_policy_file_unusable_document(tmp_path):
-    _d, res, doc, _out = _run(tmp_path, "policy_file", "validate_strict")
-    assert res.returncode == 1
-    [rec] = doc["findings"]
-    assert (rec["kind"], rec["file"], rec["blocks"], rec["severity"]) == (
-        "domain_policy_unusable", "_domain_policy.yaml", "strict", "error")
+@pytest.mark.parametrize("mode", list(cases.MODES))
+def test_policy_file_unusable_document(tmp_path, mode):
+    """#3116: refused in every mode now (blocks "always"; it was a
+    strict-only ERROR, and a lenient run dropped every policy at rc 0)."""
+    _d, res, doc, _out = _run(tmp_path, "policy_file", mode)
+    assert res.returncode == doc["exit_code"] == 1
+    [rec] = _records(doc, kind="domain_policy_unusable")
+    assert (rec["file"], rec["field"], rec["blocks"], rec["severity"]) == (
+        "_domain_policy.yaml", "domain_policies", "always", "error")
+    assert {r["kind"] for r in doc["findings"]} == {
+        "domain_policy_unusable", "refusal_summary"}
 
 
 def test_skipped_entry_document(tmp_path):
@@ -404,8 +423,11 @@ def test_blocks_restates_todays_rule(tmp_path, capsys, fixture, strict):
     for f in stream:
         blocking = gv.blocking_generation_errors([f]) == [f]
         policy_err = gar._policy_errors([f]) == [f]
+        # #2906 / #3116: a field-type error (a `domain_policy_unusable`
+        # included) refuses the whole tree in every mode, too.
         tree_or_collision = (gv.is_routing_tree_error(f)
-                             or gv.is_receiver_name_collision(f))
+                             or gv.is_receiver_name_collision(f)
+                             or gv.is_field_type_error(f))
         assert (f.blocks in ("validate", "always")) == blocking, f
         assert (f.blocks == "always") == tree_or_collision, f
         if policy_err:
