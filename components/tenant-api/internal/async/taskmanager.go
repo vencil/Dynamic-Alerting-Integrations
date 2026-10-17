@@ -11,6 +11,9 @@ package async
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -63,6 +66,27 @@ type Task struct {
 	Results   []TaskResult `json:"results,omitempty"`
 	Summary   string       `json:"summary,omitempty"`
 	Error     string       `json:"error,omitempty"`
+	// Owner identifies who submitted the task (#3123): the poll endpoint
+	// shows the task to that caller only. Opaque to this package; never on
+	// the wire.
+	Owner string `json:"-"`
+}
+
+// ErrDuplicateTaskID is Submit's refusal of an id already held by a task.
+var ErrDuplicateTaskID = errors.New("async: task id already in use")
+
+// NewTaskID returns a fresh task id: 128 random bits, hex (#3123). Task ids
+// used to be "batch-<yyyymmdd>-<op count>" / "group-batch-<group>-<ts>", which
+// anyone could guess, and two batches with the same date and op count shared
+// one.
+func NewTaskID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand.Read does not fail on supported platforms (Go 1.24+
+		// crashes the process instead); a predictable id is never an option.
+		panic(fmt.Sprintf("async: crypto/rand: %v", err))
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // TaskFunc is the function signature for work submitted to the pool.
@@ -133,17 +157,19 @@ func NewManager(workerCount int) *Manager {
 	return m
 }
 
-// Submit enqueues a TaskFunc for execution and returns a Task with status "pending".
-// taskID must be unique; the format "batch-{YYYYMMDD}-{count}" or
-// "group-batch-{groupID}-{timestamp}" is pre-reserved from existing code.
-// If a task with the same ID already exists, it is returned unchanged.
-func (m *Manager) Submit(taskID string, fn TaskFunc) *Task {
+// Submit enqueues a TaskFunc for execution and returns a Task with status
+// "pending", owned by owner (Task.Owner). taskID should come from NewTaskID.
+//
+// An id already held by a task is refused with ErrDuplicateTaskID and fn is
+// not run (#3123). Submit used to return the EXISTING task instead: the later
+// batch was silently dropped and its caller handed — and told to poll —
+// somebody else's task.
+func (m *Manager) Submit(taskID, owner string, fn TaskFunc) (*Task, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// If task already exists, return it (prevent duplicates).
-	if t, ok := m.tasks[taskID]; ok {
-		return t
+	if _, ok := m.tasks[taskID]; ok {
+		return nil, fmt.Errorf("%w: %s", ErrDuplicateTaskID, taskID)
 	}
 
 	now := time.Now().UTC()
@@ -153,6 +179,7 @@ func (m *Manager) Submit(taskID string, fn TaskFunc) *Task {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Results:   []TaskResult{},
+		Owner:     owner,
 	}
 	m.tasks[taskID] = task
 
@@ -167,7 +194,7 @@ func (m *Manager) Submit(taskID string, fn TaskFunc) *Task {
 		task.UpdatedAt = time.Now().UTC()
 	}
 
-	return task
+	return task, nil
 }
 
 // Get retrieves a task by ID, returning a snapshot (deep copy).

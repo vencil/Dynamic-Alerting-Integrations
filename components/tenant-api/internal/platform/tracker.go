@@ -45,10 +45,17 @@ type PollingTracker struct {
 	// addresses the root cause).
 	clock clockwork.Clock
 
-	mu           sync.RWMutex
-	pendingPRs   []PRInfo
-	byTenant     map[string]PRInfo   // tenantID → most recent pending PR/MR
-	claimed      map[string]struct{} // tenantID → in-flight PR/MR creation claim
+	mu         sync.RWMutex
+	pendingPRs []PRInfo
+	byTenant   map[string]PRInfo   // tenantID → most recent pending PR/MR
+	claimed    map[string]struct{} // tenantID → in-flight PR/MR creation claim
+	// batchTenants maps a batch PR/MR's head branch to the tenants it covers,
+	// as RegisterPR recorded them when this process created it (#3123). The
+	// forge's list of open PRs/MRs carries no trustworthy tenant list — the
+	// branch names none, and the PR body is free text anyone with write access
+	// to the repository can edit — so Sync re-attaches this one. A batch PR/MR
+	// absent from it (created before a restart) keeps an empty Tenants.
+	batchTenants map[string][]string
 	syncInterval time.Duration
 	lastSync     time.Time
 
@@ -83,6 +90,7 @@ func NewPollingTracker(lister Lister, provider string, syncInterval time.Duratio
 		clock:        clockwork.NewRealClock(),
 		byTenant:     make(map[string]PRInfo),
 		claimed:      make(map[string]struct{}),
+		batchTenants: make(map[string][]string),
 		syncInterval: syncInterval,
 	}
 }
@@ -124,10 +132,32 @@ func (t *PollingTracker) WatchLoop(stopCh <-chan struct{}) {
 // Exported (vs. internal sync()) so tests can drive the poll
 // deterministically without waiting on the WatchLoop ticker.
 func (t *PollingTracker) Sync() {
+	// #3123: which batch records existed BEFORE the forge call. A record
+	// missing from the listing is dropped only if it was already known then —
+	// one registered while the call was in flight describes a PR the listing
+	// may simply not show yet. A copy of the key set, taken under the lock:
+	// RegisterPR writes the map, so it must not be read outside the lock.
+	t.mu.RLock()
+	before := make(map[string]struct{}, len(t.batchTenants))
+	for ref := range t.batchTenants {
+		before[ref] = struct{}{}
+	}
+	t.mu.RUnlock()
+
 	prs, err := t.lister()
 	if err != nil {
 		slog.Warn("tracker sync failed", "provider", t.provider, "error", err)
 		return
+	}
+
+	// A batch branch names no tenant; its tenants are re-attached below,
+	// under the lock, from the records current at that moment.
+	prs = append([]PRInfo(nil), prs...)
+	for i := range prs {
+		if IsBatchBranch(prs[i].HeadRef) {
+			prs[i].TenantID = ""
+			prs[i].Tenants = nil
+		}
 	}
 
 	byTenant := make(map[string]PRInfo, len(prs))
@@ -157,6 +187,37 @@ func (t *PollingTracker) Sync() {
 	}
 
 	t.mu.Lock()
+	// #3123: a listed batch PR/MR gets back the tenants this process recorded
+	// for it, and only those. Records for batches no longer listed are
+	// dropped, except one registered during the forge call (not in before).
+	kept := make(map[string][]string, len(t.batchTenants))
+	for i := range prs {
+		if !IsBatchBranch(prs[i].HeadRef) {
+			continue
+		}
+		if tenants, ok := t.batchTenants[prs[i].HeadRef]; ok {
+			prs[i].Tenants = append([]string(nil), tenants...)
+			kept[prs[i].HeadRef] = tenants
+		}
+	}
+	for ref, tenants := range t.batchTenants {
+		if _, known := before[ref]; !known {
+			kept[ref] = tenants
+		}
+	}
+	t.batchTenants = kept
+	// Each covered tenant resolves to its open batch PR/MR, as RegisterPR
+	// left it: without this a sync made the covered tenants look PR-less, so
+	// ClaimTenant let a second PR/MR be opened on a tenant file the open
+	// batch already changes (the dedup lost). Same newest-wins rule as the
+	// single-tenant entries above.
+	for _, pr := range prs {
+		for _, id := range pr.Tenants {
+			if existing, ok := byTenant[id]; !ok || pr.Number > existing.Number {
+				byTenant[id] = pr
+			}
+		}
+	}
 	t.pendingPRs = prs
 	t.byTenant = byTenant
 	t.lastSync = t.clock.Now()
@@ -291,9 +352,33 @@ func (t *PollingTracker) ReleaseClaim(tenantID string) {
 // before the next poll. If the same tenant already has an entry, the
 // existing entry is replaced (avoids transient duplicates between
 // "client just created" and "next sync confirms it").
+//
+// A batch PR/MR (pr.Tenants non-empty, #3123) is ONE entry covering all its
+// tenants: it is listed once, each covered tenant resolves to it
+// (PendingPRForTenant / HasPendingPR), and its tenant list is kept for Sync to
+// re-attach. It used to be registered once per tenant, which listed it to
+// anyone who could read any one of them.
 func (t *PollingTracker) RegisterPR(pr PRInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if len(pr.Tenants) > 0 {
+		pr.TenantID = ""
+		pr.Tenants = append([]string(nil), pr.Tenants...)
+		t.batchTenants[pr.HeadRef] = pr.Tenants
+		for _, id := range pr.Tenants {
+			delete(t.claimed, id)
+			t.byTenant[id] = pr
+		}
+		for i, existing := range t.pendingPRs {
+			if existing.HeadRef == pr.HeadRef {
+				t.pendingPRs[i] = pr
+				return
+			}
+		}
+		t.pendingPRs = append(t.pendingPRs, pr)
+		return
+	}
 
 	// The real PR now represents the pending state — supersede any
 	// synchronous claim so it doesn't outlive the PR (a stale claim would

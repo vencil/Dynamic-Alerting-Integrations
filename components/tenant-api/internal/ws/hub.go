@@ -5,10 +5,19 @@
 //
 // Design:
 //   - Hub maintains a set of client channels (buffered, 16 events per client)
-//   - Broadcast sends events to all connected clients
+//   - Broadcast sends each event to the clients whose filter admits it (#3123)
 //   - SSE endpoint (GET /api/v1/events) streams JSON events with proper headers
 //   - Slow clients (full buffer) are disconnected to prevent blocking broadcasts
 //   - Events include type, tenant_id, timestamp, and optional detail
+//
+// #3123: the route in front of the stream only checks read on "*", which an
+// org- or metadata-scoped rule passes (those axes are shadow-only there), so
+// the route is not an isolation barrier. Every subscriber therefore carries a
+// filter, built by the caller from the request's principal (Handler), and
+// Broadcast delivers an event only to subscribers whose filter admits it. A
+// subscriber without a filter receives no broadcast event at all — only the
+// stream's own control events (connected / close / server_shutdown) — so a
+// forgotten wiring fails closed.
 package ws
 
 import (
@@ -34,7 +43,22 @@ type Event struct {
 	// pod instead of stampeding it. omitempty so every other event type stays byte-
 	// identical on the wire.
 	ReconnectDelayMs int `json:"reconnect_delay_ms,omitempty"`
+	// Tenant is the tenant whose readers may receive this event (#3123); it is
+	// what a subscriber's filter judges, and never goes on the wire. Empty means
+	// the event is not tied to one tenant (a groups / views / policy write),
+	// which a filter should admit only for a caller who reads every tenant.
+	Tenant string `json:"-"`
 }
+
+// Filter decides whether one subscriber receives a broadcast event (#3123).
+// It is called by Broadcast, once per event per subscriber, at the moment the
+// event is broadcast — not once at subscribe time — so it must judge with the
+// state current at that moment (see Handler).
+type Filter func(Event) bool
+
+// FilterFor builds the Filter for one SSE request, typically from the
+// request's authenticated principal.
+type FilterFor func(*http.Request) Filter
 
 // Config tunes SSE per-client liveness (#143). All three are independently
 // optional (0 = disabled); see the field docs for what disabling each costs.
@@ -89,8 +113,10 @@ func DefaultConfig() Config {
 
 // Hub manages SSE client connections and broadcasts events.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[chan Event]struct{}
+	mu sync.RWMutex
+	// clients maps each subscriber's channel to its filter (#3123); a nil
+	// filter admits no broadcast event.
+	clients map[chan Event]Filter
 	cfg     Config
 	// shuttingDown latches true the moment Shutdown begins. Subscribe refuses
 	// new streams once set, so a request that reaches ServeHTTP after Shutdown
@@ -118,7 +144,7 @@ func NewHub() *Hub {
 // builds the Config from TA_SSE_* env vars and calls this.
 func NewHubWithConfig(cfg Config) *Hub {
 	h := &Hub{
-		clients: make(map[chan Event]struct{}),
+		clients: make(map[chan Event]Filter),
 		cfg:     cfg,
 	}
 	activeHub.Store(h)
@@ -136,14 +162,20 @@ func ClientCountSnapshot() (int, bool) {
 	return 0, false
 }
 
-// Broadcast sends an event to all connected clients.
-// Slow clients whose channel buffer is full are disconnected silently.
+// Broadcast sends an event to every connected client whose filter admits it
+// (#3123). Slow clients whose channel buffer is full are disconnected
+// silently. Filtering happens here, before the event is queued, so an event a
+// subscriber may not see never occupies its buffer: a burst of other tenants'
+// writes can neither disconnect it as "slow" nor be timed through it.
 func (h *Hub) Broadcast(evt Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	var slow []chan Event
-	for ch := range h.clients {
+	for ch, allow := range h.clients {
+		if allow == nil || !allow(evt) {
+			continue
+		}
 		select {
 		case ch <- evt:
 			// Event sent successfully
@@ -161,16 +193,18 @@ func (h *Hub) Broadcast(evt Event) {
 }
 
 // Subscribe adds a new client channel and returns it. The channel is buffered
-// with a capacity of 16 events. Returns nil once Shutdown has begun, so callers
-// must not open a new SSE stream after shutdown (ServeHTTP returns 503).
-func (h *Hub) Subscribe() chan Event {
+// with a capacity of 16 events. allow is the subscriber's filter (#3123): it
+// receives only the broadcast events allow admits, and none at all when allow
+// is nil. Returns nil once Shutdown has begun, so callers must not open a new
+// SSE stream after shutdown (ServeHTTP returns 503).
+func (h *Hub) Subscribe(allow Filter) chan Event {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.shuttingDown {
 		return nil
 	}
 	ch := make(chan Event, 16)
-	h.clients[ch] = struct{}{}
+	h.clients[ch] = allow
 	return ch
 }
 
@@ -232,9 +266,31 @@ func (h *Hub) Shutdown(reconnectDelay time.Duration) {
 	}
 }
 
-// ServeHTTP implements http.Handler for the SSE endpoint.
-// GET /api/v1/events — clients connect and receive streaming JSON events.
+// ServeHTTP implements http.Handler for the SSE endpoint WITHOUT a filter: the
+// stream carries its own control events (connected, close, server_shutdown)
+// and no broadcast event (#3123). Production serves GET /api/v1/events through
+// Handler with a per-request filter; this fail-closed form exists so that
+// mounting the hub directly can never stream other tenants' writes.
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.serve(w, r, nil)
+}
+
+// Handler returns the SSE endpoint handler (GET /api/v1/events) whose
+// subscriber filter filterFor builds from each request (#3123). filterFor runs
+// once per connection; the Filter it returns runs once per broadcast event, so
+// a Filter that reads live state (the RBAC snapshot, the tenant→org mapping)
+// judges every event with the state current when that event is broadcast.
+func (h *Hub) Handler(filterFor FilterFor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var allow Filter
+		if filterFor != nil {
+			allow = filterFor(r)
+		}
+		h.serve(w, r, allow)
+	}
+}
+
+func (h *Hub) serve(w http.ResponseWriter, r *http.Request, allow Filter) {
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -277,7 +333,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return write(fmt.Sprintf("data: %s\n\n", data))
 	}
 
-	ch := h.Subscribe()
+	ch := h.Subscribe(allow)
 	if ch == nil {
 		// Shutdown already began — refuse the new stream so it can't miss the
 		// server_shutdown hint or keep srv.Shutdown waiting. http.Error overrides

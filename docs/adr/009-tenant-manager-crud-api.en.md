@@ -92,7 +92,7 @@ The parsed `_rbac.yaml` is stored in a `sync/atomic.Value`, so handlers read it 
 ```json
 {
   "status": "completed",
-  "task_id": "batch-20260405-0002",
+  "task_id": "3f9c2b7e8a1d4c60b5e7f2a9d8c41e06",
   "results": [
     {"tenant_id": "db-a-prod", "status": "ok"},
     {"tenant_id": "db-b-staging", "status": "error", "message": "conflict: retry after refresh"}

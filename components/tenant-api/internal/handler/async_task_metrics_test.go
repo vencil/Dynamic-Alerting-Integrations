@@ -29,7 +29,7 @@ func TestAsyncTaskPanicMetrics(t *testing.T) {
 	m := async.NewManager(1)
 	defer m.Close()
 	SetAsyncTaskSource(m)
-	m.Submit("boom", func(context.Context) ([]async.TaskResult, error) { panic("boom") })
+	m.Submit("boom", "", func(context.Context) ([]async.TaskResult, error) { panic("boom") })
 	task := pollUntilTerminal(t, m, "boom", 10*time.Second)
 	if task.Status != async.TaskFailed {
 		t.Fatalf("the panicking task: %+v, want failed", task)

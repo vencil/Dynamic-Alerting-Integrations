@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,7 +263,7 @@ func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
     permissions: [read]
 `)
 
-	task := taskMgr.Submit("test-task", func(ctx context.Context) ([]async.TaskResult, error) {
+	task, _ := taskMgr.Submit("test-task", taskOwner(&rbac.VerifiedPrincipal{Subject: "alice@example.com", Source: rbac.SourceHumanHopB}), func(ctx context.Context) ([]async.TaskResult, error) {
 		return []async.TaskResult{
 			{TenantID: "db-a", Status: "ok"},
 			{TenantID: "db-b", Status: "error", Message: "conflict"},
@@ -295,11 +296,13 @@ func TestGetTask_FiltersResultsByTenantAccess(t *testing.T) {
 	}
 }
 
-func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
+func TestGetTask_NoAccessibleResults_SubmitterGetsEmptyResults(t *testing.T) {
 	t.Parallel()
-	// Task touched a tenant the caller cannot read → 403, not 200
-	// with empty results, not 404. The task DOES exist but the
-	// caller has no business knowing about it.
+	// #3123: the submitter sees its own task even when its current read
+	// permission covers none of the task's tenants — the results are filtered
+	// to nothing. (Any other caller gets the missing-task 404:
+	// TestIssue3123_Task_OnlySubmitterSeesIt.) This used to be a 403, which
+	// told any caller that the task exists.
 	taskMgr := async.NewManager(2)
 
 	rbacMgr := newRBACManager(t, `groups:
@@ -308,7 +311,7 @@ func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
     permissions: [read]
 `)
 
-	task := taskMgr.Submit("test-task", func(ctx context.Context) ([]async.TaskResult, error) {
+	task, _ := taskMgr.Submit("test-task", taskOwner(&rbac.VerifiedPrincipal{Subject: "alice@example.com", Source: rbac.SourceHumanHopB}), func(ctx context.Context) ([]async.TaskResult, error) {
 		return []async.TaskResult{{TenantID: "db-secret", Status: "ok"}}, nil
 	})
 	// TRK-224: use shared pollUntilTerminal (see async_test.go).
@@ -319,8 +322,11 @@ func TestGetTask_NoAccessibleResults_Returns403(t *testing.T) {
 	w := servePopulatingRBAC(t, GetTask(&Deps{Tasks: taskMgr, RBAC: rbacMgr}), req,
 		"alice@example.com", []string{"viewers"})
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("zero-access task: status = %d, want 403; body = %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("zero-access task: status = %d, want 200; body = %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "db-secret") {
+		t.Errorf("result for an unreadable tenant leaked: %s", w.Body.String())
 	}
 }
 

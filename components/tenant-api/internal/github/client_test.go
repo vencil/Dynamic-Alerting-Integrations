@@ -174,8 +174,8 @@ func TestListOpenPRs(t *testing.T) {
 	if prs[0].TenantID != "db-a" {
 		t.Errorf("expected tenant_id 'db-a', got %q", prs[0].TenantID)
 	}
-	if prs[1].TenantID != "batch" {
-		t.Errorf("expected tenant_id 'batch', got %q", prs[1].TenantID)
+	if prs[1].TenantID != "" { // #3123: a batch branch names no tenant
+		t.Errorf("batch branch: expected empty tenant_id, got %q", prs[1].TenantID)
 	}
 }
 

@@ -9,6 +9,7 @@ package platform
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -45,6 +46,38 @@ const (
 // matching the others.
 const BranchPrefix = "tenant-api/"
 
+// BatchTenantID is the second segment of every batch branch
+// ("<prefix>batch/<ts>"). A batch branch names no tenant, so this id is
+// reserved: a tenant called "batch" would cut "<prefix>batch/<ts>" too, and
+// the two could not be told apart (#3123). ReservedTenantID is the predicate
+// the write gates check.
+const BatchTenantID = "batch"
+
+// BatchBranchPrefix is the namespace of batch branches (gitops.WritePRBatch).
+const BatchBranchPrefix = BranchPrefix + BatchTenantID + "/"
+
+// IsBatchBranch reports whether ref is a batch branch: a PR/MR covering
+// several tenants, which its branch name does not list.
+func IsBatchBranch(ref string) bool { return strings.HasPrefix(ref, BatchBranchPrefix) }
+
+// ReservedTenantID reports whether id is reserved by tenant-api's branch
+// namespace and so cannot be written as a tenant (#3123).
+func ReservedTenantID(id string) bool { return id == BatchTenantID }
+
+// TenantIDFromBranch is the tenant a tenant-api branch was cut for
+// ("<prefix><tenant>/<ts>"), and "" for a batch branch or any other ref. The
+// forge clients set PRInfo.TenantID from it. A batch branch used to yield
+// "batch", which made every batch PR readable by whoever may read a tenant
+// called "batch" (#3123); its covered tenants are PRInfo.Tenants instead.
+func TenantIDFromBranch(ref string) string {
+	rest, ok := strings.CutPrefix(ref, BranchPrefix)
+	if !ok || IsBatchBranch(ref) {
+		return ""
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	return id
+}
+
 // PRInfo holds metadata about a created or existing pull/merge request.
 // The fields are intentionally provider-neutral; "Number" maps to GitHub PR
 // number or GitLab MR IID (project-scoped).
@@ -55,7 +88,12 @@ type PRInfo struct {
 	Title     string `json:"title"`                // PR/MR title
 	HeadRef   string `json:"head_ref"`             // Source branch name
 	CreatedAt string `json:"created_at,omitempty"` // ISO 8601 timestamp
-	TenantID  string `json:"tenant_id,omitempty"`  // Extracted from branch name
+	TenantID  string `json:"tenant_id,omitempty"`  // Extracted from branch name; empty for a batch PR/MR
+	// Tenants are the tenants a batch PR/MR covers, as tenant-api recorded
+	// them when it created the PR/MR (#3123). Empty for a single-tenant PR/MR,
+	// and for a batch PR/MR this process did not create (e.g. after a
+	// restart): such a PR/MR is shown only to callers who read every tenant.
+	Tenants []string `json:"tenants,omitempty"`
 	// Mergeable is the conflict-visibility tri-state (#646). GitLab populates
 	// it from the list-MR response's detailed_merge_status (free); GitHub
 	// leaves it MergeableUnknown (list-PRs API omits it). See MergeableState.

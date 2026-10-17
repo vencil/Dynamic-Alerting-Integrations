@@ -164,8 +164,17 @@ definitions:
         description: '"open"/"opened", "closed", "merged"'
         type: string
       tenant_id:
-        description: Extracted from branch name
+        description: Extracted from branch name; empty for a batch PR/MR
         type: string
+      tenants:
+        description: |-
+          Tenants are the tenants a batch PR/MR covers, as tenant-api recorded
+          them when it created the PR/MR (#3123). Empty for a single-tenant PR/MR,
+          and for a batch PR/MR this process did not create (e.g. after a
+          restart): such a PR/MR is shown only to callers who read every tenant.
+        items:
+          type: string
+        type: array
       title:
         description: PR/MR title
         type: string
@@ -553,14 +562,11 @@ definitions:
           — a broken file, not a missing tenant. Unrestricted callers (open mode,
           or an admin restricted on no org, environment or domain) get root-relative
           paths; any other caller gets only the file name, and only for a file named
-          after a tenant it could see as a degraded list row.
+          after a tenant it could see as a degraded list row. Other files are left
+          out without trace (not even counted).
         items:
           type: string
         type: array
-      parse_failed_hidden:
-        description: Parse-failed files not named in parse_failed_files because the
-          caller's RBAC scope does not cover them.
-        type: integer
     type: object
   internal_handler.ConfigDerivedState:
     properties:
@@ -920,9 +926,13 @@ definitions:
         minLength: 1
         type: string
       members:
+        description: |-
+          At least one member (#3123): an empty group has nothing to authorize a
+          reader or writer against. Emptying a group is a DELETE.
         items:
           type: string
         maxItems: 1000
+        minItems: 1
         type: array
     required:
     - label
@@ -1660,10 +1670,9 @@ paths:
       - federation
   /api/v1/federation/tokens/{id}:
     delete:
-      description: 'Revokes a federation token — removes its record and adds it to
-        the gateway revoked set. NOTE: revocation is eventually consistent and propagates
-        to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission
-        on the token''s tenant.'
+      description: |-
+        Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.
+        A caller without that permission gets the same 404 as for a token that does not exist, so a token id reveals nothing about its tenant.
       parameters:
       - description: Token ID
         in: path
@@ -1679,12 +1688,9 @@ paths:
             additionalProperties:
               type: string
             type: object
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/ErrorResponse'
         "404":
-          description: Not Found
+          description: No such token, or the caller lacks admin permission on its
+            tenant (indistinguishable)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -1809,15 +1815,20 @@ paths:
               type: string
             type: object
         "400":
-          description: Bad Request
+          description: Invalid id or body; members must list at least one tenant (an
+            empty group is removed with DELETE)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: Forbidden
+          description: The caller may not write a member tenant (of the request, or
+            of the visible stored group)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: Conflict
+          description: 'Code GROUP_ID_UNAVAILABLE: the id is held by a group the caller
+            cannot see — choose another id; do not retry. The body is the same whatever
+            that group holds; it discloses only that the id is taken. Otherwise a
+            state write lost a race (CONFLICT; retry)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -1981,8 +1992,10 @@ paths:
       - identity
   /api/v1/prs:
     get:
-      description: Returns pending pull/merge requests created by tenant-api, filtered
-        by caller's tenant RBAC.
+      description: |-
+        Returns pending pull/merge requests created by tenant-api, filtered by caller's tenant RBAC.
+        A batch PR/MR (several tenants; `tenant_id` empty, `tenants` lists them) is returned only to callers who may read every tenant it covers.
+        A batch PR/MR whose tenants tenant-api did not record (e.g. created before a restart) is returned only to callers who may read every tenant.
       parameters:
       - description: Filter by tenant ID
         in: query

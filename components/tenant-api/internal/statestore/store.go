@@ -57,6 +57,25 @@ func SubsetTenant(key string) (string, bool) {
 // SubsetPrefix is the Keys prefix that lists every federation subset.
 const SubsetPrefix = subsetPrefix
 
+// subsetEntityPrefix + tenant id is the Meta.Entity of a federation subset
+// write.
+const subsetEntityPrefix = "federation/"
+
+// SubsetEntity is the Meta.Entity of a write to tenantID's federation subset.
+func SubsetEntity(tenantID string) string { return subsetEntityPrefix + tenantID }
+
+// EntityTenant is the tenant a Meta.Entity belongs to, and false for an entity
+// that belongs to no single tenant (groups, views, the federation policy, the
+// AccountID registry, an import). The change-event stream (#3123) uses it to
+// send a state write only to callers who may read that tenant.
+func EntityTenant(entity string) (string, bool) {
+	id, ok := strings.CutPrefix(entity, subsetEntityPrefix)
+	if !ok || id == "" {
+		return "", false
+	}
+	return id, true
+}
+
 // Meta describes one write for the audit event and the change notification.
 type Meta struct {
 	// Entity names what changed in the change notification ("groups",

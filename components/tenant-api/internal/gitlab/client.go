@@ -174,11 +174,8 @@ func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
 				CreatedAt: mr.CreatedAt,
 				Mergeable: mergeableFromGitLab(mr.DetailedMergeStatus),
 			}
-			// Extract tenant ID from branch name: tenant-api/{tenantID}/{timestamp}
-			parts := strings.SplitN(mr.SourceBranch, "/", 3)
-			if len(parts) >= 2 {
-				info.TenantID = parts[1]
-			}
+			// tenant-api/{tenantID}/{timestamp}; "" for a batch branch (#3123).
+			info.TenantID = platform.TenantIDFromBranch(mr.SourceBranch)
 			result = append(result, info)
 		}
 

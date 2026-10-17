@@ -31,6 +31,7 @@ import (
 	"github.com/vencil/tenant-api/internal/boundedcall"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/customalerts"
+	"github.com/vencil/tenant-api/internal/platform"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
@@ -482,6 +483,11 @@ func guardTenantID(tenantID string) error {
 	}
 	if !tenantid.Valid(tenantID) {
 		return fmt.Errorf("%w %q: %s", ErrInvalidTenantID, tenantID, tenantid.Description)
+	}
+	// #3123: reserved by the PR branch namespace (platform.ReservedTenantID);
+	// the handler's ValidateWritableTenantID refuses it first.
+	if platform.ReservedTenantID(tenantID) {
+		return fmt.Errorf("%w %q: reserved for batch PR branches", ErrInvalidTenantID, tenantID)
 	}
 	return nil
 }
