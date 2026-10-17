@@ -353,3 +353,197 @@ func TestPutTenant_DeclaredUndecodableMetadataRefused(t *testing.T) {
 		})
 	}
 }
+
+// --- third review round ------------------------------------------------
+
+// F1: a node that contains the declared sections — the `tenants:` value, or
+// the root mapping — carrying an anchor. An alias to it resolves to a node
+// the splice changes whatever the body says, so whether a hidden part of the
+// file aliases it must not decide the answer: for a withheld caller the
+// anchor alone is the refusal, the same 409 with or without the alias.
+func TestPutTenant_AncestorAnchorIsNotAStructuralOracle(t *testing.T) {
+	t.Parallel()
+	sections := foreignInSection + foreignOutSection
+	for _, mode := range foreignModes {
+		for _, tc := range []struct{ name, aliased, plain string }{
+			{"tenants_anchor",
+				"tenants: &t\n" + sections + "x-notes:\n  q: *t\n",
+				"tenants: &t\n" + sections},
+			{"root_anchor",
+				"&r\ntenants:\n" + sections + "x-notes:\n  q: *r\n",
+				"&r\ntenants:\n" + sections},
+		} {
+			t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				wa, fa, diskA, brA := foreignPut(t, mode.pr, tc.aliased, foreignBodyOmitOut, false)
+				wb, fb, diskB, brB := foreignPut(t, mode.pr, tc.plain, foreignBodyOmitOut, false)
+				sameRefusal(t, wa, wb)
+				foreignRefused(t, wa, fa, tc.aliased, diskA, brA, http.StatusConflict, orgEnfTenantOut, "anchor", "alias")
+				foreignRefused(t, wb, fb, tc.plain, diskB, brB, http.StatusConflict, orgEnfTenantOut, "anchor", "alias")
+			})
+		}
+	}
+}
+
+// F2: an alias in a base section the body replaces is taken away with it;
+// no other node resolves through an alias, so removing it rebinds nothing.
+// The withheld caller's write is not refused for it: In's `<<: *d` (d at the
+// root) is replaced, Out and x-defaults stay as they are, Out's `*d` still
+// binds to x-defaults.
+func TestPutTenant_ReplacedSectionAliasIsNotRefused(t *testing.T) {
+	t.Parallel()
+	file := "x-defaults: &d\n  _silent_mode: \"warning\"\n" +
+		"tenants:\n" +
+		"  " + orgEnfTenantIn + ":\n    <<: *d\n" +
+		"  " + orgEnfTenantOut + ":\n    <<: *d\n"
+	want := "x-defaults: &d\n  _silent_mode: \"warning\"\n" +
+		"tenants:\n" +
+		foreignInChanged +
+		"  " + orgEnfTenantOut + ":\n    <<: *d\n"
+	for _, mode := range foreignModes {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			w, _, onDisk, branch := foreignPut(t, mode.pr, file, foreignBodyOmitOut, false)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+			if got := foreignWritten(t, mode.pr, file, onDisk, branch); got != want {
+				t.Errorf("written file:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+// F2's counter-case: a hidden section's alias that points INTO the replaced
+// section is bound by an anchor the replaced section defines, so the write
+// is still refused — on that anchor, the same 409 whether or not the hidden
+// section aliases it.
+func TestPutTenant_ReplacedSectionAnchorStillRefused(t *testing.T) {
+	t.Parallel()
+	in := "  " + orgEnfTenantIn + ":\n    _silent_mode: &x \"critical\"\n"
+	aliased := "tenants:\n" + in + "  " + orgEnfTenantOut + ":\n    _silent_mode: *x\n"
+	plain := "tenants:\n" + in + foreignOutSection
+	for _, mode := range foreignModes {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			wa, fa, diskA, brA := foreignPut(t, mode.pr, aliased, foreignBodyOmitOut, false)
+			wb, fb, diskB, brB := foreignPut(t, mode.pr, plain, foreignBodyOmitOut, false)
+			sameRefusal(t, wa, wb)
+			foreignRefused(t, wa, fa, aliased, diskA, brA, http.StatusConflict, orgEnfTenantOut, "anchor", "alias")
+			foreignRefused(t, wb, fb, plain, diskB, brB, http.StatusConflict, orgEnfTenantOut, "anchor", "alias")
+		})
+	}
+}
+
+// F7: an anchor on a section's KEY counts as one in the section, on both
+// sides. A hidden `&k "zz"` precedes In; an anchor &k on In's key — in the
+// body, or in the file — rebinds a later `*k` (to In's key, or back to the
+// hidden value). With or without that `*k`, the same withheld 409.
+func TestPutTenant_KeyAnchorIsNotAStructuralOracle(t *testing.T) {
+	t.Parallel()
+	hidden := "  " + orgEnfTenantOut + ":\n    _silent_mode: &k \"zz\"\n"
+	const alias = "x-notes:\n  q: *k\n"
+	bodyKeyAnchored := "tenants:\n  &k " + orgEnfTenantIn + ":\n    _silent_mode: \"disable\"\n"
+	baseKeyAnchored := "tenants:\n" + hidden + "  &k " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n"
+	basePlain := "tenants:\n" + hidden + foreignInSection
+	for _, mode := range foreignModes {
+		for _, tc := range []struct{ name, aliased, plain, body string }{
+			{"body_key", basePlain + alias, basePlain, bodyKeyAnchored},
+			{"base_key", baseKeyAnchored + alias, baseKeyAnchored, foreignBodyOmitOut},
+		} {
+			t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				wa, fa, diskA, brA := foreignPut(t, mode.pr, tc.aliased, tc.body, false)
+				wb, fb, diskB, brB := foreignPut(t, mode.pr, tc.plain, tc.body, false)
+				sameRefusal(t, wa, wb)
+				foreignRefused(t, wa, fa, tc.aliased, diskA, brA, http.StatusConflict, orgEnfTenantOut, "zz", "anchor", "alias")
+				foreignRefused(t, wb, fb, tc.plain, diskB, brB, http.StatusConflict, orgEnfTenantOut, "zz", "anchor", "alias")
+			})
+		}
+	}
+}
+
+// F6: /diff answers a proposal declaring a tenant another conf.d file also
+// declares as the PUT it previews does — 409 TENANT_DECLARED_ELSEWHERE, the
+// same body — not with a preview.
+func TestDiffTenant_DeclaredElsewhereAnswersAsPUT(t *testing.T) {
+	t.Parallel()
+	const id, other = "svc-alpha", "svc-beta"
+	const file = "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\n  " + other + ":\n    mysql_connections: \"60\"\n"
+	const body = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n  " + other + ":\n    mysql_connections: \"65\"\n"
+	serve := func(t *testing.T, h func(*Deps) http.HandlerFunc, method, path string) *httptest.ResponseRecorder {
+		dir := setupConfigDir(t, map[string]string{id + ".yaml": file,
+			other + ".yaml": "tenants:\n  " + other + ":\n    mysql_connections: \"60\"\n", "_defaults.yaml": caDefaults})
+		initGitRepo(t, dir)
+		runGit(t, dir, "branch", "-M", "main")
+		deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir),
+			RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
+		req := newRequestWithChiParam(method, path, "id", id, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/yaml")
+		return servePopulatingRBAC(t, h(deps), req, "alice@example.com", []string{"platform"})
+	}
+	put := serve(t, PutTenant, "PUT", "/api/v1/tenants/"+id)
+	diff := serve(t, DiffTenant, "POST", "/api/v1/tenants/"+id+"/diff")
+	if put.Code != http.StatusConflict || diff.Code != put.Code {
+		t.Fatalf("PUT %d, /diff %d; want both 409; PUT: %s /diff: %s", put.Code, diff.Code, put.Body.String(), diff.Body.String())
+	}
+	var pe, de ErrorResponse
+	if json.Unmarshal(put.Body.Bytes(), &pe) != nil || json.Unmarshal(diff.Body.Bytes(), &de) != nil ||
+		pe.Code != CodeTenantDeclaredElsewhere || de.Code != pe.Code || de.Error != pe.Error {
+		t.Errorf("/diff's 409 is not PUT's:\nPUT:   %s\n/diff: %s", put.Body.String(), diff.Body.String())
+	}
+}
+
+// F5, the other side: a full reader's write of a section holding an anchor
+// asks fileShown (the anchor rule needs it), and that ask walks read
+// permission over every tenant the file declares — in shadow mode an
+// unlabeled one is counted as a read would-deny. EXPECTED and not avoidable:
+// "may this caller read every tenant of the file" is the very question that
+// lets a full reader keep the value comparison, and it cannot be answered
+// without asking each tenant. A write with no anchor or alias in what it
+// swaps asks nothing (TestPutTenant_SuccessfulSpliceCountsNoReadWouldDeny).
+func TestPutTenant_AnchoredSpliceCountsTheReadItAsks(t *testing.T) {
+	t.Parallel()
+	const unlabeled = "tenant-org-unlabeled"
+	file := "tenants:\n" + foreignInSection + "  " + unlabeled + ":\n    _silent_mode: \"warning\"\n"
+	body := inSection("    _silent_mode: &a \"disable\"\n")
+	for _, mode := range foreignModes {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			f := newOrgEnfFixture(t, map[string]string{orgEnfTenantIn + ".yaml": file})
+			f.rbacMgr = newRBACManagerWithClaims(t, orgEnfRBACYAML, map[string]string{"org": orgEnfClaimHeader})
+			rec := &ScopeWouldDenyMetrics{}
+			f.rbacMgr.SetScopeAuditor(rec)
+			d := f.deps()
+			if mode.pr {
+				d.WriteMode, d.PRClient, d.PRTracker = WriteModePR, &mockPlatformClient{}, &mockPlatformTracker{}
+			}
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(body))
+			w := httptest.NewRecorder()
+			wrapWithRBACMiddleware(PutTenant(d), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).
+				ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (a full reader in shadow mode); body=%s", w.Code, w.Body.String())
+			}
+			if snap := rec.Snapshot(); snap["org"] == 0 {
+				t.Errorf("would-deny{axis=org} = 0: the anchor rule's fileShown ask over the unlabeled tenant was not counted")
+			} else {
+				t.Logf("would-deny{axis=org} = %d", snap["org"])
+			}
+		})
+	}
+}
+
+// F4 (NIT): with no RBAC manager (a test-only state) neither #2405's bit
+// nor the undecodable-metadata bit is granted — both fail closed alike.
+func TestMayWriteUndecodableMetadata_NoRBACFailsClosed(t *testing.T) {
+	t.Parallel()
+	d := &Deps{}
+	r := httptest.NewRequest("PUT", "/api/v1/tenants/x", nil)
+	if mayWriteUndecodableMetadata(d, rbac.RequestPrincipal(r)) {
+		t.Error("mayWriteUndecodableMetadata = true without an RBAC manager, want false (fail closed)")
+	}
+	if mayWriteUndecodableMetadata(d, nil) != mayReplaceUnparseable(r, d) {
+		t.Error("mayWriteUndecodableMetadata and mayReplaceUnparseable disagree without an RBAC manager")
+	}
+}

@@ -29,9 +29,10 @@ package handler
 //     refused, fail closed;
 //   - for a caller who may not read every tenant of the file (#3050's
 //     fileShown), that value comparison would be an oracle on the hidden
-//     sections, so a declared section — the body's, or the one it replaces —
-//     holding any anchor or alias is refused outright, whatever the values
-//     (swapsAnchorsOrAliases, in spliceDeclaredSections);
+//     sections, so a body section holding any anchor or alias, a replaced
+//     section holding an anchor, or a root or `tenants:` node carrying an
+//     anchor is refused outright, whatever the values (swapsAnchorsOrAliases
+//     and the ancestor rule, in spliceDeclaredSections);
 //   - a tenant the body declares besides {id} that another conf.d file also
 //     declares (#2078's duplicate) is refused under the writer's lock, 409
 //     TENANT_DECLARED_ELSEWHERE (gitops: ensureDeclaredSectionsNotElsewhere);
@@ -297,8 +298,12 @@ func declaredOnBase(d *Deps, p *rbac.VerifiedPrincipal, configDir, tenantID, bod
 // with no scope at all (rbac.PlatformUnrestricted: no org-scope,
 // environments or domains), whose verdict no label could change — the one
 // caller who can still repair such a section through the API.
+//
+// A Deps without an RBAC manager (test-only) does not get it, fail closed as
+// mayReplaceUnparseable: neither caller reaches here then
+// (declaredTenantsJudge returns before, with no gates for declaredOnBase).
 func mayWriteUndecodableMetadata(d *Deps, p *rbac.VerifiedPrincipal) bool {
-	return d.RBAC == nil || d.RBAC.PlatformUnrestricted(p, rbac.PermWrite)
+	return d.RBAC != nil && d.RBAC.PlatformUnrestricted(p, rbac.PermWrite)
 }
 
 // writeDeclaredUnwritableOnBase answers errDeclaredUnwritableOnBase.
@@ -468,16 +473,28 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	// comparison here is an oracle whatever it compares.
 	//
 	// So such a caller's write is refused, with the one withheld 409, as soon
-	// as a declared section — the body's, or the base's it replaces, its key
-	// included — holds any anchor or alias: decided on the body and on the
-	// sections the caller writes alone, never on hidden content. Without
-	// them the splice cannot change the binding of any alias it does not
-	// declare, and verifySplice's verdict does not depend on a hidden value.
-	// A caller who may read every tenant of the file has no hidden value to
-	// learn and keeps the value comparison. fileShown is asked only here and
-	// on a refusal (spliceShown), so a write with no anchor or alias in what
-	// it swaps never asks it.
-	if swapsAnchorsOrAliases(bodyPairs, basePairs, baseIDs, declared) && !isShown.get() {
+	// as a declared section the body brings in holds any anchor or alias, or
+	// one of the base's it replaces holds an anchor (its key included; see
+	// swapsAnchorsOrAliases for why the base side asks anchors only): decided
+	// on the body and on the sections the caller writes alone, never on
+	// hidden content.
+	//
+	// Likewise when a node that CONTAINS the declared sections — the root
+	// mapping, or the `tenants:` value — carries an anchor (F1): an alias to
+	// it resolves to a node the splice changes whatever the body says, so
+	// verifySplice's verdict would depend on whether some hidden part of the
+	// file aliases it — one structural bit of hidden content. The anchor
+	// itself is on a node the caller sees (the file's skeleton, not a hidden
+	// section), so refusing on it alone, alias or not, answers the same.
+	//
+	// Without any of these the splice cannot change the binding of any alias
+	// it does not declare, nor what one resolves to, and verifySplice's
+	// verdict does not depend on a hidden value. A caller who may read every
+	// tenant of the file has no hidden value to learn and keeps the value
+	// comparison. fileShown is asked only here and on a refusal
+	// (spliceShown), so a write that meets none of these never asks it.
+	ancestorAnchored := root.Anchor != "" || (idx >= 0 && root.Content[2*idx+1].Anchor != "")
+	if (ancestorAnchored || swapsAnchorsOrAliases(bodyPairs, basePairs, baseIDs, declared)) && !isShown.get() {
 		return "", refuse("")
 	}
 
@@ -560,9 +577,21 @@ func spliceRefusal(tenantID string, shown *spliceShown) func(detail string) erro
 	}
 }
 
-// swapsAnchorsOrAliases reports whether a section the splice swaps holds an
-// anchor or an alias anywhere, its key included: one the body declares, or
-// one of the base's that a declared section replaces.
+// swapsAnchorsOrAliases reports whether the splice swaps in a section the
+// body declares holding an anchor or an alias anywhere, its key included, or
+// swaps out a base section a declared one replaces holding an ANCHOR
+// anywhere, its key included.
+//
+// The two sides differ on purpose (F2). The body is a document of its own:
+// an alias in it resolves to an anchor in it, and once spliced may be bound
+// by an anchor of a hidden section instead, so both are refused. A base
+// section the splice removes changes other aliases' bindings only through
+// the anchors it takes away; an alias it takes away binds nothing — no other
+// node resolves through it — so removing it cannot change what an alias
+// outside the declared sections resolves to. An alias there that points
+// into a section the caller may not read is simply gone, and refusing on it
+// would only refuse a write that leaks nothing (`In: {<<: *d}` with
+// `x-defaults: &d` at the root).
 func swapsAnchorsOrAliases(bodyPairs, basePairs [][2]*yaml.Node, baseIDs []string, declared map[string]bool) bool {
 	for _, p := range bodyPairs {
 		if hasAnchorOrAlias(p[0]) || hasAnchorOrAlias(p[1]) {
@@ -570,7 +599,7 @@ func swapsAnchorsOrAliases(bodyPairs, basePairs [][2]*yaml.Node, baseIDs []strin
 		}
 	}
 	for i, p := range basePairs {
-		if declared[baseIDs[i]] && (hasAnchorOrAlias(p[0]) || hasAnchorOrAlias(p[1])) {
+		if declared[baseIDs[i]] && (hasAnchor(p[0]) || hasAnchor(p[1])) {
 			return true
 		}
 	}
@@ -594,6 +623,24 @@ func hasAnchorOrAlias(n *yaml.Node) bool {
 	return false
 }
 
+// hasAnchor reports whether n or a node under it defines an anchor. An alias
+// is not followed: the anchor it points to is defined, and judged, where it
+// is written.
+func hasAnchor(n *yaml.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Anchor != "" {
+		return true
+	}
+	for _, c := range n.Content {
+		if hasAnchor(c) {
+			return true
+		}
+	}
+	return false
+}
+
 // verifySplice returns refuse's error unless merged keeps base's written
 // YAML everywhere outside the tenants.<declared> sections — the partial-write
 // invariant (verifyPartialWrite), the replaced unit being a whole declared
@@ -609,8 +656,8 @@ func hasAnchorOrAlias(n *yaml.Node) bool {
 // and every effect that has on content it does not declare is an alias
 // outside them resolving differently, which the node comparison refuses.
 // That comparison runs only for a caller the file is shown to: for anyone
-// else a declared section with an anchor or alias never gets here
-// (swapsAnchorsOrAliases), since comparing a rebound alias with what it
+// else a write that could rebind or reshape an alias never gets here
+// (swapsAnchorsOrAliases and the ancestor-anchor rule), since comparing a rebound alias with what it
 // resolved to would answer whether the caller guessed a hidden value.
 func verifySplice(base, merged []byte, body string, declared map[string]bool, tenantID string, names gitops.TenantNames, refuse func(string) error) error {
 	at := func(path []string) error { return refuse(describePath(path, tenantID, names)) }

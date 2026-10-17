@@ -191,7 +191,9 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 // all tenants); anyone else gets PUT's 400 (errPreviewUnparseableBase), not
 // a preview of a write PUT refuses. A splice PUT refuses because it would
 // change what the proposal does not declare is the *putSpliceError PUT
-// answers with (writeDiffError: the same 409).
+// answers with (writeDiffError: the same 409). A proposal declaring a tenant
+// besides tenantID that another conf.d file also declares is PUT's 409
+// TENANT_DECLARED_ELSEWHERE, judged after the splice as PUT judges it.
 //
 // Both callers have already established fileShown on current (or current
 // does not exist): the splice is told so instead of asking it again.
@@ -203,11 +205,19 @@ func previewPut(r *http.Request, d *Deps, tenantID string, current []byte, propo
 		if !mayReplaceUnparseable(r, d) {
 			return "", errPreviewUnparseableBase
 		}
-		return proposed, nil
+		written = proposed
 	case errors.Is(err, gitops.ErrValidation):
 		return proposed, nil
+	case err != nil:
+		return "", err
 	}
-	return written, err
+	// As PUT, after the splice: a tenant the proposal declares besides
+	// tenantID that another conf.d file also declares is PUT's 409
+	// TENANT_DECLARED_ELSEWHERE (writeDiffError), not a preview.
+	if err := d.Writer.PreviewDeclaredSectionsNotElsewhere(tenantID, proposed, current); err != nil {
+		return "", err
+	}
+	return written, nil
 }
 
 // errPreviewUnparseableBase is the 400 PUT answers a caller without #2405's

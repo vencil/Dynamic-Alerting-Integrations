@@ -1460,6 +1460,21 @@ func (w *Writer) ensureDeclaredSectionsNotElsewhere(walk func() (*cfg.TreeScan, 
 	return nil
 }
 
+// PreviewDeclaredSectionsNotElsewhere is ensureDeclaredSectionsNotElsewhere
+// for a preview of a spliced PUT (#3062, POST /diff): the same judgement on
+// the same inputs — the body, and current, the tenant file as the preview
+// read it (nil when it does not exist) — against the file the preview
+// resolves (previewTenantFilePath) on the shared read walk, without a lock,
+// so a body PUT refuses with ErrTenantDeclaredElsewhere is refused by the
+// preview with the same error.
+func (w *Writer) PreviewDeclaredSectionsNotElsewhere(tenantID, yamlContent string, current []byte) error {
+	target, err := w.previewTenantFilePath(tenantID)
+	if err != nil {
+		return err
+	}
+	return w.ensureDeclaredSectionsNotElsewhere(w.scanTreeForRead, tenantID, yamlContent, current, target)
+}
+
 // ensureNotDeclaredElsewhereIn is ensureNotDeclaredElsewhere judged on the
 // walk that walk returns — scanTree on the write path, scanTreeForRead on
 // the preview path (see previewTenantFilePath).
