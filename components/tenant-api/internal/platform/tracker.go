@@ -206,6 +206,18 @@ func (t *PollingTracker) Sync() {
 		}
 	}
 	t.batchTenants = kept
+	// Each covered tenant resolves to its open batch PR/MR, as RegisterPR
+	// left it: without this a sync made the covered tenants look PR-less, so
+	// ClaimTenant let a second PR/MR be opened on a tenant file the open
+	// batch already changes (the dedup lost). Same newest-wins rule as the
+	// single-tenant entries above.
+	for _, pr := range prs {
+		for _, id := range pr.Tenants {
+			if existing, ok := byTenant[id]; !ok || pr.Number > existing.Number {
+				byTenant[id] = pr
+			}
+		}
+	}
 	t.pendingPRs = prs
 	t.byTenant = byTenant
 	t.lastSync = t.clock.Now()

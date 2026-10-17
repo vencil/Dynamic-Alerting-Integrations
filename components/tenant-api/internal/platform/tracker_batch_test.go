@@ -57,6 +57,30 @@ func TestSync_ReattachesRecordedBatchTenants(t *testing.T) {
 	}
 }
 
+// #3123 review round 2: after a Sync, every tenant an open batch PR/MR covers
+// still resolves to it (HasPendingPR / PendingPRForTenant), so ClaimTenant
+// keeps refusing a second PR on that tenant. Sync used to rebuild byTenant
+// from single-tenant entries only.
+func TestSync_CoveredTenantsStillResolveToBatchPR(t *testing.T) {
+	t.Cleanup(ResetMetricsRegistriesForTest)
+	tr := NewPollingTracker(func() ([]PRInfo, error) {
+		return []PRInfo{{Number: 9, HeadRef: batchRefA, WebURL: "https://forge.example/pr/9"}}, nil
+	}, "test", time.Hour)
+	tr.RegisterPR(PRInfo{Number: 9, HeadRef: batchRefA, WebURL: "https://forge.example/pr/9", Tenants: []string{"tenant-a", "tenant-b"}})
+	tr.Sync()
+	for _, id := range []string{"tenant-a", "tenant-b"} {
+		if !tr.HasPendingPR(id) {
+			t.Errorf("after Sync, HasPendingPR(%q) = false while its batch PR is open", id)
+		}
+		if pr, ok := tr.PendingPRForTenant(id); !ok || pr.Number != 9 || len(pr.Tenants) != 2 {
+			t.Errorf("after Sync, PendingPRForTenant(%q) = %+v, %v; want the batch PR", id, pr, ok)
+		}
+		if tr.ClaimTenant(id) {
+			t.Errorf("after Sync, ClaimTenant(%q) succeeded: a second PR could be opened", id)
+		}
+	}
+}
+
 // #3123 review F1: RegisterPR and Sync run concurrently in production (a
 // PR-mode batch vs WatchLoop / RefreshNow). Run under -race: the previous
 // Sync read the record map outside the lock while RegisterPR wrote it.

@@ -1,7 +1,9 @@
 package federation
 
 import (
+	"bytes"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/handler"
@@ -61,5 +63,26 @@ func TestIssue3123_ReservedTenantTokenStillRevocable(t *testing.T) {
 	wrapWithRBACMiddleware(DeleteFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 	if w.Code != 200 {
 		t.Fatalf("revoking a token of tenant \"batch\" = %d %s, want 200", w.Code, w.Body.String())
+	}
+}
+
+// #3123 review round 2: no NEW token is issued for the reserved id.
+func TestIssue3123_ReservedTenantGetsNoNewToken(t *testing.T) {
+	t.Parallel()
+	rbacMgr := newRBACManager(t, fedAdminRBAC)
+	fed := newTestFederation(t)
+	d := &handler.Deps{RBAC: rbacMgr, Federation: fed}
+	req := httptest.NewRequest("POST", "/api/v1/federation/tokens",
+		bytes.NewBufferString(`{"tenant_id":"batch","description":"x"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Email", "ops@example.com")
+	req.Header.Set("X-Forwarded-Groups", "fed-admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(CreateFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "reserved") {
+		t.Errorf("issuing a token for tenant \"batch\" = %d %s, want 400 naming the reservation", w.Code, w.Body.String())
+	}
+	if recs, _ := fed.List("batch"); len(recs) != 0 {
+		t.Errorf("a token was stored for the reserved id: %d record(s)", len(recs))
 	}
 }

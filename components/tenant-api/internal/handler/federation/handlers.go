@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/federation/token"
 	"github.com/vencil/tenant-api/internal/handler"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -125,6 +126,16 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 		// real bar).
 		if err := handler.ValidateTenantID(req.TenantID); err != nil {
 			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		// #3123: no new credential for the id reserved by the batch PR
+		// branch namespace. Only the reservation, not all of
+		// ValidateWritableTenantID: its tenant-id rule (ADR-035) refuses ids
+		// an existing tenant may still carry, and reads/issuance keep
+		// accepting those. Revoking an existing token stays allowed.
+		if platform.ReservedTenantID(req.TenantID) {
+			handler.WriteJSONError(w, r, http.StatusBadRequest,
+				"tenant ID \""+req.TenantID+"\" is reserved: tenant-api names its batch PR branches "+platform.BatchBranchPrefix+"<timestamp>")
 			return
 		}
 

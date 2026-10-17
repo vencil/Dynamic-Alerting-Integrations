@@ -200,9 +200,9 @@ func TestIssue3123_PRs_RecordedTenantsSurviveSync(t *testing.T) {
 		t.Errorf("after sync, the batch PR is visible to a caller who cannot read every covered tenant: %s", body)
 	}
 	f.shareOut(t) // now ORG-ALPHA reads both tenants
-	// Only the bulk path: after a sync the tracker no longer resolves a
-	// covered tenant to its batch PR (PendingPRForTenant), as before #3123.
-	for _, q := range []string{""} {
+	// After a sync a covered tenant still resolves to its batch PR, so the
+	// ?tenant= path finds it too.
+	for _, q := range []string{"", "?tenant=" + orgEnfTenantOut} {
 		var resp PRListResponse
 		if err := json.Unmarshal([]byte(i3123ListPRs(t, f.rbacMgr, d, id, q)), &resp); err != nil {
 			t.Fatal(err)
