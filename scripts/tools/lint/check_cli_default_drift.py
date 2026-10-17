@@ -40,6 +40,7 @@ from typing import Any, NamedTuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
+import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lint_helpers import parse_command_map  # noqa: E402
 
@@ -167,6 +168,9 @@ def introspect_defaults() -> tuple[dict[str, dict[str, Any]], list[str],
                 unscoreable.append(f"{command} (script {script} not found)")
                 continue
             saved_argv, saved_path = sys.argv[:], sys.path[:]
+            # A tool run as __main__ may set this process's crash exit code
+            # (tenant_verify sets 1, #3090); it must not outlive the run.
+            saved_crash = _lib_exitcodes.get_crash_exit_code()
             sys.argv = [str(path)]
             sys.path.insert(0, str(path.parent))
             sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
@@ -199,6 +203,7 @@ def introspect_defaults() -> tuple[dict[str, dict[str, Any]], list[str],
                 blind.append(f"{command} ({type(exc).__name__}: {exc})")
             finally:
                 sys.argv, sys.path = saved_argv, saved_path
+                _lib_exitcodes.set_crash_exit_code(saved_crash)
     finally:
         argparse.ArgumentParser.parse_args = real_parse  # type: ignore[method-assign]
         argparse.ArgumentParser.parse_known_args = real_parse_known  # type: ignore[method-assign]

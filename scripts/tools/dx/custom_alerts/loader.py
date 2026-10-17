@@ -19,7 +19,7 @@ import os
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
@@ -374,13 +374,21 @@ def _skip_record(tenant: str, origin, inst, exc: Exception) -> dict:
 
 
 def build_shapes(config_dir: Path,
-                 max_custom_recipes: int = MAX_CUSTOM_RECIPES_DEFAULT
+                 max_custom_recipes: int = MAX_CUSTOM_RECIPES_DEFAULT,
+                 accepted: Optional[List[dict]] = None,
                  ) -> Tuple[List[dict], Dict[str, int], List[dict]]:
     """Group all effective instances into shapes; return (shapes, per_tenant_count, skipped).
 
     Each shape dict carries the representative params + recipe_id + sorted severities
     union. per_tenant_count is the EFFECTIVE count (own + inherited) of the recipes that
     COMPILED.
+
+    `accepted`, given, receives one dict per recipe instance that COMPILED —
+    `tenant`, `name`, `recipe_id`, `severities`, `origin`, `own` and
+    `disabled` (switched off the way the exporter reads it: compiled, but the
+    exporter serves no row for it by design) — in compile order. #3042: what this
+    compiler builds a rule for, per tenant, to set beside what the exporter
+    serves.
 
     FAIL-SOFT (#1008 / F3 Part B): this is a shared CI gate, so a single bad recipe from
     ANY tenant must not abort the whole compile — that would redden the gate and block
@@ -545,6 +553,15 @@ def build_shapes(config_dir: Path,
         per_tenant[tenant] += len(sevs)
         if is_own:
             own_per_tenant[tenant] += len(sevs)
+        if accepted is not None:
+            # The exporter's own opt-out test: an SLO objective of exactly
+            # `disable` (resolveSloBurnRate); a threshold value any of
+            # disable / disabled / off / false, any case (isDisabled).
+            off = (str(inst.get("objective", "")).strip() == "disable" if is_slo
+                   else _value.strip().lower() in ("disable", "disabled", "off", "false"))
+            accepted.append({"tenant": tenant, "name": name, "recipe_id": rid,
+                             "severities": list(sevs), "origin": origin, "own": is_own,
+                             "disabled": off})
 
         if rid not in shapes:
             shapes[rid] = {
