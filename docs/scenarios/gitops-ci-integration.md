@@ -210,7 +210,7 @@ graph LR
 | Custom Rule Lint | `da-tools lint` | 自訂規則禁止列表檢查 | ⚠️ 不在 pre-commit hook 裡。產出的 GitHub workflow 有這一步，但它被 `if [ -d "rule-packs/custom" ]` 包住，而 `init` **不建立 `rule-packs/`** ⇒ 在新 repo 是 no-op，直到你自己建立那個目錄為止 |
 
 ⛔ **這張表列的是「有沒有人在看」，不是「壞的東西過不去」。** 上面四列裡，會讓驗證 FAIL 的
-只有語法錯與表裡明寫「FAIL、exit 1」的那幾種；其他都是 WARN，而 **WARN 不影響 exit code**。
+只有語法錯、讀不了租戶樹（例如找不到 da-guard，這時是 exit 2），以及表裡明寫「FAIL、exit 1」的那幾種；其他都是 WARN，而 **WARN 不影響 exit code**。
 閾值被 clamp、租戶 key 打錯字（不以 `_` 開頭的）、閾值填成負數——這些都會安靜地通過 commit 與 CI。
 
 ```bash

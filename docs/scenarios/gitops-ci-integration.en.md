@@ -233,8 +233,8 @@ Runs automatically on every PR and push. Checks:
 | Custom Rule Lint | `da-tools lint` | Custom rules deny-list check | ⚠️ Not in the pre-commit hooks. The generated GitHub workflow has the step, but it is wrapped in `if [ -d "rule-packs/custom" ]` and `init` **does not create `rule-packs/`** ⇒ a no-op in a fresh repo until you create that directory yourself |
 
 ⛔ **This table says who is looking, not what gets stopped.** Of the four rows,
-only syntax errors and the cases the table marks "FAIL, exit 1" make validation
-FAIL; everything else is a WARN, and **WARN does not affect the exit code**. A
+only syntax errors, a tenant tree that cannot be read (da-guard missing, say — that
+one exits 2), and the cases the table marks "FAIL, exit 1" make validation FAIL; everything else is a WARN, and **WARN does not affect the exit code**. A
 clamped threshold, a misspelled tenant key (one not starting with `_`), a negative
 threshold — all of those pass commit and CI silently.
 
