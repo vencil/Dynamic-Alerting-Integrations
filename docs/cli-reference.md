@@ -3264,7 +3264,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 多通道通知連通性測試 — 驗證所有已配置 receiver 的可達性，報告連通性狀態。
 
-受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試。只有 receiver **本身的設定**被產生器（`build_receiver_config`）拒收時才不送出（`INVALID_URL`／`INVALID_CONFIG`）；目前不涵蓋路由層的略過，這些 receiver 照常測試（另開 [#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076) 追蹤）：`overrides` 或 `routes` 的項目被產生器略過（例如 override 缺 `alertname`／`metric_group`、`routes[i]` 有不支援的 key），以及主 receiver 被拒收時該租戶的 `overrides`／`routes` 整組不產出。要確認產生器收不收這份設定，跑 `generate-routes --validate`。
+受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試。受測清單是產生器對每個項目（主 receiver、`overrides[i]`、`routes[i]`）的判定，本工具不另外列舉 `_routing`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)）：只送產生器實際產出的 receiver；沒產出的項目照列、不送出、算失敗——receiver **本身的設定**被產生器（`build_receiver_config`）拒收標 `INVALID_URL`／`INVALID_CONFIG`，在路由層被略過標 `NOT_RENDERED` 並附產生器的原因（例如 override 缺 `alertname`／`metric_group`、`routes[i]` 有不支援的 key，以及主 receiver 被拒收或缺少時該租戶的每個 `overrides`／`routes` 項目）。本工具沒有 `--policy`，產生器帶 `--policy` 時因 `allowed_domains` 略過的項目不在判定內。要確認產生器收不收整份設定，跑 `generate-routes --validate`。
 
 **用法**
 
@@ -3295,7 +3295,7 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | 狀態 | 意義 |
 |------|------|
 | `OK` | receiver 回了成功的 HTTP 回應 |
-| `DRY_RUN` | `--dry-run`：路由產生器（`build_receiver_config`）收這個 receiver 本身的設定、port 在 1–65535，未實際連線（不代表產生器會在路由層產出它，見上方 ⚠️）。主機名能否編碼（IDNA）只在送出時檢查，乾跑不涵蓋 |
+| `DRY_RUN` | `--dry-run`：路由產生器產出這個 receiver、port 在 1–65535，未實際連線。主機名能否編碼（IDNA）只在送出時檢查，乾跑不涵蓋 |
 | `SKIPPED` | 沒有可測的 URL（例如 `email`） |
 | `TIMEOUT` | 連線或等待回應超過 `--timeout` |
 | `CONNECTION_REFUSED` | 對端拒絕連線（埠上沒有服務，或被防火牆以 RST 拒絕） |
@@ -3304,7 +3304,8 @@ da-tools test-notification --config-dir <PATH> [--tenant <NAME>] [--dry-run] [--
 | `AUTH_ERROR` | HTTP `401`／`403` |
 | `HTTP_ERROR` | 其他 HTTP 錯誤狀態碼，或回應格式錯誤、被截斷（detail 以 `malformed response:` 開頭） |
 | `INVALID_URL` | receiver 本身的設定被路由產生器（`build_receiver_config`）以 URL 欄位（email 為 `smarthost`）有給但格式不合或不是字串拒收、port 不在 1–65535，或送出時主機名無法編碼、URL 被拒（未送出任何請求） |
-| `INVALID_CONFIG` | receiver 本身的設定被路由產生器（`build_receiver_config`）以其他原因拒收（例如缺必填欄位——URL 欄位缺鍵、空字串或 null 也算、`type` 不認得、選填欄位型別不對），與產生器的判定一致 |
+| `INVALID_CONFIG` | receiver 本身的設定被路由產生器（`build_receiver_config`）以其他原因拒收（例如缺必填欄位——URL 欄位缺鍵、空字串或 null 也算、`type` 不認得、選填欄位型別不對；項目或租戶沒寫 `receiver`、`receiver` 不是物件也算），與產生器的判定一致 |
+| `NOT_RENDERED` | 路由產生器在路由層略過這個項目，Alertmanager 不會有它（未送出任何請求）：`overrides[i]`／`routes[i]` 本身不合格（例如缺 matcher、有不支援的 key、不是 mapping），或該租戶的主 receiver 沒產出、子項目一個都不產出。detail 是產生器自己的原因；主 receiver 沒產出時，本身另有缺陷的子項目也只報這個原因（`NOT_RENDERED`），修好主 receiver 後才會看到它自己的問題；`overrides`／`routes` 不是清單時標在 `<tenant>-overrides`／`<tenant>-routes`（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)） |
 
 `TIMEOUT`、`CONNECTION_REFUSED`、`CONNECTION_ERROR`、`TLS_ERROR` 的 detail 截在 80 字元（含 `via proxy: ` 前綴），較長的錯誤訊息會被切掉。設了 `https_proxy`／`http_proxy` 時，這些狀態可能描述的是到 proxy 的那一段：proxy 的埠沒開是 `CONNECTION_REFUSED`、proxy 主機名解析失敗是 `CONNECTION_ERROR`，http receiver 經 proxy 收到的 `HTTP 502` 是 `HTTP_ERROR`；只有 HTTPS 的 CONNECT 失敗會帶 `via proxy: ` 前綴（含 proxy 回 `504 Connection Timed Out`，這時不標 `TIMEOUT`）。
 
@@ -3329,14 +3330,14 @@ da-tools test-notification --config-dir conf.d/ --ci
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有 receiver 連通正常（或非 CI 模式） |
-| `1` | CI 模式：任一 receiver 連通失敗（receiver 設定無效或 URL 不合法也算，`--dry-run` 不連線時也一樣） |
+| `1` | CI 模式：任一 receiver 失敗（連通失敗、receiver 設定無效或 URL 不合法、產生器不產出的項目 `NOT_RENDERED` 都算，`--dry-run` 不連線時也一樣）。非 CI 模式一律 `0`，但 `--json` 的 `status` 與文字報告的 `Overall` 同樣依失敗與否標 `fail`／`FAIL` |
 | `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752） |
 
 #### explain-route
 
 路由合併管線除錯器 — 顯示每個 tenant 的四層路由合併展開（ADR-007），包括 `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`。
 
-`overrides` 與 `routes` 不列在「最終合併結果」裡，而是列在其後的「生效的子路由」：依比對順序（`overrides` → `routes`）列出產生器實際產出的每條子路由與 receiver，被產生器略過的條目另列並附原因（[#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)）。`--json` 的每個 tenant 多了 `sub_routes` 與 `skipped_sub_routes`；`final` 仍是合併後的原始設定。時長寫成 Alertmanager 不接受的寫法時，產生器會換成平台預設值（`--validate` 擋下），這些行另列在「產生器以平台預設值頂替」一節（主 route 與子路由都算），`--json` 放在 `replaced_values`，與 `skipped_sub_routes` 分開——那些條目仍有產出、只是值被換掉（[#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)）。`_routing_enforced` 只列在第 4 層、不併進 `final`：它在產出的設定裡是 tenant 路由之外**另一條** `continue: true` 路由，不會取代 tenant 自己的 receiver 或 timing（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）。
+`overrides` 與 `routes` 不列在「最終合併結果」裡，而是列在其後的「生效的子路由」：依比對順序（`overrides` → `routes`）列出產生器實際產出的每條子路由與 receiver，被產生器略過的條目另列並附原因（[#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)）。兩份清單都取自產生器對每個項目的判定，與 `test-notification` 同一個來源；租戶的主 receiver 缺少或被拒時，產生器不產出任何子路由，每個 `overrides`／`routes` 項目各列一行「主 receiver 未產出」的原因（[#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)，先前主 receiver 缺少或被拒時都不列）。`--json` 的每個 tenant 多了 `sub_routes` 與 `skipped_sub_routes`；`final` 仍是合併後的原始設定。時長寫成 Alertmanager 不接受的寫法時，產生器會換成平台預設值（`--validate` 擋下），這些行另列在「產生器以平台預設值頂替」一節（主 route 與子路由都算），`--json` 放在 `replaced_values`，與 `skipped_sub_routes` 分開——那些條目仍有產出、只是值被換掉（[#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)）。`_routing_enforced` 只列在第 4 層、不併進 `final`：它在產出的設定裡是 tenant 路由之外**另一條** `continue: true` 路由，不會取代 tenant 自己的 receiver 或 timing（[#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)）。
 
 **用法**
 
