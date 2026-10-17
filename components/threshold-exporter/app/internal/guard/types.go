@@ -343,6 +343,13 @@ type CheckInput struct {
 	// EffectiveConfigs (#2031); nil skips the check.
 	CustomAlertDuplicates map[string][]config.CustomAlertDuplicate `json:"-"`
 
+	// CustomAlertsOverCap maps tenant ID → the custom-alert rows the exporter
+	// serves it from its OWN `_custom_alerts` (not a profile's), for each
+	// tenant over config.MaxCustomRecipesDefault. Each becomes a
+	// custom_alert_over_cap error for a tenant in EffectiveConfigs (#3042);
+	// nil skips the check.
+	CustomAlertsOverCap map[string]int `json:"-"`
+
 	// MetricsNotGatherable is why the exporter's /metrics cannot be gathered
 	// for the whole tree:
 	// two keys giving one series fail the scrape for every tenant (HTTP 500).
