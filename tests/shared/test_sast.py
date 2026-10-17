@@ -307,6 +307,10 @@ class TestFileWritePermissions:
     # key = 相對於 repo root 的路徑
     # value = 豁免原因
     CHMOD_EXEMPT = {
+        "scripts/tools/_lib_exitcodes.py": (
+            "唯一的寫入 open() 開的是 os.devnull：`2>&-` 時拿它頂替不存在的"
+            " stderr，不產生任何檔案，沒有權限可套（#3124；啟發式本身由 #3107 換掉）"
+        ),
         "scripts/tools/lint/fix_file_hygiene.py": (
             "pre-commit auto-fixer：以 open(path, 'wb') 寫回同一檔案，"
             "應保留原始權限而非強制 0o600（會改變既有檔案的 permission bits）"
