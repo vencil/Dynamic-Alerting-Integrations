@@ -88,6 +88,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -464,6 +465,45 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 // tree cannot look like a completed scan. logger nil falls back
 // to log.Default().
 func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger) (*TreeScan, error) {
+	return ScanDirTreeWith(root, prior, obs, logger, ScanOptions{})
+}
+
+// ScanOptions changes what one ScanDirTreeWith reads. The zero value is
+// ScanDirTree: the tree as it is on disk. It is passed down the call path
+// explicitly (never a package variable), so the exporter's serving path,
+// which passes none, reads exactly what it always read.
+type ScanOptions struct {
+	// Overlay, when non-nil, is one file's bytes read at one path of the
+	// tree in place of the disk (`da-guard effective --overlay`, #2906).
+	Overlay *FileOverlay
+}
+
+// FileOverlay is "these bytes at this tree path": Rel is root-relative
+// with '/', Data the bytes.
+//
+//   - Rel names a file the walk lists: its bytes are Data instead of the
+//     file's (substitute). Its stat is the file's own.
+//   - nothing exists at Rel: a regular file holding Data is taken as present
+//     there, in its walk-order place (create). Its parent must be a directory
+//     the walk descends — every directory on the way exists, is a real
+//     directory (not a symlink) and could be listed.
+//
+// Anything else is refused with an error wrapping ErrOverlay, and nothing
+// is scanned: a Rel that is not clean or leaves the root, a name the walk
+// does not read (hidden, or not `.yaml` / `.yml`), something at Rel that is
+// not a file the walk lists (a directory, a symlink to one, a special or
+// unreadable file), or a create whose parent the walk does not descend.
+type FileOverlay struct {
+	Rel  string
+	Data []byte
+}
+
+// ErrOverlay is wrapped by every refusal of a FileOverlay.
+var ErrOverlay = errors.New("overlay refused")
+
+// ScanDirTreeWith is ScanDirTree with opts (see ScanOptions; the zero value
+// is ScanDirTree itself).
+func ScanDirTreeWith(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, opts ScanOptions) (*TreeScan, error) {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -471,7 +511,7 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		t0 := time.Now()
 		defer func() { obs.ObserveScanElapsed(time.Since(t0)) }()
 	}
-	scan, err := walkDirTree(root, prior, obs, logger, walkFull)
+	scan, err := walkDirTree(root, prior, obs, logger, walkFull, opts.Overlay)
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +566,7 @@ func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
 	if logger == nil {
 		logger = log.Default()
 	}
-	return walkDirTree(root, nil, nil, logger, walkListOnly)
+	return walkDirTree(root, nil, nil, logger, walkListOnly, nil)
 }
 
 // scanRootDefaults is the root-only, carriers-only mode of the ONE walker
@@ -545,7 +585,7 @@ func ScanDirTreeFiles(root string, logger *log.Logger) (*TreeScan, error) {
 // The returned scan has no tenants; only Files/Keys/Defaults and
 // DefaultsCarriers are meaningful.
 func scanRootDefaults(root string) (*TreeScan, error) {
-	return walkDirTree(root, nil, nil, discardLogger, walkRootCarriers)
+	return walkDirTree(root, nil, nil, discardLogger, walkRootCarriers, nil)
 }
 
 // scanRootPlatform is the root-only, platform-files mode of the ONE walker
@@ -564,7 +604,7 @@ func scanRootDefaults(root string) (*TreeScan, error) {
 // platform set (nothing below the root is kept, so there is nothing nested
 // to exclude). Same lister, same hidden / extension / stat / read rules.
 func scanRootPlatform(root string) (*TreeScan, error) {
-	return walkDirTree(root, nil, nil, discardLogger, walkRootPlatform)
+	return walkDirTree(root, nil, nil, discardLogger, walkRootPlatform, nil)
 }
 
 // dirLinkTargetIsWalked reports whether the directory symlink at linkPath
@@ -603,7 +643,8 @@ func dirLinkTargetIsWalked(absRoot, linkPath string) bool {
 // walkDirTree is ScanDirTree without the metric contract: the walk, the
 // hash, the classification and the hierarchy products. mode is walkFull for
 // every production caller except scanRootDefaults and scanRootPlatform.
-func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode) (*TreeScan, error) {
+// overlay is ScanOptions.Overlay (walkFull only; nil everywhere else).
+func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger, mode walkMode, overlay *FileOverlay) (*TreeScan, error) {
 	absRoot := AbsScanRoot(root)
 
 	info, serr := os.Stat(absRoot)
@@ -810,6 +851,23 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		return nil, fmt.Errorf("walk %q: %w", absRoot, walkErr)
 	}
 
+	// The overlay's entry: the listed file it substitutes, or a new entry in
+	// its walk-order place (create). -1 for none.
+	overlayAt := -1
+	if overlay != nil {
+		at, create, oerr := overlayPlace(absRoot, overlay.Rel, len(entries), func(i int) string { return entries[i].rel }, unreadable)
+		if oerr != nil {
+			return nil, oerr
+		}
+		if create {
+			abs := filepath.Join(absRoot, filepath.FromSlash(overlay.Rel))
+			entries = append(entries, entry{})
+			copy(entries[at+1:], entries[at:])
+			entries[at] = entry{abs: filepath.Clean(abs), rel: overlay.Rel}
+		}
+		overlayAt = at
+	}
+
 	scan := &TreeScan{
 		AbsRoot:  absRoot,
 		Files:    make(map[string]*TreeFile, len(entries)),
@@ -820,7 +878,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	// Phase 2: hash + classify, in WALK order (the duplicate-tenant error
 	// names the first two files in that order, as it always has).
 	var walkOrder []*TreeFile
-	for _, e := range entries {
+	for i, e := range entries {
 		name := e.rel[strings.LastIndexByte(e.rel, '/')+1:]
 		f := &TreeFile{
 			AbsPath:    e.abs,
@@ -834,7 +892,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		if prior != nil {
 			pf = prior.Files[e.rel]
 		}
-		if pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && sameLinkStat(pf.LinkStat, f.LinkStat) &&
+		if i != overlayAt && pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && sameLinkStat(pf.LinkStat, f.LinkStat) &&
 			time.Since(time.Unix(0, guardMtime(f.Stat, f.LinkStat))) > TreeScanMtimeGuard {
 			f.Hash = pf.Hash
 			// ⛔ THE CARRY. Reusing the hash without the declarations would
@@ -848,7 +906,13 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		} else {
 			// ReadConfFile, not os.ReadFile: an entry swapped for a FIFO
 			// since phase 1 judged it is refused here without blocking.
-			data, rerr := ReadConfFile(e.abs)
+			var data []byte
+			var rerr error
+			if i == overlayAt {
+				data = append(make([]byte, 0, len(overlay.Data)), overlay.Data...) // never nil: Data marks "cached"
+			} else {
+				data, rerr = ReadConfFile(e.abs)
+			}
 			if rerr != nil {
 				logger.Printf("WARN: cannot read %s: %v", e.abs, rerr)
 				// A config-named symlink to a directory stats fine and fails
@@ -1140,4 +1204,69 @@ func ResolveScanRoot(dir string) string {
 		return resolved
 	}
 	return dir
+}
+
+// overlayPlace is where a FileOverlay goes among the walk's n entries (rel(i)
+// is entry i's root-relative path, in walk order): the index of the listed
+// file it substitutes (create false), or the index a new entry is inserted
+// at (create true). unreadable is the walk's own record, for a parent it
+// could not list. Every refusal wraps ErrOverlay (see FileOverlay).
+func overlayPlace(absRoot, rel string, n int, relOf func(int) string, unreadable []UnreadableFile) (int, bool, error) {
+	refuse := func(format string, a ...any) (int, bool, error) {
+		return 0, false, fmt.Errorf("%w: path %q: "+format, append([]any{ErrOverlay, rel}, a...)...)
+	}
+	if rel == "" || strings.HasPrefix(rel, "/") || filepath.IsAbs(rel) || filepath.VolumeName(rel) != "" {
+		return refuse("must be relative to the config dir")
+	}
+	if path.Clean(rel) != rel || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "\\") {
+		return refuse("must be a clean path inside the config dir (no '..', no '.' segment, '/' only)")
+	}
+	if !IsScannedPath(rel) {
+		return refuse("is not a name the walk reads (a hidden segment, or not a .yaml / .yml file)")
+	}
+	for i := 0; i < n; i++ {
+		if relOf(i) == rel {
+			return i, false, nil // substitute
+		}
+	}
+	// Create: every directory on the way exists, is a real directory and was
+	// listed by the walk — then nothing may be at rel itself.
+	parts := strings.Split(rel, "/")
+	cur := absRoot
+	for k, seg := range parts[:len(parts)-1] {
+		cur = filepath.Join(cur, seg)
+		fi, err := os.Lstat(cur)
+		if err != nil || !fi.IsDir() {
+			return refuse("its parent %q is not a directory the walk descends (missing, a symlink or not a directory)", strings.Join(parts[:k+1], "/"))
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(absRoot, filepath.FromSlash(rel))); err == nil || !errors.Is(err, fs.ErrNotExist) {
+		return refuse("exists but is not a file the walk lists (a directory, a symlink to one, a special or unreadable file)")
+	}
+	for _, u := range unreadable {
+		if u.Reason == UnreadableWalkError && (u.RelKey == path.Dir(rel) || strings.HasPrefix(path.Dir(rel), u.RelKey+"/")) {
+			return refuse("its parent %q could not be listed", u.RelKey)
+		}
+	}
+	// Walk order is lexical per directory, depth first: compare segment by
+	// segment, as WalkDir visits them.
+	at := n
+	for i := 0; i < n; i++ {
+		if walkOrderLess(rel, relOf(i)) {
+			at = i
+			break
+		}
+	}
+	return at, true, nil
+}
+
+// walkOrderLess reports whether WalkDir visits root-relative file a before b.
+func walkOrderLess(a, b string) bool {
+	as, bs := strings.Split(a, "/"), strings.Split(b, "/")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		if as[i] != bs[i] {
+			return as[i] < bs[i]
+		}
+	}
+	return len(as) < len(bs)
 }
