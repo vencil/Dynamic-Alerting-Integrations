@@ -65,6 +65,7 @@ from _grar_validate import (  # noqa: E402
     FIELD_TYPE_ERROR_PREFIX,
     POLICY_ERROR_PREFIX,
     ROUTING_TREE_ERROR_PREFIX,
+    domain_policy_problems,
     receiver_bool_type_errors,
     value_type_text,
     _validate_profile_refs,
@@ -134,7 +135,8 @@ def git_irregular_reason(mode: str) -> str:
 
 
 def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
-                          warning: str | None = None) -> None:
+                          warning: str | None = None,
+                          field: str | None = None) -> None:
     """Record content this reader had to drop, then warn — in one place.
 
     ⛔ There is more than one way for the domain policies to fall on the
@@ -144,6 +146,8 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     zero policies enforced**, which is precisely what ADR-007 ``--strict``
     exists to refuse to do quietly — so every one of them has to leave a
     record here. Before #1448 only the "does not parse" branch did.
+    #3116: the record is a ``domain_policy_unusable`` field-type error, so
+    the whole tree is refused in every mode, not under ``--strict`` only.
 
     Measured on ``generate-routes --validate --strict`` over an otherwise
     clean conf.d, with only ``_domain_policy.yaml`` varying (a routing
@@ -158,6 +162,10 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
         not UTF-8                       1 (crash)    1
         `domain_policies:` is a list        0 ← !     1
         `domain_policies:` is null          0 ← !     1
+
+    #3116: the null row no longer comes here — the schema allows a null
+    ``domain_policies:`` ("no policy configured"), so the reader takes it as
+    an empty mapping (rc 0, nothing to enforce).
 
     ⛔ The two rows marked ← ! printed ``OK: all configs valid``, on the
     base and on every release before it. They are **not** a regression this
@@ -210,9 +218,16 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
         # hand-built result dict.
         result.setdefault("policy_file_errors", []).append(
             detail.replace("\n", " "))
-        # #2766: the file of each record above, by index — the record is
-        # text, and a finding's `file` is never parsed back out of text.
-        result.setdefault("policy_file_error_files", []).append(fname)
+        # #3116: a policy file that cannot be used is `domain_policy_unusable`
+        # like any other policy problem — the whole tree is refused in every
+        # mode (it used to block under --strict only; a lenient run dropped
+        # every policy of the file at rc 0). *field* is `domain_policies`
+        # when that block is not a mapping, None when the file is unusable.
+        _field_type_error(
+            result, "domain_policy_unusable",
+            f"domain policy file could not be used, so no policy in it is "
+            f"enforced: {detail.replace(chr(10), ' ')}",
+            file=fname, field=field)
     # #1538: escape at the PRINT, not in `detail` above — `detail` lands in
     # result["policy_file_errors"] -> schema_warnings -> validate-config
     # --json, whose bytes must not change (json.dumps already escapes).
@@ -239,9 +254,10 @@ def _drop_unreadable_file(fname: str, reason: str, remedy: str, result: dict,
     ``generate_alertmanager_routes.main`` derives its "read N, skipped M"
     line and its refusal from these records, never from the WARN text.
 
-    Policy files keep their existing ``--strict`` treatment through the
-    delegate; they are booked in ``files_skipped`` (a skipped file is a
-    skipped file) but NOT in ``tenant_file_errors``.
+    Policy files keep their own treatment through the delegate (#3116: a
+    ``domain_policy_unusable`` field-type error, refused in every mode);
+    they are booked in ``files_skipped`` (a skipped file is a skipped file)
+    but NOT in ``tenant_file_errors``.
     """
     result.setdefault("files_skipped", []).append((fname, reason))
     if os.path.basename(fname) not in _POLICY_FILENAMES:
@@ -765,32 +781,25 @@ def _parse_nested_config(data: dict, fname: str, level: str,
     _parse_profiles_and_policies(data, fname, level, result)
 
 
-def _record_policy_type_errors(fname: str, policies: dict, result: dict) -> None:
-    """#2906: a domain policy's boolean constraint that is not a boolean.
+def _record_policy_problems(fname: str, policies: dict, result: dict) -> None:
+    """#3116: every reason a domain policy of *fname* cannot be enforced as
+    written (``domain_policy_problems``: the policy, `tenants` or
+    `constraints` of the wrong shape, a list constraint that is not a list,
+    an entry that is not a receiver type / tenant id, an unreadable duration
+    bound, a `require_critical_escalation` that is not a boolean).
 
-    `require_critical_escalation` is true, false or null (not constrained).
-    Anything else — `"true"`, `"yes"`, `1` — refuses the WHOLE tree in every
-    mode. It used to be enforced only when it was the boolean `True`, and
-    reported only under `--strict`: without it a quoted `"true"` switched the
-    constraint off at rc 0, and so will an unquoted `yes` once the generator
-    reads yaml.v3 (ADR-036 step 4).
+    Each is a ``domain_policy_unusable`` field-type error: the generator
+    refuses the WHOLE tree on any of them, in every mode. Most used to be
+    reported under `--strict` only (#2906 began with
+    `require_critical_escalation`), so a lenient run switched the policy or
+    the constraint off at rc 0.
     """
     for name, policy in policies.items():
-        if not isinstance(policy, dict):
-            continue
-        constraints = policy.get("constraints")
-        if not isinstance(constraints, dict) or "require_critical_escalation" not in constraints:
-            continue
-        value = constraints["require_critical_escalation"]
-        if value is None or isinstance(value, bool):
-            continue
-        _field_type_error(
-            result, "domain_policy_unusable",
-            f"{fname}: domain_policy '{name}': constraint "
-            f"'require_critical_escalation' must be a boolean (true / false, "
-            f"unquoted), got {value_type_text(value)}",
-            file=fname, policy=str(name),
-            field="constraints.require_critical_escalation")
+        for fld, message in domain_policy_problems(policy):
+            _field_type_error(
+                result, "domain_policy_unusable",
+                f"{fname}: domain_policy '{name}': {message}",
+                file=fname, policy=str(name), field=fld)
 
 
 def _parse_profiles_and_policies(data: dict, fname: str, level: str,
@@ -842,7 +851,7 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
         if base in _POLICY_FILENAMES:
             policies = data["domain_policies"]
             if isinstance(policies, dict):
-                _record_policy_type_errors(fname, policies, result)
+                _record_policy_problems(fname, policies, result)
             if isinstance(policies, dict) and level == ROOT_LEVEL:
                 result["domain_policies"].update(policies)
             elif isinstance(policies, dict):
@@ -853,6 +862,11 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 origin = result.setdefault("domain_policy_origin", {})
                 for name in policies:
                     origin[(level, name)] = fname
+            elif policies is None:
+                # #3116: `domain_policies:` with no value is legal in the
+                # schema ("an empty or null map is legal"): no policy, as
+                # an empty mapping. It used to be dropped as unusable.
+                pass
             else:
                 # #1448: the file decodes, parses, and is a mapping — and
                 # every domain policy still ends up on the floor. Same
@@ -868,7 +882,8 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                     f"{dp_fname}",
                     result,
                     warning=f"  WARN: domain_policies in {_f} must be a "
-                            f"dict, ignoring")
+                            f"dict, ignoring",
+                    field="domain_policies")
         else:
             # setdefault: tests may call this helper with a hand-built dict.
             result.setdefault("policy_misplacements", []).append(fname)
@@ -1181,7 +1196,7 @@ def _parse_config_files(config_dir: str) -> dict:
         "domain_policies": {},       # v2.1.0 ADR-007: domain compliance constraints
         "tenant_profile_refs": {},   # v2.1.0 ADR-007: tenant → profile name
         "policy_misplacements": [],  # ADR-007 --strict: domain_policies in wrong file
-        "policy_file_errors": [],    # ADR-007 --strict: unparseable _domain_policy.yaml
+        "policy_file_errors": [],    # ADR-007: unusable _domain_policy.yaml (#3116: refused in every mode)
         # #1460: whole-file accounting. `files_read` counts config files this
         # reader parsed (a mapping, or an empty document); `files_skipped`
         # is every (fname, reason) it had to drop; `tenant_file_errors` is
@@ -1895,10 +1910,11 @@ def load_tenant_tree(
         schema_warnings.extend(
             check_domain_policies(reachable, policies, strict=strict_policies))
 
-    # ADR-007 --strict fail-open closures: an unparseable _domain_policy.yaml
-    # or a domain_policies block in a wrongly named file makes every policy
-    # silently vanish (validation stays green). Strict mode surfaces both as
-    # blocking ERRORs; non-strict keeps the legacy stderr WARN prints only.
+    # ADR-007 --strict fail-open closure: a domain_policies block in a
+    # wrongly named file makes every policy in it silently vanish (validation
+    # stays green); strict mode surfaces it as a blocking ERROR, non-strict
+    # keeps the legacy stderr WARN only. (#3116: a _domain_policy.yaml that
+    # cannot be used is refused in every mode instead — field_type_errors.)
     # #2431: a matcher value (`routes[i].match.<label>`, `overrides[i].
     # alertname` / `metric_group`) of the RESOLVED routing that PyYAML does
     # not read as a string is a blocking ERROR too (tenant-api's writes get
@@ -1953,15 +1969,6 @@ def load_tenant_tree(
                 f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}",
                 kind="routing_group_by_invalid", blocks="strict",
                 field=f"_routing_enforced.group_by[{idx}]"))
-        policy_files = parsed.get("policy_file_error_files", [])
-        for i, err in enumerate(parsed.get("policy_file_errors", [])):
-            # The cause and the remedy travel with the record (see
-            # _drop_unusable_policy); this line only frames the consequence.
-            schema_warnings.append(Finding(
-                f"  {POLICY_ERROR_PREFIX} domain policy file could not be "
-                f"used — every domain policy is silently dropped: {err}",
-                kind="domain_policy_unusable", blocks="strict",
-                file=policy_files[i] if i < len(policy_files) else None))
         for fname in parsed.get("policy_misplacements", []):
             schema_warnings.append(unclassified(
                 f"  {POLICY_ERROR_PREFIX} domain_policies block in "

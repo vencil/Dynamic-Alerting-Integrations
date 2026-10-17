@@ -241,9 +241,10 @@ READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
 # value that is not a string, and (#2503) a bad group_by entry, so the
 # advice names every kind.
 POLICY_ONLY_SCHEMA_HINT = (
-    "The findings above are --strict errors (ADR-007 domain-policy errors, "
-    "a routing matcher value that is not a string, or a bad group_by "
-    "entry), not tenant key problems: no unknown key was reported in this "
+    "The findings above are ADR-007 domain-policy errors (a policy that "
+    "cannot be used is refused in every mode) or --strict errors (a routing "
+    "matcher value that is not a string, or a bad group_by entry), not "
+    "tenant key problems: no unknown key was reported in this "
     "run. \u26d4 Ignore the generic advice about removing keys: fix what "
     "each error names (the domain policy file, quote the matcher value in "
     "YAML, e.g. team: \"yes\", or quote / remove the group_by entry), then "
@@ -857,8 +858,12 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(
         config_dir, strict_policies=strict)
 
+    # #3116: a domain policy that cannot be used is a field-type error now
+    # (refused in every mode), not a --strict ERROR line; it is still a
+    # policy finding for the advice below.
     policy_errors = [w for w in schema_warnings
-                     if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)]
+                     if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)
+                     or getattr(w, "kind", None) == "domain_policy_unusable"]
     # #2164: the `--validate` predicate for "an entry was dropped as
     # unusable" (`generate_alertmanager_routes._validate_mode`). Today only
     # a non-boolean `_routing_enforced.enabled` puts one in schema_warnings;
@@ -2420,6 +2425,9 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
             rules.add((a["recipe_id"], sev))
             if not a["disabled"]:
                 compiled[(a["tenant"], a["recipe_id"], sev)] = a
+    # The exporter serves a tenant one row per shape and severity (#3112:
+    # a second one would fail the shape's shared rule for every tenant), so
+    # each list holds one name; a list keeps the row honest if that changes.
     served_rows: dict[tuple, list[str]] = {}
     for t, v in served.items():
         for r in v.values.get("_custom_alerts") or []:
@@ -2436,17 +2444,11 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
     for (t, rid, sev), a in compiled.items():
         if (t, rid, sev) not in served_rows:
             origin = a["origin"] if a["own"] else "an inherited `_defaults.yaml`"
-            groups.setdefault(("never_fires", origin, a["name"], rid, ""), set()).add(t)
+            groups.setdefault(("never_fires", origin, a["name"], rid), set()).add(t)
     for (t, rid, sev), names in served_rows.items():
         if (rid, sev) not in rules:
             for name in names:
-                groups.setdefault(("not_compiled", _where(t), name, rid, ""), set()).add(t)
-        elif len(names) > 1:
-            # Several served recipes of one shape and severity in one tenant:
-            # the compiler takes at most one per tenant, shape and severity. Which one it took is not re-derived here
-            # (a switched-off one serves no row; names are spelt per side).
-            groups.setdefault(("shared", _where(t), ", ".join(f"`{n}`" for n in sorted(names)),
-                               rid, sev), set()).add(t)
+                groups.setdefault(("not_compiled", _where(t), name, rid), set()).add(t)
 
     def _tenants(ts: set[str]) -> str:
         ts = sorted(ts)
@@ -2454,17 +2456,13 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
         return ", ".join(ts[:WARN_LIMIT]) + more
 
     details = []
-    for (kind, where, name, rid, kept), ts in sorted(groups.items()):
+    for (kind, where, name, rid), ts in sorted(groups.items()):
         if kind == "never_fires":
             details.append(f"{where}: `{name}` ({rid}) is compiled, but the exporter serves "
                            f"no threshold for it — the rule never fires — tenant(s) {_tenants(ts)}")
-        elif kind == "not_compiled":
+        else:
             details.append(f"{where}: `{name}` ({rid}) is served, but no rule is compiled "
                            f"for it — it never alerts — tenant(s) {_tenants(ts)}")
-        else:
-            details.append(f"{where}: {name} ({rid}, {kept}) are served for one tenant with the "
-                           "same shape and severity — the compiler takes at most one recipe per "
-                           f"tenant, shape and severity — tenant(s) {_tenants(ts)}")
     if details:
         return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
     return _make_result("custom_alert_sources", PASS, [
@@ -2492,6 +2490,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     * #2291 — no ``_routing*`` key, whatever its value (below). A
       ``_routing*`` key gets that rule's line only, never a second one from
       the value rule.
+    * #3045 — any other ``_`` key under ``defaults:`` whose value decodes
+      is a WARN: no ``_`` key is a threshold (the exporter makes no row of
+      one) and no other reader reads one there, so it is dead config — a
+      root ``_metadata: 1`` used to fail served-values and now says nothing
+      anywhere else. A value that does not decode keeps the value rule's
+      FAIL line only.
     * #2386 — a root carrier with no ``defaults:`` mapping (the key absent,
       or present with no value) whose top level holds a key the merge takes
       (``_keys_acting_when_merged``: a threshold, or a reserved key such as
@@ -2579,6 +2583,14 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                 if isinstance(k, str) and k.startswith("_routing")]
     if details:
         return _make_result("root_defaults", FAIL, details)
+    dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "
+            "(threshold-exporter makes no row of one, #3045) and no other reader reads "
+            "`_` keys under `defaults:`; delete it, or drop the `_` to make it a threshold"
+            for k in block
+            if isinstance(k, str) and k.startswith("_") and not k.startswith("_routing")
+            and k not in dropped]
+    if dead:
+        return _make_result("root_defaults", WARN, dead)
     return _make_result("root_defaults", PASS, [
         f"{rel}: {len(block)} key(s) under `defaults:`, every value a number "
         f"threshold-exporter decodes, no `_routing*` key"])

@@ -110,12 +110,9 @@ func rootSpellings(rk config.RootNullKey) string {
 // rootNullFix is the finding's fix sentence for key k. Both were measured to
 // serve the tenant's value: a number in the root `_defaults.yaml`, and the
 // key listed under `optional_overrides:` (with the null line left or
-// removed). A `_` key gets the root only — `optional_overrides:` does not
-// serve keys starting with `_` (see undeliverableFix).
+// removed). No `_` key reaches it: none is a threshold row (baseRowsSkipKey,
+// #3045).
 func rootNullFix(k string) string {
-	if strings.HasPrefix(k, "_") {
-		return fmt.Sprintf("Write a number for `%s` in the conf.d root `_defaults.yaml` instead of null.", k)
-	}
 	return fmt.Sprintf("Write a number for `%s` in the conf.d root `_defaults.yaml` instead of null, or list it "+
 		"under `optional_overrides:` to declare it without a platform value.", k)
 }

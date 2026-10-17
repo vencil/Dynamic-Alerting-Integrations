@@ -20,7 +20,7 @@ domain_policies:
     description: "Finance domain compliance requirements"
     tenants: [redis-prod, mongo-prod]
     constraints:
-      allowed_receiver_types: [pagerduty, email, opsgenie]
+      allowed_receiver_types: [pagerduty, email]
       forbidden_receiver_types: [slack, webhook]
       enforce_group_by: [tenant, alertname, severity]
       max_repeat_interval: 1h

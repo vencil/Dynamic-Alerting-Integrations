@@ -25,7 +25,6 @@ package guard
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
@@ -69,19 +68,9 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 	return out
 }
 
-// undeliverableFix is the finding's fix sentence for key k.
-//
-// ⛔ A `_` KEY GETS THE ROOT ONLY. resolveDeclaredRows (the reader of
-// `optional_overrides:`) skips every `_`-prefixed key, so declaring a `_` key
-// there serves nothing and leaves this finding standing (the build's
-// reachability test asks the same skip, #2707). Declared in the root
-// `_defaults.yaml` it is served. The `_` keys that reach this finding are
-// the ones undeliverableThresholds keeps (not reserved, not skipped by the
-// row generator).
+// undeliverableFix is the finding's fix sentence for key k. No `_` key
+// reaches it: the row generator skips every one (baseRowsSkipKey, #3045),
+// so undeliverableThresholds leaves them to subtree_default_reserved_key.
 func undeliverableFix(k string) string {
-	if strings.HasPrefix(k, "_") {
-		return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml`; `optional_overrides:` does not "+
-			"serve keys starting with `_`.", k)
-	}
 	return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`.", k)
 }

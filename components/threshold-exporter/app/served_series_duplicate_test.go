@@ -140,17 +140,29 @@ func TestMetrics_DimensionalKeySpellings_OneSeries(t *testing.T) {
 // series, and the drop counted on da_custom_alert_parse_errors.
 func TestMetrics_CustomAlertDuplicateSeries_DropsTheLaterEntry(t *testing.T) {
 	t.Parallel()
+	const thr = "recipe: threshold, metric: qd, op: \">\", window: 5m"
 	for name, tc := range map[string]struct {
-		list, want string
+		list, want, dropped string
 	}{
+		// #3112: another name or mode is still the shape and severity the
+		// pack's one shared rule joins on — two of them fail that rule for
+		// every tenant of the shape.
+		"same shape and severity, another name": {
+			"      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
+				"      - {" + thr + ", name: q_other, threshold: \"200:warning\"}\n",
+			`name="q_high",recipe_id=`, `name="q_other"`},
+		"same shape and severity, another mode": {
+			"      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
+				"      - {" + thr + ", name: q_quiet, threshold: \"200:warning\", mode: silent}\n",
+			`name="q_high",recipe_id=`, `name="q_quiet"`},
 		"same name and shape": {
 			"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n" +
 				"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"200:warning\"}\n",
-			`severity="warning",tenant="tenant-a"} 100`},
+			`severity="warning",tenant="tenant-a"} 100`, `} 200`},
 		"slo, same shape": {
 			"      - {recipe: slo_burn_rate, name: avail1, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n" +
 				"      - {recipe: slo_burn_rate, name: avail2, metric: err_total, denominator_metric: req_total, objective: \"99.5\"}\n",
-			`tenant="tenant-a"} 99.9`},
+			`tenant="tenant-a"} 99.9`, `name="avail2"`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -161,8 +173,40 @@ func TestMetrics_CustomAlertDuplicateSeries_DropsTheLaterEntry(t *testing.T) {
 			if !strings.Contains(body, tc.want) {
 				t.Errorf("want %s (the first entry); body:\n%s", tc.want, body)
 			}
+			if strings.Contains(body, tc.dropped) {
+				t.Errorf("the later entry is served (%s); body:\n%s", tc.dropped, body)
+			}
 			if !strings.Contains(body, `da_custom_alert_parse_errors{tenant="tenant-a"} 1`) {
 				t.Errorf("the dropped entry is not counted; body:\n%s", body)
+			}
+		})
+	}
+}
+
+// The shape and severity a tenant serves once: another severity of one
+// shape, or another shape, is a series of its own and is served (#3112).
+func TestMetrics_CustomAlertOtherSeverityOrShape_BothServed(t *testing.T) {
+	t.Parallel()
+	const thr = "recipe: threshold, op: \">\", window: 5m"
+	for name, list := range map[string]string{
+		"another severity": "      - {" + thr + ", metric: qd, name: q_warn, threshold: \"100:warning\"}\n" +
+			"      - {" + thr + ", metric: qd, name: q_crit, threshold: \"200:critical\"}\n",
+		"another shape": "      - {" + thr + ", metric: qd, name: q_warn, threshold: \"100:warning\"}\n" +
+			"      - {" + thr + ", metric: qe, name: q_crit, threshold: \"200:warning\"}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			code, body := scrapeTree(t, "tenants:\n  tenant-a:\n    _custom_alerts:\n"+list)
+			if code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body:\n%s", code, body)
+			}
+			for _, n := range []string{`name="q_warn"`, `name="q_crit"`} {
+				if !strings.Contains(body, n) {
+					t.Errorf("%s is not served; body:\n%s", n, body)
+				}
+			}
+			if !strings.Contains(body, `da_custom_alert_parse_errors{tenant="tenant-a"} 0`) {
+				t.Errorf("an entry is counted as dropped; body:\n%s", body)
 			}
 		})
 	}
