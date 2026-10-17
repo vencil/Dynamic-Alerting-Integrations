@@ -109,7 +109,7 @@
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",
           "title": "Custom Alerts (v2.9.0 ADR-024 Capability B)",
-          "description": "Tenant-authored declarative custom alerts via platform recipes. Declared here (tenant leaf) they apply only to this tenant. Compiled to ONE vectorized rule per shape (rule count = shape count, not per-tenant fan-out). Tenants never write PromQL."
+          "description": "Tenant-authored declarative custom alerts via platform recipes. Declared here (tenant leaf) they apply only to this tenant and replace, whole, the list of the profile it binds (no merge; ADR-024 §3). Compiled to ONE vectorized rule per shape (rule count = shape count, not per-tenant fan-out). Tenants never write PromQL."
         }
       },
       "additionalProperties": {
@@ -1303,8 +1303,8 @@
         },
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",
-          "title": "Custom Alerts — platform/domain scope (v2.9.0 ADR-024)",
-          "description": "Custom alert recipes declared at this directory level apply to EVERY tenant in the subtree (platform L0 / domain L1 / subdomain L2), as ONE vectorized rule covering the subtree. Tenants in the subtree cannot override these (platform/domain policy)."
+          "title": "Custom Alerts in a _defaults.yaml — not served (ADR-024 §3)",
+          "description": "The exporter does NOT serve `_custom_alerts` declared here: there is no subtree inheritance for custom alerts (`da-guard effective` marks them not_served for tenants with no other source). Until the custom-alert compiler builds only from what the exporter serves (#3042), it still compiles rules for recipes declared here, and those rules never fire for tenants that get no threshold; `da-tools validate-config`, run where the compiler is installed, reports them in its `custom_alert_sources` row."
         }
       },
       "additionalProperties": true
@@ -1312,7 +1312,7 @@
     "customAlertList": {
       "type": "array",
       "title": "Custom Alert Recipe Declarations (v2.9.0 ADR-024 Capability B)",
-      "description": "List of custom alert recipe instances. Each fills a platform-authored recipe's parameters — the tenant never writes PromQL. Scope is the declaration level (tenant leaf vs _defaults.yaml). See rule-packs/recipes/ and docs/design/config-driven.md.",
+      "description": "List of custom alert recipe instances. Each fills a platform-authored recipe's parameters — the tenant never writes PromQL. The exporter takes each tenant's list from one place — its own entry, else its `tenants:` entry in a root platform file, else the bound profile — and never merges; `_custom_alerts` in a _defaults.yaml is not served (ADR-024 §3). See rule-packs/recipes/ and docs/design/config-driven.md.",
       "items": { "$ref": "#/definitions/customAlertInstance" }
     },
     "customAlertInstance": {
@@ -1383,7 +1383,7 @@
         "min_events": {
           "type": "integer",
           "title": "Minimum Bad Events (slo_burn_rate recipe)",
-          "description": "Low-traffic false-positive guard (ADR-031): the fast (5m) window must contain MORE THAN this many bad events for the fast-burn alert to fire (the slow tier's floor is compiler-derived as ×6 for its 30m window). A shape component: the literal is written into the rule text and enters the recipe_id slug (`minev{N}`), so a tenant overriding a domain-inherited default forks the shape (+~12 rules) and spends 2 cap units — deliberate, documented in rule-packs/recipes/slo_burn_rate.yaml. NB with the default 10, a service SUSTAINED below ~2 req/min can never trip EITHER tier even at 100% errors — the slow floor (×6 over a ×6 window) is the same per-minute rate, so it does NOT cover sustained low traffic; what it adds is bursty/intermittent coverage (the 30m aggregate smooths 5m gaps). For genuinely tiny services, consciously lower min_events — best set once at the domain level so the shape stays single.",
+          "description": "Low-traffic false-positive guard (ADR-031): the fast (5m) window must contain MORE THAN this many bad events for the fast-burn alert to fire (the slow tier's floor is compiler-derived as ×6 for its 30m window). A shape component: the literal is written into the rule text and enters the recipe_id slug (`minev{N}`), so a tenant writing a value different from the others forks the shape (+~12 rules). Separately, every tenant-own slo_burn_rate declaration spends 2 cap units, whatever its value — deliberate, documented in rule-packs/recipes/slo_burn_rate.yaml. NB with the default 10, a service SUSTAINED below ~2 req/min can never trip EITHER tier even at 100% errors — the slow floor (×6 over a ×6 window) is the same per-minute rate, so it does NOT cover sustained low traffic; what it adds is bursty/intermittent coverage (the 30m aggregate smooths 5m gaps). For genuinely tiny services, consciously lower min_events — best the same value for every tenant so the shape stays single.",
           "minimum": 1,
           "maximum": 1000000,
           "default": 10

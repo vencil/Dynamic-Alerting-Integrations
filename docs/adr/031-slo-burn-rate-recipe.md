@@ -9,13 +9,15 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-07-12
-updated_at: 2026-07-12
+updated_at: 2026-10-16
 ---
 # ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯
 
 ## 狀態
 
 ✅ **Accepted**（2026-07-12）
+
+📝 **修訂（2026-10-16）**：一組租戶共用的 SLO 宣告寫在 profile；`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` exporter 不會送出，不能用來共用（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3「宣告位置」、[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
 
 > **決策一句話**：新增第 7 個平台自撰 recipe `slo_burn_rate`——一條宣告在編譯期展開成多窗 SLI recording rules ＋ multi-window AND 的 fast/slow burn-rate 告警；objective 走**既有** `user_threshold{severity}` 通道（exporter resolve 期算好係數）；v1 範圍＝availability/error-ratio 型 only；custom 子樹 outbound delivery 列硬前置。
 
@@ -29,7 +31,7 @@ updated_at: 2026-07-12
 - **v1 範圍 = availability/error-ratio SLI only**；latency-quantile 與 freshness 型 **defer-with-trigger**（宣告介面表達不了，硬塞會產生「永不觸發且靜默」的告警）。
 - **objective 不開新資料平面**：exporter 在 resolve 期算好 `14.4×(1−obj)`／`6×(1−obj)`，以**既有** `user_threshold{severity}` 通道餵值 → 規則端零新表達式類別、落回現行 per-severity core join。
 - **硬前置**：custom 子樹 outbound delivery（現況 firehose receiver 無 notifier——沒有它，「critical/page」page 不到任何人）。
-- **主推模式 = domain-inherited**（domain 定義 recipe、tenant 填 objective；不吃 cap、自動向量化）。
+- **主推模式 = profile 共用**（profile 定義 recipe 與預設 objective，租戶綁定該 profile；同一 shape、自動向量化）。⚠️ 目前編譯器還不為 profile 裡的 recipe 產生規則（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)），在那之前寫在 profile 的不能指望告警；請先在各租戶自己的條目宣告同樣的 recipe（同值的 `min_events` 仍是同一 shape），並刪掉 `_defaults.yaml` 裡的同名 recipe（同名時編譯器隔離租戶那條）。
 - **明確不做**：raw-PromQL 逃生門（ADR-029 T1）；平台代管錯誤預算政策。
 
 ## 背景
@@ -67,8 +69,8 @@ _custom_alerts:
 ```
 
 - **`objective` 取代 `threshold` 欄位**（schema if/then 第三分支）：值域驗證 `(0,100)` **開區間**（`objective=100` → 閾值 0 → 恆 fire，直接 reject）；`"disable"` 保留三態關閉語意。severity **不再**來自 threshold 尾巴慣例——由 recipe 固定（fast→critical、slow→warning），為刻意偏離、於 recipe 文件明示。
-- **`min_events` 是編譯期宣告參數**（shape-affecting）：主推 domain-inherited 模式下由 domain 統一設定→單一 shape；tenant 覆寫＝shape 分岔（可接受：改動罕見）。slow 檔的下限由**編譯器按窗長線性換算**（30m = 5m×6）寫成字面值，換算歸屬明確在編譯側。
-  - ⚠️ 此處推翻早期草案「`N_min` 走資料平面」：那是為「per-tenant 各異 + 共 shape」優化，但 domain-first 模式下不成立；編譯期字面值換得零新管線。
+- **`min_events` 是編譯期宣告參數**（shape-affecting）：主推的 profile 共用模式下由 profile 統一設定→單一 shape；租戶自寫不同的 `min_events`＝shape 分岔（可接受：改動罕見）。slow 檔的下限由**編譯器按窗長線性換算**（30m = 5m×6）寫成字面值，換算歸屬明確在編譯側。
+  - ⚠️ 此處推翻早期草案「`N_min` 走資料平面」：那是為「per-tenant 各異 + 共 shape」優化，但 profile 共用模式下不成立；編譯期字面值換得零新管線。
 - **latency-quantile／freshness 型 → Deferred**（見下）；模板文件仍教 instrumentation 路徑（pushgateway／textfile／Vector `log_to_metric`），但 recipe 支援不假裝存在。
 
 ### 2. 編譯輸出（兩段預設檔位）
@@ -86,7 +88,7 @@ _custom_alerts:
 
 ### 3. 護欄
 
-1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **loader 計 2**（沿用 distinct (tenant, recipe_id, severity) 計數，明定不另開特例）。domain-inherited 不吃 cap（既有行為）。**覆寫的代價誠實告知**：租戶覆寫 domain 預設的 `min_events`（或任何 shape 成分）＝自有宣告 → **計入自身 cap 額度（2）且 shape 分岔（+12 條規則）**——架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。
+1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **loader 計 2**（沿用 distinct (tenant, recipe_id, severity) 計數，明定不另開特例）。**覆寫的代價誠實告知**：租戶要不同的 objective 或 `min_events`，就得寫自己的 `_custom_alerts`＝自有宣告 → **計入自身 cap 額度（2）**；它會**整個取代** profile 的清單（profile 裡其他 recipe 要一併照抄，否則該租戶就沒有了）；改 `min_events`（或任何 shape 成分）還會 **shape 分岔（+12 條規則）**，只改 objective 不會。架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。profile 送出的 recipe 怎麼計 cap，隨編譯器改讀 exporter 送出的一起決定（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
 2. **Cardinality**：`group_by` 白名單、rule-group limit、promtool hard gate、fail-soft quarantine 全數繼承。
 3. **通知風暴（infra 全局震盪）**：**量測永不抑制**；抑制通知 fan-out——`vibe_slo_burn="true"` 標籤（命名照 pack 標籤慣例實作期覆核）+ 文件化 infra-outage sentinel inhibit pattern。
 4. **維護窗（三態）交互——刻意取捨**：SLO **alert** 沿用 pack 慣例，維護窗期間 `unless` 抑制（三態對租戶的承諾就是「維護窗零告警干擾」）；SLI **recording rules 不受 unless 影響、持續評估**——預算燒蝕在 TSDB 全程留痕，「量測永不抑制」哲學由 recording 層承擔，alert 層的抑制是通知承諾、不是量測缺口。此取捨明寫進 recipe 文件。
@@ -106,7 +108,7 @@ _custom_alerts:
 
 ## 後果
 
-**正面**：租戶零 PromQL 得到含低流量防護的 burn-rate 告警；domain→tenant 分工（domain 定 shape、tenant 填 objective）；規則 O(shapes)；**objective 改值不 re-slug**（editable 友善——objective 是 series 值、非 shape 成分）。
+**正面**：租戶零 PromQL 得到含低流量防護的 burn-rate 告警；profile→tenant 分工（profile 定 shape 與預設 objective，租戶綁定）；規則 O(shapes)；**objective 改值不 re-slug**（editable 友善——objective 是 series 值、非 shape 成分）。
 
 **負面／待審視**：
 

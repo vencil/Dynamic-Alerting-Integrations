@@ -1,6 +1,6 @@
-# Custom Alerts example — TENANT leaf under the finance/ domain (tenant `pay-a`).
-# pay-a's EFFECTIVE recipes = its own (below) + the finance/ domain ratio +
-# the platform absence heartbeat — demonstrating union inheritance + scope.
+# Custom Alerts example — TENANT leaf under finance/ (tenant `pay-a`).
+# The exporter serves pay-a only its own recipe below: finance/_defaults.yaml's
+# ratio is not served (no subtree inheritance, ADR-024 §3).
 tenants:
   pay-a:
     _custom_alerts:
