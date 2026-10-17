@@ -809,7 +809,7 @@ const docTemplate = `{
         },
         "/api/v1/me": {
             "get": {
-                "description": "Returns the authenticated user's email, groups, accessible tenants, and permissions. Requires an identity only, no grant (#2520): a caller no rule grants anything (including under a configured _rbac.yaml with zero rules) gets 200 with empty permissions and accessible_tenants. Lists only the rules matching the caller.",
+                "description": "Returns the authenticated user's email, groups, accessible tenants, and permissions. Requires an identity only, no grant (#2520): a caller no rule matches (including under a configured _rbac.yaml with zero rules) gets 200 with empty permissions and accessible_tenants. Lists only the rules matching the caller — a summary of those rules, not of effective access: a matched rule that grants nothing right now (an org-scoped rule without the org claim under enforce) is still listed.",
                 "produces": [
                     "application/json"
                 ],

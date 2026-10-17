@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -28,5 +29,23 @@ func TestStatusWriter_KeepsFlusherAndUnwrap(t *testing.T) {
 	u, ok := w.(interface{ Unwrap() http.ResponseWriter })
 	if !ok || u.Unwrap() != rec {
 		t.Error("statusWriter does not unwrap to the wrapped writer (http.ResponseController needs it)")
+	}
+}
+
+// failingFlushWriter is a connection whose flush fails (a client gone away).
+type failingFlushWriter struct{ *httptest.ResponseRecorder }
+
+func (failingFlushWriter) FlushError() error { return errFlushFailed }
+
+var errFlushFailed = errors.New("flush to a dead connection")
+
+// http.ResponseController.Flush must report the wrapped writer's flush error
+// through statusWriter: the SSE stream ends a subscription on it. Without
+// FlushError the controller stops at statusWriter.Flush and reports nil.
+func TestStatusWriter_ForwardsFlushError(t *testing.T) {
+	t.Parallel()
+	w := &statusWriter{ResponseWriter: failingFlushWriter{httptest.NewRecorder()}}
+	if err := http.NewResponseController(w).Flush(); !errors.Is(err, errFlushFailed) {
+		t.Errorf("ResponseController.Flush through statusWriter = %v, want %v", err, errFlushFailed)
 	}
 }

@@ -94,6 +94,13 @@ func (w *statusWriter) Flush() {
 	}
 }
 
+// FlushError is what http.ResponseController.Flush calls first: without it
+// the controller would stop at Flush above and report nil, so the SSE stream
+// could not see that the flush to a dead connection failed.
+func (w *statusWriter) FlushError() error {
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
 // Unwrap exposes the wrapped writer to http.ResponseController, so the SSE
 // stream's per-write deadlines (#143) reach the connection.
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
