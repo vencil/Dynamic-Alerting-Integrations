@@ -40,9 +40,9 @@ package config
 //   - spelling_duplicate: the winning layer's map writes the threshold
 //     under another spelling too, and the decode keeps that one
 //     (normalizeKeys, #2031; keyed by the losing spelling as written).
-//   - unregistered: a `_` key the reserved-key registry does not list,
-//     which every row phase skips (IsUnregisteredUnderscoreKey through
-//     baseRowsSkipKey / criticalRowBase / resolveDimensionalRows, #3045).
+//   - unregistered: a `_` key the reserved-key registry does not list
+//     (IsUnregisteredUnderscoreKey): nothing reads it, and no row phase
+//     reads any `_` key (baseRowsSkipKey, #3045).
 //
 // ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
 // serves what effective shows": a profile-layer value applyProfiles discards

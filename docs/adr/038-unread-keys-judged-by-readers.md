@@ -22,7 +22,7 @@ updated_at: 2026-10-17
 
 2026-10-16 修訂（實作登錄表時依實測修正）：讀取端多一類 `policy_engine`；層多一層子目錄 `_defaults.yaml`；探針改為雙向，涵蓋所有比對得到輸出的讀取端（決定 2、3）。決定 8 的成本說明更新。
 
-2026-10-17 修訂：exporter 不再送出登錄表沒有的 `_` 鍵，與 JSON schema 一致（決定 2）；判決因此不再有 `platform_violation`，這類鍵判為 `unread`（決定 4、6）。
+2026-10-17 修訂：`_` 開頭的鍵都不再產生閾值列，登錄表沒有的 `_` 鍵 exporter 完全不讀，與 JSON schema 一致（決定 2）；判決因此不再有 `platform_violation`，這類鍵判為 `unread`（決定 4、6）。
 
 ## 摘要
 
@@ -141,7 +141,7 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 這條分界讓讀者知道某個清單該去哪裡改：頂層保留鍵改登錄表，子鍵改讀取它的那支程式。
 
-**`_` 命名空間以登錄表為準**：登錄表沒有的 `_` 鍵，exporter 在任何一層都不送，根 defaults 宣告了也一樣，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
+**`_` 命名空間以登錄表為準**：登錄表的 `_` 鍵沒有一個是閾值，所以 `_` 開頭的鍵在任何一層、任何形狀（base、`_critical`、維度鍵）都不產生閾值列，根 defaults 宣告了也一樣；登錄表沒有的 `_` 鍵則沒有任何讀取端讀，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`；Go 的寫入檢查（tenant-api）報「unknown reserved key」並拒收；`expires:` 也不再為它發出過期事件。根 defaults 寫成數字的登錄表鍵（例如 `_namespaces: 5`）同樣不再成為閾值，判決照決定 4 判為 `unread`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
 
 ### 3. 防止登錄表與程式漂移
 
@@ -275,7 +275,7 @@ db-a
 ## 後果與已知限制
 
 - **保留鍵清單只剩一個來源**：新增保留鍵只改登錄表，再重新產生；各讀取端各自的鍵名判斷改由共用判決取代。
-- **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。剩下的差異：根 defaults 宣告了這種鍵時，產生器 `--validate` 對租戶寫的同名鍵仍不警告；共用判決照樣把它判為 `unread`。
+- **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。剩下的差異：根 defaults 宣告了這種鍵時，產生器 `--validate` 對租戶寫的同名鍵仍不警告；共用判決照樣把它判為 `unread`，產生器在第 3 步改用共用判決時一併消除（決定 11）。
 - **判決需要兩支程式**：完整的「沒有讀取端讀」需要 da-guard 與產生器都能跑。只有 da-guard 的環境得到 exporter 那半，產生器那半回 exit 4（未判定）。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。
 - **規則讀取以 repo 內的規則包為準**：客戶自己的規則讀了某個閾值，除非宣告為外部讀取端，否則會被報成「沒有規則讀」。這一項因此永遠只是建議。

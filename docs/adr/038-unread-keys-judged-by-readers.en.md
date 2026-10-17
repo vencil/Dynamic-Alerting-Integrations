@@ -16,7 +16,7 @@ lang: en
 
 Revised 2026-10-16 (corrected from measurement while implementing the registry): one more reader class, `policy_engine`; one more layer, a subdirectory's `_defaults.yaml`; the probe checks both directions, for every reader whose output can be compared (decisions 2 and 3). The cost description in decision 8 is updated.
 
-Revised 2026-10-17: the exporter no longer serves `_` keys the registry does not list, in line with the JSON schema (decision 2); the verdict therefore no longer has `platform_violation`, and such a key is `unread` (decisions 4 and 6).
+Revised 2026-10-17: no `_` key produces a threshold row any more, and the exporter reads no `_` key the registry does not list, in line with the JSON schema (decision 2); the verdict therefore no longer has `platform_violation`, and such a key is `unread` (decisions 4 and 6).
 
 ## Summary
 
@@ -135,7 +135,7 @@ At run time each tool reads the generated constants, not this JSON, so the da-to
 
 This boundary tells readers where to change a given list: top-level reserved keys change in the registry, sub-keys change in the program that reads them.
 
-**The registry owns the `_` namespace**: the exporter serves a `_` key the registry does not list in no layer, even when the root defaults declares it, in line with the JSON schema. For example, with `_myth: 5` in the root defaults and `_myth: "7"` in a tenant, the exporter produces no row for `_myth`, `_myth_critical` or `_myth{x="a"}`; served-values lists the key in `unserved` with the reason `unregistered`, and `da-guard effective`'s `not_served` marks it `unregistered` too. This is a breaking change: a deployment that relies on declaring such a key in the root defaults loses those rows on upgrade. To migrate, use a key the registry lists, or drop the `_` prefix so it becomes an ordinary threshold key ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)).
+**The registry owns the `_` namespace**: no `_` key in the registry is a threshold, so a `_` key produces no threshold row in any layer or shape (base, `_critical`, dimensional), even when the root defaults declares it; and no reader reads a `_` key the registry does not list, in line with the JSON schema. For example, with `_myth: 5` in the root defaults and `_myth: "7"` in a tenant, the exporter produces no row for `_myth`, `_myth_critical` or `_myth{x="a"}`; served-values lists the key in `unserved` with the reason `unregistered`, and `da-guard effective`'s `not_served` marks it `unregistered` too; Go's write check (tenant-api) reports "unknown reserved key" and refuses it; and `expires:` emits no expiry event for it. A registry key written as a number in the root defaults (such as `_namespaces: 5`) is no threshold either, and the verdict judges it `unread` under decision 4. This is a breaking change: a deployment that relies on declaring such a key in the root defaults loses those rows on upgrade. To migrate, use a key the registry lists, or drop the `_` prefix so it becomes an ordinary threshold key ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)).
 
 ### 3. Keeping the registry and the code from drifting
 
@@ -183,7 +183,7 @@ This brings a linked amendment: [ADR-036](./036-single-parser-effective-config.e
 
 ### 6. Platform-side problems are not charged to tenants
 
-Decision 4's "`unread` from a platform file or profile" (for example, a `_` key the registry does not list, declared in the root defaults) appears in every run and are not charged to the tenant being changed. tenant-api's write check does not block writes for unrelated tenants because of such existing problems in platform files.
+Decision 4's "`unread` from a platform file or profile" (for example, a `_` key the registry does not list, declared in the root defaults) appears in every run and is not charged to the tenant being changed. tenant-api's write check does not block writes for unrelated tenants because of such existing problems in platform files.
 
 ### 7. When it cannot be judged
 
@@ -269,7 +269,7 @@ The input and today's measured output are in "Background"; this table is the ver
 ## Consequences and known limits
 
 - **The reserved-key list has only one source left**: adding a reserved key only changes the registry, followed by regeneration; each reader's own key-name checks are replaced by the shared verdict.
-- **A `_` key the registry does not list no longer produces threshold rows**: the exporter and the JSON schema agree on such a key. A deployment that served thresholds by declaring such a key in the root defaults loses those rows on upgrade (see decision 2 for the migration). The difference left: when the root defaults declares such a key, the generator's `--validate` still does not warn about a tenant's key of the same name; the shared verdict judges it `unread` all the same.
+- **A `_` key the registry does not list no longer produces threshold rows**: the exporter and the JSON schema agree on such a key. A deployment that served thresholds by declaring such a key in the root defaults loses those rows on upgrade (see decision 2 for the migration). The difference left: when the root defaults declares such a key, the generator's `--validate` still does not warn about a tenant's key of the same name; the shared verdict judges it `unread` all the same, and the difference goes when the generator takes the shared verdict in step 3 (decision 11).
 - **A verdict needs two programs**: the full "no reader reads it" needs both da-guard and the generator to run. An environment with only da-guard gets the exporter half; the generator half returns exit 4 (undecided).
 - **Typos and intentional omissions are not told apart**: for a threshold key the platform has not declared, the verdict does not know whether the tenant misspelled it or the platform forgot to declare it; both are reported with the same reason.
 - **Rule reads are based on the rule packs in the repo**: if the customer's own rules read a threshold, it will be reported as "no rule reads it" unless declared as an external reader. That is why this item is always advisory only.

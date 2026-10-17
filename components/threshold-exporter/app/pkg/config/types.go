@@ -416,10 +416,16 @@ func IsReservedKey(k string) bool {
 // reserved-key registry (reserved_keys.json) does not list it: not a key, a
 // prefix or a retired key of it — `_myth`, `_myth_critical`,
 // `_myth{x="a"}`, `_silent_bogus`. The `_` namespace is the registry's, as
-// the JSON schema says, so the exporter serves no row for such a key in any
-// layer, the root `defaults:` included (#3045): baseRowsSkipKey,
-// criticalRowBase and resolveDimensionalRows ask this. Before #3045 a root
-// `defaults:` entry made such a key a threshold.
+// the JSON schema says: nothing reads such a key in any layer — no row
+// phase reads ANY `_` key (baseRowsSkipKey; before #3045 a root
+// `defaults:` entry made one a threshold) — so it is the not_served reason
+// `unregistered` and the write check's "unknown reserved key" even when a
+// `defaults:` declares it (#3045).
+//
+// The retired-key test cannot be told apart from `true` with today's
+// registry: its one retired key, `_routing_receiver_type`, is under the
+// `_routing` prefix IsReservedKey already accepts. It stays for a retired
+// key outside every prefix.
 func IsUnregisteredUnderscoreKey(k string) bool {
 	if !strings.HasPrefix(k, "_") || IsReservedKey(k) {
 		return false
