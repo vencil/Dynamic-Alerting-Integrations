@@ -158,6 +158,28 @@ def test_severity_union_emits_declared_branches_only(tmp_path):
     assert shapes[0]["severities"] == ["critical", "warning"]
 
 
+def test_accepted_lists_what_compiled_only(tmp_path):
+    """#3042: `accepted` is what the compiler builds a rule for — a
+    quarantined recipe (here: same name as an inherited one) is not in it,
+    and a `disable` threshold / objective is marked."""
+    _write_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  m: 1\n_custom_alerts:\n"
+                          '  - {recipe: threshold, name: dup, metric: m_root, op: ">", window: 5m, threshold: "10:warning"}\n',
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+                  '      - {recipe: threshold, name: dup, metric: m_own, op: ">", window: 5m, threshold: "10:warning"}\n'
+                  '      - {recipe: threshold, name: turned_off, metric: m_off, op: ">", window: 5m, threshold: "disable"}\n'
+                  '      - {recipe: slo_burn_rate, name: slo, metric: m_err, denominator_metric: m_tot, objective: "disable"}\n'
+                  '      - {recipe: slo_burn_rate, name: slo2, metric: m_e2, denominator_metric: m_t2, objective: "99.9"}\n',
+    })
+    accepted: list = []
+    _shapes, _per, skipped = ld.build_shapes(tmp_path, accepted=accepted)
+    got = {(a["tenant"], a["name"], a["own"], a["disabled"]) for a in accepted}
+    assert got == {("ta", "dup", False, False), ("ta", "turned_off", True, True),
+                   ("ta", "slo", True, True), ("ta", "slo2", True, False)}
+    assert [s["name"] for s in skipped] == ["dup"]
+    assert all(a["recipe_id"] for a in accepted)
+
+
 def test_single_severity_no_critical_mirror(tmp_path):
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'

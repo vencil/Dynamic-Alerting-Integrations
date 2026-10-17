@@ -51,6 +51,11 @@ Checks:
                     in no layer it is written in. Report only: WARN, never
                     FAIL, and da-guard failing is a WARN that the verdict is
                     incomplete, not a refusal (ADR-038 decisions 4 and 5)
+  15. Custom alert sources — the custom alerts the compiler builds a rule
+                    for beside the ones the exporter serves a threshold for
+                    (#3042): a rule that never fires, a served threshold no
+                    rule reads. Report only; run only where the compiler is
+                    installed (the repo — the da-tools image ships none)
 
 Hierarchical trees: a row may get its input from a reader that is FLAT — it
 reads only the top level of --config-dir — while threshold-exporter reads the
@@ -202,6 +207,7 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ParseFailedError,
     load_effective_tree,
+    load_served_tree,
     print_load_error,
     value_not_served_as_written,
 )
@@ -2332,6 +2338,139 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
 
 
+# #3042: what each line of the custom_alert_sources row means to the reader.
+_CUSTOM_ALERT_SOURCES_HINT = (
+    "The custom-alert compiler and the exporter take `_custom_alerts` from "
+    "different places (#3042). A rule with no served threshold never fires; "
+    "a served threshold with no rule never alerts. Once the compiler builds "
+    "from what the exporter serves (#3042, the next stage), the first are no "
+    "longer compiled and the second start to fire. Reported only, not yet "
+    "blocking.")
+_CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT = (
+    "Nothing was compared; the line above names why. The exporter's side "
+    "needs da-guard (in the repo `make da-guard-build`, or set "
+    "`DA_GUARD_BINARY`) and a tree it can read — the yaml_syntax, json_schema "
+    "and values_not_served rows name a file it cannot; the compiler's side "
+    "stops on a `_custom_alerts` it cannot walk (e.g. a number in a "
+    "subdirectory file's `tenants:`). Fix it and run again. Reported only, not "
+    "yet blocking.")
+
+
+def _custom_alert_compiler():
+    """The custom-alert compiler's loader, or None where it is not installed
+    (the da-tools image ships no compiler: the row is then not run)."""
+    dx = os.path.join(str(_THIS_DIR.parent), "dx")
+    if os.path.isdir(dx) and dx not in sys.path:
+        sys.path.insert(0, dx)
+    try:
+        from custom_alerts import loader
+    except ImportError:
+        return None
+    return loader
+
+
+def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object]:
+    """#3042: the custom alerts the compiler builds a rule for, per tenant,
+    beside the ones the exporter serves a threshold for — the two readers of
+    `_custom_alerts`, compared on what a rule joins on: (tenant, recipe_id,
+    severity); the name is only what each side calls it. Neither side is
+    re-derived here: the compiler's own `build_shapes` (what it accepts, not
+    what it collects) and da-guard served-values.
+
+    * compiled, not served: the rule's join is empty — it never fires (a
+      recipe the compiler inherits from a `_defaults.yaml` top level, or takes
+      from a subdirectory `_` file the exporter does not read);
+    * served, not compiled: a threshold row no rule reads — it never alerts
+      (a root `_defaults.yaml` `tenants:` entry, a profile, a tenant's own
+      recipe quarantined for a same-named inherited one).
+
+    A recipe switched off the way the exporter reads it (a threshold of
+    disable / disabled / off / false, an SLO objective of `disable`) is
+    compiled and not served by design: not a finding. Report only (#3016):
+    WARN, never FAIL; either side unreadable (da-guard unavailable or failing,
+    a file it cannot read, a `_custom_alerts` the compiler cannot walk) is a
+    WARN saying nothing was compared.
+    """
+    side = "exporter"
+    try:
+        # The shared effective run first: when it fails, the row stops here
+        # and runs no da-guard of its own (as unread_keys).
+        sources = _effective_tree(config_dir).tenants
+        served = load_served_tree(config_dir).tenants
+        side = "compiler"
+        accepted: list[dict] = []
+        (loader or _custom_alert_compiler()).build_shapes(Path(config_dir), accepted=accepted)
+    except Exception as exc:  # noqa: BLE001 — any failure is "not compared", never a refusal
+        return _make_result("custom_alert_sources", WARN, [
+            f"comparison incomplete: the {side}'s custom alerts were not read "
+            f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
+            hint=_CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT)
+
+    # A rule is one per (recipe_id, severity) for the whole pack, joined
+    # on(tenant) to every tenant's user_threshold row of that recipe_id and
+    # severity. So a tenant's compiled recipe fires only if the exporter
+    # serves that tenant such a row; a served row alerts if ANY tenant's
+    # recipe — a switched-off one too — got that rule compiled. The name is
+    # only what each side calls it.
+    compiled: dict[tuple, dict] = {}
+    rules: set[tuple] = set()
+    for a in accepted:
+        for sev in a["severities"]:
+            rules.add((a["recipe_id"], sev))
+            if not a["disabled"]:
+                compiled[(a["tenant"], a["recipe_id"], sev)] = a
+    served_rows: dict[tuple, list[str]] = {}
+    for t, v in served.items():
+        for r in v.values.get("_custom_alerts") or []:
+            if isinstance(r, dict) and isinstance(r.get("labels"), dict):
+                served_rows.setdefault(
+                    (t, str(r["labels"].get("recipe_id")), str(r.get("severity"))), []
+                ).append(str(r["labels"].get("name")))
+
+    def _where(t: str) -> str:
+        src = sources.get(t).key_sources.get("_custom_alerts") if t in sources else None
+        return src.file if src is not None else "?"
+
+    groups: dict[tuple, set[str]] = {}
+    for (t, rid, sev), a in compiled.items():
+        if (t, rid, sev) not in served_rows:
+            origin = a["origin"] if a["own"] else "an inherited `_defaults.yaml`"
+            groups.setdefault(("never_fires", origin, a["name"], rid, ""), set()).add(t)
+    for (t, rid, sev), names in served_rows.items():
+        if (rid, sev) not in rules:
+            for name in names:
+                groups.setdefault(("not_compiled", _where(t), name, rid, ""), set()).add(t)
+        elif len(names) > 1:
+            # Several served recipes of one shape and severity in one tenant:
+            # the compiler takes at most one per tenant, shape and severity. Which one it took is not re-derived here
+            # (a switched-off one serves no row; names are spelt per side).
+            groups.setdefault(("shared", _where(t), ", ".join(f"`{n}`" for n in sorted(names)),
+                               rid, sev), set()).add(t)
+
+    def _tenants(ts: set[str]) -> str:
+        ts = sorted(ts)
+        more = f" (+{len(ts) - WARN_LIMIT} more)" if len(ts) > WARN_LIMIT else ""
+        return ", ".join(ts[:WARN_LIMIT]) + more
+
+    details = []
+    for (kind, where, name, rid, kept), ts in sorted(groups.items()):
+        if kind == "never_fires":
+            details.append(f"{where}: `{name}` ({rid}) is compiled, but the exporter serves "
+                           f"no threshold for it — the rule never fires — tenant(s) {_tenants(ts)}")
+        elif kind == "not_compiled":
+            details.append(f"{where}: `{name}` ({rid}) is served, but no rule is compiled "
+                           f"for it — it never alerts — tenant(s) {_tenants(ts)}")
+        else:
+            details.append(f"{where}: {name} ({rid}, {kept}) are served for one tenant with the "
+                           "same shape and severity — the compiler takes at most one recipe per "
+                           f"tenant, shape and severity — tenant(s) {_tenants(ts)}")
+    if details:
+        return _make_result("custom_alert_sources", WARN, details, hint=_CUSTOM_ALERT_SOURCES_HINT)
+    return _make_result("custom_alert_sources", PASS, [
+        f"{len(compiled)} compiled custom alert(s), counted per tenant and severity, each with "
+        "a served threshold; every served one has a rule"])
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
@@ -2599,6 +2738,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "switches nothing off usually sits on a misspelt key. "
         "`da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
         "key, who reads it and why not. Reported only, not yet blocking (#3016).",
+        "docs/cli-reference.md#validate-config",
+    ),
+    # #3042: each line names the file, the alert, its recipe_id and the tenants.
+    "custom_alert_sources": (
+        _CUSTOM_ALERT_SOURCES_HINT,
         "docs/cli-reference.md#validate-config",
     ),
     # #2386: the row names the file and keys; where they go depends on level.
@@ -3227,6 +3371,15 @@ def main() -> None:
     # WARN, never FAIL, until the gates block (#3016).
     results.append(_run_check("unread_keys", check_unread_keys,
                               args.config_dir, _config_dir=args.config_dir))
+
+    # 15. Custom alerts the compiler and the exporter disagree on (#3042) —
+    # report only; run where the compiler is installed (the repo, not the
+    # da-tools image, which ships none): an absent row is "not compared".
+    custom_alert_compiler = _custom_alert_compiler()
+    if custom_alert_compiler is not None:
+        results.append(_run_check("custom_alert_sources", check_custom_alert_sources,
+                                  args.config_dir, loader=custom_alert_compiler,
+                                  _config_dir=args.config_dir))
     _effective_runs = None
 
     # Report
