@@ -1721,14 +1721,19 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
 
 def _documentable(model: ParserModel) -> tuple[frozenset[str], frozenset[str]]:
     """(option strings V7 requires a row for, hidden ones it does not), over
-    the parser and all its sub-parsers. ``-h``/``--help`` is in neither."""
+    the parser and all its sub-parsers. ``-h``/``--help`` is in neither.
+
+    Hidden is per action: a string ``help=SUPPRESS`` in one sub-parser but
+    public in another is required, so the union of hidden strings is never
+    subtracted from the required set — only what no action makes public is
+    reported as hidden."""
     required = set(model.options) - model.hidden - _PARSER_GLOBAL
     hidden = set(model.hidden) - _PARSER_GLOBAL
     for sub in (model.subparsers or {}).values():
         r, h = _documentable(sub)
         required |= r
         hidden |= h
-    return frozenset(required - hidden), frozenset(hidden)
+    return frozenset(required), frozenset(hidden - required)
 
 
 def _all_options(model: ParserModel) -> frozenset[str]:
@@ -1937,7 +1942,8 @@ _STAT_KEYS = (
     "unscanned_carrier_files", "portal_commands", "portal_unavailable",
     "cmd_synopsis", "cmd_injected_assumed", "cmd_parse_placeholder_value",
     "cmd_parse_crashed", "table_cmd_rows", "table_flags_by_union",
-    "v7_sections_without_option_table", "v7_suppressed_options")
+    "v7_sections_without_option_table", "v7_suppressed_options",
+    "v7_sections_without_parser")
 
 
 class PortalCommand(NamedTuple):
@@ -2125,6 +2131,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     no_script: set[str] = set()
     v7_no_option_table: set[str] = set()
     v7_suppressed: set[tuple[str, str]] = set()
+    v7_no_parser: set[str] = set()
     for doc in reference_docs:
         rel = _rel(doc, repo_root)
         found, facts = scan_reference(doc, rel, parsers, injected_for, exit_codes,
@@ -2137,6 +2144,8 @@ def scan(parsers: dict[str, ParserModel] | None = None,
         no_script |= {c for c in facts.exit_tables if c not in exit_codes}
         v7_no_option_table |= facts.no_option_table
         v7_suppressed |= facts.suppressed
+        v7_no_parser |= {c for c in facts.sections
+                         if c in command_map and c not in parsers}
         for carrier, label in (("option_rows", "option-table flags"),
                                ("exit_codes", "exit codes")):
             if not per_doc[rel][carrier]:
@@ -2154,6 +2163,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     stats["exit_tables_no_script"] = len(no_script)
     stats["v7_sections_without_option_table"] = len(v7_no_option_table)
     stats["v7_suppressed_options"] = len(v7_suppressed)
+    stats["v7_sections_without_parser"] = len(v7_no_parser)
     stats["exit_undecidable_scripts"] = len(
         {c for c, ec in exit_codes.items() if ec.undecidable})
     if not stats["scored"]:
@@ -2176,7 +2186,9 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"scanned: {s['cmd_segments']} fenced command segments, {s['inline_spans']} "
         f"inline code spans, {s['table_cmd_rows']} command-table rows, {s['cmd_manifest_argvs']} manifest args lists, "
         f"{s['cmd_sh_c_strings']} `sh -c` strings, {s['portal_commands']} CLI "
-        f"Playground command lines"
+        f"Playground command lines, {s['v7_sections_without_option_table']} "
+        f"reference sections with options but no option table (V7 reports "
+        f"each of their options)"
         + (" (⚠️ CLI Playground NOT scored: node not on PATH)"
            if s["portal_unavailable"] else ""),
         f"NOT scored: {s['cmd_no_parser']} commands under a subcommand with no "
@@ -2207,7 +2219,9 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"commands with a parser and a reference section but no exit-code table, "
         f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
         f"{s['v7_suppressed_options']} `help=SUPPRESS` options V7 does not require "
-        f"a row for, "
+        f"a row for, {s['v7_sections_without_parser']} sections of a command with "
+        f"no argparse parser (guard/parser/batch-pr — V7 cannot list their "
+        f"options), "
         f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
         f"(portal JS/JSX, shell scripts) outside this scan set",
         f"NOT scored per action: {s['table_flags_by_union']} command-table flag "

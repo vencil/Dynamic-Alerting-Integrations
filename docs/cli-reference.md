@@ -685,7 +685,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 **語法**
 
 ```bash
-da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> --old-value <v> --new-value <v>] [options]
+da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
 ```
 
 **必需參數**
@@ -700,7 +700,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <
    （比對兩個配置版本）
    兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。severity 只決定由哪支告警比較這一列，觸發點只看值（[#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)）：值或 severity 任一邊不同都是一列變更，兩邊 severity 不同時 `--json` 該列帶 `old_severity`／`new_severity`、文字與 Markdown 報告在值旁註明。只改 severity 到另一個有規則選的 severity（`70` → `70:critical`）照值回測（觸發點不變）；改到規則不選的 severity（`70:high`、`70:`）那一邊視同沒有門檻，判為告警被靜默（`Metric disabled — all alerts silenced`），改回來則是重新啟用。每一列由哪支告警比較，取自 served-values 對該 key 回報的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（例如 `60:high`、`60:Critical`——規則只選 `severity="warning"`／`"critical"`，大小寫也要一致）沒有告警比較：那一邊視同沒有門檻，兩邊都沒有規則選的 severity 時不回測（`severity '...' is selected by no threshold rule`，與 `--git-diff`／`--tenant` 同一個理由）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不讀，舊名底下的資料不算這個門檻的資料。一列的 row 若由比較不同 series 或不同方向的告警比較，一次回放代表不了兩者，該列不回測（`rows compared differently`）。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。
 
-3. **單一變更模式**：`--tenant <id> --metric <key> --old-value <v> --new-value <v>`
+3. **單一變更模式**：`--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
    （不讀任何配置檔，直接回測手給的一筆變更）
    `--tenant` 須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個，否則結束碼 2；租戶 id 須是合法的 DNS-1123 label。值的讀法同 `--git-diff`（見下方「回測查什麼」）。同時給了 `--git-diff` 或 `--config-dir` 時以它們為準，這幾個旗標只做參數檢查。
 
@@ -2115,7 +2115,7 @@ da-tools scaffold [options]
 | `--severity-dedup <MODE>` | `disable` 時寫入 `_severity_dedup: disable`；`enable`（critical 觸發時抑制 warning 通知）是預設，不寫 | `enable` |
 | `--routing-receiver <ADDR>` | 告警路由 receiver 的位址（依 `--routing-receiver-type` 是 URL 或 email 清單）；給了才寫 `_routing` | （無） |
 | `--routing-receiver-type <TYPE>` | receiver 類型：`webhook`／`email`／`slack`／`teams`／`rocketchat`／`pagerduty` | `webhook` |
-| `--routing-smarthost <HOST:PORT>` | email receiver 的 SMTP smarthost（如 `smtp.example.com:587`） | （無） |
+| `--routing-smarthost <HOST:PORT>` | email receiver 的 SMTP smarthost（如 `smtp.example.com:587`） | （無；email receiver 用 `localhost:25`） |
 | `--routing-group-by <LIST>` | 逗號分隔的 `group_by` label | （無；寫 `_routing` 時用 `alertname,tenant`） |
 | `--routing-group-wait <DURATION>` | `group_wait`（範圍 5s–5m） | （無；寫 `_routing` 時用 `30s`） |
 | `--routing-group-interval <DURATION>` | `group_interval`（範圍 5s–5m） | （無；寫 `_routing` 時用 `5m`） |

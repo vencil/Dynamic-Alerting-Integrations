@@ -848,6 +848,8 @@ class TestV7UndocumentedOption:
         r = _scan(tmp_path, reference=ref)
         assert {t for v, c, t in _open(r.findings) if v == "V7"} == self._ALL
         assert r.stats["v7_sections_without_option_table"] == 1
+        assert any("1 reference sections with options but no option table" in line
+                   for line in mod._not_scored_lines(r.stats))
 
     def test_rows_in_several_tables_of_one_section_all_count(self, tmp_path):
         ref = tmp_path / "ref.md"
@@ -894,6 +896,46 @@ class TestV7UndocumentedOption:
         """tool2/tool3 have parsers and no `####` section in the reference:
         the missing section is check_cli_coverage's finding, not 6 of ours."""
         assert not any(f.command in ("tool2", "tool3") for f in _scan(tmp_path).findings)
+
+    def test_a_flag_suppressed_in_one_sub_parser_but_public_in_another_is_required(
+            self, tmp_path):
+        """``hidden`` is per action: `a --foo` is hidden, `b --foo` is public,
+        so `--foo` still needs a row."""
+        p = argparse.ArgumentParser(prog="probe")
+        sub = p.add_subparsers(dest="action")
+        sub.add_parser("a").add_argument("--foo", help=argparse.SUPPRESS)
+        b = sub.add_parser("b")
+        b.add_argument("--foo")
+        b.add_argument("--bar")
+        ref = tmp_path / "ref.md"
+        ref.write_text(_REF_HEAD + _REF_WIDGET_ROWS + _REF_EXIT
+                       + "\n#### probe\n\n| 選項 | 說明 | 預設值 |\n|---|---|---|\n"
+                       "| `--bar <X>` | bar | - |\n", encoding="utf-8")
+        r = _scan(tmp_path, reference=ref,
+                  parsers={**PARSERS, "probe": mod._model(p)},
+                  command_map={**COMMAND_MAP, "probe": "probe.py"})
+        assert _open(r.findings) == [("V7", "probe", "--foo")]
+        assert r.stats["v7_suppressed_options"] == 0
+
+    def test_only_the_first_column_documents_a_flag(self, tmp_path):
+        """A flag named in another row's description cell is not its row."""
+        rows = (_REF_WIDGET_ROWS.replace("| `--tags [TAG ...]` | tags | - |\n", "")
+                .replace("| `--format <FMT>` | format | - |",
+                         "| `--format <FMT>` | format; see `--tags` | - |"))
+        assert "`--tags`" in rows
+        r = _scan(tmp_path, reference=_reference(tmp_path, _REF_CLEAN_ROW + rows,
+                                                 complete=False))
+        assert _open(r.findings) == [("V7", "widget", "--tags")]
+
+    def test_a_section_of_a_command_without_a_parser_is_disclosed(self, tmp_path):
+        ref = tmp_path / "ref.md"
+        ref.write_text(_REF_HEAD + _REF_WIDGET_ROWS + _REF_EXIT
+                       + "\n#### noparser\n\ntext\n", encoding="utf-8")
+        r = _scan(tmp_path, reference=ref)
+        assert _open(r.findings) == []
+        assert r.stats["v7_sections_without_parser"] == 1
+        assert any("1 sections of a command with no argparse parser" in line
+                   for line in mod._not_scored_lines(r.stats))
 
     def test_a_ledger_row_can_name_v7(self, tmp_path):
         p = tmp_path / "b.yaml"
@@ -1806,6 +1848,8 @@ class TestRealRepo:
         every section with options now has an option table."""
         assert result["stats"]["v7_suppressed_options"] == 4, result["stats"]
         assert result["stats"]["v7_sections_without_option_table"] == 0
+        # guard / batch-pr / parser: Go wrappers, no argparse parser to compare
+        assert result["stats"]["v7_sections_without_parser"] == 3, result["stats"]
 
     @_needs_node
     def test_the_portal_carrier_judged_the_real_playground(self, result):
