@@ -415,3 +415,39 @@ func TestWritePR_UntrackedNonRegularTargetIsRefusedAndKept(t *testing.T) {
 	// git status does not list a FIFO, so the FIFO staying is checked above.
 	assertCleanOnBase(t, dir, "main", "tenant-api/")
 }
+
+// The tracked check takes conf.d's path literally: with conf.d at
+// `conf[1]`, the glob `conf[1]/prk-t.yaml` would match the tracked
+// `conf1/prk-t.yaml` and pass the untracked FIFO as tracked — and the write
+// would replace it.
+func TestWritePR_UntrackedNonRegularTargetTrackedCheckIsLiteral(t *testing.T) {
+	repo := seedTreeRepo(t, map[string]string{
+		"conf[1]/prk-o.yaml": tenantBody("prk-o"),
+		"conf1/prk-t.yaml":   tenantBody("prk-t"), // outside conf.d; matches the glob
+	})
+	confDir := filepath.Join(repo, "conf[1]")
+	target := filepath.Join(confDir, "prk-t.yaml")
+	mkfifoReleased(t, target)
+	if got := gitOut(t, repo, "ls-files", "--", "conf[1]/prk-t.yaml"); got != "conf1/prk-t.yaml" {
+		t.Fatalf("fixture: the glob does not reach the other tracked file (ls-files = %q)", got)
+	}
+	done := make(chan error, 1)
+	go func() { done <- writeVia(t, "WritePR", NewWriter(confDir, repo), "prk-t") }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("blocked")
+	}
+	var te *TargetUnreadableError
+	if !errors.As(err, &te) || !errors.Is(err, confd.ErrNotRegularFile) {
+		t.Fatalf("err = %v, want *TargetUnreadableError (not_regular_file)", err)
+	}
+	if fi, lerr := os.Lstat(target); lerr != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the FIFO is gone or replaced (err=%v)", lerr)
+	}
+	if b := gitOut(t, repo, "ls-remote", "origin", "refs/heads/tenant-api/*"); b != "" {
+		t.Errorf("a refused write pushed a branch: %s", b)
+	}
+	assertCleanOnBase(t, repo, "main", "tenant-api/")
+}

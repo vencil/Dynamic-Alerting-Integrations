@@ -453,8 +453,11 @@ func (w *Writer) refuseUntrackedNonRegular(filePath, tenantID string) error {
 	if err != nil {
 		return err
 	}
+	// literal: conf.d's path and the file's name are names, not patterns — a
+	// `[`, `*` or `?` in either would glob onto another tracked file and
+	// pass this entry as tracked.
 	tracked, err := w.gitOutput(w.gitDir, "ls-files", "-z", "--",
-		":(top)"+filepath.ToSlash(filepath.Join(rel, filepath.Base(filePath))))
+		":(top,literal)"+filepath.ToSlash(filepath.Join(rel, filepath.Base(filePath))))
 	if err != nil {
 		return fmt.Errorf("check whether the tenant file is tracked: %w", err)
 	}
