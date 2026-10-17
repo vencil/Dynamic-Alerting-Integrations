@@ -889,7 +889,9 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 		// line is keyed by tenant rather than request_id.
 		slog.Error("batch write failed; detail withheld from the client",
 			"tenant", tenantID, "error", err)
-		msg = msgBatchOpFailed
+		// #1535: the server's failure, so its code says so — as the sync
+		// answer's 500 INTERNAL_ERROR does (writeBatchFailure).
+		msg, code = msgBatchOpFailed, CodeInternal
 	}
 	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: code}
 }

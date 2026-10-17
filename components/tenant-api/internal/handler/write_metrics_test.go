@@ -116,12 +116,12 @@ func TestWriteResults_PutDirect(t *testing.T) {
 		wantStatus(t, wmPut(d, update, stale), http.StatusConflict)
 		wantWrites(t, d.WriteResults, 0, 1, 0)
 	})
-	t.Run("a git failure answered 400 is an error", func(t *testing.T) {
+	t.Run("a git failure is an error", func(t *testing.T) {
 		t.Parallel()
 		dir := setupConfigDir(t, wmTree()) // not a git repository: the commit fails
 		d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect, WriteResults: &WriteResults{}}
 		w := wmPut(d, update, "")
-		wantStatus(t, w, http.StatusBadRequest)
+		wantStatus(t, w, http.StatusInternalServerError)
 		if !strings.Contains(w.Body.String(), msgWriteFailed) {
 			t.Fatalf("want the withheld write failure, got %s", w.Body.String())
 		}
@@ -177,7 +177,7 @@ func TestWriteResults_CustomAlerts(t *testing.T) {
 		ok, errs int64
 	}{
 		{"ok", true, http.StatusOK, 1, 0},
-		{"a git failure answered 400 is an error", false, http.StatusBadRequest, 0, 1},
+		{"a git failure is an error", false, http.StatusInternalServerError, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

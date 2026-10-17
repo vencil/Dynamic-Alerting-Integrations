@@ -65,9 +65,10 @@ type ReadFunc func() (data []byte, exists bool, err error)
 // returns the error without Store-ing; a NewWithReader partial snapshot aside),
 // so a config an admin edited with a typo silently stops taking effect. BOTH reload paths are silent:
 //   - WatchLoop (periodic tick) logs a WARN and moves on.
-//   - Reload (post-write refresh) returns the error, but every production
-//     caller discards it — `_ = mgr.Reload()` in handler/group.go, view.go and
-//     federation/policy.go — and then answers 200 OK, so the caller never
+//   - Reload (post-write refresh) returns the error, but its one production
+//     caller discards it — `_ = mgr.Reload()` in handler/state.go's
+//     reloadState, run on every exit of a groups / views / federation-policy
+//     write (#1535) — and the handler then answers 200 OK, so the caller never
 //     learns the snapshot went stale.
 //
 // The observer records the outcome (ok) of each load so the handler can drive
@@ -211,9 +212,8 @@ func (w *Watcher[T]) Get() *T {
 // WatchLoop ticker fires.
 //
 // The outcome is recorded on the reload observer (by load()) as well as
-// returned: every production caller discards the error (`_ = mgr.Reload()` —
-// handler/group.go, handler/view.go, handler/federation/policy.go) and still
-// answers 200 OK, so without the metric a post-write reload failure is just as
+// returned: its production caller discards the error (`_ = mgr.Reload()` in
+// handler/state.go's reloadState) and the handler still answers 200 OK, so without the metric a post-write reload failure is just as
 // silent as a WatchLoop tick failure and leaves the manager serving the stale
 // snapshot.
 func (w *Watcher[T]) Reload() error {

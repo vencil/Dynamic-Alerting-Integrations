@@ -1,0 +1,201 @@
+package handler
+
+// #1535 item 2: a write whose commit stage fails is the server's fault. Before
+// the fix a direct PUT /tenants/{id} answered it 400 BAD_REQUEST, so the
+// client looked for a mistake in a body that was fine. Every write endpoint
+// now answers a commit / infrastructure failure 500 INTERNAL_ERROR with a
+// fixed text (the git detail goes to the log, #1700), while a body the
+// validation refuses stays a 4xx.
+//
+// The fault is the conf repo's reference-transaction hook refusing every ref
+// update in its "prepared" state: `git commit` (and `git update-ref`, which a
+// compare-and-swap commit path uses) then exits 1 after the file was written
+// — the stage the measured `git commit: exit status 1` came from. Everything
+// before the commit (resolve, validate, the file write) runs as usual.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/groups"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
+)
+
+// refuseRefUpdates installs a reference-transaction hook in repo that aborts
+// every ref update, and checks that it fires: a `git update-ref` must fail.
+func refuseRefUpdates(t *testing.T, repo string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("sh hooks; Go tests for this package run in the dev container / Linux CI")
+	}
+	hook := filepath.Join(repo, ".git", "hooks", "reference-transaction")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\n[ \"$1\" = prepared ] && { echo 'ref updates refused (test fault)' >&2; exit 1; }\nexit 0\n"
+	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "update-ref", "refs/heads/fault-probe", "HEAD").CombinedOutput(); err == nil {
+		t.Fatalf("the reference-transaction hook did not refuse a ref update (the fault would not fire): %s", out)
+	}
+}
+
+// wantInternalWriteFailure: 500 INTERNAL_ERROR with a fixed text that names
+// nothing of git or the server.
+func wantInternalWriteFailure(t *testing.T, status int, body []byte, configDir string) {
+	t.Helper()
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (a commit failure is the server's, not the body's); body: %s", status, body)
+	}
+	var got ErrorResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", body, err)
+	}
+	if got.Code != CodeInternal {
+		t.Errorf("code = %q, want %q; body: %s", got.Code, CodeInternal, body)
+	}
+	if !publicInternalMessages[got.Error] {
+		t.Errorf("error = %q, want one of the fixed INTERNAL_ERROR texts (#1700)", got.Error)
+	}
+	for _, leak := range []string{"git", "exit status", configDir} {
+		if strings.Contains(got.Error, leak) {
+			t.Errorf("error text carries %q: %q", leak, got.Error)
+		}
+	}
+}
+
+func TestPutTenant_CommitFailureIsInternalError(t *testing.T) {
+	t.Parallel()
+	dir := seedGitTree(t, wmTree())
+	refuseRefUpdates(t, dir)
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect, WriteResults: &WriteResults{}}
+
+	w := wmPut(d, "tenants:\n  t-a:\n    mysql_connections: \"60\"\n", "")
+	wantInternalWriteFailure(t, w.Code, w.Body.Bytes(), dir)
+	wantWrites(t, d.WriteResults, 0, 0, 1)
+
+	// The same server, a body the validation refuses: still the caller's 4xx.
+	w = wmPut(d, "tenants:\n  t-a:\n    mysql_connections: [unclosed\n", "")
+	if w.Code < 400 || w.Code >= 500 {
+		t.Fatalf("invalid body: status = %d, want a 4xx; body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestPutTenantCustomAlerts_CommitFailureIsInternalError(t *testing.T) {
+	t.Parallel()
+	const tenantYAML = "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
+	dir := seedGitTree(t, map[string]string{"t-a.yaml": tenantYAML, "_defaults.yaml": caDefaults})
+	refuseRefUpdates(t, dir)
+	d := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: adminRBAC(t), WriteResults: &WriteResults{}}
+	body := `{"base_hash":"` + cfg.ComputeSourceHash([]byte(tenantYAML)) +
+		`","custom_alerts":[{"recipe":"threshold","name":"queue_high","metric":"queue_depth","threshold":"1000","window":"5m"}]}`
+
+	resp := putCustomAlerts(t, d, "t-a", body, "alice@example.com", []string{"admins"})
+	b, _ := readBody(resp)
+	wantInternalWriteFailure(t, resp.StatusCode, []byte(b), dir)
+	wantWrites(t, d.WriteResults, 0, 0, 1)
+}
+
+// A direct batch that fails as a whole answers 500 (writeBatchFailure), and
+// the per-op result an async task stores for it carries INTERNAL_ERROR — the
+// code BatchResult documents for a server-side failure — not an empty code.
+func TestBatch_CommitFailureIsInternalError(t *testing.T) {
+	t.Parallel()
+	dir := seedGitTree(t, wmTree())
+	refuseRefUpdates(t, dir)
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect, WriteResults: &WriteResults{}}
+
+	w := wmBatch(d, "")
+	wantInternalWriteFailure(t, w.Code, w.Body.Bytes(), dir)
+
+	run := writeBatchOps(context.Background(), d.Writer,
+		[]BatchOperation{{TenantID: "t-a", Patch: map[string]string{"_silent_mode": "warning"}}}, "alice@example.com", true)
+	if run.Err == nil {
+		t.Fatal("the batch committed: the fault did not fire")
+	}
+	got := run.Results[0]
+	if got.Status != "error" || got.Code != CodeInternal || got.Message != msgBatchOpFailed {
+		t.Errorf("op result = %+v, want status error, code %s, message %q", got, CodeInternal, msgBatchOpFailed)
+	}
+}
+
+func TestGroupBatch_CommitFailureIsInternalError(t *testing.T) {
+	t.Parallel()
+	dir := seedGitTree(t, wmTree())
+	refuseRefUpdates(t, dir)
+	// The group record lives in the state store, outside conf.d (#2856).
+	stateDir := t.TempDir()
+	setupGroupsFile(t, stateDir, "groups:\n  g-one:\n    label: G\n    members: [t-a]\n")
+	d := &Deps{State: mustDirState(stateDir), Groups: groups.NewDirManager(stateDir), Writer: newTestWriter(dir),
+		ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect}
+
+	req := newRequestWithChiParam("POST", "/api/v1/groups/g-one/batch", "id", "g-one",
+		bytes.NewBufferString(`{"patch":{"_silent_mode":"warning"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := wmServe(d, GroupBatch(d), req)
+	wantInternalWriteFailure(t, w.Code, w.Body.Bytes(), dir)
+}
+
+// PR mode: the feature branch cannot be cut or committed. Already a 500 before
+// #1535; pinned so every write endpoint is held to the same class.
+func TestPutTenantPRMode_CommitFailureIsServerError(t *testing.T) {
+	t.Parallel()
+	dir := seedGitTree(t, wmTree())
+	refuseRefUpdates(t, dir)
+	d := wmPRDeps(t, dir, openedPR)
+
+	w := wmPut(d, "tenants:\n  t-a:\n    mysql_connections: \"60\"\n", "")
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "exit status") {
+		t.Errorf("body carries git's text: %s", w.Body.String())
+	}
+}
+
+// The classification the handlers share: the errors a client caused keep 400
+// and their own text; anything else out of a write — the commit stage
+// included — is 500 with the fixed text.
+func TestWriteTenantWriteFailure_Classification(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"validation", errors.Join(gitops.ErrValidation, errors.New("bad key")), http.StatusBadRequest, CodeBadRequest},
+		{"commit stage", errors.New("git commit: git commit: exit status 1 — "), http.StatusInternalServerError, CodeInternal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := httptest.NewRecorder()
+			fault := writeTenantWriteFailure(w, nil, tc.err)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, tc.status, w.Body.String())
+			}
+			var got ErrorResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Code != tc.code {
+				t.Errorf("code = %q, want %q", got.Code, tc.code)
+			}
+			if fault != (tc.status == http.StatusInternalServerError) {
+				t.Errorf("fault = %v for status %d", fault, tc.status)
+			}
+		})
+	}
+}

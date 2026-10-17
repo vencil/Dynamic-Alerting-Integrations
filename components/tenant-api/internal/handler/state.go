@@ -14,12 +14,37 @@ import (
 // when the record does not exist) and returns the next ones, or nil for "no
 // change" — with one addition: a store may run it more than once, against
 // fresher content, when a concurrent write wins a race.
+//
+// #1535: on EVERY exit — success and error alike — it re-reads the in-memory
+// snapshot of the record it wrote (reloadState), before the caller answers. An
+// error does not mean nothing was written: a ConfigMap update can reach the
+// API server and its response be lost, so the caller answers 503 for a write
+// that happened. Reloading only on success left GET without that write, and a
+// DELETE of it answering 404, until the next WatchLoop tick. A reload that
+// finds nothing changed is a no-op (the watcher's hash dedup).
 func (d *Deps) mutateState(ctx context.Context, key, entity, author string, transform func(current []byte) ([]byte, error), notes ...string) error {
 	if d.State == nil {
 		return errors.New("tenant-api state store is not configured")
 	}
+	defer d.reloadState(key)
 	_, err := d.State.Mutate(ctx, key, statestore.Meta{Entity: entity, Author: author, Notes: notes}, transform)
 	return err
+}
+
+// reloadState re-reads the in-memory snapshot that serves key, when one does:
+// groups, views and the federation whitelist. A federation subset and the
+// AccountID registry are read from the store on every request and have none.
+// The error is the reload metrics' to report (configwatcher.ReloadObserver);
+// on failure the snapshot keeps its last good content, as on a WatchLoop tick.
+func (d *Deps) reloadState(key string) {
+	switch {
+	case key == statestore.KeyGroups && d.Groups != nil:
+		_ = d.Groups.Reload()
+	case key == statestore.KeyViews && d.Views != nil:
+		_ = d.Views.Reload()
+	case key == statestore.KeyFederationPolicy && d.FederationPolicy != nil:
+		_ = d.FederationPolicy.Reload()
+	}
 }
 
 // MutateState is mutateState for the handler subpackages (federation).

@@ -10,7 +10,7 @@ tenant_api_requests_total 42
 # HELP tenant_api_errors_total Total API errors.
 # TYPE tenant_api_errors_total counter
 tenant_api_errors_total 7
-# HELP tenant_api_writes_total Write attempts to the config repository by result: one per git commit or PR/MR attempt (a batch counts once). ok = 2xx, conflict = 409, error = server-side failure: 5xx/429, a direct write's git or file failure answered 400, the forge refusing tenant-api's own token (403), a batch committed but not finished cleanly (409 committed: true; its commit is written). Requests refused as invalid or forbidden, and failures after the client went away, are not counted.
+# HELP tenant_api_writes_total Write attempts to the config repository by result: one per git commit or PR/MR attempt (a batch counts once). ok = 2xx, conflict = 409, error = server-side failure: 5xx/429, the forge refusing tenant-api's own token (403), a batch committed but not finished cleanly (409 committed: true; its commit is written). Requests refused as invalid or forbidden, and failures after the client went away, are not counted.
 # TYPE tenant_api_writes_total counter
 tenant_api_writes_total{result="ok"} 3
 tenant_api_writes_total{result="conflict"} 1

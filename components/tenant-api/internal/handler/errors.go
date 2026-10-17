@@ -574,10 +574,13 @@ var publicInternalMessages = map[string]bool{
 	msgRootPlatformRead:        true,
 	msgEffectiveUnresolved:     true,
 	msgCustomAlertsUnparseable: true,
+	msgWriteFailed:             true,
 }
 
 // msgWriteFailed is the client-facing text of a tenant write that failed for a
 // reason that is not the client's (#1700); the request_id finds the full text.
+// It names the failed operation and nothing of the server, so a 500
+// INTERNAL_ERROR may carry it (publicInternalMessages).
 const msgWriteFailed = "the write failed; the server log has the details under this request_id"
 
 // writeBaseRestoreFailed answers a PR-mode write whose branch was cut (and
@@ -616,6 +619,23 @@ func writeErrorIsForClient(err error) bool {
 		errors.Is(err, gitops.ErrTenantGitManaged) ||
 		errors.Is(err, confd.ErrAmbiguousTenantFile) ||
 		errors.Is(err, confd.ErrNotRegularFile)
+}
+
+// writeTenantWriteFailure answers a tenant-write error that no more specific
+// mapping claimed, and reports whether the failure is the server's (#3054).
+// The status follows the same line as the text (#1535): an error that is about
+// the request (writeErrorIsForClient) is the caller's 400 with its own text;
+// anything else — the commit stage failing, the temp file, reading the tenant
+// file — is the server's, a 500 INTERNAL_ERROR with msgWriteFailed and the
+// detail in the log under the request_id. It used to be a 400 for both, so a
+// client whose body was fine read a failed commit as its own mistake.
+func writeTenantWriteFailure(w http.ResponseWriter, r *http.Request, err error) (fault bool) {
+	if writeErrorIsForClient(err) {
+		WriteJSONError(w, r, http.StatusBadRequest, err.Error())
+		return false
+	}
+	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, writeErrorText(r, err))
+	return true
 }
 
 // writeErrorText is the text a tenant-write failure shows the client: its own
@@ -928,10 +948,10 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, d *Deps, err er
 //   - anything else             → 500 INTERNAL_ERROR (its text goes to the log
 //     only — WriteErrorEnvelope, #1700)
 //
-// The default is 500 — deliberately distinct from tenant_put.go /
-// tenant_custom_alerts.go, whose unrecognized-write case is a 400. This helper
-// is ONLY for the views/groups config-file writers; do not route the tenant
-// write paths through it.
+// The default is 500. The tenant write paths have their own fallback,
+// writeTenantWriteFailure (400 for an error about the request, else 500,
+// #1535); this helper is ONLY for the views/groups config-file writers — do
+// not route the tenant write paths through it.
 func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
 	if WriteStateError(w, r, err) {
 		return

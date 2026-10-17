@@ -347,9 +347,6 @@ func PutGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Reload manager to pick up the new file
-		_ = d.Groups.Reload()
-
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status":   "ok",
 			"group_id": groupID,
@@ -470,8 +467,6 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 			writeConfigFileError(w, r, err)
 			return
 		}
-
-		_ = d.Groups.Reload()
 
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status":   "ok",
