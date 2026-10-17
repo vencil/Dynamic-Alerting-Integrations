@@ -12,6 +12,7 @@ import io
 import json
 import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional, TypeVar
@@ -1214,14 +1215,23 @@ def _die_on_write_error(exc: OutputWriteError, exit_code: int) -> None:
     sys.exit(exit_code)
 
 
+# #3105: ``0o600`` on a regular file only (both writers below). A device or
+# FIFO (``-o /dev/null``) is left alone — a socket already fails the open: as root the chmod would change the
+# device for every process on the host (a ``crw-------`` /dev/null), and as
+# anyone else it fails (EPERM) after the content was already written. A
+# regular file owned by someone else still fails the chmod and the write is
+# reported as failed — the ``0o600`` the caller asked for is not dropped.
+
+
 def write_text_secure(path: str, content: str, *, flag: Optional[str] = None) -> None:
-    """Write text to *path* with UTF-8 encoding, LF endings, and ``0o600``.
+    """Write text to *path* with UTF-8 encoding, LF endings, and ``0o600``
+    (a regular file only; a device or FIFO keeps its mode, #3105).
 
     Centralises the SAST-mandated pattern::
 
         with open(path, "w", encoding="utf-8", newline="\\n") as f:
             f.write(content)
-        Path(path).chmod(0o600)
+        Path(path).chmod(0o600)   # regular files only (#3105)
 
     ⛔ ``newline="\\n"`` is load-bearing, not cosmetic. Without it Python's
     text layer translates every ``\\n`` to ``os.linesep``, so the SAME
@@ -1254,7 +1264,8 @@ def write_text_secure(path: str, content: str, *, flag: Optional[str] = None) ->
     target = Path(path)
     try:
         target.write_text(content, encoding="utf-8", newline="\n")
-        target.chmod(0o600)
+        if stat.S_ISREG(os.stat(path).st_mode):  # #3105: not a device
+            os.chmod(path, 0o600)
     except OSError as exc:
         raise OutputWriteError(path, exc, flag=flag) from exc
 
@@ -1267,7 +1278,8 @@ def write_json_secure(
     ensure_ascii: bool = False,
     flag: Optional[str] = None,
 ) -> None:
-    """Write *data* as JSON to *path* with ``0o600`` permissions.
+    """Write *data* as JSON to *path* with ``0o600`` permissions (a regular
+    file only; a device or FIFO keeps its mode, #3105).
 
     Args:
         path: Filesystem path to write.
@@ -1290,7 +1302,8 @@ def write_json_secure(
     try:
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
-        Path(path).chmod(0o600)
+        if stat.S_ISREG(os.stat(path).st_mode):  # #3105: not a device
+            os.chmod(path, 0o600)
     except OSError as exc:
         raise OutputWriteError(path, exc, flag=flag) from exc
 
