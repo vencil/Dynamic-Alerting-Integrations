@@ -15,7 +15,8 @@ import (
 // ⛔ The one Go source of the set. rulepack_severity_test.go holds every
 // rule-pack copy's user_threshold severity selectors to it, and
 // tests/shared/threshold_value_matrix.json carries it to the Python mirrors
-// (backtest_threshold._COMPARED_SEVERITIES, custom_alerts/shape.py).
+// (_lib_validation.THRESHOLD_SEVERITIES, which backtest_threshold's
+// _COMPARED_SEVERITIES is, and custom_alerts/shape.py's THRESHOLD_SEVERITIES).
 var thresholdSeverities = []string{"warning", "critical"}
 
 // ThresholdSeverities is a copy of the severities a threshold row can carry.

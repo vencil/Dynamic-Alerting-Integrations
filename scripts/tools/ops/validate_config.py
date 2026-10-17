@@ -2725,7 +2725,8 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     ),
     # #2065: the row names the file, tenant, key and reason.
     "values_not_served": (
-        "Fix each listed value: write a number (optionally `:<severity>`) or "
+        "Fix each listed value: write a number (optionally `:warning` or "
+        "`:critical`; any other suffix, e.g. `70:high` or `70:`, is unreadable) or "
         "`disable`; give each schedule window a UTC `HH:MM-HH:MM` whose start "
         "differs from its end; write a subtree default as a number or a "
         "`{default, overrides: [{window, value}]}` schedule; keep one spelling "
