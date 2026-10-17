@@ -40,6 +40,49 @@ type routerDeps struct {
 	// (handler.RateLimit) because its sweeper goroutine is tied to the
 	// server-lifetime stopCh.
 	RateLimit func(http.Handler) http.Handler
+
+	// RequestTimeout bounds every request except the SSE stream (see
+	// timeoutExceptStream). Zero means defaultRequestTimeout; tests inject a
+	// short one.
+	RequestTimeout time.Duration
+}
+
+// defaultRequestTimeout is the per-request deadline (chi middleware.Timeout).
+const defaultRequestTimeout = 30 * time.Second
+
+// eventsPath is the SSE stream, the one long-lived route. Registered below as
+// apiV1Prefix + eventsRoute; timeoutExceptStream exempts exactly that path.
+const (
+	apiV1Prefix = "/api/v1"
+	eventsRoute = "/events"
+	eventsPath  = apiV1Prefix + eventsRoute
+)
+
+// timeoutExceptStream is chi's middleware.Timeout for every request except
+// GET eventsPath. Under the timeout a stream is cut at the deadline (its
+// context is cancelled, the handler returns, and chi then writes a 504 onto
+// the open stream). The stream is bounded instead by the hub: a heartbeat and
+// a per-write deadline drop a dead client, and an optional max lifetime ends
+// any connection. It sits where middleware.Timeout sat, so every other request
+// keeps the same chain in the same order.
+//
+// The path is compared the way chi routes it (RawPath when set, else Path), so
+// the exemption applies exactly to the requests chi hands the events handler.
+func timeoutExceptStream(d time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		timed := middleware.Timeout(d)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			path := r.URL.RawPath
+			if path == "" {
+				path = r.URL.Path
+			}
+			if r.Method == http.MethodGet && path == eventsPath {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timed.ServeHTTP(w, r)
+		})
+	}
 }
 
 // buildRouter assembles the chi router: the standard middleware chain and
@@ -86,7 +129,11 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	// those headers for the peer address; keep the true TCP peer.
 	r.Use(handler.SlogRequestLogger) // PR-10/11: structured JSON request log w/ request_id
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
+	timeout := rd.RequestTimeout
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	r.Use(timeoutExceptStream(timeout)) // every route but the SSE stream
 	r.Use(handler.MetricsMiddleware)
 
 	// dev-auth-bypass (ADR-022): mounted only when --dev-bypass-auth is set
@@ -107,10 +154,12 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	r.Get("/metrics", handler.MetricsHandler)
 
 	// API v1 — all routes require identity headers (injected by oauth2-proxy)
-	r.Route("/api/v1", func(r chi.Router) {
-		// Identity endpoint: the caller's own rules — readable by anyone who
-		// can read some tenant (#2520; it used to demand read on "*").
-		r.With(anyTenantRead).
+	r.Route(apiV1Prefix, func(r chi.Router) {
+		// Identity endpoint: the caller's own rules (RulesMatching) and
+		// nothing else — authentication only, like OIDC userinfo (#2520; it
+		// used to demand read on "*"). A caller with no grant gets 200 with
+		// empty grants, so it can tell "not configured for me" from an error.
+		r.With(rbacMgr.MiddlewareAuthenticated()).
 			Get("/me", handler.Me(deps))
 
 		// Tenant list (read permission, no specific tenant ID)
@@ -226,9 +275,10 @@ func buildRouter(rd routerDeps) *chi.Mux {
 				Get("/prs", handler.ListPRs(deps))
 		}
 
-		// Real-time event stream (v2.6.0 — SSE for config change notifications)
+		// Real-time event stream (v2.6.0 — SSE for config change notifications).
+		// The only route outside the request timeout (timeoutExceptStream).
 		r.With(anyTenantRead).
-			Get("/events", rd.Events)
+			Get(eventsRoute, rd.Events)
 
 		// Federation 2-tier policy — platform whitelist (v2.9.0 —
 		// ADR-020 IV-2e). Always registered: the policy is independent

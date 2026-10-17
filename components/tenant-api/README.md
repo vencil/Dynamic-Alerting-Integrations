@@ -72,7 +72,7 @@
 
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
-| `GET` | `/api/v1/me` | read | 當前呼叫者的 email + groups + RBAC 摘要 |
+| `GET` | `/api/v1/me` | 身分(不需授權) | 當前呼叫者的 email + groups + 命中他的規則摘要;沒有任何授權也回 200(空的 `permissions` / `accessible_tenants`),缺身分 401 |
 | `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失;每筆的 `config_derived`(`silent_targets` / `maintenance_active`)見下方「依設定推算的狀態」 |
 | `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);與 `/tenants` 共用快照快取。回應頂層的 `config_derivation` 附推算時間,並列出解析失敗而被跳過的檔案(`parse_failed_files`) |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + `resolved_thresholds`(套根目錄的 defaults carrier、根目錄平台檔的 `tenants:` 區塊與租戶選用的 `_profile`,見下方「單一租戶端點與 conf.d 範圍」);`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409;對該租戶沒有寫入權限的呼叫者看到遮罩後的憑證(見上方「憑證遮罩」) |
@@ -333,7 +333,7 @@ groups:
     permissions: [read]
 ```
 
-上例的 `db-operators` 只拿得到 `db-a-*`、`db-b-*` 兩組租戶:`/me`、`/tenants`、`/groups`、`/prs`、`/events` 等列表端點的路由閘門只要求**至少對一個租戶**有讀取權([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520);先前要求 `tenants: ["*"]`,這類規則一律 403),列表內容由 handler 逐租戶過濾。閘門只看呼叫者自己的規則:規則列了不存在的租戶也過得了、拿到空列表,所以 200 / 403 不透露租戶存在與否;帶 `org-scope` 的規則在呼叫者沒有該 claim、且 org 軸是 enforce 時不算數。零條規則的設定檔照舊 fail-closed(MED-8)。仍要求 `"*"` 的:views、`PUT /federation/policy`、`POST /federation/accounts/backfill`、`/audit/...`。
+上例的 `db-operators` 只拿得到 `db-a-*`、`db-b-*` 兩組租戶:`/tenants`、`/groups`、`/prs`、`/events` 等列表端點的路由閘門只要求**至少對一個租戶**有讀取權([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520);先前要求 `tenants: ["*"]`,這類規則一律 403),列表內容由 handler 逐租戶過濾。閘門只看呼叫者自己的規則:規則列了不存在的租戶也過得了、拿到空列表,所以 200 / 403 不透露租戶存在與否;帶 `org-scope` 的規則在呼叫者沒有該 claim、且 org 軸是 enforce 時不算數。零條規則的設定檔照舊 fail-closed(MED-8)。仍要求 `"*"` 的:views、`PUT /federation/policy`、`POST /federation/accounts/backfill`、`/audit/...`。`/me` 只要求身分、不看授權:它只回呼叫者自己命中的規則,沒有任何授權(含零條規則的 MED-8)也回 200 與空的授權摘要。
 
 支援以環境 / 域 metadata 做進一步過濾(細節見 `internal/rbac/` 註解)。**沒標記該 metadata 的租戶**在受限規則下預設**仍放行**(SHADOW,行為與過去一致),但每次會計入 `tenant_api_scope_would_deny_total{axis="metadata"}`(**單調遞增 counter**、僅重啟歸零)。待 `increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak窗])` 在整個 soak 窗維持 **0**(看增長率非絕對值),並**掃過確認沒有落單租戶**(counter 是 traffic-driven:沒被 list 到的租戶不會觸發)後,設 `--rbac-metadata-scope-enforce`(或 `TA_RBAC_METADATA_SCOPE_ENFORCE=1`;helm `--set rbac.metadataScopeEnforce=true`)切成**沒標記就拒絕**(fail-closed,ADR-027 / LD-6 P1)。
 

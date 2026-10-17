@@ -125,6 +125,10 @@ const (
 	gateReadPlatformStar = "platform-\"*\" read gate (Middleware(PermRead, nil))"
 	// gateReadNoAuth — infra endpoint mounted with no RBAC middleware.
 	gateReadNoAuth = "no-auth infra endpoint"
+	// gateReadAuthenticated — identity only (MiddlewareAuthenticated): 401
+	// without an identity, no grant required. Only for a response derived
+	// from the caller's own principal that names nothing else (#2520).
+	gateReadAuthenticated = "authenticated-only gate (MiddlewareAuthenticated) — caller's own principal, no grant required"
 	// gateReadPlatformAdmin — route middleware checks read on "*" (PermRead,
 	// nil); the LOCKED authorization bar (rbac.PlatformAdminNonOrgScoped) runs
 	// at the top of the handler with a constant 403 (ADR-027 / LD-6 P6).
@@ -146,7 +150,7 @@ var readRouteManifest = map[string]string{
 	"GET /api/v1/tenants/{id}/access":     gateReadByIDOrg + " — recipe-preview PEP probe (#657); 403 = DENY",
 	"GET /api/v1/tenants/{id}/federation": gateReadByIDOrg + " — per-tenant federation metric subset",
 	// list / wildcard reads — middleware org-blind by design
-	"GET /api/v1/me":                 gateReadAnyTenant + " — caller's own identity and rule patterns (RulesMatching); names no tenant beyond the caller's own grants",
+	"GET /api/v1/me":                 gateReadAuthenticated + " — caller's own identity and rule patterns (RulesMatching); names no tenant beyond the caller's own grants; zero grants → 200 with empty grants",
 	"GET /api/v1/tenants":            gateReadAnyTenant + " — filterTenantsByRBAC: ScopeAllowed / ScopeAllowedUnknownMetadata per row (list plane, P4a)",
 	"GET /api/v1/tenants/search":     gateReadAnyTenant + " — same filterTenantsByRBAC row filter as the list; config_derivation scoped by configDerivedMeta",
 	"GET /api/v1/groups":             gateReadAnyTenant + " — ListGroups filters members + skips inaccessible groups (hasAccessibleMember/filterAccessibleMembers, org-aware P4c)",
@@ -257,8 +261,9 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 // manifest (ADR-027 / LD-6 P4c): every GET route must declare, in
 // readRouteManifest, whether it is org-gated by the read-by-id middleware path
 // (gateReadByIDOrg), behind the any-tenant gate with a named handler filter
-// (gateReadAnyTenant), or on a platform gate (gateReadPlatformStar /
-// gateReadPlatformAdmin / gateReadNoAuth).
+// (gateReadAnyTenant), on the identity-only gate (gateReadAuthenticated), or
+// on a platform gate (gateReadPlatformStar / gateReadPlatformAdmin /
+// gateReadNoAuth).
 // A new GET route missing from the manifest — a read endpoint added without a
 // conscious org-gate decision, exactly the read-by-id IDOR shape P4c closed — or
 // a stale entry, fails the test in both directions.

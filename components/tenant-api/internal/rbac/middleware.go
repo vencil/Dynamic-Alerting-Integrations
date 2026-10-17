@@ -60,10 +60,27 @@ func (m *Manager) MiddlewareAnyTenant(want Permission) func(http.Handler) http.H
 	})
 }
 
-// gate is the shared body of Middleware and MiddlewareAnyTenant: resolve the
-// hop-B principal (401 on a missing identity), run the machine-identity audit
-// side-channel, let authorize decide (it writes its own denial), then attach
-// the identity to the request context for the handler.
+// MiddlewareAuthenticated is the route gate for endpoints that answer about the
+// caller itself and nothing else (GET /api/v1/me — the OIDC userinfo / GitHub
+// GET /user shape): it requires an identity (401 without one, exactly as
+// Middleware) and grants nothing to decide. No rule has to match: a caller
+// with zero grants — no rule names it, an org-scoped rule it lacks the claim
+// for under enforce, or a configured _rbac.yaml with zero groups (MED-8) —
+// passes and learns only that it holds no grant. MED-8 is about access to
+// tenant data, which this gate never guards.
+//
+// ⛔ Mount it only on a route whose response is derived from the caller's own
+// principal (its matched rules) and names nothing else; any route that reads
+// tenant or platform data takes Middleware or MiddlewareAnyTenant.
+func (m *Manager) MiddlewareAuthenticated() func(http.Handler) http.Handler {
+	return m.gate(func(http.ResponseWriter, *http.Request, *VerifiedPrincipal) bool { return true })
+}
+
+// gate is the shared body of Middleware, MiddlewareAnyTenant and
+// MiddlewareAuthenticated: resolve the hop-B principal (401 on a missing
+// identity), run the machine-identity audit side-channel, let authorize decide
+// (it writes its own denial), then attach the identity to the request context
+// for the handler.
 func (m *Manager) gate(authorize func(http.ResponseWriter, *http.Request, *VerifiedPrincipal) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
