@@ -104,6 +104,7 @@ def _find_repo_root() -> Path:
 
 REPO_ROOT = _find_repo_root()
 TENANT_API_DIR = REPO_ROOT / "components" / "tenant-api"
+DA_GUARD_DIR = REPO_ROOT / "components" / "threshold-exporter" / "app"
 SWAGGER_JSON = TENANT_API_DIR / "docs" / "swagger.json"
 GENERATOR_SERVICE = REPO_ROOT / "scripts" / "tools" / "ops" / "generator_service.py"
 
@@ -330,6 +331,25 @@ def run_policy_gate_smoke(base_url: str) -> bool:
     return ok
 
 
+def build_da_guard(workdir: Path) -> str:
+    """The da-guard the generator service reads conf.d through once #2906
+    (ADR-036 step 4) lands: `$DA_GUARD_BINARY` when set, else built from this
+    checkout — without one the service then fails every write with exit 2
+    (run_failed)."""
+    preset = os.environ.get("DA_GUARD_BINARY")
+    if preset:
+        return preset
+    binary = workdir / "da-guard"
+    print(f"[contract] building da-guard → {binary}")
+    subprocess.run(
+        ["go", "build", "-buildvcs=false", "-o", str(binary), "./cmd/da-guard"],
+        cwd=DA_GUARD_DIR,
+        check=True,
+        timeout=180,
+    )
+    return str(binary)
+
+
 def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess.Popen, str]:
     """Start the generator service over config_dir (the repository root, as
     the chart mounts it) and wait until its status endpoint answers ready.
@@ -346,7 +366,8 @@ def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess
     amtool.chmod(0o755)
     sock_dir = Path(tempfile.mkdtemp(prefix="cg"))
     sock = str(sock_dir / "g.sock")
-    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+           "DA_GUARD_BINARY": build_da_guard(workdir)}
     proc = subprocess.Popen(
         [sys.executable, str(GENERATOR_SERVICE), "--socket", sock, "--repo", str(config_dir),
          "--config-subdir", ".", "--work-dir", str(workdir / "generator-work")],
