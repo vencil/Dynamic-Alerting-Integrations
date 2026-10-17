@@ -65,7 +65,12 @@ SCOPE — WHAT THIS GATE ASSERTS
   ``doc_check`` that asserts it.
 * **``expect_caller_error`` recipes assert the exit code as well as the
   document**: the tool must reject the invocation with exit 2 *and* still put
-  one JSON document on stdout (``patch_config``'s early exits).
+  one JSON document on stdout (``patch_config``'s early exits). Since #3115
+  the library prints that document for the shared exits — the ``exit_on_*``
+  decorators, ``die_caller_error``, a hand-written ``sys.exit(2)`` reaching
+  ``_lib_exitcodes.run`` — and one recipe per decorator pins its named
+  ``reason`` (``served_values_unavailable`` / ``yaml_file_unreadable`` /
+  ``output_unwritable`` / ``observed_map_unavailable``).
 * **A crash is a terminal path too** (#3094): every tool is driven once more
   with an exception injected right where it arms its crash envelope, and must
   exit 2 with exactly one ``caller_error`` / ``internal_error`` envelope on
@@ -642,6 +647,14 @@ class Recipe:
     doc_check: Callable[[object], str | None] | None = None
     # OPTIONAL value of FAKE_KUBECTL_CM for this recipe (see _FAKE_KUBECTL_PY).
     fake_cm: str | None = None
+    # OPTIONAL environment overrides, e.g. a `DA_GUARD_BINARY` that names no
+    # file (#3115: the shared decorators' rc 2 paths).
+    env: tuple[tuple[str, str], ...] = ()
+    # OPTIONAL: run from a PRIVATE copy of `scripts/tools` + `rule-packs/`
+    # that this callable breaks first — for an input the tool derives from
+    # its own location (the observed-map, #3115). Not the shared
+    # `sandbox_repo`: a recipe there regenerates that very file.
+    private_tree: Callable[[Path], None] | None = None
 
     @property
     def id(self) -> str:
@@ -855,6 +868,27 @@ def _confd_with_nested_tenant(tmp: Path) -> str:
     return str(d)
 
 
+# #3115: inputs for the named rc-2 exits of the shared decorators. Each recipe
+# below expects rc 2 AND exactly one envelope naming the reason — the
+# library prints it (`_lib_exitcodes`), so a tool that stops arming, or a
+# decorator that stops naming its reason, turns its recipe red.
+_MISSING_DA_GUARD = (("DA_GUARD_BINARY", "/nonexistent/da-guard"),)
+
+
+def _broken_yaml_file(tmp: Path) -> str:
+    return _write(tmp / "broken.yml", "route:\n  receiver: [\n")
+
+
+def _path_under_a_file(tmp: Path) -> str:
+    """An output path whose parent is a regular file: no directory can exist there."""
+    _write(tmp / "a_file", "")
+    return str(tmp / "a_file" / "sub")
+
+
+def _break_observed_map(root: Path) -> None:
+    _write(root / "scripts" / "tools" / "ops" / "metric_observed_map.yaml", "keys: [\n")
+
+
 R = Recipe
 RECIPES: list[Recipe] = [
     # ── alert_correlate ────────────────────────────────────────────────────
@@ -873,6 +907,11 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--json"],
       expect_caller_error=True,
       doc_check=_caller_error_doc("prometheus_query_error")),
+    # #3115: a hand-written `sys.exit(2)` after the arguments are accepted —
+    # no named reason, but still one envelope (from `_lib_exitcodes.run`).
+    R("alert_quality", "invalid-period",
+      lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--period", "bogus", "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
 
     # ── analyze_rule_pack_gaps ─────────────────────────────────────────────
     R("analyze_rule_pack_gaps", "config-dir",
@@ -901,6 +940,10 @@ RECIPES: list[Recipe] = [
                     "--output", _out(t, "assembled"), "--json"],
       expect_caller_error=True,
       doc_check=_caller_error_doc("manifest_without_sources")),
+    # #3115: `exit_on_output_write_error` — the output cannot be created.
+    R("assemble_config_dir", "output-unwritable",
+      lambda t, s: ["--sources", str(SEED_CONF_D), "--output", _path_under_a_file(t), "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("output_unwritable")),
 
     # ── backtest_threshold  (⚠ known multi-mode trap) ──────────────────────
     # #3017: a key a shipped alert compares, so Prometheus is really asked
@@ -1016,6 +1059,12 @@ RECIPES: list[Recipe] = [
     R("diagnose", "show-inheritance",
       lambda t, s: ["db-demo", "--prometheus", s, "--config-dir", str(SEED_CONF_D),
                     "--show-inheritance", "--json"]),
+    # #3115: `exit_on_served_values_error` — da-guard is not there.
+    R("diagnose", "served-values-unavailable",
+      lambda t, s: ["tenant-one", "--config-dir", str(SEED_CONF_D),
+                    "--prometheus", "http://127.0.0.1:1", "--json"],
+      env=_MISSING_DA_GUARD, expect_caller_error=True,
+      doc_check=_caller_error_doc("served_values_unavailable")),
 
     # ── discover_instance_mappings  (⚠ known multi-mode trap) ──────────────
     R("discover_instance_mappings", "prometheus",
@@ -1073,6 +1122,10 @@ RECIPES: list[Recipe] = [
     # ── grafana_import ─────────────────────────────────────────────────────
     R("grafana_import", "dry-run",
       lambda t, s: ["--dashboard", str(DASHBOARD_JSON), "--dry-run", "--json"]),
+    # #3115: a hand-written rc 2 with no document of its own — generic reason.
+    R("grafana_import", "dashboard-dir-missing",
+      lambda t, s: ["--dashboard-dir", _out(t, "absent"), "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
     R("grafana_import", "verify", lambda t, s: ["--verify", "--json"], needs_kubectl=True),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` + `--verify`.
     # `--verify` wins; it is read-only, so nothing is lost by `--dry-run` being
@@ -1132,6 +1185,16 @@ RECIPES: list[Recipe] = [
     R("onboard_platform", "write",
       lambda t, s: ["--alertmanager-config", str(ALERTMANAGER_YML),
                     "-o", _out(t, "onboard2"), "--json"]),
+    # #3115: `exit_on_yaml_file_error` — an input YAML that does not parse.
+    R("onboard_platform", "unreadable-yaml",
+      lambda t, s: ["--alertmanager-config", _broken_yaml_file(t),
+                    "-o", _out(t, "onboard3"), "--dry-run", "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("yaml_file_unreadable")),
+    # #3115 review: no phase input at all — the help text is prose, so under
+    # --json it goes to stderr and stdout keeps the one envelope.
+    R("onboard_platform", "no-inputs",
+      lambda t, s: ["-o", _out(t, "onboard4"), "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
 
     # ── operator_check ─────────────────────────────────────────────────────
     R("operator_check", "check",
@@ -1245,6 +1308,12 @@ RECIPES: list[Recipe] = [
     # ── policy_opa_bridge ──────────────────────────────────────────────────
     R("policy_opa_bridge", "dry-run",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--dry-run", "--json"]),
+    # #3115: `exit_on_served_values_error`; this path used to leave stdout
+    # empty on purpose ("the tool's convention") — the contract won.
+    R("policy_opa_bridge", "served-values-unavailable",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--dry-run", "--json"],
+      env=_MISSING_DA_GUARD, expect_caller_error=True,
+      doc_check=_caller_error_doc("served_values_unavailable")),
     R("policy_opa_bridge", "opa-url",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--opa-url", s, "--json"]),
     # #2115 0-B: the tenants come from da-guard, which refuses a directory
@@ -1268,6 +1337,10 @@ RECIPES: list[Recipe] = [
     R("rule_pack_diff", "breaking-diff",
       lambda t, s: ["--from", str(RULE_PACKS / "rule-pack-mariadb.yaml"),
                     "--to", str(RULE_PACKS / "rule-pack-redis.yaml"), "--json"]),
+    # #3115: a hand-written rc 2 (an input that does not exist) — generic reason.
+    R("rule_pack_diff", "input-missing",
+      lambda t, s: ["--from", _out(t, "absent-a.yaml"), "--to", _out(t, "absent-b.yaml"), "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
 
     # ── runtime_audit ──────────────────────────────────────────────────────
     R("runtime_audit", "runtime-json",
@@ -1323,6 +1396,11 @@ RECIPES: list[Recipe] = [
                     "--dry-run", "--json"]),
     R("threshold_recommend", "generate-observed-map",
       lambda t, s: ["--generate-observed-map", "--json"], sandbox=True),
+    # #3115: `exit_on_observed_map_error` — the committed map does not parse.
+    R("threshold_recommend", "observed-map-unreadable",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--prometheus", s, "--json"],
+      private_tree=_break_observed_map, expect_caller_error=True,
+      doc_check=_caller_error_doc("observed_map_unavailable")),
 
     # ── validate_config ────────────────────────────────────────────────────
     # Every recipe also pins the entry-key contract (#1653); `broken-yaml` and
@@ -1423,11 +1501,24 @@ def test_recipe_table_covers_every_json_tool():
 # ═══════════════════════════════════════════════════════════════════════════
 # The gate
 # ═══════════════════════════════════════════════════════════════════════════
+def _private_tree(tmp_path: Path, breaker: Callable[[Path], None]) -> Path:
+    """A throwaway `scripts/tools` + `rule-packs/` copy, broken by *breaker*."""
+    root = tmp_path / "private_repo"
+    shutil.copytree(TOOLS_DIR, root / "scripts" / "tools",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(RULE_PACKS, root / "rule-packs")
+    breaker(root)
+    return root
+
+
 def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
          fake_bin: Path) -> subprocess.CompletedProcess:
     root = sandbox_root if recipe.sandbox else REPO_ROOT
+    if recipe.private_tree is not None:
+        root = _private_tree(tmp_path, recipe.private_tree)
     script = root / JSON_TOOL_PATHS[recipe.tool]
     env = dict(os.environ)
+    env.update(recipe.env)
     # Windows hosts default to cp950 -> tools with CJK output would raise
     # UnicodeEncodeError before we ever see stdout. That's an environment
     # artefact, not the contract under test.
@@ -1533,11 +1624,29 @@ runpy.run_path(script, run_name="__main__")
 CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
                       if not r.expect_caller_error}.values())
 
-# Known gap: these tools arm (so the gate below is green for them), but their
-# own `except Exception` around the work turns a real crash into a stderr-only
-# rc 2 before the envelope can print. The injected crash fires before that
-# handler, so green here is NOT coverage for them. Tracked in #3115.
-CRASH_SWALLOWED_BY_OWN_HANDLER = {"config_diff": "#3115", "operator_generate": "#3115"}
+# These tools catch `Exception` around their work themselves (their own word
+# for "no result": a stderr line and rc 2). The injected crash above fires
+# before that handler, so green there is not coverage for it; until #3115 the
+# handler left stdout empty. The crash is injected INSIDE the handler's reach
+# here — a library function the work calls is replaced by one that raises —
+# and the handler must still end at rc 2 with one named envelope.
+# (module, attribute to break, reason the handler names)
+OWN_BROAD_HANDLER = {
+    "config_diff": ("_render_diff", "compare", "compare_failed"),
+    "operator_generate": ("_lib_confd", "tenant_carriers", "generate_failed"),
+}
+_HANDLER_WRAPPER = f"""
+import importlib, os, runpy, sys
+tools_dir, script, module, attr = sys.argv[1:5]
+sys.argv = sys.argv[4:]
+sys.argv[0] = script
+sys.path.insert(0, os.path.dirname(script))
+sys.path.insert(0, tools_dir)
+def _broken(*args, **kwargs):
+    raise RuntimeError({_INJECTED!r})
+setattr(importlib.import_module(module), attr, _broken)
+runpy.run_path(script, run_name="__main__")
+"""
 
 # Known gap: these tools' --json document is an ARRAY, but the crash envelope
 # is an object. Whether to normalise envelope shapes is an owner decision in
@@ -1551,9 +1660,39 @@ CRASH_ENVELOPE_TYPE_DIFFERS = {
 def test_every_json_tool_has_a_crash_recipe():
     """Anti-vacuity: the crash gate below reaches every --json tool."""
     assert sorted(r.tool for r in CRASH_RECIPES) == JSON_TOOLS
-    for gaps in (CRASH_SWALLOWED_BY_OWN_HANDLER, CRASH_ENVELOPE_TYPE_DIFFERS):
+    for gaps in (OWN_BROAD_HANDLER, CRASH_ENVELOPE_TYPE_DIFFERS):
         assert set(gaps) <= set(JSON_TOOLS), (
             "a known-gap list names a tool that is no longer a --json tool")
+
+
+@pytest.mark.parametrize("tool", sorted(OWN_BROAD_HANDLER))
+def test_a_crash_caught_by_the_tools_own_handler_still_emits_one_envelope(
+    tool: str, tmp_path: Path, stub_url: str, sandbox_repo: Path,
+    fake_kubectl_dir: Path,
+):
+    """#3115: `config_diff` / `operator_generate` turn any exception from
+    their work into rc 2 themselves — that path owes one envelope too."""
+    module, attr, reason = OWN_BROAD_HANDLER[tool]
+    recipe = next(r for r in CRASH_RECIPES if r.tool == tool)
+    script = REPO_ROOT / JSON_TOOL_PATHS[tool]
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    env["PATH"] = str(fake_kubectl_dir) + os.pathsep + env.get("PATH", "")
+    proc = subprocess.run(
+        [sys.executable, "-c", _HANDLER_WRAPPER, str(TOOLS_DIR), str(script),
+         module, attr, *recipe.build(tmp_path, stub_url)],
+        capture_output=True, timeout=TIMEOUT_S, cwd=str(REPO_ROOT), env=env,
+        encoding="utf-8", errors="replace",
+    )
+    where = (f"{tool}.py rc={proc.returncode}\n  stdout[:300]: {proc.stdout[:300]!r}\n"
+             f"  stderr[-300:]: {proc.stderr[-300:]!r}")
+    assert _INJECTED in proc.stderr, f"the injected failure never reached the handler: {where}"
+    assert proc.returncode == EXIT_CALLER_ERROR, where
+    try:
+        doc = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise AssertionError(f"stdout is not one JSON document ({e}): {where}") from None
+    assert _caller_error_doc(reason)(doc) is None, where
+    assert _INJECTED in doc.get("error", ""), where
 
 
 @pytest.mark.parametrize("recipe", CRASH_RECIPES, ids=[r.tool for r in CRASH_RECIPES])

@@ -74,7 +74,8 @@ def check_alert(alert_name, tenant, prom_url):
     }, indent=2))
 
 
-if __name__ == "__main__":
+def main():
+    """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Check Prometheus alert state for a specific tenant",
     )
@@ -96,3 +97,8 @@ if __name__ == "__main__":
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
     check_alert(args.alert_name, args.tenant, args.prometheus)
+
+
+if __name__ == "__main__":
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

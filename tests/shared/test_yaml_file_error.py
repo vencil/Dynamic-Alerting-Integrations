@@ -517,22 +517,26 @@ def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cw
     assert "Traceback" not in p.stderr
 
 
-@pytest.mark.parametrize("label, script, argv", [
+@pytest.mark.parametrize("label, script, argv, reason", [
     ("analyze_gaps --json", OPS / "analyze_rule_pack_gaps.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"]),
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "served_values_unavailable"),
     ("onboard --json", OPS / "onboard_platform.py",
      lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"),
-                "--dry-run", "--json"]),
+                "--dry-run", "--json"], "yaml_file_unreadable"),
     ("policy_opa_bridge --json", OPS / "policy_opa_bridge.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"]),
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "served_values_unavailable"),
 ], ids=["analyze_gaps", "onboard", "policy_opa_bridge"])
-def test_decorated_tools_leave_stdout_empty_under_json(fx, label, script, argv):
-    """No envelope convention on their caller-error paths (their existing
-    ``sys.exit(EXIT_CALLER_ERROR)`` sites are stderr-only), so the wrapper
-    is stderr-only too — and stdout must not carry a half-written document."""
+def test_decorated_tools_emit_one_envelope_under_json(fx, label, script, argv, reason):
+    """The decorators exit through ``_lib_exitcodes.die_caller_error`` (#3115):
+    a tool that armed its ``--json`` envelope gets exactly one, naming the
+    reason — stdout used to be empty here — and still no traceback."""
+    import json
     p = _run(script, argv(fx))
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
-    assert p.stdout == "", p.stdout[:200]
+    doc = json.loads(p.stdout)
+    assert (doc["status"], doc["reason"]) == ("caller_error", reason), doc
+    assert doc["error"].startswith("ERROR: cannot read"), doc
+    assert "Traceback" not in p.stderr
 
 
 def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
