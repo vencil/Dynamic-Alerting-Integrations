@@ -865,11 +865,14 @@ class TestWriteScope:
             pc.patch_legacy(cm, "tenant-x", "cpu", "6")
 
     def test_a_spelling_pyyaml_rewrites_is_refused_naming_it(self):
-        """未動到的 `~` 被 PyYAML 寫成 `null`：原文不同，整份拒寫、點名位置。"""
-        cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: ~\n")
+        """未動到的 `!!float 1` 被 PyYAML 寫成 `1.0`：原文不同，整份拒寫、點名位置。
+        （未動到的 `~` 照原樣寫回，不算改寫：`keep_null_spelling`。）"""
+        cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: !!float 1\n")
         with pytest.raises(pc.ConfigMapShapeError,
-                           match=r"tenants\.tenant-x\.mem: expected !!null '~', read !!null 'null'"):
+                           match=r"tenants\.tenant-x\.mem: expected !!float '1', read !!float '1\.0'"):
             pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+        cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: ~\n")
+        assert "mem: ~" in pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]["tenant-x.yaml"]
 
 
 # What da-guard parse-tree cannot read (ADR-036 §2). A TAB separator and

@@ -93,10 +93,10 @@ def find_config_file(tenant, config_dir):
     warn_nested(base)
     if not base.is_dir():
         return None
-    tree = _reader(config_dir).tree()
     for rel in _top_level(config_dir):
-        if config_stem(rel) == tenant and rel not in tree.unreadable \
-                and (base / rel).is_file():
+        # A file parse-tree cannot read is still the tenant's file (named
+        # unreadable by `load_all_configs`, which blocks --execute).
+        if config_stem(rel) == tenant and (base / rel).is_file():
             return str(base / rel)
     return None
 

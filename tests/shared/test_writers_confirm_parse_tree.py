@@ -473,3 +473,12 @@ def test_offboard_tenant_reads_the_declaration_the_yaml_v3_way(tmp_path):
     r = _ob(root)
     assert r.returncode == 0, r.stdout + r.stderr
     assert not (root / "tenant-a.yaml").exists()
+
+
+def test_offboard_tenant_finds_but_does_not_delete_its_own_unreadable_file(tmp_path):
+    root = _tree(tmp_path / "conf.d", {
+        "tenant-a.yaml": "tenants:\n  tenant-a: {}\n  tenant-a: {}\n"})
+    r = _ob(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "✅ 設定檔案" in r.stdout and "duplicate_key" in r.stdout, r.stdout
+    assert (root / "tenant-a.yaml").exists()
