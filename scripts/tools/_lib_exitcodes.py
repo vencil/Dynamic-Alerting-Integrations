@@ -135,7 +135,10 @@ the tool had — 0, 1, 2 or a crash — into 120. Now:
   the ``__cause__`` chain). An exception merely raised while handling one
   (implicit ``__context__``: a bug in that handler, the tool's next error)
   is its own — crash report or named reason, own code — and ``raise ...
-  from None`` cuts the chain. The same errno from a socket, another fd, or
+  from None`` cuts the chain; before that own exit, the failed stream is
+  quietly pointed at the null device, so bytes still buffered for it
+  cannot fail the final flush and override that line and code. The same
+  errno from a socket, another fd, or
   a stderr that ``redirect_stdout`` made ``sys.stdout`` stays the tool's
   own error too.
 * that failure, reaching ``exit_on_crash`` or a ``die_caller_error`` /
@@ -350,6 +353,7 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
     *code* is honoured there too."""
     _exit_if_stdout_lost(sys.exc_info()[1], code=code)
     _print_armed_envelope(reason or CallerError.reason, error)
+    _quiet_failed_streams(sys.exc_info()[1])
     sys.exit(_caller_error_code if code is None else code)
 
 
@@ -556,15 +560,16 @@ def disarm_crash_envelope() -> None:
 def reset_exit_state() -> None:
     """Every piece of this module's process-global exit state back to its
     import-time value: the arm and its stdout, the recorded stdout failures,
-    the "already reported" flag, the caller-error and crash codes. For test
+    the "already reported" flag, the caller-error and crash codes (to the
+    values they had when this module was imported). For test
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
     global _crash_exit_code, _caller_error_code, _stdout_closed_reported
     disarm_crash_envelope()
     _stdout_failures.clear()
     _stdout_closed_reported = False
-    _crash_exit_code = EXIT_CALLER_ERROR
-    _caller_error_code = EXIT_CALLER_ERROR
+    _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
+    _caller_error_code = _IMPORT_CALLER_ERROR_CODE
 
 
 def _print_crash_envelope(exc: BaseException) -> None:
@@ -681,6 +686,7 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
         print(f"ERROR: {what} failed:", file=sys.stderr)
         traceback.print_exception(type(hook_exc), hook_exc,
                                   hook_exc.__traceback__, file=sys.stderr)
+    _quiet_failed_streams(exc)
     sys.exit(_crash_exit_code if code is None else code)
 
 
@@ -813,6 +819,21 @@ def _recorded_stdout_failure(exc: Optional[BaseException]) -> Optional[tuple[OSE
     return None
 
 
+def _quiet_failed_streams(exc: Optional[BaseException]) -> None:
+    """The tool leaves with its OWN exit (its crash, its caller error) for
+    *exc*, an error raised while handling stdout's failure (that failure is
+    in its implicit ``__context__`` chain): point the failed stream at the
+    null device, so bytes still buffered for it cannot fail the final flush
+    again and replace the tool's line and code with the stdout ones."""
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        for failed, stream in _stdout_failures:
+            if failed is exc:
+                _point_at_null(stream)
+        exc = exc.__cause__ or exc.__context__
+
+
 def _exit_if_stdout_lost(exc: Optional[BaseException], *, code: Optional[int] = None) -> None:
     """Leave by the lost-stdout exit when *exc* is stdout's recorded failure."""
     found = _recorded_stdout_failure(exc)
@@ -890,3 +911,7 @@ _atexit.register(_flush_stdout_at_exit)
 # failure of it is recorded wherever it happens (gate: the closed-stdout
 # matrix in tests/shared/test_single_exit_path.py runs unarmed scripts).
 _tap_stdout(sys.__stdout__)
+
+# The codes as this module set them at import, for ``reset_exit_state``.
+_IMPORT_CRASH_EXIT_CODE = _crash_exit_code
+_IMPORT_CALLER_ERROR_CODE = _caller_error_code

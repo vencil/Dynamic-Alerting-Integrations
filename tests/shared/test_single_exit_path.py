@@ -905,7 +905,9 @@ def test_probe_sees_clean_exit_state():
     import _lib_exitcodes as ec  # noqa: E402
     assert (ec._crash_envelope_armed, ec._armed_stdout, ec._stdout_failures,
             ec._stdout_closed_reported, ec.get_crash_exit_code(),
-            ec.get_caller_error_code()) == (None, None, [], False, 2, 2)
+            ec.get_caller_error_code()) == (None, None, [], False,
+                                            ec._IMPORT_CRASH_EXIT_CODE,
+                                            ec._IMPORT_CALLER_ERROR_CODE)
 
 
 def test_exit_state_does_not_leak_between_tests():
@@ -925,26 +927,39 @@ def test_exit_state_does_not_leak_between_tests():
     assert STDOUT_CLOSED_LINE not in out, out[-2000:]
 
 
+# A small write stays in the buffer after the failed flush, so the exit
+# flush would fail again; a big one fails inside write() and leaves none.
+_SIZES = {"small": 100, "big": 1_000_000}
+
+
+@pytest.mark.parametrize("size", sorted(_SIZES))
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
-def test_a_bug_in_a_broken_pipe_handler_is_still_a_crash(tmp_path, buffering):
+def test_a_bug_in_a_broken_pipe_handler_is_still_a_crash(tmp_path, buffering, size):
     """S1 (p1): the handler for stdout's BrokenPipeError has a bug of its
     own. Its TypeError only has the BrokenPipeError as implicit context —
-    it is a crash and must be reported as one."""
-    body = ("def main():\n"
-            "    try:\n        print('x' * 1_000_000)\n        sys.stdout.flush()\n"
+    it is a crash, reported as one, at the tool's crash code: the bytes
+    still buffered for the broken stdout must not turn it into the
+    stdout-closed exit at interpreter exit."""
+    body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
+            "def main():\n"
+            f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
             "    except BrokenPipeError:\n        cleanup = None\n        cleanup()\n"
             "    return 0\n_lib_exitcodes.run(main)\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert f"{CRASH_MARK} (TypeError)" in err and "Traceback" in err, err
+    assert rc == 70, err
+    assert STDOUT_CLOSED_LINE not in err, err
 
 
+@pytest.mark.parametrize("size", sorted(_SIZES))
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
-def test_a_tools_own_error_inside_a_broken_pipe_handler_keeps_its_line_and_code(tmp_path, buffering):
+def test_a_tools_own_error_inside_a_broken_pipe_handler_keeps_its_line_and_code(
+        tmp_path, buffering, size):
     """S1 (p2): after stdout's failure the tool hits ANOTHER error and names
     it with its own code. Implicit context is not a cause: its line and code
-    stand (unless the final flush also fails, which this run does not)."""
+    stand — also when bytes are still buffered for the broken stdout."""
     body = ("def main():\n"
-            "    try:\n        print('x' * 1_000_000)\n        sys.stdout.flush()\n"
+            f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
             "    except BrokenPipeError:\n"
             "        try:\n            open('/nonexistent/d/f', 'w')\n"
             "        except OSError as e:\n"
@@ -954,6 +969,7 @@ def test_a_tools_own_error_inside_a_broken_pipe_handler_keeps_its_line_and_code(
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert "ERROR: cannot write --output" in err, err
     assert rc == 5, err
+    assert STDOUT_CLOSED_LINE not in err, err
 
 
 def test_raise_from_none_cuts_the_chain(tmp_path):
@@ -966,3 +982,16 @@ def test_raise_from_none_cuts_the_chain(tmp_path):
         "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone")
     assert "ERROR: render failed" in err, err
+
+
+def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
+    """Not a hard-coded 2: a process whose import set other codes (#3092's
+    crash code under tests) gets those back."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    monkeypatch.setattr(ec, "_IMPORT_CRASH_EXIT_CODE", 70)
+    monkeypatch.setattr(ec, "_IMPORT_CALLER_ERROR_CODE", 3)
+    ec.set_crash_exit_code(9)
+    ec.set_caller_error_code(9)
+    ec.reset_exit_state()
+    assert (ec.get_crash_exit_code(), ec.get_caller_error_code()) == (70, 3)
