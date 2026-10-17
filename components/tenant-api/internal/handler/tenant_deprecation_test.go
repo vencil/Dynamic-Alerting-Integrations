@@ -90,6 +90,10 @@ func TestPutTenant_DeprecatedKey_PRMode200CarriesWarnings(t *testing.T) {
 	t.Parallel()
 	configDir := initGitConfigDir(t)
 	testutil.WriteYAML(t, configDir, "_defaults.yaml", deprecationDefaultsYAML)
+	// Committed: a PR-mode write is judged on the base it branches from, as
+	// git holds it (#2972), like a PR-mode batch (#2900).
+	runGit(t, configDir, "add", "-A")
+	runGit(t, configDir, "commit", "-q", "-m", "seed")
 	writer := newTestWriter(configDir)
 
 	mockClient := &mockPlatformClient{
