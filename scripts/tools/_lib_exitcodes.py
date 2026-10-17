@@ -62,7 +62,8 @@ handed to the previous hook untouched (Ctrl-C keeps its own exit status).
 Overrides:
 
 * ``set_crash_exit_code(code)`` — per-process crash code. tenant_verify
-  sets 1, because its 2 means "verification failed" (see below).
+  sets 1, because its 2 means "verification failed" (see below); it sets
+  its caller-error code (``set_caller_error_code``) to 1 for the same reason.
 * ``@main`` / ``@main(crash_exit_code=..., on_crash=...)`` — wrap a tool's
   ``main()``: same report + exit, but in-function, so a tool with a
   ``--json`` contract can emit its ``internal_error`` envelope from
@@ -75,11 +76,63 @@ Overrides:
   ``build()`` (dev-rules §13) plus ``{"status": "caller_error", "reason":
   "internal_error", "error": <the ERROR line>}``. Every crash path uses it
   (this hook, ``@main`` without ``on_crash``, and ``da-tools``' last line of
-  defence). It fires at most once; a tool that can still run code after
-  printing its own document calls ``disarm_crash_envelope()`` there, so a
-  late crash does not add a second document. A crash before the arguments
-  are parsed has no envelope — the tool does not know yet that ``--json``
-  was asked for.
+  defence). It fires at most once, and not at all once the tool wrote to
+  stdout itself (#3115); a tool that can still run code after printing its
+  own document may also call ``disarm_crash_envelope()`` there. A crash
+  before the arguments are parsed has no envelope — the tool does not know
+  yet that ``--json`` was asked for.
+
+Caller errors and the single exit path (#3115)
+----------------------------------------------
+The same armed envelope covers every caller-error exit, so "rc 2 in
+``--json`` mode has one document" has one implementation:
+
+* ``die_caller_error(message, reason=...)`` — stderr line, envelope with
+  ``reason`` (default ``"caller_error"``) and ``error`` = *message*, exit.
+  ``exit_caller_error(error, reason=...)`` is the same for a caller that
+  printed its own stderr lines. The shared decorators go through them:
+  ``exit_on_yaml_file_error`` (``yaml_file_unreadable``),
+  ``exit_on_output_write_error`` and the ``*_or_die`` writers
+  (``output_unwritable``), ``exit_on_served_values_error``
+  (``served_values_unavailable``), ``exit_on_observed_map_error``
+  (``observed_map_unavailable``).
+* ``CallerError(message, reason=None)`` — the raisable form. Wherever it
+  ends up (``run``, ``@main``, the excepthook, ``exit_on_crash``) it is not
+  a crash: one ``ERROR:`` line, no traceback, the caller-error code, the
+  envelope. A subclass names its reason on the class.
+* ``run(main)`` — the one process entry: ``if __name__ == "__main__":
+  _lib_exitcodes.run(main)``. *main*'s return value is the exit status; a
+  hand-written ``sys.exit(2)`` that printed no envelope gets the generic one
+  (``reason: "caller_error"``, ``error``: the last line the tool wrote to
+  stderr). Every tool that calls ``arm_crash_envelope`` must enter through
+  it (gate: tests/shared/test_single_exit_path.py).
+
+No envelope is printed when nothing was armed (no ``--json``), or when the
+tool already wrote to stdout since arming (its own document — or prose,
+which breaks the contract anyway). Arming notices that by wrapping
+``write`` on the stdout / stderr objects; the objects, their buffers,
+filenos and encodings stay as they were.
+
+The caller-error code is per process like the crash code, and separate from
+it: ``set_caller_error_code(code)`` (default 2; tenant_verify sets 1). A
+caller error and a closed stdout (below) use it; a crash never does.
+
+stdout closed by the reader (#3124)
+-----------------------------------
+``tool | head -c1``, ``tool | true``, a closed fd 1: when the reader is gone
+while the tool still has output buffered, the interpreter's last flush
+failed and the process ended at rc 120 — whatever it was exiting with, 0, 1,
+2 or a crash — and a write that failed mid-run was reported as
+``unexpected internal error (BrokenPipeError)``. Neither is a crash. Now:
+an atexit hook registered at import (so it runs after the tool's own) makes
+that last flush; if it fails, and whenever a ``BrokenPipeError`` reaches
+``exit_on_crash`` while stdout's reader is gone, stdout is pointed at the
+null device, stderr gets one line ``ERROR: stdout was closed before all
+output was written``, and the process exits with the caller-error code.
+A ``BrokenPipeError`` from anything else (a socket) stays a crash. Output
+that was fully handed to the pipe before the reader left keeps the tool's
+own exit code. ops/patch_config.py seals its streams itself and keeps its
+own codes (#2505).
 
 ``da-tools`` (components/da-tools/app/entrypoint.py) is the last line of
 defence for tools that never import this module: it catches what
@@ -145,14 +198,82 @@ EXIT_VIOLATION: Final[int] = 1
 EXIT_CALLER_ERROR: Final[int] = 2
 
 
-def die_caller_error(message: str) -> NoReturn:
-    """Print *message* to stderr and exit EXIT_CALLER_ERROR (2).
+_caller_error_code: int = EXIT_CALLER_ERROR
+
+
+def _check_code(what: str, code: Any) -> int:
+    if (isinstance(code, bool) or not isinstance(code, int)
+            or not 1 <= code <= 255):
+        raise ValueError(f"{what} exit code must be an int in 1..255, got {code!r}")
+    return code
+
+
+def set_caller_error_code(code: int) -> None:
+    """Set the exit code this process uses for a caller error.
+
+    Default EXIT_CALLER_ERROR (2). Only a tool whose own contract gives 2
+    another meaning should change it (tenant_verify: 1). Kept apart from the
+    crash code (``set_crash_exit_code``): "stdout was closed by the reader"
+    and a named caller error are not crashes, whatever the crash code is.
+    """
+    global _caller_error_code
+    _caller_error_code = _check_code("caller-error", code)
+
+
+def get_caller_error_code() -> int:
+    """The exit code a caller error ends with in this process."""
+    return _caller_error_code
+
+
+class CallerError(Exception):
+    """A caller error raised instead of exiting: the process ends at the
+    caller-error code with one ``ERROR:`` line on stderr — no traceback — and,
+    in ``--json`` mode, one envelope naming ``reason``.
+
+    Raise it from anywhere below ``run()`` (or let the module excepthook /
+    ``@main`` see it); it is never reported as a crash. A subclass names its
+    reason once, on the class (``reason = "prometheus_query_error"``); the
+    constructor's *reason* overrides that for one instance.
+    """
+
+    reason: str = "caller_error"
+
+    def __init__(self, message: str, reason: Optional[str] = None) -> None:
+        super().__init__(message)
+        if reason is not None:
+            self.reason = reason
+
+    @property
+    def error_line(self) -> str:
+        """The stderr line: the message, prefixed ``ERROR:`` unless it is."""
+        text = str(self)
+        return text if text.startswith("ERROR") else f"ERROR: {text}"
+
+
+def die_caller_error(message: str, reason: Optional[str] = None, *,
+                     code: Optional[int] = None) -> NoReturn:
+    """Print *message* to stderr and exit with the caller-error code.
 
     Convenience for the common "bad invocation / unusable environment"
     bail-out so call sites don't hand-roll the print + sys.exit(2) pair.
+    In ``--json`` mode (an armed envelope, see ``arm_crash_envelope``) it
+    also prints one ``caller_error`` envelope whose ``reason`` is *reason*
+    (default ``"caller_error"``) and whose ``error`` is *message* — unless
+    the tool already wrote to stdout. *code* overrides the process
+    caller-error code (``set_caller_error_code``) for this one exit.
     """
     print(message, file=sys.stderr)
-    sys.exit(EXIT_CALLER_ERROR)
+    exit_caller_error(message, reason, code=code)
+
+
+def exit_caller_error(error: str, reason: Optional[str] = None, *,
+                      code: Optional[int] = None) -> NoReturn:
+    """``die_caller_error`` for a caller that already printed its own
+    stderr lines: only the armed envelope (``error`` = *error*) and the
+    exit. Use it when stderr carries more than the one line the envelope
+    should name (``exit_on_served_values_error``: da-guard's own lines)."""
+    _print_armed_envelope(reason or CallerError.reason, error)
+    sys.exit(_caller_error_code if code is None else code)
 
 
 # ── Unexpected crash handling (#3090) ─────────────────────────────────
@@ -171,11 +292,8 @@ def set_crash_exit_code(code: int) -> None:
     crash must never read as success — as are non-int and out-of-range
     values.
     """
-    if (isinstance(code, bool) or not isinstance(code, int)
-            or not 1 <= code <= 255):
-        raise ValueError(f"crash exit code must be an int in 1..255, got {code!r}")
     global _crash_exit_code
-    _crash_exit_code = code
+    _crash_exit_code = _check_code("crash", code)
 
 
 def get_crash_exit_code() -> int:
@@ -213,6 +331,13 @@ def report_crash(exc: BaseException) -> None:
 
 _DocBuilder = Callable[[], dict[str, Any]]
 _crash_envelope_armed: Optional[tuple[Optional[_DocBuilder], dict[str, Any]]] = None
+# Since the envelope was armed: did the tool write to stdout itself (then it
+# owes no envelope — it printed its own document, or broke the contract
+# already), and what did it last write to stderr (the generic envelope's
+# ``error``). Kept by the taps ``arm_crash_envelope`` puts on the streams.
+_stdout_written = False
+_stderr_tail = ""
+_STDERR_TAIL_MAX = 4000
 
 
 def crash_envelope(exc: BaseException, base: Optional[dict[str, Any]] = None,
@@ -225,19 +350,67 @@ def crash_envelope(exc: BaseException, base: Optional[dict[str, Any]] = None,
     report and *fields* its extra keys (dev-rules §13: an early exit keeps
     the tool's schema keys, zeroed); neither can replace the three above.
     """
+    return caller_error_envelope("internal_error", crash_message(exc), base, **fields)
+
+
+def caller_error_envelope(reason: str, error: str, base: Optional[dict[str, Any]] = None,
+                          **fields: Any) -> dict[str, Any]:
+    """The ``--json`` document a caller-error exit prints (#3115): the
+    tool's zeroed report *base* and extra *fields*, then ``status:
+    caller_error``, *reason* and *error* — which neither can replace."""
     return {**(base or {}), **fields, "status": "caller_error",
-            "reason": "internal_error", "error": crash_message(exc)}
+            "reason": reason, "error": error}
+
+
+def _note_stdout(text: Any) -> None:
+    global _stdout_written
+    if text:
+        _stdout_written = True
+
+
+def _note_stderr(text: Any) -> None:
+    global _stderr_tail
+    if isinstance(text, str) and text:
+        _stderr_tail = (_stderr_tail + text)[-_STDERR_TAIL_MAX:]
+
+
+def _tap(stream: Any, note: Callable[[Any], None]) -> None:
+    """Make *stream*'s ``write`` call *note* first. The stream object, its
+    buffer, fileno and encoding stay what they were; ``write`` returns what
+    it returned. Once per stream; a stream that refuses attributes (a
+    custom object) is left alone."""
+    if stream is None or getattr(stream, "_da_exit_tap", False):
+        return
+    try:
+        inner = stream.write
+
+        def write(text: Any) -> Any:
+            note(text)
+            return inner(text)
+
+        stream.write = write
+        stream._da_exit_tap = True
+    except (AttributeError, TypeError):
+        pass
 
 
 def arm_crash_envelope(build: Optional[_DocBuilder] = None, **fields: Any) -> None:
-    """Make an unexpected crash in this process print ``crash_envelope``.
+    """Make every rc-2 exit of this process print one ``--json`` envelope.
 
     Call it right after parsing the arguments, and only when ``--json`` was
-    given. *build* returns the tool's zeroed report; it runs at crash time,
-    so a timestamp in it is the crash's. Calling it again replaces both.
+    given. A crash then prints ``crash_envelope``; a caller-error exit
+    (``die_caller_error``, ``CallerError``, a hand-written exit with the
+    caller-error code reaching ``run()``) prints ``caller_error_envelope``.
+    Neither prints once the tool wrote to stdout itself. *build* returns the
+    tool's zeroed report; it runs at exit time, so a timestamp in it is the
+    exit's. Calling it again replaces both.
     """
-    global _crash_envelope_armed
+    global _crash_envelope_armed, _stdout_written, _stderr_tail
     _crash_envelope_armed = (build, dict(fields))
+    _stdout_written = False
+    _stderr_tail = ""
+    _tap(sys.stdout, _note_stdout)
+    _tap(sys.stderr, _note_stderr)
 
 
 def disarm_crash_envelope() -> None:
@@ -248,9 +421,23 @@ def disarm_crash_envelope() -> None:
 
 
 def _print_crash_envelope(exc: BaseException) -> None:
+    _print_armed_envelope("internal_error", crash_message(exc))
+
+
+def _last_stderr_line() -> str:
+    for line in reversed(_stderr_tail.splitlines()):
+        if line.strip():
+            line = " ".join(line.split())
+            return line[:_CRASH_MESSAGE_MAX] + ("..." if len(line) > _CRASH_MESSAGE_MAX else "")
+    return "caller error (no message)"
+
+
+def _print_armed_envelope(reason: str, error: str) -> None:
+    """Print the armed envelope with *reason* / *error*, at most once, and
+    not after the tool wrote to stdout itself."""
     global _crash_envelope_armed
     armed, _crash_envelope_armed = _crash_envelope_armed, None
-    if armed is None:
+    if armed is None or _stdout_written:
         return
     build, fields = armed
     base = None
@@ -259,10 +446,10 @@ def _print_crash_envelope(exc: BaseException) -> None:
             base = build()
         except Exception:  # noqa: BLE001 — the three keys still print
             base = None
-    import json  # deferred: only a crash in --json mode needs it
+    import json  # deferred: only an exit in --json mode needs it
     import os
-    data = (json.dumps(crash_envelope(exc, base, **fields), ensure_ascii=False,
-                       indent=2, default=str) + "\n").encode(
+    data = (json.dumps(caller_error_envelope(reason, error, base, **fields),
+                       ensure_ascii=False, indent=2, default=str) + "\n").encode(
         getattr(sys.stdout, "encoding", None) or "utf-8", "replace")
     # Straight to the fd, never through the stdout buffer: on a closed pipe a
     # write left in the buffer fails again at interpreter exit and turns the
@@ -286,7 +473,15 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
     ``arm_crash_envelope`` (if any) is printed instead. If that raises, it is
     reported too and the exit code is unchanged. Uses ``sys.exit`` so atexit
     handlers run.
+
+    Two exceptions are not crashes and leave by their own exit instead: a
+    ``CallerError`` (caller-error code, one line, its envelope) and a
+    ``BrokenPipeError`` whose broken end is stdout (the reader left: #3124).
     """
+    if isinstance(exc, CallerError):
+        die_caller_error(exc.error_line, exc.reason)
+    if isinstance(exc, BrokenPipeError) and _stdout_is_gone():
+        _exit_stdout_closed(at_exit=False)
     report_crash(exc)
     try:
         (on_crash or _print_crash_envelope)(exc)
@@ -316,11 +511,8 @@ def main(func: Optional[_F] = None, *, crash_exit_code: Optional[int] = None,
     ``on_crash(exc)`` lets a ``--json`` tool emit its envelope. ``SystemExit``
     and ``KeyboardInterrupt`` pass through untouched.
     """
-    if crash_exit_code is not None and (
-            isinstance(crash_exit_code, bool) or not isinstance(crash_exit_code, int)
-            or not 1 <= crash_exit_code <= 255):
-        raise ValueError(
-            f"crash exit code must be an int in 1..255, got {crash_exit_code!r}")
+    if crash_exit_code is not None:
+        _check_code("crash", crash_exit_code)
 
     def decorate(f: _F) -> _F:
         @functools.wraps(f)
@@ -356,3 +548,131 @@ def _crash_excepthook(exc_type, exc, tb) -> None:
 # IDE / test runner) that set its own hook keeps it.
 if sys.excepthook is sys.__excepthook__:
     sys.excepthook = _crash_excepthook
+
+
+# ── The single process entry (#3115) ──────────────────────────────────
+
+
+def run(entry: Callable[[], Any]) -> NoReturn:
+    """Run a tool's *entry* (its ``main``) and exit — the one way out.
+
+    ``if __name__ == "__main__": _lib_exitcodes.run(main)`` replaces both
+    ``main()`` and ``sys.exit(main())``: *entry*'s return value is the exit
+    status, as ``sys.exit`` reads it. On top of that:
+
+    * an ``Exception`` is a crash (``exit_on_crash``) — except a
+      ``CallerError`` or a stdout ``BrokenPipeError``, which leave by their
+      own exits (see ``exit_on_crash``);
+    * an exit with the caller-error code that has printed no envelope yet
+      — a hand-written ``sys.exit(2)`` — prints the armed envelope with
+      ``reason: "caller_error"`` and, as ``error``, the last line the tool
+      wrote to stderr. Nothing is printed when not armed (no ``--json``) or
+      when the tool already wrote to stdout itself.
+
+    Gate: tests/shared/test_single_exit_path.py (every tool that calls
+    ``arm_crash_envelope`` enters through here).
+    """
+    try:
+        status = entry()
+    except SystemExit as exc:
+        status = exc.code
+    except Exception as exc:  # noqa: BLE001 — that is the point
+        exit_on_crash(exc)
+    if (isinstance(status, int) and not isinstance(status, bool)
+            and status == _caller_error_code):
+        _print_armed_envelope(CallerError.reason, _last_stderr_line())
+    sys.exit(status)
+
+
+# ── stdout closed by the reader (#3124) ────────────────────────────────
+#
+# `tool | head -c1`, `tool | true`, a closed fd 1: the reader is gone while
+# the tool still has output. Left alone, the interpreter's last flush of
+# stdout fails and the process ends at rc 120 — whatever the tool exited
+# with, crash or not; and a write that fails mid-run surfaces as an
+# "unexpected internal error (BrokenPipeError)". Neither is a crash, and 120
+# is outside 0/1/2. Both now end here: stdout is pointed at the null device
+# (so nothing fails again), one line goes to stderr, and the process exits
+# with the CALLER-ERROR code — not the crash code.
+
+STDOUT_CLOSED_MESSAGE = "ERROR: stdout was closed before all output was written"
+_stdout_closed_reported = False
+
+
+def _stdout_is_gone() -> bool:
+    """Is stdout's reader gone (the far end of a pipe closed, fd 1 closed)?
+
+    A ``BrokenPipeError`` from a socket or a child's pipe leaves stdout
+    writable, so it answers False there and that error stays a crash.
+    """
+    out = sys.stdout
+    if out is None:
+        return False
+    try:
+        fd = out.fileno()
+    except (AttributeError, OSError, ValueError):  # no fd (a capture object)
+        fd = None
+    if fd is not None:
+        try:
+            import select
+            poller = select.poll()
+            poller.register(fd, select.POLLOUT)
+            gone = select.POLLERR | select.POLLHUP | select.POLLNVAL
+            return any(ev & gone for _, ev in poller.poll(0))
+        except (AttributeError, OSError, ValueError):  # no poll() (Windows)
+            pass
+    try:
+        out.flush()
+    except OSError:
+        return True
+    except ValueError:  # closed by the tool itself: not the reader
+        return False
+    return False
+
+
+def _exit_stdout_closed(*, at_exit: bool) -> NoReturn:
+    global _stdout_closed_reported, _crash_envelope_armed
+    _crash_envelope_armed = None  # no stdout to put it on
+    import os
+    try:
+        fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        fd = 1
+    try:
+        null = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(null, fd)
+        finally:
+            os.close(null)
+    except OSError:
+        pass
+    if not _stdout_closed_reported:
+        _stdout_closed_reported = True
+        try:
+            print(STDOUT_CLOSED_MESSAGE, file=sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001 — stderr gone too: the code still says it
+            pass
+    if at_exit:
+        # atexit cannot change the exit status by raising; this runs last.
+        os._exit(_caller_error_code)
+    sys.exit(_caller_error_code)
+
+
+def _flush_stdout_at_exit() -> None:
+    out = sys.stdout
+    if out is None or getattr(out, "closed", False):
+        return
+    try:
+        out.flush()
+    except OSError:
+        _exit_stdout_closed(at_exit=True)
+    except ValueError:
+        pass
+
+
+# Registered at import, before any tool code can register its own, so it
+# runs LAST of them (atexit is LIFO): the tool's own exit handlers have
+# written whatever they write by then.
+import atexit as _atexit  # noqa: E402
+
+_atexit.register(_flush_stdout_at_exit)

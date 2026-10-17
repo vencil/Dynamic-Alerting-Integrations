@@ -182,7 +182,10 @@ class ParserModel(NamedTuple):
     parser: argparse.ArgumentParser | None = None
 
 
-class _Captured(Exception):
+class _Captured(BaseException):
+    # BaseException, not Exception: a tool entered through
+    # `_lib_exitcodes.run(main)` (#3115) turns any Exception into a crash
+    # exit, so the capture must pass through it like SystemExit does.
     def __init__(self, parser: argparse.ArgumentParser) -> None:
         self.parser = parser
 
@@ -263,8 +266,10 @@ def introspect_parsers() -> tuple[dict[str, ParserModel], list[str], list[str],
                 continue
             saved_argv, saved_path = sys.argv[:], sys.path[:]
             # A tool run as __main__ may set this process's crash exit code
-            # (tenant_verify sets 1, #3090); it must not outlive the run.
+            # (tenant_verify sets 1, #3090) and caller-error code (1 too,
+            # #3124); neither may outlive the run.
             saved_crash = _lib_exitcodes.get_crash_exit_code()
+            saved_caller = _lib_exitcodes.get_caller_error_code()
             sys.argv = [str(path)]
             sys.path.insert(0, str(path.parent))
             sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
@@ -281,6 +286,7 @@ def introspect_parsers() -> tuple[dict[str, ParserModel], list[str], list[str],
             finally:
                 sys.argv, sys.path = saved_argv, saved_path
                 _lib_exitcodes.set_crash_exit_code(saved_crash)
+                _lib_exitcodes.set_caller_error_code(saved_caller)
     finally:
         argparse.ArgumentParser.parse_args = real_parse  # type: ignore[method-assign]
         argparse.ArgumentParser.parse_known_args = real_parse_known  # type: ignore[method-assign]
@@ -328,10 +334,12 @@ def reachable_exit_codes(source: str) -> ExitCodes:
     """Non-zero exit codes a script can produce, by AST.
 
     Resolves ``sys.exit(<expr>)`` / ``raise SystemExit(<expr>)`` /
-    ``die_caller_error(...)`` (=2), where ``<expr>`` is an ``EXIT_*`` name, an
-    int literal, an ``IfExp`` (both arms), a module-level name bound to an int
-    literal, or a module-level function whose own ``return`` statements
-    resolve by the same rules (``sys.exit(main())``). Anything else is
+    ``die_caller_error(...)`` / ``exit_caller_error(...)`` (=2), where
+    ``<expr>`` is an ``EXIT_*`` name, an int literal, an ``IfExp`` (both
+    arms), a module-level name bound to an int literal, or a module-level
+    function whose own ``return`` statements resolve by the same rules
+    (``sys.exit(main())``, and ``_lib_exitcodes.run(main)``, which exits with
+    main's return value the same way). Anything else is
     undecidable and disclosed with its line. argparse's own rc 2 is not looked
     for here: the caller adds it for every command that HAS a parser.
     """
@@ -381,8 +389,17 @@ def reachable_exit_codes(source: str) -> ExitCodes:
             if name == "exit" and isinstance(f, ast.Attribute) \
                     and isinstance(f.value, ast.Name) and f.value.id == "sys":
                 _resolve_expr(node.args[0] if node.args else None, node.lineno, 0)
-            elif name == "die_caller_error":
+            elif name in ("die_caller_error", "exit_caller_error"):
                 _add(EXIT_CALLER_ERROR, node.lineno)
+            elif name == "run" and isinstance(f, ast.Attribute) \
+                    and isinstance(f.value, ast.Name) \
+                    and f.value.id == "_lib_exitcodes" and node.args:
+                # #3115: `_lib_exitcodes.run(main)` exits with main's return
+                # value, exactly as `sys.exit(main())` does.
+                entry = node.args[0]
+                if isinstance(entry, ast.Name):
+                    entry = ast.Call(func=entry, args=[], keywords=[])
+                _resolve_expr(entry, node.lineno, 0)
         elif isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) \
                 and isinstance(node.exc.func, ast.Name) \
                 and node.exc.func.id == "SystemExit":

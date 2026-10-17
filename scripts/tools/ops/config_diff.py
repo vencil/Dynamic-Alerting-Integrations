@@ -52,7 +52,7 @@ from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
 
@@ -1603,13 +1603,13 @@ def main():
         # BaseException, so the tool's own 0/1/2 exits pass through untouched.
         # ``str(exc)``, not ``repr(exc)``: it carries the file name where the
         # exception has one; the type name because str() alone can be terse.
-        print(
+        # #3115: through die_caller_error, so --json gets its one envelope.
+        die_caller_error(
             f"ERROR: cannot compare configs "
             f"(--old-dir {args.old_dir} --new-dir {args.new_dir}): "
             f"{type(exc).__name__}: {exc}",
-            file=sys.stderr,
+            reason="compare_failed",
         )
-        sys.exit(EXIT_CALLER_ERROR)
 
 
 def _run(args):
@@ -1646,4 +1646,5 @@ def _run(args):
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

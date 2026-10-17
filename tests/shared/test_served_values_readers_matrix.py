@@ -196,7 +196,11 @@ def test_dangling_symlink_fails_closed(script, extra, tmp_path):
     assert p.returncode == 2, (p.returncode, p.stderr)
     err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
     assert len(err) == 1 and "tenant-b.yaml (stat_error)" in err[0], p.stderr
-    assert "Traceback" not in p.stderr and p.stdout == "", (p.stdout, p.stderr)
+    assert "Traceback" not in p.stderr, p.stderr
+    # #3115: 兩支都帶 --json，stdout 是一份 envelope（原為空），error 就是那行 ERROR。
+    doc = json.loads(p.stdout)
+    assert (doc["status"], doc["reason"], doc["error"]) == (
+        "caller_error", "served_values_unavailable", err[0]), p.stdout
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
