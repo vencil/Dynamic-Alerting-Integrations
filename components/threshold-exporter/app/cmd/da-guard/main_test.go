@@ -359,12 +359,14 @@ func TestRun_OnlyParseFailedFile_ExitsThreeNotVacuous(t *testing.T) {
 	}
 }
 
-// The two decode failures the walker cannot see (#2123 round 2): a
-// `_defaults.yaml` (never decoded by the walker, `_`-prefixed) with a
-// repeated key, and a tenant file whose repeated key sits under a top-level
-// field the walker's typed decode ignores but the effective-config merge
-// (into `any`) rejects. Both used to surface as a resolve error → exit 2
-// ("caller error"); they are the author's file to fix → exit 3, file named.
+// Two decode failures (#2123 round 2): a `_defaults.yaml` (never decoded by
+// the walker, `_`-prefixed) with a repeated key, and a tenant file whose
+// repeated key sits under a top-level field the typed decode ignores but the
+// effective-config merge (into `any`) rejects. Both used to surface as a
+// resolve error → exit 2 ("caller error"); they are the author's file to fix
+// → exit 3, file named. Since #3063 the walker refuses the tenant file itself
+// (ParseTenantFile runs the merge's generic decode), so it reaches exit 3 as
+// a ParseFailed file rather than through the resolve; the verdict is the same.
 func TestRun_DecodeFailureWhileResolving_ExitsThree(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

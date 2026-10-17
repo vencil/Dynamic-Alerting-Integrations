@@ -268,9 +268,12 @@ func TestServedValues_ParseFailedFile_ExitsThreeAndNamesIt(t *testing.T) {
 		"tenant file": {"tenant-b.yaml", "tenants:\n  tenant-b: [1]\n"},
 		// `dP8=` is "t\xff": the exporter skips the whole file (#2266).
 		"tenant file, non-UTF-8 tenant id": {"tenant-b.yaml", "tenants:\n  ? !!binary dP8=\n  : {mysql_connections: 5}\n  tenant-b:\n    mysql_connections: 7\n"},
-		"root defaults (typed decode)":     {"_defaults.yaml", "defaults:\n  mysql_connections: abc\n"},
-		"root profiles (typed decode)":     {"_profiles.yaml", "profiles: [1, 2]\n"},
-		"nested defaults (syntax)":         {"sub/_defaults.yaml", "defaults: [oops\n"},
+		// An explicit tag the text does not satisfy: the typed decode never
+		// resolved it, the generic one refuses it (#3063).
+		"tenant file, mismatched explicit tag": {"tenant-b.yaml", "tenants:\n  tenant-b:\n    mysql_connections: !!int abc\n"},
+		"root defaults (typed decode)":         {"_defaults.yaml", "defaults:\n  mysql_connections: abc\n"},
+		"root profiles (typed decode)":         {"_profiles.yaml", "profiles: [1, 2]\n"},
+		"nested defaults (syntax)":             {"sub/_defaults.yaml", "defaults: [oops\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			files := map[string]string{

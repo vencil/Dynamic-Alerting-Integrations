@@ -112,11 +112,22 @@ type metaEnfFixture struct {
 // upgrades into).
 func newMetaEnfFixture(t *testing.T, enforce bool) *metaEnfFixture {
 	t.Helper()
-	configDir := setupConfigDir(t, map[string]string{
+	return newMetaEnfFixtureWith(t, enforce, nil)
+}
+
+// newMetaEnfFixtureWith is newMetaEnfFixture with files seeded over the
+// three default tenant files (a key naming one of them replaces it).
+func newMetaEnfFixtureWith(t *testing.T, enforce bool, files map[string]string) *metaEnfFixture {
+	t.Helper()
+	seeded := map[string]string{
 		metaEnfTenantIn + ".yaml":        tenantYAMLWithMeta(metaEnfTenantIn, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfSeedMode),
 		metaEnfTenantEnvOut + ".yaml":    tenantYAMLWithMeta(metaEnfTenantEnvOut, metaEnfOutsideEnv, metaEnfScopedDomain, metaEnfSeedMode),
 		metaEnfTenantDomainOut + ".yaml": tenantYAMLWithMeta(metaEnfTenantDomainOut, metaEnfScopedEnv, metaEnfOutsideDomain, metaEnfSeedMode),
-	})
+	}
+	for k, v := range files {
+		seeded[k] = v
+	}
+	configDir := setupConfigDir(t, seeded)
 	initGitRepo(t, configDir)
 	// initGitRepo leaves the repo on the init default branch; gitops.Writer's
 	// base branch is "main" — normalize (same as the org-axis harness).

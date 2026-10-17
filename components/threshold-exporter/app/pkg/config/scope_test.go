@@ -86,9 +86,15 @@ func TestScopeEffective_ParseFailedIsTheExportersVerdict(t *testing.T) {
 	}
 }
 
-// #2123 round 2: a decode failure met while resolving (a chain defaults file,
-// or a tenant file the walker accepted) is still an error of ScopeEffective,
-// with its historical text, but errors.As finds a *DecodeError naming the file.
+// #2123 round 2: a decode failure met while resolving a chain defaults file
+// is still an error of ScopeEffective, with its historical text, but
+// errors.As finds a *DecodeError naming the file.
+//
+// A tenant file can no longer get there (#3063): the walker's
+// ParseTenantFile now runs the merge's generic decode too, so a tenant file
+// the merge would refuse — a repeated key under a top-level field the typed
+// decode skips — is refused by the walker and is a ParseFailed file instead
+// (TestScopeEffective_TenantFileOnlyTheMergeRefusedIsParseFailed).
 func TestScopeEffective_ResolveDecodeFailureIsADecodeError(t *testing.T) {
 	for _, tc := range []struct {
 		name, want, text string
@@ -98,9 +104,6 @@ func TestScopeEffective_ResolveDecodeFailureIsADecodeError(t *testing.T) {
 			"conf.d/_defaults.yaml":     "defaults:\n  cpu: 70\n",
 			"conf.d/sub/_defaults.yaml": "defaults:\n  cpu: 1\n  cpu: 2\n",
 			"conf.d/sub/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
-		}},
-		{"tenant", "tenant-b.yaml", "parse tenant:", map[string]string{
-			"conf.d/tenant-b.yaml": "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -151,14 +154,45 @@ func TestEffectiveTree_ResolveDecodeFailure(t *testing.T) {
 		t.Errorf("ParseFailed = %v, want [sub/_defaults.yaml]", got.ParseFailed)
 	}
 
+	// #3063: a tenant file only the merge used to refuse is refused by the
+	// walker as well, so it is a ParseFailed file, not a resolve error.
 	tmp = t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/tenant-b.yaml": "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
 	})
-	_, err = EffectiveTree(filepath.Join(tmp, "conf.d"))
-	var de *DecodeError
-	if !errors.As(err, &de) || de.Path != "tenant-b.yaml" {
-		t.Fatalf("err = %v, want a *DecodeError naming tenant-b.yaml", err)
+	got, err = EffectiveTree(filepath.Join(tmp, "conf.d"))
+	if err != nil {
+		t.Fatalf("EffectiveTree err = %v, want the file reported as ParseFailed", err)
+	}
+	if len(got.Tenants) != 0 || !reflect.DeepEqual(got.ParseFailed, []string{"tenant-b.yaml"}) {
+		t.Errorf("tenants = %v, ParseFailed = %v; want none and [tenant-b.yaml]", got.Tenants, got.ParseFailed)
+	}
+}
+
+// #3063: the tenant-file case the test above used to carry. Before, the
+// walker's typed decode accepted the file (it skips `extra`) and the merge
+// refused it, so ScopeEffective failed with a *DecodeError; the walker now
+// refuses it too, so the file is in ParseFailed and declares no tenant.
+func TestScopeEffective_TenantFileOnlyTheMergeRefusedIsParseFailed(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": "defaults:\n  cpu: 70\n",
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    cpu: 80\n",
+		"conf.d/tenant-b.yaml":  "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
+	})
+	got, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "")
+	if err != nil {
+		t.Fatalf("ScopeEffective err = %v", err)
+	}
+	if !reflect.DeepEqual(got.ParseFailed, []string{"tenant-b.yaml"}) {
+		t.Errorf("ParseFailed = %v, want [tenant-b.yaml]", got.ParseFailed)
+	}
+	var ids []string
+	for _, ec := range got.Tenants {
+		ids = append(ids, ec.TenantID)
+	}
+	if !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
 	}
 }
 

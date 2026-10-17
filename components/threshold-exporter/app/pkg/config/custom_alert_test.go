@@ -254,14 +254,16 @@ func TestCustomAlert_MalformedBlockCounted(t *testing.T) {
 }
 
 // TestCustomAlert_OverflowDeterministic塞爆 a tenant past the cardinality cap with
-// SAME-recipe_id / DIFFERENT-name custom alerts and asserts the cap truncation
-// is deterministic (no random drop) + does not panic — Gemini's 護身符二.
+// custom alerts that differ only in their metric (and so recipe_id) and name,
+// and asserts the cap truncation is deterministic (no random drop) + does not
+// panic — Gemini's 護身符二. (One shape and severity under ten names is no
+// longer ten rows: the exporter serves the first only, #3112.)
 func TestCustomAlert_OverflowDeterministic(t *testing.T) {
 	var list string
 	for i := 0; i < 10; i++ {
-		// identical shape (same recipe_id) but distinct name → only the name
-		// CustomLabel differs; truncationSortKey must still order them stably.
-		list += fmt.Sprintf("      - {recipe: threshold, name: alert%02d, metric: cpu, op: \">\", window: 5m, threshold: \"%d:warning\"}\n", i, 50+i)
+		// one recipe, op, window and severity; only the metric and the name
+		// differ — truncationSortKey must still order them stably.
+		list += fmt.Sprintf("      - {recipe: threshold, name: alert%02d, metric: cpu%d, op: \">\", window: 5m, threshold: \"%d:warning\"}\n", i, i, 50+i)
 	}
 	cfg := customAlertsConfig(t, "shop-a", list)
 	cfg.MaxMetricsPerTenant = 3

@@ -47,10 +47,19 @@ var effectiveWarmTrees = map[string]map[string]string{
 		"sub/t1.yaml":        "tenants:\n  t1:\n    mysql_connections:\n      <<: {default: \"55\"}\n",
 		"t2.yaml":            "tenants:\n  t2:\n    redis_memory: 60\n",
 	},
-	"root unwrapped and decode error": {
+	"root unwrapped": {
 		"_defaults.yaml": "pg_connections: 100\n",
 		"t1.yaml":        "tenants:\n  t1: {}\n",
-		"t2.yaml":        "extra:\n  k: 1\n  k: 2\ntenants:\n  t2:\n    cpu: \"80\"\n",
+		// Refused whole by the walker since #3063 (the repeated key under a
+		// field the typed decode skips): t2 is not declared, a 404.
+		"t2.yaml": "extra:\n  k: 1\n  k: 2\ntenants:\n  t2:\n    cpu: \"80\"\n",
+	},
+	// The decode error: a root `_defaults.yaml` the exporter's build reads
+	// (its typed decode skips `extra`) and the merge refuses. A tenant file
+	// of that shape no longer gets this far (#3063).
+	"decode error": {
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\nextra:\n  k: 1\n  k: 2\n",
+		"t1.yaml":        "tenants:\n  t1: {}\n",
 	},
 	"duplicates": {
 		"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",

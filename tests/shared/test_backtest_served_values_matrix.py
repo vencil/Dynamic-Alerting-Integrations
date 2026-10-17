@@ -245,37 +245,38 @@ def _ident(metric_key: str, severity: str, component: str = "mysql",
                                         "severity": severity}, metric_key, twin, {}, {})
 
 
-def test_an_empty_severity_is_read_from_the_schedule(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """#3060: `"70:"` is served with severity "". da-guard used to leave
-    `severity` out of such a segment, so the reader (strict: a served segment
-    carries it) raised and backtest exited 2. It is a severity-only change
-    (`test_a_severity_only_change_is_listed`)."""
-    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
-    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:")})
-    segs = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"].schedules["mysql_connections"].segments
-    assert [s[:4] for s in segs] == [("00:00", "24:00", 70.0, "")]
-    _backtest(monkeypatch, b, c)  # raised ServedValuesError before #3060
-
-
-@pytest.mark.parametrize("value,severity,compared", [
-    ("70:critical", "critical", True), ("70:high", "high", False), ("70:", "", False)])
-def test_a_severity_only_change_is_listed(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str, severity: str,
-        compared: bool) -> None:
-    """#3060 R1: the same value under another severity is a change. A
-    severity a threshold rule selects keeps the threshold (another alert
-    compares it); one no rule selects is no threshold (`new_compared`)."""
+@pytest.mark.parametrize("value", ["70:high", "70:", "70:a|b"])
+def test_a_severity_no_rule_selects_is_served_as_the_default(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """#3071: a severity no threshold rule selects makes the value
+    unreadable; the exporter serves the platform default (80, warning), so
+    the change is 70 -> 80. #3060 read `"70:"` as served with severity ""
+    (and before that, da-guard left `severity` out of such a segment and
+    backtest exited 2); no current exporter serves such a row."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(value)})
+    segs = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"].schedules["mysql_connections"].segments
+    assert [s[:4] for s in segs] == [("00:00", "24:00", 80.0, "warning")]
     got = _backtest(monkeypatch, b, c)
-    want = {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "70",
-            "old_severity": "warning", "new_severity": severity}
-    if not compared:
-        want["new_compared"] = False
-    assert _no_series(got) == [want]
+    assert _no_series(got) == [{"tenant": "tx", "metric": "mysql_connections",
+                                "old_value": "70", "new_value": "80"}]
+    assert got[0]["series"] == [_ident("mysql_connections", "warning")]
+
+
+def test_a_severity_only_change_is_listed(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """#3060 R1: the same value under another severity is a change, and a
+    severity a threshold rule selects keeps the threshold (another alert
+    compares it). Since #3071 the exporter serves no other severity
+    (`test_a_severity_no_rule_selects_is_served_as_the_default`)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:Critical")})
+    got = _backtest(monkeypatch, b, c)
+    assert _no_series(got) == [{"tenant": "tx", "metric": "mysql_connections", "old_value": "70",
+                                "new_value": "70", "old_severity": "warning",
+                                "new_severity": "critical"}]
     assert got[0]["series"] == [_ident("mysql_connections", "warning"),
-                                _ident("mysql_connections", severity)]
+                                _ident("mysql_connections", "critical")]
 
 
 def test_a_severity_only_part_of_the_day_is_its_own_change(
@@ -311,28 +312,31 @@ def test_opposite_severity_changes_are_two_changes(
 @pytest.mark.parametrize("old,new,status,risk,message,rc", [
     # The same points fire, under the critical alert: no change in firing.
     ("70", "70:critical", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
-    # No rule selects "high": the warning alert loses its threshold.
-    ("70", "70:high", "analyzed", "MEDIUM", "Metric disabled — all alerts silenced", 0),
-    ("70", "70:", "analyzed", "MEDIUM", "Metric disabled — all alerts silenced", 0),
-    # ... and back: the alert compares it again (2000 fires: HIGH).
-    ("70:high", "70", "analyzed", "HIGH", "Metric newly enabled — 1/2 points would fire", 1),
-    # A value and a severity no rule selects: the alert is silenced (it was
-    # not backtested: "selected by no threshold rule").
-    ("70", "60:high", "analyzed", "MEDIUM", "Metric disabled — all alerts silenced", 0),
+    # #3071: no rule selects "high" (or ""), so the value is unreadable and
+    # the default (80) is served: a value change, 70 -> 80, and back. #3060
+    # R1 read these as the alert silenced (to-*: MEDIUM, rc 0) and enabled
+    # again (from-high: HIGH, rc 1).
+    ("70", "70:high", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
+    ("70", "70:", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
+    ("70:high", "70", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
+    ("70", "60:high", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
 ], ids=["to-critical", "to-high", "to-empty", "from-high", "value-to-high"])
 def test_a_severity_only_change_is_backtested_by_r1(
         tmp_path: Path, monkeypatch, capsys, cli_argv, old: str, new: str, status: str,
         risk: str, message: str, rc: int) -> None:
     """#3060 R1 (owner ruling): the severity decides which alert compares a
-    row, the value when it fires. Owner-approved exit codes: `from-high` is
-    the 0 -> 1 the ruling names (on main it was not listed at all)."""
+    row, the value when it fires. #3071 (owner ruling): a severity no rule
+    selects is an unreadable value, served as the default, so those rows are
+    value changes (exit codes 0, measured on the stub series)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(old)})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(new)})
     got_rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["status"], r["risk"], r["message"]) for r in rows] == [(status, risk, message)]
-    sev = lambda v: v.partition(":")[2] if ":" in v else "warning"  # noqa: E731
-    assert (rows[0]["old_severity"], rows[0]["new_severity"]) == (sev(old), sev(new))
+    if new == "70:critical":
+        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "critical")
+    else:
+        assert "old_severity" not in rows[0] and "new_severity" not in rows[0]
     assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
     assert got_rc == rc
 
@@ -341,11 +345,11 @@ def test_reports_name_the_severities(tmp_path: Path, monkeypatch, capsys, cli_ar
     """`70 -> 70` alone does not say what changed: the text and Markdown
     reports show each side's severity beside its value."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
-    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:high")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:critical")})
     md = tmp_path / "r.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert "70 (warning) -> 70 (high)" in out.out
-    assert "| 70 (warning) | 70 (high) |" in md.read_text(encoding="utf-8")
+    assert "70 (warning) -> 70 (critical)" in out.out
+    assert "| 70 (warning) | 70 (critical) |" in md.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("severity,text,cell", [
@@ -355,11 +359,21 @@ def test_reports_name_the_severities(tmp_path: Path, monkeypatch, capsys, cli_ar
 def test_a_severity_from_the_tree_is_escaped(
         tmp_path: Path, monkeypatch, capsys, cli_argv, severity: str, text: str,
         cell: str) -> None:
-    """The severity is tenant input: escaped (`safe_label`) in both reports,
-    and its `|` escaped in the Markdown table, which keeps its 7 columns."""
+    """The severity is read from served-values: escaped (`safe_label`) in both
+    reports, and its `|` escaped in the Markdown table, which keeps its 7
+    columns. Since #3071 the exporter serves no severity but warning and
+    critical, but `DA_GUARD_BINARY` may name an older da-guard, which served
+    the tenant's suffix as written — so the change carries one here."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
-    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS,
-                                  "tx.yaml": _wrapper(f"70:{severity}")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:critical")})
+    extract = bt.extract_changes_from_dirs
+
+    def as_an_older_exporter_served(*args, **kwargs):
+        changes = extract(*args, **kwargs)
+        for c in changes:
+            c["new_severity"] = severity.encode().decode("unicode_escape")
+        return changes
+    monkeypatch.setattr(bt, "extract_changes_from_dirs", as_an_older_exporter_served)
     md = tmp_path / "r.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
     assert f"70 (warning) -> {text}" in out.out and "\x1b" not in out.out
@@ -521,28 +535,33 @@ def test_a_critical_key_without_its_base_is_not_backtested(
     assert (rc, asked) == (0, [])
 
 
-@pytest.mark.parametrize("old,new", [
-    ("70:high", "60:high"),
-    ("70:Critical", "60:Critical"),  # the rules select "critical" exactly
-], ids=["high", "capital-Critical"])
-def test_a_severity_no_rule_selects_is_not_backtested(
-        tmp_path: Path, monkeypatch, capsys, cli_argv, old: str, new: str) -> None:
-    """The exporter serves `60:high` as severity="high"; the threshold rules
-    select severity="warning" / "critical" exactly, so no alert compares that
-    row. It used to be replayed against the warning alert (#3017 review);
-    `--git-diff` / `--tenant` give the same reason. With neither side any
-    rule selects there is nothing to compare; one side standard is #3060
-    R1's (`test_a_severity_only_change_is_backtested_by_r1`)."""
-    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(old)})
-    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(new)})
-    sev = new.partition(":")[2]
-    assert sev in {s.labels["severity"] for s in _backtest(monkeypatch, b, c)[0]["series"]}
+def test_a_severity_no_rule_selects_on_both_sides_is_no_change(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3071: `70:high` -> `60:high` is two unreadable values; the exporter
+    serves the platform default on both sides, so nothing changed and
+    nothing is queried. Before #3071 the exporter served severity="high",
+    which no threshold rule selects, and the change was listed as not
+    backtested ("selected by no threshold rule", #3017 review)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:high")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60:high")})
+    assert _backtest(monkeypatch, b, c) == []
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    assert (rc, asked, json.loads(out.out)["changes"]) == (0, [], [])
+
+
+def test_a_capitalised_severity_is_backtested_on_its_alert(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3071: `70:Critical` is read as critical (the suffix is lower-cased),
+    so `70:Critical` -> `60:Critical` is compared by the critical alert.
+    Before #3071 the exporter served severity="Critical", which the rules
+    (selecting "critical" exactly) did not compare."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:Critical")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60:Critical")})
+    assert {s.labels["severity"] for s in _backtest(monkeypatch, b, c)[0]["series"]} == {"critical"}
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
-    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [(
-        "mysql_connections", "not_backtested",
-        f"skipped: severity {sev!r} is selected by no threshold rule")]
-    assert (rc, asked) == (0, [])
+    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_connections", "analyzed")]
+    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
 
 
 @pytest.mark.parametrize("side", ["baseline", "current"])

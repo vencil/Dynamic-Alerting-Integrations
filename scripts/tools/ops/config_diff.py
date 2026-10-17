@@ -47,6 +47,7 @@ from _lib_python import (  # noqa: E402
     format_json_report,
     is_disabled as _is_disabled,
 )
+from _lib_validation import custom_alert_disabled  # noqa: E402  (#3071)
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
@@ -523,14 +524,13 @@ def _code_span(val):
 
 
 def _threshold_disabled(val):
-    """Is a custom-alert threshold a three-state opt-out? Mirrors the exporter
-    (custom_alert.go): split the optional `:severity`, then test the value part
-    against the disabled set — so `off`/`disabled`/`false` and `:severity`-
-    suffixed forms (e.g. ``disable:warning``) are caught, not just ``disable``
-    (R2 self-review: keep parity with blast_radius._threshold_disabled)."""
-    raw = str(val).strip()
-    value = raw.rsplit(":", 1)[0] if ":" in raw else raw
-    return _is_disabled(value)
+    """Is a custom-alert threshold a three-state opt-out? The exporter's
+    reading (custom_alert.go), shared with blast_radius: `custom_alert_disabled`
+    splits the optional `:severity` with the one grammar (#3071) and tests the
+    value part against the disabled set — so `off`/`disabled`/`false` and
+    ``disable:warning`` are caught, while ``disable:bogus`` (a parse error in
+    Go, the alert is not opted out) is not."""
+    return custom_alert_disabled(val)
 
 
 def _field_change_annotation(field, old, new):

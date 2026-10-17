@@ -520,8 +520,10 @@ def _f1_allowed_not_a_string() -> list[str]:
 def _collection_receiver_types() -> list[str]:
     """#2758: a receiver-type entry PyYAML builds as a collection (unhashable).
 
-    It names no receiver type: the generator skips it and still enforces the
-    string entries; a non-empty allowed list of none still restricts.
+    It names no receiver type. #3116: the generator refuses the whole tree on
+    it, in every mode (each row's `pyyaml_strict_blocks` carries
+    `domain_policy_unusable` with blocks "always"); the verdict still records
+    what the policy's string entries say.
     """
     return [
         _constraints("forbidden_receiver_types: [slack, {a: 1}]"),
@@ -1152,6 +1154,10 @@ def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
         forbidden = forbidden if isinstance(forbidden, list) else []
         allowed = cons.get("allowed_receiver_types")
         allowed = allowed if isinstance(allowed, list) else []
+        # #3116: an entry that is not a receiver type (a non-string one, or an
+        # unknown name) refuses the whole tree — the row's
+        # `pyyaml_strict_blocks` says so; the verdict below is what the
+        # policy's entries read as, not what a run enforces.
         # Only a string entry can forbid anything: a non-string one (`! "null"`
         # is None, `! "true"` True to PyYAML) equals only a non-string
         # receiver type, which the generator already refuses on its own

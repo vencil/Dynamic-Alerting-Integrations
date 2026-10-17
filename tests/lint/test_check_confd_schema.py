@@ -98,6 +98,29 @@ class TestValidateDir:
         assert "_silent_mode" in viol[0] and "(?!" not in viol[0]
         assert viol[0].endswith("@ /tenants/db-a")
 
+    @pytest.mark.parametrize("key,value,where", [
+        ("mysql_connections", "70:high", "mysql_connections"),
+        ("mysql_connections", "70:", "mysql_connections"),
+        ('mysql_connections{db="a"}', "60:high", 'mysql_connections{db="a"}'),
+        ("mysql_connections", "{default: '70:bogus'}", "mysql_connections/default"),
+    ])
+    def test_a_severity_suffix_the_exporter_refuses_is_rejected_readably(
+            self, confd, schema, key, value, where):
+        """#3071: thresholdScalar's suffix pattern. The message states the rule
+        (its patternErrorMessage), not the regex."""
+        rendered = value if value.startswith("{") else f'"{value}"'
+        _write(confd, "db-a.yaml", f"tenants:\n  db-a:\n    '{key}': {rendered}\n")
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert len(viol) == 1, viol
+        assert "must be warning or critical" in viol[0], viol
+        assert "[Ww]" not in viol[0] and "\\u" not in viol[0] and "does not match" not in viol[0]
+        assert viol[0].endswith(f"@ /tenants/db-a/{where}")
+
+    @pytest.mark.parametrize("value", ["70", "70:Critical", " 70 : warning ", "disable"])
+    def test_a_severity_suffix_the_exporter_reads_passes(self, confd, schema, value):
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    mysql_connections: "{value}"\n')
+        assert validate_dir(confd, schema, jsonschema)[1] == []
+
     def test_an_open_state_prefix_key_is_accepted(self, confd, schema):
         _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _state_custom_x: "enable"\n')
         assert validate_dir(confd, schema, jsonschema)[1] == []

@@ -84,7 +84,16 @@ func effectiveScanCorpus() map[string]map[string]string {
 		"root unwrapped": {
 			"_defaults.yaml": "pg_connections: 100\n",
 			"t1.yaml":        "tenants:\n  t1: {}\n",
-			"t2.yaml":        "extra:\n  k: 1\n  k: 2\ntenants:\n  t2:\n    cpu: \"80\"\n",
+		},
+		// A resolve error: a root `_defaults.yaml` the exporter's build
+		// reads (its typed decode skips `extra`) and the merge's generic
+		// decode refuses (the repeated key). A tenant file of that shape no
+		// longer reaches the merge — the walker refuses it the same way
+		// (#3063) — and a nested `_defaults.yaml` of it is one the build
+		// drops (chain parse failed), so the root carrier is what is left.
+		"root defaults only the merge refuses": {
+			"_defaults.yaml": "defaults:\n  mysql_connections: 80\nextra:\n  k: 1\n  k: 2\n",
+			"t1.yaml":        "tenants:\n  t1: {}\n",
 		},
 		"chain parse failed": {
 			"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",

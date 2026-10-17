@@ -84,7 +84,7 @@ def test_render_refuses_the_tree_and_writes_nothing(enabled, tmp_path):
     out = tmp_path / "am.yaml"
     p = _gen(_tree(tmp_path, enabled), "-o", str(out))
     assert p.returncode == 1, p.stderr
-    assert "field value(s) of the wrong type or not recognised" in p.stderr
+    assert "config problem(s) — nothing was generated, written or applied" in p.stderr
     assert not out.exists()
 
 

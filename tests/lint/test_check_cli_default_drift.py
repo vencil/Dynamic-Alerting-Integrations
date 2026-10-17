@@ -161,12 +161,14 @@ class TestRealRepo:
         stayed above any floor. A total cannot see one shape going blind; the
         set can.
 
-        ⚠️ Three mapped shapes appear in the docs and legitimately score zero,
+        ⚠️ Two mapped shapes appear in the docs and legitimately score zero,
         so they are NOT in this set and a column-index error in them would go
         unnoticed here (disclosed rather than papered over):
           ('Flag','預設','說明')   — `guard` tables; flags owned by the Go binary
           ('Flag','Default','Purpose') — `batch-pr` tables, same reason
-          ('參數','說明','預設')    — `init`, whose argparse defaults are None
+        ('參數','說明','預設') — `init` — used to be the third: its listed flags
+        all had a None default until #3110 added `--namespace` and
+        `--config-source` to that table.
         """
         _f, _st, _n, by_header = mod.scan()
         productive = {k for k, v in by_header.items() if v > 0}
@@ -178,6 +180,7 @@ class TestRealRepo:
             ("Flag", "Default", "說明"),
             ("Flag", "Default", "Description"),
             ("參數", "用途", "預設"),
+            ("參數", "說明", "預設"),
             ("Argument", "Description", "Default"),
             ("Parameter", "Purpose", "Default"),
         }, (

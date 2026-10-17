@@ -305,12 +305,7 @@ python3 scripts/tools/ops/validate_config.py \
 
 > Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.en.md#validate-config).
 
-Checked items (schema validation runs by default — no flag needed):
-- YAML syntax correctness
-- Parameter schema conformance
-- Route generation success
-- Policy checks pass
-- Version consistency (add `--version-check` to enable)
+Schema validation runs by default, no flag needed; some checks only appear with a flag (for example `--policy`, `--rule-packs`, `--version-check`). For what each row checks and which need a flag, see [CLI reference validate-config](../cli-reference.en.md#validate-config).
 
 ### Alert Quality Scoring (v2.1.0)
 
@@ -637,7 +632,7 @@ Prometheus's `/-/reload` and Alertmanager's `/-/reload` are HTTP POST endpoints 
 
 > **How to deploy** it is in [§Deploy tenant-api + da-portal](#deploy-tenant-api--da-portal-tenant-manager) above.
 
-The platform provides a Web UI (tenant-manager) for Domain Experts to self-manage tenant configurations without editing YAML directly:
+The platform provides a Web UI (tenant-manager) for Domain Experts to self-manage part of the tenant configuration: custom alerts are edited in the UI, and for maintenance / silent mode the UI generates YAML fragments to paste into the tenant file; thresholds and routing are still edited in YAML (or written by automation through tenant-api).
 
 - **tenant-api**: Go HTTP server with oauth2-proxy authentication, commit-on-write preserving full Git audit trail
 - **RBAC**: `_rbac.yaml` controls which teams can manage which tenants

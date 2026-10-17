@@ -58,6 +58,7 @@ from _grar_validate import (  # noqa: E402
     PlatformProbeSetUnverifiable,
     ROUTING_TREE_ERROR_PREFIX,
     check_policy_scope,
+    domain_policy_problems,
     duplicate_tenant_errors,
     invalid_tenant_id_text,
     routing_defaults_not_mapping_text,
@@ -749,40 +750,32 @@ def summarize_tree(root: dict) -> list[str]:
 def _level_policies_for_tenant(domain_policies: dict, tenant: str
                                ) -> tuple[list[tuple[str, set, set]], list[str]]:
     """The policies of ONE level's ``domain_policies`` that list *tenant*,
-    read the way the generator's ``check_domain_policies`` reads them
-    (non-strict). Returns ``(applicable, inert)`` as ``_policies_for_tenant``.
+    read the way the generator's ``check_domain_policies`` reads them.
+    Returns ``(applicable, inert)`` as ``_policies_for_tenant``.
+
+    #3116: a policy with a ``domain_policy_problems`` entry refuses the whole
+    tree, and ``_policy_step`` reads no policy of a refused tree; one is
+    skipped here all the same, so this reader has no lenient reading of its
+    own.
     """
     applicable, inert = [], []
     for name, policy in sorted(domain_policies.items()):
-        if not isinstance(policy, dict):
+        if not isinstance(policy, dict) or domain_policy_problems(policy):
             continue
-        tenants = policy.get("tenants", [])
-        if not isinstance(tenants, list):
-            inert.append(f"'{name}': 'tenants' is not a list, so the policy "
-                         f"applies to no tenant")
-            continue
-        if tenant not in tenants:
+        if tenant not in (policy.get("tenants") or []):
             continue
         constraints = policy.get("constraints", {})
-        if not isinstance(constraints, dict):
+        if constraints is None:
             inert.append(f"'{name}' lists '{tenant}' but its 'constraints' "
-                         f"is not a mapping, so nothing is enforced")
+                         f"is null, so nothing is enforced")
             continue
 
         def _types(field: str) -> set:
-            # #2758: a collection entry (unhashable) names no type; it stays
-            # as None so a non-empty allowed list still restricts.
+            # #3116: every entry is a receiver type here — a tree with one
+            # that is not is refused (`tree_refusal`), and `_policy_step`
+            # reads no policy then.
             raw = constraints.get(field)
-            if not isinstance(raw, list):
-                return set()
-            out = set()
-            for entry in raw:
-                try:
-                    hash(entry)
-                except TypeError:
-                    entry = None
-                out.add(entry)
-            return out
+            return set(raw) if isinstance(raw, list) else set()
 
         applicable.append((name, _types("forbidden_receiver_types"),
                            _types("allowed_receiver_types")))
@@ -803,8 +796,8 @@ def _policies_for_tenant(parsed: dict, tenant: str
     Returns ``(applicable, inert)``: ``applicable`` is ``(name, forbidden
     types, allowed types)`` of every reaching policy whose ``tenants`` list
     names the tenant; ``inert`` says, per policy, why one that may concern
-    the tenant is not applied (``tenants`` not a list, ``constraints`` not a
-    mapping, out of its subtree's scope).
+    the tenant is not applied (null ``constraints``, out of its subtree's
+    scope).
     """
     tenant_dirs = parsed.get("tenant_dirs") or {}
     applicable, inert = [], []
@@ -823,13 +816,22 @@ def _policies_for_tenant(parsed: dict, tenant: str
     return applicable, inert
 
 
-def _policy_step(parsed: dict, tenant: str, tenant_types: list[str] | None
-                 ) -> dict:
+def _policy_step(parsed: dict, tenant: str, tenant_types: list[str] | None,
+                 refused: bool = False) -> dict:
     """Step 5: the receiver-type constraints of the policies that list
     *tenant*, against the tenant receiver(s) Alertmanager delivers to.
-    ``tenant_types`` None means the delivery is unknown (no amtool)."""
-    applicable, inert = _policies_for_tenant(parsed, tenant)
+    ``tenant_types`` None means the delivery is unknown (no amtool).
+
+    *refused*: the generator refuses the tree (``tree_refusal``); no policy
+    is read then — one the refusal names may hold entries that are not
+    receiver types (#3116)."""
     step: dict = {"step": 5, "action": "policy_check"}
+    if refused:
+        step["detail"] = ("Receiver-type constraints not evaluated: the "
+                          "generator refuses this config")
+        step["passed"] = None
+        return step
+    applicable, inert = _policies_for_tenant(parsed, tenant)
     if inert:
         step["notes"] = inert
     typed = [(n, f, a) for n, f, a in applicable if f or a]
@@ -859,8 +861,7 @@ def _policy_step(parsed: dict, tenant: str, tenant_types: list[str] | None
                 issues.append(f"Domain '{name}' forbids receiver type '{rtype}'")
             if allowed and rtype not in allowed:
                 issues.append(f"Domain '{name}' only allows "
-                              f"{sorted(t for t in allowed if isinstance(t, str))}, "
-                              f"got '{rtype}'")
+                              f"{sorted(allowed)}, got '{rtype}'")
     if issues:
         step.update(detail="Receiver-type constraint violated",
                     violations=issues, passed=False)
@@ -1086,7 +1087,7 @@ def trace_alert_routing(
         })
 
     # Step 5: receiver-type constraints, scoped like the generator's check
-    steps.append(_policy_step(parsed, tenant, tenant_types))
+    steps.append(_policy_step(parsed, tenant, tenant_types, bool(refusal)))
 
     return {
         "tenant": tenant,
@@ -1336,7 +1337,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  WARN: {safe_label(invalid_tenant_id_text(tenant))} — "
                   f"generate-routes refuses this tree", file=sys.stderr)
         # #2906: a boolean / enum field of the wrong type or an unknown value
-        # — refused whole by generate-routes, in every mode.
+        # (#3116: a domain policy's receiver-type entry included) — refused
+        # whole by generate-routes, in every mode.
         for err in parsed.get("field_type_errors", []):
             print(f"  WARN: {safe_label(err.message)} — generate-routes "
                   f"refuses this tree", file=sys.stderr)

@@ -18,16 +18,16 @@ lang: en
 ## Your Onboarding Path
 
 1. **Run the whole stack first** (big picture) → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md): `docker compose up da-portal tenant-api`, open the Tenant Manager in your browser.
-2. **Go deeper on your main interface** → [da-portal QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/QUICKSTART.md) (browser self-service threshold edits / Saved Views).
+2. **Go deeper on your main interface** → [da-portal QUICKSTART](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/QUICKSTART.md) (in-browser threshold calculator, custom-alert management / Saved Views).
 3. **Configure your tenant for real** → the "30-Second Quick Setup" and common operations below.
 
 ## Three Things You Need to Know
 
 **1. Your monitoring is already active.** The platform ships with Rule Packs covering MariaDB, PostgreSQL, Redis, MongoDB, Elasticsearch, Kafka, and more. As long as your exporter is running, alert rules are in effect.
 
-**2. You only manage one YAML file (or use the Web UI).** All customization lives in `conf.d/<tenant>.yaml` — thresholds, notification routing, maintenance windows, everything. If your Platform Team has deployed the Self-Service Portal (tenant-manager UI), you can manage everything directly in the browser without editing YAML.
+**2. You only manage one YAML file (or use the Web UI).** All of your own customization lives in `conf.d/<tenant>.yaml` — thresholds, notification routing, maintenance windows, everything. If your Platform Team has deployed the Self-Service Portal (tenant-manager UI), you can edit custom alerts directly in the browser; for maintenance / silent mode the UI generates YAML fragments you paste into your tenant file; thresholds and routing are still edited in YAML.
 
-**3. Defaults are reasonable. You may not need to change anything.** Unless your business scenario requires stricter or more relaxed thresholds, the defaults in `_defaults.yaml` are sufficient.
+**3. Keys that have a default may not need changing.** Unless your business scenario requires stricter or more relaxed thresholds, the defaults in `_defaults.yaml` are sufficient; but some keys deliberately have no platform default and stay silent until you set them — see the ⚠️ below.
 
 ## 30-Second Quick Setup
 

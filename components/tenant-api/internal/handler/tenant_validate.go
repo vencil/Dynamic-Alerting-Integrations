@@ -4,8 +4,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -26,12 +26,15 @@ type ValidateResponse struct {
 
 // ValidateTenant handles POST /api/v1/tenants/{id}/validate
 //
-// Dry-run validation without writing: the verdict comes from the same gitops
-// validation function PUT runs in the configured write mode (#2124) — the full
-// pre-write sequence in direct mode, the body-only pre-flight in PR mode.
-// Authorization is not part of it, and neither are routing and the domain
-// policy: the route generator judges those on the write (PUT's 422
-// GENERATOR_FINDINGS, #2903), and the dry-run does not call it. Body checks
+// Dry-run without writing: the verdict is PUT's own refusal sequence (#3062,
+// planPut and gitops.PreviewPut, tenant_put_plan.go) — the write scope, the
+// declared tenants, the placeholder, then in direct mode the steps PUT runs
+// on the tree (resolution, splice, validation, #2124), in PR mode only the
+// body-only pre-flight (#1718). Routing and the domain policy are not part
+// of it: the route generator judges those on the write (PUT's 422
+// GENERATOR_FINDINGS, #2903), and the dry-run does not call it. A refusal
+// of the request itself (the id, the body's size) is this route's 400 /
+// 413; every other refusal is valid: false with PUT's text. Body checks
 // belong in gitops, never here.
 //
 // @Summary     Validate tenant config
@@ -40,6 +43,16 @@ type ValidateResponse struct {
 // @Description valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
 // @Description symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
 // @Description when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
+// @Description The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
+// @Description holds it and as the body proposes it, every other tenant the body declares (a fixed text naming no tenant), a
+// @Description masked-credential placeholder, the splice into the current file (#2405's rule for a file whose tenants cannot be
+// @Description told apart; for a caller who may not read every tenant of the file, its anchor rules), a declared tenant another
+// @Description conf.d file also declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
+// @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
+// @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
+// @Description This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
+// @Description it gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on
+// @Description the body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json
@@ -51,14 +64,20 @@ type ValidateResponse struct {
 // @Router      /api/v1/tenants/{id}/validate [post]
 func ValidateTenant(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID := chi.URLParam(r, "id")
-		if err := ValidateWritableTenantID(tenantID); err != nil {
-			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
-			return
+		readBody := func(w http.ResponseWriter, r *http.Request) (string, bool) {
+			body, ok := readLimitedBody(w, r, d)
+			return string(body), ok
 		}
-
-		body, ok := readLimitedBody(w, r, d)
+		// #3062: PUT's refusal sequence (tenant_put_plan.go). A refusal of
+		// the request itself (the id, the body's size) is this route's own
+		// 400 / 413; every other refusal is the verdict — valid: false with
+		// the text PUT answers it with.
+		verdict := &verdictCapture{}
+		plan, ok := planPut(w, verdict, r, d, endpointValidate, readBody)
 		if !ok {
+			if verdict.status != 0 {
+				writeJSON(w, http.StatusOK, ValidateResponse{Valid: false, Warnings: verdict.validateWarnings()})
+			}
 			return
 		}
 
@@ -66,19 +85,13 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 		var err error
 		if d.prWritePath() {
 			// The local tree may lag the base in PR mode (#1718), so only the
-			// body-only pre-flight WritePR itself runs before the PR is cut.
-			errs, err = gitops.DryRunValidateBodyOnly(tenantID, string(body))
+			// body-only pre-flight WritePR itself runs before the PR is cut;
+			// PUT runs the rest on the fresh base, under the writer lock.
+			errs, err = gitops.DryRunValidateBodyOnly(plan.tenantID, plan.body)
 		} else {
-			// Production always wires d.Writer (cmd/server/main.go builds it on
-			// the same configDir). The fallback serves handler-test literals
-			// that set only ConfigDir: same checks, without the production
-			// Writer's shared read walk and its stuck-walk breaker (see
-			// DryRunValidate).
-			wr := d.Writer
-			if wr == nil {
-				wr = gitops.NewWriter(d.ConfigDir, "")
-			}
-			errs, notices, err = wr.DryRunValidate(withTenantNames(withReplaceUnparseable(r, d), d).Context(), tenantID, string(body))
+			var res gitops.PutResolution
+			res, errs, err = plan.preview(d)
+			notices = res.Notices
 		}
 		if err != nil {
 			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}
@@ -116,7 +129,15 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 	if errors.As(err, &tu) {
 		return targetUnreadableText(tu)
 	}
+	// #3062: the splice PUT runs refused the write — PUT's 409 text (its
+	// detail withheld as PUT withholds it), or PUT's 400 (#2405).
+	var se *putSpliceError
+	if errors.As(err, &se) {
+		return se.Error()
+	}
 	switch {
+	case errors.Is(err, gitops.ErrValidation):
+		return strings.TrimPrefix(err.Error(), gitops.ErrValidation.Error()+": ")
 	case errors.Is(err, gitops.ErrReservedTenantID), errors.Is(err, gitops.ErrInvalidTenantID),
 		errors.Is(err, confd.ErrAmbiguousTenantFile):
 		return err.Error()

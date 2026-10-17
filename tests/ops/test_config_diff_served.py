@@ -76,7 +76,8 @@ def test_severity_only_change_reads_as_written(tmp_path, da_guard):
 
 def test_empty_severity_is_a_change_not_a_failed_side(tmp_path, da_guard):
     """#3060：`"70:"`（severity 為空字串）原本讓 served-values 的排程段少了 `severity`，
-    讀取端拒收、整支 rc 2；現在兩側都讀得到，`70` → `70:` 列為變更、rc 1。"""
+    讀取端拒收、整支 rc 2；現在兩側都讀得到，`70` → `70:` 列為變更、rc 1。
+    #3071：空後綴讓整個值讀不懂，exporter 改送平台預設值 80，所以變更是 70 → 80（looser）。"""
     base = _tree(tmp_path / "base", {"tx": {"mysql_connections": "70"}})
     pr = _tree(tmp_path / "pr", {"tx": {"mysql_connections": "70:"}})
     p = subprocess.run(
@@ -88,7 +89,22 @@ def test_empty_severity_is_a_change_not_a_failed_side(tmp_path, da_guard):
     doc = json.loads(p.stdout)
     assert doc["views"]["served"]["status"] == "computed", doc["views"]
     assert doc["threshold_changes"] == [
-        {"key": "mysql_connections", "old": 70, "new": "70:", "change": "modified", "tenants": ["tx"]}]
+        {"key": "mysql_connections", "old": 70, "new": 80, "change": "looser", "tenants": ["tx"]}]
+
+
+def test_unreadable_severity_on_both_sides_is_no_change(tmp_path, da_guard):
+    """#3071：兩邊都是讀不懂的 severity（`70:high` → `75:High`）時，兩邊 exporter 都送
+    預設值 80，served 視圖沒有差異，rc 0（#3071 之前是 modified、rc 1）。這種樹由
+    da-guard 的 value_not_served 擋，不是 config-diff 的事。"""
+    base = _tree(tmp_path / "base", {"tx": {"mysql_connections": "70:high"}})
+    pr = _tree(tmp_path / "pr", {"tx": {"mysql_connections": "75:High"}})
+    p = subprocess.run(
+        [sys.executable, str(CONFIG_DIFF), "--old-dir", str(base), "--new-dir", str(pr),
+         "--at", AT, "--format", "json"],
+        env={**os.environ, "DA_GUARD_BINARY": da_guard},
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert p.returncode == 0, (p.returncode, p.stderr)
+    assert json.loads(p.stdout)["threshold_changes"] == []
 
 
 def test_inherited_threshold_change_is_reported_for_tenants_that_do_not_override(tmp_path, da_guard):
@@ -438,3 +454,57 @@ def test_a_scheduled_value_not_served_still_reads_as_scheduled():
          "change": "modified", "not_served": ["new"]}
     assert cd._format_side(c, "new") == "(scheduled) (not served)"
     assert cd._format_side(c, "old") == "85"
+
+
+# ── #3045：沒登記的 `_` 鍵不再送出 ──────────────────────────────────────
+
+_PLAIN = "defaults:\n  mysql_connections: 80\n"
+
+
+def _diff_json(tmp_path, da_guard, base: dict, pr: dict, base_defaults: str, pr_defaults: str) -> dict:
+    b = _tree(tmp_path / "base", base, base_defaults)
+    p = _tree(tmp_path / "pr", pr, pr_defaults)
+    r = subprocess.run(
+        [sys.executable, str(CONFIG_DIFF), "--old-dir", str(b), "--new-dir", str(p),
+         "--at", AT, "--format", "json"],
+        env={**os.environ, "DA_GUARD_BINARY": da_guard},
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert r.returncode == 1, (r.returncode, r.stderr)
+    doc = json.loads(r.stdout)
+    assert doc["views"]["served"]["status"] == "computed", doc["views"]
+    return doc
+
+
+def _changes(entries):
+    return sorted((e["key"], e["change"], tuple(e["tenants"])) for e in entries)
+
+
+def test_adding_a_leading_underscore_reports_the_rows_that_disappear(tmp_path, da_guard):
+    """#3045：把 `myth` 改名成沒登記的 `_myth`（根 defaults 與租戶檔都改），它在
+    任何一層都不送出：閾值區段列出兩個租戶的那一列被移除，`_myth` 只出現在設定
+    區段——不會被當成一列新的閾值。遷移（反方向）則是那兩列出現。"""
+    tenants_plain = {"ta": {"myth": "7"}, "tb": {"mysql_connections": "60"}}
+    tenants_under = {"ta": {"_myth": "7"}, "tb": {"mysql_connections": "60"}}
+    doc = _diff_json(tmp_path, da_guard, tenants_plain, tenants_under,
+                     _PLAIN + "  myth: 5\n", _PLAIN + "  _myth: 5\n")
+    assert _changes(doc["threshold_changes"]) == [("myth", "removed", ("ta",)),
+                                                  ("myth", "removed", ("tb",))]
+    assert _changes(doc["setting_changes"]) == [("_myth", "added", ("ta",)),
+                                                ("_myth", "added", ("tb",))]
+    old = {tuple(e["tenants"]): e["old"] for e in doc["threshold_changes"]}
+    assert old == {("ta",): 7, ("tb",): 5}
+
+    back = _diff_json(tmp_path / "back", da_guard, tenants_under, tenants_plain,
+                      _PLAIN + "  _myth: 5\n", _PLAIN + "  myth: 5\n")
+    assert _changes(back["threshold_changes"]) == [("myth", "added", ("ta",)),
+                                                   ("myth", "added", ("tb",))]
+
+
+def test_a_root_only_unregistered_key_is_reported_for_every_tenant(tmp_path, da_guard):
+    """#3045：根 defaults 新增沒登記的 `_myth`、沒有租戶寫它：served-values 把它列進
+    每個租戶的 unserved，所以 config-diff 對每個租戶都報，不會只報「平台檔改了」。"""
+    tenants = {"ta": {"mysql_connections": "70"}, "tb": {}}
+    doc = _diff_json(tmp_path, da_guard, tenants, tenants, _PLAIN, _PLAIN + "  _myth: 5\n")
+    assert doc["threshold_changes"] == []
+    # 同一個值（根的 5）：一筆，兩個租戶都列。
+    assert _changes(doc["setting_changes"]) == [("_myth", "added", ("ta", "tb"))]

@@ -20,7 +20,6 @@ func TestCheckRootNullUndeclared(t *testing.T) {
 		RootNullUndeclared: map[string][]config.RootNullKey{
 			"tenant-b": {
 				{Key: "redis_x", NullKey: "redis_x"},
-				{Key: "_myth", NullKey: "_myth"},
 				{Key: "redis_y_critical", NullKey: "redis_y", CriticalRow: true},
 			},
 			"tenant-out": {{Key: "k3", NullKey: "k3"}}, // not in EffectiveConfigs: not reported
@@ -39,15 +38,14 @@ func TestCheckRootNullUndeclared(t *testing.T) {
 		msg[f.Field] = f.Message
 	}
 	want := [][3]string{
-		{"tenant-b", "_myth", findingkind.FindingRootDefaultNullUndeclared.String()},
 		{"tenant-b", "redis_x", findingkind.FindingRootDefaultNullUndeclared.String()},
 		{"tenant-b", "redis_y_critical", findingkind.FindingRootDefaultNullUndeclared.String()},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("findings = %v, want %v", got, want)
 	}
-	if report.Summary.Warnings != 3 || report.Summary.Errors != 0 || report.Summary.PassedTenantCount != 2 {
-		t.Errorf("summary = %+v, want 3 warnings, 0 errors, 2 passing", report.Summary)
+	if report.Summary.Warnings != 2 || report.Summary.Errors != 0 || report.Summary.PassedTenantCount != 2 {
+		t.Errorf("summary = %+v, want 2 warnings, 0 errors, 2 passing", report.Summary)
 	}
 	if !strings.Contains(msg["redis_x"], "optional_overrides:") {
 		t.Errorf("redis_x message lacks optional_overrides: %s", msg["redis_x"])
@@ -57,8 +55,5 @@ func TestCheckRootNullUndeclared(t *testing.T) {
 	if c := msg["redis_y_critical"]; !strings.Contains(c, "Write a number for `redis_y`") ||
 		!strings.Contains(c, "does not serve the critical row") {
 		t.Errorf("redis_y_critical message lacks the base fix: %s", c)
-	}
-	if strings.Contains(msg["_myth"], "optional_overrides:") {
-		t.Errorf("_myth message offers optional_overrides:, which does not serve `_` keys: %s", msg["_myth"])
 	}
 }

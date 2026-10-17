@@ -40,7 +40,7 @@ import generate_alertmanager_routes as gar  # noqa: E402
 import validate_config as vc  # noqa: E402
 
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
-_REFUSAL = "field value(s) of the wrong type or not recognised"
+_REFUSAL = "config problem(s) — nothing was generated, written or applied"
 
 _DEFAULTS = "defaults:\n  cpu_usage_percent: 80\n"
 _HOOK = ("      receiver:\n        type: webhook\n"

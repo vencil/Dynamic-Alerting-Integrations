@@ -493,9 +493,12 @@ def test_f3_a_nested_tenant_file_is_not_this_finding(tmp_path):
 
 
 @pytest.mark.parametrize("policy_file", ["_domain_policy.yaml", "team/_domain_policy.yaml"])
-@pytest.mark.parametrize("strict, rc", [(True, EXIT_VIOLATION), (False, EXIT_OK)])
+@pytest.mark.parametrize("strict", [True, False])
 def test_f4_a_mapping_in_a_policy_tenants_list_does_not_crash(tmp_path, policy_file,
-                                                              strict, rc):
+                                                              strict):
+    """#2326 F4: no crash. #3116: the entry names no tenant, so the whole
+    tree is refused in both modes (it used to be skipped, named only under
+    --strict, and a lenient run passed at rc 0)."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         policy_file: ("domain_policies:\n  fin:\n    tenants: [t-team, {x: 1}]\n"
@@ -504,15 +507,17 @@ def test_f4_a_mapping_in_a_policy_tenants_list_does_not_crash(tmp_path, policy_f
     })
     res = _gar("--config-dir", str(d), "--validate", *(["--strict"] if strict else []))
     assert "Traceback" not in res.stderr, res.stderr
-    assert res.returncode == rc, res.stderr
-    if strict:
-        assert "'tenants' entry must be a tenant id, got dict" in res.stderr
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    assert "ERROR (field type):" in res.stderr, res.stderr
+    assert "'tenants' lists a mapping, which names no tenant" in res.stderr, res.stderr
 
 
 @pytest.mark.parametrize("entry", ["{a: 1}", "[a]", "!!set {a}", "!!omap [{a: 1}]"])
-@pytest.mark.parametrize("strict, rc", [(True, EXIT_VIOLATION), (False, EXIT_OK)])
-def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, strict, rc):
-    """#2758: the collection entry is skipped, `email` is still forbidden."""
+@pytest.mark.parametrize("strict", [True, False])
+def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, strict):
+    """#2758: no crash. #3116: the entry is no receiver type, so the whole
+    tree is refused in both modes (it used to be skipped, `email` still
+    forbidden, and named only under --strict)."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "_domain_policy.yaml": ("domain_policies:\n  fin:\n    tenants: [t-team]\n"
@@ -521,10 +526,11 @@ def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, s
     })
     res = _gar("--config-dir", str(d), "--validate", *(["--strict"] if strict else []))
     assert "Traceback" not in res.stderr, res.stderr
-    assert res.returncode == rc, res.stdout + res.stderr
+    assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
     out = res.stdout + res.stderr
-    assert "tenant 't-team': receiver type 'email' is forbidden" in out, out
-    assert ("'forbidden_receiver_types' entry must be a receiver type" in out) == strict, out
+    assert "ERROR (field type): _domain_policy.yaml: domain_policy 'fin': constraint " \
+        "'forbidden_receiver_types' lists" in out, out
+    assert "is forbidden" not in out, out
 
 
 def test_a_non_mapping_level_contributes_nothing(tmp_path):

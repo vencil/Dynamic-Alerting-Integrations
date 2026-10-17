@@ -916,15 +916,19 @@ MUTATIONS: list[Mutation] = [
         fn_name="check_domain_policies",
         old='    severity = POLICY_ERROR_PREFIX.rstrip(":") if strict else "WARN"',
         new='    severity = "WARN"',
-        kill_test="test_tenants_not_list_strict_becomes_error",
+        # #3116: `tenants` not a list is the reader's refusal now, not a
+        # strict ERROR here; a violation's strict line is what this kills.
+        kill_test="test_zero_group_wait_strict_violates",
     ),
     Mutation(
         target_file="scripts/tools/ops/_grar_validate.py",
         test_file="tests/ops/test_grar_strict_hardening.py",
-        label="domain_policies: strict constraint-side duration pre-validation dropped (unenforceable bound goes silent)",
-        fn_name="check_domain_policies",
-        old="                if raw is not None and _parse_policy_duration(raw) is None:",
-        new="                if False:",
+        # #3116: the bound is judged once, in domain_policy_problems (every
+        # mode refuses the tree); dropping it lets the bound go silent.
+        label="domain_policies: constraint-side duration pre-validation dropped (unenforceable bound goes silent)",
+        fn_name="domain_policy_problems",
+        old="        if raw is not None and _parse_policy_duration(raw) is None:",
+        new="        if False:",
         kill_test="test_garbage_constraint_value_strict_fails_loud",
     ),
     Mutation(

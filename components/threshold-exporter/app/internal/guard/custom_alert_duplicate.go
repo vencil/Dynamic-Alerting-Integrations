@@ -1,15 +1,17 @@
 package guard
 
 // `_custom_alerts` entries whose series an earlier entry already serves
-// (#2031).
+// (#2031, #3112).
 //
 // Two entries of one tenant's list putting the same series on /metrics — a
 // custom alert with the same name and shape twice, or two slo_burn_rate
 // alerts of one shape (one user_slo_objective{tenant, recipe_id}) — used to
 // fail the exporter's whole Gather: /metrics answered 500 for every tenant.
-// The exporter now serves the first and drops the later one
-// (da_custom_alert_parse_errors, an ERROR line); this check refuses it before
-// merge.
+// Two entries of one shape and severity under different names or modes put
+// two series on the side the shape's shared rule joins on, and its
+// evaluation failed for every tenant of the shape (#3112). The exporter now
+// serves the first and drops the later one (da_custom_alert_parse_errors, an
+// ERROR line); this check refuses it before merge.
 //
 // ⛔ NO VERDICT OF ITS OWN: the entries are the exporter's own reading of the
 // tenant's built map (config.CustomAlertDuplicates, the function its resolver
@@ -41,7 +43,8 @@ func checkCustomAlertDuplicates(input CheckInput) []Finding {
 				TenantID: id,
 				Field:    fmt.Sprintf("_custom_alerts[%d]", d.Index),
 				Message: fmt.Sprintf("_custom_alerts[%d] (%q) puts on /metrics the series %s that _custom_alerts[%d] (%q) "+
-					"already puts there, so the exporter serves only the first and drops this entry (it counts on "+
+					"already puts there — one tenant serves one alert per shape and severity, whatever its name or mode — "+
+					"so the exporter serves only the first and drops this entry (it counts on "+
 					"da_custom_alert_parse_errors). Delete one of the two.", d.Index, d.Name, d.Series, d.Of, d.OfName),
 			})
 		}

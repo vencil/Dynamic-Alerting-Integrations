@@ -608,8 +608,6 @@ sum(rate(da_config_debounce_batch_size_sum[5m]))
 sum(rate(da_config_debounce_batch_size_count[5m]))
 ```
 
-**New test case (v2.8.0 follow-up, scheduled with Migration Batch PR Pipeline implementation)**: `TestDebouncedReload_RollbackWave` — simulates N git-sync commits applied in reverse order with 100ms debounce window, asserts fire count always == 1 (same pattern as `TestSlowWriteTornStateStress`, but with reversed time series + cascading defaults retreating in lockstep). Detailed design deferred to the batch-PR pipeline implementation PR.
-
 ### Staging rehearsal mandatory (T-2 weeks before cutover)
 
 **No formal cutover without a passed rehearsal first** — written into the cutover checklist as a hard gate (Customer Delivery milestone calendar).

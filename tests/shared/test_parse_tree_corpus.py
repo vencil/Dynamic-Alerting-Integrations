@@ -492,10 +492,10 @@ MERGE_KEY_HISTOGRAM = {
     "unreadable:invalid_utf8": 7,
     "unreadable:multiple_documents": 7,
     "unreadable:non_scalar_key": 2,
-    "unreadable:non_specific_tag": 239,
+    "unreadable:non_specific_tag": 233,
     "unreadable:null_key": 128,
     "unreadable:syntax_error": 82,
-    "unreadable:tag_not_allowed": 749,
+    "unreadable:tag_not_allowed": 755,
 }
 
 

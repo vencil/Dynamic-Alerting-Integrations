@@ -75,7 +75,17 @@ type platformMetadataSource struct {
 // environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
 // declares tenantID (or that the caller proposes to write for it).
 func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
-	var metadata cfg.MetadataResolver // no configDir: the document's own `_metadata` alone
+	// No configDir: the document's own `_metadata` alone (declaredIn).
+	// A `_metadata` that does not decode reads as the empty pair, as an
+	// unusable file does.
+	e, dm, _, _ := s.declaredIn(data, tenantID)
+	return e, dm
+}
+
+// declaredIn is environmentDomainOf that also reports whether data declares
+// tenantID, and (ResolveFile's decoded) whether its `_metadata` decodes.
+func (s *platformMetadataSource) declaredIn(data []byte, tenantID string) (environment, domain string, ok, decoded bool) {
+	var metadata cfg.MetadataResolver
 	if s.configDir != "" {
 		s.once.Do(func() {
 			root, _ := platformMetadataOrNone(s.configDir, "write")
@@ -83,10 +93,8 @@ func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID strin
 		})
 		metadata = s.metadata
 	}
-	// A `_metadata` that does not decode reads as the empty pair, as an
-	// unusable file does.
-	meta, _, _ := metadata.ResolveFile(tenantID, data)
-	return meta.Environment, meta.Domain
+	meta, ok, decoded := metadata.ResolveFile(tenantID, data)
+	return meta.Environment, meta.Domain, ok, decoded
 }
 
 // WriteScopeMeta builds the write-plane resolver: one targeted read of the
@@ -111,6 +119,41 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 			return "", ""
 		}
 		return src.environmentDomainOf(data, tenantID)
+	}
+}
+
+// declaredScopeMeta is WriteScopeMeta for the tenants a PUT body declares
+// besides {id} (#3062). Their sections live in the file {id} lives in — the
+// file the PUT splices into — which ResolveTenantFile, matching file names,
+// does not find for them: WriteScopeMeta would read such a tenant as
+// unlabeled, which an enforced metadata axis denies whatever its real
+// labels. So a tenant fileOwner's file declares is read from that file; any
+// other (a section the body would add, which the writer refuses anyway) as
+// WriteScopeMeta reads it. A file that cannot be read fails soft the same
+// way.
+//
+// decoded is false for a section of that file whose `_metadata` does not
+// decode: its labels cannot be read, and the caller refuses the write
+// (declaredTenantsJudge) — as freshDeclaredWriteScope's caller does on the
+// fresh base, so the local tree and the base answer alike, fail closed.
+func declaredScopeMeta(configDir, fileOwner string) func(tenantID string) (pair scopePair, decoded bool) {
+	own := WriteScopeMeta(configDir)
+	src := &platformMetadataSource{configDir: configDir}
+	var data []byte
+	if configDir != "" {
+		if path, err := confd.ResolveTenantFile(configDir, fileOwner); err == nil {
+			if b, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path)); problem == confd.ProblemNone {
+				data = b
+			}
+		}
+	}
+	return func(tenantID string) (scopePair, bool) {
+		if data != nil {
+			if e, dm, ok, decoded := src.declaredIn(data, tenantID); ok {
+				return scopePair{e, dm}, decoded
+			}
+		}
+		return scopePairOf(own, tenantID), true
 	}
 }
 
@@ -172,8 +215,25 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 func requireOrgWriteAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) (writeGate, bool) {
 	pair := scopePairOf(WriteScopeMeta(d.ConfigDir), tenantID)
 	return writeGate{pair, gateOrgs(d, tenantID)}, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
-		"insufficient permissions for tenant "+tenantID+
-			" (permission and organization-scope checks, ADR-027)")
+		orgWriteDeniedText(tenantID))
+}
+
+// orgWriteDeniedText is requireOrgWriteAt's refusal text.
+func orgWriteDeniedText(tenantID string) string {
+	return "insufficient permissions for tenant " + tenantID +
+		" (permission and organization-scope checks, ADR-027)"
+}
+
+// orgWriteAt is requireOrgWriteAt for PermWrite without the answer: what it
+// judged, and whether the caller may write (#3062's planPut, which decides
+// where a refusal goes). The same predicate as canSeeCredentials.
+func orgWriteAt(r *http.Request, d *Deps, tenantID string) (writeGate, bool) {
+	pair := scopePairOf(WriteScopeMeta(d.ConfigDir), tenantID)
+	gate := writeGate{pair, gateOrgs(d, tenantID)}
+	if d.RBAC == nil {
+		return gate, true // test-only state, see requireOrgWriteWithMeta
+	}
+	return gate, OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermWrite, fixedScopeMeta(pair))
 }
 
 // RequireOrgWriteProposed is the POST-STATE half of the write gate (#1597
@@ -288,6 +348,43 @@ func freshWriteScope(configDir, tenantID string) (pair scopePair, judged bool) {
 	return scopePair{meta.Environment, meta.Domain}, true
 }
 
+// freshDeclaredWriteScope is freshWriteScope for a tenant a PUT body
+// declares besides {id} (#3062), read where declaredScopeMeta reads it: from
+// fileOwner's file on the base when that file declares it, else as
+// freshWriteScope reads it. fileOwner's file existing on the base but not
+// readable for its metadata (ambiguous, not a regular file, not a tenant
+// file that parses) is judged false, as freshWriteScope judges the tenant's
+// own file. A section there whose `_metadata` does not decode is judged and
+// undecodable (decoded false): its caller refuses the write, as the local
+// check (declaredScopeMeta) does.
+func freshDeclaredWriteScope(configDir, fileOwner, tenantID string) (pair scopePair, judged, decoded bool) {
+	path, err := confd.ResolveTenantFile(configDir, fileOwner)
+	switch {
+	case errors.Is(err, confd.ErrTenantFileNotFound):
+		pair, judged = freshWriteScope(configDir, tenantID)
+		return pair, judged, true
+	case err != nil:
+		return scopePair{}, false, true
+	}
+	data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
+	if problem != confd.ProblemNone {
+		return scopePair{}, false, true
+	}
+	if _, err := cfg.ParseConfigFile(data); err != nil {
+		return scopePair{}, false, true
+	}
+	root, _ := platformMetadataOrNone(configDir, "write")
+	meta, ok, dec := root.MetadataResolver().ResolveFile(tenantID, data)
+	switch {
+	case !ok:
+		pair, judged = freshWriteScope(configDir, tenantID)
+		return pair, judged, true
+	case !dec:
+		return scopePair{}, true, false
+	}
+	return scopePair{meta.Environment, meta.Domain}, true, true
+}
+
 // freshScopeAllowed is the write scope judged on the fresh base a PR-mode
 // write lands on (#2857), configDir being that tree. This verdict is the
 // authoritative one: the gate on the pod's local tree can only refuse early,
@@ -350,10 +447,16 @@ func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
 // test-only state, see requireOrgWriteWithMeta) does not get the bit — the
 // refusal is the fail-closed side.
 func withReplaceUnparseable(r *http.Request, d *Deps) *http.Request {
-	if d.RBAC == nil || !d.RBAC.PlatformUnrestricted(rbac.RequestPrincipal(r), rbac.PermWrite) {
+	if !mayReplaceUnparseable(r, d) {
 		return r
 	}
 	return r.WithContext(gitops.WithReplaceUnparseable(r.Context()))
+}
+
+// mayReplaceUnparseable is the #2405 bit withReplaceUnparseable sets, for a
+// preview that answers as the write would (planPut).
+func mayReplaceUnparseable(r *http.Request, d *Deps) bool {
+	return d.RBAC != nil && d.RBAC.PlatformUnrestricted(rbac.RequestPrincipal(r), rbac.PermWrite)
 }
 
 // tenantsLackingPermission returns the subset of `tenantIDs` for

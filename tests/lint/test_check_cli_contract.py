@@ -113,10 +113,28 @@ _REF_EXIT = ("\n**結束碼**\n\n| 代碼 | 說明 |\n|------|------|\n"
              "| `0` | ok |\n| `1` | findings |\n| `2` | caller |\n| `3` | blocked |\n")
 
 
+# Every option widget declares, so the default reference documents each one
+# and V7 (#3110) is quiet unless a test removes a row (`complete=False`).
+_REF_WIDGET_ROWS = (
+    "| `--config-dir <PATH>` | dir | - |\n"
+    "| `-o, --output-dir <PATH>` | out | - |\n"
+    "| `--json-output` | json | false |\n"
+    "| `-v, --verbose` | verbose | false |\n"
+    "| `-q, --quiet` | quiet | false |\n"
+    "| `--config-file <FILE>` | file | - |\n"
+    "| `--tenant-config <FILE>` | tenant file | - |\n"
+    "| `--rounds <N>` | rounds | - |\n"
+    "| `--ratio <R>` | ratio | - |\n"
+    "| `--format <FMT>` | format | - |\n"
+    "| `--tags [TAG ...]` | tags | - |\n")
+
+
 def _reference(tmp_path: Path, rows: str = _REF_CLEAN_ROW,
-               exit_table: str = _REF_EXIT, name: str = "ref.md") -> Path:
+               exit_table: str = _REF_EXIT, name: str = "ref.md",
+               complete: bool = True) -> Path:
     p = tmp_path / name
-    p.write_text(_REF_HEAD + rows + exit_table, encoding="utf-8")
+    p.write_text(_REF_HEAD + (_REF_WIDGET_ROWS if complete else "") + rows + exit_table,
+                 encoding="utf-8")
     return p
 
 
@@ -132,7 +150,7 @@ def _fence(*lines: str, lang: str = "bash") -> str:
 
 def _scan(tmp_path: Path, docs: list[Path] | None = None,
           reference: Path | None = None, exit_codes=None, parsers=None,
-          command_map=None, portal=None):
+          command_map=None, portal=None, injected=None):
     if exit_codes is None:
         exit_codes = {"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)}
     # `portal=[]` by default: a synthetic tree has no CLI Playground, and the
@@ -141,7 +159,8 @@ def _scan(tmp_path: Path, docs: list[Path] | None = None,
                     command_map=COMMAND_MAP if command_map is None else command_map,
                     docs=docs if docs is not None else [],
                     reference_docs=(reference or _reference(tmp_path),),
-                    injected=INJECTED, exit_codes=exit_codes, repo_root=tmp_path,
+                    injected=INJECTED if injected is None else injected,
+                    exit_codes=exit_codes, repo_root=tmp_path,
                     portal=[] if portal is None else portal)
 
 
@@ -636,7 +655,7 @@ class TestV3OptionTable:
         """`#### Rollback 程序` is not a command; a table under it must not be
         judged as the previous command's, and the heading is disclosed."""
         ref = tmp_path / "ref.md"
-        ref.write_text(_REF_HEAD + _REF_CLEAN_ROW + _REF_EXIT
+        ref.write_text(_REF_HEAD + _REF_WIDGET_ROWS + _REF_EXIT
                        + "\n#### Rollback 程序\n\n| 選項 | 說明 | 預設值 |\n|---|---|---|\n"
                        "| `--dirs <d>` | other tool's flag | y |\n", encoding="utf-8")
         r = _scan(tmp_path, reference=ref)
@@ -648,7 +667,7 @@ class TestV3OptionTable:
     def test_a_fenced_comment_inside_a_section_is_not_a_heading(self, tmp_path):
         """A `# comment` inside an example block does not end the command's section."""
         ref = tmp_path / "ref.md"
-        ref.write_text(_REF_HEAD + _REF_CLEAN_ROW + "\n```bash\n# comment\nda-tools widget x\n```\n"
+        ref.write_text(_REF_HEAD + _REF_WIDGET_ROWS + "\n```bash\n# comment\nda-tools widget x\n```\n"
                        + _REF_EXIT.replace("| `3` | blocked |\n", ""), encoding="utf-8")
         assert _open(_scan(tmp_path, reference=ref).findings) == [("V4", "widget", "3")]
 
@@ -781,6 +800,149 @@ class TestV6DocumentedCodeUnreachable:
             "| `1` | x |", "| `1` | x | <!-- datools-cmd-ignore: no exit -->")
         r = self._run(tmp_path, table, source="import sys\nsys.exit(1)\n")
         assert any("stale" in e for e in r.errors), r.errors
+
+
+class TestV7UndocumentedOption:
+    """The reverse of V3 (#3110): every option string the parser declares is a
+    row of that command's option table. Prose, code spans and examples
+    elsewhere in the section do not count; a section with no option table
+    reports every option; ``-h``/``--help`` and ``help=SUPPRESS`` options are
+    not required; a command with no section is check_cli_coverage's."""
+
+    _ALL = {"-o", "--output-dir", "--json-output", "-v", "--verbose", "-q",
+            "--quiet", "--config-dir", "--config-file", "--tenant-config",
+            "--rounds", "--ratio", "--format", "--tags"}
+
+    def test_a_declared_flag_without_a_row_is_reported_at_the_section(self, tmp_path):
+        rows = _REF_WIDGET_ROWS.replace("| `--tags [TAG ...]` | tags | - |\n", "")
+        r = _scan(tmp_path, reference=_reference(tmp_path, _REF_CLEAN_ROW + rows,
+                                                 complete=False))
+        assert _open(r.findings) == [("V7", "widget", "--tags")]
+        f = next(f for f in r.findings if f.verdict == "V7")
+        lines = (tmp_path / "ref.md").read_text(encoding="utf-8").splitlines()
+        assert lines[f.line - 1] == "#### widget"
+
+    def test_a_table_with_every_declared_option_is_clean(self, tmp_path):
+        r = _scan(tmp_path)
+        assert _open(r.findings) == [] and r.errors == [] and r.fatal == []
+
+    def test_a_short_alias_needs_its_own_spelling(self, tmp_path):
+        rows = _REF_WIDGET_ROWS.replace("`-o, --output-dir <PATH>`", "`--output-dir <PATH>`")
+        r = _scan(tmp_path, reference=_reference(tmp_path, _REF_CLEAN_ROW + rows,
+                                                 complete=False))
+        assert _open(r.findings) == [("V7", "widget", "-o")]
+
+    def test_a_flag_only_in_prose_or_an_example_is_not_documented(self, tmp_path):
+        rows = _REF_WIDGET_ROWS.replace("| `--tags [TAG ...]` | tags | - |\n", "")
+        ref = tmp_path / "ref.md"
+        ref.write_text("#### widget\n\n必需參數：`--tags`。\n\n"
+                       + _fence("da-tools widget t1 --tags a b")
+                       + "\n**選項**\n\n| 選項 | 說明 | 預設值 |\n|------|------|--------|\n"
+                       + _REF_CLEAN_ROW + rows + _REF_EXIT, encoding="utf-8")
+        r = _scan(tmp_path, reference=ref)
+        assert _open(r.findings) == [("V7", "widget", "--tags")]
+
+    def test_a_section_without_an_option_table_reports_every_option(self, tmp_path):
+        ref = tmp_path / "ref.md"
+        ref.write_text("#### widget\n\nsee `--config-dir`.\n" + _REF_EXIT, encoding="utf-8")
+        r = _scan(tmp_path, reference=ref)
+        assert {t for v, c, t in _open(r.findings) if v == "V7"} == self._ALL
+        assert r.stats["v7_sections_without_option_table"] == 1
+        assert any("1 reference sections with options but no option table" in line
+                   for line in mod._not_scored_lines(r.stats))
+
+    def test_rows_in_several_tables_of_one_section_all_count(self, tmp_path):
+        ref = tmp_path / "ref.md"
+        ref.write_text(_REF_HEAD + _REF_CLEAN_ROW + "\n**more**\n\n"
+                       "| 參數 | 說明 |\n|---|---|\n" + _REF_WIDGET_ROWS.replace(" - |\n", "\n")
+                       .replace(" false |\n", "\n") + _REF_EXIT, encoding="utf-8")
+        r = _scan(tmp_path, reference=ref)
+        assert _open(r.findings) == [] and r.errors == []
+
+    def test_help_and_suppressed_options_are_not_required(self, tmp_path):
+        p = _widget_parser()
+        p.add_argument("--legacy-mode", help=argparse.SUPPRESS)
+        r = _scan(tmp_path, parsers={**PARSERS, "widget": mod._model(p)})
+        assert _open(r.findings) == []
+        assert r.stats["v7_suppressed_options"] == 1
+
+    def test_sub_parser_options_are_required_too(self, tmp_path):
+        ref = tmp_path / "ref.md"
+        ref.write_text(_REF_HEAD + _REF_CLEAN_ROW + _REF_WIDGET_ROWS + _REF_EXIT
+                       + "\n#### tool2\n\n| 選項 | 說明 | 預設值 |\n|---|---|---|\n"
+                       "| `-r, --repo <DIR>` | repo | - |\n", encoding="utf-8")
+        r = _scan(tmp_path, reference=ref)
+        assert sorted(_open(r.findings)) == [
+            ("V7", "tool2", "--limit"), ("V7", "tool2", "--message"), ("V7", "tool2", "-m")]
+
+    def test_an_injected_flag_the_parser_declares_still_needs_its_row(self, tmp_path):
+        """entrypoint.py appends ``--prometheus $PROMETHEUS_URL`` only as a
+        fallback; the flag is the parser's own and the reader overrides it."""
+        p = _widget_parser()
+        p.add_argument("--prometheus")
+        parsers = {**PARSERS, "widget": mod._model(p)}
+        r = _scan(tmp_path, parsers=parsers)
+        assert _open(r.findings) == [("V7", "widget", "--prometheus")]
+        ok = _reference(tmp_path, _REF_CLEAN_ROW + "| `--prometheus <URL>` | p | - |\n",
+                        name="ok.md")
+        assert _open(_scan(tmp_path, reference=ok, parsers=parsers).findings) == []
+
+    def test_an_injected_flag_the_parser_lacks_is_not_required(self, tmp_path):
+        """widget is in INJECTED but its parser declares no --prometheus."""
+        assert "widget" in INJECTED and "--prometheus" not in PARSERS["widget"].options
+        assert _open(_scan(tmp_path).findings) == []
+
+    def test_a_command_without_a_section_is_not_judged_here(self, tmp_path):
+        """tool2/tool3 have parsers and no `####` section in the reference:
+        the missing section is check_cli_coverage's finding, not 6 of ours."""
+        assert not any(f.command in ("tool2", "tool3") for f in _scan(tmp_path).findings)
+
+    def test_a_flag_suppressed_in_one_sub_parser_but_public_in_another_is_required(
+            self, tmp_path):
+        """``hidden`` is per action: `a --foo` is hidden, `b --foo` is public,
+        so `--foo` still needs a row."""
+        p = argparse.ArgumentParser(prog="probe")
+        sub = p.add_subparsers(dest="action")
+        sub.add_parser("a").add_argument("--foo", help=argparse.SUPPRESS)
+        b = sub.add_parser("b")
+        b.add_argument("--foo")
+        b.add_argument("--bar")
+        ref = tmp_path / "ref.md"
+        ref.write_text(_REF_HEAD + _REF_WIDGET_ROWS + _REF_EXIT
+                       + "\n#### probe\n\n| 選項 | 說明 | 預設值 |\n|---|---|---|\n"
+                       "| `--bar <X>` | bar | - |\n", encoding="utf-8")
+        r = _scan(tmp_path, reference=ref,
+                  parsers={**PARSERS, "probe": mod._model(p)},
+                  command_map={**COMMAND_MAP, "probe": "probe.py"})
+        assert _open(r.findings) == [("V7", "probe", "--foo")]
+        assert r.stats["v7_suppressed_options"] == 0
+
+    def test_only_the_first_column_documents_a_flag(self, tmp_path):
+        """A flag named in another row's description cell is not its row."""
+        rows = (_REF_WIDGET_ROWS.replace("| `--tags [TAG ...]` | tags | - |\n", "")
+                .replace("| `--format <FMT>` | format | - |",
+                         "| `--format <FMT>` | format; see `--tags` | - |"))
+        assert "`--tags`" in rows
+        r = _scan(tmp_path, reference=_reference(tmp_path, _REF_CLEAN_ROW + rows,
+                                                 complete=False))
+        assert _open(r.findings) == [("V7", "widget", "--tags")]
+
+    def test_a_section_of_a_command_without_a_parser_is_disclosed(self, tmp_path):
+        ref = tmp_path / "ref.md"
+        ref.write_text(_REF_HEAD + _REF_WIDGET_ROWS + _REF_EXIT
+                       + "\n#### noparser\n\ntext\n", encoding="utf-8")
+        r = _scan(tmp_path, reference=ref)
+        assert _open(r.findings) == []
+        assert r.stats["v7_sections_without_parser"] == 1
+        assert any("1 sections of a command with no argparse parser" in line
+                   for line in mod._not_scored_lines(r.stats))
+
+    def test_a_ledger_row_can_name_v7(self, tmp_path):
+        p = tmp_path / "b.yaml"
+        p.write_text("entries:\n  - {file: d.md, command: widget, verdict: V7, "
+                     "token: \"--tags\", count: 1, ticket: \"#3110\"}\n", encoding="utf-8")
+        entries, errors = mod.load_baseline(p)
+        assert errors == [] and [e.verdict for e in entries] == ["V7"]
 
 
 def _probe_parser() -> argparse.ArgumentParser:
@@ -1085,7 +1247,8 @@ class TestBlindIsNotClean:
 
     def test_zero_judged_tokens_is_fatal(self, tmp_path):
         ref = tmp_path / "ref.md"
-        ref.write_text("#### widget\n\nnothing\n", encoding="utf-8")
+        # `noparser`: a section V7 cannot judge either (#3110).
+        ref.write_text("#### noparser\n\nnothing\n", encoding="utf-8")
         r = _scan(tmp_path, reference=ref)
         assert r.stats["scored"] == 0
         assert any("compared nothing" in e for e in r.fatal), r.fatal
@@ -1093,7 +1256,7 @@ class TestBlindIsNotClean:
     def test_a_reference_doc_with_no_judged_rows_is_fatal_per_carrier(self, tmp_path):
         r = _scan(tmp_path, reference=_reference(tmp_path, exit_table=""))
         assert any("0 judged exit codes" in e for e in r.fatal), r.fatal
-        r = _scan(tmp_path, reference=_reference(tmp_path, rows=""))
+        r = _scan(tmp_path, reference=_reference(tmp_path, rows="", complete=False))
         assert any("0 judged option-table flags" in e for e in r.fatal), r.fatal
 
     def test_a_missing_landing_page_is_reported(self, tmp_path):
@@ -1641,15 +1804,52 @@ class TestRealRepo:
             "| `0` | ok |\n| `1` | findings |\n| `2` | caller |\n", encoding="utf-8")
         r = mod.scan(docs=[doc], reference_docs=(ref,), repo_root=tmp_path, portal=[])
         assert r.fatal == [], r.fatal
-        assert {(f.verdict, f.command, f.token) for f in r.findings} == {
+        assert {(f.verdict, f.command, f.token) for f in r.findings
+                if f.verdict != "V7"} == {
             ("V1", "batch-diagnose", "--check-shadow-removal"),
-            ("V2", "migrate", "--output"),
             ("V1", "maintenance-scheduler", "--timezone"),
             ("V1", "shadow-verify", "--window"),
+            ("V2", "migrate", "--output"),
             ("V3", "lint", "--strict")}
+        # V7 (#3110) against the REAL lint parser: its table names none of
+        # lint's real options, so every one of them is reported.
+        lint = mod.introspect_parsers()[0]["lint"]
+        required, _hidden = mod._documentable(lint)
+        assert required and {f.token for f in r.findings if f.verdict == "V7"} == required
         # the shadow-verify key must come from the prose line after the fence
         # (line 9), i.e. from the inline-span carrier, not from a fenced line
         assert [f.line for f in r.findings if f.command == "shadow-verify"] == [9]
+
+    @pytest.mark.parametrize("doc", mod.CLI_REFERENCE_DOCS, ids=lambda d: d.name)
+    def test_dropping_one_real_option_row_is_v7_red(self, tmp_path, doc):
+        """Mutation on the shipped text (#3110): remove backtest's
+        `--skip-if-unavailable` row and V7 must name exactly that flag; the
+        unmutated copy of the same file is V7-clean (the control)."""
+        text = doc.read_text(encoding="utf-8")
+        rows = [ln for ln in text.splitlines() if ln.startswith("| `--skip-if-unavailable` |")]
+        assert len(rows) == 1, "the probe row moved — pick another live one"
+        clean = tmp_path / "clean.md"
+        clean.write_text(text, encoding="utf-8")
+        cut = tmp_path / "cut.md"
+        cut.write_text(text.replace(rows[0] + "\n", "", 1), encoding="utf-8")
+        parsers = mod.introspect_parsers()[0]
+
+        def v7(ref):
+            r = mod.scan(parsers=parsers, docs=[], reference_docs=(ref,),
+                         repo_root=tmp_path, portal=[])
+            assert r.fatal == [], r.fatal
+            return [(f.command, f.token) for f in r.findings if f.verdict == "V7"]
+
+        assert v7(clean) == []
+        assert v7(cut) == [("backtest", "--skip-if-unavailable")]
+
+    def test_the_v7_disclosures_are_counted_on_the_real_tree(self, result):
+        """init's four `help=SUPPRESS` GitOps flags are the only hidden ones;
+        every section with options now has an option table."""
+        assert result["stats"]["v7_suppressed_options"] == 4, result["stats"]
+        assert result["stats"]["v7_sections_without_option_table"] == 0
+        # guard / batch-pr / parser: Go wrappers, no argparse parser to compare
+        assert result["stats"]["v7_sections_without_parser"] == 3, result["stats"]
 
     @_needs_node
     def test_the_portal_carrier_judged_the_real_playground(self, result):

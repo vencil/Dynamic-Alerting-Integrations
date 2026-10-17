@@ -228,12 +228,17 @@ class TestWritersRefuseAnUnreadableTree:
         assert "Config files: 2 read, 0 skipped" in r.stdout, r.stdout
 
 
-# ── Boundary: policy files keep their --strict-gated treatment ─────────
+# ── Boundary: policy files keep their own gate ─────────────────────────
 class TestPolicyFilesKeepTheirOwnGate:
     """`_domain_policy.yaml` already had its record (policy_file_errors) and
-    its own gate (`--strict`, ADR-007); #1460 does not re-decide that. It IS
-    counted as a skipped file — the accounting line is about files, and a
-    skipped file is a skipped file — but it is not a tenant_file_error."""
+    its own gate (ADR-007); #1460 does not re-decide that. It IS counted as a
+    skipped file — the accounting line is about files, and a skipped file is
+    a skipped file — but it is not a tenant_file_error.
+
+    #3116: that gate is no longer `--strict` only. A policy file that cannot
+    be used is `domain_policy_unusable`, a field-type error that refuses the
+    whole tree in every mode (it used to pass a lenient `--validate` at
+    rc 0 with every policy dropped)."""
 
     def test_broken_policy_file_is_counted_but_not_a_tenant_error(self, tmp_path):
         d = tmp_path / "conf.d"
@@ -243,8 +248,9 @@ class TestPolicyFilesKeepTheirOwnGate:
         tree = load_tenant_tree(str(d))
         assert [f for f, _ in tree.files_skipped] == ["_domain_policy.yaml"]
         assert tree.tenant_file_errors == []
+        assert [e.kind for e in tree.field_type_errors] == ["domain_policy_unusable"]
         r = _gar(["--config-dir", str(d), "--validate"])
-        assert r.returncode == EXIT_OK, (r.stdout, r.stderr)
+        assert r.returncode == EXIT_VIOLATION, (r.stdout, r.stderr)
         assert "Config files: 1 read, 1 skipped (_domain_policy.yaml)" in r.stdout
         r = _gar(["--config-dir", str(d), "--validate", "--strict"])
         assert r.returncode == EXIT_VIOLATION, "the ADR-007 gate is unchanged"

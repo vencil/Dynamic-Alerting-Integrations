@@ -726,22 +726,36 @@ def validate_forecast_ratio_threshold(inst: dict, value: str) -> None:
         )
 
 
-# severity is parsed from the threshold's "value:severity" tail (reuses the
-# existing thresholdScalar convention). Default severity when omitted: warning.
+# What Go's strings.TrimSpace trims (unicode.IsSpace); Python's str.strip also
+# trims U+001C..U+001F, which Go keeps.
+_GO_SPACE = ("\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+             "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
+
+# The severities a threshold value may name: Go's config.ThresholdSeverities.
+THRESHOLD_SEVERITIES = ("warning", "critical")
+
+
+# severity is parsed from the threshold's "value:severity" tail. Default
+# severity when omitted: warning.
 def parse_threshold(threshold: str) -> Tuple[str, str]:
     """Split a `value[:severity]` threshold into (value, severity).
 
-    Mirrors resolve.go's value:severity convention. Returns (value, severity);
-    severity defaults to 'warning'. `value` is returned verbatim for absence
-    (where it is a presence flag, not a numeric comparand).
+    The one grammar of the exporter's splitThresholdSeverity (#3071), which
+    the threshold rows and custom alerts share: split at the LAST `:`, trim
+    both halves as Go does, lower-case an ASCII severity. Returns (value,
+    severity); severity defaults to 'warning'. `value` is returned verbatim
+    for absence (where it is a presence flag, not a numeric comparand).
+    tests/shared/threshold_value_matrix.json holds it to Go.
     """
-    raw = str(threshold).strip()
+    raw = str(threshold).strip(_GO_SPACE)
     if ":" in raw:
         value, sev = raw.rsplit(":", 1)
-        value, sev = value.strip(), sev.strip().lower()
+        value, sev = value.strip(_GO_SPACE), sev.strip(_GO_SPACE)
+        if sev.isascii():
+            sev = sev.lower()
     else:
         value, sev = raw, "warning"
-    if sev not in ("warning", "critical"):
+    if sev not in THRESHOLD_SEVERITIES:
         raise RecipeError(
             f"threshold severity {sev!r} must be 'warning' or 'critical' "
             f"(custom alerts are per-severity, ADR-024 §2c)"

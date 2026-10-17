@@ -396,9 +396,14 @@ func TestCredentialMask_DiffRefusals(t *testing.T) {
 		t.Errorf("writer diff of the same proposal: %d %s, want 200", w.Code, w.Body.String())
 	}
 
+	// #3062: a proposal over the tenant-document limit is PUT's 400 (the
+	// writer's body-only pre-flight), for a viewer as for a writer — judged
+	// before anything is masked, so the masked preview never parses it.
 	huge := strings.Repeat("a", int(gitops.DefaultTenantDocBytes())+1)
-	if w := f.diff(t, "viewers", huge); w.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("viewer diff of an oversize proposal: %d, want 413", w.Code)
+	wv, ww := f.diff(t, "viewers", huge), f.diff(t, "writers", huge)
+	if wv.Code != http.StatusBadRequest || ww.Code != http.StatusBadRequest ||
+		decodeJSON(t, wv)["error"] != decodeJSON(t, ww)["error"] {
+		t.Errorf("oversize proposal: viewer %d %s, writer %d %s; want the same 400", wv.Code, wv.Body.String(), ww.Code, ww.Body.String())
 	}
 }
 
@@ -419,7 +424,9 @@ func TestCredentialMask_DiffOverBodyCapIsNotTruncated(t *testing.T) {
 func TestCredentialMask_DiffRefusesUnmaskableCurrentFile(t *testing.T) {
 	t.Parallel()
 	f := newMaskFixture(t, "a: &x 1\nb: *x\n# CANARY-IN-FILE\n")
-	w := f.diff(t, "viewers", "a: 1\n")
+	// A proposal PUT accepts (#3062: one PUT refuses is refused as PUT
+	// refuses it), so what is judged is the current file's masking.
+	w := f.diff(t, "viewers", "tenants:\n  "+maskTenantID+":\n    _silent_mode: \"warning\"\n")
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Errorf("viewer diff against an aliased file: %d %s, want 422", w.Code, w.Body.String())
 	}

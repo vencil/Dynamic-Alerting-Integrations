@@ -818,9 +818,9 @@ func optionalOverridesCanDeclare(key string) bool {
 //     delivers the key (`_state_<f>` as a schedule at one level, a scalar
 //     below). Reported by subtreeReservedKeys instead (#2388).
 //  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
-//     row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`), whether
-//     declared or not: `_silent_bogus` declared at the root still serves
-//     nothing (measured), so the advice cannot help. Also reported by
+//     row: every `_` key (#3045), whether declared or not — `_silent_bogus`,
+//     `_myth2` or `_namespaces` declared at the root still serves nothing, so
+//     the advice cannot help. Also reported by
 //     subtreeReservedKeys (#2388).
 //  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
 //     resolver's own disable test, on the default and every window). It is
@@ -828,16 +828,13 @@ func optionalOverridesCanDeclare(key string) bool {
 //     for; declaring it at the root would instead start serving it for every
 //     tenant outside the subtree (measured). Not #2388's — just not reported.
 //
-// ⚠️ An unrecognised `_` key that is none of the above (`_myth: 5`) IS a
-// threshold to the exporter: a root `_myth` serves a user_threshold row, and
-// declaring a subtree's `_myth2` at the root makes the tenant serve the
-// subtree's value (both measured) — so it is reported, like any threshold.
-// For such a key only the ROOT is a fix: resolveDeclaredRows skips every `_`
-// key, so a `_myth2` listed under `optional_overrides:` is still not served —
-// and, since declaredAnywhere asks that same skip (optionalOverridesCanDeclare),
-// still in this set and the exporter's ERROR and gauge (#2707). The
-// finding's message names only the root for such a key
-// (guard.undeliverableFix).
+// ⚠️ A `_` key the registry does not list (`_myth: 5`) was a threshold to
+// the exporter before #3045 — a root `_myth` served a user_threshold row —
+// and was reported here. It now serves no row in any layer, so exclusion 2
+// leaves it out. It still stays in FlatBuild.Unreachable (the exporter's
+// ERROR and gauge) when the root does not declare it: resolveDeclaredRows
+// skips every `_` key, and declaredAnywhere asks that same skip
+// (optionalOverridesCanDeclare, #2707).
 func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
 	var out map[string]map[string]ScheduledValue
 	for tenantID, keys := range byTenant {
@@ -1208,13 +1205,11 @@ func thresholdScalar(value string) bool {
 	if isDisabled(strings.ToLower(raw)) {
 		return true
 	}
-	// `value:severity` is the inline-severity form resolveBaseRows accepts.
-	valuePart := raw
-	if idx := strings.Index(raw, ":"); idx >= 0 {
-		valuePart = raw[:idx]
-	}
-	_, err := strconv.ParseFloat(strings.TrimSpace(valuePart), 64)
-	return err == nil
+	// `value:severity` is the inline-severity form resolveBaseRows accepts —
+	// read by the same function, so a severity it refuses (#3071) is refused
+	// here too.
+	_, _, ok := parseThresholdValue(raw)
+	return ok
 }
 
 // SubtreeDefaultsRefusedKey is subtreeDefaultsRefusedKey, for da-guard's

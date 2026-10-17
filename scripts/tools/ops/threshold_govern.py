@@ -26,10 +26,13 @@ the tenant-api (single-writer, ADR-023) instead of a Slack nudge nobody acts on.
     排程在離峰 + ``concurrencyPolicy: Forbid``，不持續 hammer prod。
   - **安全預設 dry-run**：不帶 ``--apply`` 只印出「會開哪些 PR」，**不發任何寫入**。
 
-讀-改-寫的正確性（重要）：tenant-api 的 PUT 是**整檔覆寫**（verbatim），所以本工具
-GET 當前完整租戶 YAML → 只 surgical 取代被推薦的 threshold 值行（保留註解 / 縮排 /
-其餘行 byte-identical）→ parse-before/after 驗證「只有目標 keys 變動」→ 才 PUT。
-產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
+讀-改-寫的正確性（重要）：本工具 GET 當前完整租戶 YAML → 只 surgical 取代被推薦的
+threshold 值行（保留註解 / 縮排 / 其餘行 byte-identical）→ parse-before/after 驗證
+「只有目標 keys 變動」→ 才 PUT。產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
+自 #3062 起 tenant-api 的 PUT 只替換 body **宣告**的租戶段落：單租戶檔，或呼叫身分
+對檔內每個租戶都有寫入權限的共用檔，body 宣告的就是整份檔，照舊逐位元組寫入；共用
+檔裡有呼叫身分不能寫的租戶時，送整份檔會被 403（GET 對讀不到的租戶本來就不給
+``raw_yaml``）。
 
 只治理租戶檔自己寫的 key（#2116）：歸屬取自 ``da-guard effective`` 的逐 key 來源；
 繼承自 defaults／平台／profile 的 key 只列參考（``inherited``），不進計畫、不查
@@ -666,8 +669,10 @@ def _http_put_yaml(
 ) -> tuple[int, Optional[dict], Optional[str]]:
     """PUT a raw-YAML body. Returns ``(status_code, parsed_json|None, error|None)``.
 
-    The tenant-api PUT commits the body verbatim as conf.d/{id}.yaml, so the body
-    is sent as ``application/yaml`` (NOT JSON-wrapped). The status code is surfaced
+    The tenant-api PUT writes the tenant sections the body declares (#3062); a
+    body declaring every section of the file — a single-tenant file, or a shared
+    one the caller may write whole — is committed verbatim. The body is sent as
+    ``application/yaml`` (NOT JSON-wrapped). The status code is surfaced
     so the caller can treat 409 (a pending PR already exists) as a dedup-skip
     rather than an error.
     """

@@ -266,6 +266,34 @@ def test_a_retired_key_changes_no_exporter_output(readers, tmp_path):
             del _SENTINELS[name]
 
 
+@pytest.mark.parametrize("layer", [None, *_LAYERS])
+def test_an_unregistered_key_changes_no_exporter_output(readers, tmp_path, layer):
+    """#3045: a `_` key the registry does not list is read by no reader, so
+    the exporter serves it nowhere — not even with the root `defaults:`
+    declaring it, which before #3045 made it a threshold (`_myth: 5` at the
+    root served 5, and a tenant's `_myth` its own value). The probe declares
+    `_myth` in the root `defaults:` and, but for `None`, writes it in `layer`
+    too; the exporter's output must be that of the tree without it."""
+    name = "_myth"
+    _SENTINELS[name] = (name, "7")
+    try:
+        base, probe = str(tmp_path / "base"), str(tmp_path / "probe")
+        _tree(base, name, None, False)
+        _tree(probe, name, layer, False)
+        root = os.path.join(probe, "_defaults.yaml")
+        with open(root, encoding="utf-8") as f:
+            text = f.read()
+        assert "  mem: 60\n" in text, text
+        _write(root, text.replace("  mem: 60\n", "  mem: 60\n  _myth: 5\n", 1))
+        assert readers.exporter(probe) == readers.exporter(base), layer
+        entry = readers.exporter_keys(probe).get(name)
+        if entry is not None:
+            assert (entry["exporter"], entry.get("reason"), entry.get("registered")) == (
+                False, "unregistered", False), entry
+    finally:
+        del _SENTINELS[name]
+
+
 @pytest.mark.parametrize("name,layer", _CASES, ids=[f"{n}@{l}" for n, l in _CASES])
 def test_served_values_keys_agree_with_the_registry(readers, name, layer):
     """served-values' `keys` says whether the exporter reads each key of a

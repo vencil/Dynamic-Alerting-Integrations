@@ -95,7 +95,7 @@ domain_policies:
     description: "金融域合規要求"
     tenants: [db-a, db-b, db-e]
     constraints:
-      allowed_receiver_types: [pagerduty, email, opsgenie]
+      allowed_receiver_types: [pagerduty, email]
       forbidden_receiver_types: [slack, webhook]
       enforce_group_by: [tenant, alertname, severity]
       max_repeat_interval: 1h
