@@ -17,7 +17,7 @@ updated_at: 2026-10-16
 
 ✅ **Accepted**（2026-07-12）
 
-📝 **修訂（2026-10-16）**：一組租戶共用的 SLO 宣告寫在 profile；`_defaults.yaml` 裡的 `_custom_alerts` exporter 不會送出，不能用來共用（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3「宣告位置」、[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
+📝 **修訂（2026-10-16）**：一組租戶共用的 SLO 宣告寫在 profile；`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` exporter 不會送出，不能用來共用（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3「宣告位置」、[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
 
 > **決策一句話**：新增第 7 個平台自撰 recipe `slo_burn_rate`——一條宣告在編譯期展開成多窗 SLI recording rules ＋ multi-window AND 的 fast/slow burn-rate 告警；objective 走**既有** `user_threshold{severity}` 通道（exporter resolve 期算好係數）；v1 範圍＝availability/error-ratio 型 only；custom 子樹 outbound delivery 列硬前置。
 

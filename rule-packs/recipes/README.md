@@ -20,10 +20,11 @@
 
 ## 宣告語法（`_custom_alerts`）
 
-exporter 為每個租戶只從一處取 `_custom_alerts`，依序是租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、租戶綁定的 profile，**不合併**。`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` 不會送出；一組租戶共用的告警寫在 profile——但目前編譯器還不為 profile 與根 `_defaults.yaml` 的 `tenants:` 產生規則，寫在那裡的不能指望告警（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。在那之前請寫在租戶自己的條目或 `_platform.yaml` 的 `tenants:`，兩處擇一（兩處都寫，編譯器兩處都編、exporter 只取租戶自己的）；搬進租戶條目時，同時刪掉 `_defaults.yaml` 裡的同名 recipe——同名時編譯器隔離租戶自己那條，它就只有門檻、沒有規則。（規則見 [ADR-024 §3「宣告位置」](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)）：
+exporter 為每個租戶只從一處取 `_custom_alerts`，依序是租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、租戶綁定的 profile，**不合併**。`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` 不會送出；一組租戶共用的告警寫在 profile——但目前編譯器還不為 profile 與根 `_defaults.yaml` 的 `tenants:` 產生規則，寫在那裡的不能指望告警（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。在那之前請寫在租戶自己的條目或 `_platform.yaml` 的 `tenants:`，兩處擇一（兩處都寫，編譯器兩處都編、exporter 只取租戶自己的）；搬進租戶條目時，同時刪掉 `_defaults.yaml` 裡的同名 recipe——同名時編譯器隔離租戶自己那條，它就只有門檻、沒有規則。（規則見 [ADR-024 §3「宣告位置」](../../docs/adr/024-version-aware-threshold-via-dimensional-label.md)）。
+
+租戶檔（tenant leaf，只作用該租戶）：
 
 ```yaml
-# tenant leaf（只作用該租戶）
 tenants:
   shop-a:
     _custom_alerts:
@@ -35,9 +36,11 @@ tenants:
         op: ">"
         window: 5m
         threshold: "50:warning"     # value:severity（severity 預設 warning）
+```
 
-# 根目錄平台檔（_platform.yaml）的 tenants: 條目——租戶沒有自己的 _custom_alerts
-# 時取這份；兩處都寫則 exporter 只取租戶自己的
+根目錄平台檔（`_platform.yaml`）的 `tenants:` 條目——租戶沒有自己的 `_custom_alerts` 時取這份；兩處都寫則 exporter 只取租戶自己的：
+
+```yaml
 tenants:
   shop-b:
     _custom_alerts:
