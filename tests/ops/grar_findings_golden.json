@@ -141,42 +141,42 @@
  },
  "policy_file/render": {
   "rc": 1,
-  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
+  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_file/strict": {
   "rc": 1,
-  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
+  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_file/validate": {
   "rc": 1,
-  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
+  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_file/validate_strict": {
   "rc": 1,
-  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
+  "stderr": "  WARN: domain_policies in _domain_policy.yaml must be a dict, ignoring\nFAIL: 1 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): domain policy file could not be used, so no policy in it is enforced: _domain_policy.yaml: 'domain_policies:' must be a mapping of domain name to policy, got list — the whole block is ignored — fix: indent each domain under `domain_policies:` in _domain_policy.yaml\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_unusable/render": {
   "rc": 1,
-  "stderr": "FAIL: 3 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
+  "stderr": "FAIL: 3 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_unusable/strict": {
   "rc": 1,
-  "stderr": "FAIL: 3 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
+  "stderr": "FAIL: 3 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_unusable/validate": {
   "rc": 1,
-  "stderr": "FAIL: 3 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
+  "stderr": "FAIL: 3 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy_unusable/validate_strict": {
   "rc": 1,
-  "stderr": "FAIL: 3 field value(s) of the wrong type or not recognised — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
+  "stderr": "FAIL: 3 config problem(s) — nothing was generated, written or applied:\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': 'tenants' lists a mapping, which names no tenant — list each tenant id as a plain YAML scalar\n  ERROR (field type): _domain_policy.yaml: domain_policy 'finance': constraint 'min_group_wait' value string 'banana' is not a valid duration — use Prometheus/Go duration syntax such as '30s', '1h' or '1h30m'; negative values are not allowed\n  ERROR (field type): _domain_policy.yaml: domain_policy 'broken': 'tenants' must be a list, got string 'alpha' — define 'tenants' as a YAML list of tenant ids\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "scope/render": {

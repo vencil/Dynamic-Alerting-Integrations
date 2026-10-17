@@ -837,7 +837,6 @@ class TestEveryWayThePoliciesFallOnTheFloor:
         ("file-is-a-scalar", b"domain_policies\n"),
         # the file and its top level are fine, the block is not a mapping
         ("block-is-a-list", b"domain_policies:\n  - fin\n"),
-        ("block-is-null", b"domain_policies:\n"),
         ("block-is-a-scalar", b"domain_policies: nope\n"),
     ]
 
@@ -886,6 +885,18 @@ class TestEveryWayThePoliciesFallOnTheFloor:
                 assert "UTF-8" in msg, msg
             if label.startswith("block-"):
                 assert "'domain_policies:'" in msg, msg
+
+    @pytest.mark.parametrize("body", [b"domain_policies:\n", b"domain_policies: ~\n"],
+                             ids=["no-value", "tilde"])
+    def test_a_null_block_is_no_policy_not_unusable(self, body):
+        """#3116: the schema allows a null `domain_policies:` ("no policy
+        configured"); it used to be dropped as unusable (block-is-null)."""
+        with tempfile.TemporaryDirectory() as d:
+            self._tree(d, body)
+            for strict in (True, False):
+                tree = load_tenant_tree(d, strict_policies=strict)
+                assert tree.field_type_errors == [], tree.field_type_errors
+                assert not [f for f, _ in tree.files_skipped], tree.files_skipped
 
     def test_a_usable_policy_file_records_nothing(self):
         """Must-tolerate control: without it, "record everything" passes

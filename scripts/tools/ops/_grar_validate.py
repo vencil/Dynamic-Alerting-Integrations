@@ -2036,8 +2036,11 @@ def domain_policy_problems(policy: object) -> list[tuple[str | None, str]]:
     off at rc 0.
 
     Null is "not set" wherever the schema allows it: a null policy, null
-    ``constraints``, a null constraint value. ``tenants`` must be a list —
-    null included, as the generator has always read it.
+    ``constraints``, a null constraint value, and a null ``tenants`` (the
+    policy applies to no tenant — it used to be refused as "not a list").
+    The schema decides the shape: ``enforce_group_by`` entries are non-empty
+    strings (``group_by_problems``' ``not_string`` / ``empty``; a mapping
+    entry used to crash the run with a TypeError, rc 2).
     """
     if policy is None:
         return []
@@ -2046,8 +2049,10 @@ def domain_policy_problems(policy: object) -> list[tuple[str | None, str]]:
                        f"— define the policy as a mapping with "
                        f"description/tenants/constraints keys")]
     out: list[tuple[str | None, str]] = []
-    tenants = policy.get("tenants", [])
-    if not isinstance(tenants, list):
+    tenants = policy.get("tenants")
+    if tenants is None:
+        pass
+    elif not isinstance(tenants, list):
         out.append(("tenants", f"'tenants' must be a list, got "
                                f"{value_type_text(tenants)} — define 'tenants' "
                                f"as a YAML list of tenant ids"))
@@ -2078,6 +2083,14 @@ def domain_policy_problems(policy: object) -> list[tuple[str | None, str]]:
             bad = unknown_receiver_type_entries(raw)
             if bad:
                 out.append((f"constraints.{fld}", unknown_receiver_types_text(fld, bad)))
+        else:
+            # A required label is a label name, as a group_by entry is: the
+            # group_by predicate's element rules (a repeat or `...` is not a
+            # problem in a list of requirements).
+            for idx, kind, value in group_by_problems(raw)[1]:
+                if kind in ("not_string", "empty"):
+                    out.append((f"constraints.{fld}", group_by_problem_text(
+                        f"constraint '{fld}' entry [{idx}]", kind, value)))
     for fld in POLICY_DURATION_CONSTRAINTS:
         raw = constraints.get(fld)
         if raw is not None and _parse_policy_duration(raw) is None:
@@ -2871,7 +2884,7 @@ def check_domain_policies(
         # `constraints` is inert.
         if not isinstance(policy, dict) or domain_policy_problems(policy):
             continue
-        tenants = policy.get("tenants", [])
+        tenants = policy.get("tenants") or []  # null: no tenant
         constraints = policy.get("constraints") or {}
 
         forbidden_types = set(constraints.get("forbidden_receiver_types") or [])

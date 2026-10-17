@@ -164,6 +164,10 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
         `domain_policies:` is a list        0 ← !     1
         `domain_policies:` is null          0 ← !     1
 
+    #3116: the null row no longer comes here — the schema allows a null
+    ``domain_policies:`` ("no policy configured"), so the reader takes it as
+    an empty mapping (rc 0, nothing to enforce).
+
     ⛔ The two rows marked ← ! printed ``OK: all configs valid``, on the
     base and on every release before it. They are **not** a regression this
     branch introduced; the crash rows are what this branch had to convert,
@@ -852,6 +856,11 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 origin = result.setdefault("domain_policy_origin", {})
                 for name in policies:
                     origin[(level, name)] = fname
+            elif policies is None:
+                # #3116: `domain_policies:` with no value is legal in the
+                # schema ("an empty or null map is legal"): no policy, as
+                # an empty mapping. It used to be dropped as unusable.
+                pass
             else:
                 # #1448: the file decodes, parses, and is a mapping — and
                 # every domain policy still ends up on the floor. Same

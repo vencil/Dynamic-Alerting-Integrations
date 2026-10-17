@@ -35,7 +35,7 @@
         "tenants": {
           "type": ["array", "null"],
           "title": "Applicable Tenants",
-          "description": "List of tenant IDs this policy applies to. A tenant may appear in multiple policies. An empty list means the policy is inert.",
+          "description": "List of tenant IDs this policy applies to. A tenant may appear in multiple policies. An empty list or null means the policy is inert (applies to no tenant).",
           "items": {
             "type": "string",
             "minLength": 1

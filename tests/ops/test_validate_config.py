@@ -2187,7 +2187,9 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
     def test_a_policy_only_failure_gets_policy_advice(self, tmp_path, capsys,
                                                       cli_argv):
         cli_argv("validate_config", "--config-dir",
-                 self._tree(tmp_path, "domain_policies:\n"), "--strict")
+                 # #3116: a null `domain_policies:` is legal now (no policy);
+                 # a list is still a policy file that cannot be used.
+                 self._tree(tmp_path, "domain_policies: [a]\n"), "--strict")
         with pytest.raises(SystemExit):
             vc.main()
         out = capsys.readouterr().out

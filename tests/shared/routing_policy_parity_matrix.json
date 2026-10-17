@@ -5447,13 +5447,7 @@
         "_domain_policy.yaml": "domain_policies: null\n",
         "t-null.yaml": "tenants:\n  t-null:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n"
       },
-      "platform": [
-        [
-          "domain_policy_unusable",
-          "_domain_policy.yaml",
-          "domain_policies"
-        ]
-      ],
+      "platform": [],
       "expect": {
         "t-null": {
           "targets": [

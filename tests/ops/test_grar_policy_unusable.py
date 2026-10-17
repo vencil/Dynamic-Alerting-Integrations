@@ -6,17 +6,19 @@
 `--strict` 都 rc 1、不寫出、不套用。涵蓋：
 
 * policy 本身不是 mapping（null＝沒有約束，照收）；
-* `tenants` 不是 list（null 也算，產生器一向如此）、或有項目不是 tenant id；
+* `tenants` 不是 list、或有項目不是 tenant id（null＝不套用任何租戶，照收）；
 * `constraints` 不是 mapping（null＝沒有約束，照收）；
 * list constraint（`forbidden_receiver_types`／`allowed_receiver_types`／`enforce_group_by`）
-  不是 list（null＝沒有約束，照收）；
+  不是 list（null＝沒有約束，照收）；`enforce_group_by` 的項目不是非空字串（沿用 group_by
+  的 `not_string`／`empty` 規則；過去 mapping 項目讓產生器 TypeError、rc 2）；
 * receiver 類型清單有一項不是 `_lib_constants.RECEIVER_TYPES` 的鍵：拼錯的名稱、`opsgenie`、
   非字串（`yes` 是 True、`1`、`~`、mapping）。類型集合與 tenant-config.schema.json 的 receiver
   定義同一組，由 tests/shared/test_receiver_spec_parity.py 釘住，domain-policy.schema.json 的
   enum 也是；
 * duration bound（`max_repeat_interval`／`min_group_wait`）解析不了；
 * `require_critical_escalation` 不是布林（#2906）；
-* 整份 `_domain_policy.yaml` 不能用（語法錯、頂層或 `domain_policies:` 不是 mapping）。
+* 整份 `_domain_policy.yaml` 不能用（語法錯、頂層或 `domain_policies:` 不是 mapping；
+  `domain_policies:` 沒有值＝沒有任何 policy，照收）。
 
 在這之前，除了 `require_critical_escalation` 以外都只在 `--strict` 擋：非 strict 時拼錯的
 forbidden 類型什麼都不禁止、解析不了的 bound 不生效、整份檔不能用時所有 policy 靜默消失，
@@ -77,8 +79,6 @@ CASES = {
                       None, "fin", "policy must be a mapping, got number 5"),
     "tenants-scalar": (_fin("    tenants: t-a\n    constraints: {max_repeat_interval: 1h}\n"),
                        "tenants", "fin", "'tenants' must be a list, got string 't-a'"),
-    "tenants-null": (_fin("    tenants: ~\n    constraints: {max_repeat_interval: 1h}\n"),
-                     "tenants", "fin", "'tenants' must be a list, got null"),
     "tenants-entry-mapping": (_fin("    tenants: [t-a, {x: 1}]\n"
                                    "    constraints: {max_repeat_interval: 1h}\n"),
                               "tenants", "fin", "'tenants' lists a mapping"),
@@ -93,6 +93,26 @@ CASES = {
     "enforce-group-by-not-list": (_cons("enforce_group_by: tenant"),
                                   "constraints.enforce_group_by", "fin",
                                   "constraint 'enforce_group_by' must be a list"),
+    # Entries are label names (non-empty strings), by group_by's element
+    # rules; a mapping entry used to crash the run (TypeError, rc 2).
+    "enforce-group-by-mapping": (_cons("enforce_group_by: [{a: 1}]"),
+                                 "constraints.enforce_group_by", "fin",
+                                 "constraint 'enforce_group_by' entry [0] is dict"),
+    "enforce-group-by-list": (_cons("enforce_group_by: [tenant, [a]]"),
+                              "constraints.enforce_group_by", "fin",
+                              "constraint 'enforce_group_by' entry [1] is list"),
+    "enforce-group-by-number": (_cons("enforce_group_by: [8]"),
+                                "constraints.enforce_group_by", "fin",
+                                "constraint 'enforce_group_by' entry [0] is int 8"),
+    "enforce-group-by-bool": (_cons("enforce_group_by: [yes]"),
+                              "constraints.enforce_group_by", "fin",
+                              "constraint 'enforce_group_by' entry [0] is bool True"),
+    "enforce-group-by-null-entry": (_cons("enforce_group_by: [tenant, ~]"),
+                                    "constraints.enforce_group_by", "fin",
+                                    "constraint 'enforce_group_by' entry [1] is NoneType"),
+    "enforce-group-by-empty": (_cons("enforce_group_by: ['']"),
+                               "constraints.enforce_group_by", "fin",
+                               "constraint 'enforce_group_by' entry [0] is an empty string"),
     "max-repeat-banana": (_cons("max_repeat_interval: banana"),
                           "constraints.max_repeat_interval", "fin",
                           "value string 'banana' is not a valid duration"),
@@ -107,8 +127,6 @@ CASES = {
     "file-top-level-list": (_doc("- fin\n"), None, None,
                             "domain policy file could not be used"),
     "file-domain-policies-list": (_doc("domain_policies: [fin]\n"), "domain_policies", None,
-                                  "'domain_policies:' must be a mapping"),
-    "file-domain-policies-null": (_doc("domain_policies:\n"), "domain_policies", None,
                                   "'domain_policies:' must be a mapping"),
 }
 # Receiver-type entries: YAML text of one entry → the words the message uses.
@@ -174,6 +192,12 @@ def test_a_subtree_policy_is_judged_too(tmp_path):
 # Null is "not set" wherever the schema allows it; legal values render.
 _LEGAL = {
     "policy-null": _doc("domain_policies:\n  fin: ~\n"),
+    # #3116: null is "no tenant" / "no policy", as the schema allows — both
+    # used to be refused as "not a list" / "not a mapping".
+    "tenants-null": _fin("    tenants: ~\n    constraints: {forbidden_receiver_types: [webhook]}\n"),
+    "domain-policies-null": _doc("domain_policies:\n"),
+    "domain-policies-tilde": _doc("domain_policies: ~\n"),
+    "enforce-group-by-repeat-and-wildcard": _cons("enforce_group_by: [tenant, tenant, '...']"),
     "constraints-null": _fin("    tenants: [t-a]\n    constraints: ~\n"),
     "constraints-absent": _fin("    tenants: [t-a]\n"),
     "tenants-absent": _fin("    constraints: {max_repeat_interval: 1h}\n"),

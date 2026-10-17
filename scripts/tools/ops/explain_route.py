@@ -762,7 +762,7 @@ def _level_policies_for_tenant(domain_policies: dict, tenant: str
     for name, policy in sorted(domain_policies.items()):
         if not isinstance(policy, dict) or domain_policy_problems(policy):
             continue
-        if tenant not in policy.get("tenants", []):
+        if tenant not in (policy.get("tenants") or []):
             continue
         constraints = policy.get("constraints", {})
         if constraints is None:
