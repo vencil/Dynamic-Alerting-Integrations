@@ -437,14 +437,16 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 }
 
 // baseRowsSkipKey reports whether resolveBaseRows skips a defaults key
-// without producing a row: the _state_ / _silent_ / _severity_dedup /
-// _routing keys, handled by ResolveStateFilters() / ResolveSilentModes() /
-// ResolveSeverityDedup() / ResolveRouting() respectively. Named so the #1976
-// report (undeliverableThresholds) asks the row generator itself which keys
-// never become a base row.
+// without producing a row: every `_` key (#3045). The `_` namespace is the
+// reserved-key registry's and none of its keys is a threshold — the
+// _state_ / _silent_ / _severity_dedup / _routing keys are read by
+// ResolveStateFilters() / ResolveSilentModes() / ResolveSeverityDedup() /
+// ResolveRouting(), the others by other readers or by nothing — so a `_`
+// key in a `defaults:` (`_myth: 5`, `_namespaces: 5`) is no threshold row
+// either. Named so the #1976 report (undeliverableThresholds) asks the row
+// generator itself which keys never become a base row.
 func baseRowsSkipKey(metricKey string) bool {
-	return strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
-		IsRoutingLayerKey(metricKey)
+	return strings.HasPrefix(metricKey, "_")
 }
 
 // BaseRowsSkipKey is baseRowsSkipKey, for da-guard.
@@ -688,9 +690,10 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 // criticalRowBase is resolveCriticalRows' entry test: whether an override
 // key is one it serves as a critical row, and that row's base metric key
 // ("mysql_connections_critical" → "mysql_connections"). The build's
-// root-null report (rootNullUndeclared, #2518) asks the same function.
+// root-null report (rootNullUndeclared, #2518) asks the same function. A `_`
+// key is none (`_myth_critical`, `_routing_x_critical`; baseRowsSkipKey, #3045).
 func criticalRowBase(key string) (string, bool) {
-	if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
+	if !strings.HasSuffix(key, "_critical") || baseRowsSkipKey(key) {
 		return "", false
 	}
 	return strings.TrimSuffix(key, "_critical"), true
@@ -775,7 +778,8 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, v := range defaults {
-		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) {
+		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) ||
+			baseRowsSkipKey(key) {
 			continue
 		}
 		// Its parse failure is warnUnparsedRootDims' line, once per resolve.
@@ -785,8 +789,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if !strings.Contains(key, "{") {
 			continue // not a dimensional key
 		}
-		if strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") ||
-			IsRoutingLayerKey(key) {
+		if baseRowsSkipKey(key) { // every `_` key (#3045)
 			continue
 		}
 		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
@@ -1283,7 +1286,9 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 					continue
 				}
 			}
-			if _, isDefault := canonDefaults[canonKey]; !isDefault {
+			// A `_` key is no base row wherever it is declared
+			// (baseRowsSkipKey, #3045): nothing reverts.
+			if _, isDefault := canonDefaults[canonKey]; !isDefault || baseRowsSkipKey(canonKey) {
 				continue
 			}
 			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
@@ -1550,6 +1555,16 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					tenant, key, canonKey, canonKey))
 			}
 
+			// #3045: a `_` key the registry does not list is read in no layer,
+			// even when a `defaults:` declares it — the defaults-first
+			// membership test below would otherwise accept it, and tenant-api
+			// would take a write that serves nothing.
+			if IsUnregisteredUnderscoreKey(canonKey) {
+				v.Errors = append(v.Errors, fmt.Sprintf(
+					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, canonKey))
+				continue
+			}
+
 			// PREVENT #656 v1: `expires:` is honored only on base standard metrics
 			// (resolveBaseRows is the only resolution path with the fail-safe hook).
 			// Warn when it appears elsewhere (silent no-op) or is malformed (would
@@ -1567,7 +1582,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				// ResolveThresholdExpiriesAt (which gates on canonDefaults
 				// alone) still emitted its expiry event, splitting the very
 				// pair the contract test below exists to hold together.
-				if _, isDefault := canonDefaults[canonKey]; isDefault {
+				if _, isDefault := canonDefaults[canonKey]; isDefault && !baseRowsSkipKey(canonKey) {
 					if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
 						v.Errors = append(v.Errors, fmt.Sprintf(
 							"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))

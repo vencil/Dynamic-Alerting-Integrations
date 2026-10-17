@@ -821,15 +821,21 @@ class TestPolicyScope:
         step5 = _trace(capsys, conf)["steps"][4]
         assert step5["passed"] is True
         assert "(no usable domain policy lists it)" in step5["detail"]
-        assert "'constraints' is not a mapping" in step5["notes"][0]
+        # #3116: null constraints is schema-legal "no constraint" (not an
+        # unusable mapping); the note says so instead.
+        assert "'constraints' is null, so nothing is enforced" in step5["notes"][0]
 
-    def test_tenants_not_a_list_is_said_so(self, capsys, tmp_path):
+    def test_tenants_not_a_list_refuses_the_tree(self, capsys, tmp_path):
+        # #3116: a `tenants` that is not a list is domain_policy_unusable,
+        # which refuses the whole tree in every mode — --trace reads no
+        # policy then (it used to note the policy and pass it).
         conf = _tree(tmp_path, routing={"receiver": _SLACK},
                      policy={"p": {"tenants": _TT, "constraints": {
                          "forbidden_receiver_types": ["slack"]}}})
         step5 = _trace(capsys, conf)["steps"][4]
-        assert step5["passed"] is True
-        assert "'tenants' is not a list" in step5["notes"][0]
+        assert step5["passed"] is None
+        assert step5["detail"] == ("Receiver-type constraints not evaluated: "
+                                   "the generator refuses this config")
 
     def test_pass_claims_only_receiver_type_constraints(self, capsys, tmp_path):
         conf = _tree(tmp_path, routing={"receiver": _SLACK},

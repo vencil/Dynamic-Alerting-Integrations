@@ -267,12 +267,15 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			wantReported: []string{"redis_q", "redis_r", "redis_s"},
 		},
 		{
-			// An unrecognised `_` key is a threshold to the exporter (the
-			// root's `_myth` serves a row), so `_myth2` is reported.
-			name:         "unrecognised-underscore-key",
-			files:        subtreeTree(plainRoot+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
-			wantUnreach:  []string{"_myth2"},
-			wantReported: []string{"_myth2"},
+			// A `_` key the registry does not list is no threshold to the
+			// exporter in any layer (#3045: the root's `_myth` serves no
+			// row), so declaring `_myth2` at the root is no fix: it is
+			// unreachable but not reported here — subtreeReservedKeys
+			// (#2388) reports it, as `_silent_bogus`. Before #3045 it was
+			// reported.
+			name:        "unrecognised-underscore-key",
+			files:       subtreeTree(plainRoot+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
+			wantUnreach: []string{"_myth2"},
 		},
 		{
 			// The finding's fix applied: declared at the root, nothing is

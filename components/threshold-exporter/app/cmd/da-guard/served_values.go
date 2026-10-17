@@ -136,7 +136,10 @@ type servedTenantValues struct {
 	// config does not carry them, but the tenant's effective config shows
 	// them. Keyed as that defaults file spells them; the value is NOT as
 	// written but the build's normalised rendering of the deepest level that
-	// writes the key in a threshold shape (a YAML `1e6` is "1e+06").
+	// writes the key in a threshold shape (a YAML `1e6` is "1e+06"). Also
+	// the root `defaults:` entries the tenant does not write that serve it
+	// no row: a dimensional key (#2031) and a `_` key the registry does not
+	// list (#3045), with the root's value.
 	Unserved map[string]any `json:"unserved"`
 	// Dropped: keys the resolver produced a row for but whose series the
 	// exporter cannot build (client_golang rejects the label set), so
@@ -189,9 +192,10 @@ type servedTenantValues struct {
 
 // servedKey is one entry of servedTenantValues.Keys.
 //
-// Exporter, for a key that is not `_`-prefixed, an unregistered `_` key
-// and `_custom_alerts`: the key owns a row the resolver produced — kept
-// (Values) or dropped (Dropped). For any other registered `_` key it is what
+// Exporter, for a key that is not `_`-prefixed and `_custom_alerts`: the
+// key owns a row the resolver produced — kept (Values) or dropped (Dropped).
+// For a `_` key the registry does not list it is false: the exporter reads
+// it in no layer (#3045). For any other registered `_` key it is what
 // the registry declares (reserved_keys.json, whose layers
 // tests/shared/test_reserved_key_probes.py measures; the merged config holds
 // only what the exporter's build took in), whether or not the resolver
@@ -242,8 +246,8 @@ const (
 	// keyReasonStateFilterUndeclared: `_state_<filter>` for a filter the
 	// root `state_filters:` does not declare.
 	keyReasonStateFilterUndeclared = "state_filter_undeclared"
-	// keyReasonUnregistered: a `_` key the registry does not list, with no
-	// row and not switched off.
+	// keyReasonUnregistered: a `_` key the registry does not list; the
+	// exporter reads it in no layer, a `disable` included (#3045).
 	keyReasonUnregistered = "unregistered"
 	// keyReasonRetired: a retired key (Hint says what replaced it).
 	keyReasonRetired = "retired"
@@ -724,11 +728,14 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		// #2031: a root dimensional default the tenant does not write is the
-		// tenant's labelled series; one with no row is unserved.
+		// tenant's labelled series; one with no row is unserved. #3045: so is
+		// a root default under a `_` key the registry does not list, which
+		// serves no row for any tenant.
 		for k, v := range cfg.Defaults {
 			canon, _ := config.CanonicalKeyFor(k)
 			_, own := overrides[canon]
-			if _, served := tv.Values[canon]; served || own || !strings.Contains(k, "{") {
+			perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k)
+			if _, served := tv.Values[canon]; served || own || !perTenant {
 				continue
 			}
 			tv.Unserved[k] = v
@@ -848,19 +855,10 @@ func servedKeys(tv servedTenantValues,
 		switch {
 		case config.RetiredHint(k) != "":
 			e.Reason, e.Hint = keyReasonRetired, config.RetiredHint(k)
-		case !registered && config.BaseRowsSkipKey(k):
-			// A key the row generator never reads (`_silent_…`): no row,
-			// no switch-off.
-			e.Reason = keyReasonUnregistered
 		case !registered:
-			// The exporter serves an unregistered `_` key as a threshold
-			// when the root declares it (#3045): read it as one — its rows,
-			// its switch-off — and name it unregistered only when nothing
-			// came of it.
-			threshold()
-			if e.Reason == keyReasonNoRow {
-				e.Reason = keyReasonUnregistered
-			}
+			// The row generator reads no `_` key the registry does not
+			// list, wherever it is written (#3045): no row, no switch-off.
+			e.Reason = keyReasonUnregistered
 		case k == customAlertsKey:
 			// Measured: the recipes the exporter serves are its rows.
 			if kept || dropped {

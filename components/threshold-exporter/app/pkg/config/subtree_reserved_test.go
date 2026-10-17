@@ -25,8 +25,9 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _state_maintenance: 0\n" +
 			"state_filters:\n  maintenance:\n    reasons: []\n    severity: warning\n    default_state: enable\n",
 		// enable (dropped), a severity (dropped), disable (applied), an
-		// undeclared filter (undeliverable), a null, an unrecognised `_` key
-		// and a plain threshold (the last two are #1976's, not #2388's).
+		// undeclared filter (undeliverable), a null, a `_` key the registry
+		// does not list (#2388's since #3045: no layer serves it) and a plain
+		// threshold (#1976's, not #2388's).
 		"finance/_defaults.yaml": "defaults:\n  _state_maintenance: enable\n  _silent_mode: warning\n" +
 			"  _severity_dedup: disable\n  _state_bogus: 5\n  _metadata: null\n  _myth: 5\n  redis_x: 5\n" +
 			// `_routing*` is the route generator's (routing_in_unread_location).
@@ -51,6 +52,7 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 			"_silent_mode":       {"finance/_defaults.yaml"},
 			"_severity_dedup":    {"finance/_defaults.yaml"},
 			"_state_bogus":       {"finance/_defaults.yaml"},
+			"_myth":              {"finance/_defaults.yaml"},
 			// `_metadata: null` is not listed: a null writes nothing (#2388 r1b).
 		},
 	}
@@ -59,7 +61,7 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 	}
 	// The other half of the partition (#1976): the undeliverable keys the
 	// predicate does not refuse, and none it does.
-	wantUndeliverable := map[string][]string{"tenant-a": {"_myth", "redis_x"}}
+	wantUndeliverable := map[string][]string{"tenant-a": {"redis_x"}}
 	if !reflect.DeepEqual(scoped.Undeliverable, wantUndeliverable) {
 		t.Errorf("Undeliverable = %v, want %v", scoped.Undeliverable, wantUndeliverable)
 	}

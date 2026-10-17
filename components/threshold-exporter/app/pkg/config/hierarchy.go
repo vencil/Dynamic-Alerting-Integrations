@@ -450,7 +450,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	if r.served != nil {
 		unparsed = r.served.unparsedOf(tenantID)
 	}
-	if r.withSources || spells.any() || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed)) {
+	if r.withSources || spells.any() || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed, view)) {
 		ks, err := keySources(view, parts.tenantRaw, ec.SourceFile, relChain, blocks,
 			overlay, parts.platformSources, parts.profileSources)
 		if err != nil {

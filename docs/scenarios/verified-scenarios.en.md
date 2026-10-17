@@ -43,7 +43,7 @@ Composite alerts (AND logic) and multi-tier severity (Critical auto-downgrade to
 | **B — Weakest-link detection** | Alerts fire on the "worst" value across nodes / metrics | One bad node is caught, not diluted by averaging |
 | **C — Three-state control** | A metric that has a platform default can be custom / default / disable (a declared key has nothing to inherit — only "set it" or "stay silent") | Precise control over each alert's switch and threshold |
 | **D — Maintenance mode** | Auto-silence during the window, auto-recover on expiry | Planned maintenance doesn't spam, and you can't forget to re-enable |
-| **E — Multi-tenant isolation** | Changing tenant A's config **never** affects tenant B | The foundation of multi-tenant safety |
+| **E — Multi-tenant isolation** | Changing tenant A's thresholds or switches does not affect tenant B (two exceptions: see row E below) | The foundation of multi-tenant safety |
 | **F — HA failover** | Service continues when a Pod dies; aggregate value doesn't double | High availability + data correctness |
 
 ### What guards each guarantee
@@ -56,7 +56,7 @@ These guarantees are **not** guarded by a single end-to-end test in a K8s cluste
 | **B** | Only "max across containers within one pod": the mixed-pod case in `rule-pack-kubernetes-cpu-node-share_test.yaml` |
 | **C** | `TestResolve_ThreeState` in `config_resolve_test.go` |
 | **D** | Maintenance silencing: `rule-pack-mariadb-threads_test.yaml`, plus the lint `scripts/tools/lint/check_maintenance_symmetry.py`, which checks that no arm of a two-arm alert drops its maintenance clause; expiry recovery: `config_silent_mode_test.go`; multi-tier severity: `TestConfigManager_LoadDir_CriticalSuffix` in `config_loaddir_test.go` |
-| **E** | Config-resolution layer only, and as a single-config, one-pass resolution snapshot (no "change A, then check B"): `TestResolve_ThreeState` asserts that different per-tenant overrides or `disable` do not affect each other; `TestResolveStateFilters_PerTenantDisable` covers only a state filter's `disable` |
+| **E** | Config-resolution layer only, and as a single-config, one-pass resolution snapshot (no "change A, then check B"): `TestResolve_ThreeState` asserts that different per-tenant overrides or `disable` do not affect each other; `TestResolveStateFilters_PerTenantDisable` covers only a state filter's `disable`. ⚠️ Two exceptions: when a file fails to parse, **the tenants that file declares** are dropped (one that another file also declares in the same load moves to that file and stays) while other files are served as before (`config_broken_tenant_file_reload_test.go`) — so tenants sharing a file are affected together; and when a file declares a tenant id another file already has, **the whole load is refused** and every tenant stays on the previous config (`TestMixedMode_DuplicateAcrossModes_RejectedAtLoad` in `config_mixed_mode_test.go`) |
 | **F** | No double-counting: the lint `scripts/tools/lint/check_ha_threshold_aggregation.py` (every aggregation of `user_threshold` must use `max`) |
 
 **Gaps (no automated coverage today)**:

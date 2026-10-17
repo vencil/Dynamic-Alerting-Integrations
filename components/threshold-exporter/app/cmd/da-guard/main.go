@@ -594,8 +594,9 @@ func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTena
 }
 
 // customAlertDuplicates is guard.CheckInput.CustomAlertDuplicates: the
-// `_custom_alerts` entries the exporter's own build of the tree drops as
-// duplicates of an earlier entry's series (config.CustomAlertDuplicates), for
+// `_custom_alerts` entries the exporter's own build of the tree drops because
+// an earlier entry serves their series or a row of their shape and severity
+// (config.CustomAlertDuplicates, #2031 / #3112), for
 // the in-scope tenants. nil when none.
 func customAlertDuplicates(scoped *config.ScopedTenants) map[string][]config.CustomAlertDuplicate {
 	if scoped.Config == nil {

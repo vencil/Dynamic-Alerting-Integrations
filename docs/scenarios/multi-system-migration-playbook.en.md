@@ -574,12 +574,14 @@ Correct order:
 
 ##### ☢️ Step 4 nuke warning: never use `helm uninstall` to shut down the old Prom
 
-If the customer's Prometheus is deployed via `kube-prometheus-stack` or a similar Helm chart, **`helm uninstall` is a PVC nuke**:
+When the old Prom was deployed with a Helm chart, whether `helm uninstall` takes the history with it **depends on who created the PVC**:
 
-- `helm uninstall` deletes all resources managed by the chart (`StatefulSet` / `Deployment` / `ConfigMap` / `Secret`)
-- If the PVC's `StorageClass` has `reclaimPolicy: Delete` (**the default for most cloud providers**), deleting the PVC will **also delete the PV and the underlying disk**
-- Result: the Step 5 safety net of "wait 14 days then dual sign-off to delete PVC" **becomes purely cosmetic** — historical data vaporises **within seconds** of running `helm uninstall`
-- AM's old config / Prom config disappear at the same time (already warned about in Phase 4 catalog: `helm uninstall` nukes PVC)
+| Where the PVC comes from | Example | After `helm uninstall` |
+|---|---|---|
+| The chart renders a PVC object | `prometheus-community/prometheus` defaults (the server is a Deployment) | The PVC is deleted; with a StorageClass `reclaimPolicy` of `Delete` (the default for dynamic provisioning) the PV and the underlying disk go too — **the data is unrecoverable** |
+| A StatefulSet's `volumeClaimTemplates` | `kube-prometheus-stack` (the PVC comes from the StatefulSet the Prometheus Operator creates; Helm does not own it) | The PVC is kept by default; it is deleted only when `prometheusSpec.persistentVolumeClaimRetentionPolicy.whenDeleted: Delete` |
+
+Either way, the StatefulSet / Deployment / ConfigMap / Secret the chart owns are deleted: the old AM and Prom config go with them, and rolling back is no longer a matter of setting `replicas` back to 1. In the first case the Step 5 safety net ("wait 14 days, dual sign-off, then delete the PVC") is gone as well.
 
 **The correct shutdown approach**:
 
@@ -590,19 +592,19 @@ prometheus:
     replicas: 0   # ← Set this instead of helm uninstall
 ```
 
-Or for raw StatefulSet/Deployment:
+Or for a StatefulSet / Deployment no operator manages (for an operator-managed one, change the CR — the operator reverts a direct scale):
 
 ```bash
 # Just scale, don't uninstall
-kubectl scale statefulset prometheus-k8s --replicas=0 -n monitoring
+kubectl scale deployment prometheus-server --replicas=0 -n monitoring
 ```
 
 **Why `replicas: 0` is safe**:
 
-- The StatefulSet/Deployment still exists; the PVC remains bound (`reclaimPolicy: Retain` or `Delete` — neither is triggered)
+- The StatefulSet/Deployment still exists; the PVC remains bound (a PV's reclaim policy acts only when its PVC is deleted, so neither `Retain` nor `Delete` is triggered). ⚠️ Exception: a StatefulSet whose `persistentVolumeClaimRetentionPolicy.whenScaled` is `Delete` deletes the PVC on a scale to 0 too — check that it is the default `Retain` first
 - ConfigMap / Secret / NetworkPolicy are all retained → Step 5 dual sign-off has something to review
 - For real rescue, `replicas: 1` brings the pod back in 30 seconds with data intact
-- The Helm release still exists; if you later need `helm uninstall`, patch the PVC `reclaimPolicy: Retain` first, then uninstall — that's safe
+- The Helm release still exists; if you do later need `helm uninstall`, first set the reclaim policy of the PV (not the PVC) to `Retain`, then uninstall: `kubectl patch pv <name> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'`
 
 **Pitfall #2**: a customer SRE in Phase 4 Step 5 wants to "clean it all up at once" with `helm uninstall prometheus-stack` — that `helm uninstall` should **never be run within Phase 4**. Even after Step 5's PVC dual sign-off is done, the correct flow is: (a) manually `kubectl delete pvc <name>`, observe for 1 week, (b) confirm nothing breaks, then `helm uninstall`. **Split PVC deletion and Helm-release uninstall into two manual steps** — avoid chart hooks or finalisers taking unexpected resources with them.
 
@@ -658,7 +660,7 @@ After every Phase 4 completion, **a mandatory internal post-mortem** — regardl
 - [ ] Archive AM's old config (git tag + commit into the customer's GitOps repo `archive/`)
 
 **Step 4: Prom shutdown**
-- [ ] ☢️ **Never `helm uninstall`** — it deletes the PVC too; historical data vaporises
+- [ ] ☢️ **Never `helm uninstall`** — all the config goes, and a PVC the chart renders itself is deleted too (see the Step 4 warning above)
 - [ ] Use `replicas: 0` (kube-prometheus-stack: `prometheus.prometheusSpec.replicas: 0`, or `kubectl scale ... --replicas=0`)
 - [ ] Confirm PVC remains bound, ConfigMap / Secret / Helm release all retained
 - [ ] Observe 14 days with no query complaints
@@ -828,7 +830,7 @@ Each Phase lists known failure modes + hyper-realistic anchors.
 | **Some Grafana dashboards turn red after old Prom shuts down** | Customer dashboards still point at old-Prom URL; audit should have run before Phase 4; recovery is to switch back to read-only Prom temporarily and batch-fix datasource | (e.g., capacity-planning dashboard maintained by customer SRE team uses `legacy-prom` datasource; pre-Phase-4 grafana-audit missed dashboard JSON hardcoded UIDs; after Step 4 shutdown all panels show `No data`, capacity review meeting urgently rescheduled) |
 | **Compliance audit wants 6-month-old data, but old Prom retention is 3 months** | Confirm retention ≥ customer audit needs before Phase 4; if missed, export to cold storage but it disrupts the audit timeline | (e.g., customer SOX audit Q2 asks for Q4-prior-year alert history; old Prom 90-day retention falls short; pre-cutover the audit needs weren't confirmed; emergency Thanos-backup excavation from PVC snapshots, audit delayed 3 weeks) |
 | **dual-write left attached; vmagent retries to a dead endpoint** | Step 3 skipped or forgotten; vmagent log keeps showing `connection refused`, buffer accumulates; eventually OOMs | (e.g., Phase 4 Step 4 directly shut down old Prom but vmagent remote_write still points at old-Prom URL; vmagent buffer grows unbounded for 48h then OOMKilled; incident RCA reveals Step 3 was missed on the ticket) |
-| **`helm uninstall` nukes the PVC** (most severe incident class) | `helm uninstall` deletes ConfigMap + StatefulSet + **PVC** (default `reclaimPolicy: Delete`) simultaneously; historical data vaporises within seconds | (e.g., Phase 4 Step 4 customer SRE runs `helm uninstall prometheus-stack` to "clean up"; within 60s ConfigMap + PVC + underlying disk delete cascade; AM v1 routing all vanishes, Prom 30-day history vaporised; 2 months later compliance wants original routing rules + 6 months alert history; git history restores routing but metric data can only be partially backfilled from vmagent dual-write period — baseline before Phase 1 is completely lost) |
+| **`helm uninstall` nukes the PVC** (most severe incident class) | `helm uninstall` deletes ConfigMap + StatefulSet, and a **PVC** the chart renders itself goes with them; with a StorageClass `reclaimPolicy: Delete` (the default for dynamic provisioning) historical data vaporises within seconds | (e.g., Phase 4 Step 4 customer SRE runs `helm uninstall prometheus-stack` to "clean up"; within 60s ConfigMap + PVC + underlying disk delete cascade; AM v1 routing all vanishes, Prom 30-day history vaporised; 2 months later compliance wants original routing rules + 6 months alert history; git history restores routing but metric data can only be partially backfilled from vmagent dual-write period — baseline before Phase 1 is completely lost) |
 | **`_defaults.yaml` big-bang activation causes major alert change, mistaken for incident** | metric-split should roll out per-domain; big-bang causes customer ops to look at the dashboard and panic | (e.g., customer platform team "cleans it all up at once" after Phase 4 and enables `_defaults.yaml` across all clusters; alert volume swings ±40% within a week; customer ops urgently pages platform team thinking it's an incident; root cause is metric-split design working as intended, communication gap) |
 | **Quarter-end / fiscal close collides with grace period** | Grace period default 30 days hits month-end / quarter-end finance close; no-one can validate | (e.g., Phase 4 Step 1 scheduled 12/15; grace period crosses year-end + Q1 close + Lunar New Year; customer finance team unavailable for a full month; Step 4 shutdown drags to March; maintenance cost doubles in the interim) |
 | **PVC deleted, then 1 week later customer suddenly wants to query old data** | Step 4's 14-day wait before PVC deletion is the default; some cases need longer | (e.g., customer legal team after 6 weeks discloses they need an alert history from last year as evidence in an SLA dispute; old PVC deleted, Thanos backup expired; weekly snapshot partial restore; dispute goes to arbitration) |

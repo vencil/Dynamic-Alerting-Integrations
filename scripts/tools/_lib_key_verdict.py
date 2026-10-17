@@ -20,12 +20,14 @@ It joins three readings, none of them its own:
   registry lists it). A wildcard target names no key.
 
 A key is `read` when some reader reads it (`annotation` counts), `unread`
-when none does, `undecidable` when no root platform file was read (a
+when none does, and `undecidable` when no root platform file was read (a
 threshold key's exporter half cannot be judged; `_` keys are judged as
-usual, decision 7), and `platform_violation` when the exporter serves a `_`
-key the registry does not list — the platform's to fix, never charged to
-the tenant (decision 6). Severities are those decision 4 gives the gates
-once they block; callers that only report print them as they are.
+usual, decision 7). A `_` key the registry does not list is read by no
+reader — the exporter serves it in no layer (#3045) — so it is `unread`
+like any other, reason `unregistered`: an error in the tenant's own file, a
+notice on the platform file or profile it comes from (decision 4).
+Severities are those decision 4 gives the gates once they block; callers
+that only report print them as they are.
 
 A `disable` is read when it switches something off (`effective` /
 `partial`); a `noop` one is unread at `warning` (decision 4) — except on a
@@ -61,7 +63,7 @@ from _lib_constants import (  # noqa: E402
 #: `_` key there is read by the exporter or by nothing.
 _LAYERS = {"tenant": "tenant", "platform": "platform_tenants", "profile": "profile"}
 
-READ, UNREAD, UNDECIDABLE, PLATFORM_VIOLATION = "read", "unread", "undecidable", "platform_violation"
+READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
 
 
@@ -71,7 +73,7 @@ class KeyVerdict(NamedTuple):
     layer: str | None              # da-guard effective's layer, None when it has no source
     file: str | None               # the file whose value the tenant gets
     read_by: tuple[str, ...]       # sorted reader names; () for none
-    verdict: str                   # READ / UNREAD / UNDECIDABLE / PLATFORM_VIOLATION
+    verdict: str                   # READ / UNREAD / UNDECIDABLE
     severity: str | None           # ERROR / WARNING / NOTICE; None for READ
     reason: str | None             # served-values' reason, "disable_noop", or None
     disable: str | None            # "effective" / "partial" / "noop" / None
@@ -84,7 +86,7 @@ class Finding(NamedTuple):
     """One thing to report: a tenant's own key, or a platform file / profile
     key reaching `tenants`."""
     severity: str
-    kind: str                      # "unread" | "platform_violation" | "disable_noop" | "disable_partial"
+    kind: str                      # "unread" | "disable_noop" | "disable_partial"
     key: str
     file: str | None
     tenants: tuple[str, ...]
@@ -286,9 +288,7 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
         read_by.add("policy_engine")
 
     platform_side = layer in ("platform", "profile", "defaults")
-    if misspelt_reserved and "exporter" in read_by:
-        verdict, severity = PLATFORM_VIOLATION, NOTICE
-    elif read_by:
+    if read_by:
         verdict, severity, reason = READ, None, None
     elif undecidable and not key.startswith("_"):
         verdict, severity = UNDECIDABLE, None
@@ -315,28 +315,23 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
 
 def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str]) -> list[Finding]:
     """Deduplicated by (kind, file, key) for platform-side keys; one per
-    tenant key for the tenant's own file. A platform_violation is the
+    tenant key for the tenant's own file. An undeclared state filter is the
     platform's: one finding per key, on the root `_defaults.yaml` that
-    declares it, with every tenant it reaches — never charged to a tenant's
-    own file (decision 6)."""
+    should declare it, with every tenant it reaches — never charged to a
+    tenant's own file (decision 6, 7)."""
     groups: dict[tuple, list[KeyVerdict]] = {}
     for rows in keys.values():
         for v in rows:
             kinds = []
-            if v.verdict in (UNREAD, PLATFORM_VIOLATION):
+            if v.verdict == UNREAD:
                 kinds.append("disable_noop" if v.reason == "disable_noop" else v.verdict)
             if v.disable == "partial":
                 kinds.append("disable_partial")
             for kind in kinds:
-                platform_owned = kind == PLATFORM_VIOLATION or v.reason == "state_filter_undeclared"
-                if platform_owned:
-                    # The platform's to fix: the file that declares it (or
-                    # should), never the tenant's own.
-                    # (`state_filters:` is declared in the root `_defaults.yaml`
-                    # only).
-                    own_file = v.layer not in (None, "tenant") and v.reason != "state_filter_undeclared"
-                    file = v.file if own_file else root_defaults.get(v.tenant)
-                    gk = (kind, file, v.key, None, ())
+                if v.reason == "state_filter_undeclared":
+                    # The platform's to fix: `state_filters:` is declared in
+                    # the root `_defaults.yaml` only, never the tenant's own.
+                    gk = (kind, root_defaults.get(v.tenant), v.key, None, ())
                 else:
                     own = v.layer == "tenant"
                     gk = (kind, v.file, v.key, v.tenant if own else None,
