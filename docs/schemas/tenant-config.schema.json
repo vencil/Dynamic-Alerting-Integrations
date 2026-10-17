@@ -132,7 +132,8 @@
     "thresholdScalar": {
       "type": "string",
       "title": "Threshold Value (Scalar)",
-      "description": "Simple string threshold. Values: numeric threshold (e.g., '70'), 'disable' (stop alerting), or 'value:severity' (e.g., '1000:critical'). Three-state design: custom value, omit (use default), or 'disable' — the 'omit' state applies only to keys that have a value under 'defaults:' in _defaults.yaml. A key the platform only DECLARES (its 'optional_overrides:' list) has no default to inherit, so omitting it means no value and no series at all.",
+      "description": "Simple string threshold. Values: numeric threshold (e.g., '70'), 'disable' (stop alerting), or 'value:severity' (e.g., '1000:critical'). The severity after the LAST ':' must be warning or critical, in any letter case; any other suffix ('70:high', the empty '70:') makes the value unreadable, and the exporter serves it like an unparseable value (#3071; the pattern below checks the suffix only, tests/shared/threshold_value_matrix.json pins it to the exporter). Three-state design: custom value, omit (use default), or 'disable' — the 'omit' state applies only to keys that have a value under 'defaults:' in _defaults.yaml. A key the platform only DECLARES (its 'optional_overrides:' list) has no default to inherit, so omitting it means no value and no series at all.",
+      "pattern": "^[^:]*$|:[\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*([Ww][Aa][Rr][Nn][Ii][Nn][Gg]|[Cc][Rr][Ii][Tt][Ii][Cc][Aa][Ll])[\t\n\u000b\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$",
       "examples": ["70", "1000", "disable", "500:critical", "85.5"]
     },
     "scheduledValue": {

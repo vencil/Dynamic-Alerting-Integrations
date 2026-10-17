@@ -663,19 +663,10 @@ func RecipeID(spec CustomAlertSpec) (string, error) {
 }
 
 // parseCustomAlertThreshold splits "value[:severity]" → (value, severity).
-// severity defaults to "warning"; mirrors shape.py parse_threshold.
+// severity defaults to "warning". The grammar is the threshold rows' one
+// (splitThresholdSeverity, #3071); mirrors shape.py parse_threshold.
 func parseCustomAlertThreshold(threshold string) (value, severity string, err error) {
-	raw := strings.TrimSpace(threshold)
-	if i := strings.LastIndex(raw, ":"); i >= 0 {
-		value = strings.TrimSpace(raw[:i])
-		severity = strings.ToLower(strings.TrimSpace(raw[i+1:]))
-	} else {
-		value, severity = raw, "warning"
-	}
-	if severity != "warning" && severity != "critical" {
-		return "", "", fmt.Errorf("threshold severity %q must be warning or critical", severity)
-	}
-	return value, severity, nil
+	return splitThresholdSeverity(threshold)
 }
 
 // ResolvedSloObjective carries one slo_burn_rate declaration's raw objective

@@ -358,6 +358,8 @@ tenants:
     "redis_queue_length{queue='orders'}": "500:critical"
 ```
 
+severity 取最後一個 `:` 之後的部分，只能是 `warning` 或 `critical`（不分大小寫）。其他寫法（`500:high`、空的 `500:`）沒有任何 Rule Pack 規則會選，整個值視為讀不懂：基本 key 改送平台預設值（severity 為 warning），維度 key 與 `optional_overrides:` 宣告的 key 不送出該 series；兩者都由 da-guard 的 `value_not_served` 報出（[#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)）。
+
 **Prometheus 輸出：**
 ```
 user_threshold{tenant="db-a", component="mysql", metric="connections", severity="warning"} 100

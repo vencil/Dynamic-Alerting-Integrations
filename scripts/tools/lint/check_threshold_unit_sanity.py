@@ -13,7 +13,8 @@ verbatim:
 It materialised. #1217 cleaned eleven user-visible surfaces still teaching the
 old magnitude — and the mitigation was still zero lines: both
 `docs/schemas/platform-defaults.schema.json` ("values left loose") and
-`tenant-config.schema.json`'s `thresholdScalar` (bare `type: string`) decline
+`tenant-config.schema.json`'s `thresholdScalar` (`type: string`; its only
+pattern, #3071, checks the `:severity` suffix) decline
 to constrain threshold VALUES. This file is that mitigation.
 
 It is deliberately NOT `mysql_cpu`-shaped. Two independent adversarial reviews

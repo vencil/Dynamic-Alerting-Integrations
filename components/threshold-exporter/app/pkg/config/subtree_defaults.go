@@ -1208,13 +1208,11 @@ func thresholdScalar(value string) bool {
 	if isDisabled(strings.ToLower(raw)) {
 		return true
 	}
-	// `value:severity` is the inline-severity form resolveBaseRows accepts.
-	valuePart := raw
-	if idx := strings.Index(raw, ":"); idx >= 0 {
-		valuePart = raw[:idx]
-	}
-	_, err := strconv.ParseFloat(strings.TrimSpace(valuePart), 64)
-	return err == nil
+	// `value:severity` is the inline-severity form resolveBaseRows accepts —
+	// read by the same function, so a severity it refuses (#3071) is refused
+	// here too.
+	_, _, ok := parseThresholdValue(raw)
+	return ok
 }
 
 // SubtreeDefaultsRefusedKey is subtreeDefaultsRefusedKey, for da-guard's

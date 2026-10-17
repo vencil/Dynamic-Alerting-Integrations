@@ -719,10 +719,12 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 
     * #3060: the severity decides which alert compares a row — a
       `severity="warning"` row the `metric_key` alert, a critical one the
-      `<metric_key>_critical` alert, any other (`high`, `""`) none — and the
-      value alone decides when it fires. A side whose severity no rule
-      selects is `old_compared` / `new_compared` False: `backtest_change`
-      reads it as no threshold (`70` -> `70:high` silences the alert). When
+      `<metric_key>_critical` alert, any other none — and the value alone
+      decides when it fires. A side whose severity no rule selects is
+      `old_compared` / `new_compared` False: `backtest_change` reads it as
+      no threshold. Since #3071 the exporter serves no such row (`70:high`
+      is an unreadable value, served as the platform default); only an
+      older da-guard named by `DA_GUARD_BINARY` serves one. When
       the severities differ, `old_severity` / `new_severity` name them
       ("/"-joined when a side has several in the change's parts of the day);
       the same value under another compared severity (`70` -> `70:critical`)
@@ -1152,8 +1154,15 @@ def _observed_map():
 
 
 # The severities a threshold recording rule selects (`severity="warning"` for
-# `tenant:alert_threshold:<key>`, `severity="critical"` for `<key>_critical`).
+# `tenant:alert_threshold:<key>`, `severity="critical"` for `<key>_critical`),
+# which are the only ones the exporter serves (#3071): Go's
+# `config.ThresholdSeverities`, carried by tests/shared/threshold_value_matrix.json.
 _COMPARED_SEVERITIES = ("warning", "critical")
+
+# What Go's `strings.TrimSpace` trims (`unicode.IsSpace`). Python's `str.strip`
+# also trims U+001C..U+001F, which Go keeps.
+_GO_SPACE = ("\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+             "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
 
 
 def parse_threshold_value(key, raw):
@@ -1163,9 +1172,12 @@ def parse_threshold_value(key, raw):
 
     Mirrors `pkg/config/resolve.go`: a disabled value (`is_disabled`) serves
     nothing; a `<base>_critical` key's whole value is the number and its row
-    is critical (`resolveCriticalRows`); any other key's value is split once
-    at `:` into number and severity (`"70:critical"`; no suffix is
-    `warning`), each trimmed. The number is read with Python's `float`
+    is critical (`resolveCriticalRows`); any other key's value is
+    `splitThresholdSeverity`'s grammar (#3071): split at the LAST `:` into
+    number and severity, each trimmed, an ASCII severity lower-cased
+    (`"70:Critical"` is critical; no `:` is `warning`), and a severity other
+    than `_COMPARED_SEVERITIES` (`70:high`, the empty `70:`) makes the value
+    unreadable. Trimming is Go's (`_GO_SPACE`). The number is read with Python's `float`
     only where it agrees with Go's `ParseFloat` (measured, go1.x):
 
     * refused, Go refuses too: a non-ASCII digit; a signed NaN (`+nan`);
@@ -1179,13 +1191,19 @@ def parse_threshold_value(key, raw):
     dropped, which this tool cannot see from the value alone."""
     if raw is None or is_disabled(str(raw)):
         return None
-    text = str(raw)
+    text = str(raw).strip(_GO_SPACE)
     if key.endswith("_critical"):
         number, severity = text, "critical"
     else:
-        number, sep, suffix = text.partition(":")
-        severity = suffix.strip() if sep else "warning"
-    number = number.strip()
+        number, sep, suffix = text.rpartition(":")
+        if not sep:
+            number, severity = suffix, "warning"
+        else:
+            suffix = suffix.strip(_GO_SPACE)
+            severity = suffix.lower() if suffix.isascii() else suffix
+            if severity not in _COMPARED_SEVERITIES:
+                raise ValueError(raw)  # #3071: the exporter cannot read it either
+    number = number.strip(_GO_SPACE)
     if not number.isascii() or "_" in number:
         raise ValueError(raw)
     value = float(number)
@@ -1220,9 +1238,10 @@ def _written_alert_keys(change):
     (the exporter's own), and `N:critical` on a base key is a critical row,
     compared by the `<key>_critical` alert. #3060: each side is compared by
     the alert of its own severity, so `70` -> `50:critical` is compared by
-    both; a side of a severity no threshold rule selects is compared by none
-    (`backtest_change` reads it as no threshold). A value that is not read
-    as written, or no side any rule selects, is a reason."""
+    both. A value that is not read as written is a reason — since #3071 that
+    includes a severity no threshold rule selects (`70:high`, `70:`), which
+    makes the exporter's whole value unreadable (`parse_threshold_value`
+    raises), so the `uncompared` branch below is never taken for it."""
     key = canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
     keys, uncompared = [], []
     for raw in (change["old_value"], change["new_value"]):
@@ -1250,12 +1269,13 @@ def _alert_keys(change):
     A change read from two trees names them by its /metrics series (#2750):
     a critical row is compared by the `<metric_key>_critical` alert (a window
     overridden to `N:critical` too), a warning row by `metric_key`'s; a row
-    of any other severity (`60:high`, `60:Critical` — the rules select
-    `severity="warning"` / `"critical"` exactly) by none: #3060, such a row
-    is skipped (`backtest_change` reads its side as no threshold), and with
-    no row any rule selects the change is not backtested, the same reason
-    `_written_alert_keys` gives. A legacy twin is the same row under a
-    retired name and is never read.
+    of any other severity (the rules select `severity="warning"` /
+    `"critical"` only) by none: #3060, such a row is skipped
+    (`backtest_change` reads its side as no threshold), and with no row any
+    rule selects the change is not backtested. Since #3071 the exporter
+    serves no such row; one comes only from an older da-guard named by
+    `DA_GUARD_BINARY`, which served `60:high` as written. A legacy twin is
+    the same row under a retired name and is never read.
     ⛔ A non-critical row whose `metric_key` itself ends in `_critical` is a
     `<base>_critical` key served on its own (its base is not declared in the
     root `defaults:`): its metric label is `<x>_critical`, which no threshold
@@ -1637,7 +1657,7 @@ def _not_backtested_counts(changes):
 def _shown_value(change, side, none):
     """A side's value as the reports show it: `none` without one, and its
     severity beside it when the two sides' severities differ (#3060) and
-    the value does not already carry it (`--tenant 70:high` does)."""
+    the value does not already carry it (`--tenant 70:critical` does)."""
     value = change[f"{side}_value"]
     if value is None:
         return none
