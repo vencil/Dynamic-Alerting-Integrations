@@ -12,6 +12,9 @@ instead of keeping a copy.
 """
 from __future__ import annotations
 
+import dataclasses
+import json
+import math
 import sys
 from pathlib import Path
 
@@ -119,3 +122,257 @@ def test_the_image_ships_the_module() -> None:
     assert any(line.strip() == "_lib_parse_tree.py" for line in build.splitlines()), (
         "build.sh does not copy _lib_parse_tree.py: migration-audit would ImportError in the image")
 
+
+
+# ── loader API: Tree / to_python (ADR-036 step 4, #2906) ─────────────
+
+def _s(text, tag, *value):
+    """A scalar node; `value` omitted means the document has no "value" field."""
+    node = {"text": text, "tag": tag}
+    if value:
+        node["value"] = value[0]
+    return node
+
+
+@pytest.mark.parametrize("node, want", [
+    (_s("yes", "!!str", "yes"), "yes"),            # a string, never True (ADR-036 §2)
+    (_s("off", "!!str", "off"), "off"),
+    (_s("true", "!!bool", True), True),
+    (_s("False", "!!bool", False), False),
+    (_s("~", "!!null", None), None),
+    (_s("", "!!null", None), None),
+    (_s("0777", "!!int", "511"), 511),
+    (_s("0x1F", "!!int", "31"), 31),
+    (_s("-12", "!!int", "-12"), -12),
+    (_s("9223372036854775808", "!!int", "9223372036854775808"), 2**63),
+    (_s("18446744073709551615", "!!int", "18446744073709551615"), 2**64 - 1),
+    (_s("1e3", "!!float", "1000"), 1000.0),
+    (_s("1e-7", "!!float", "0.0000001"), 1e-7),
+    (_s("-0.0", "!!float", "-0"), -0.0),
+])
+def test_to_python_reads_a_scalar_by_its_tag(node, want) -> None:
+    got = lpt.to_python(node)
+    assert got == want and type(got) is type(want), (got, want)
+
+
+def test_a_big_int_is_exact() -> None:
+    got = lpt.to_python(_s("123456789012345678901", "!!int", "123456789012345678901"))
+    assert got == 123456789012345678901 and isinstance(got, int)
+
+
+# Every spelling yaml.v3 resolves to an infinite or NaN float
+# (third_party/yaml.v3/resolve.go); parse-tree gives them no "value".
+@pytest.mark.parametrize("text", [".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF"])
+def test_positive_infinity(text) -> None:
+    assert lpt.to_python(_s(text, "!!float")) == math.inf
+
+
+@pytest.mark.parametrize("text", ["-.inf", "-.Inf", "-.INF"])
+def test_negative_infinity(text) -> None:
+    assert lpt.to_python(_s(text, "!!float")) == -math.inf
+
+
+@pytest.mark.parametrize("text", [".nan", ".NaN", ".NAN"])
+def test_nan(text) -> None:
+    assert math.isnan(lpt.to_python(_s(text, "!!float")))
+
+
+def test_a_timestamp_is_its_text_and_not_a_string() -> None:
+    got = lpt.to_python(_s("2001-12-14", "!!timestamp"))
+    assert got == lpt.Timestamp("2001-12-14")
+    assert not isinstance(got, str)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        got.text = "x"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("node", [
+    _s("x", "!!binary", "x"),                  # a tag outside the allowed set
+    _s("x", "!foo", "x"),
+    _s("1", "!!int"),                          # no value
+    _s("1", "!!int", 1),                       # a JSON number, not the decimal text
+    _s("1", "!!int", " 1"),                    # int() would take these
+    _s("1", "!!int", "+1"),
+    _s("1000", "!!int", "1_000"),
+    _s("nan", "!!float", "nan"),               # float() would take it
+    _s("inf", "!!float"),                      # not a yaml.v3 spelling
+    _s(".inf", "!!float", None),               # null is not "no value"
+    _s("yes", "!!bool", "yes"),                # no lenient conversion (ADR-036 §2)
+    _s("yes", "!!str", True),
+    _s("~", "!!null"),
+    _s("2001-12-14", "!!timestamp", "2001-12-14"),
+    {"text": "x", "tag": "!!str", "value": "x", "extra": 1},
+    "x",
+    3,
+])
+def test_to_python_refuses_any_other_node(node) -> None:
+    with pytest.raises(ValueError):
+        lpt.to_python({"k": [node]})
+
+
+def test_to_python_keeps_keys_and_nesting() -> None:
+    node = {"010": {"_routing": {"send_resolved": _s("yes", "!!str", "yes")}},
+            "list": [_s("1", "!!int", "1"), [], {}, [_s("~", "!!null", None)]]}
+    assert lpt.to_python(node) == {"010": {"_routing": {"send_resolved": "yes"}},
+                                   "list": [1, [], {}, [None]]}
+
+
+def test_to_python_is_not_limited_by_the_recursion_limit() -> None:
+    depth = sys.getrecursionlimit() * 3
+    node: object = _s("x", "!!str", "x")
+    for _ in range(depth):
+        node = {"a": node}
+    got = lpt.to_python(node)
+    for _ in range(depth):
+        got = got["a"]
+    assert got == "x"
+
+
+def test_scalar_text() -> None:
+    assert lpt.scalar_text(_s("0777", "!!int", "511")) == "0777"
+    with pytest.raises(ValueError):
+        lpt.scalar_text({"a": _s("1", "!!int", "1")})
+
+
+def _doc(**over) -> dict:
+    doc = {
+        "schema": lpt.SCHEMA, "da_guard_version": "test", "mode": "tree",
+        "selected": {"t.yaml": ["exporter", "generator"], "bad.yaml": ["exporter", "generator"]},
+        "defaults_carriers": {}, "not_read": [{"file": "a/_defaults.yml", "reason": "unselected_defaults_carrier"}],
+        "files": {"t.yaml": {"cpu": _s("80", "!!int", "80")}},
+        "unreadable": [{"file": "bad.yaml", "kind": "duplicate_key", "message": "line 2: twice"}],
+        "rendered_by": {},
+    }
+    doc.update(over)
+    lpt.check_shape(doc)
+    return doc
+
+
+def test_tree_reads_a_selected_file() -> None:
+    tree = lpt.tree_of(_doc())
+    assert tree.value("t.yaml") == {"cpu": 80}
+    assert lpt.is_scalar(tree.node("t.yaml")["cpu"])
+    assert dict(tree.selected) == {"t.yaml": ("exporter", "generator"),
+                                   "bad.yaml": ("exporter", "generator")}
+    assert dict(tree.unreadable) == {"bad.yaml": ("duplicate_key", "line 2: twice")}
+    assert dict(tree.not_read) == {"a/_defaults.yml": "unselected_defaults_carrier"}
+    assert tree.value("t.yaml") is not tree.value("t.yaml")   # a new object each call
+
+
+def test_an_unreadable_file_raises_never_reads_empty() -> None:
+    tree = lpt.tree_of(_doc())
+    for read in (tree.value, tree.node):
+        with pytest.raises(lpt.FileUnreadable) as e:
+            read("bad.yaml")
+        assert (e.value.file, e.value.kind, e.value.message) == ("bad.yaml", "duplicate_key", "line 2: twice")
+        assert isinstance(e.value, lpt.ParseTreeError)
+
+
+@pytest.mark.parametrize("rel", ["a/_defaults.yml", "missing.yaml"])
+def test_a_file_no_reader_selects_is_a_key_error(rel) -> None:
+    tree = lpt.tree_of(_doc())
+    for read in (tree.value, tree.node):
+        with pytest.raises(KeyError):
+            read(rel)
+
+
+def test_tree_is_read_only() -> None:
+    tree = lpt.tree_of(_doc())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        tree.selected = {}  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        tree.selected["x"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        tree.unreadable["x"] = ("k", "m")  # type: ignore[index]
+
+
+def test_rendered_by_is_kept_when_present_and_none_when_absent() -> None:
+    tree = lpt.tree_of(_doc(rendered_by={"_defaults.yaml": {"defaults": ["exporter"]}}))
+    assert tree.rendered_by is not None
+    assert tree.rendered_by["_defaults.yaml"]["defaults"] == ("exporter",)
+    doc = _doc()
+    del doc["rendered_by"]
+    assert lpt.tree_of(doc).rendered_by is None
+
+
+@pytest.mark.parametrize("over", [
+    {"rendered_by": {"_defaults.yaml": {"defaults": "exporter"}}},
+    {"rendered_by": []},
+    {"unreadable": [{"file": "bad.yaml", "kind": "duplicate_key", "message": "m"}] * 2},
+    {"not_read": [{"file": "x.txt", "reason": "not_config_name"}] * 2},
+])
+def test_a_malformed_document_is_unusable_whole(over) -> None:
+    doc = _doc()
+    doc.update(over)
+    with pytest.raises(lpt.ParseTreeError):
+        lpt.tree_of(doc)
+
+
+def test_load_reads_the_real_document(tmp_path, da_guard_binary) -> None:
+    root = _tree(tmp_path, {
+        "t.yaml": "tenants:\n  010:\n    send_resolved: yes\n    cpu: 0777\n    at: 2001-12-14\n",
+        "dup.yaml": "a: 1\na: 2\n",
+    })
+    tree = lpt.load(root, da_guard_binary, 60)
+    assert tree.value("t.yaml") == {"tenants": {"010": {
+        "send_resolved": "yes", "cpu": 511, "at": lpt.Timestamp("2001-12-14")}}}
+    assert lpt.scalar_text(tree.node("t.yaml")["tenants"]["010"]["cpu"]) == "0777"
+    assert tree.rendered_by is not None   # today's da-guard writes it
+    with pytest.raises(lpt.FileUnreadable) as e:
+        tree.value("dup.yaml")
+    assert e.value.kind == "duplicate_key"
+
+
+def test_mapping_keys_come_sorted_not_in_file_order(tmp_path, da_guard_binary) -> None:
+    """The fact the module docstring states: parse-tree writes Go maps, whose
+    JSON keys encoding/json sorts. A reader needing the author's order cannot
+    get it from the document."""
+    root = _tree(tmp_path, {"t.yaml": 'zeta: 1\nalpha:\n  mike: a\n  bravo: b\n  "10": x\n  "9": y\nMid: 2\n_b: 3\n'})
+    v = lpt.load(root, da_guard_binary, 60).value("t.yaml")
+    assert list(v) == ["Mid", "_b", "alpha", "zeta"]
+    assert list(v["alpha"]) == ["10", "9", "bravo", "mike"]
+
+
+def test_every_corpus_row_through_the_real_binary(tmp_path, da_guard_binary) -> None:
+    """tests/shared/parse_tree_corpus.json, every row and every merge-key row,
+    each file alone in its own directory of one tree: a row parse-tree reads
+    converts without raising; a row it refuses raises FileUnreadable with the
+    row's kind. Directories, not file mode: one run of the binary for all
+    1,600-odd rows, and every row keeps the file name it is written for."""
+    sys.path.insert(0, str(ROOT / "tests" / "shared"))
+    from test_merge_key_policy_corpus import _encode  # noqa: E402
+
+    shared = ROOT / "tests" / "shared"
+    corpus = json.loads((shared / "parse_tree_corpus.json").read_text(encoding="utf-8"))
+    mk_docs = {r["id"]: r for r in json.loads(
+        (shared / "merge_key_policy_corpus.json").read_text(encoding="utf-8"))["rows"]}
+    mk_cats = json.loads((shared / "parse_tree_merge_key_categories.json")
+                         .read_text(encoding="utf-8"))["categories"]
+    rows = [(r["id"], r["file"], r["doc"], r.get("encoding"), r["category"]) for r in corpus["rows"]]
+    rows += [(r["id"], "_domain_policy.yaml", mk_docs[r["id"]]["doc"], mk_docs[r["id"]].get("encoding"),
+              mk_cats[r["id"]]) for r in corpus["merge_key_rows"]]
+    assert len(rows) > 1000
+    root = tmp_path / "conf.d"
+    rels = {}
+    for rid, name, text, enc, cat in rows:
+        rel = f"r{rid}/{name}"
+        if rel in rels:   # the same file twice (one row id = one file's bytes)
+            assert rels[rel] == cat, rel
+            continue
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_encode(text, enc))
+        rels[rel] = cat
+    tree = lpt.load(root, da_guard_binary, 300)
+    assert set(tree.selected) == set(rels), "every row's file must be selected"
+    read = refused = 0
+    for rel, cat in sorted(rels.items()):
+        if cat.startswith("unreadable:"):
+            with pytest.raises(lpt.FileUnreadable) as e:
+                tree.value(rel)
+            assert e.value.kind == cat.removeprefix("unreadable:"), rel
+            refused += 1
+        else:
+            assert cat in ("both_read", "pyyaml_only"), (rel, cat)
+            assert isinstance(tree.value(rel), dict), rel
+            read += 1
+    assert read and refused, (read, refused)
