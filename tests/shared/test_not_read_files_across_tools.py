@@ -17,6 +17,10 @@
    每支工具都會報的錯值，含記號 `zzqmark`）不得出現在任何輸出裡。
 3. 產生器在快取模式（產生器容器：不跑 tree 模式）下對 `not_read` 的判斷與 CLI 相同。
 
+⚠️ 第 2 條的「記號不得出現」只對會把讀到的值寫進輸出的工具有牙齒。`policy_engine`、
+`explain_keys` 只讀根目錄的 carrier，在子目錄的形狀上只能證明「不崩」；`assemble_config_dir`
+的產出目錄整個掃進比對文字。
+
 ⚠️ 在 4c87384 上第 2 條量不紅：今天兩份選擇規則在這些形狀上答案一致（見 PR 回報）。
 這裡守的是類別——下一次兩份實作分岔時，紅的是這支，而不是使用者的 rc 2。
 """
@@ -89,7 +93,7 @@ _TOOLS: dict[str, tuple[list[str], tuple[str, ...]]] = {
     "ops/policy_engine.py": (["--config-dir", "{d}", "--json", "--ci"], ()),
     "ops/explain_keys.py": (["--config-dir", "{d}", "--json"], ()),
     "ops/assemble_config_dir.py": (
-        ["--sources", "{d}", "--output", "{out}/asm", "--validate"], ()),
+        ["--sources", "{d}", "--output", "{out}/asm", "--validate"], ("asm",)),
     "lint/check_routing_profiles.py": (["--config-dir", "{d}", "--strict"], ()),
     "lint/check_confd_schema.py": (["--config-dir", "{d}"], ()),
 }
@@ -150,8 +154,12 @@ def _run(tool: str, shape: str) -> tuple[int, str]:
             cwd=tmp, env=_env(), timeout=300)
         text = r.stdout + "\n" + r.stderr
         for f in outputs:
-            if (out / f).exists():
-                text += "\n" + (out / f).read_text(encoding="utf-8", errors="replace")
+            target = out / f
+            # An output directory (assemble's) is read whole: a `not_read`
+            # file copied into it is the leak this row looks for.
+            for q in sorted(target.rglob("*")) if target.is_dir() else [target]:
+                if q.is_file():
+                    text += "\n" + q.read_text(encoding="utf-8", errors="replace")
     return r.returncode, text
 
 
