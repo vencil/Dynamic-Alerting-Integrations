@@ -22,6 +22,18 @@ import (
 // flock on lockFile across processes (#2884) — `tenant-api state restore`
 // runs as a second process beside the server, and a read-transform-write
 // that two processes interleave loses one of them.
+//
+// The flock is advisory: it keeps out only writers that take it too
+// (#1535). Mutate re-reads the record after it holds the lock, so a writer
+// outside tenant-api that holds an exclusive flock on <dir>/.lock across
+// its whole read-modify-write keeps its change. One that skips the lock is
+// silently overwritten — Mutate writes back what it read plus its own
+// change, and reports success. Get takes no lock, so such a writer should
+// also write through a dot-named temp file and a rename, as writeAtomic
+// does. This backend is for development and try-local only; production
+// runs the ConfigMap store, whose resourceVersion check makes the loser of
+// a race re-read instead of overwrite. dir_external_writer_test.go pins
+// both halves of this contract.
 type dirStore struct {
 	dir     string
 	onWrite OnWrite
@@ -29,7 +41,11 @@ type dirStore struct {
 	mu      sync.Mutex
 }
 
-// NewDir returns a Store backed by dir, creating it if needed.
+// NewDir returns a Store backed by dir, creating it if needed. It is for
+// development and try-local, not production (see dirStore): anything else
+// that edits files in dir must hold an exclusive flock on
+// filepath.Join(dir, ".lock") for the whole read-modify-write, or
+// tenant-api's next write silently overwrites the edit.
 func NewDir(dir string, onWrite OnWrite) (Store, error) {
 	if dir == "" {
 		return nil, errors.New("statestore: state directory is empty")

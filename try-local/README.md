@@ -82,7 +82,7 @@ git -C try-local/seed/conf.d log --oneline
 
 這就是「設定即 GitOps」最直接的體感：UI 一按 = 一個 commit。
 
-Saved View 與群組不在 conf.d：它們是 tenant-api 自己的紀錄，存在 named volume `tenant-api-state`（state store），不產生 commit。示範用的 Saved View 放在 `seed/state/`，tenant-api 每次啟動前把 volume 裡**還沒有**的紀錄複製進去（`seed/state-seed.sh`），所以你改過的 view 重開後仍在；`make clean-local` 會連 volume 一起清掉，下次啟動回到示範內容。
+Saved View 與群組不在 conf.d：它們是 tenant-api 自己的紀錄，存在 named volume `tenant-api-state`（state store），不產生 commit。示範用的 Saved View 放在 `seed/state/`，tenant-api 每次啟動前把 volume 裡**還沒有**的紀錄複製進去（`seed/state-seed.sh`），所以你改過的 view 重開後仍在；`make clean-local` 會連 volume 一起清掉，下次啟動回到示範內容。⚠️ 這個 volume 用的是 tenant-api 的 `dir` 模式（只供開發與 try-local，正式環境用 `configmap` 模式）：tenant-api 運行中要從外部改裡面的檔案，必須先對 `/state/.lock` 取得 exclusive flock、涵蓋整段讀改寫，否則會被 tenant-api 的下一次寫入**靜默覆蓋**。規則與範例見 [tenant-api README §dir 模式的外部寫入者必須拿 flock](../components/tenant-api/README.md#dir-模式的外部寫入者必須拿-flock)（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）。
 
 ## 看點
 
