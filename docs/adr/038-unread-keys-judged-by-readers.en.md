@@ -16,6 +16,8 @@ lang: en
 
 Revised 2026-10-16 (corrected from measurement while implementing the registry): one more reader class, `policy_engine`; one more layer, a subdirectory's `_defaults.yaml`; the probe checks both directions, for every reader whose output can be compared (decisions 2 and 3). The cost description in decision 8 is updated.
 
+Revised 2026-10-17: no `_` key produces a threshold row any more, and the exporter reads no `_` key the registry does not list, in line with the JSON schema (decision 2); the verdict therefore no longer has `platform_violation`, and such a key is `unread` (decisions 4 and 6).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -85,7 +87,7 @@ validate-config stops `_routng`, but nobody stops the rest:
 Today several places each decide "which keys are valid": the generator's reserved-key check, the exporter's check at load time, tenant-api's write check, and the prefix rules for `_state_` / `_routing`. The reserved-key list itself also exists in three copies: the Python constants, the Go constants and the JSON schema, kept consistent by comparison tests. Filling them in one by one does not work, because whether a key is valid depends on how the reader reads it, not on its name:
 
 - **Dimension keys**: the base of `es_heap_usage_percent{node="es-hot-01"}` is not in defaults. The generator's key-name check judges it invalid; the exporter's key-name check at load time judges it invalid too, but only writes a log line and serves it anyway. On the main conf.d the generator gives 17 such warnings; for 15 of them the exporter does serve the key (the other 2 have the value `disable`). These 15 keys are served, so they are not "read by nothing"; their problem is that no alert rule reads them (see decision 10).
-- **`_`-prefixed keys that are not registered**: the root defaults declares `_myth`, and a tenant writes `_myth: "7"`. The exporter serves 7 anyway, but the JSON schema rejects `_myth`.
+- **`_`-prefixed keys that are not registered**: the JSON schema rejects `_myth`; the generator's `--validate` warns only when the root defaults does not declare it; the exporter, when the root defaults does declare it, serves a tenant's `_myth: "7"` as a threshold of 7. The three reach different conclusions about the same key; decision 2 makes the exporter follow the registry.
 - **Typos brought in by a profile**: the exporter charges them to the tenant; the generator does not check them.
 - **The `_state_` prefix**: any spelling counts as valid.
 
@@ -133,7 +135,7 @@ At run time each tool reads the generated constants, not this JSON, so the da-to
 
 This boundary tells readers where to change a given list: top-level reserved keys change in the registry, sub-keys change in the program that reads them.
 
-**When the registry and measurement disagree**: measurement wins. For example, `_myth` is not registered, but the root defaults declares it and the exporter serves it. This is judged as "the platform file breaks the `_` namespace rule", reported on the platform file, and not counted as a tenant typo (see decision 6). In the long run the exporter will stop serving unregistered `_` keys so that all three agree; that is a breaking change, see [#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045).
+**The registry owns the `_` namespace**: no `_` key in the registry is a threshold, so a `_` key produces no threshold row in any layer or shape (base, `_critical`, dimensional), even when the root defaults declares it; and no reader reads a `_` key the registry does not list, in line with the JSON schema. For example, with `_myth: 5` in the root defaults and `_myth: "7"` in a tenant, the exporter produces no row for `_myth`, `_myth_critical` or `_myth{x="a"}`; served-values lists the key in `unserved` with the reason `unregistered`, and `da-guard effective`'s `not_served` marks it `unregistered` too; Go's write check (tenant-api) reports "unknown reserved key" and refuses it; and `expires:` emits no expiry event for it. A registry key written as a number in the root defaults (such as `_namespaces: 5`) is no threshold either, and the verdict judges it `unread` under decision 4. This is a breaking change: a deployment that relies on declaring such a key in the root defaults loses those rows on upgrade. To migrate, use a key the registry lists, or drop the `_` prefix so it becomes an ordinary threshold key ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)).
 
 ### 3. Keeping the registry and the code from drifting
 
@@ -157,9 +159,8 @@ For each key of each tenant, the shared function gives:
 | verdict | Meaning | Level |
 |---|---|---|
 | `read` | At least one reader reads it; keys registered as `annotation` also count | — |
-| `unread` | No reader reads it | Written in the tenant file: error; from a platform file or profile: notice, naming the file; unread only because of `disable_noop`: warning (see decision 8) |
+| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`) | Written in the tenant file: error; from a platform file or profile: notice, naming the file; unread only because of `disable_noop`: warning (see decision 8) |
 | `undecidable` | No root platform file was read, so the exporter half cannot judge the threshold keys the tenant wrote; reserved keys are judged as usual (see decision 7) | The verdict output returns rc 2 |
-| `platform_violation` | An unregistered `_` key is served by the exporter | Reported on the platform file; not charged to the tenant's change, and does not block writes for unrelated tenants |
 
 The same typo coming from a platform file is reported only once (deduplicated by file and key), listing the affected tenants, rather than one finding per tenant.
 
@@ -182,7 +183,7 @@ This brings a linked amendment: [ADR-036](./036-single-parser-effective-config.e
 
 ### 6. Platform-side problems are not charged to tenants
 
-The `platform_violation` of decision 4 and "`unread` from a platform file" appear in every run and are not charged to the tenant being changed. tenant-api's write check does not block writes for unrelated tenants because of such existing problems in platform files.
+Decision 4's "`unread` from a platform file or profile" (for example, a `_` key the registry does not list, declared in the root defaults) appears in every run and is not charged to the tenant being changed. tenant-api's write check does not block writes for unrelated tenants because of such existing problems in platform files.
 
 ### 7. When it cannot be judged
 
@@ -268,6 +269,7 @@ The input and today's measured output are in "Background"; this table is the ver
 ## Consequences and known limits
 
 - **The reserved-key list has only one source left**: adding a reserved key only changes the registry, followed by regeneration; each reader's own key-name checks are replaced by the shared verdict.
+- **A `_` key the registry does not list no longer produces threshold rows**: the exporter and the JSON schema agree on such a key. A deployment that served thresholds by declaring such a key in the root defaults loses those rows on upgrade (see decision 2 for the migration). The difference left: when the root defaults declares such a key, the generator's `--validate` still does not warn about a tenant's key of the same name; the shared verdict judges it `unread` all the same, and the difference goes when the generator takes the shared verdict in step 3 (decision 11).
 - **A verdict needs two programs**: the full "no reader reads it" needs both da-guard and the generator to run. An environment with only da-guard gets the exporter half; the generator half returns exit 4 (undecided).
 - **Typos and intentional omissions are not told apart**: for a threshold key the platform has not declared, the verdict does not know whether the tenant misspelled it or the platform forgot to declare it; both are reported with the same reason.
 - **Rule reads are based on the rule packs in the repo**: if the customer's own rules read a threshold, it will be reported as "no rule reads it" unless declared as an external reader. That is why this item is always advisory only.
@@ -277,7 +279,6 @@ The input and today's measured output are in "Background"; this table is the ver
   - The custom alert compiler and the exporter use different source rules for `_custom_alerts`: the compiler picks up tenants in `_` files in sub-directories that are not selected; the exporter does not read them ([#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)).
   - The generator reads `_metadata` but does not use it ([#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)).
   - `_severity_dedup` is read only from the tenant file, while other reserved keys inherit from profiles; whether this is intended needs confirming ([#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)).
-  - The exporter serves unregistered `_` keys, which disagrees with the schema (see decision 2, [#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)).
   - `disable` does not also turn off `_critical` and dimension keys (see decision 8, [#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)).
 
 ## Rejected alternatives

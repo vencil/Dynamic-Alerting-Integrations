@@ -2492,8 +2492,10 @@ paths:
         with the exporter's own reason (parse_failed,
         root_defaults_unwrapped, value_rejected, value_unparsed,
         value_unparsed_dropped, window_invalid, undeliverable,
-        root_null_undeclared, spelling_duplicate)
-        and the file of the value shown; spelling_duplicate names a
+        root_null_undeclared, spelling_duplicate, unregistered)
+        and the file of the value shown; unregistered is a `_` key
+        the reserved-key registry does not list, which /metrics
+        serves in no layer; spelling_duplicate names a
         spelling of a threshold that the same mapping also writes
         under the spelling /metrics serves (two spellings of one
         dimensional key, or both #1231 names). Dimensional keys are

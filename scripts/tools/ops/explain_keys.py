@@ -9,7 +9,7 @@ tenant of a conf.d, every key of its config is listed with
   readers the reserved-key registry declares for that layer (route
   generator, custom-alert compiler, Policy-as-Code, annotation), plus
   Policy-as-Code for a key a `_policies` rule names as `target`;
-* the verdict (read / unread / undecidable / platform_violation) with its
+* the verdict (read / unread / undecidable) with its
   severity and reason — the shared verdict, `_lib_key_verdict.judge_tree`,
   not a reading of this tool's own;
 * what a `disable` does (effective / partial / noop), by resolving the tree

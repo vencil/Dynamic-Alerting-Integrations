@@ -58,7 +58,7 @@ func TestServedValues_KeysSayWhetherTheExporterReadsEachKey(t *testing.T) {
 		"_silent_mode":                  {exporter: true, registered: yes()}, // from the profile
 		"mysql_conections":              {reason: keyReasonNoRow},
 		"mysql_slave_lagg":              {reason: keyReasonDisabled},
-		"_routng":                       {reason: keyReasonDisabled, registered: no()},
+		"_routng":                       {reason: keyReasonUnregistered, registered: no()}, // its `disable` switches nothing off (#3045)
 		"redis_memory":                  {reason: keyReasonDisabled},
 		"redis_memory_critical":         {exporter: true},
 		"_namespaces":                   {reason: keyReasonNotExporterKey, registered: yes(), declared: map[string][]string{"annotation": {"tenant", "platform_tenants"}}},
@@ -68,10 +68,10 @@ func TestServedValues_KeysSayWhetherTheExporterReadsEachKey(t *testing.T) {
 		"_routing_receiver_type":        {reason: keyReasonRetired, registered: no()},
 		retiredCPU:                      {reason: keyReasonShadowed},
 		"mysql_threads_running":         {exporter: true},
-		"_myth":                         {exporter: true, registered: no()}, // unregistered, yet /metrics serves it
+		"_myth":                         {reason: keyReasonUnregistered, registered: no()}, // the root declares it: still not served (#3045)
 		`mysql_connections{tenant="x"}`: {exporter: true},
 		"redis_evicted_keys":            {reason: keyReasonUndeliverable},
-		`_myth{__x="a"}`:                {exporter: true, registered: no()},
+		`_myth{__x="a"}`:                {reason: keyReasonUnregistered, registered: no()},
 		`redis_memory{ db = "a" }`:      {exporter: true}, // keyed as written
 	}
 	for k, w := range want {
@@ -92,25 +92,43 @@ func TestServedValues_KeysSayWhetherTheExporterReadsEachKey(t *testing.T) {
 			}
 		}
 	}
-	// An unregistered `_` key is read as the threshold the exporter takes it
-	// for: its switch-off and its rows count; nothing at all is unregistered.
-	// `_custom_alerts` is read only when it serves a recipe.
+	// #3045: a `_` key the registry does not list is read in no layer — not
+	// as a threshold even when the root `defaults:` declares it, so its
+	// `disable` switches nothing off either. `_custom_alerts` is read only
+	// when it serves a recipe.
 	code, doc2, _, stderr := served(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  cpu: 80\n  _myth: 3\n  _myth_critical: 8\n  _silent_foo: 5\n",
 		"t1.yaml": "tenants:\n  t1:\n    _myth: disable\n    _myth_critical: disable\n    _nothing: 4\n" +
-			"    _silent_foo: disable\n" + // the row generator never reads `_silent_…`
+			"    _silent_foo: disable\n" +
 			"    _custom_alerts:\n      - {recipe: bogus}\n",
 		"t2.yaml": "tenants:\n  t2:\n    cpu: 1\n",
 	}, "")
 	mustOK(t, code, stderr)
-	for k, w := range map[string]string{"_myth": keyReasonDisabled, "_myth_critical": keyReasonDisabled,
+	for k, w := range map[string]string{"_myth": keyReasonUnregistered, "_myth_critical": keyReasonUnregistered,
 		"_nothing": keyReasonUnregistered, "_silent_foo": keyReasonUnregistered, customAlertsKey: keyReasonNoRow} {
 		if e := doc2.Tenants["t1"].Keys[k]; e.Exporter || e.Reason != w {
 			t.Errorf("t1 keys[%q] = %+v, want reason %q", k, e, w)
 		}
 	}
-	if _, ok := doc2.Tenants["t2"].Values["_myth"]; !ok {
-		t.Errorf("control: t2 is served _myth: %v", doc2.Tenants["t2"].Values)
+	// t2 writes none of them: the root's own values serve it no row, and
+	// each is in its unserved with the root's value and a keys entry.
+	t2 := doc2.Tenants["t2"]
+	for _, k := range []string{"_myth", "_myth_critical"} {
+		if _, ok := t2.Values[k]; ok {
+			t.Errorf("t2 is served root %s: %v", k, t2.Values)
+		}
+		if _, ok := t2.Severities[k]; ok {
+			t.Errorf("t2 has a severity for root %s: %v", k, t2.Severities)
+		}
+	}
+	if want := map[string]any{"_myth": 3.0, "_myth_critical": 8.0, "_silent_foo": 5.0}; !reflect.DeepEqual(t2.Unserved, want) {
+		t.Errorf("t2 unserved = %v, want %v", t2.Unserved, want)
+	}
+	if e := t2.Keys["_myth"]; e.Exporter || e.Reason != keyReasonUnregistered {
+		t.Errorf("t2 keys[_myth] = %+v, want reason %q", e, keyReasonUnregistered)
+	}
+	if _, ok := t2.Values["cpu"]; !ok {
+		t.Errorf("control: t2 is not served cpu: %v", t2.Values)
 	}
 	if e := got["_routing_receiver_type"]; e.Hint == "" {
 		t.Errorf("a retired key carries the registry's hint; keys[_routing_receiver_type] = %+v", e)

@@ -328,13 +328,14 @@ func TestGuard_RootNullMessageNamesTheRootSpelling(t *testing.T) {
 	}
 }
 
-// For da-guard, optional_overrides: does not declare a non-reserved `_` key
-// (#2707). The reader of that list, resolveDeclaredRows, skips every key
-// starting with `_`, so listing a root-null `_myth` there serves nothing: the
-// finding stays and served-values keeps the tenant's 50 in `unserved`. `_myth` is no
-// reserved key and no key resolveBaseRows skips: a number for it at the
-// root serves the tenant's 50. The non-`_` control — the same listing
-// serving the tenant's value with no finding — is
+// A `_` key the reserved-key registry does not list (`_myth`) is served in
+// no layer (#3045), so no root declaration is a fix for it and
+// root_default_null_undeclared — whose advice is a declaration — does not
+// name it: not with the root null listed under optional_overrides: (whose
+// reader, resolveDeclaredRows, skips every `_` key, #2707), and not with a
+// root number either, which before #3045 served the tenant's 50. The
+// tenant's 50 stays in `unserved`, unregistered. The non-`_` control — the
+// same listing serving the tenant's value with no finding — is
 // TestGuard_RootNullFixServesTheTenantValue's "optional_overrides, null".
 func TestGuard_RootNullUnderscoreKeyNotDeclaredByOptionalOverrides(t *testing.T) {
 	t.Parallel()
@@ -344,29 +345,25 @@ func TestGuard_RootNullUnderscoreKeyNotDeclaredByOptionalOverrides(t *testing.T)
 			"sub/tx.yaml":    "tenants:\n  tx:\n    _myth: 50\n",
 		}
 	}
-	listed := files("defaults:\n  _myth: null\n  mysql_slow_queries: 5\noptional_overrides: [_myth]\n")
-
-	_, got := guardFindingsOf(t, listed)
-	if len(got) != 1 || got[0].Kind != findingkind.FindingRootDefaultNullUndeclared.String() ||
-		got[0].TenantID != "tx" || got[0].Field != "_myth" {
-		t.Errorf("findings = %+v, want one root_default_null_undeclared for tx / _myth", got)
+	for name, root := range map[string]string{
+		"listed":      "defaults:\n  _myth: null\n  mysql_slow_queries: 5\noptional_overrides: [_myth]\n",
+		"root number": "defaults:\n  _myth: 30\n  mysql_slow_queries: 5\n",
+	} {
+		tree := files(root)
+		if code, got := guardFindingsOf(t, tree, "--warn-as-error"); code != exitOK || len(got) != 0 {
+			t.Errorf("%s: exit = %d, findings = %+v; want 0 and none", name, code, got)
+		}
+		code, doc, _, stderr := served(t, tree, "2026-10-01T00:00:00Z")
+		mustOK(t, code, stderr)
+		tv := doc.Tenants["tx"]
+		if _, has := tv.Values["_myth"]; has {
+			t.Errorf("%s: values carries _myth: %v", name, tv.Values)
+		}
+		if want := map[string]any{"_myth": "50"}; !reflect.DeepEqual(tv.Unserved, want) {
+			t.Errorf("%s: tx unserved = %v, want %v", name, tv.Unserved, want)
+		}
+		if e := tv.Keys["_myth"]; e.Exporter || e.Reason != keyReasonUnregistered {
+			t.Errorf("%s: keys[_myth] = %+v, want reason %q", name, e, keyReasonUnregistered)
+		}
 	}
-	code, doc, _, stderr := served(t, listed, "2026-10-01T00:00:00Z")
-	mustOK(t, code, stderr)
-	tv := doc.Tenants["tx"]
-	if _, has := tv.Values["_myth"]; has {
-		t.Errorf("values carries _myth: %v", tv.Values)
-	}
-	if want := map[string]any{"_myth": "50"}; !reflect.DeepEqual(tv.Unserved, want) {
-		t.Errorf("tx unserved = %v, want %v", tv.Unserved, want)
-	}
-
-	// The root-number half of the fix does serve it.
-	fixed := files("defaults:\n  _myth: 30\n  mysql_slow_queries: 5\n")
-	if code, got := guardFindingsOf(t, fixed, "--warn-as-error"); code != exitOK || len(got) != 0 {
-		t.Errorf("root number: exit = %d, findings = %+v; want 0 and none", code, got)
-	}
-	code, doc, _, stderr = served(t, fixed, "2026-10-01T00:00:00Z")
-	mustOK(t, code, stderr)
-	wantValue(t, doc, "tx", "_myth", 50)
 }
