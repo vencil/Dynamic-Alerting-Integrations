@@ -19,7 +19,7 @@ import (
 // On success, the email and groups are available via RequestEmail/RequestGroups.
 // On failure, responds 401 (missing identity) or 403 (insufficient permission).
 //
-// tenantIDFn extracts the tenant ID from the request (may be nil for list endpoints).
+// tenantIDFn extracts the tenant ID from the request (may be nil — see below).
 //
 // ADR-027 identity seam (PR-1b-i): the header identity is now resolved through
 // HeaderResolver into a VerifiedPrincipal, and — when a machine-identity
@@ -27,7 +27,61 @@ import (
 // the authorization check. The authorization decision itself is UNCHANGED: it
 // runs entirely off the hop-B header groups. With no auditor installed (the
 // default) the observable behavior is byte-identical to the pre-seam version.
+//
+// tenantIDFn == nil checks `want` on the platform wildcard "*" — passed only by
+// a rule whose tenants list holds the literal "*". That is the gate for
+// platform-scope resources with no per-tenant ownership (saved views). A
+// collection route whose handler filters per tenant mounts
+// MiddlewareAnyTenant instead (#2520).
 func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) string) func(http.Handler) http.Handler {
+	return m.gate(func(w http.ResponseWriter, r *http.Request, bPrincipal *VerifiedPrincipal) bool {
+		return m.authorizeTenant(w, r, bPrincipal, want, tenantIDFn)
+	})
+}
+
+// MiddlewareAnyTenant is the route gate for collection endpoints whose handler
+// narrows the response per tenant (#2520): the caller passes iff some rule
+// could grant `want` on at least one tenant (GrantsSomeTenant — decided from
+// the principal and _rbac.yaml alone, see there for why it is not "an existing
+// tenant"). Everything else — identity resolution, the 401, the
+// machine-identity audit, the context the handler reads — is Middleware's.
+//
+// ⛔ Mount it only on a route whose handler decides visibility per tenant
+// itself. This gate admits a caller holding ["db-a"]; a handler that returns
+// platform-wide data unfiltered would hand it everything. The read-route
+// manifest in cmd/server/routes_test.go names each route's filter.
+func (m *Manager) MiddlewareAnyTenant(want Permission) func(http.Handler) http.Handler {
+	return m.gate(func(w http.ResponseWriter, r *http.Request, bPrincipal *VerifiedPrincipal) bool {
+		if m.GrantsSomeTenant(bPrincipal, want) {
+			return true
+		}
+		m.writeForbiddenAnyTenant(w, r, want)
+		return false
+	})
+}
+
+// MiddlewareAuthenticated is the route gate for endpoints that answer about the
+// caller itself and nothing else (GET /api/v1/me — the OIDC userinfo / GitHub
+// GET /user shape): it requires an identity (401 without one, exactly as
+// Middleware) and grants nothing to decide. No rule has to match: a caller
+// with zero grants — no rule names it, an org-scoped rule it lacks the claim
+// for under enforce, or a configured _rbac.yaml with zero groups (MED-8) —
+// passes and learns only that it holds no grant. MED-8 is about access to
+// tenant data, which this gate never guards.
+//
+// ⛔ Mount it only on a route whose response is derived from the caller's own
+// principal (its matched rules) and names nothing else; any route that reads
+// tenant or platform data takes Middleware or MiddlewareAnyTenant.
+func (m *Manager) MiddlewareAuthenticated() func(http.Handler) http.Handler {
+	return m.gate(func(http.ResponseWriter, *http.Request, *VerifiedPrincipal) bool { return true })
+}
+
+// gate is the shared body of Middleware, MiddlewareAnyTenant and
+// MiddlewareAuthenticated: resolve the hop-B principal (401 on a missing
+// identity), run the machine-identity audit side-channel, let authorize decide
+// (it writes its own denial), then attach the identity to the request context
+// for the handler.
+func (m *Manager) gate(authorize func(http.ResponseWriter, *http.Request, *VerifiedPrincipal) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Resolve the trusted-hop (header) principal. Empty email → 401,
@@ -62,43 +116,7 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 				}
 			}
 
-			// For list endpoints (tenantIDFn == nil), check read on wildcard "*"
-			tenantID := "*"
-			if tenantIDFn != nil {
-				tenantID = tenantIDFn(r)
-			}
-
-			// Authorization runs off the hop-B principal through the single
-			// evaluation core (ADR-027 / LD-6 P3): the principal's groups —
-			// and, for rules carrying a match: block, its named claims —
-			// feed the one shared ruleMatches predicate.
-			//
-			// ADR-027 / LD-6 P4c: per-tenant READ routes additionally gate on the
-			// org axis. A read-by-id of another org's tenant is the read-only
-			// IDOR the enforce flip must close, so when this is a read on a
-			// concrete tenant (want == PermRead AND the resolved tenant is not the
-			// platform wildcard "*"), resolve the tenant's org list and route
-			// through AllowedInOrgRead (records the read/visibility would-deny on
-			// axis="org", flips atomically with list+write via the same
-			// orgScopeEnforce flag). The wildcard "*" (list routes, tenantIDFn==nil)
-			// stays org-blind by design — invariant I6: org-scope does not apply to
-			// platform scope. WRITE routes (PermWrite/PermAdmin middleware) stay
-			// org-blind here too; their org gate lives handler-side in
-			// RequireOrgWrite, one plane per site. The guard keys on the RESOLVED
-			// tenantID != "*" (not tenantIDFn != nil): TenantIDFromPath returns
-			// chi.URLParam, so a crafted id="*" must remain org-blind.
-			var authorized bool
-			if want == PermRead && tenantID != "*" {
-				var orgs []string
-				if m.orgResolver != nil {
-					orgs = m.orgResolver(tenantID)
-				}
-				authorized = m.AllowedInOrgRead(bPrincipal, tenantID, want, orgs)
-			} else {
-				authorized = m.Allowed(bPrincipal, tenantID, want)
-			}
-			if !authorized {
-				m.writeForbidden(w, r, tenantID, want)
+			if !authorize(w, r, bPrincipal) {
 				return
 			}
 
@@ -111,6 +129,53 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// authorizeTenant is Middleware's decision: `want` on the tenant tenantIDFn
+// names, or on the platform wildcard "*" when tenantIDFn is nil. On a denial it
+// writes the 403 and returns false.
+func (m *Manager) authorizeTenant(w http.ResponseWriter, r *http.Request, bPrincipal *VerifiedPrincipal,
+	want Permission, tenantIDFn func(*http.Request) string) bool {
+	// Platform-scope routes (tenantIDFn == nil) check want on wildcard "*"
+	tenantID := "*"
+	if tenantIDFn != nil {
+		tenantID = tenantIDFn(r)
+	}
+
+	// Authorization runs off the hop-B principal through the single
+	// evaluation core (ADR-027 / LD-6 P3): the principal's groups —
+	// and, for rules carrying a match: block, its named claims —
+	// feed the one shared ruleMatches predicate.
+	//
+	// ADR-027 / LD-6 P4c: per-tenant READ routes additionally gate on the
+	// org axis. A read-by-id of another org's tenant is the read-only
+	// IDOR the enforce flip must close, so when this is a read on a
+	// concrete tenant (want == PermRead AND the resolved tenant is not the
+	// platform wildcard "*"), resolve the tenant's org list and route
+	// through AllowedInOrgRead (records the read/visibility would-deny on
+	// axis="org", flips atomically with list+write via the same
+	// orgScopeEnforce flag). The wildcard "*" (platform-scope routes,
+	// tenantIDFn==nil) stays org-blind by design — invariant I6: org-scope does not apply to
+	// platform scope. WRITE routes (PermWrite/PermAdmin middleware) stay
+	// org-blind here too; their org gate lives handler-side in
+	// RequireOrgWrite, one plane per site. The guard keys on the RESOLVED
+	// tenantID != "*" (not tenantIDFn != nil): TenantIDFromPath returns
+	// chi.URLParam, so a crafted id="*" must remain org-blind.
+	var authorized bool
+	if want == PermRead && tenantID != "*" {
+		var orgs []string
+		if m.orgResolver != nil {
+			orgs = m.orgResolver(tenantID)
+		}
+		authorized = m.AllowedInOrgRead(bPrincipal, tenantID, want, orgs)
+	} else {
+		authorized = m.Allowed(bPrincipal, tenantID, want)
+	}
+	if !authorized {
+		m.writeForbidden(w, r, tenantID, want)
+		return false
+	}
+	return true
 }
 
 // observeSafely runs a machine-identity audit as a guaranteed side-channel:
@@ -196,6 +261,19 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) 
 		panic(fmt.Sprintf("rbac.writeError: no error-code mapping for status %d (code is required by the OpenAPI error schema)", status))
 	}
 	writeEnvelope(w, r, status, errorEnvelope{Error: msg, Code: code})
+}
+
+// writeForbiddenAnyTenant is MiddlewareAnyTenant's 403: no rule grants the
+// caller `want` on any tenant. Same envelope, code and help link as
+// writeForbidden; the message names no tenant, because none was asked for.
+func (m *Manager) writeForbiddenAnyTenant(w http.ResponseWriter, r *http.Request, want Permission) {
+	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{
+		Error: "insufficient permissions: no tenant grants " + string(want),
+		Code:  codeForbidden,
+		Help:  "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/governance-security.md",
+		Action: "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) +
+			"' permission for at least one tenant.",
+	})
 }
 
 // writeForbidden writes a 403 response with a help link and suggested action.

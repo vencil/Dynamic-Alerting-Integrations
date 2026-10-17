@@ -3,9 +3,9 @@ package handler
 // GET /api/v1/events — the change-event stream, filtered per subscriber
 // (#3123).
 //
-// The route's middleware checks read on "*" only. An org-scoped (or
-// environment / domain scoped) `tenants: ["*"]` rule passes that check,
-// because rbac.Allowed holds those axes at shadow, so the route is not an
+// The route's middleware only checks that the caller may read SOME tenant
+// (#2520; before that, read on "*" — which an org-, environment- or
+// domain-scoped `tenants: ["*"]` rule passes too), so the route is not an
 // isolation barrier: before #3123 every write's tenant id — and every state
 // record's entity, federation/<tenant> included — went to every subscriber.
 

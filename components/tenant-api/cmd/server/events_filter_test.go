@@ -17,8 +17,8 @@ import (
 // #3123 item 1, end to end: GET /api/v1/events as main.go serves it (the
 // route's RBAC middleware in front of handler.EventStream over a real hub,
 // events built by the constructors main.go broadcasts). An org-scoped
-// `tenants: ["*"]` caller passes the route's "*" gate; the stream must still
-// carry only its own org's tenants.
+// `tenants: ["*"]` caller passes the route's any-tenant gate (#2520); the
+// stream must still carry only its own org's tenants.
 func TestEventsRoute_FiltersPerSubscriber(t *testing.T) {
 	t.Parallel()
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", `groups:
@@ -48,7 +48,7 @@ func TestEventsRoute_FiltersPerSubscriber(t *testing.T) {
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		mgr.Middleware(rbac.PermRead, nil)(handler.EventStream(d, hub)).ServeHTTP(w, req)
+		mgr.MiddlewareAnyTenant(rbac.PermRead)(handler.EventStream(d, hub)).ServeHTTP(w, req)
 		close(done)
 	}()
 	deadline := time.Now().Add(2 * time.Second)

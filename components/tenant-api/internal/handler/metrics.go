@@ -83,6 +83,28 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Flush passes a flush through to the wrapped writer. Embedding the
+// http.ResponseWriter interface promotes only its three methods, so without
+// this every handler behind MetricsMiddleware saw a writer that is not an
+// http.Flusher — and GET /api/v1/events, which requires one, answered every
+// subscriber 500 "streaming not supported" in the production router.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// FlushError is what http.ResponseController.Flush calls first: without it
+// the controller would stop at Flush above and report nil, so the SSE stream
+// could not see that the flush to a dead connection failed.
+func (w *statusWriter) FlushError() error {
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Unwrap exposes the wrapped writer to http.ResponseController, so the SSE
+// stream's per-write deadlines (#143) reach the connection.
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // MetricsHandler handles GET /metrics in Prometheus exposition format.
 //
 // PR-11/11 added two rate-limiter metrics (`rejections_total` counter
