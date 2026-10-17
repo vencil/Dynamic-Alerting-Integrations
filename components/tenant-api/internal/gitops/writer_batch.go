@@ -135,26 +135,33 @@ func (w *Writer) batchWorktreesDir() (string, error) {
 // confRel returns configDir relative to the repository's top level, as git
 // paths in a staging worktree name it ("." when conf.d is the top level).
 func (w *Writer) confRel() (string, error) {
+	_, rel, err := w.confTopRel()
+	return rel, err
+}
+
+// confTopRel is confRel that also returns the top level it is relative to
+// (symlinks resolved): a command given rel as a pathspec runs there.
+func (w *Writer) confTopRel() (top, rel string, err error) {
 	out, err := w.gitOutput(w.gitDir, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return "", fmt.Errorf("locate repository top level: %w", err)
+		return "", "", fmt.Errorf("locate repository top level: %w", err)
 	}
-	top, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+	top, err = filepath.EvalSymlinks(strings.TrimSpace(string(out)))
 	if err != nil {
-		return "", fmt.Errorf("repository top level: %w", err)
+		return "", "", fmt.Errorf("repository top level: %w", err)
 	}
 	conf, err := filepath.Abs(w.configDir)
 	if err == nil {
 		conf, err = filepath.EvalSymlinks(conf)
 	}
 	if err != nil {
-		return "", fmt.Errorf("config dir: %w", err)
+		return "", "", fmt.Errorf("config dir: %w", err)
 	}
-	rel, err := filepath.Rel(top, conf)
+	rel, err = filepath.Rel(top, conf)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("config dir is not inside the git repository")
+		return "", "", fmt.Errorf("config dir is not inside the git repository")
 	}
-	return rel, nil
+	return top, rel, nil
 }
 
 // stagingTree is one batch's worktree.
@@ -238,7 +245,9 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 			return nil, fmt.Errorf("list conf.d in the batch worktree: %w", err)
 		}
 		if len(tracked) > 0 { // an empty conf.d has nothing to check out
-			if err := w.gitIn(root, "checkout", "--", filepath.ToSlash(rel)); err != nil {
+			// literalPathspec: checkout runs post-checkout, so it gets no
+			// GIT_LITERAL_PATHSPECS (literalPathspecs).
+			if err := w.gitIn(root, "checkout", "--", literalPathspec(filepath.ToSlash(rel))); err != nil {
 				w.closeStaging(st)
 				return nil, fmt.Errorf("check out conf.d in the batch worktree: %w", err)
 			}
