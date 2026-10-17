@@ -217,6 +217,7 @@ class ConfdReader:
         self.timeout = timeout
         self._tree: Optional[Tree] = None
         self._verdicts: "dict[str, Optional[tuple[Optional[str], dict]]]" = {}
+        self._carriers_by_dir: "Optional[dict[str, list[str]]]" = None
 
     def tree(self) -> Tree:
         """The tree-mode document (run on first use). Raises ParseTreeError."""
@@ -312,7 +313,7 @@ class ConfdReader:
             chosen = self.tree().defaults_carriers.get(d)
         else:
             chosen = None
-            for name in self._carrier_names(d + "/_"):
+            for name in self._carrier_names("_" if d == "." else d + "/_"):
                 verdict = self._verdict(name if d == "." else f"{d}/{name}")
                 if verdict is not None:
                     chosen = verdict[1].get(d)
@@ -320,22 +321,24 @@ class ConfdReader:
         return None if chosen is None else self.root / chosen
 
     def _carrier_names(self, rel: str) -> list[str]:
-        """The defaults-named regular files (`_lib_confd.is_defaults_name`,
-        the exporter's `confdname.IsDefaults`; a link to a regular file
-        counts, a FIFO or a directory does not — never opened) of *rel*'s
-        directory, sorted; [] unless *rel* itself is one or names no file
-        (``dir/_``)."""
-        from _lib_confd import is_defaults_name  # _lib_confd imports this module lazily
+        """The defaults carriers (`_lib_confd.is_defaults_name`, the
+        exporter's `confdname.IsDefaults`) the shared walk
+        (`_lib_confd.iter_config_files`: regular files, links to one
+        included, hidden entries pruned — run once per reader) finds in
+        *rel*'s directory, by name, sorted; [] unless *rel* itself is one or
+        names no file (``dir/_``)."""
+        from _lib_confd import is_defaults_name, iter_config_files  # lazy: imports this module
         parent, _, base = rel.rpartition("/")
         if base != "_" and not is_defaults_name(base):
             return []
-        directory = os.path.join(self.root, parent or ".")
-        try:
-            names = os.listdir(directory)
-        except OSError:
-            return []
-        return sorted(n for n in names
-                      if is_defaults_name(n) and os.path.isfile(os.path.join(directory, n)))
+        if self._carriers_by_dir is None:
+            by_dir: dict[str, list[str]] = {}
+            for p in iter_config_files(self.root):
+                if is_defaults_name(p.name):
+                    d = p.parent.relative_to(self.root).as_posix()
+                    by_dir.setdefault("" if d == "." else d, []).append(p.name)
+            self._carriers_by_dir = by_dir
+        return sorted(self._carriers_by_dir.get(parent, []))
 
     def _verdict(self, rel: str) -> "Optional[tuple[Optional[str], dict]]":
         """Under a cache: ``(not_read reason or None, defaults_carriers)`` of

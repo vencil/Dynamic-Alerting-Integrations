@@ -122,6 +122,28 @@ class _PyYamlReader:
             raise FileUnreadable(rel, "top_level_not_mapping", type(data).__name__)
         return data
 
+    def _chosen(self, directory) -> "Path | None":
+        from _lib_confd import (is_defaults_name, iter_config_files, readable_carriers,
+                                select_defaults_carrier)
+        carriers = [p for p in iter_config_files(self.root)
+                    if p.parent == Path(directory) and is_defaults_name(p.name)]
+        return select_defaults_carrier(readable_carriers(carriers)[0])
+
+    def split_not_read(self, paths):
+        """The read loop's carrier selection before step 4 (Python's)."""
+        from _lib_confd import is_defaults_name
+        read, skipped = [], []
+        for p in map(Path, paths):
+            chosen = self._chosen(p.parent) if is_defaults_name(p.name) else None
+            if chosen is not None and p != chosen:
+                skipped.append((p, "unselected_defaults_carrier"))
+            else:
+                read.append(p)
+        return read, skipped
+
+    def carrier(self, directory) -> "Path | None":
+        return self._chosen(directory)
+
 CORPUS_PATH = Path(__file__).parent / "merge_key_policy_corpus.json"
 SEED = 2677
 DOCS = 500
