@@ -110,6 +110,7 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = gitEnv()
 	// Bound how long Wait blocks for pipe I/O after the deadline kill, so a
 	// surviving remote-helper grandchild holding stdout can't keep the writer
 	// mutex pinned past the deadline (see defaultGitKillGrace).
@@ -118,6 +119,33 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 		cmd.WaitDelay = defaultGitKillGrace
 	}
 	return cmd, ctx, cancel
+}
+
+// gitEnv is the environment every git child runs with: the process's own,
+// plus GIT_LITERAL_PATHSPECS=1 (#3114). Every path tenant-api hands git is a
+// name — conf.d's path, as the operator configured it, and file names in it —
+// never a pattern; a `[`, `*` or `?` in one would otherwise glob onto other
+// tracked files, and `git add` / `reset` / `checkout` / `log` would touch or
+// read those too. Set here, in the one place every git command is built, so a
+// call site added later is literal without remembering to be. It also turns
+// pathspec magic off: a `:(top)` prefix would be read as part of the name, so
+// no call site uses one (a path is run from the directory it is relative to
+// instead). Callers that add variables append to cmd.Env, not os.Environ().
+//
+// GIT_GLOB_PATHSPECS and GIT_ICASE_PATHSPECS are dropped: git refuses to
+// run with either of them and GIT_LITERAL_PATHSPECS set ("incompatible with
+// all other global pathspec settings"), so an inherited one would fail every
+// command — and icase would match a name of another case. A duplicate
+// GIT_LITERAL_PATHSPECS is overridden (the last entry wins in os/exec).
+func gitEnv() []string {
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GIT_GLOB_PATHSPECS=") || strings.HasPrefix(kv, "GIT_ICASE_PATHSPECS=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "GIT_LITERAL_PATHSPECS=1")
 }
 
 // gitErr renders a git failure. A deadline kill is reported LOUDLY and flags that

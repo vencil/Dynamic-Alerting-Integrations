@@ -449,15 +449,17 @@ func (w *Writer) refuseUntrackedNonRegular(filePath, tenantID string) error {
 	} else {
 		reason = cfg.UnreadableStatError
 	}
-	rel, err := w.confRel()
+	top, rel, err := w.confTopRel()
 	if err != nil {
 		return err
 	}
-	// literal: conf.d's path and the file's name are names, not patterns — a
-	// `[`, `*` or `?` in either would glob onto another tracked file and
-	// pass this entry as tracked.
-	tracked, err := w.gitOutput(w.gitDir, "ls-files", "-z", "--",
-		":(top,literal)"+filepath.ToSlash(filepath.Join(rel, filepath.Base(filePath))))
+	// Literal (gitEnv, #3114): conf.d's path and the file's name are names,
+	// not patterns — a `[`, `*` or `?` in either would glob onto another
+	// tracked file and pass this entry as tracked. rel is relative to the top
+	// level, so the command runs there (pathspec magic such as `:(top)` is off
+	// under GIT_LITERAL_PATHSPECS).
+	tracked, err := w.gitOutput(top, "ls-files", "-z", "--",
+		filepath.ToSlash(filepath.Join(rel, filepath.Base(filePath))))
 	if err != nil {
 		return fmt.Errorf("check whether the tenant file is tracked: %w", err)
 	}
