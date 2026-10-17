@@ -536,9 +536,12 @@ def yaml_bool_literals() -> dict[str, bool]:
     yaml.v3 (an unquoted ``yes`` is the string "yes") and judges a boolean
     field by type alone (ADR-036 §2, ``is_bool_or_unset``), and the schema's
     ``definitions.yamlBool`` is boolean or null only, so this is no longer a
-    schema list. What still uses it: the YAML 1.1 boolean-word warning's
-    tests (the readers not yet on parse-tree read these words as booleans).
-    ``y`` / ``n`` are not in it: PyYAML reads them as strings."""
+    schema list. What still uses the table: the YAML 1.1 boolean-word
+    warning — ``_lib_io.find_yaml11_bool_words`` takes its words from
+    ``_YAML_BOOL_LITERALS`` minus yaml.v3's six (``true`` / ``false`` in
+    three spellings) — and that warning's tests, through this function
+    (tests/shared/test_yaml11_bool_word_warning.py). ``y`` / ``n`` are not in
+    it: PyYAML reads them as strings."""
     return dict(_YAML_BOOL_LITERALS)
 
 

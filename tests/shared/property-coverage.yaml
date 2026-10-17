@@ -60,7 +60,7 @@ modules:
       receiver_optional_problem: "#2295 optional receiver values by the schema's boolean properties + httpConfig (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
       _http_config_problem: "#2295 http_config auth-count + proxy_url rule; table-covered by receiver_presence_cases.json via receiver_optional_problem"
       _type_name: "#2295 message helper (type name for a problem string); no law to property-test"
-      yaml_bool_literals: "#2295 schema reader (definitions.yamlBool enum, cached); pinned by tests/shared/test_receiver_spec_parity.py"
+      yaml_bool_literals: "#2295 → #2906 constant table of the YAML 1.1 boolean words (no schema read since yamlBool became boolean-or-null), the word set of _lib_io.find_yaml11_bool_words minus yaml.v3's six; pinned against PyYAML's resolver by tests/shared/test_yaml11_bool_word_warning.py::test_word_set_is_yaml11_bools_minus_yaml12_bools"
       is_bool_or_unset: "#2906 type test (bool or None); table-covered by receiver_presence_cases.json (JSON and yaml rows) and test_grar_field_types.py"
       receiver_bool_fields: "#2295 schema lookup (properties referencing yamlBool); pinned by test_pipeline_refuses_yaml_bool_words_given_as_strings"
       receiver_bool_problems: "#2906 schema-driven walk of a receiver's boolean fields + http_config.proxy_from_environment, type test only; example-pinned by test_grar_field_types.py"

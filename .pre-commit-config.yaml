@@ -744,7 +744,7 @@ repos:
         entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_routing_profiles.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles|scripts/tools/_lib_parse_(tree|cache)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_routing_profiles|scripts/tools/_lib_(parse_tree|parse_cache|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/)
         additional_dependencies: ['pyyaml']
 
       # #880 Day-3 hardening: validate every tenant-shaped conf.d file against
@@ -761,7 +761,7 @@ repos:
         entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
         language: python
         pass_filenames: false
-        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
+        files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
         # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
         # fail the hook, and pre-commit prints a passing hook's output only when
@@ -800,7 +800,7 @@ repos:
           --config-dir components/da-tools/app/examples/cardinality-demo/conf.d
         language: python
         pass_filenames: false
-        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
+        files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|scripts/tools/_lib_(io|parse_tree|parse_cache|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
         # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
         # fail the hook, and pre-commit prints a passing hook's output only when
