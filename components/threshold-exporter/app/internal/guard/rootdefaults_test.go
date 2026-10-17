@@ -226,3 +226,30 @@ func TestDefaultsWrapperSubtreeRefusedKeyFix(t *testing.T) {
 		})
 	}
 }
+
+// #3042: no reader takes custom alerts from a `_defaults.yaml`, so a root
+// file's `_custom_alerts` is reported by both shapes — with where the list
+// goes instead; a finding without it does not say so.
+func TestDefaultsWrapperRootCustomAlertsFix(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		body string
+		kind findingkind.Kind
+		want bool
+	}{
+		"unwrapped":         {"_custom_alerts: []\nmysql_connections: 70\n", findingkind.FindingRootDefaultsUnwrapped, true},
+		"wrapped":           {"defaults:\n  x: 1\n_custom_alerts: []\n", findingkind.FindingDefaultsTopLevelIgnored, true},
+		"wrapped-no-alerts": {"defaults:\n  x: 1\nmysql_connections: 70\n", findingkind.FindingDefaultsTopLevelIgnored, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := checkDefaultsWrapper(CheckInput{DefaultsFiles: []config.DefaultsFile{{Name: "_defaults.yaml", Data: []byte(tc.body)}}})
+			if len(got) != 1 || got[0].Kind != tc.kind || got[0].Severity != SeverityError {
+				t.Fatalf("findings = %+v", got)
+			}
+			if has := strings.Contains(got[0].Message, customAlertsRootFix); has != tc.want {
+				t.Errorf("custom-alerts fix in %q: %v, want %v", got[0].Message, has, tc.want)
+			}
+		})
+	}
+}

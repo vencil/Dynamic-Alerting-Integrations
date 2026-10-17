@@ -258,16 +258,29 @@ def test_an_undeclared_state_filter_is_a_platform_notice(tmp_path):
 
 
 def test_a_declared_reader_counts_only_in_its_layer(tmp_path):
-    """`_custom_alerts` 寫在 profile：exporter 讀、編譯器不讀（登錄表的層）。"""
+    """`_severity_dedup` 寫在子目錄 `_defaults.yaml`：exporter 讀、路由產生器不讀
+    （登錄表的層）；寫在租戶檔兩者都讀。"""
+    t = kv.judge_tree(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "_severity_dedup: enable\n",
+        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n",
+        "tb.yaml": "tenants:\n  tb:\n    _severity_dedup: enable\n"}))
+    assert _by_key(t, "ta")["_severity_dedup"].read_by == ("exporter",)
+    assert _by_key(t, "tb")["_severity_dedup"].read_by == ("exporter", "generator")
+
+
+def test_custom_alerts_have_the_same_readers_in_every_layer(tmp_path):
+    """#3042：編譯器照 exporter 的讀法編，`_custom_alerts` 寫在 profile 或租戶檔，
+    兩個讀取端都讀。"""
     recipe = ("      - {recipe: threshold, name: n1, metric: m1, op: '>', window: 5m, "
               "threshold: '10:warning'}\n")
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "_profiles.yaml": "profiles:\n  p1:\n    _custom_alerts:\n" + recipe.replace("      -", "      -"),
+        "_profiles.yaml": "profiles:\n  p1:\n    _custom_alerts:\n" + recipe,
         "ta.yaml": "tenants:\n  ta:\n    _profile: p1\n",
         "tb.yaml": "tenants:\n  tb:\n    _custom_alerts:\n" + recipe}))
-    assert _by_key(t, "ta")["_custom_alerts"].read_by == ("exporter",)
-    assert _by_key(t, "tb")["_custom_alerts"].read_by == ("custom_alert_compiler", "exporter")
+    for tenant in ("ta", "tb"):
+        assert _by_key(t, tenant)["_custom_alerts"].read_by == ("custom_alert_compiler", "exporter")
 
 
 def test_a_reserved_key_in_a_layer_the_exporter_does_not_read_is_unread(tmp_path):

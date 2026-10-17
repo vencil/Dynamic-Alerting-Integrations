@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-07-12
-updated_at: 2026-10-16
+updated_at: 2026-10-17
 ---
 # ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯
 
@@ -18,6 +18,8 @@ updated_at: 2026-10-16
 ✅ **Accepted**（2026-07-12）
 
 📝 **修訂（2026-10-16）**：一組租戶共用的 SLO 宣告寫在 profile；`_defaults.yaml` 頂層或 `defaults:` 底下的 `_custom_alerts` exporter 不會送出，不能用來共用（見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3「宣告位置」、[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
+
+📝 **修訂（2026-10-17）**：每租戶 cap 改由 tenant-api 寫入檢查、da-guard 與 validate-config 計算，profile 的 recipe 不計；壞 recipe 由 exporter 逐條拒收、編譯器不為它產生規則（§3 護欄 1、2）。
 
 > **決策一句話**：新增第 7 個平台自撰 recipe `slo_burn_rate`——一條宣告在編譯期展開成多窗 SLI recording rules ＋ multi-window AND 的 fast/slow burn-rate 告警；objective 走**既有** `user_threshold{severity}` 通道（exporter resolve 期算好係數）；v1 範圍＝availability/error-ratio 型 only；custom 子樹 outbound delivery 列硬前置。
 
@@ -31,7 +33,7 @@ updated_at: 2026-10-16
 - **v1 範圍 = availability/error-ratio SLI only**；latency-quantile 與 freshness 型 **defer-with-trigger**（宣告介面表達不了，硬塞會產生「永不觸發且靜默」的告警）。
 - **objective 不開新資料平面**：exporter 在 resolve 期算好 `14.4×(1−obj)`／`6×(1−obj)`，以**既有** `user_threshold{severity}` 通道餵值 → 規則端零新表達式類別、落回現行 per-severity core join。
 - **硬前置**：custom 子樹 outbound delivery（現況 firehose receiver 無 notifier——沒有它，「critical/page」page 不到任何人）。
-- **主推模式 = profile 共用**（profile 定義 recipe 與預設 objective，租戶綁定該 profile；同一 shape、自動向量化）。⚠️ 目前編譯器還不為 profile 裡的 recipe 產生規則（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)），在那之前寫在 profile 的不能指望告警；請先在各租戶自己的條目宣告同樣的 recipe（同值的 `min_events` 仍是同一 shape），並刪掉 `_defaults.yaml` 裡的同名 recipe（同名時編譯器隔離租戶那條）。
+- **主推模式 = profile 共用**（profile 定義 recipe 與預設 objective，租戶綁定該 profile；同一 shape、自動向量化）。編譯器照 exporter 的讀法編譯，profile 裡的 recipe 也產生規則（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
 - **明確不做**：raw-PromQL 逃生門（ADR-029 T1）；平台代管錯誤預算政策。
 
 ## 背景
@@ -88,8 +90,8 @@ _custom_alerts:
 
 ### 3. 護欄
 
-1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **loader 計 2**（沿用 distinct (tenant, recipe_id, severity) 計數，明定不另開特例）。**覆寫的代價誠實告知**：租戶要不同的 objective 或 `min_events`，就得寫自己的 `_custom_alerts`＝自有宣告 → **計入自身 cap 額度（2）**；它會**整個取代** profile 的清單（profile 裡其他 recipe 要一併照抄，否則該租戶就沒有了）；改 `min_events`（或任何 shape 成分）還會 **shape 分岔（+12 條規則）**，只改 objective 不會。架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。profile 送出的 recipe 怎麼計 cap，隨編譯器改讀 exporter 送出的一起決定（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
-2. **Cardinality**：`group_by` 白名單、rule-group limit、promtool hard gate、fail-soft quarantine 全數繼承。
+1. **Cap 帳**：一條宣告固定展開 fast(critical)+slow(warning) → **計 2**（cap 數的是清單要 exporter 送出的 `user_threshold` 列，tenant-api 寫入檢查、da-guard `custom_alert_over_cap` 與 validate-config `custom_alert_cap` 同一個數，明定不另開特例）。**覆寫的代價誠實告知**：租戶要不同的 objective 或 `min_events`，就得寫自己的 `_custom_alerts`＝自有宣告 → **計入自身 cap 額度（2）**；它會**整個取代** profile 的清單（profile 裡其他 recipe 要一併照抄，否則該租戶就沒有了）；改 `min_events`（或任何 shape 成分）還會 **shape 分岔（+12 條規則）**，只改 objective 不會。架構上可接受（改動罕見），但 recipe 文件必須明寫，防「免費覆寫」的錯誤預期。profile 送出的 recipe 是選用它的租戶共用的 shape，不計入 cap。
+2. **Cardinality**：`group_by` 白名單、rule-group limit、promtool hard gate 全數繼承；壞宣告由 exporter 逐條拒收，編譯器不為它產生規則、其餘照編（同其他 recipe）。
 3. **通知風暴（infra 全局震盪）**：**量測永不抑制**；抑制通知 fan-out——`vibe_slo_burn="true"` 標籤（命名照 pack 標籤慣例實作期覆核）+ 文件化 infra-outage sentinel inhibit pattern。
 4. **維護窗（三態）交互——刻意取捨**：SLO **alert** 沿用 pack 慣例，維護窗期間 `unless` 抑制（三態對租戶的承諾就是「維護窗零告警干擾」）；SLI **recording rules 不受 unless 影響、持續評估**——預算燒蝕在 TSDB 全程留痕，「量測永不抑制」哲學由 recording 層承擔，alert 層的抑制是通知承諾、不是量測缺口。此取捨明寫進 recipe 文件。
 5. **表達力邊界**：編譯期展開、輸入仍為受限參數（bare metric name、enum、已驗純量）——**不新增租戶查詢表達力類別、不觸發 ADR-029 T1**（T1 定義=「超出固定 recipe 模板+已驗純量參數」；objective/min_events 為新增已驗純量——objective 經 ParseFloat 驗證、**永不進規則文本**；min_events 為**編譯期字面值**，經嚴格整數驗證（tag/charset/範圍）後寫入規則文本，無注入面，與 §1/§2 的編譯期換算語意一致）。objective/min_events 依 ADR-029 Consequences 慣例**於 Python/Go 兩側各自加驗證**。
@@ -148,5 +150,5 @@ _custom_alerts:
 
 - [ADR-008](008-operator-native-integration-path.md)/[ADR-024](024-version-aware-threshold-via-dimensional-label.md)（declarative-only、custom-alerts 能力線）、[ADR-025](025-alerting-plane-self-liveness.md)（編譯 canary，新 recipe 自動納入）、[ADR-029](029-custom-alert-cross-tenant-query-scoping.md)（表達力邊界；objective/min_events 驗證義務）。
 - feature 追蹤 issue [#1092](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1092)（TRK-333；含完整對抗軌跡 triage 表）。
-- [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) recipe-preview（ratio 預覽解凍為 Phase 1 前置）、[#1008](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1008) fail-soft quarantine（繼承）。
+- [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) recipe-preview（ratio 預覽解凍為 Phase 1 前置）、[#1008](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1008) 逐 recipe fail-soft（繼承；現由 exporter 逐條判定，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3）。
 - 告警驗證能力階梯的 deferred 端：[#1090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1090)（chaos-for-alerts）、[#1091](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1091)（公開驗證 guide）。

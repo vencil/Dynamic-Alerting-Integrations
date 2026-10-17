@@ -38,7 +38,6 @@ var platformRoutingKeys = keySet(
 // topLevelReadElsewhere are the `_` keys another reader takes from the
 // top level of a root conf.d `_` file.
 var topLevelReadElsewhere = []string{
-	"_custom_alerts",
 	"_policies",
 	"_routing_defaults",
 	"_routing_enforced",
@@ -55,7 +54,7 @@ var retiredReservedKeys = []retiredKey{
 var reservedKeyReaders = map[string]map[string][]string{
 	"_custom_alerts": {
 		"exporter":              {"tenant", "platform_tenants", "profile"},
-		"custom_alert_compiler": {"tenant", "platform_tenants", "platform_top"},
+		"custom_alert_compiler": {"tenant", "platform_tenants", "profile"},
 	},
 	"_metadata": {
 		"exporter": {"tenant", "platform_tenants", "profile"},

@@ -27,8 +27,12 @@ _DX = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "d
 sys.path.insert(0, _DX)
 
 import compile_custom_alerts as cc  # noqa: E402
+from custom_alerts import entries as ent  # noqa: E402
 from custom_alerts import shape as shp  # noqa: E402
 from custom_alerts import loader as ld  # noqa: E402
+
+# #3042: the notices are of the entries the exporter serves (da-guard served-values).
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _REPO = Path(__file__).resolve().parents[2]
 _EXAMPLES = _REPO / "rule-packs" / "recipes" / "examples" / "conf.d"
@@ -79,18 +83,26 @@ def test_recipe_status_accessor_known_and_unknown():
 
 # --- 4. Compiler lifecycle notices ------------------------------------------
 
+def _example_entries() -> list:
+    """The example tree's entries as the exporter serves them (#3042)."""
+    return ent.entries_from_tree(_EXAMPLES).entries
+
+
+def _a_used_recipe() -> str:
+    used = {e.spec["recipe"] for e in _example_entries()} & set(shp.RECIPES)
+    assert used, "example conf.d declares no known recipes — fixture changed?"
+    return sorted(used)[0]
+
+
 def test_notices_empty_when_all_active():
-    assert ld.collect_lifecycle_notices(_EXAMPLES) == []
+    assert ent.lifecycle_notices(_example_entries()) == []
 
 
 def test_notices_flag_deprecated_recipe_in_use(monkeypatch):
-    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)[0]}
-    used &= set(shp.RECIPES)
-    assert used, "example conf.d declares no known recipes — fixture changed?"
-    target = sorted(used)[0]
+    target = _a_used_recipe()
 
     monkeypatch.setitem(shp.RECIPE_STATUS, target, "deprecated")
-    notices = ld.collect_lifecycle_notices(_EXAMPLES)
+    notices = ent.lifecycle_notices(_example_entries())
     assert notices, "a deprecated recipe in use must yield a notice"
     joined = "\n".join(notices)
     assert target in joined and "deprecated" in joined
@@ -99,10 +111,7 @@ def test_notices_flag_deprecated_recipe_in_use(monkeypatch):
 
 
 def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
-    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)[0]}
-    used &= set(shp.RECIPES)
-    assert used, "example conf.d declares no known recipes — fixture changed?"
-    target = sorted(used)[0]
+    target = _a_used_recipe()
     monkeypatch.setitem(shp.RECIPE_STATUS, target, "deprecated")
     # build_pack must NOT raise — deprecated keeps compiling (no silent loss)
     pack = cc.build_pack(_EXAMPLES)
@@ -110,12 +119,9 @@ def test_deprecated_recipe_still_compiles(monkeypatch, capsys):
 
 
 def test_eol_notice_uses_rejection_wording(monkeypatch):
-    used = {inst["recipe"] for _t, inst, _o, _own in ld.collect_instances(_EXAMPLES)[0]}
-    used &= set(shp.RECIPES)
-    assert used, "example conf.d declares no known recipes — fixture changed?"
-    target = sorted(used)[0]
+    target = _a_used_recipe()
     monkeypatch.setitem(shp.RECIPE_STATUS, target, "eol")
-    joined = "\n".join(ld.collect_lifecycle_notices(_EXAMPLES))
+    joined = "\n".join(ent.lifecycle_notices(_example_entries()))
     assert target in joined and "eol" in joined
     assert "rejected until SRE clears" in joined
 

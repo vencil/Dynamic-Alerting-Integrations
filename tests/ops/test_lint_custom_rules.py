@@ -545,7 +545,7 @@ def _compiled_forecast_pack_text():
 
 
 @pytest.fixture
-def compiled_forecast_pack(tmp_path):
+def compiled_forecast_pack(tmp_path, da_guard_env):  # the compiler reads through da-guard (#3042)
     """A real compiled forecast pack written at the canonical relative path."""
     text = _compiled_forecast_pack_text()
     assert "predict_linear" in text          # fixture sanity: forecast shape present
