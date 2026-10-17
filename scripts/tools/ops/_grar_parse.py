@@ -38,8 +38,6 @@ from _lib_confd import (  # noqa: E402
     is_reserved_name,
     list_config_tree,
     overlay_platform_tenants,
-    readable_carriers,
-    select_defaults_carrier,
     tenant_declarations,
     unusable_config_paths,
     unusable_reason,
@@ -609,9 +607,9 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
 
 def _unselected_carrier(fname: str, chosen: str, level: str,
                         result: dict) -> None:
-    """#2906: a readable defaults carrier the directory's selection passed
-    over (`select_defaults_carrier`; da-guard parse-tree: `not_read`
-    reason `unselected_defaults_carrier`). No plane reads it, so whatever
+    """#2906: a defaults carrier the directory's selection passed over
+    (da-guard parse-tree: `not_read` reason `unselected_defaults_carrier`;
+    *chosen* is its `defaults_carriers` entry for the directory). No plane reads it, so whatever
     it says is not in force: a `WARN … skipping` line, blocking under
     `--validate` like every other line for config that is written and not
     rendered. The file is never opened here — its content cannot change
@@ -1163,41 +1161,48 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
     # #1469: ONE predicate for "what is a config file", shared with
     # `check_yaml_syntax` — the walker's own list.
     # #1674: ONE carrier per directory, chosen by the rule every exporter
-    # plane reads (`select_defaults_carrier`, over the carriers that can be
-    # read). Any other carrier spelling is ignored WHOLE, as the exporter
-    # ignores it — never opened — and named once, as its own finding (#2906).
+    # plane reads. Any other carrier spelling is ignored WHOLE, as the
+    # exporter ignores it — never opened — and named once, as its own
+    # finding (#2906). ⛔ Which file that is, is parse-tree's verdict
+    # (`ConfdReader.not_read` / `carrier`), never `select_defaults_carrier`:
+    # a second implementation of the rule that read a file parse-tree lists
+    # in `not_read` would die rc 2 on `NotSelected` (#2906 review).
     # #1982: every tenant entry of every file, in read order, applied AFTER
     # the loop — see `_apply_tenant_entries`.
     tenant_entries: list[tuple[str, object, dict]] = []
     listed = listing.files
-    carriers_by_dir: dict[Path, list[Path]] = {}
-    for p in listed:
-        if is_defaults_name(p.name):
-            carriers_by_dir.setdefault(p.parent, []).append(p)
-    selected: dict[Path, "Path | None"] = {}
-    readable_set: set[Path] = set()
-    for d, carriers in carriers_by_dir.items():
-        readable, _unreadable = readable_carriers(carriers)
-        readable_set.update(readable)
-        chosen = select_defaults_carrier(readable)
-        selected[d] = chosen
-        # #2906: each readable carrier not selected is a finding — this
-        # replaces `warn_multi_carrier`'s stderr line on this path, so the
-        # one fact is printed once, by the stream.
-        for p in sorted((p for p in readable if p != chosen), key=_rel):
-            _unselected_carrier(_rel(p), _rel(chosen),
-                                PurePosixPath(_rel(p)).parent.as_posix(), result)
+    try:
+        _read, not_read = reader.split_not_read(listed)
+        skipped_by_dir: dict[Path, list[Path]] = {}
+        for p in listed:  # directories in walk order, as the findings were
+            skipped_by_dir.setdefault(p.parent, [])
+        for p, _why in not_read:
+            skipped_by_dir[p.parent].append(p)
+        # #2906: each carrier not selected is a finding — this replaces
+        # `warn_multi_carrier`'s stderr line on this path, so the one fact
+        # is printed once, by the stream.
+        for d, skipped_here in skipped_by_dir.items():
+            if not skipped_here:
+                continue
+            chosen = reader.carrier(d)
+            for p in sorted(skipped_here, key=_rel):
+                _unselected_carrier(_rel(p), _rel(chosen) if chosen is not None
+                                    else "another carrier",
+                                    PurePosixPath(_rel(p)).parent.as_posix(), result)
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
+    skipped_set = {p for p, _why in not_read}
     for path_p in listed:
         fname = _rel(path_p)
         level = PurePosixPath(fname).parent.as_posix()
-        chosen = selected.get(path_p.parent)
-        if is_defaults_name(path_p.name) and (
-                chosen is None or path_p.name != chosen.name):
-            if path_p in readable_set:
-                # The unselected spelling: named above (#2906, a finding),
-                # never opened.
-                continue
-            # unreadable: fall through, the read below books it as skipped
+        if path_p in skipped_set:
+            # The unselected spelling: named above (#2906, a finding), never
+            # opened. A carrier parse-tree cannot read is not here: the read
+            # below books it as skipped.
+            continue
+        # Not in `not_read`: a defaults-named file here is its directory's
+        # selected carrier (or one the read below drops as unreadable).
+        is_carrier = is_defaults_name(path_p.name)
         # ADR-036 step 4 (#2906): the content is parse-tree's. A file it
         # cannot read (`unreadable`: a syntax error, a repeated key — the
         # exporter's yaml.v3 rejects that file —, a null key, several
@@ -1222,20 +1227,18 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         if not data:
             continue
 
-        # #2904: routing where nothing reads it. `chosen` is this directory's
-        # selected carrier (an unselected spelling never got here).
+        # #2904: routing where nothing reads it. `is_carrier`: this
+        # directory's selected carrier (an unselected spelling never got here).
         _unread_routing(
             data, fname,
-            is_carrier=chosen is not None and path_p.name == chosen.name,
+            is_carrier=is_carrier,
             is_root_platform=level == ROOT_LEVEL and is_reserved_name(path_p.name),
             result=result)
 
         if level == ROOT_LEVEL:
             _parse_platform_config(data, fname, result)
         else:
-            _parse_nested_config(
-                data, fname, level,
-                chosen is not None and path_p.name == chosen.name, result)
+            _parse_nested_config(data, fname, level, is_carrier, result)
 
         if "tenants" not in data:
             continue

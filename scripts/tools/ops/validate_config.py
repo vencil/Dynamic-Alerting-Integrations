@@ -133,9 +133,7 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     observe_flat_reads,
     printable_name,
-    readable_carriers,
     resolve_defaults_file,
-    select_defaults_carrier,
     unusable_config_paths,
     unusable_reason,
 )
@@ -1491,6 +1489,15 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # the nested carriers whose `_policies` this lookup skips are named.
     defaults_path = str(resolve_defaults_file(
         Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
+    # The carrier read is the one parse-tree selects (#2906 review), not
+    # `resolve_defaults_file`'s own selection: that one names the file to
+    # create when there is none, and prints the skipped-carriers note.
+    try:
+        chosen = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
+    except ParseTreeError as exc:
+        return _parse_tree_failure_row("policy_dsl", exc, _POLICY_DSL_NO_DA_GUARD_HINT)
+    if chosen is not None:
+        defaults_path = str(chosen)
     # #2725: a carrier that is there but cannot be opened (a dangling
     # symlink) is not "no carrier" — that line told the operator to create one.
     if os.path.isfile(defaults_path):
@@ -2087,27 +2094,24 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
     """Every level's `_defaults.yaml`: top-level keys a `defaults:` mapping
     leaves out of the defaults merge (#2386).
 
-    One carrier per directory, selected as every plane selects it
-    (``select_defaults_carrier`` over the readable carriers); a file that
-    does not load as a mapping is left to ``yaml_syntax`` /
+    One carrier per directory, the one parse-tree says the chain selects:
+    a carrier it lists in ``not_read`` is not read, and the row says so
+    (never ``select_defaults_carrier`` here — a second implementation of the
+    rule; reading a file parse-tree does not select is rc 2, #2906 review).
+    A file that does not load as a mapping is left to ``yaml_syntax`` /
     ``root_defaults``. Measured on a subtree: top-level
     ``_severity_dedup: disable`` was served as ``disable`` with no wrapper
     or with ``defaults:`` and no value, and as ``enable`` once
     ``defaults: {}`` was added.
     """
     root = Path(config_dir)
-    by_dir: dict[Path, list[Path]] = {}
-    for p in iter_config_files(root):
-        if is_defaults_name(p.name):
-            by_dir.setdefault(p.parent, []).append(p)
+    carriers, skipped = _lib_parse_cache.reader_for(config_dir).split_not_read(
+        p for p in iter_config_files(root) if is_defaults_name(p.name))
     details: list[str] = []
     checked = 0
     subtree_reserved = False
-    for d in sorted(by_dir):
-        readable, _unreadable = readable_carriers(by_dir[d])
-        carrier = select_defaults_carrier(readable)
-        if carrier is None:
-            continue
+    for carrier in sorted(carriers, key=lambda p: (p.parent, p.name)):
+        d = carrier.parent
         try:
             raw = load_confd_file(config_dir, str(carrier), default={})
         except YamlFileError:
@@ -2130,7 +2134,16 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
                             if subtree_reserved else None)
     return _make_result("defaults_wrapper", PASS, [
         f"{checked} defaults file(s): no top-level key left out by a "
-        f"`defaults:` mapping"])
+        f"`defaults:` mapping{_not_read_note(root, skipped)}"])
+
+
+def _not_read_note(root: Path, skipped: "list[tuple[Path, str]]") -> str:
+    """A row's note on the files it did not read because parse-tree lists
+    them in ``not_read`` (``ConfdReader.split_not_read``); '' for none."""
+    if not skipped:
+        return ""
+    return "; not checked, no reader reads: " + ", ".join(
+        f"{p.relative_to(root).as_posix()} ({why})" for p, why in skipped)
 
 
 def _schedule_null_lines(rel: str, where: str, body: object) -> list[str]:
@@ -2170,28 +2183,21 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
     other than an unselected carrier — its ``tenants:`` entries and
     ``profiles:``. A ``_`` file below the root that is not the selected
     carrier is read by no plane. A file that does not load is left to
-    ``yaml_syntax``.
+    ``yaml_syntax``. Which carrier is unselected is parse-tree's
+    ``not_read`` (named in the row), not a Python re-selection (#2906
+    review: reading one parse-tree does not select is rc 2).
     """
     root = Path(config_dir)
-    by_dir: dict[Path, list[Path]] = {}
-    files = list(iter_config_files(root))
-    for p in files:
-        if is_defaults_name(p.name):
-            by_dir.setdefault(p.parent, []).append(p)
-    selected = set()
-    for d, carriers in by_dir.items():
-        readable, _unreadable = readable_carriers(carriers)
-        chosen = select_defaults_carrier(readable)
-        if chosen is not None:
-            selected.add(chosen)
+    files, skipped = _lib_parse_cache.reader_for(config_dir).split_not_read(
+        iter_config_files(root))
     details: list[str] = []
     checked = 0
     for p in sorted(files):
         reserved = is_reserved_name(p.name)
         at_root = p.parent == root
-        carrier = p in selected
-        if reserved and is_defaults_name(p.name) and not carrier:
-            continue  # an unselected carrier: no plane reads it (#1674)
+        # Not in `not_read`: the directory's selected carrier (one parse-tree
+        # cannot read raises below and is left to `yaml_syntax`).
+        carrier = is_defaults_name(p.name)
         if reserved and not at_root and not carrier:
             continue  # a nested `_` file: read by no plane
         try:
@@ -2220,7 +2226,7 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
         return _make_result("schedule_null", FAIL, details)
     return _make_result("schedule_null", PASS, [
         f"{checked} file(s): no null inside a threshold schedule with "
-        f"override windows"])
+        f"override windows{_not_read_note(root, skipped)}"])
 
 
 _VALUES_NOT_SERVED_TREE_UNREADABLE_HINT = (
@@ -2395,8 +2401,10 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
         # ADR-036 step 4 (#2906): the compiler reads each file through this
         # run's parse-tree reader, not its own PyYAML read — one reading of
         # conf.d per validate-config run.
+        # Which carrier is read is that reader's verdict too (#2906 review).
         (loader or _custom_alert_compiler()).build_shapes(
-            Path(config_dir), accepted=accepted, read=_confd_values_reader(config_dir))
+            Path(config_dir), accepted=accepted, read=_confd_values_reader(config_dir),
+            not_read=_lib_parse_cache.reader_for(config_dir).not_read)
     except Exception as exc:  # noqa: BLE001 — any failure is "not compared", never a refusal
         return _make_result("custom_alert_sources", WARN, [
             f"comparison incomplete: the {side}'s custom alerts were not read "
@@ -2620,17 +2628,13 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     ⚠️ The root carrier is found without ``resolve_defaults_file``: that
     helper records nested ``_defaults.yaml`` files as skipped by a flat read,
     which would turn this row WARN on every ADR-017 tree for files it is
-    deliberately not about. Selection is ``select_defaults_carrier`` over the
-    readable carriers, the rule every plane shares (#1674). The candidates
-    come from the shared recursive enumerator filtered to the root level, not
-    from a second, flat listing of the directory.
+    deliberately not about. The carrier is the one parse-tree says the root's
+    chain selects (``ConfdReader.carrier``, its ``defaults_carriers``), the
+    rule every plane shares (#1674) — not ``select_defaults_carrier``, a
+    second implementation of it that could hand the read a file parse-tree
+    does not select (rc 2, #2906 review).
     """
-    root = Path(config_dir)
-    entries = [p for p in iter_config_files(root)
-               if len(p.relative_to(root).parts) == 1
-               and is_defaults_name(p.name)]
-    readable, _unreadable = readable_carriers(entries)
-    carrier = select_defaults_carrier(readable)
+    carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
     if carrier is None:
         return _make_result("root_defaults", PASS,
                             ["no root _defaults.yaml — nothing to check"])

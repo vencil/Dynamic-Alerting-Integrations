@@ -108,11 +108,23 @@ def _file_skip(origin: str, exc: Exception) -> dict:
     return _file_record(origin, f"{type(exc).__name__}: {exc}")
 
 
+#: Carriers `_dir_defaults_alerts` has named as not read in this process.
+_NOT_READ_WARNED: set = set()
+
+
 def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
-                         read: "Optional[Callable[[Path], dict]]" = None) -> Dict[Path, List[dict]]:
+                         read: "Optional[Callable[[Path], dict]]" = None,
+                         not_read: "Optional[Callable[[Path], Optional[str]]]" = None,
+                         ) -> Dict[Path, List[dict]]:
     """Map each directory → its _defaults.yaml top-level `_custom_alerts` list. A
     _defaults.yaml that fails to load is quarantined into `file_errors` (#1008 Part B),
-    not raised."""
+    not raised.
+
+    `not_read`, given (with `read`: the da-guard parse-tree reader's
+    `ConfdReader.not_read`), decides which carrier is read in place of this
+    module's selection: a carrier it names a reason for is not read (and is
+    named on stderr), every other one is (#2906 review — a second selection
+    could hand `read` a file parse-tree does not select)."""
     out: Dict[Path, List[dict]] = {}
     for root, dirs, files in os.walk(config_dir):
         # #2086: prune `.`-prefixed directories the way the exporter's walker
@@ -140,23 +152,40 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
         # reported in `file_errors`, as before selection existed. Selecting
         # among raw names let a dangling `_defaults.yaml` beat a readable
         # `_defaults.yml` and yield no alerts (blind review of #1674).
-        readable, unreadable = readable_carriers(defaults_files_in(root, files))
-        for bad, exc in unreadable:
-            file_errors.append(_file_skip(bad.relative_to(config_dir).as_posix(), exc))
-        chosen = select_defaults_carrier(readable)
-        if chosen is None:
-            continue
-        # The losing spelling is named here too, in the exporter's and
-        # describe_tenant's words, rather than dropped in silence.
-        warn_multi_carrier(Path(root), readable)
-        try:
-            data = (read or _load_yaml)(chosen)
-        except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
-            file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
-            continue
-        alerts = data.get("_custom_alerts") or []
-        if alerts:
-            out.setdefault(Path(root).resolve(), []).extend(alerts)
+        if not_read is not None:
+            chosen_list = []
+            for p in defaults_files_in(root, files):
+                why = not_read(p)
+                if why is None:
+                    chosen_list.append(p)
+                elif os.path.abspath(p) not in _NOT_READ_WARNED:
+                    # Once per file per process, as `warn_multi_carrier`.
+                    _NOT_READ_WARNED.add(os.path.abspath(p))
+                    print(f"WARN: {p.relative_to(config_dir).as_posix()} is not read "
+                          f"({why}, da-guard parse-tree): its _custom_alerts are "
+                          f"ignored on every plane (#1674)", file=sys.stderr)
+        else:
+            readable, unreadable = readable_carriers(defaults_files_in(root, files))
+            for bad, exc in unreadable:
+                file_errors.append(_file_skip(bad.relative_to(config_dir).as_posix(), exc))
+            chosen = select_defaults_carrier(readable)
+            if chosen is None:
+                continue
+            # The losing spelling is named here too, in the exporter's and
+            # describe_tenant's words, rather than dropped in silence.
+            warn_multi_carrier(Path(root), readable)
+            chosen_list = [chosen]
+        # With `not_read`, more than one only when parse-tree cannot read the
+        # others: their read raises and quarantines them, as before.
+        for chosen in chosen_list:
+            try:
+                data = (read or _load_yaml)(chosen)
+            except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+                file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
+                continue
+            alerts = data.get("_custom_alerts") or []
+            if alerts:
+                out.setdefault(Path(root).resolve(), []).extend(alerts)
     return out
 
 
@@ -181,6 +210,7 @@ def _inherited_for(leaf_dir: Path, config_dir: Path,
 
 def collect_instances(config_dir: Path,
                       read: "Optional[Callable[[Path], dict]]" = None,
+                      not_read: "Optional[Callable[[Path], Optional[str]]]" = None,
                       ) -> Tuple[List[Tuple[str, dict, str, bool]], List[dict]]:
     """Return (triples, file_errors): (tenant, instance, origin, is_own) tuples for every
     effective decl, PLUS skip records for conf.d files that failed to load.
@@ -196,7 +226,7 @@ def collect_instances(config_dir: Path,
     """
     config_dir = Path(config_dir)
     file_errors: List[dict] = []
-    dir_alerts = _dir_defaults_alerts(config_dir, file_errors, read)
+    dir_alerts = _dir_defaults_alerts(config_dir, file_errors, read, not_read)
     triples: List[Tuple[str, dict, str, bool]] = []
 
     # ⚠️ Same third axis as `operator_generate`, and here it is louder:
@@ -383,6 +413,7 @@ def build_shapes(config_dir: Path,
                  max_custom_recipes: int = MAX_CUSTOM_RECIPES_DEFAULT,
                  accepted: Optional[List[dict]] = None,
                  read: "Optional[Callable[[Path], dict]]" = None,
+                 not_read: "Optional[Callable[[Path], Optional[str]]]" = None,
                  ) -> Tuple[List[dict], Dict[str, int], List[dict]]:
     """Group all effective instances into shapes; return (shapes, per_tenant_count, skipped).
 
@@ -394,6 +425,8 @@ def build_shapes(config_dir: Path,
     module's PyYAML read (`_load_yaml` / `_load_tenant_yaml`): validate-config
     hands its `da-guard parse-tree` reader in (ADR-036 step 4, #2906), so one
     run reads conf.d one way. A file it raises on is quarantined the same way.
+    `not_read`, with it, is that reader's verdict on which defaults carrier
+    is read (`_dir_defaults_alerts`).
 
     `accepted`, given, receives one dict per recipe instance that COMPILED —
     `tenant`, `name`, `recipe_id`, `severities`, `origin`, `own` and
@@ -418,7 +451,7 @@ def build_shapes(config_dir: Path,
         raise CustomAlertConfigError(
             f"max_custom_recipes must be >= 0 (got {max_custom_recipes})"
         )
-    triples, file_errors = collect_instances(config_dir, read)
+    triples, file_errors = collect_instances(config_dir, read, not_read)
 
     # validation accumulators
     name_seen: Dict[Tuple[str, str], str] = {}              # (tenant, name) → origin

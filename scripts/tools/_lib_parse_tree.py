@@ -343,11 +343,14 @@ class Tree:
     file → reason; `rendered_by`: the document's `rendered_by` (file → key →
     readers), or None when the document has none — the field was added
     beside the v1 fields (parse_tree.go), so a v1 document may lack it, and a
-    reader that needs it must refuse such a document."""
+    reader that needs it must refuse such a document. `defaults_carriers`:
+    directory (root-relative, "." for the root) → the defaults carrier its
+    chain selects there (empty when the document has none)."""
     selected: Mapping[str, tuple[str, ...]]
     unreadable: Mapping[str, tuple[str, str]]
     not_read: Mapping[str, str]
     rendered_by: Optional[Mapping[str, Mapping[str, tuple[str, ...]]]]
+    defaults_carriers: Mapping[str, str]
     _files: Mapping[str, Any]
 
     def node(self, rel: str) -> Any:
@@ -395,11 +398,17 @@ def tree_of(doc: dict) -> Tree:
                                  "{file: {key: [reader]}}; nothing of the document is used")
         rendered_by = MappingProxyType({f: MappingProxyType({k: tuple(rs) for k, rs in keys.items()})
                                         for f, keys in rb.items()})
+    carriers = doc.get("defaults_carriers", {})
+    if not (isinstance(carriers, dict)
+            and all(isinstance(c, str) for c in carriers.values())):
+        raise ParseTreeError(f"da-guard {SUBCOMMAND}: \"defaults_carriers\" is not "
+                             "{directory: file}; nothing of the document is used")
     return Tree(
         selected=MappingProxyType({f: tuple(rs) for f, rs in doc["selected"].items()}),
         unreadable=MappingProxyType(unreadable),
         not_read=MappingProxyType(not_read),
         rendered_by=rendered_by,
+        defaults_carriers=MappingProxyType(dict(carriers)),
         _files=MappingProxyType(dict(doc["files"])),
     )
 

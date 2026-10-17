@@ -169,14 +169,16 @@ def _tree_rules(conf_d: str | os.PathLike[str], binary: str | None = None) -> li
     # from da-guard's reading of the whole tree, and the root-only
     # `_policies` gap is Policy-as-Code's to report (validate-config's
     # `policy_dsl` row, policy-engine itself).
-    path = _lib_confd.resolve_defaults_file(Path(conf_d), observed=False)
     # ADR-036 step 4 (#2906): read as the rest of the tree is — through
     # `da-guard parse-tree` (the run's reader of `conf_d`, or one with the
-    # caller's binary), not PyYAML.
-    if not path.is_file():
-        return []
+    # caller's binary), not PyYAML; and the carrier is the one parse-tree
+    # says the root's chain selects (#2906 review), not a Python selection.
     import _lib_parse_cache
-    reader = _lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary else None
+    reader = (_lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary
+              else _lib_parse_cache.reader_for(conf_d))
+    path = reader.carrier(conf_d)
+    if path is None or not path.is_file():
+        return []
     return pe.load_policies(str(path), config_dir=str(conf_d), reader=reader)
 
 
