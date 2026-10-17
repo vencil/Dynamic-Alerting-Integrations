@@ -21,11 +21,12 @@ package handler
 //     reload failure RATE (dashboards / trend).
 //   - tenant_api_config_last_reload_successful{component} — 0/1 GAUGE, current
 //     STATE ("is this manager serving stale config right now?"). This is what
-//     the counter structurally cannot answer: a single-shot Reload failure
-//     (groups/views never retry via a WatchLoop) leaves the counter at 1, below
-//     any `increase()>N` threshold, yet the config IS stale until the next
-//     successful reload. The gauge flips to 0 and STAYS 0 until a load succeeds,
-//     so `== 0` alerts regardless of retry cadence. Mirrors Prometheus's own
+//     the counter structurally cannot answer: the counter grows once per
+//     failed attempt, so whether it crosses an `increase()>N` threshold depends
+//     on the retry cadence (the WatchLoop interval, --reload-interval), yet the
+//     config IS stale from the first failure until the next successful load.
+//     The gauge flips to 0 and STAYS 0 until a load succeeds, so `== 0` alerts
+//     regardless of retry cadence. Mirrors Prometheus's own
 //     prometheus_config_last_reload_successful.
 //
 // Import direction: handler → configwatcher (a leaf package). configwatcher
@@ -51,12 +52,14 @@ import (
 // Membership = EVERY config manager, because BOTH reload paths mask a failure
 // silently and the Watcher records both (configwatcher.WatchLoop and
 // configwatcher.Reload):
-//   - rbac / tenantorg / federation-policy run a periodic WatchLoop.
-//   - groups / views (and federation-policy again) are Reload()ed after a write
-//     that succeeded or may have (#1535; in the background when the outcome is
-//     unknown) — and that one production caller DISCARDS the error —
-//     `_ = mgr.Reload()` in handler/state.go's reloadState — and the handler
-//     then answers. Equally silent.
+//   - every one of them runs a periodic WatchLoop (cmd/server/main.go; groups
+//     and views too since #2856, as the state ConfigMap can be edited out of
+//     band).
+//   - groups / views / federation-policy are also reloaded after a write that
+//     succeeded or may have (#1535): `_ = mgr.Reload()` in handler/state.go's
+//     reloadState, or ReloadAsync in the background when the outcome is
+//     unknown. Neither reports the error to anyone — the handler answers
+//     regardless. Equally silent.
 //
 // A new manager appends its label here in the same commit that adds it. This is
 // an ARRAY, not a slice, so the `counters` / `states` stores below are sized FROM
@@ -179,7 +182,7 @@ func writeConfigReloadStateMetrics(w io.Writer) {
 			snap[c] = 1
 		}
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1) or failed and is serving stale last-good config (0). Unlike the failure counter this catches a single-shot Reload failure (groups/views do not retry) and stays 0 until a load succeeds — alert on == 0.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_config_last_reload_successful Whether each config manager's LAST reload succeeded (1) or failed and is serving stale last-good config (0). Unlike the failure counter, whose growth depends on the retry cadence, it is 0 from the first failure and stays 0 until a load succeeds — alert on == 0.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_config_last_reload_successful gauge\n")
 	for _, c := range sortedComponents() {
 		_, _ = fmt.Fprintf(w, "tenant_api_config_last_reload_successful{component=%q} %d\n", c, snap[c])

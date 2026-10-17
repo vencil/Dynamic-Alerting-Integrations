@@ -6,9 +6,10 @@ package handler
 // DELETE is the one group operation whose target is the stored object rather
 // than something the request supplies, so the member-permission gate and the
 // thing being destroyed have to be read from the same bytes. The snapshot is
-// not those bytes: groupMgr has no WatchLoop, and it only refreshes on a
-// successful write's Reload — so once the file moves underneath it (a write
-// that failed after writeFileAtomic, or a concurrent write), it stays wrong.
+// not those bytes: groupMgr refreshes only on a write's Reload and on its
+// WatchLoop tick (none runs in these tests) — so once the record moves
+// underneath it (an out-of-band edit, a concurrent write), it is wrong until
+// then.
 //
 // The middleware here is mounted with PermRead purely to populate the verified
 // principal; production mounts DELETE with PermWrite (cmd/server/routes.go).

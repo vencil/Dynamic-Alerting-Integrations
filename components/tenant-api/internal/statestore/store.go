@@ -103,6 +103,13 @@ type Store interface {
 	// Mutate applies t to the record atomically with respect to every other
 	// Mutate on the same store. changed reports whether anything was written
 	// (false when t returned nil or the same bytes).
+	//
+	// Error contract: when t returns an error, Mutate writes nothing and
+	// returns that error as is (or wrapped with %w, so errors.Is finds it);
+	// ErrConflict and ErrTooLarge likewise mean nothing was written. Any other
+	// error may follow a write that took effect (a lost response). tenant-api's
+	// handler.mutateState relies on this to skip the post-write reload for a
+	// write that provably did not happen.
 	Mutate(ctx context.Context, key string, m Meta, t Transform) (changed bool, err error)
 	// Keys lists the record keys starting with prefix, sorted.
 	Keys(ctx context.Context, prefix string) ([]string, error)

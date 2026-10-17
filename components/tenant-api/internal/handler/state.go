@@ -29,11 +29,15 @@ import (
 //     unknown. A ConfigMap update can reach the API server and its response
 //     be lost, so the caller answers 503 for a write that happened; without a
 //     reload GET would miss it, and a DELETE of it answer 404, until the next
-//     WatchLoop tick. The reload runs in the background so the error answer
-//     does not wait for it: it reads through statestore.ReadFunc, whose
-//     context is not the request's and allows a full k8sCallTimeout, and it
-//     queues behind every other reload on the watcher's mutex — exactly when
-//     the API server is already slow.
+//     WatchLoop tick. The reload runs in the background (reloadStateAsync) so
+//     the error answer does not wait for it: it reads through
+//     statestore.ReadFunc, whose context is not the request's and allows a
+//     full k8sCallTimeout, and it queues behind every other reload on the
+//     watcher's mutex — exactly when the API server is already slow. The
+//     snapshot converges shortly after the answer, not before it; at the
+//     latest on the next WatchLoop tick. Background reloads are coalesced
+//     (configwatcher.ReloadAsync), so an outage's stream of failed writes
+//     queues one reload per record, not one per write.
 //
 // A reload that finds nothing changed is a no-op (the watcher's hash dedup).
 func (d *Deps) mutateState(ctx context.Context, key, entity, author string, transform func(current []byte) ([]byte, error), notes ...string) error {
@@ -56,7 +60,7 @@ func (d *Deps) mutateState(ctx context.Context, key, entity, author string, tran
 	case notApplied(err, transformErr):
 		// The store is as it was; the snapshot needs nothing.
 	default:
-		go d.reloadState(key)
+		d.reloadStateAsync(key)
 	}
 	return err
 }
@@ -84,9 +88,10 @@ func notApplied(err, transformErr error) bool {
 // AccountID registry are read from the store on every request and have none.
 // The error is the reload metrics' to report (configwatcher.ReloadObserver);
 // on failure the snapshot keeps its last good content, as on a WatchLoop tick.
-// It is safe to call from several goroutines at once: Reload holds the
-// watcher's mutex for the whole read, so concurrent reloads run one after
-// another and each reads the store as it is when its turn comes.
+// It is safe to call from several goroutines at once, and beside a
+// background reload: Reload holds the watcher's mutex for the whole read, so
+// concurrent reloads run one after another and each reads the store as it is
+// when its turn comes.
 func (d *Deps) reloadState(key string) {
 	switch {
 	case key == statestore.KeyGroups && d.Groups != nil:
@@ -95,6 +100,20 @@ func (d *Deps) reloadState(key string) {
 		_ = d.Views.Reload()
 	case key == statestore.KeyFederationPolicy && d.FederationPolicy != nil:
 		_ = d.FederationPolicy.Reload()
+	}
+}
+
+// reloadStateAsync is reloadState in the background, coalesced per record
+// (configwatcher.ReloadAsync: a call while a background reload of the same
+// record is still waiting to read is covered by it and dropped).
+func (d *Deps) reloadStateAsync(key string) {
+	switch {
+	case key == statestore.KeyGroups && d.Groups != nil:
+		d.Groups.ReloadAsync()
+	case key == statestore.KeyViews && d.Views != nil:
+		d.Views.ReloadAsync()
+	case key == statestore.KeyFederationPolicy && d.FederationPolicy != nil:
+		d.FederationPolicy.ReloadAsync()
 	}
 }
 

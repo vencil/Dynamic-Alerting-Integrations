@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -156,13 +157,19 @@ type gatedStore struct {
 	armed       atomic.Bool
 	readStarted chan struct{}
 	release     chan struct{}
+
+	// writes counts Mutate calls; seen records, for each armed read, how
+	// many writes had been attempted when it started.
+	writes atomic.Int64
+	mu     sync.Mutex
+	seen   []int64
 }
 
 func newGatedStore(t *testing.T, failWith error) *gatedStore {
 	s := &gatedStore{
 		Store:       mustDirState(t.TempDir()),
 		failWith:    failWith,
-		readStarted: make(chan struct{}, 16),
+		readStarted: make(chan struct{}, 64),
 		release:     make(chan struct{}),
 	}
 	return s
@@ -170,6 +177,9 @@ func newGatedStore(t *testing.T, failWith error) *gatedStore {
 
 func (s *gatedStore) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	if s.armed.Load() {
+		s.mu.Lock()
+		s.seen = append(s.seen, s.writes.Load())
+		s.mu.Unlock()
 		s.readStarted <- struct{}{}
 		<-s.release
 	}
@@ -177,6 +187,7 @@ func (s *gatedStore) Get(ctx context.Context, key string) ([]byte, bool, error) 
 }
 
 func (s *gatedStore) Mutate(ctx context.Context, key string, m statestore.Meta, t statestore.Transform) (bool, error) {
+	s.writes.Add(1)
 	if s.failWith != nil {
 		return false, s.failWith
 	}
@@ -301,5 +312,62 @@ func TestMutateState_SuccessReloadsSynchronously(t *testing.T) {
 	}
 	if _, ok := d.Groups.GetGroup("g-one"); !ok {
 		t.Fatal("the snapshot does not hold the group mutateState just wrote")
+	}
+}
+
+// A stream of unknown-outcome failures while a background reload is mid-read
+// queues ONE more reload, not one per failure — and that one starts reading
+// after the last failure, so the snapshot still converges on the last write.
+func TestMutateState_UnknownOutcomeReloadsAreCoalesced(t *testing.T) {
+	t.Parallel()
+	const n = 10
+	s := newGatedStore(t, fmt.Errorf("%w: update configmap ns/name: response lost", statestore.ErrUnavailable))
+	d, obs := groupsDeps(s)
+	s.armed.Store(true)
+	var once atomic.Bool
+	release := func() {
+		if once.CompareAndSwap(false, true) {
+			close(s.release)
+		}
+	}
+	t.Cleanup(release)
+	fail := func() {
+		if err := d.mutateState(context.Background(), statestore.KeyGroups, "groups", "a@example.com", writeOneGroup); err == nil {
+			t.Fatal("mutateState: want an error")
+		}
+	}
+
+	// The first failure's reload starts reading and is held there.
+	fail()
+	select {
+	case <-s.readStarted:
+	case <-time.After(eventuallyTimeout):
+		t.Fatal("no reload started after the first unknown-outcome write")
+	}
+	// The rest arrive while it is mid-read, spaced so that each background
+	// goroutine a failure starts has run up to where it waits for the lock
+	// before the next failure.
+	for i := 1; i < n; i++ {
+		fail()
+		time.Sleep(10 * time.Millisecond)
+	}
+	release()
+
+	deadline := time.Now().Add(eventuallyTimeout)
+	for obs.n.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("reloads = %d, want 2 (the one mid-read and one after the last write)", obs.n.Load())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // let any surplus reload land
+	if got := obs.n.Load(); got != 2 {
+		t.Fatalf("reloads after %d unknown-outcome writes = %d, want 2", n, got)
+	}
+	s.mu.Lock()
+	seen := append([]int64(nil), s.seen...)
+	s.mu.Unlock()
+	if last := seen[len(seen)-1]; last != n {
+		t.Fatalf("the last reload started after %d of %d writes (reads saw %v): it may miss the last write", last, n, seen)
 	}
 }

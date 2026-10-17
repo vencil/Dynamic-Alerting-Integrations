@@ -190,9 +190,9 @@ func TestReload_Success_RecordsOKNotFailure(t *testing.T) {
 // A file that is already BROKEN at startup fails the initial load() while no
 // observer is installed yet (New runs before SetReloadObserver). Installing the
 // observer must REPLAY that failure so the gauge reflects the stale state
-// immediately — otherwise a no-WatchLoop manager (groups/views) that never gets a
-// post-startup write sits at the assumed-current default forever, exactly the
-// single-shot stale case the gauge is meant to catch (verifier finding #1).
+// immediately — otherwise the gauge sits at the assumed-current default until
+// the next load (a WatchLoop tick later, or forever for a watcher run without
+// one), while the config is already stale (verifier finding #1).
 //
 // Dogfood note: dropping the replay call in SetReloadObserver makes this fail
 // (obs.last returns recorded=false) — the assertion is load-bearing.
@@ -332,5 +332,50 @@ func TestWatchLoop_ReloadFailure_NilObserverNoPanic(t *testing.T) {
 	// Reaching here without a panic is the assertion; last-good still served.
 	if got := w.Get().Items["foo"]; got != "good" {
 		t.Errorf("last-good not preserved: foo = %q, want good", got)
+	}
+}
+
+// A panic in a ReloadAsync goroutine's parse is recovered — nothing else would
+// catch it outside the request path — and recorded as a failed reload, with
+// the last-good snapshot kept.
+func TestReloadAsync_PanicIsRecoveredAndRecordedAsFailure(t *testing.T) {
+	var mu sync.Mutex
+	payload := []byte("value: good\n")
+	read := func() ([]byte, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return payload, true, nil
+	}
+	parse := func(data []byte) (*testConfig, error) {
+		if strings.Contains(string(data), "panic") {
+			panic("synthetic parse panic")
+		}
+		return parseTestConfig(data)
+	}
+	w, err := NewWithReader("test source", "async", read, parse, emptyTestConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := w.Get()
+	obs := &fakeReloadObserver{}
+	w.SetReloadObserver(obs)
+
+	mu.Lock()
+	payload = []byte("value: panic\n")
+	mu.Unlock()
+	w.ReloadAsync()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for obs.failCount("async") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the panicking background reload was not recorded as a failure")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ok, _ := obs.last("async"); ok {
+		t.Fatal("last recorded outcome is ok, want the panic's failure")
+	}
+	if w.Get() != good {
+		t.Fatal("the snapshot changed; want the last-good one kept")
 	}
 }
