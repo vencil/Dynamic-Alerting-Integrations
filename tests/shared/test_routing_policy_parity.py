@@ -118,7 +118,10 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
                   # #2989: a `_routing_enforced.match` that is not a list.
                   "routing_enforced_match_invalid",
                   # #2904: a `routing_profiles:` block that is not a mapping.
-                  "routing_profiles_unusable"}
+                  "routing_profiles_unusable",
+                  # #2906: a defaults carrier the directory's selection passed
+                  # over (no field: the whole file is not read).
+                  "unselected_defaults_carrier"}
 ROUTE_FINDING_KINDS = set(MATRIX["route_finding_kinds"])
 GO_SEVERITY = MATRIX["go_severity"]
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "values_not_string",
@@ -502,6 +505,9 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         # #2989: an enforced `match` that is not a list, off the finding's fields.
         + [["routing_enforced_match_invalid", w.file, w.field] for w in got.schema_warnings
            if getattr(w, "kind", None) == "routing_enforced_match_invalid"]
+        # #2906: an unselected defaults carrier, off the finding's fields.
+        + [["unselected_defaults_carrier", w.file, w.field or ""] for w in got.schema_warnings
+           if getattr(w, "kind", None) == "unselected_defaults_carrier"]
         # #2326: the tree findings travel as data on the tree, not as text.
         + [[kind, fname, fld] for kind, fname, fld, _msg in got.routing_tree_problems])
     # domain_policy_unusable (#2325) is compared on kind and field below.

@@ -55,6 +55,7 @@
     "is never rendered: targets null, and da-guard reports it as a routing_in_unread_location",
     "platform row, field = the key path in that file. Since #2904 the generator reports the same row (a blocking",
     "`WARN ... skipping`, --validate fails), so both halves compare it.",
+    "#2906 - a second defaults carrier spelling in one directory (`_defaults.yaml` beside `_defaults.yml`) is one unselected_defaults_carrier row, field empty: no reader opens it, so whatever it carries (a `_routing_enforced` below the root included) adds no other row.",
     "#2914 - in a threshold profile every routing-layer key is such a row, not only `_routing*`: every key Go config.IsRoutingLayerKey / Python _grar_parse._is_routing_layer_key accepts, whether or not a tenant elects the profile; a look-alike (`_severity_dedupx`, `_Routing`) is not one. A profile that is null or empty carries none. A profile that is a scalar or a list (or a `profiles:` that is) makes the exporter drop the whole file, da-guard exit 3, so it is no tree here.",
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
@@ -3191,9 +3192,9 @@
       },
       "platform": [
         [
-          "routing_enforced_below_root",
+          "unselected_defaults_carrier",
           "team/_defaults.yml",
-          "_routing_enforced"
+          ""
         ]
       ],
       "expect": {
@@ -6087,6 +6088,11 @@
           "routing_key_ignored",
           "team/_defaults.yaml",
           "_routing_enforce"
+        ],
+        [
+          "unselected_defaults_carrier",
+          "team/_defaults.yml",
+          ""
         ]
       ],
       "expect": {

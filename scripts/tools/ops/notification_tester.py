@@ -88,7 +88,9 @@ from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+)
 
 _LANG = detect_cli_lang()
 
@@ -821,6 +823,7 @@ def resolved_routing(config_dir: str) -> dict[str, dict]:
     import generate_alertmanager_routes as gar  # the generator's own reader
 
     tree = gar.load_tenant_tree(config_dir)
+    gar.print_reader_warnings(tree)  # #2906: what the reader used to print itself
     _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
                                   tree.duplicate_tenants,
                                   tree.routing_tree_problems,
@@ -1016,6 +1019,12 @@ def main() -> None:
         help=_HELP['rate_limit'][_LANG],
     )
     args = parser.parse_args()
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys of the routing_tree_refused document below
+        arm_crash_envelope(tool="test-notification", tenants=[],
+                           summary={"total_receivers": 0, "passed": 0,
+                                    "failed": 0, "skipped": 0})
 
     if not Path(args.config_dir).is_dir():
         msg = f"配置目錄不存在: {args.config_dir}" if _LANG == 'zh' else f"Config directory not found: {args.config_dir}"
@@ -1050,6 +1059,7 @@ def main() -> None:
 
     if args.json_output:
         print(format_json_report(reports))
+        disarm_crash_envelope()  # the document is out; a late crash must not add a second
     else:
         print(format_text_report(reports))
 

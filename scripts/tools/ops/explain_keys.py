@@ -60,7 +60,9 @@ for _p in (_TOOLS, _HERE):
 
 import _lib_key_verdict as kv  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
+)
 from _lib_io import safe_label  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
@@ -245,6 +247,10 @@ def _fail(reason: str, as_json: bool) -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys _fail's caller_error document carries
+        arm_crash_envelope(schema=SCHEMA, at=None, undecidable=False, tenants={}, findings=[])
     try:
         expected = None
         if args.assert_file is not None:
@@ -263,6 +269,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.json:
         doc["assert_differences"] = diffs
         print(json.dumps(doc, ensure_ascii=False, default=str))
+        disarm_crash_envelope()  # the document is out; a late crash must not add a second
     else:
         print(render_text(doc))
         for d in diffs:

@@ -28,6 +28,8 @@ Verifies that every registered tool:
              The assertion only discriminates for tools whose bare run would
              exit 0. See #1642 for the measurement.
 """
+import json
+import os
 import subprocess
 import sys
 import pytest
@@ -202,12 +204,12 @@ _CRASH_PRELUDE = (
 )
 
 
-def _run_crash_script(tmp_path, body, *, prelude=_CRASH_PRELUDE):
+def _run_crash_script(tmp_path, body, *, prelude=_CRASH_PRELUDE, env=None):
     script = tmp_path / "crash_tool.py"
     script.write_text(prelude.format(tools=str(TOOLS_DIR)) + body, encoding="utf-8")
     return subprocess.run(
         [sys.executable, str(script)], capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=30,
+        encoding="utf-8", errors="replace", timeout=30, env=env,
     )
 
 
@@ -327,6 +329,104 @@ def test_main_decorator_calls_on_crash_and_exits_with_crash_code(tmp_path):
     assert "ATEXIT-RAN" in proc.stderr
 
 
+def test_armed_crash_envelope_is_printed_once_on_stdout(tmp_path):
+    """arm_crash_envelope (#3094): a crash in --json mode puts exactly one
+    envelope on stdout — the tool's extra keys kept, status/reason/error not
+    overridable — and still exits 2 with the traceback on stderr."""
+    proc = _run_crash_script(
+        tmp_path,
+        "_lib_exitcodes.arm_crash_envelope(schema='t/v1', status='ok')\n"
+        "raise OSError('disk gone')\n")
+    assert proc.returncode == 2, proc.stderr
+    assert json.loads(proc.stdout) == {
+        "schema": "t/v1", "status": "caller_error", "reason": "internal_error",
+        "error": "ERROR: unexpected internal error (OSError): disk gone"}
+    assert "Traceback" in proc.stderr
+    assert "ATEXIT-RAN" in proc.stderr
+
+
+def test_armed_crash_envelope_builds_the_tools_zeroed_report_at_crash_time(tmp_path):
+    """dev-rules §13: the envelope keeps the tool's own schema keys, zeroed;
+    build() runs when the crash happens, not when the envelope is armed."""
+    proc = _run_crash_script(
+        tmp_path,
+        "state = {'n': 0}\n"
+        "_lib_exitcodes.arm_crash_envelope(lambda: {'total': state['n'], 'reason': 'x'},"
+        " tool='t')\n"
+        "state['n'] = 7\nraise ValueError('late')\n")
+    assert proc.returncode == 2, proc.stderr
+    assert json.loads(proc.stdout) == {
+        "total": 7, "tool": "t", "status": "caller_error", "reason": "internal_error",
+        "error": "ERROR: unexpected internal error (ValueError): late"}
+
+
+def test_failing_build_still_prints_the_three_key_envelope(tmp_path):
+    """A build() that raises must not leave stdout empty: rc 2 keeps its envelope."""
+    proc = _run_crash_script(
+        tmp_path,
+        "_lib_exitcodes.arm_crash_envelope(lambda: {}['x'], tool='t')\n"
+        "raise RuntimeError('boom')\n")
+    assert proc.returncode == 2, proc.stderr
+    assert json.loads(proc.stdout) == {
+        "tool": "t", "status": "caller_error", "reason": "internal_error",
+        "error": "ERROR: unexpected internal error (RuntimeError): boom"}
+    assert _stderr_lines(proc)[-2] == \
+        "ERROR: unexpected internal error (RuntimeError): boom", proc.stderr
+
+
+@pytest.mark.parametrize("unbuffered", ["1", None])
+def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path, unbuffered):
+    """`tool --json | head -c1`: stdout is gone, so the envelope is dropped
+    quietly — the crash report on stderr is the only one, rc stays 2. Run
+    with and without PYTHONUNBUFFERED: a write left in a block-buffered
+    stdout fails again at interpreter exit and makes the rc 120."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    if unbuffered:
+        env["PYTHONUNBUFFERED"] = unbuffered
+    proc = _run_crash_script(
+        tmp_path,
+        "import os\n_lib_exitcodes.arm_crash_envelope()\n"
+        "os.close(1)\nraise RuntimeError('x')\n", env=env)
+    assert proc.returncode == 2, proc.stderr
+    assert "crash envelope failed" not in proc.stderr
+    assert proc.stderr.count("Traceback") == 1, proc.stderr
+
+
+def test_disarmed_crash_envelope_prints_nothing(tmp_path):
+    """A tool whose own document is already out disarms: a later crash must
+    not add a second document."""
+    proc = _run_crash_script(
+        tmp_path,
+        "_lib_exitcodes.arm_crash_envelope()\nprint('{}')\n"
+        "_lib_exitcodes.disarm_crash_envelope()\nraise RuntimeError('late')\n")
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stdout == "{}\n"
+
+
+def test_main_decorator_on_crash_wins_over_the_armed_envelope(tmp_path):
+    """An explicit on_crash is the tool's own envelope: the armed default is
+    not printed beside it."""
+    proc = _run_crash_script(
+        tmp_path,
+        "_lib_exitcodes.arm_crash_envelope()\n"
+        "@_lib_exitcodes.main(on_crash=lambda exc: print('OWN'))\n"
+        "def main():\n    raise RuntimeError('x')\n"
+        "main()\n")
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stdout == "OWN\n"
+
+
+def test_bare_main_decorator_prints_the_armed_envelope(tmp_path):
+    proc = _run_crash_script(
+        tmp_path,
+        "_lib_exitcodes.arm_crash_envelope()\n"
+        "@_lib_exitcodes.main\n"
+        "def main():\n    raise RuntimeError('x')\n"
+        "main()\n")
+    assert proc.returncode == 2, proc.stderr
+    assert json.loads(proc.stdout)["reason"] == "internal_error"
+
+
 class TestMainDecoratorInProcess:
     """The decorator's own contract, without a subprocess."""
 
@@ -336,7 +436,17 @@ class TestMainDecoratorInProcess:
         import _lib_exitcodes as ec  # noqa: E402
         # idempotent reset (not save-then-restore): every test starts from 2
         monkeypatch.setattr(ec, "_crash_exit_code", ec.EXIT_CALLER_ERROR)
+        monkeypatch.setattr(ec, "_crash_envelope_armed", None)
         return ec
+
+    def test_armed_envelope_fires_at_most_once(self, monkeypatch, capfd):
+        # capfd, not capsys: the envelope goes straight to fd 1
+        ec = self._ec(monkeypatch)
+        ec.arm_crash_envelope()
+        ec._print_crash_envelope(RuntimeError("a"))
+        ec._print_crash_envelope(RuntimeError("b"))
+        out = capfd.readouterr().out
+        assert json.loads(out)["error"].endswith("(RuntimeError): a")
 
     def test_bare_decorator_exits_crash_code(self, monkeypatch, capsys):
         ec = self._ec(monkeypatch)

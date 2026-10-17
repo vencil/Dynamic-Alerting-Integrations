@@ -27,7 +27,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, http_get_json  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
 # #452/#737: kubectl return codes that signal a caller-error-class failure
 # (the tool could not reach/run kubectl), distinct from rc==1 which means
@@ -351,6 +352,9 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     checker = OperatorChecker(args)
     checker.run_all_checks()

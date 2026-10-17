@@ -38,7 +38,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+)
 from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     CONFIG_SUFFIXES,
@@ -455,6 +457,8 @@ def main() -> int:
         help="Output results as JSON",
     )
     args = parser.parse_args()
+    if args.json:
+        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     def reject(reason: str, message: str) -> int:
         """Contradictory or incomplete flags: exit 2 (dev-rules #13).

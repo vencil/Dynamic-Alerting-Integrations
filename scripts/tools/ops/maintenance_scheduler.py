@@ -51,7 +51,10 @@ from _lib_tenant_values import (  # noqa: E402
     load_effective_tree,
     load_served_tree,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
+    arm_crash_envelope, disarm_crash_envelope,
+)
 
 # Creator label for idempotency checks
 SILENCE_CREATOR = "da-tools/maintenance-scheduler"
@@ -504,6 +507,9 @@ def main():
     try_utf8_stdout()
     parser = build_parser()
     args = parser.parse_args()
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     if not Path(args.config_dir).is_dir():
         print(f"ERROR: config directory not found: {args.config_dir}", file=sys.stderr)
@@ -542,6 +548,8 @@ def main():
             "errors": errors,
             "mode": mode,
         }))
+        # #3094: the document is out; a later push_metrics crash must not add a second
+        disarm_crash_envelope()
 
     print(f"\nSummary: {counted}, {skipped} skipped, {errors} errors",
           file=sys.stderr)

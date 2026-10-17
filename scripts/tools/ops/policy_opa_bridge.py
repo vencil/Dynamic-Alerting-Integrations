@@ -100,7 +100,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_confd import resolve_defaults_file  # noqa: E402  (#1674 carrier selection)
 
@@ -712,6 +713,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys of the zeroed report below; `passed` is False, not that
+        # report's True — a crash evaluated nothing and must not read as a pass
+        arm_crash_envelope(tenants_evaluated=0, error_count=0, warning_count=0,
+                           passed=False, violations=[])
 
     # Load configs
     tenant_configs, served = load_tenant_inputs(args.config_dir)

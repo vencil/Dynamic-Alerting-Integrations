@@ -118,6 +118,9 @@ FINDING_KINDS: dict[str, str] = {
         "One routing-profile name is defined in two files.",
     "routing_in_unread_location":
         "A routing block in a file the generator never reads it from.",
+    "unselected_defaults_carrier":
+        "A second defaults carrier (_defaults.yaml / _defaults.yml spelling) "
+        "in one directory; only one is read, the other is ignored whole.",
     "routing_profiles_unusable":
         "A routing_profiles block that is not a mapping; no profile in it is "
         "applied.",

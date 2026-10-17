@@ -64,7 +64,7 @@ from _grar_validate import (  # noqa: E402
     routing_defaults_not_mapping_text,
     routing_not_mapping_warning,
 )
-from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
+from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
 from _grar_routes import enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
@@ -78,7 +78,7 @@ from _grar_merge import (  # noqa: E402
 )
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1279,6 +1279,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     # #2264: --label only feeds the trace; outside it the flag would be
     # silently ignored, so refuse it (argparse caller error → rc 2).
@@ -1301,6 +1304,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     parsed = _parse_config_files(args.config_dir)
+    # #2906: in every mode (--trace too), as the reader's own multi-carrier
+    # WARN was before it became a finding.
+    print_reader_warnings(parsed)
     # #2326: a tree the generator refuses outright (rc 2) is still explained
     # here — this is a diagnostic — but never without saying so first.
     # ⛔ Not under --trace: the trace asks the generator itself

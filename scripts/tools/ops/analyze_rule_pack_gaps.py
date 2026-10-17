@@ -45,7 +45,9 @@ from _lib_tenant_values import (  # noqa: E402  (#2115)
     load_served_tree,
     print_load_warnings,
 )
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+)
 
 # ---------------------------------------------------------------------------
 # Default paths (relative to script location for da-tools container)
@@ -341,6 +343,9 @@ def main():
         help="Output JSON only",
     )
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     if not args.config_dir and not args.tenant_config:
         print("ERROR: Specify --config-dir or --tenant-config", file=sys.stderr)
@@ -375,6 +380,7 @@ def main():
     # Output
     if args.json:
         print(format_json_report(results))
+        disarm_crash_envelope()  # the -o write below must not add a second document
     else:
         print_report(results)
 

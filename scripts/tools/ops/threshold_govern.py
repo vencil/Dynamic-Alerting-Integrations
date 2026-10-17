@@ -92,7 +92,9 @@ from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116
 from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope,
+)
 
 # Reuse the recommendation engine wholesale — threshold_govern is its active
 # layer, never a re-implementation (the engine owns percentiles / observed-map /
@@ -1253,6 +1255,9 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON 格式輸出" if _LANG == "zh" else "Output as JSON")
     args = parser.parse_args()
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope(tool="threshold-govern")
 
     if not os.path.isdir(args.config_dir):
         msg = (f"配置目錄不存在: {args.config_dir}" if _LANG == "zh"

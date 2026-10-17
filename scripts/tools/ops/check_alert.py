@@ -31,7 +31,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import http_get_json, add_prometheus_arg  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
 
 
 def check_alert(alert_name, tenant, prom_url):
@@ -92,4 +92,7 @@ if __name__ == "__main__":
     parser.add_argument("--json", action="store_true", default=True,
                         help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
     check_alert(args.alert_name, args.tenant, args.prometheus)

@@ -36,7 +36,7 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
@@ -1087,6 +1087,8 @@ def main():
     """CLI entry point (thin orchestration: parse → validate → generate → emit → exit)."""
     parser = build_arg_parser()
     args = parser.parse_args()
+    if args.json:
+        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     # Resolve paths relative to current directory
     rule_packs_dir = args.rule_packs_dir.resolve()

@@ -436,33 +436,12 @@ def test_routing_profiles_lint_reads_the_tree(tmp_path):
 # ── review round (#2326 review F1–F4) ───────────────────────────────────
 
 
-def test_f1_enforced_in_the_unselected_carrier_spelling_is_refused(tmp_path):
-    """(b) is about ANY file below the root: the carrier spelling the chain
-    does not read is still refused for `_routing_enforced`. Its other keys
-    stay unread — a `receiver: null` there is not the (a) finding."""
-    d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": _EMAIL_RD,
-        "team/_defaults.yaml": _SLACK_RD,
-        "team/_defaults.yml": ("_routing_enforced:\n  enabled: true\n"
-                               "_routing_defaults:\n  receiver: null\n"),
-        "team/t-team.yaml": _tenant("t-team"),
-    })
-    res = _gar("--config-dir", str(d), "--validate", "--strict")
-    assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-    assert "team/_defaults.yml: _routing_enforced is read only at the conf.d root" in res.stderr
-    assert "_routing_defaults.receiver is null" not in res.stderr
-
-
-def test_f1_a_clean_unselected_spelling_is_not_refused(tmp_path):
-    """Control: the unselected spelling alone is only the multi-carrier WARN."""
-    d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": _EMAIL_RD,
-        "team/_defaults.yaml": _SLACK_RD,
-        "team/_defaults.yml": "_routing_defaults:\n  receiver: null\n",
-        "team/t-team.yaml": _tenant("t-team"),
-    })
-    res = _gar("--config-dir", str(d), "--validate", "--strict")
-    assert res.returncode == EXIT_OK, res.stderr
+# #2906: F1 (`_routing_enforced` read out of the unselected carrier spelling
+# below the root, refused rc 2) and its two controls (a clean or an
+# unparseable unselected spelling: rc 0, stderr WARN only) are gone — the
+# generator no longer opens that file, and every unselected carrier is one
+# `unselected_defaults_carrier` finding, blocking under --validate.
+# tests/ops/test_grar_unselected_carrier.py holds all three trees.
 
 
 def test_f2_a_null_body_still_declares_the_tenant(tmp_path):
@@ -552,20 +531,6 @@ def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, s
     assert "ERROR (field type): _domain_policy.yaml: domain_policy 'fin': constraint " \
         "'forbidden_receiver_types' lists" in out, out
     assert "is forbidden" not in out, out
-
-
-def test_an_unparseable_unselected_carrier_spelling_is_not_refused(tmp_path):
-    """F1's reader carries nothing from a file that does not parse, so only
-    the multi-carrier WARN."""
-    d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": _EMAIL_RD,
-        "team/_defaults.yaml": _SLACK_RD,
-        "team/_defaults.yml": "a: [1, 2\n",
-        "team/t-team.yaml": _tenant("t-team"),
-    })
-    res = _gar("--config-dir", str(d), "--validate", "--strict")
-    assert res.returncode == EXIT_OK, res.stderr
-    assert "has 2 defaults carriers" in res.stderr
 
 
 def test_a_non_mapping_level_contributes_nothing(tmp_path):

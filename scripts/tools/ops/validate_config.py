@@ -120,7 +120,8 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -3257,6 +3258,9 @@ def main() -> None:
     parser.add_argument("--strict", action="store_true",
                         help=_h('strict'))
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     if not os.path.isdir(args.config_dir):
         print(f"ERROR: config-dir not found: {args.config_dir}",

@@ -40,7 +40,9 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+)
 # #2123: a key written twice in one mapping is a YAMLError, as the exporter
 # (yaml.v3) treats it — not PyYAML's silent last-wins.
 from _lib_io import strict_safe_load  # noqa: E402
@@ -546,6 +548,10 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    # #3094: a crash in --json mode still prints one envelope (`--json` lives
+    # on every subcommand; no subcommand means no attribute)
+    if getattr(args, "json", False):
+        arm_crash_envelope()
 
     if not args.action:
         parser.print_help()

@@ -77,7 +77,9 @@ except ImportError:
         """No-op stand-in with the same signature (flag is keyword-only)."""
         return _nullcontext()
 
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+)
 
 
 # ─ I18n Fallback ────────────────────────────────────────────────────────
@@ -766,6 +768,20 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys of process_rule_packs' report as it starts (all zero/empty)
+        arm_crash_envelope(build=lambda: {
+            "errors": [],
+            "warnings": [],
+            "processed_files": [],
+            "validation": {
+                "total_packs": 0,
+                "edge_rules": 0,
+                "central_rules": 0,
+                "metric_mismatches": [],
+            },
+        })
 
     report = process_rule_packs(
         rule_packs_dir=args.rule_packs_dir,

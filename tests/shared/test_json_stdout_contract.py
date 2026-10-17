@@ -66,6 +66,13 @@ SCOPE — WHAT THIS GATE ASSERTS
 * **``expect_caller_error`` recipes assert the exit code as well as the
   document**: the tool must reject the invocation with exit 2 *and* still put
   one JSON document on stdout (``patch_config``'s early exits).
+* **A crash is a terminal path too** (#3094): every tool is driven once more
+  with an exception injected right where it arms its crash envelope, and must
+  exit 2 with exactly one ``caller_error`` / ``internal_error`` envelope on
+  stdout (``test_crash_in_json_mode_emits_one_envelope``). That proves every
+  tool arms in ``--json`` mode; it does not prove a crash LATER in the run
+  gets no second document — that rests on each tool disarming after printing
+  its own report where more code can still run.
 
 HOW THE MODES ARE DRIVEN (every dependency is mocked, none is contacted)
 -----------------------------------------------------------------------
@@ -1496,3 +1503,114 @@ def test_json_mode_emits_exactly_one_json_document(
     if recipe.doc_check is not None:
         reason = recipe.doc_check(doc)
         assert reason is None, fail(f"wrong document for this mode — {reason}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# A crash is a terminal path too (#3094)
+# ═══════════════════════════════════════════════════════════════════════════
+# An uncaught exception ends at rc 2 (#3090), and rc 2 owes `--json` its
+# envelope (#3059). Each tool arms that envelope with
+# `_lib_exitcodes.arm_crash_envelope()` once it knows `--json` was given; the
+# crash is injected right there — the wrapper makes the arm call raise after
+# arming — so a tool that never arms has no envelope and fails here, by name.
+# One recipe per tool (its first non-rejecting one) is enough: the crash path
+# does not depend on the mode.
+_INJECTED = "injected crash (#3094)"
+_CRASH_WRAPPER = f"""
+import os, runpy, sys
+tools_dir, script = sys.argv[1], sys.argv[2]
+sys.argv = sys.argv[2:]
+sys.path.insert(0, os.path.dirname(script))
+sys.path.insert(0, tools_dir)
+import _lib_exitcodes
+_arm = _lib_exitcodes.arm_crash_envelope
+def _arm_then_crash(*args, **kwargs):
+    _arm(*args, **kwargs)
+    raise RuntimeError({_INJECTED!r})
+_lib_exitcodes.arm_crash_envelope = _arm_then_crash
+runpy.run_path(script, run_name="__main__")
+"""
+CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
+                      if not r.expect_caller_error}.values())
+
+# Known gap: these tools arm (so the gate below is green for them), but their
+# own `except Exception` around the work turns a real crash into a stderr-only
+# rc 2 before the envelope can print. The injected crash fires before that
+# handler, so green here is NOT coverage for them. Tracked in #3115.
+CRASH_SWALLOWED_BY_OWN_HANDLER = {"config_diff": "#3115", "operator_generate": "#3115"}
+
+# Known gap: these tools' --json document is an ARRAY, but the crash envelope
+# is an object. Whether to normalise envelope shapes is an owner decision in
+# #3115; until then a consumer tells the crash apart by the top-level type.
+CRASH_ENVELOPE_TYPE_DIFFERS = {
+    "validate_config": "#3115", "analyze_rule_pack_gaps": "#3115",
+    "blind_spot_discovery": "#3115", "explain_route": "#3115",
+}
+
+
+def test_every_json_tool_has_a_crash_recipe():
+    """Anti-vacuity: the crash gate below reaches every --json tool."""
+    assert sorted(r.tool for r in CRASH_RECIPES) == JSON_TOOLS
+    for gaps in (CRASH_SWALLOWED_BY_OWN_HANDLER, CRASH_ENVELOPE_TYPE_DIFFERS):
+        assert set(gaps) <= set(JSON_TOOLS), (
+            "a known-gap list names a tool that is no longer a --json tool")
+
+
+@pytest.mark.parametrize("recipe", CRASH_RECIPES, ids=[r.tool for r in CRASH_RECIPES])
+def test_crash_in_json_mode_emits_one_envelope(
+    recipe: Recipe, tmp_path: Path, stub_url: str, sandbox_repo: Path,
+    fake_kubectl_dir: Path,
+):
+    """`--json` + an unexpected crash ⇒ rc 2 and exactly one envelope on stdout."""
+    if recipe.needs_kubectl and os.name == "nt":
+        pytest.skip(f"{recipe.id}: fake-kubectl shim cannot intercept on Windows")
+    root = sandbox_repo if recipe.sandbox else REPO_ROOT
+    script = root / JSON_TOOL_PATHS[recipe.tool]
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    env["PATH"] = str(fake_kubectl_dir) + os.pathsep + env.get("PATH", "")
+    for key in ("PROMETHEUS_URL", "ALERTMANAGER_URL", "FAKE_KUBECTL_CM"):
+        env.pop(key, None)
+    if recipe.fake_cm is not None:
+        env["FAKE_KUBECTL_CM"] = recipe.fake_cm
+    proc = subprocess.run(
+        [sys.executable, "-c", _CRASH_WRAPPER, str(root / "scripts" / "tools"), str(script),
+         *recipe.build(tmp_path, stub_url)],
+        capture_output=True, timeout=TIMEOUT_S, cwd=str(root), env=env,
+        encoding="utf-8", errors="replace",
+    )
+    where = (f"{recipe.tool}.py ({recipe.mode}) rc={proc.returncode}\n"
+             f"  stdout[:300]: {proc.stdout[:300]!r}\n"
+             f"  stderr[-300:]: {proc.stderr[-300:]!r}")
+    assert _INJECTED in proc.stderr, (
+        f"the injected crash never fired — the tool did not call "
+        f"_lib_exitcodes.arm_crash_envelope() in --json mode: {where}")
+    assert proc.returncode == EXIT_CALLER_ERROR, f"a crash must exit 2: {where}"
+    try:
+        doc = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise AssertionError(f"stdout is not one JSON document ({e}): {where}") from None
+    assert isinstance(doc, dict) and (doc.get("status"), doc.get("reason")) == (
+        "caller_error", "internal_error"), f"not the crash envelope: {where}"
+    assert _INJECTED in doc.get("error", ""), f"envelope does not name the crash: {where}"
+
+    # dev-rules §13: an early exit keeps the tool's own schema keys. Where a
+    # rejecting recipe shows the tool's own caller_error document, the crash
+    # envelope must carry every one of its keys.
+    rejecting = next((r for r in RECIPES
+                      if r.tool == recipe.tool and r.expect_caller_error), None)
+    if rejecting is not None:
+        own_tmp = tmp_path / "own"
+        own_tmp.mkdir()
+        own = json.loads(_run(rejecting, own_tmp, stub_url, sandbox_repo,
+                              fake_kubectl_dir).stdout)
+        if recipe.tool in CRASH_ENVELOPE_TYPE_DIFFERS:
+            assert isinstance(own, list), (
+                f"{recipe.tool} is listed as array-shaped but its document is "
+                f"{type(own).__name__}; drop it from CRASH_ENVELOPE_TYPE_DIFFERS")
+        else:
+            assert isinstance(own, dict), (
+                f"the tool's own caller_error document is "
+                f"{type(own).__name__}, the crash envelope an object: {where}")
+            missing = sorted(set(own) - set(doc))
+            assert not missing, (f"crash envelope lacks keys of the tool's own "
+                                 f"caller_error document {missing}: {where}")

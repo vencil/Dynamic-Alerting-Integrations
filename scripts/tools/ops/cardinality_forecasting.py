@@ -34,7 +34,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -610,6 +611,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys of the caller_error document below, zeroed
+        arm_crash_envelope(build=lambda: {
+            "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "lookback_days": parse_duration_seconds(args.lookback) // SECONDS_PER_DAY,
+            "cardinality_limit": args.limit,
+            "warn_days": args.warn_days,
+            "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0},
+            "tenants": [],
+        })
 
     # Parse lookback — already validated by `duration_arg` at the parser, so
     # no `or <default>` here (#1625: that fallback hid unusable values).

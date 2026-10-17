@@ -621,12 +621,8 @@ def test_missing_da_guard_message_keeps_its_lines(tmp_path) -> None:
 def test_today_selection_is_the_generators(tmp_path, monkeypatch) -> None:
     """Differential: the files `_grar_parse._parse_config_files` actually
     opens with its loader, against `read_tree_today`. If the generator's
-    file selection moves, this turns red. Known, listed differences:
+    file selection moves, this turns red. Known, listed difference:
 
-    * `sub/_defaults.yml` — the unselected carrier below the root: the
-      generator opens it only to ask whether it writes `_routing_enforced`
-      (`_enforced_in_unread_file`); it reads nothing from it, and neither
-      side counts it as read.
     * `dir.yaml` — a directory with a config name: no loader opens it; both
       book it as refused (the generator via `files_skipped`).
     """
@@ -651,9 +647,14 @@ def test_today_selection_is_the_generators(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(_grar_parse, "strict_load_exporter_keys", spy)
     res = _grar_parse._parse_config_files(str(root))
     read, refused = ma.read_tree_today(root)
-    expected_extra_opened = {"sub/_defaults.yml"}
     expected_refused_unopened = {"dir.yaml"}
-    assert set(opened) - expected_extra_opened == (set(read) | set(refused)) - expected_refused_unopened
-    assert expected_extra_opened <= set(opened)
+    assert set(opened) == (set(read) | set(refused)) - expected_refused_unopened
+    # #2906: the unselected carrier below the root (it writes
+    # `_routing_enforced`) is no longer opened — before, the generator read
+    # it to refuse that key (`_enforced_in_unread_file`, removed); now it is
+    # an `unselected_defaults_carrier` finding whatever it holds.
+    assert "sub/_defaults.yml" not in opened
+    assert {"_DEFAULTS.yml", "sub/_defaults.yml"} <= {
+        f.file for f in res["unselected_carriers"]}
     assert set(refused) == {f for f, _ in res["files_skipped"]}
     assert set(refused) == {"bad.yaml", "latin.yaml", "dir.yaml"}
