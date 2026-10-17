@@ -80,6 +80,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "_parse_tenant_overrides",
         "load_tenant_configs",
         "load_tenant_tree",
+        "print_reader_warnings",  # #2906, for notification_tester (gar.*)
     ),
     "_grar_routes": (
         "_build_enforced_routes",

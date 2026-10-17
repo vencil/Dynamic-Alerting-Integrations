@@ -823,6 +823,7 @@ def resolved_routing(config_dir: str) -> dict[str, dict]:
     import generate_alertmanager_routes as gar  # the generator's own reader
 
     tree = gar.load_tenant_tree(config_dir)
+    gar.print_reader_warnings(tree)  # #2906: what the reader used to print itself
     _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
                                   tree.duplicate_tenants,
                                   tree.routing_tree_problems,

@@ -63,7 +63,7 @@ from _grar_validate import (  # noqa: E402
     routing_defaults_not_mapping_text,
     routing_not_mapping_warning,
 )
-from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
+from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
 from _grar_routes import enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
@@ -1303,6 +1303,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     parsed = _parse_config_files(args.config_dir)
+    # #2906: in every mode (--trace too), as the reader's own multi-carrier
+    # WARN was before it became a finding.
+    print_reader_warnings(parsed)
     # #2326: a tree the generator refuses outright (rc 2) is still explained
     # here — this is a diagnostic — but never without saying so first.
     # ⛔ Not under --trace: the trace asks the generator itself
