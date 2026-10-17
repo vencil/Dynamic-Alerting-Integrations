@@ -37,16 +37,16 @@ Usage:
   - da-guard (DA_GUARD_BINARY, or on PATH) for --git-diff and --config-dir
 """
 import argparse
+import contextlib
 import errno
-import hashlib
 import io
 import math
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
-import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -235,7 +235,7 @@ def _fsdecode(raw):
     return raw.decode(sys.getfilesystemencoding(), "surrogateescape")
 
 
-def _git_bytes(args, quotepath_off=False, stdin=None, timeout=15):
+def _git_bytes(args, quotepath_off=False, stdin=None, timeout=15, env=None):
     r"""Run git and return raw stdout BYTES, or None if the call failed.
 
     ⛔ #1634. Every path-carrying git call in this file used `text=True`, and
@@ -262,7 +262,8 @@ def _git_bytes(args, quotepath_off=False, stdin=None, timeout=15):
         cmd += ["-c", "core.quotepath=false"]
     try:
         result = subprocess.run(cmd + list(args), input=stdin, capture_output=True,
-                                timeout=timeout)
+                                timeout=timeout,
+                                env=None if env is None else {**os.environ, **env})
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
     if result.returncode != 0:
@@ -302,97 +303,56 @@ def _tree_entries(raw):
 
 
 class Head1Unavailable(Exception):
-    """`--git-diff` cannot compare HEAD~1's conf.d/: the message says why
-    (`main` exits 2, `git_diff_unavailable`)."""
+    """`--git-diff` cannot compare HEAD~1's conf.d/ (`main` exits 2,
+    `git_diff_unavailable`). `refused` is False when git itself could not
+    answer, True when HEAD~1 was checked out and its conf.d/ is one this
+    backtest will not read (a submodule, not a directory, a file whose path
+    leaves the checkout)."""
+
+    def __init__(self, message, refused=False):
+        super().__init__(message)
+        self.refused = refused
 
 
-def _git_blob_id(data, oid):
-    """The git object id of a blob holding `data`, in the hash `oid` is in
-    (40 hex digits: SHA-1, 64: SHA-256)."""
-    algo = hashlib.sha1 if len(oid) == 40 else hashlib.sha256
-    return algo(b"blob %d\0" % len(data) + data).hexdigest()
-
-
-def _fallback_data_filter(member, dest_path):
-    """`tarfile.data_filter`'s refusals, for a Python that has none: an
-    absolute name or link, one that leaves `dest_path`, a device or FIFO."""
-    if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
-        raise tarfile.TarError(f"{member.name!r} is a special file")
-    dest = os.path.realpath(dest_path)
-    target = os.path.realpath(os.path.join(dest, member.name))
-    if os.path.isabs(member.name) or os.path.commonpath([dest, target]) != dest:
-        raise tarfile.TarError(f"{member.name!r} would be extracted outside the destination")
-    if member.issym() or member.islnk():
-        base = os.path.dirname(target) if member.issym() else dest
-        link = os.path.realpath(os.path.join(base, member.linkname))
-        if os.path.isabs(member.linkname) or os.path.commonpath([dest, link]) != dest:
-            raise tarfile.TarError(f"{member.name!r} links outside the destination")
-    return member
-
-
-_DATA_FILTER = getattr(tarfile, "data_filter", None)
-_FILTER_ERRORS = (tarfile.TarError,) + ((tarfile.FilterError,) if hasattr(tarfile, "FilterError") else ())
-
-
-def _verify_confd(root, confd):
-    """Check the written-out `confd` (repo-relative, bytes) against what git
-    records for it at HEAD~1: every file with its content, every symlink
-    with its target, no submodule. Raises Head1Unavailable naming the path.
-
-    This is what catches what `git archive` changes on the way
-    (`export-ignore` drops a file, `export-subst` rewrites one, a link
-    target holding a NUL is cut short) and what a crafted tree does (two
-    entries of one name)."""
-    raw = _git_bytes(["ls-tree", "-r", "-z", "--full-tree", "HEAD~1", "--", confd + b"/"],
-                     timeout=120)
-    if raw is None:
-        raise Head1Unavailable("git could not list HEAD~1's conf.d/ (a timeout?)")
-    for mode, kind, oid, path in _tree_entries(raw):
-        shown = f"HEAD~1:{safe_label(_fsdecode(path))}"
-        if kind == b"commit":
-            raise Head1Unavailable(f"{shown} is a submodule, which a checkout may or may not "
-                                   "populate; this backtest does not guess")
-        target = os.path.join(root, path)
-        try:
-            if mode == b"120000":
-                data = os.readlink(target) if os.path.islink(target) else None
-            elif os.path.isfile(target) and not os.path.islink(target):
-                with open(target, "rb") as f:
-                    data = f.read()
-            else:
-                data = None
-        except OSError:
-            data = None
-        if data is None or _git_blob_id(data, oid) != oid:
-            raise Head1Unavailable(
-                f"{shown} was not written out as git records it (`git archive` "
-                "export-ignore / export-subst, or a crafted tree)")
+def _inside(path, root):
+    """Whether `path`, every link in it resolved (`os.path.realpath`), lies
+    under `root` (itself resolved)."""
+    root = os.path.realpath(os.fsdecode(root))
+    return os.path.commonpath([root, os.path.realpath(os.fsdecode(path))]) == root
 
 
 def materialize_head1_confd(dest):
-    """Write the whole HEAD~1 tree under `dest` (`git archive`, extracted
-    with tarfile's `data` filter) and return its `conf.d/` beside the cwd —
-    the one `git diff HEAD~1 -- conf.d/` would read — as a path, or `""`
-    when HEAD~1 has none there (the PR adds it). Raises Head1Unavailable
-    naming why HEAD~1 cannot be compared: git not on PATH, not inside a git
-    work tree, no HEAD~1 (a shallow clone of depth 1 has none), an object
-    the clone does not have, a timeout, a conf.d/ that is a submodule or
-    not a directory, a member the filter refuses inside it (an absolute
-    symlink, one leaving the repository), or a file not written out as git
-    records it (`_verify_confd`).
+    """Check HEAD~1 out under `dest/tree` with git itself and return its
+    `conf.d/` beside the cwd — the one `git diff HEAD~1 -- conf.d/` would
+    read — as a path, or `""` when HEAD~1 has none there (the PR adds it).
 
-    #3111: `--git-diff` used to parse `git diff` text, with its own rules
-    for git's path quoting, the tenant taken from the file name, and a
-    Python copy of the exporter's value grammar; the tree is now read by
-    the exporter (`extract_changes_from_dirs`). The WHOLE tree is written,
-    not just conf.d/, so a relative symlink out of conf.d/ (or a conf.d/
-    that is itself a symlink) resolves as it does in a checkout. A member
-    the filter refuses outside conf.d/ is left out; a link inside conf.d/
-    to it then fails as a file the exporter cannot read.
+    #3111: git does the checkout, so this tool re-derives none of its
+    semantics (end-of-line conversion, filters, how a link is written):
+    `git read-tree HEAD~1` into an index of our own (`GIT_INDEX_FILE` in
+    `dest`, never the repository's) and `git checkout-index -a -f` into
+    `dest/tree` (`--work-tree`), from the top level, with LFS smudging
+    skipped (a pointer file is what a conf.d/ would hold anyway, and no
+    network is asked). The repository, its index and `.git/worktrees` are
+    not touched. A relative link out of conf.d/, or a conf.d/ that is itself
+    a link, resolves as in any checkout.
+
+    Raises Head1Unavailable for what git cannot answer — git not on PATH,
+    not inside a git work tree (a bare repository), no HEAD~1 (a shallow
+    clone of depth 1 has none), an object the clone does not have, a
+    timeout — and, `refused`, for the only things this checks itself, both
+    decided on git's objects or on the checkout: a conf.d/ that is or holds
+    a submodule (a checkout may or may not populate it), and a conf.d/ that
+    is not a directory or whose files the exporter would read
+    (`list_config_tree`) resolve outside the checkout (an absolute link, a
+    chain of links leaving it).
     """
-    if _git_bytes(["rev-parse", "--is-inside-work-tree"]) is None:
+    inside = _git_bytes(["rev-parse", "--is-inside-work-tree"])
+    if inside is None:
         raise Head1Unavailable("git could not run (not on PATH, not inside a git work tree, "
                                "or a timeout)")
+    if inside.strip() != b"true":
+        raise Head1Unavailable("this directory is not inside a git work tree (a bare "
+                               "repository?)")
     if _git_bytes(["rev-parse", "--verify", "--quiet", "HEAD~1^{commit}"]) is None:
         raise Head1Unavailable("there is no parent commit HEAD~1 (a shallow clone needs "
                                "fetch-depth: 2)")
@@ -400,54 +360,40 @@ def materialize_head1_confd(dest):
     top = _git_bytes(["rev-parse", "--show-toplevel"])
     if prefix is None or top is None:
         raise Head1Unavailable("git could not name this directory's path in the repository")
+    top = top.rstrip(b"\n")
     confd = prefix.rstrip(b"\n") + b"conf.d"
-    archive = os.path.join(dest, "head1.tar")
-    # ⚠️ Run from the top level: from a subdirectory `git archive` writes
-    # only that subdirectory's part of the tree (measured), which would
-    # leave out what a relative link from conf.d/ points at.
-    if _git_bytes(["-C", top.rstrip(b"\n"), "archive", "--format=tar", "-o", archive, "HEAD~1"],
-                  timeout=600) is None:
-        raise Head1Unavailable("`git archive HEAD~1` failed (an object this clone does not "
-                               "have, or a timeout)")
+    confd_name = safe_label(os.fsdecode(confd))
+    listed = _git_bytes(["ls-tree", "-r", "-t", "-z", "--full-tree", "HEAD~1", "--",
+                         confd, confd + b"/"], timeout=120)
+    if listed is None:
+        raise Head1Unavailable("git could not list HEAD~1's conf.d/ (a timeout?)")
+    for _mode, kind, _oid, path in _tree_entries(listed):
+        if kind == b"commit":
+            raise Head1Unavailable(
+                f"HEAD~1:{safe_label(_fsdecode(path))} is a submodule, which a checkout may "
+                "or may not populate; this backtest does not guess", refused=True)
     root = os.path.join(dest, "tree")
     os.makedirs(root)
-    confd_name = os.fsdecode(confd)
-    refused = []
-
-    def keep(member, dest_path):
-        try:
-            return (_DATA_FILTER or _fallback_data_filter)(member, dest_path)
-        except _FILTER_ERRORS as exc:
-            name = member.name.rstrip("/")
-            if (name == confd_name or name.startswith(confd_name + "/")
-                    or confd_name.startswith(name + "/")):
-                refused.append(f"HEAD~1:{safe_label(name)}: {safe_label(str(exc))}")
-            return None
-    try:
-        with tarfile.open(archive) as tar:
-            tar.extractall(root, filter=keep)
-    except (OSError, tarfile.TarError, ValueError) as exc:
-        raise Head1Unavailable("HEAD~1's tree cannot be written out "
-                               f"({safe_label(_head1_relabel(root)(str(exc)))})")
-    finally:
-        os.remove(archive)
-    if refused:
-        raise Head1Unavailable(f"{refused[0]} (refused when writing HEAD~1's tree out)")
-    kind = _git_bytes(["ls-tree", "-z", "--full-tree", "HEAD~1", "--", confd])
-    if kind is None:
-        raise Head1Unavailable("git could not list HEAD~1's conf.d/ (a timeout?)")
-    entries = _tree_entries(kind)
-    if entries and entries[0][1] == b"commit":
-        raise Head1Unavailable(f"HEAD~1:{safe_label(confd_name)} is a submodule, which a "
-                               "checkout may or may not populate; this backtest does not guess")
+    env = {"GIT_INDEX_FILE": os.path.join(dest, "index"), "GIT_LFS_SKIP_SMUDGE": "1"}
+    if (_git_bytes(["-C", top, "read-tree", "HEAD~1"], env=env, timeout=300) is None
+            or _git_bytes(["-C", top, f"--work-tree={root}", "checkout-index", "-a", "-f"],
+                          env=env, timeout=600) is None):
+        raise Head1Unavailable("git could not check HEAD~1 out (an object this clone does "
+                               "not have, or a timeout)")
     path = os.path.join(os.fsencode(root), confd)
-    if os.path.isdir(path):
-        if entries and entries[0][1] == b"tree":
-            _verify_confd(os.fsencode(root), confd)
-        return os.fsdecode(path)
-    if os.path.lexists(path) or entries:
-        raise Head1Unavailable(f"HEAD~1:{safe_label(confd_name)} is not a directory")
-    return ""
+    if not os.path.lexists(path):
+        return ""
+    if not os.path.isdir(path) or not _inside(path, root):
+        raise Head1Unavailable(f"HEAD~1:{confd_name} is not a directory inside the checkout",
+                               refused=True)
+    listing = list_config_tree(os.fsdecode(path))
+    for entry in listing.files + listing.unusable:
+        if not _inside(entry, root):
+            shown = os.path.relpath(os.fsdecode(entry), root)
+            raise Head1Unavailable(
+                f"HEAD~1:{safe_label(shown)} resolves outside the checked-out tree (an "
+                "absolute link, or links leaving the repository)", refused=True)
+    return os.fsdecode(path)
 
 
 # Roots already named as unlistable, so the warning is said once per run.
@@ -649,17 +595,42 @@ def _confd_tree(path):
     return path if listing.files or listing.unusable else None
 
 
-def _head1_relabel(root):
-    """A function naming paths under the written-out HEAD~1 tree `root` as
-    git does (`HEAD~1:<repo path>`), not as a temporary path nobody has."""
-    roots = sorted({os.path.join(r, "") for r in (root, os.path.realpath(root))},
-                   key=len, reverse=True)
+def _head1_relabel(tmp):
+    """A function naming paths under `--git-diff`'s temporary directory
+    `tmp` as git does: the checked-out tree's `tmp/tree/<path>` as
+    `HEAD~1:<path>`, anything else under `tmp` as `HEAD~1:<name>` — never a
+    temporary path nobody has (#3111)."""
+    roots = []
+    for base in (tmp, os.path.realpath(tmp)):
+        roots += [os.path.join(base, "tree", ""), os.path.join(base, "")]
+    roots = sorted(set(roots), key=len, reverse=True)
 
     def relabel(text):
         for r in roots:
             text = text.replace(r, "HEAD~1:")
+        for r in roots:  # the directory itself, without a trailing separator
+            text = text.replace(r.rstrip(os.sep), "HEAD~1:")
         return text
     return relabel
+
+
+@contextlib.contextmanager
+def _removed_on_signal():
+    """While `--git-diff`'s temporary directory exists, SIGTERM unwinds the
+    stack (SystemExit 143) as SIGINT already does (KeyboardInterrupt), so
+    `TemporaryDirectory` removes it — a 60 MB checkout of HEAD~1 is not left
+    behind (#3111). The previous handler is restored on the way out."""
+    def stop(signum, _frame):
+        raise SystemExit(128 + signum)
+    try:
+        previous = signal.signal(signal.SIGTERM, stop)
+    except ValueError:  # not the main thread: nothing to install
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def _print_tree_warnings(trees, relabel=lambda text: text):
@@ -779,7 +750,8 @@ def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--
             for (old_v, new_v), spans in pairs.items():
                 keys = _keys_in(days, spans)
                 change = {"tenant": tenant,
-                          "metric": keys[0] if dimensioned_row else _alert_key(series),
+                          "metric": _alert_key(series) + (
+                              "{" + keys[0].partition("{")[2] if dimensioned_row else ""),
                           "old_value": old_v, "new_value": new_v, "keys": keys}
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
@@ -1508,6 +1480,18 @@ def _markdown_cell(text):
     return safe_label(text).replace("|", "\\|")
 
 
+def _code_cell(text):
+    """A string from a tree or built from one (a key, a query holding a
+    tenant id) as inline code in one Markdown table cell: `_markdown_cell`'s
+    escaping, inside a backtick fence longer than any backtick run in it
+    (padded when it starts or ends with one), so neither the code span nor
+    the row can be closed early."""
+    text = _markdown_cell(text)
+    fence = "`" * (max((len(r) for r in re.findall(r"`+", text)), default=0) + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return f"{fence}{pad}{text}{pad}{fence}"
+
+
 def generate_markdown(report):
     """Generate Markdown suitable for a PR comment."""
     lines = []
@@ -1535,14 +1519,14 @@ def generate_markdown(report):
         old_v, new_v = (_shown_value(c, side, "—").replace("|", "\\|") for side in ("old", "new"))
         window = f" ({', '.join(c['window'])} UTC)" if c.get("window") else ""
         # #3002 B: the PromQL the verdict rests on; "—" when none was asked.
-        query = f"`{c['query']}`" if c.get("query") else "—"
+        query = _code_cell(c["query"]) if c.get("query") else "—"
         # #3059: a `query_error` message carries Prometheus's own text, which
         # may hold `|` (a PromQL parse error quoting the query) — escaped so
         # it stays one cell.
         message = c["message"].replace("|", "\\|")
-        served_by = _served_by(c, lambda k: f"`{_markdown_cell(k)}`")
-        cell = _markdown_cell
-        lines.append(f"| {c['risk']} | {cell(c['tenant'])} | `{cell(c['metric'])}`{window}{served_by} | "
+        served_by = _served_by(c, _code_cell)
+        lines.append(f"| {c['risk']} | {_markdown_cell(c['tenant'])} | "
+                     f"{_code_cell(c['metric'])}{window}{served_by} | "
                      f"{old_v} | {new_v} | {message} | {query} |")
 
     lines.append("")
@@ -1868,20 +1852,23 @@ def main():
     # trees — so the served-values errors below are this mode's too.
     dir_changes = None
     if args.git_diff:
-        with tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp, \
+                _removed_on_signal():
+            relabel = _head1_relabel(tmp)
             try:
                 old_confd = materialize_head1_confd(tmp)
-            except Head1Unavailable as exc:
-                print(f"--git-diff: git could not run to read HEAD~1's conf.d/ — {exc}. Causes: "
-                      "git not on PATH, not inside a git work tree, no parent commit (a "
-                      "shallow clone needs fetch-depth: 2), an object the clone does not "
-                      "have, a timeout, or a conf.d/ at HEAD~1 that cannot be read as a "
-                      "directory; run from a checkout with git installed.\n"
-                      "  ⛔ Do not switch to --config-dir to clear this — that "
+            except (Head1Unavailable, OSError) as exc:
+                refused = getattr(exc, "refused", False)
+                lead = ("HEAD~1's conf.d/ is not one this backtest reads" if refused
+                        else "git could not run to check HEAD~1 out")
+                print(f"--git-diff: {lead}: {safe_label(relabel(str(exc)))}.", file=sys.stderr)
+                if not refused:
+                    print("  Run from a checkout with git installed (a shallow clone needs "
+                          "fetch-depth: 2).", file=sys.stderr)
+                print("  ⛔ Do not switch to --config-dir to clear this — that "
                       "compares two trees, not your PR.", file=sys.stderr)
                 _end_not_run(args, "caller_error", "git_diff_unavailable", EXIT_CALLER_ERROR,
                              recipe_tenants)
-            relabel = _head1_relabel(os.path.join(tmp, "tree"))
             old_confd, cur_confd = _confd_tree(old_confd), _confd_tree("conf.d")
             if old_confd is None and cur_confd is None:
                 print("WARNING: --git-diff: there is no conf.d/ in this directory at HEAD~1 "

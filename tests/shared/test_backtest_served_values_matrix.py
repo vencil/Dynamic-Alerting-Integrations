@@ -859,3 +859,19 @@ def test_a_metric_cell_from_the_tree_is_escaped(
     row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "db=~" in line)
     assert "a\\|b" in row
     assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
+
+
+def test_a_query_cell_holding_a_tenant_id_is_escaped(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111 round 2: a tenant id PromQL takes (`a|b`c`) is put in the query, and
+    the Query cell carried it raw — the `|` split the row."""
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "x.yaml": f"tenants:\n  'a|b`c':\n    mysql_connections: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
+    md = tmp_path / "r.md"
+    _, _out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert asked == ['tenant:mysql_threads_connected:max{tenant="a|b`c"}']
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "threads" in line)
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8, row  # 7 columns
+    assert '``tenant:mysql_threads_connected:max{tenant="a\\|b`c"}``' in row, row

@@ -2099,6 +2099,27 @@ class TestTenantAndGitDiffAgree:
                for r in json.loads(out.out)["changes"]]
         assert tenant == git and tenant, (tenant, git)
 
+    @pytest.mark.parametrize("old,new", [("70", "70:critical"), ("70", "60")])
+    def test_same_rows_for_a_dimensioned_key(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                             fake_prom, old, new):
+        """#3111 round 2: one naming for dimensioned rows — the alert key plus
+        the dimension part — in both modes."""
+        key = 'mysql_connections{db="a"}'
+        p = fake_prom()
+        _rc, out = _run_main(cli_argv, capsys, "--tenant", "db-a", "--metric", key,
+                             "--old-value", old, "--new-value", new, "--prometheus", p.url,
+                             "--json")
+        tenant = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
+                  for r in json.loads(out.out)["changes"]]
+        cfg = _git_tree_repo(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
+            {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
+        monkeypatch.chdir(cfg)
+        _rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        git = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
+               for r in json.loads(out.out)["changes"]]
+        assert tenant == git and tenant, (tenant, git)
+
 
 # ── --git-diff 比的是 HEAD~1 與工作樹的兩棵 conf.d（#3111）─────────────
 
@@ -2277,8 +2298,37 @@ class TestGitDiffComparesTrees:
         assert rc == 2
         assert json.loads(out.out)["reason"] == "git_diff_unavailable"
         assert "fetch-depth" in out.err
-        # #3111 review: every cause is named, an unfetched object and a timeout too.
-        assert "an object the clone does not have" in out.err and "a timeout" in out.err
+        assert "git could not run to check HEAD~1 out: there is no parent commit" in out.err
+
+    def test_an_object_the_clone_lacks_is_rc2_named(self, tmp_path, monkeypatch, cli_argv,
+                                                    capsys):
+        """#3111 review: a missing object is its own named cause."""
+        cfg = _git_tree_repo(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 70\n")},
+            {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+        repo = cfg.parent
+        oid = _git_run(repo, "rev-parse", "HEAD~1:cfg/conf.d/db-a.yaml").stdout.decode().strip()
+        os.remove(repo / ".git" / "objects" / oid[:2] / oid[2:])
+        monkeypatch.chdir(cfg)
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", "http://prom:9090",
+                            "--json")
+        assert (rc, json.loads(out.out)["reason"]) == (2, "git_diff_unavailable")
+        assert "an object this clone does not have" in out.err
+
+    def test_a_bare_repository_is_rc2_named(self, tmp_path, monkeypatch, cli_argv, capsys):
+        """#3111 review: `--is-inside-work-tree` answers `false` (rc 0) in a bare
+        repository; that answer is read, not only whether git ran."""
+        cfg = _git_tree_repo(tmp_path, {**_D}, {**_D, "db-a.yaml": "tenants:\n  db-a: {}\n"})
+        bare = tmp_path / "bare.git"
+        subprocess.run([_GIT, "clone", "-q", "--bare", str(cfg.parent), str(bare)],
+                       capture_output=True, timeout=60, check=True)
+        monkeypatch.chdir(bare)
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", "http://prom:9090",
+                            "--json")
+        assert (rc, json.loads(out.out)["reason"]) == (2, "git_diff_unavailable")
+        assert "this directory is not inside a git work tree (a bare repository?)" in out.err
 
     def test_outside_a_work_tree_is_rc2(self, tmp_path, monkeypatch, cli_argv, capsys):
         (tmp_path / "plain" / "conf.d").mkdir(parents=True)
@@ -2330,10 +2380,10 @@ def _blob(root, data):
 
 @pytest.mark.usefixtures("da_guard_env")
 class TestHead1TreeShapes:
-    """#3111 review：HEAD~1 整棵樹由 `git archive` 寫出、`tarfile` 的 data filter
-    解開，所以 conf.d/ 本身是 symlink、或裡面的 symlink 指出 conf.d/，都照
-    checkout 的樣子解析；submodule、不是目錄、逃出 repo 的 link、與 git 記錄不符
-    的檔一律 rc 2 `git_diff_unavailable`、指名 `HEAD~1:<path>`，不再有 traceback。"""
+    """#3111 review：HEAD~1 由 git 自己 checkout 到暫存目錄，所以 conf.d/ 本身是
+    symlink、或裡面的 symlink 指出 conf.d/，都照 checkout 的樣子解析；submodule、
+    不是目錄、解析後逃出 checkout 的 link 一律 rc 2 `git_diff_unavailable`、指名
+    `HEAD~1:<path>`，不再有 traceback。"""
 
     def _run(self, monkeypatch, cli_argv, capsys, fake_prom, cwd):
         p = fake_prom()
@@ -2374,8 +2424,8 @@ class TestHead1TreeShapes:
         rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
         assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
         assert "HEAD~1:conf.d/t1.yaml" in err and "Traceback" not in err
-        # Named as the filter's refusal, not only as a file that went missing.
-        assert "refused when writing HEAD~1's tree out" in err, err
+        assert "resolves outside the checked-out tree" in err, err
+        assert "git could not run" not in err  # a refusal, not a git failure
 
     def test_a_refused_link_outside_confd_is_left_out(self, tmp_path, monkeypatch, cli_argv,
                                                       capsys, fake_prom):
@@ -2386,30 +2436,6 @@ class TestHead1TreeShapes:
         _commit_twice(repo)
         rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
         assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
-
-    def test_the_fallback_filter_refuses_and_resolves_the_same(self, tmp_path, monkeypatch):
-        """沒有 `tarfile.data_filter` 的 Python：自己的檢查拒絕同樣的 member。"""
-        monkeypatch.setattr(bt, "_DATA_FILTER", None)
-        repo = _plain_repo(tmp_path / "ok")
-        _write_confd(repo / "shared", {"t1.yaml": "x: 1\n"})
-        _write_confd(repo / "conf.d", _D)
-        symlink_or_skip("../shared/t1.yaml", repo / "conf.d" / "t1.yaml")
-        _commit_twice(repo)
-        monkeypatch.chdir(repo)
-        out = tmp_path / "out1"
-        out.mkdir()
-        got = bt.materialize_head1_confd(str(out))
-        with open(os.path.join(got, "t1.yaml"), encoding="utf-8") as f:
-            assert f.read() == "x: 1\n"
-        bad = _plain_repo(tmp_path / "bad")
-        _write_confd(bad / "conf.d", _D)
-        symlink_or_skip("../../x.yaml", bad / "conf.d" / "t1.yaml")
-        _commit_twice(bad)
-        monkeypatch.chdir(bad)
-        out = tmp_path / "out2"
-        out.mkdir()
-        with pytest.raises(bt.Head1Unavailable, match="HEAD~1:conf.d/t1.yaml"):
-            bt.materialize_head1_confd(str(out))
 
     def test_a_submodule_confd_fails_closed(self, tmp_path, monkeypatch, cli_argv, capsys,
                                             fake_prom):
@@ -2448,11 +2474,16 @@ class TestHead1TreeShapes:
         assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
         assert "HEAD~1:conf.d is not a directory" in err
 
-    @pytest.mark.parametrize("shape", ["blob-and-tree", "two-blobs", "nul-link"])
-    def test_a_crafted_tree_is_a_named_rc2(self, tmp_path, monkeypatch, cli_argv, capsys,
-                                           fake_prom, shape):
-        """舊版：同名的兩個 entry ⇒ FileExistsError、link target 含 NUL ⇒ ValueError，
-        都是 traceback。"""
+    @pytest.mark.parametrize("shape,want", [
+        ("blob-and-tree", (0, "no_changes")), ("two-blobs", (0, "no_changes")),
+        # git writes the link cut at the NUL (`a`), which dangles: the exporter
+        # cannot read it, so the baseline is refused whole (#2119's rule).
+        ("nul-link", (2, "served_values_unavailable"))])
+    def test_a_crafted_tree_is_what_git_checks_out(self, tmp_path, monkeypatch, cli_argv,
+                                                   capsys, fake_prom, shape, want):
+        """4ca5dcdf：同名的兩個 entry ⇒ FileExistsError、link target 含 NUL ⇒
+        ValueError，都是 traceback。現在由 git 自己 checkout：結果就是 checkout 的
+        結果，一份 JSON、沒有 traceback、沒有暫存路徑。"""
         repo = _plain_repo(tmp_path / "r")
         a, b = _blob(repo, b"tenants: {}\n"), _blob(repo, b"x: 1\n")
         sub = subprocess.run([_GIT, "mktree"], cwd=str(repo), input=b"100644 blob " + a + b"\tz.yaml\n",
@@ -2464,9 +2495,8 @@ class TestHead1TreeShapes:
         }[shape]
         _crafted_head1(repo, b"\n".join(lines) + b"\n")
         rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
-        assert "Traceback" not in err
-        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
-        assert "HEAD~1:" in err
+        assert "Traceback" not in err and "backtest-head1-" not in err, err
+        assert (rc, doc.get("reason") if rc else doc["status"]) == want, (doc, err)
 
     def test_hidden_only_confd_at_head1_serves_nothing(self, tmp_path, monkeypatch, cli_argv,
                                                        capsys, fake_prom):
@@ -2479,3 +2509,143 @@ class TestHead1TreeShapes:
         rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, cfg)
         assert any((c["tenant"], c["old_value"], c["new_value"]) == ("db-a", None, "50")
                    for c in doc["changes"]), (doc, err)
+
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestHead1IsGitsOwnCheckout:
+    """#3111 round 2：HEAD~1 由 git 自己 checkout（暫存 index 的 read-tree +
+    checkout-index），所以 eol 轉換、link 的寫法、export-subst（checkout 不套用）
+    都與真的 checkout 相同；這幾種未變更的 repo 都不報變更。"""
+
+    def _run(self, monkeypatch, cli_argv, capsys, fake_prom, cwd):
+        p = fake_prom()
+        monkeypatch.chdir(cwd)
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        return rc, json.loads(out.out), out.err
+
+    _T = {"t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")}
+
+    @pytest.mark.parametrize("how", ["autocrlf", "eol-crlf"])
+    def test_crlf_checkouts_compare_as_unchanged(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                                 fake_prom, how):
+        """f998d34b：archive 套了 working-tree 轉換、雜湊不符 ⇒ 必定 rc 2。"""
+        repo = _plain_repo(tmp_path / "r")
+        if how == "autocrlf":
+            _git_run(repo, "config", "core.autocrlf", "true")
+        else:
+            (repo / ".gitattributes").write_text("* text eol=crlf\n", encoding="utf-8")
+        _write_confd(repo / "conf.d", {**_D, **self._T})
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    def test_links_written_with_dot_and_double_slash(self, tmp_path, monkeypatch, cli_argv,
+                                                     capsys, fake_prom):
+        """f998d34b：data filter 正規化 link target 後與 git 記錄不符 ⇒ rc 2。"""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "shared", {"t2.yaml": _tenant_file("t-b", "    mysql_connections: 60\n")})
+        _write_confd(repo / "conf.d", {**_D, "t1.real": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        symlink_or_skip("./t1.real", repo / "conf.d" / "t1.yaml")
+        symlink_or_skip("../shared//t2.yaml", repo / "conf.d" / "t2.yaml")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    @pytest.mark.parametrize("layout", ["link-out-of-confd", "confd-is-a-link"])
+    def test_export_subst_is_not_applied(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                         fake_prom, layout):
+        """f998d34b：`git archive` 套 export-subst，conf.d 外的連結目標（或 conf.d
+        本身是 link 時）被改寫，未變更的 PR 報 HIGH、rc 1。checkout 不套用它。"""
+        repo = _plain_repo(tmp_path / "r")
+        body = _tenant_file("t-a", '    mysql_connections: "$Format:%ct$"\n')
+        if layout == "link-out-of-confd":
+            (repo / ".gitattributes").write_text("shared/** export-subst\n", encoding="utf-8")
+            _write_confd(repo / "shared", {"t.yaml": body})
+            _write_confd(repo / "conf.d", _D)
+            symlink_or_skip("../shared/t.yaml", repo / "conf.d" / "t.yaml")
+        else:
+            (repo / ".gitattributes").write_text("real/** export-subst\n", encoding="utf-8")
+            _write_confd(repo / "real", {**_D, "t.yaml": body})
+            symlink_or_skip("real", repo / "conf.d")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    @pytest.mark.parametrize("last", ["../../outside.yaml", "/etc/hostname"])
+    def test_a_chain_of_links_leaving_the_checkout_is_refused(self, tmp_path, monkeypatch,
+                                                              cli_argv, capsys, fake_prom, last):
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", _D)
+        (repo / "hop").mkdir()
+        symlink_or_skip(last, repo / "hop" / "l1.yaml")
+        symlink_or_skip("../hop/l1.yaml", repo / "conf.d" / "t.yaml")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:conf.d/t.yaml resolves outside the checked-out tree" in err, err
+        assert "backtest-head1-" not in err
+
+    def test_the_repository_is_not_touched(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                           fake_prom):
+        """The repository's own index, work tree and `.git/worktrees` are not touched."""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", {**_D, **self._T})
+        _commit_twice(repo)
+        (repo / "conf.d" / "t.yaml").write_text(
+            _tenant_file("t-a", "    mysql_connections: 50\n"), encoding="utf-8")
+        before = (_git_run(repo, "status", "--porcelain").stdout,
+                  (repo / ".git" / "index").read_bytes())
+        rc, doc, _ = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert [(c["metric"], c["old_value"], c["new_value"]) for c in doc["changes"]] == [
+            ("mysql_connections", "70", "50")]
+        assert (_git_run(repo, "status", "--porcelain").stdout,
+                (repo / ".git" / "index").read_bytes()) == before
+        assert not (repo / ".git" / "worktrees").exists()
+
+
+_SLOW_GIT = """#!{bash}
+"{git}" "$@"
+rc=$?
+case " $* " in *" checkout-index "*) : > "{marker}"; exec sleep 60;; esac
+exit $rc
+"""
+
+
+@pytest.mark.parametrize("sig", ["SIGTERM", "SIGINT"])
+def test_a_signal_removes_the_head1_checkout(tmp_path, sig, da_guard_env):
+    """#3111 round 2：SIGTERM 會留下約 60 MB 的暫存 checkout。兩種訊號下都清掉。"""
+    import signal as _signal
+    import time
+    bash = shutil.which("bash")
+    if bash is None or not hasattr(_signal, sig) or os.name != "posix":
+        pytest.skip("needs bash and POSIX signals")
+    repo = _plain_repo(tmp_path / "r")
+    _write_confd(repo / "conf.d", {**_D, "t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+    _commit_twice(repo)
+    bindir, scratch, marker = tmp_path / "bin", tmp_path / "tmp", tmp_path / "checked-out"
+    bindir.mkdir()
+    scratch.mkdir()
+    wrapper = bindir / "git"
+    with open(wrapper, "w", encoding="utf-8") as f:
+        f.write(_SLOW_GIT.format(bash=bash, git=_GIT, marker=marker))
+    os.chmod(wrapper, 0o755)
+    env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+           "TMPDIR": str(scratch)}
+    env.pop("PYTHONUNBUFFERED", None)
+    proc = subprocess.Popen([sys.executable, bt.__file__, "--git-diff", "--prometheus",
+                             "http://127.0.0.1:9"], cwd=str(repo), env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 60
+        while not marker.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "never reached checkout"
+            time.sleep(0.1)
+        assert [p.name for p in scratch.iterdir() if p.name.startswith("backtest-head1-")]
+        proc.send_signal(getattr(_signal, sig))
+        proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=60)
+    assert [p.name for p in scratch.iterdir() if p.name.startswith("backtest-head1-")] == []
