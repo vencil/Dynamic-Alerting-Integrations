@@ -213,6 +213,13 @@ da-tools check-alert <alert_name> <tenant> [options]
 | `<alert_name>` | Alert name | `MariaDBHighConnections` |
 | `<tenant>` | Tenant ID | `db-a` |
 
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--json` | JSON output. Output is always JSON; the flag is accepted for compatibility | true |
+
 **Output**
 
 JSON format containing alert state (firing / pending / inactive).
@@ -272,6 +279,7 @@ da-tools diagnose <tenant> [options]
 | `--config-dir <PATH>` | Tenant config directory; profile and inheritance chain are looked up only when given | (none) |
 | `--show-inheritance` | Print only the full inheritance-chain resolution (requires `--config-dir`) | false |
 | `--json` | JSON output. Output is always JSON; the flag is accepted for compatibility | true |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 The Pod is always looked up in the namespace named after the tenant; there is no option to choose another namespace.
 
@@ -338,9 +346,11 @@ None (auto-discover tenants).
 | `--tenants <LIST>` | Comma-separated tenant list (if omitted, auto-discover) | (auto) |
 | `--workers <N>` | Number of parallel diagnosis threads | `5` |
 | `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)). The deadline reaches every call inside the check: `kubectl` is stopped slightly before it (`min(0.5s, --timeout/4)`), so no process is left behind after the batch ends (not guaranteed with a very short `--timeout`, below about 0.5s, or on a heavily loaded machine), and past the deadline no `kubectl` is started and no Prometheus query is sent ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)) | `60` |
-| `--output <FILE>` | Output to file (JSON format) | stdout |
+| `-o, --output <FILE>` | Also write the JSON report to a file; the report still goes to stdout | (none) |
+| `--json` | Print only JSON on stdout, no text report | false |
 | `--dry-run` | Only list tenants, don't run checks | false |
 | `--namespace <NS>` | K8s namespace (for auto-discover) | `monitoring` |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
 
@@ -392,6 +402,7 @@ da-tools baseline --tenant <name> [options]
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
 | `-o, --output-dir <DIR>` | Output directory; both CSVs are written there (see Output below), created if missing | `baseline_output` |
 | `--dry-run` | Only show metrics to observe, don't sample | false |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
 
@@ -462,12 +473,18 @@ Choose one mode:
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--mapping <FILE>` | Mapping mode: path to `prefix-mapping.yaml` (see above) | (none) |
+| `--old <QUERY>` | Query mode: PromQL of the old Recording Rule (with `--new`) | (none) |
+| `--new <QUERY>` | Query mode: PromQL of the new Recording Rule (with `--old`) | (none) |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
 | `--interval <SEC>` | Monitoring interval in seconds (>= 0, fractions allowed; `0` = no pause between rounds, capped by `--rounds`; a negative value, `nan` or `inf` exits `2`) | `60` |
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
 | `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1%. Must be a finite number ≥ 0; `inf`, `nan` or a negative value exits 2 | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
 | `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there | `validation_output` |
+| `--stability-window <N>` | Consecutive all-match rounds `--auto-detect-convergence` needs to call it converged | `5` |
+| `--convergence-output <FILE>` | Where the readiness JSON is written (`--watch --auto-detect-convergence`) | `cutover-readiness.json` under `-o/--output-dir` |
 
 **Output**
 
@@ -522,6 +539,7 @@ da-tools cutover --readiness-json <FILE> --tenant <name> [options]
 | `--force` | Proceed even when the readiness JSON says `ready: false`; `--readiness-json` is still required | false |
 | `--namespace <NS>` | K8s namespace | `monitoring` |
 | `--json-output` | Also print a JSON report on stdout | false |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Automated Steps**
 
@@ -576,6 +594,7 @@ da-tools blind-spot --config-dir <path> [options]
 |--------|-------------|---------|
 | `--exclude-jobs <LIST>` | Exclude job list (comma-separated) | (none) |
 | `--json-output` | Structured JSON output | false |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
 
@@ -669,7 +688,7 @@ Execute historical backtest of PR threshold changes.
 **Syntax**
 
 ```bash
-da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
+da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
 ```
 
 **Required Parameters**
@@ -682,7 +701,11 @@ Choose one mode:
 
 2. **Directory Comparison Mode**: `--config-dir <dir> --baseline <dir>`
    (Compare two config versions)
-   Both trees are read by the exporter (`da-guard served-values`, da-guard required; #2119), and the values `/metrics` actually serves are compared per tenant and per threshold key: a change in the platform file, a `_defaults.yaml`, a profile or a sub-directory counts; tenants come from each file's `tenants:`, and a file without `tenants:` serves nothing, so editing it is no change. A key or tenant served on one side only (switched off, added, removed) has no value on the other. Values are compared over the whole UTC day: each old/new pair a key takes is one row; one that does not hold all day carries `window`, the list of every part of the day it holds in (UTC `HH:MM-HH:MM`). The Prometheus backtest is not restricted to those windows: it always covers the whole `--lookback`. The severity decides which alert compares a row, the value when it fires ([#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)): a row whose value or severity differs is a change; when the two sides' severities differ, under `--json` the row carries `old_severity` / `new_severity` and the text and Markdown reports note them beside the values. A change to another severity a rule selects (`70` → `70:critical`) is backtested on its values (the same points fire); to a severity no rule selects (`70:high`, `70:`) that side has no threshold and the change reads as the alert silenced (`Metric disabled — all alerts silenced`), and changing it back as re-enabled. Which alert compares a row is read from the `/metrics` series served-values reports for the key ([#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)), not from the key's name: a row with severity critical (a `<base>_critical` whose `<base>` is declared in the root `defaults:` — even when the tenant switches `<base>` itself off with `disable` — and a key a window overrides to `N:critical`) is compared by the `<metric_key>_critical` alert, a row with severity warning by the `<metric_key>` alert; a row of any other severity (e.g. `60:high`, `60:Critical` — the rules select `severity="warning"` / `"critical"` exactly, case included) is compared by no alert: that side has no threshold, and with neither side of a severity a rule selects the change is not backtested (`severity '...' is selected by no threshold rule`, the same reason `--git-diff` / `--tenant` give) — and a `<base>_critical` whose `<base>` the root `defaults:` does not declare is served as a warning row of metric `<x>_critical`, which no alert selects, so it is not backtested; a retired alias's twin (`legacy_twin: true`) is never read, since data under the retired name is not this threshold's data. When the rows of one change are compared by alerts that disagree on the series or the direction, one replay cannot stand for both and the change is not backtested (`rows compared differently`). The alert's threshold is the `max by(tenant)` of every row of one metric and severity, dimensioned rows included: when the tenant also serves (in either tree, at any time of the day) a dimensioned row of the same metric and severity, the changed base value is not what the alert compares, and the change is not backtested (`dimensioned rows share this alert's threshold (max by tenant)`). Dimensioned keys (a series with `dimensions` / `dimensions_regex` in served-values, e.g. `metric{db="a"}`) are listed but not queried in Prometheus, marked `not_backtested` (`backtest: skipped: dimensioned key`). The text and Markdown reports say how many were not backtested, and why.
+   Both trees are read by the exporter (`da-guard served-values`, da-guard required; #2119), and the values `/metrics` actually serves are compared per tenant and per threshold key: a change in the platform file, a `_defaults.yaml`, a profile or a sub-directory counts; tenants come from each file's `tenants:`, and a file without `tenants:` serves nothing, so editing it is no change. A key or tenant served on one side only (switched off, added, removed) has no value on the other. Values are compared over the whole UTC day: each old/new pair a key takes is one row; one that does not hold all day carries `window`, the list of every part of the day it holds in (UTC `HH:MM-HH:MM`). The Prometheus backtest is not restricted to those windows: it always covers the whole `--lookback`. The severity decides which alert compares a row, the value when it fires ([#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)): a row whose value or severity differs is a change; when the two sides' severities differ, under `--json` the row carries `old_severity` / `new_severity` and the text and Markdown reports note them beside the values. A change to another severity a rule selects (`70` → `70:critical`) is backtested on its values (the same points fire). The severity suffix may only be `warning` or `critical`, in any letter case (`70:Critical` is critical); any other suffix (`70:high`, the empty `70:`) makes the whole value unreadable, and the exporter serves the platform default with severity warning ([#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)): `70` → `70:high` is a value change from 70 to the default, and two unreadable values (`70:high` → `60:high`) are no change. `--git-diff` / `--tenant` cannot see the default from the value as written, so such a value is not backtested there (`value '...': this backtest cannot read it the way the exporter does`). Which alert compares a row is read from the `/metrics` series served-values reports for the key ([#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)), not from the key's name: a row with severity critical (a `<base>_critical` whose `<base>` is declared in the root `defaults:` — even when the tenant switches `<base>` itself off with `disable` — and a key a window overrides to `N:critical`) is compared by the `<metric_key>_critical` alert, a row with severity warning by the `<metric_key>` alert; a row of any other severity (the rules select `severity="warning"` / `"critical"` only; an exporter since #3071 serves no such row, and one appears only when `DA_GUARD_BINARY` names an older da-guard, which served `60:high` as written, as `severity="high"`) is compared by no alert: that side has no threshold, and with neither side of a severity a rule selects the change is not backtested (`severity '...' is selected by no threshold rule`) — and a `<base>_critical` whose `<base>` the root `defaults:` does not declare is served as a warning row of metric `<x>_critical`, which no alert selects, so it is not backtested; a retired alias's twin (`legacy_twin: true`) is never read, since data under the retired name is not this threshold's data. When the rows of one change are compared by alerts that disagree on the series or the direction, one replay cannot stand for both and the change is not backtested (`rows compared differently`). The alert's threshold is the `max by(tenant)` of every row of one metric and severity, dimensioned rows included: when the tenant also serves (in either tree, at any time of the day) a dimensioned row of the same metric and severity, the changed base value is not what the alert compares, and the change is not backtested (`dimensioned rows share this alert's threshold (max by tenant)`). Dimensioned keys (a series with `dimensions` / `dimensions_regex` in served-values, e.g. `metric{db="a"}`) are listed but not queried in Prometheus, marked `not_backtested` (`backtest: skipped: dimensioned key`). The text and Markdown reports say how many were not backtested, and why.
+
+3. **Single-change Mode**: `--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
+   (Reads no config file; backtests the one change given on the command line)
+   `--tenant` requires `--metric` and at least one of `--old-value` / `--new-value`, otherwise exit 2; the tenant id must be a valid DNS-1123 label. Values are read the same way as in `--git-diff` (see "What the backtest queries" below). When `--git-diff` or `--config-dir` is also given, that source wins and these flags are only argument-checked.
 
 **What the backtest queries** ([#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017), [#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002))
 
@@ -695,8 +718,19 @@ Choose one mode:
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--git-diff` | Git Diff mode: read the threshold changes in `git diff HEAD~1 -- conf.d/` (needs git, see Required Parameters above) | false |
+| `--config-dir <DIR>` | Directory Comparison mode: the config directory after the change (with `--baseline`) | (none) |
+| `--baseline <DIR>` | Directory Comparison mode: the config directory before the change (with `--config-dir`) | (none) |
+| `--tenant <ID>` | Single-change mode: the tenant id (requires `--metric` and at least one of `--old-value` / `--new-value`) | (none) |
+| `--metric <KEY>` | Single-change mode: the threshold key (with `--tenant`) | (none) |
+| `--old-value <VALUE>` | Single-change mode: the old threshold value, read the way conf.d is (e.g. `70`, `70:critical`; with `--tenant`) | (none) |
+| `--new-value <VALUE>` | Single-change mode: the new threshold value (with `--tenant`) | (none) |
+| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--lookback <DURATION>` | Historical lookback window, `<number><d\|h\|m>` (e.g. `7d` / `24h`). A value that does not match that shape (including a bare `7` or the empty string) ⇒ exit code 2 listing the accepted shape (#1625; it used to be silently treated as `7d`) | `7d` |
-| `--output <FILE>` | Output to JSON or CSV | stdout |
+| `-o, --output <FILE>` | Also write the JSON report to a file, the same document `--json` would print on this run (when it is written: see Output below); the text report still goes to stdout | (none) |
+| `--json` | Print only JSON on stdout, no text report | false |
+| `--markdown-output <FILE>` | Also write the Markdown report to a file (for PR comments) | (none) |
+| `--skip-if-unavailable` | Only "Prometheus unreachable" becomes exit 0; every other caller error (see the exit-code table below) still exits 2 | false |
 
 **Output**
 
@@ -1054,7 +1088,7 @@ da-tools alert-correlate --input <FILE> [--window <DURATION>] [--min-score <FLOA
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--prometheus <URL>` | Prometheus endpoint (online mode) | `$PROMETHEUS_URL` |
-| `--input <FILE>` | Alertmanager JSON file (offline mode) | — |
+| `-i, --input <FILE>` | Alertmanager JSON file (offline mode) | — |
 | `--window <DURATION>` | Time window size (Prometheus duration, e.g. `5m`). ⚠️ A bare number does **not** parse (`10` → `None`); the unit is required | `5m` |
 | `--lookback <DURATION>` | Lookback duration | `24h` |
 | `--min-score <FLOAT>` | Minimum correlation score threshold | `0.3` |
@@ -1105,6 +1139,10 @@ da-tools drift-detect --dirs <DIR1>,<DIR2>[,<DIR3>...] [--labels <L1>,<L2>,...] 
 | `--json` | JSON output | — |
 | `--markdown` | Markdown report output | — |
 | `--ci` | CI mode (exit 1 on unexpected drift) | — |
+| `--mode <MODE>` | `configmap`: compare several directories (`--dirs` needs at least 2); `operator`: compare one local directory with the PrometheusRule CRDs in the cluster (`--dirs` takes exactly 1) | `configmap` |
+| `--kubeconfig <FILE>` | kubeconfig path (operator mode only) | — |
+| `--context <NAME>` | Kubernetes context name (operator mode only) | — |
+| `--namespace <NS>` | Monitoring namespace (operator mode only) | `monitoring` |
 
 **Examples**
 
@@ -1198,6 +1236,14 @@ da-tools config-history --config-dir <PATH> <action>
 | `show` | Show snapshot details | `<id>` |
 | `diff` | Compare two snapshots | `<id_a> <id_b>` |
 
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config-dir <PATH>` | The conf.d directory (required; goes before the subcommand) | (none) |
+| `-m, --message <TEXT>` | `snapshot`: the snapshot message | (empty) |
+| `--limit <N>` | `log`: show only the last N entries (`0` shows all) | (all) |
+
 **Examples**
 
 ```bash
@@ -1238,6 +1284,10 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--non-interactive` | Skip interactive prompts (requires `--tenants`) | — |
 | `--dry-run` | Show files that would be generated without writing | — |
 | `--force` | Re-run in an initialised directory: **rewrites every generated file**, including `conf.d/_defaults.yaml` and each `conf.d/<tenant>.yaml` (hand edits are lost). ⚠️ **Exception: it never rewrites an existing root `.gitlab-ci.yml`** — that may be the customer's own pipeline, so it is left alone on every run (and there is therefore no in-tool way to regenerate it); ⚠️ if an own file also declares a tenant this run was not asked for, `--force` is refused too (see above); ⚠️ **nor any conf.d carrier init did not write**: tenants your other files may declare, and defaults in another spelling, are still skipped and named, and a coexisting pair is still refused (see above) | — |
+| `-o, --output-dir <DIR>` | Output root directory | `.` (current directory) |
+| `--namespace <NS>` | Kubernetes monitoring namespace | `monitoring` |
+| `--da-tools-image <IMAGE>` | The da-tools image the generated CI pipelines and pre-commit config use; an empty value exits 2 | the image of the da-tools release running this init |
+| `--config-source <SOURCE>` | Config source: only `configmap` is supported; `git` (GitOps Native Mode) is temporarily unsupported and exits 2 ([#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349)) | `configmap` |
 
 **Examples**
 
@@ -1267,6 +1317,18 @@ da-tools gitops-check <subcommand> [options]
 | `repo` | Validate Git repo accessibility and branch existence | `--url <git-url> [--branch main]` |
 | `local` | Validate local clone's conf.d/ structure | `--dir <path>` |
 | `sidecar` | Check K8s git-sync sidecar deployment readiness | `[--namespace monitoring]` |
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--url <GIT-URL>` | `repo`: the Git repository URL (required) | (none) |
+| `--branch <BRANCH>` | `repo`: the branch to check | `main` |
+| `--path <PATH>` | `repo`: the config path inside the repository | `configs/` |
+| `--dir <PATH>` | `local`: the local config directory (required) | (none) |
+| `--namespace <NS>` | `sidecar`: K8s namespace | `monitoring` |
+| `--json` | Accepted by all three subcommands: JSON output | false |
+| `--ci` | Accepted by all three subcommands: only a failure exits 1, a warning exits 0 (without it a warning exits 1 too) | false |
 
 **Examples**
 
@@ -1688,6 +1750,11 @@ da-tools operator-check [options]
 |--------|-------------|---------|
 | `--namespace <NS>` | K8s namespace to explore | `monitoring` (auto-discover) |
 | `--json` | JSON format output | false |
+| `--rule-packs-dir <DIR>` | Rule Pack YAML directory; the PrometheusRule check compares the number loaded in the cluster with the `rule-pack-*.yaml` files here | `rule-packs/` |
+| `--config-dir <DIR>` | Tenant config directory. ⚠️ No check reads it today: accepted, with no effect on the result | `conf.d/` |
+| `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise | (none) |
+| `--kubeconfig <FILE>` | kubeconfig path | (none) |
+| `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl unavailable is always 2) | false |
 
 **Checks Performed**
 
@@ -1839,7 +1906,7 @@ da-tools generate-routes --config-dir <path> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--output <FILE>` | Output to file. **Read only by render (default) and `--output-configmap`, and not together with `--dry-run`**; with `--validate` / `--apply` / `--dry-run` it is a caller error (exit 2), never a silent no-write (#1650) | stdout |
+| `-o, --output <FILE>` | Output to file. **Read only by render (default) and `--output-configmap`, and not together with `--dry-run`**; with `--validate` / `--apply` / `--dry-run` it is a caller error (exit 2), never a silent no-write (#1650) | stdout |
 | `--output-configmap` | Output complete Kubernetes ConfigMap YAML | false |
 | `--base-config <FILE>` | Custom Alertmanager base config. **Only `--output-configmap` reads it**; supplying it in any other mode is a caller error (exit 2), not a silent no-op | built-in default (**only when the flag is omitted**; a supplied value that is unreadable / not valid YAML / not a mapping exits 2 rather than falling back) |
 | `--dry-run` | Show preview without writing. **Not read by `--validate` / `--apply`** (exit 2) | false |
@@ -1985,7 +2052,26 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--work-dir <dir>` | Scratch directory for the tree of each judgement; removed when the judgement ends (also when it is killed) |
 | `--policy <FILE>` | Deployment policy file (`allowed_domains`, `min_generator_version`), read again for every judgement |
 | `--warm-ref <ref>` | The commit warmed at start (default `HEAD`; an empty value turns it off). One that does not resolve is logged and counted, and the service stays usable |
-| Others | The judgement time limit, the time left to the caller, the judgement process's `RLIMIT_DATA`, the cache limit, the queue length, open connections, the body bytes being read or queued, one request's size and number of writes: defaults in `--help` |
+
+**Other parameters**
+
+| Parameter | Purpose | Default |
+|------|------|------|
+| `--max-judgement-seconds <SEC>` | Upper bound of one request's time, queue included | `20.0` |
+| `--deadline-reserve-seconds <SEC>` | Time kept back for the caller out of its `deadline_ms` | `5.0` |
+| `--memory-limit-bytes <BYTES>` | `RLIMIT_DATA` of each judgement process | `201326592` |
+| `--cache-max-bytes <BYTES>` | Parse-cache bytes kept for content not in the latest base tree, least recently used dropped first | `33554432` |
+| `--max-cache-transfer-bytes <BYTES>` | New parse-cache bytes one judgement may hand back; the rest are dropped | `67108864` |
+| `--max-queue <N>` | Requests that may wait; more are rejected as `busy` | `32` |
+| `--max-connections <N>` | Open client connections served at once; past it a new connection is answered `busy` and closed | `40` |
+| `--max-body-bytes <BYTES>` | Largest request body; larger is 413 | `4194304` |
+| `--max-inflight-body-bytes <BYTES>` | Request body bytes being read or queued at once (reserved from `Content-Length` before the body is read); past it a request is answered `busy`. Below `--max-body-bytes` the service refuses to start | `4194304` |
+| `--read-timeout-seconds <SEC>` | Time to receive a request's header, and again its body | `10.0` |
+| `--max-result-bytes <BYTES>` | Largest result a judgement process may send | `16777216` |
+| `--max-writes <N>` | Writes in one request; more is a 400 | `10000` |
+| `--warm-seconds <SEC>` | Time limit of one warming run; a request arriving ends it at once | `300.0` |
+| `--git <PATH>` | git executable | `git` |
+| `--da-guard-binary <PATH>` | da-guard used for the reported version | `$DA_GUARD_BINARY`, else `da-guard` on `$PATH` |
 
 **Endpoints**
 
@@ -2031,6 +2117,26 @@ da-tools scaffold [options]
 | `--db <LIST>` | Comma-separated DB type list | (interactive prompt) |
 | `--namespaces <LIST>` | Comma-separated K8s namespace list | (interactive prompt) |
 | `-o, --output-dir <DIR>` | Output directory | `scaffold_output` |
+| `--catalog` | List the supported exporters and exit | false |
+| `--generate-profile <NAME>` | Generate a `_profiles.yaml` skeleton instead, with this profile name; requires `--db` | (none) |
+| `--tier <TIER>` | Threshold tier for `--generate-profile`: `prod` or `staging` | `prod` |
+| `--from-onboard <FILE>` | Read `onboard-hints.json` and generate a config for each tenant from the onboard results | (none) |
+| `--profile <NAME>` | The tenant YAML references this profile (`_profile`) and holds only explicit overrides | (none) |
+| `--topology <TOPOLOGY>` | Tenant mapping topology (ADR-006): `1:1`, `N:1` (needs `--namespaces`), `1:N` (generates a mapping hint; needs `--mapping-instance` and `--mapping-filter`); a missing companion only prints a WARN | `1:1` |
+| `--mapping-instance <NAME>` | Source instance name for the `1:N` topology (e.g. `oracle-prod-01`) | (none) |
+| `--mapping-filter <PROMQL>` | PromQL filter for the `1:N` topology (e.g. `schema=~"app_a_.*"`) | (none) |
+| `--silent-mode <MODE>` | Write `_silent_mode`: alerts still fire (the TSDB records them) but no notification is sent; `warning` / `critical` / `all`, `disable` is the same as not writing it | (not written) |
+| `--severity-dedup <MODE>` | `disable` writes `_severity_dedup: disable`; `enable` (suppress the warning notification while critical fires) is the default and is not written | `enable` |
+| `--routing-receiver <ADDR>` | Alert routing receiver address (a URL or an email list, by `--routing-receiver-type`); `_routing` is written only when it is given | (none) |
+| `--routing-receiver-type <TYPE>` | Receiver type: `webhook` / `email` / `slack` / `teams` / `rocketchat` / `pagerduty` | `webhook` |
+| `--routing-smarthost <HOST:PORT>` | SMTP smarthost for an email receiver (e.g. `smtp.example.com:587`) | (none; `localhost:25` for an email receiver) |
+| `--routing-group-by <LIST>` | Comma-separated `group_by` labels | (none; `alertname,tenant` when `_routing` is written) |
+| `--routing-group-wait <DURATION>` | `group_wait` (range 5s–5m) | (none; `30s` when `_routing` is written) |
+| `--routing-group-interval <DURATION>` | `group_interval` (range 5s–5m) | (none; `5m` when `_routing` is written) |
+| `--routing-repeat-interval <DURATION>` | `repeat_interval` (range 1m–72h) | (none; `4h` when `_routing` is written) |
+| `--routing-profile <NAME>` | Write a `_routing_profile` reference (ADR-007), e.g. `team-sre-apac` | (none) |
+
+The tenant-setting flags from `--profile` through `--routing-profile` apply only in non-interactive mode (`--tenant` plus `--db`); interactive mode and `--from-onboard` do not read them.
 
 **Supported DB Types**
 
@@ -2094,6 +2200,8 @@ da-tools migrate <input_file> [options]
 | `--interactive` | Ask user when uncertain | false |
 | `--no-prefix` | Disable custom_ prefix (not recommended) | false |
 | `--no-ast` | Force old regex engine | false |
+| `--prefix <PREFIX>` | Custom metric prefix | `custom_` |
+| `--no-dictionary` | Disable heuristic dictionary matching | false |
 
 **Output**
 
@@ -2178,7 +2286,7 @@ da-tools validate-config --config-dir <path> [options]
 - **Root defaults** (`root_defaults`): checks `defaults:` in the **root** `_defaults.yaml` the way the exporter decodes it, and FAILs on three things. First, values: the exporter decodes the root `defaults:` as `map[string]float64`, so **a value that does not decode as a number** (`"70"`, `disable`, a mapping, a list, a boolean, a date …) makes it **drop the whole `defaults:` block** — every platform threshold — while the load still reports success; and **an empty value** (`k:`, `~`, `null`) is reported as having no value. Before [#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518) it was served as a 0 threshold; what it changes now depends on the rest of the tree (another spelling, `optional_overrides:`, a `<<:` merge), and this row does not judge it. The verdict is the same yaml.v3 mirror the `deprecate` carrier health check uses (#1414). Second, routing: `_routing` or any `_routing`-prefixed key under `defaults:` FAILs whatever its value. `defaults:` is for numeric thresholds; routing defaults go in the top-level `_routing_defaults:` block. ⚠️ A `_routing` mapping there costs more than routing: the exporter reads the root `defaults:` as numbers only, so it drops **the whole block — every platform threshold** — while the load still reports success; and the route generator never reads `defaults:` either. Third, the wrapper ([#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)): when a root `_defaults.yaml`'s `defaults:` is not a mapping (the key is absent, or present with no value), the defaults merge reads the whole document and `/effective` shows its top-level keys, while the exporter's root decode reads thresholds only from a `defaults:` mapping and has no field for the other keys, so `/metrics` does not carry them from this file. The row FAILs and names them when the top level holds any of: thresholds (keys with no `_` prefix) and reserved keys other than `_routing*` ones (e.g. `_severity_dedup`, `_silent_mode`, `_state_*`). Not listed: fields of the exporter's root config struct (e.g. `state_filters`, `max_metrics_per_tenant`); `_routing_defaults` / `_routing_enforced` / `_custom_alerts`, which other tools read at the top level; `_metadata`, which the defaults merge drops at every level; `_routing*` keys (the route generator does not read routing from a defaults file; a misplaced one is `routing_in_unread_location`); any other `_` key (e.g. `_x: &x`, a key that only carries a YAML anchor). Measured: a top-level threshold was absent from `/metrics`; a top-level `_severity_dedup: disable` showed `disable` on `/effective` while `/metrics` served `enable`. A `_defaults.yaml` in a subdirectory is not judged by this row (#2291). Any other `_` key under `defaults:` with a number (such as `_metadata: 1`, `_namespaces: 5`) is a WARN: no `_` key is a threshold, the exporter makes no threshold row of one and no other reader reads one under `defaults:`, so it does nothing ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)); a value that does not decode as a number FAILs under the value rule above and gets no second line. ⚠️ **Not present in the v2.9.0 image** <!-- image-caveat: v2.9.0 -->
 - **Defaults wrapper** (`defaults_wrapper`, [#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)): a `_defaults.yaml` at any level (in each directory, the one the exporter selects) FAILs when its `defaults:` is a mapping (`{}` included, and a YAML `!!set`, which the exporter decodes as one) while its top level also holds keys that would enter the merged config behind `/effective`; the line names the file and the keys. Those keys are thresholds (keys with no `_` prefix) and reserved keys other than `_routing*` ones (e.g. `_severity_dedup`, `_silent_mode`, `_state_*`). Not listed: fields of the exporter's root config struct (e.g. `state_filters`, `max_metrics_per_tenant`); `_routing_defaults` / `_routing_enforced` / `_custom_alerts`, which other tools read at the top level; `_metadata`, which the defaults merge drops at every level; `_routing*` keys (the route generator does not read routing from a defaults file; a misplaced one is `routing_in_unread_location`); any other `_` key (e.g. `_x: &x`, a key that only carries a YAML anchor). With `defaults:` a mapping the defaults merge reads only that mapping, and those top-level keys appear in no tenant's `/effective`; with no `defaults:`, or `defaults:` with no value, the merge reads the whole document, and nothing is reported. Measured on a subtree: wrapped this way, a top-level threshold and `_severity_dedup` were no longer served on `/metrics`; `_silent_mode` and `_state_*` changed `/effective` only (they were not on `/metrics` in any shape). In a subtree file, a reserved key is not told to move under `defaults:` (subtree defaults do not support reserved keys): the line says to delete it from the file and leaves whether to set it in each tenant's own entry to da-guard's `subtree_default_reserved_key` (the suggested action then drops "give `defaults:` no value" too) ([#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)). ⚠️ **Not present in the v2.9.0 image** <!-- image-caveat: v2.9.0 -->
 - **Nulls in a schedule** (`schedule_null`, [#2708](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2708)): FAILs a threshold written as a schedule with override windows that holds a null (a null window entry, a window's `window:` or `value:` written as null, or a null `default:` beside windows), naming the file, the place and where the null is. Checked in: every tenant file's `tenants:`, each directory's selected `_defaults.yaml` defaults block (the whole document when it has no `defaults:` mapping), and the `tenants:` and `profiles:` of the root `_` files (an unselected defaults carrier excluded); a `_` file below the root that is not a defaults carrier is not checked. A schedule with no window and a null `default:` is not this row's. ⚠️ **Not present in the v2.9.0 image** <!-- image-caveat: v2.9.0 -->
-- **Threshold values not served as written** (`values_not_served`, [#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)): reads `da-guard effective`'s `not_served` (the exporter's own resolver and build records; this row judges no YAML itself) and FAILs on any of these, one line each naming the file, tenant, key and reason: `value_unparsed` (not a number the exporter reads, e.g. `abc`, a list, `7O:critical`; `/metrics` serves the platform default instead), `value_unparsed_dropped` (the same for a `_critical`, dimensional or `optional_overrides:`-declared key, which has no default to fall back to; no series is served), `window_invalid` (a schedule override whose `window:` is not a UTC `HH:MM-HH:MM`, has an hour or minute out of range, is missing, or starts where it ends such as `05:00-05:00`; that window never applies), `value_rejected` (a subtree `_defaults.yaml` value that is not threshold-shaped, e.g. `overrides:` written as a string; the tenants under it keep a shallower level's value), `spelling_duplicate` (the winning layer's mapping writes a threshold under two spellings — a dimensional key with its labels in another order or quoted differently, or both #1231 names, [#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)). Threshold keys only (not `_`-prefixed); a reserved key in a subtree defaults file is reported by da-guard's `subtree_default_reserved_key` (a routing key is the route generator's to judge). The set it names is the one da-guard's `value_not_served` refuses (tested); the exporter reports the same set on load and reload as `da_config_values_not_served{reason}` (counted per (tenant, key)) and one WARN line naming tenant and key only. A tree that cannot be read fails like the `profiles` row, with the same advice; a da-guard whose `effective` output lacks `not_served` is named as too old (FAIL, exit `2`). A value not served at all because nothing declares it (served-values' `unserved`, e.g. in a tree with no root `defaults:`) is not this row's, so its PASS does not mean every value is served. What `/metrics` serves does not change. ⚠️ **The v2.9.0 image does not have this check** <!-- image-caveat: v2.9.0 -->
+- **Threshold values not served as written** (`values_not_served`, [#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)): reads `da-guard effective`'s `not_served` (the exporter's own resolver and build records; this row judges no YAML itself) and FAILs on any of these, one line each naming the file, tenant, key and reason: `value_unparsed` (not a number the exporter reads, e.g. `abc`, a list, `7O:critical`, or a severity suffix other than `warning` / `critical` in any letter case, e.g. `70:high` or the empty `70:`, [#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071); `/metrics` serves the platform default instead), `value_unparsed_dropped` (the same for a `_critical`, dimensional or `optional_overrides:`-declared key, which has no default to fall back to; no series is served), `window_invalid` (a schedule override whose `window:` is not a UTC `HH:MM-HH:MM`, has an hour or minute out of range, is missing, or starts where it ends such as `05:00-05:00`; that window never applies), `value_rejected` (a subtree `_defaults.yaml` value that is not threshold-shaped, e.g. `overrides:` written as a string; the tenants under it keep a shallower level's value), `spelling_duplicate` (the winning layer's mapping writes a threshold under two spellings — a dimensional key with its labels in another order or quoted differently, or both #1231 names, [#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)). Threshold keys only (not `_`-prefixed); a reserved key in a subtree defaults file is reported by da-guard's `subtree_default_reserved_key` (a routing key is the route generator's to judge). The set it names is the one da-guard's `value_not_served` refuses (tested); the exporter reports the same set on load and reload as `da_config_values_not_served{reason}` (counted per (tenant, key)) and one WARN line naming tenant and key only. A tree that cannot be read fails like the `profiles` row, with the same advice; a da-guard whose `effective` output lacks `not_served` is named as too old (FAIL, exit `2`). A value not served at all because nothing declares it (served-values' `unserved`, e.g. in a tree with no root `defaults:`) is not this row's, so its PASS does not mean every value is served. What `/metrics` serves does not change. ⚠️ **Behaviour change ([#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071))**: a tree that writes a severity suffix no rule selects (`70:high`, `70:`) used to PASS this row and now FAILs it, exit `0` → `1`. ⚠️ **The v2.9.0 image does not have this check** <!-- image-caveat: v2.9.0 -->
 - **Keys no reader reads** (`unread_keys`, [ADR-038](adr/038-unread-keys-judged-by-readers.en.md)): judges, with the shared verdict (`da-guard served-values --disable-effects`, `da-guard effective` and the tree's `_policies`), whether some reader reads each key of each tenant — the same verdict as `da-tools explain-keys`. **Report only**: one WARN line per problem naming the file, the severity it will have once the gates block (`error` / `warning` / `notice`), the kind (`unread`, `disable_noop`, `disable_partial`), the key, the reason and the tenants it reaches; the same problem in a platform file or profile is one line. The exit code does not change for this row. With no root platform file read, one more line says the threshold keys cannot be judged (`undecidable`). With da-guard missing or failing the row is a WARN "verdict incomplete", not a FAIL. When each gate starts blocking: [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016). ⚠️ **The v2.9.0 image does not have this check** <!-- image-caveat: v2.9.0 -->
 - **Custom alerts the two readers disagree on** (`custom_alert_sources`, [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)): sets the recipes the custom-alert compiler accepts and builds a rule for beside the ones the exporter (`da-guard served-values`) serves a threshold for; each side is its own program's answer, the row reads no YAML itself. One compiled but not served has a rule whose join is always empty: it **never fires** (e.g. a recipe the compiler inherits from a `_defaults.yaml` top level; one it takes from the `tenants:` of a subdirectory `_` file the exporter does not read; or recipes in both a root platform file's `tenants:` and the tenant's own entry — the exporter takes one source per tenant, its own entry first, while the compiler takes both). Rules are shared by the whole pack — one per (`recipe_id`, severity), joined per tenant — so one served **never alerts** only when no tenant's recipe in the whole pack got a rule of that (`recipe_id`, severity) compiled (e.g. a root `_defaults.yaml` `tenants:` entry, a profile, or a tenant's own recipe quarantined for clashing with a same-named inherited one). Of several recipes of one shape and severity in one tenant the exporter serves only the first ([#3112](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3112)); da-guard's `custom_alert_duplicate_series` reports them and this row does not. A recipe the exporter takes as switched off (a threshold of `disable`, `disabled`, `off` or `false`, any case; an SLO objective of `disable`) is compiled and not served by design and is left out. The comparison is on what a rule joins on — (`recipe_id`, severity) and the tenant — the name is only shown. **Report only**: one WARN line per problem with the source, the name, the `recipe_id` and the tenants it reaches; the exit code does not change because of this row. Either side unreadable (da-guard unavailable or failing, a file the exporter cannot read, a `_custom_alerts` the compiler cannot walk, e.g. a number in a subdirectory `_` file's `tenants:`) is a WARN "comparison incomplete". Run only where the compiler is installed (the repo); the da-tools image ships no compiler and the row is absent. ⚠️ **The v2.9.0 image does not have this check** <!-- image-caveat: v2.9.0 -->
 
@@ -2464,6 +2572,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | Parameter | Description |
 |-----------|-------------|
 | `--tenant-config <PATH>` | Single tenant config file (use `--config-dir <DIR>` for a whole directory). ⚠️ Do not shorten it to `--config`: argparse resolves that to `--config-dir`, and a file path there answers "no custom_ metrics" with rc 0 |
+| `--config-dir <DIR>` | Whole tenant config directory (either this or `--tenant-config`); reads the thresholds the exporter actually serves, see below |
 
 **Options**
 
@@ -2784,7 +2893,7 @@ All three skip a file the exporter drops (still named only by exit 3).
 | `subtree_default_undeliverable` | warn | a tenant inherits a threshold key from a subtree `_defaults.yaml` that neither the conf.d root `_defaults.yaml` nor `optional_overrides:` declares. The tenant's effective config (`/effective`) shows a value for it, but the exporter serves no series for it, so that alert can never fire; at load time the exporter logs an ERROR and counts the tenant on `da_config_subtree_undeliverable_tenants`. The verdict is taken from the exporter's own load of the tree; da-guard judges nothing itself, and reports tenants under `--scope` only. Fix: declare that threshold key in the root `_defaults.yaml` or in `optional_overrides:`. Tenant is the tenant; Field is the key. `served-values` lists the key in `unserved` too. Three kinds of key are not reported: reserved keys (such as `_metadata`, `_profile`, `_state_*`) and keys the exporter never serves as a threshold row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`) — declaring either kind at the root is not a fix (no `_` key makes a threshold row in any layer); they are reported as `subtree_default_reserved_key` below ([#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)) — and keys the subtree switches off (a `disable` value and the like), which are simply not reported. The exporter's ERROR and gauge still count all of them. No `_` key is a threshold: the exporter makes no threshold row of one in any layer (one the registry does not list, such as `_myth`, included), so none is reported here but as `subtree_default_reserved_key` ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045); before it, a `_` key the registry does not list was served as a threshold and reported here). ⚠️ A warning for now (only `--warn-as-error` turns it into exit 1); planned to become an error in the next minor release |
 | `root_default_null_undeclared` | warn | the tenant side (the tenant file, a root platform file's `tenants:` entry or a profile) sets a threshold key that the root `_defaults.yaml` writes as null (`k:`, `~`, `null`) under either spelling. A null is no write ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)), so the root does not declare the key and the exporter serves no series for it: that alert can never fire. Before the upgrade the null decoded to a threshold of 0 and the tenant's own value was served, so this is where behavior changes on upgrade. The verdict is taken from the exporter's own load of the tree, for tenants under `--scope` only; `served-values` lists the key in `unserved` too. Fix: give it a number in the root `_defaults.yaml`, or list it under `optional_overrides:` (declared without a platform value; the null line may stay or go). No `_` key is a threshold or makes a threshold row in any layer, so a number is no fix and it is not reported ([#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)). A tenant-side `<key>_critical` whose `<key>` the root writes as null (either spelling) is reported here too: the critical row is served only when the root `defaults:` holds `<key>`, so the only fix is a number for `<key>` at the root (which also serves `<key>` at warning severity to tenants that do not set it); listing it under `optional_overrides:` does not serve the critical row. A `<key>_critical` whose `<key>` the root never wrote is not caused by a null and is not reported here. A value a subtree `_defaults.yaml` hands down is reported by `subtree_default_undeliverable`, not here as well; a key the tenant switches off (`disable` and the like) is not reported |
 | `schedule_null_value` | error | a threshold is written as a **schedule with override windows** and holds a null: a null window entry, a window's `window:` or `value:` written as null, or a null `default:` beside windows ([#2708](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2708)). The shape has no defined meaning and is refused at validation time. Checked in: the `tenants:` entries of tenants in `--scope` (tenant files and root platform files), each level's selected `_defaults.yaml` defaults block, and root platform files' `profiles:`; a file the exporter drops is skipped (still named only by exit 3). Field is `<file>:<section>.[<tenant or profile>.]<key>`; the tenant column is the tenant for a `tenants:` entry. Fix: give the default and every window a value; to leave that layer without a value, remove the key or write `null` |
-| `value_not_served` | error | a threshold value the tenant's effective config shows is not served as written by `/metrics` ([#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)). The verdict is the tenant's `not_served` (the same function as `da-guard effective`), five reasons only; the message starts with the reason, then names the file, the consequence and the fix: `value_unparsed` (not a number the exporter reads; the platform default is served instead), `value_unparsed_dropped` (a `_critical`, dimensional or `optional_overrides:`-declared key whose value does not parse and has no default to fall back to; that alert can never fire), `window_invalid` (a schedule override whose `window:` is not accepted — not a UTC `HH:MM-HH:MM`, missing, or starting where it ends — so that window never applies), `value_rejected` (a subtree `_defaults.yaml` value that is not threshold-shaped; the tenant keeps a shallower level's value), `spelling_duplicate` (the winning layer's mapping writes the threshold under another spelling too; [#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)). One per (tenant, key), Field is the key; threshold keys only (not `_`-prefixed) — the other reasons and reserved keys in subtree defaults have findings of their own. ⚠️ **Behaviour change**: a tree with such a value that used to pass (exit 0) now exits 1. Fix: rewrite the value or the window as the message says |
+| `value_not_served` | error | a threshold value the tenant's effective config shows is not served as written by `/metrics` ([#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)). The verdict is the tenant's `not_served` (the same function as `da-guard effective`), five reasons only; the message starts with the reason, then names the file, the consequence and the fix: `value_unparsed` (not a number the exporter reads, or a severity suffix other than `warning` / `critical` in any letter case, e.g. `70:high`, `70:`, [#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071); the platform default is served instead), `value_unparsed_dropped` (a `_critical`, dimensional or `optional_overrides:`-declared key whose value does not parse and has no default to fall back to; that alert can never fire), `window_invalid` (a schedule override whose `window:` is not accepted — not a UTC `HH:MM-HH:MM`, missing, or starting where it ends — so that window never applies), `value_rejected` (a subtree `_defaults.yaml` value that is not threshold-shaped; the tenant keeps a shallower level's value), `spelling_duplicate` (the winning layer's mapping writes the threshold under another spelling too; [#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)). One per (tenant, key), Field is the key; threshold keys only (not `_`-prefixed) — the other reasons and reserved keys in subtree defaults have findings of their own. ⚠️ **Behaviour change**: a tree with such a value that used to pass (exit 0) now exits 1; since [#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071) so does a tree writing a severity suffix such as `70:high` or `70:` (it exited 0 while the exporter served a severity no rule selects, silencing the alert). Fix: rewrite the value or the window as the message says |
 | `custom_alert_duplicate_series` | error | an entry of the tenant's `_custom_alerts` has the shape and severity of an earlier entry of the list, whatever its name or mode (two `slo_burn_rate` alerts of one shape too: they share one `user_slo_objective{tenant, recipe_id}`). With the same name too, the whole `/metrics` answered 500 ([#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)); with another name or mode, the shape's shared rule failed to evaluate and **no tenant** got an alert of that shape and severity ([#3112](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3112)). The exporter keeps the first entry, drops this one and counts it on `da_custom_alert_parse_errors`. The verdict is the exporter's own load of the tree: the tenant-api preflight's stricter "one name" rule is not reported here. Field is `_custom_alerts[i]`. ⚠️ **Behaviour change**: such a tree now exits 1 instead of 0. Fix: delete one of the two entries |
 | `metrics_not_gatherable` | error | the exporter's `/metrics` cannot be gathered for this tree: two keys give one series (e.g. `X: "70:critical"` beside `X_critical`, a regex label `q=~` beside an exact label `q_re=`), so the whole scrape answers 500 for every tenant ([#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)). It Gathers the production collectors at every schedule segment of the day; the message names the tenant and keys where it can. It covers the whole tree, whatever `--scope` says; the tenant column is empty. ⚠️ **Behaviour change**: such a tree now exits 1 instead of 0. Fix: keep one of the keys |
 
@@ -3171,7 +3280,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 Multi-channel notification connectivity testing — verify reachability of all configured receivers and report status.
 
-The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual. A receiver is held back (`INVALID_URL` / `INVALID_CONFIG`) only when the generator (`build_receiver_config`) refuses the receiver's **own config**; what it skips at the routing level is not covered yet and those receivers are tested as usual (tracked in [#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)): an `overrides` or `routes` entry the generator skips (for example an override with no `alertname` / `metric_group`, or `routes[i]` with an unsupported key), and a tenant's whole `overrides` / `routes` set, which is not rendered when its main receiver is refused. to check whether the generator accepts the config, run `generate-routes --validate`.
+The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual. The list tested is the generator's own verdict on each slot (the main receiver, `overrides[i]`, `routes[i]`); this tool does not walk `_routing` itself ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)). Only receivers the generator renders are sent; a slot it does not render is still listed, never sent, and counts as failed — `INVALID_URL` / `INVALID_CONFIG` when the generator (`build_receiver_config`) refuses the receiver's **own config**, `NOT_RENDERED` with the generator's reason when it skips the slot at the routing level (for example an override with no `alertname` / `metric_group`, `routes[i]` with an unsupported key, and every `overrides` / `routes` entry of a tenant whose main receiver is refused or missing). This tool has no `--policy`, so what the generator skips under `--policy` for `allowed_domains` is not part of the verdict. To check whether the generator accepts the whole config, run `generate-routes --validate`.
 
 **Usage**
 
@@ -3202,7 +3311,7 @@ Each receiver's result is one of the following (the status column of the text ou
 | Status | Meaning |
 |--------|---------|
 | `OK` | The receiver returned a successful HTTP response |
-| `DRY_RUN` | `--dry-run`: the route generator (`build_receiver_config`) accepts the receiver's own config and the port is 1-65535; nothing was sent (this does not mean the generator renders it into a route; see the ⚠️ above). Whether the hostname can be encoded (IDNA) is checked only when a request is sent, so a dry run does not cover it |
+| `DRY_RUN` | `--dry-run`: the route generator renders this receiver and the port is 1-65535; nothing was sent. Whether the hostname can be encoded (IDNA) is checked only when a request is sent, so a dry run does not cover it |
 | `SKIPPED` | No testable URL (for example `email`) |
 | `TIMEOUT` | Connecting or waiting for the response took longer than `--timeout` |
 | `CONNECTION_REFUSED` | The peer refused the connection (nothing listening on the port, or a firewall rejecting with RST) |
@@ -3211,7 +3320,8 @@ Each receiver's result is one of the following (the status column of the text ou
 | `AUTH_ERROR` | HTTP `401` / `403` |
 | `HTTP_ERROR` | Any other HTTP error status, or a malformed or truncated response (detail starts with `malformed response:`) |
 | `INVALID_URL` | The route generator (`build_receiver_config`) refuses the receiver's own config because its URL field (`smarthost` for email) is given but malformed or not a string, the port is not 1-65535, or at send time the hostname cannot be encoded or the URL is refused (no request was sent) |
-| `INVALID_CONFIG` | The route generator (`build_receiver_config`) refuses the receiver's own config for another reason (for example a missing required field — a URL field that is missing, empty or null included, an unknown `type`, an optional field of the wrong type), matching the generator's verdict |
+| `INVALID_CONFIG` | The route generator (`build_receiver_config`) refuses the receiver's own config for another reason (for example a missing required field — a URL field that is missing, empty or null included, an unknown `type`, an optional field of the wrong type; an entry or tenant with no `receiver`, or a `receiver` that is not a mapping, too), matching the generator's verdict |
+| `NOT_RENDERED` | The route generator skips this slot at the routing level, so Alertmanager never gets it (no request was sent): `overrides[i]` / `routes[i]` itself is unusable (for example no matcher, an unsupported key, not a mapping), or the tenant's main receiver is not rendered, so none of its children is. The detail is the generator's own reason; under a main receiver that is not rendered, a child with a defect of its own is also reported with that reason (`NOT_RENDERED`) until the main receiver is fixed; when `overrides` / `routes` is not a list, the row is `<tenant>-overrides` / `<tenant>-routes` ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076)) |
 
 For `TIMEOUT`, `CONNECTION_REFUSED`, `CONNECTION_ERROR` and `TLS_ERROR` the detail is cut at 80 characters (the `via proxy: ` prefix included); longer error messages are truncated. With `https_proxy` / `http_proxy` set, these statuses may describe the hop to the proxy: a closed proxy port is `CONNECTION_REFUSED`, an unresolvable proxy host is `CONNECTION_ERROR`, and an `HTTP 502` an http receiver gets through the proxy is `HTTP_ERROR`. Only a failed HTTPS CONNECT carries the `via proxy: ` prefix (including a proxy answering `504 Connection Timed Out`, which is then not `TIMEOUT`).
 
@@ -3236,14 +3346,14 @@ da-tools test-notification --config-dir conf.d/ --ci
 | Code | Description |
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
-| `1` | CI mode: one or more receivers unreachable (an invalid receiver config or URL counts too, even under `--dry-run`, which connects to nothing) |
+| `1` | CI mode: one or more receivers failed (unreachable, an invalid receiver config or URL, or a slot the generator does not render, `NOT_RENDERED`; even under `--dry-run`, which connects to nothing). Without `--ci` the code is always `0`, but `status` in `--json` and `Overall` in the text report still read `fail` / `FAIL` |
 | `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752) |
 
 #### explain-route
 
 Routing merge pipeline debugger — shows the four-layer routing merge expansion per tenant (ADR-007): `_routing_defaults` → `routing_profiles` → tenant `_routing` → `_routing_enforced`.
 
-`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config. A duration Alertmanager does not accept is rendered as the platform default (and `--validate` fails); those lines are listed in a "Replaced by the generator" section (main route and sub-routes alike), under `replaced_values` in `--json`, apart from `skipped_sub_routes` — those entries are still rendered, with another value ([#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)). `_routing_enforced` is listed as layer 4 only and is not merged into `final`: in the rendered config it is a **separate** `continue: true` route beside the tenant's, and does not replace the tenant's own receiver or timing ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)).
+`overrides` and `routes` are not listed in the final merged result but under "Effective sub-routes" after it: every sub-route and receiver the generator actually renders, in match order (`overrides` → `routes`), plus the entries the generator skipped, each with its reason ([#2245](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2245)). Both lists come from the generator's verdict on each slot, the same source `test-notification` reads; when a tenant's main receiver is missing or refused, the generator renders no sub-route, and each `overrides` / `routes` entry is listed with a "main receiver not rendered" reason of its own ([#3076](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3076); before, nothing was listed when the main receiver was missing or refused). In `--json`, each tenant gains `sub_routes` and `skipped_sub_routes`; `final` is still the raw merged config. A duration Alertmanager does not accept is rendered as the platform default (and `--validate` fails); those lines are listed in a "Replaced by the generator" section (main route and sub-routes alike), under `replaced_values` in `--json`, apart from `skipped_sub_routes` — those entries are still rendered, with another value ([#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)). `_routing_enforced` is listed as layer 4 only and is not merged into `final`: in the rendered config it is a **separate** `continue: true` route beside the tenant's, and does not replace the tenant's own receiver or timing ([#2293](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2293)).
 
 **Usage**
 

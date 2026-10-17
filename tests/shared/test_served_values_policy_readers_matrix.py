@@ -216,7 +216,8 @@ def test_every_window_within_the_limit_passes(tmp_path, capsys):
 
 def test_empty_severity_in_a_schedule_is_evaluated(tmp_path, capsys):
     """#3060：`"70:"`（severity 為空字串）原本讓 served-values 的排程段少了 `severity`，
-    讀取端拒收、整支 rc 2；現在照常評估，每個時段的數字都比。"""
+    讀取端拒收、整支 rc 2；現在照常評估，每個時段的數字都比。#3071：空後綴讓值讀不懂，
+    exporter 在窗外改送平台預設值 80，所以窗外比的是 80。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
         "tx.yaml": ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70:\"\n"
@@ -228,8 +229,8 @@ def test_empty_severity_in_a_schedule_is_evaluated(tmp_path, capsys):
     rc, doc = _engine(conf_d, _policy(tmp_path, pol.format(65)), capsys, "--ci")
     assert rc == 1
     assert [v["message"] for v in doc["violations"]] == [
-        "'mysql_connections' 期望 ≤ 65，實際為 '70'（UTC 00:00-01:00）",
-        "'mysql_connections' 期望 ≤ 65，實際為 '70'（UTC 09:00-24:00）"], doc
+        "'mysql_connections' 期望 ≤ 65，實際為 '80'（UTC 00:00-01:00）",
+        "'mysql_connections' 期望 ≤ 65，實際為 '80'（UTC 09:00-24:00）"], doc
 
 
 # ── 保留鍵：寫法＋繼承；Go 自動補的不算有寫（既有規則不翻轉）────────────────

@@ -496,20 +496,14 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 				continue
 			}
 
-			// Check if it has severity suffix: "70:critical"
-			parts := strings.SplitN(override, ":", 2)
-			valueStr := strings.TrimSpace(parts[0])
-			if len(parts) == 2 {
-				severity = strings.TrimSpace(parts[1])
-			}
-
-			// State 1: custom value
-			if v, err := strconv.ParseFloat(valueStr, 64); err == nil {
+			// State 1: custom value, with the optional severity suffix
+			// "70:critical" (splitThresholdSeverity, #3071).
+			if v, sev, ok := parseThresholdValue(override); ok {
 				rows = appendWithLegacyTwin(rows, metricKey, ResolvedThreshold{
 					Tenant:    tenant,
 					Metric:    metric,
 					Value:     v,
-					Severity:  severity,
+					Severity:  sev,
 					Component: component,
 				}, sink, metricKey)
 				continue
@@ -517,12 +511,12 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 
 			// Unknown value — log warning, use default. #2377: the `:severity`
 			// suffix belongs to the discarded value, so it is dropped too —
-			// "7O:critical" resolves exactly like the bare "7O".
+			// "7O:critical" resolves exactly like the bare "7O". #3071: so does
+			// a severity no threshold rule selects ("70:high", "70:").
 			logf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
 			if rec != nil {
 				rec.note(tenant, metricKey, NotServedValueUnparsed)
 			}
-			severity = "warning"
 		}
 
 		// State 2: use default
@@ -658,15 +652,8 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		}
 
 		component, metric := parseMetricKey(metricKey)
-		severity := "warning"
-		parts := strings.SplitN(override, ":", 2)
-		valueStr := strings.TrimSpace(parts[0])
-		if len(parts) == 2 {
-			severity = strings.TrimSpace(parts[1])
-		}
-
-		v, err := strconv.ParseFloat(valueStr, 64)
-		if err != nil {
+		v, severity, ok := parseThresholdValue(override)
+		if !ok {
 			// No default to fall back to — drop it and say so, matching
 			// resolveCriticalRows / resolveDimensionalRows rather than
 			// resolveBaseRows (which can and does fall back).
@@ -839,16 +826,8 @@ func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant,
 	}
 
 	component, metric := parseMetricKey(baseKey)
-	severity := "warning"
-
-	parts := strings.SplitN(valStr, ":", 2)
-	valueStr := strings.TrimSpace(parts[0])
-	if len(parts) == 2 {
-		severity = strings.TrimSpace(parts[1])
-	}
-
-	v, err := strconv.ParseFloat(valueStr, 64)
-	if err != nil {
+	v, severity, ok := parseThresholdValue(valStr)
+	if !ok {
 		logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
 		if rec != nil {
 			rec.note(tenant, key, NotServedValueUnparsedDropped)

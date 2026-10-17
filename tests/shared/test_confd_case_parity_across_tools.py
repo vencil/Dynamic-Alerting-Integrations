@@ -686,6 +686,13 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # fixture now carries both ADR-007 control files, and the tool measured
 # DIVERGENT on the day it became visible (`Upper.YAML` invisible to its
 # hand-written extension test — rc=0 on a dangling profile reference).
+#
+# ⛔ `notification_tester.py` LEFT this set in #3076. The fixture's profile
+# gives each tenant `receiver: team-standard` (a string). The tester used to
+# walk `_routing` itself and silently drop a receiver that is not a mapping,
+# so it listed nothing with or without the tenant files. It now lists every
+# slot the route generator judges, and the generator refuses that receiver
+# (INVALID_CONFIG per tenant), so removing the tenants changes its output.
 KNOWN_INSENSITIVE: set[str] = {
     "analyze_rule_pack_gaps.py",
     "backtest_threshold.py",
@@ -695,7 +702,6 @@ KNOWN_INSENSITIVE: set[str] = {
     "da_assembler.py",
     "generate_tenant_mapping_rules.py",
     "maintenance_scheduler.py",
-    "notification_tester.py",
     "operator_check.py",
     "tenant_verify.py",
     "threshold_govern.py",

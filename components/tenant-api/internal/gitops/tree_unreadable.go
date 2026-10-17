@@ -31,7 +31,7 @@ package gitops
 //
 // ⛔ ONE JUDGEMENT. judgeTree is the only place that decides it, for every
 // write and preview path: resolveTenantFilePath (Write / WriteIfUnchanged,
-// WriteMerged, WritePR / WritePRChecked, DryRunValidate, Diff /
+// WriteMerged, WritePR / WritePRChecked, PreviewPut, Diff /
 // PreviewCurrent) and applyBatch (WriteBatch, WritePRBatch). What counts as
 // unreadable is the walker's own record; the one refinement made here —
 // unresolvable link or not, for a stat_error — is unresolvableLink, which

@@ -186,6 +186,10 @@ FINDING_KINDS: dict[str, str] = {
         "changes no destination.",
     "invalid_route_entry":
         "A routes value or entry the generator does not render.",
+    "parent_receiver_not_rendered":
+        "An overrides / routes entry (or the whole value) of a tenant whose "
+        "main receiver is not rendered; no child route is rendered without "
+        "it.",
     "routing_key_ignored":
         "A key in a routing block, routing profile, overrides entry or "
         "receiver that the generator does not read; the rest is rendered "

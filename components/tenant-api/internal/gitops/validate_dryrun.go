@@ -1,81 +1,19 @@
 package gitops
 
 import (
-	"context"
 	"errors"
 	"io/fs"
 	"log/slog"
 )
-
-// DryRunValidate answers, without writing, the question a DIRECT-mode Write
-// asks before it writes: would this body for this tenant be refused? (#2124)
-//
-// ⛔ IT CALLS THE WRITE PATH'S OWN CHECKS, IT DOES NOT RE-ASSEMBLE THEM. POST
-// /tenants/{id}/validate used to hand-copy a subset of validate()'s checks and
-// so answered `valid: true` for every body whose refusal it had not copied
-// (invalid YAML among them).
-//
-// It runs write()'s refusal sequence in the same order: guardTenantID → the
-// body-only pre-flight (validateBodyOnly, then the masked-credential
-// placeholder — the PUT handler judges that (PlaceholderPreflight) before it
-// calls Write, so for a body refused by both, PUT and this dry-run can name a
-// different first reason) → the tenant file resolution
-// (ambiguous tenant file, #2078 declared-elsewhere; here through
-// w.previewTenantFilePath, the lock-free twin of write()'s w.tenantFilePath)
-// → validate(configDir, …). write() runs the last two under its lock; the
-// ORDER is what makes a body that is both
-// malformed and misplaced get the same first answer here as from Write. If
-// that sequence changes, this must change with it.
-//
-// ⚠️ DIRECT MODE ONLY. A PR-mode write judges the tree-derived checks against
-// the fresh base it checks out, not the local tree — use DryRunValidateBodyOnly
-// there (#1718).
-//
-// ⛔ A *Writer METHOD, NOT A FREE FUNCTION OF configDir: previewTenantFilePath
-// walks through scanTreeForRead, whose in-flight walk and stuck-walk breaker
-// live on the Writer. Sharing the production Writer lets concurrent dry-runs
-// and diffs share one walk, and a walk blocked on a hung mount fail every later
-// dry-run fast instead of each one leaking another blocked goroutine. That
-// breaker is the read path's own (#2153): a blocked dry-run walk never fails
-// a write, whose walks run under w.mu with a breaker of their own.
-//
-// No side effects: it takes neither the admission token nor w.mu and only reads
-// the tree. Its verdict is about the tree as a recent walk saw it — possibly
-// one another preview started just before this call (see scanTreeForRead); a
-// write is judged again, on a walk of its own, on the tree it lands on.
-//
-// err is a refusal that would come BEFORE validation, typed exactly as Write
-// returns it (reserved id, ErrAmbiguousTenantFile, ErrTenantDeclaredElsewhere,
-// ErrTenantTreeScan, or a resolver read error). errs is the blocking set Write
-// would wrap in ErrValidation — the pre-flight's, or else validate()'s — and
-// notices is validate()'s advisory set; a structural failure is reported alone.
-//
-// ctx carries the #2405 WithReplaceUnparseable bit, so the verdict on a
-// current file that cannot be parsed is the one this caller's Write would get,
-// and the caller's TenantNames (#3039), so the text is what that Write would
-// return.
-func (w *Writer) DryRunValidate(ctx context.Context, tenantID, yamlContent string) (errs, notices []string, err error) {
-	if err := guardTenantID(tenantID); err != nil {
-		return nil, nil, err
-	}
-	if errs := dryRunPreflight(tenantID, yamlContent); len(errs) > 0 {
-		return errs, nil, nil
-	}
-	filePath, err := w.previewTenantFilePath(tenantID)
-	if err != nil {
-		return nil, nil, err
-	}
-	errs, notices = validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
-	return errs, notices, nil
-}
 
 // DryRunValidateBodyOnly is the PR-mode dry-run: exactly what WritePR's
 // pre-flight runs — guardTenantID, then validateBodyOnly — plus the
 // placeholder check the PUT handler runs before WritePR (#1560), and nothing
 // that reads the tree.
 //
-// ⛔ DELIBERATELY WEAKER THAN DryRunValidate. The local tree in PR mode is only
-// synced at pod start and may lag the base (#1718); refusing on it would answer
+// ⛔ DELIBERATELY WEAKER THAN direct mode's dry-run (PreviewPut). The local
+// tree in PR mode is only synced at pod start and may lag the base (#1718);
+// refusing on it would answer
 // "invalid" for a write the PR then accepts, until the pod restarts. The
 // tree-derived checks (tenant file resolution, added sections, key validation
 // against the base's defaults, the eol guard) run when the PR is cut, against

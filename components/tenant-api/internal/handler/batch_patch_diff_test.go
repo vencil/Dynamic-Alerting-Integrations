@@ -188,8 +188,9 @@ var patchDiffCases = []patchDiffCase{
 	{name: "flow-sequence-time", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
 		base: "tenants:\n  t1: {}\n  t2:\n    k: [12:30, 2001-12-14t21:59:43]\n"},
 	// A tag the generator cannot construct in the written tenant's own
-	// block: refused (it does not decode); in another tenant's, kept as
-	// written (want unreadable_kept below).
+	// block: refused (it does not decode); since #3063 so is the same tag in
+	// another tenant's block (below), which used to be merged and kept as
+	// written.
 	{name: "tag-construct-failure-own-block", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
 		base: "tenants:\n  t1:\n    secret_x: !!int hunter2\n"},
 
@@ -202,8 +203,6 @@ var patchDiffCases = []patchDiffCase{
 		base: "tenants:\n  t1: {}\n"},
 	{name: "patch-value-sexagesimal", tenant: "t1", patch: map[string]string{"z": "1:20"}, want: "merged",
 		base: "tenants:\n  t1: {}\n"},
-	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
-		base: "tenants:\n  t1: {}\nextra: &a\n  b: *a\n"},
 	{name: "merge-key-then-explicit", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
 		base: "tenants:\n  t1: {}\nextra:\n  <<: {a: 1}\n  a: 2\n"},
 	{name: "same-number-other-text", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
@@ -217,30 +216,39 @@ var patchDiffCases = []patchDiffCase{
 	{name: "date-out-of-range", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
 		base: "tenants:\n  t1: {}\nextra: 2001-13-45\n"},
 
+	// --- unreadable to the generator, refused before the merge (#3063) --
+	// tenantConfigError's ParseTenantFile decodes the file generically as
+	// well (the merge plane's decode), and that decode refuses each of these
+	// too, so the base is invalid_config and never merged.
+	{name: "tag-construct-failure-other-tenant", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\n  t2:\n    secret_x: !!int hunter2\n"},
+	{name: "duplicate-in-unread-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1:\n    redis_memory: \"1\"\nextra:\n  a: 1\n  a: 2\n"},
+	{name: "duplicate-quoted-and-plain", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra:\n  a: 1\n  'a': 2\n"},
+	{name: "mapping-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra:\n  ? {a: 1}\n  : x\n"},
+	{name: "sequence-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra:\n  ? [a]\n  : x\n"},
+	{name: "int-tag-not-int", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra: !!int abc\n"},
+	{name: "bool-tag-not-bool", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra: !!bool maybe\n"},
+	{name: "merge-key-scalar", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra:\n  <<: 1\n"},
+	// The generator reads a recursive alias; the generic decode does not, so
+	// Go is stricter than needed here — and the exporter skips the file.
+	{name: "alias-cycle", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "base_refused",
+		base: "tenants:\n  t1: {}\nextra: &a\n  b: *a\n"},
+
 	// --- unreadable, and the re-encode keeps it so ----------------------
 	// Written back as they came: the generator refuses the merged file too.
-	{name: "tag-construct-failure-other-tenant", tenant: "t1", patch: map[string]string{"z": "1"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\n  t2:\n    secret_x: !!int hunter2\n"},
-	{name: "duplicate-in-unread-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1:\n    redis_memory: \"1\"\nextra:\n  a: 1\n  a: 2\n"},
 	{name: "duplicate-via-alias-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "k: &k a\ntenants:\n  t1: {}\nextra:\n  a: 1\n  *k : 2\n"},
-	{name: "duplicate-quoted-and-plain", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra:\n  a: 1\n  'a': 2\n"},
-	{name: "mapping-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra:\n  ? {a: 1}\n  : x\n"},
-	{name: "sequence-key", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra:\n  ? [a]\n  : x\n"},
 	{name: "unknown-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !foo bar\n"},
-	{name: "int-tag-not-int", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra: !!int abc\n"},
-	{name: "bool-tag-not-bool", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra: !!bool maybe\n"},
 	{name: "map-tag-on-sequence", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!map [1]\n"},
-	{name: "merge-key-scalar", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra:\n  <<: 1\n"},
 	{name: "python-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!python/name:os.system ''\n"},
 }

@@ -11,7 +11,7 @@
 | **打開會看到** | 一個互動工具的儀表板，**立即可玩** |
 
 > 🎯 **這個 portal 服務誰？** 三種角色，各有專屬上手指南：
-> - **Tenant（租戶）** — 瀏覽器自助調閾值、存 Saved View → [Tenant 指南](../../docs/getting-started/for-tenants.md)
+> - **Tenant（租戶）** — 瀏覽器試算閾值、管理自訂告警、存 Saved View → [Tenant 指南](../../docs/getting-started/for-tenants.md)
 > - **Platform Engineer / SRE** — 為租戶除錯、規劃容量、驗證路由 → [Platform 指南](../../docs/getting-started/for-platform-engineers.md)
 > - **Domain Expert** — 把監控知識落成 Rule Pack / 預算守則 → [Domain Expert 指南](../../docs/getting-started/for-domain-experts.md)
 

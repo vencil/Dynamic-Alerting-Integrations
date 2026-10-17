@@ -83,12 +83,13 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 	switch ns.Reason {
 	case config.NotServedValueUnparsed:
 		return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a number the exporter reads "+
-			"(e.g. `abc`, a list, `7O:critical`), so /metrics serves the platform default for it instead and the "+
+			"(e.g. `abc`, a list, `7O:critical`) or whose `:<severity>` is not `warning` or `critical` (e.g. `70:high`, "+
+			"`70:`; #3071), so /metrics serves the platform default for it instead and the "+
 			"alert fires at that default, not at the written threshold. Write a number, optionally with "+
-			"`:<severity>` (e.g. `70` or `70:critical`), or `disable`.", file, k)
+			"`:warning` or `:critical` (e.g. `70` or `70:critical`), or `disable`.", file, k)
 	case config.NotServedValueUnparsedDropped:
 		return fmt.Sprintf("value_unparsed_dropped: %s writes `%s` with a value that is not a number the exporter "+
-			"reads, and the key has no platform default to fall back to (a `_critical` tier, a dimensional key or "+
+			"reads (or whose `:<severity>` is not `warning` or `critical`, e.g. `60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier, a dimensional key or "+
 			"an `optional_overrides:` key), so /metrics serves no series for it and that alert can never fire. "+
 			"Write a number (e.g. `90`), or `disable`.", file, k)
 	case config.NotServedWindowInvalid:
@@ -103,8 +104,10 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 			file, k)
 	default: // config.NotServedValueRejected
 		return fmt.Sprintf("value_rejected: %s writes `%s` with a value that is not threshold-shaped (e.g. "+
-			"`overrides:` written as a string instead of a list of `{window, value}`), so the exporter does not "+
-			"apply it to this tenant, which keeps a shallower level's value or none. Write a number or a "+
+			"`overrides:` written as a string instead of a list of `{window, value}`, or a `:<severity>` other than "+
+			"`warning` or `critical` such as `70:high`), so the exporter does not "+
+			"apply it to this tenant, which keeps a shallower level's value or none. Write a number (optionally "+
+			"`:warning` or `:critical`) or a "+
 			"`{default, overrides: [{window, value}]}` schedule.", file, k)
 	}
 }

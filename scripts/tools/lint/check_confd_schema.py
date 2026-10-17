@@ -267,11 +267,14 @@ def _explain(exc, validator) -> str:
     the original message.
     """
     err = exc
-    if (err.validator == "pattern" and "propertyNames" in err.schema_path
-            and isinstance(err.schema, dict) and err.schema.get("patternErrorMessage")):
-        # The closed `_` namespace (#3016 R3): jsonschema's own message would
-        # print the whole generated regex, not what the key should be.
-        return f"unknown key '{err.instance}': {err.schema['patternErrorMessage']}"
+    if (err.validator == "pattern" and isinstance(err.schema, dict)
+            and err.schema.get("patternErrorMessage")):
+        # jsonschema's own message would print the whole regex, not the rule
+        # it encodes: the closed `_` namespace (#3016 R3) or a threshold's
+        # `:severity` suffix (#3071, thresholdScalar).
+        if "propertyNames" in err.schema_path:
+            return f"unknown key '{err.instance}': {err.schema['patternErrorMessage']}"
+        return f"{err.instance!r}: {err.schema['patternErrorMessage']}"
     while err.validator == "oneOf" and err.context:
         branches: dict = {}
         for sub in err.context:

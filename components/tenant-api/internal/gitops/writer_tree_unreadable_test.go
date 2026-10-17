@@ -50,7 +50,7 @@ func treeVerdictVia(t *testing.T, mode string, w *Writer, tenantID string) error
 		_, err := w.WritePRBatch(ctx, []PRBatchOp{{TenantID: tenantID, Merge: merge}}, "op@example.com")
 		return opErr(err)
 	case "DryRunValidate":
-		errs, _, err := w.DryRunValidate(ctx, tenantID, body)
+		errs, _, err := previewDryRun(ctx, w, tenantID, body)
 		if err == nil && len(errs) > 0 {
 			// Returned, not t.Fatalf: callers may run this on another goroutine.
 			return fmt.Errorf("DryRunValidate: validation errors %q", errs)

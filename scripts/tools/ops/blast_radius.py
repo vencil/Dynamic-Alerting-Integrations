@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 from _lib_python import format_json_report  # noqa: E402
+from _lib_validation import custom_alert_disabled  # noqa: E402  (#3071)
 
 # ---------------------------------------------------------------------------
 # Tier classification constants
@@ -503,24 +504,16 @@ def _recipe_names(lst: Any) -> list[str]:
     return out
 
 
-# Mirror _lib_validation._DISABLED_VALUES / Go IsDisabledValue WITHOUT importing
-# (blast_radius is the intentionally zero-dep "ultralight scanner", P2 — keep in
-# sync). The exporter's custom-alert opt-out (app/pkg/config/custom_alert.go)
-# parses value:severity then checks isDisabled(value-part) against this set, so a
-# bare `== "disable"` would miss `off` / `disabled` / `false` and any
-# `:severity`-suffixed form — under-flagging a real silencing (R2 self-review).
-_DISABLED_VALUES = frozenset({"disable", "disabled", "off", "false"})
-
-
 def _threshold_disabled(recipe: dict) -> bool:
     """A custom-alert recipe whose threshold is a three-state opt-out.
 
-    Mirrors custom_alert.go: split the optional `:severity` first, then test the
-    value part against the full disabled set (NOT just the literal "disable").
+    The exporter's reading (custom_alert.go), shared with config_diff:
+    `_lib_validation.custom_alert_disabled` splits the optional `:severity`
+    with the one grammar (#3071) and tests the value part against the full
+    disabled set — so `off` / `disabled` / `false` and `disable:critical`
+    are caught, while `disable:bogus` (a parse error in Go) is not.
     """
-    raw = str(recipe.get("threshold", "")).strip()
-    value = raw.rsplit(":", 1)[0] if ":" in raw else raw
-    return value.strip().lower() in _DISABLED_VALUES
+    return custom_alert_disabled(recipe.get("threshold", ""))
 
 
 def _pages(recipe: dict) -> bool:

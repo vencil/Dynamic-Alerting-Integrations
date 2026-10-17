@@ -1396,7 +1396,7 @@ class TestWrittenValues:
     @pytest.mark.parametrize("key,raw,want", [
         ("mysql_connections", "70", (70.0, "warning")),
         ("mysql_connections", " 70 : critical ", (70.0, "critical")),
-        ("mysql_connections", "70:info", (70.0, "info")),
+        ("mysql_connections", "70:Critical", (70.0, "critical")),
         ("mysql_connections_critical", "95", (95.0, "critical")),
         ("mysql_connections", "disable", None),
         ("mysql_connections", None, None),
@@ -1421,11 +1421,14 @@ class TestWrittenValues:
         ("mysql_connections", "+nan"), ("mysql_connections", "-nan:critical"),
         ("mysql_connections", "1e400"), ("mysql_connections_critical", "-1e400"),
         ("mysql_connections", "0x1p4"),
+        ("mysql_connections", "70:info"), ("mysql_connections", "70:"),
     ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key",
-            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "hex-float"])
+            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "hex-float",
+            "unselected-severity", "empty-severity"])
     def test_values_this_backtest_cannot_read_are_refused(self, key, raw):
-        """Go 也拒絕：typo、非 ASCII 數字、帶號 NaN、溢位（ErrRange）。Go 接受但
-        這裡保守拒絕：`1_000`、`0x1p4`（實測 go run strconv.ParseFloat）。"""
+        """Go 也拒絕：typo、非 ASCII 數字、帶號 NaN、溢位（ErrRange）、規則不選的
+        severity（#3071：`70:info`、`70:` 整個值讀不懂）。Go 接受但這裡保守拒絕：
+        `1_000`、`0x1p4`（實測 go run strconv.ParseFloat）。"""
         with pytest.raises(ValueError):
             bt.parse_threshold_value(key, raw)
 
@@ -1442,16 +1445,15 @@ class TestWrittenValues:
         assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "critical")
         assert rc == (1 if rows[0]["risk"] == "HIGH" else 0)
 
-    def test_a_side_no_rule_selects_is_no_threshold(self, monkeypatch, capsys, cli_argv):
-        """#3060 R1：`70:high` 沒有 alert 在比，等於沒有門檻——70 → 70:high 是告警
-        被靜默，與 `disable` 同判定；只有一邊有規則會選的 severity 時照常查詢。"""
+    def test_a_severity_no_rule_selects_is_unreadable(self, monkeypatch, capsys, cli_argv):
+        """#3071：`70:high` 的 severity 沒有規則會選，exporter 把整個值當成讀不懂、改送
+        平台預設值——那個值只看寫法看不出來，所以不回測（#3060 R1 曾把它判成靜默、
+        MEDIUM、rc 0；exporter 已不再這樣送）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                        "mysql_connections", "70", "70:high")
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
-        assert (rows[0]["status"], rows[0]["risk"]) == ("analyzed", "MEDIUM")
-        assert rows[0]["message"] == "Metric disabled — all alerts silenced"
-        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "high")
-        assert rc == 0
+        assert (rc, asked) == (0, [])
+        assert rows[0]["backtest"] == (
+            "skipped: value '70:high': this backtest cannot read it the way the exporter does")
 
     def test_both_critical_compare_the_numbers_on_the_critical_alert(
             self, monkeypatch, capsys, cli_argv):
@@ -1477,7 +1479,7 @@ class TestWrittenValues:
 
     @pytest.mark.parametrize("old,new,why", [
         ("70", "7O", "value '7O': this backtest cannot read it the way the exporter does"),
-        ("70:info", "80:info", "severity 'info' is selected by no threshold rule"),
+        ("70:info", "80:info", "value '70:info': this backtest cannot read it the way the exporter does"),
     ])
     def test_unreadable_values_are_not_backtested(self, monkeypatch, capsys, cli_argv,
                                                    old, new, why):
