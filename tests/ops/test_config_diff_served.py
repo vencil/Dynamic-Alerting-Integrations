@@ -76,7 +76,8 @@ def test_severity_only_change_reads_as_written(tmp_path, da_guard):
 
 def test_empty_severity_is_a_change_not_a_failed_side(tmp_path, da_guard):
     """#3060：`"70:"`（severity 為空字串）原本讓 served-values 的排程段少了 `severity`，
-    讀取端拒收、整支 rc 2；現在兩側都讀得到，`70` → `70:` 列為變更、rc 1。"""
+    讀取端拒收、整支 rc 2；現在兩側都讀得到，`70` → `70:` 列為變更、rc 1。
+    #3071：空後綴讓整個值讀不懂，exporter 改送平台預設值 80，所以變更是 70 → 80（looser）。"""
     base = _tree(tmp_path / "base", {"tx": {"mysql_connections": "70"}})
     pr = _tree(tmp_path / "pr", {"tx": {"mysql_connections": "70:"}})
     p = subprocess.run(
@@ -88,7 +89,22 @@ def test_empty_severity_is_a_change_not_a_failed_side(tmp_path, da_guard):
     doc = json.loads(p.stdout)
     assert doc["views"]["served"]["status"] == "computed", doc["views"]
     assert doc["threshold_changes"] == [
-        {"key": "mysql_connections", "old": 70, "new": "70:", "change": "modified", "tenants": ["tx"]}]
+        {"key": "mysql_connections", "old": 70, "new": 80, "change": "looser", "tenants": ["tx"]}]
+
+
+def test_unreadable_severity_on_both_sides_is_no_change(tmp_path, da_guard):
+    """#3071：兩邊都是讀不懂的 severity（`70:high` → `75:High`）時，兩邊 exporter 都送
+    預設值 80，served 視圖沒有差異，rc 0（#3071 之前是 modified、rc 1）。這種樹由
+    da-guard 的 value_not_served 擋，不是 config-diff 的事。"""
+    base = _tree(tmp_path / "base", {"tx": {"mysql_connections": "70:high"}})
+    pr = _tree(tmp_path / "pr", {"tx": {"mysql_connections": "75:High"}})
+    p = subprocess.run(
+        [sys.executable, str(CONFIG_DIFF), "--old-dir", str(base), "--new-dir", str(pr),
+         "--at", AT, "--format", "json"],
+        env={**os.environ, "DA_GUARD_BINARY": da_guard},
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert p.returncode == 0, (p.returncode, p.stderr)
+    assert json.loads(p.stdout)["threshold_changes"] == []
 
 
 def test_inherited_threshold_change_is_reported_for_tenants_that_do_not_override(tmp_path, da_guard):

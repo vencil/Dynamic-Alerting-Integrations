@@ -123,3 +123,37 @@ func TestGuard_ValueNotServedControls(t *testing.T) {
 		t.Errorf("whole tree: exit %d, findings %+v; want 1 and one for ty", code, fs)
 	}
 }
+
+// #3071: a severity suffix no threshold rule selects (`70:high`, the empty
+// `70:`) makes the value unreadable, as `7O:critical` is (#2377): the gate
+// refuses the tree. `70:Critical` is read as critical and is not reported.
+func TestGuard_UnselectedSeveritySuffixIsValueNotServed(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 80\n" +
+			"  mysql_slow_queries: 80\n",
+		"tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70:high\"\n" +
+			"    mysql_threads_running: \"70:\"\n    mysql_slow_queries: \"70:Critical\"\n" +
+			"    mysql_connections{db=\"a\"}: \"60:high\"\n",
+	}
+	code, fs := guardFindingsOf(t, files)
+	if code != exitFindings {
+		t.Errorf("exit = %d, want %d", code, exitFindings)
+	}
+	got := map[string]string{}
+	for _, f := range fs {
+		if f.Kind != findingkind.FindingValueNotServed.String() {
+			t.Errorf("unexpected finding %+v", f)
+			continue
+		}
+		got[f.TenantID+"/"+f.Field] = strings.SplitN(f.Message, ":", 2)[0]
+	}
+	want := map[string]string{
+		"tx/mysql_connections":         "value_unparsed",
+		"tx/mysql_threads_running":     "value_unparsed",
+		`tx/mysql_connections{db="a"}`: "value_unparsed_dropped",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("value_not_served = %v, want %v", got, want)
+	}
+}

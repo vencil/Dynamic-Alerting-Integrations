@@ -355,6 +355,8 @@ tenants:
     "redis_queue_length{queue='orders'}": "500:critical"
 ```
 
+The severity is the part after the last `:` and may only be `warning` or `critical` (in any letter case). Any other suffix (`500:high`, the empty `500:`) is selected by no Rule Pack rule, so the whole value is unreadable: a base key is served with the platform default (severity warning), and a dimensional key or a key declared in `optional_overrides:` serves no series; da-guard's `value_not_served` reports both ([#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)).
+
 **Prometheus output:**
 ```
 user_threshold{tenant="db-a", component="mysql", metric="connections", severity="warning"} 100

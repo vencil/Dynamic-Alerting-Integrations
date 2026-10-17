@@ -415,9 +415,11 @@ func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 	}
 }
 
-// TestServedSchedules_EmptySeverityIsWritten (#3060): `"70:"` serves its row
-// with severity "" — `severities` says "", and so must every segment that
-// serves it: a served segment always carries `severity`, even an empty one.
+// TestServedSchedules_EmptySeverityIsWritten (#3060): a served segment always
+// carries `severity`, and it says what `severities` says. `"70:"` once served
+// its row with severity "" (the case this was written for); since #3071 its
+// empty suffix makes the value unreadable, so the row is the default's, with
+// severity "warning", and no segment carries "".
 // A null segment (redis_memory switched off) and an error segment (the
 // 15:00–16:00 Gather failure of ungatherableTree) carry none.
 func TestServedSchedules_EmptySeverityIsWritten(t *testing.T) {
@@ -429,8 +431,8 @@ func TestServedSchedules_EmptySeverityIsWritten(t *testing.T) {
 	tree["tenant-b.yaml"] = "tenants:\n  tenant-b:\n    mysql_connections: \"70:\"\n"
 	code, doc, dir, stderr := servedS(t, tree, scheduleAt)
 	mustOK(t, code, stderr)
-	if sev, ok := doc.Tenants["tenant-b"].Severities["mysql_connections"]; !ok || sev != "" {
-		t.Fatalf("severities[mysql_connections] = %q (present %v), want \"\"", sev, ok)
+	if sev, ok := doc.Tenants["tenant-b"].Severities["mysql_connections"]; !ok || sev != "warning" {
+		t.Fatalf("severities[mysql_connections] = %q (present %v), want \"warning\"", sev, ok)
 	}
 	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", scheduleAt, "--schedules")
 	mustOK(t, code, stderr)
@@ -449,8 +451,8 @@ func TestServedSchedules_EmptySeverityIsWritten(t *testing.T) {
 		t.Fatalf("tenant-b mysql_connections: %d segments, want 3: %v", len(segs), segs)
 	}
 	for _, i := range []int{0, 2} {
-		if sev, has := segs[i]["severity"]; !has || sev != "" {
-			t.Errorf("served segment %v: severity = %v (present %v), want \"\"", segs[i], sev, has)
+		if sev, has := segs[i]["severity"]; !has || sev != "warning" {
+			t.Errorf("served segment %v: severity = %v (present %v), want \"warning\"", segs[i], sev, has)
 		}
 	}
 	if _, has := segs[1]["severity"]; has || segs[1]["error"] == nil {

@@ -1495,8 +1495,9 @@ def render_tenant_declared_stub_lines(
     ⚠️ Be precise about what the placeholder buys, because the natural claim —
     "an unsubstituted placeholder gets caught by validation" — is FALSE and was
     written here before it was measured. ``thresholdScalar`` in
-    ``docs/schemas/tenant-config.schema.json`` is ``{"type": "string"}`` with no
-    pattern, so ``key: "<your value>"`` is a schema-valid threshold: measured,
+    ``docs/schemas/tenant-config.schema.json`` is ``{"type": "string"}`` whose
+    only pattern checks the ``:severity`` suffix (#3071), so
+    ``key: "<your value>"`` (no ``:``) is a schema-valid threshold: measured,
     ``validate_config.py`` reports 5 checks / 5 pass / 0 warn on exactly that
     file. What the placeholder DOES buy is that no platform-chosen number is
     silently armed — the failure mode it removes is a wrong threshold quietly
