@@ -751,9 +751,21 @@ def open_governance_pr(
             plan.tenant, "error", keys,
             message=f"keys not found in live config: {unapplied}",
         )
-    verify_err = verify_only_changed(raw_yaml, merged, plan.tenant, new_values,
-                                     config_dir=args.config_dir,
-                                     rel=plan.source_file)
+    import _lib_parse_tree  # lazy, as in verify_only_changed
+    try:
+        verify_err = verify_only_changed(raw_yaml, merged, plan.tenant, new_values,
+                                         config_dir=args.config_dir,
+                                         rel=plan.source_file)
+    except _lib_parse_tree.BinaryMissing:
+        raise  # no da-guard at all: the whole run is rc 2 (main's decorator)
+    except _lib_parse_tree.ParseTreeError as exc:
+        # A da-guard that failed on THIS tenant (a timeout, the memory
+        # limit, an unexpected exit): this tenant's error, the run goes on
+        # and its summary still lists the PRs already opened.
+        return TenantOutcome(
+            plan.tenant, "error", keys,
+            message=f"refused to PUT (verify could not run): {exc}",
+        )
     if verify_err:
         return TenantOutcome(
             plan.tenant, "error", keys,

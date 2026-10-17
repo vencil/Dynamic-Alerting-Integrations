@@ -1260,13 +1260,11 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 #### init
 
-
-
-**讀法與寫入前確認（ADR-036 §2，#2906）**：另一個檔「宣告了哪些租戶」取自 `da-guard parse-tree`（yaml.v3 的讀法，與 exporter 的讀法相同，不再以文字搜尋近似）；parse-tree 讀不了的檔（語法錯、重複鍵、不在允許清單的 tag、非 UTF-8 等）視為可能宣告每一個要求的租戶。寫入任何檔之前，產生的 `conf.d/_defaults.yaml` 與 `conf.d/<tenant>.yaml` 都以 parse-tree 在要寫入的路徑讀回，內容必須正是產生的內容，否則結束碼 `1`、一個檔都不寫。`conf.d/` 已存在時、或要寫 conf.d 檔時都需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`。
-
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
 在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名，而且刻意寬鬆：檔中 `tenants:` 的 key、以及租戶 id 以獨立 token 出現在檔中任何位置（含引號內、註解、flow／JSON 寫法、UTF-16 等編碼、YAML escape 寫法如 `"db\x2dc"`）都算；讀不到、解不開或含明確 tag（`!!binary` 等）的檔視為可能提及每一個要求的租戶，跳過訊息會寫出原因與怎麼讓 init 讀得透。⚠️ 註解與字串裡以 `!` 開頭的字（例如 `# !Important`、`"wow !!"`）也會被當成 tag，使該檔被視為提及所有租戶——這是刻意接受的誤判。這種「讀不透」不會觸發下述並存拒絕：若 init 自有的 `conf.d/<t>.yaml` 已存在**且本身宣告 t**，init 照常重寫它並點名該檔請你用 guard 確認；自有檔存在但沒有宣告 t（例如佔位檔）時則視同沒有自有檔，跳過 t、不改寫它。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個檔**具體**提到了 t（`tenants:` 的 key 或租戶 id token；例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`），或 init 列不出那個檔宣告的所有租戶（PyYAML 讀不了它）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
+
+**讀法與寫入前確認（ADR-036 §2，#2906）**：另一個檔「宣告了哪些租戶」取自 `da-guard parse-tree`（yaml.v3 的讀法，與 exporter 的讀法相同，不再以文字搜尋近似）；parse-tree 讀不了的檔（語法錯、重複鍵、不在允許清單的 tag、非 UTF-8 等）視為可能宣告每一個要求的租戶。寫入任何檔之前，產生的 `conf.d/_defaults.yaml` 與 `conf.d/<tenant>.yaml` 都以 parse-tree 在要寫入的路徑讀回，內容必須正是產生的內容，否則結束碼 `1`、一個檔都不寫。`conf.d/` 已存在時、或要寫 conf.d 檔時都需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`。
 
 ⚠️ `--deploy kustomize` 時，被跳過的租戶若載體不在 `conf.d` 根目錄（例如 `conf.d/prod/db-c.yaml`），它**不會**進入產生的 ConfigMap（`configMapGenerator.files` 是扁平的；`make configmap-assemble` 同樣只收頂層檔，見 [GitOps 部署 §3](integration/gitops-deployment.md#3-configmap-assembly)），init 會在 stderr 與摘要 WARN 點名，rc 仍為 0。
 
@@ -2164,7 +2162,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 |------|------|
 | `0` | 成功 |
 | `1` | 只有未捕捉的例外（stderr 有 traceback）。多數輸入錯誤是 2，但 `--from-onboard` 的 JSON 壞掉或形狀不對目前也會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；租戶 id 不是 DNS-1123 label（`--tenant`、互動輸入，或 `--from-onboard` 清單裡任一個；[ADR-035](adr/035-tenant-id-single-source.md)），什麼都不寫。；寫出 `_defaults.yaml`、`<tenant>.yaml`（1:N 時另有 `_instance_mapping.yaml`）之前，先以 `da-guard parse-tree` 在 `-o` 目錄裡要寫入的路徑讀回，內容不是產生的內容就一個檔都不寫（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）；找不到可用的 da-guard 也是 2。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；租戶 id 不是 DNS-1123 label（`--tenant`、互動輸入，或 `--from-onboard` 清單裡任一個；[ADR-035](adr/035-tenant-id-single-source.md)），什麼都不寫；寫出 `_defaults.yaml`、`<tenant>.yaml`（1:N 時另有 `_instance_mapping.yaml`）之前，先以 `da-guard parse-tree` 在 `-o` 目錄裡要寫入的路徑讀回，內容不是產生的內容就一個檔都不寫（`--generate-profile` 的 `_profiles.yaml` 同樣先確認；`--from-onboard` 先確認所有租戶的檔，一個不過就一個都不寫）（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）；找不到可用的 da-guard 也是 2。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
 
 ---
 

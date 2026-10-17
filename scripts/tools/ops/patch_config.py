@@ -257,6 +257,22 @@ class _ConfdView:
     PyYAML only produces the text of a rewrite (`_patch_carrier`)."""
 
     def __init__(self, data):
+        # Two keys that differ only in case are two files in the exporter's
+        # mount but one file in a temporary directory on a case-insensitive
+        # filesystem (macOS, Windows): one would overwrite the other and
+        # parse-tree would read a ConfigMap that does not exist. Refused.
+        folded = {}
+        for key in data:
+            if isinstance(key, str):
+                folded.setdefault(key.casefold(), []).append(key)
+        twins = sorted(sorted(ks) for ks in folded.values() if len(ks) > 1)
+        if twins:
+            raise ConfigMapShapeError(
+                "threshold-config has keys that differ only in case ("
+                + "; ".join(", ".join(ks) for ks in twins)
+                + "); this tool reads the keys as files, and on a "
+                "case-insensitive filesystem they would be one file — rename "
+                "one of them.")
         self._tmp = tempfile.TemporaryDirectory(prefix="patch-config-")
         self.root = self._tmp.name
         for key, text in data.items():

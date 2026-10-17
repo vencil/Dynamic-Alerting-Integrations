@@ -214,6 +214,19 @@ def confirm_moves(conf_d: Path, actions: list[dict],
     for a in actions:
         if a["status"] != "ok":
             continue
+        # A destination that leaves the tree (`..`, an absolute part, a link
+        # out) is this tool's refusal, before parse-tree is asked about it.
+        parts = a["target"].split("/")
+        outside = any(p in ("", ".", "..") for p in parts) or a["target"].startswith("/")
+        if not outside:
+            try:
+                (conf_d / a["target"]).resolve().relative_to(conf_d.resolve())
+            except ValueError:
+                outside = True
+        if outside:
+            raise MoveRefused(f"{a['source']} -> {a['target']}: the destination is not a "
+                              f"path inside {conf_d} (_metadata.domain / region / "
+                              f"environment form it)")
         data = (conf_d / a["source"]).read_bytes()
         try:
             _lib_write_check.confirm(conf_d, a["target"], data, reader.node(a["source"]))

@@ -482,3 +482,77 @@ def test_offboard_tenant_finds_but_does_not_delete_its_own_unreadable_file(tmp_p
     assert r.returncode == 1, r.stdout + r.stderr
     assert "✅ 設定檔案" in r.stdout and "duplicate_key" in r.stdout, r.stdout
     assert (root / "tenant-a.yaml").exists()
+
+
+# ── E2 review follow-ups ─────────────────────────────────────────────────
+
+def test_scaffold_generate_profile_is_confirmed_before_it_is_written(tmp_path, monkeypatch):
+    # `_profiles.yaml` is a conf.d file: a profile text that does not read
+    # back as generated is not written (here a key string PyYAML writes
+    # plain and yaml.v3 reads as a number).
+    import scaffold_tenant as st
+    real = st.generate_profile
+    monkeypatch.setattr(st, "generate_profile", lambda name, dbs, tier="prod": {
+        "profiles": {name: {**real(name, dbs, tier=tier)["profiles"][name],
+                            "probe_key": "1e3"}}})
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", ["scaffold_tenant.py", "--generate-profile", "p1",
+                                      "--db", "mariadb", "-o", str(out)])
+    with pytest.raises(SystemExit) as exc:
+        st.main()
+    assert exc.value.code == 2
+    assert _bytes(out) == {}
+
+
+def test_scaffold_from_onboard_writes_all_tenants_or_none(tmp_path):
+    hints = tmp_path / "hints.json"
+    hints.write_text(json.dumps({
+        "tenants": ["db-a", "db-b"],
+        "routing_hints": {"db-a": {"receiver_type": "webhook", "group_wait": "30s"},
+                          "db-b": {"receiver_type": "webhook", "group_wait": "1e3"}},
+    }), encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/scaffold_tenant.py", "--from-onboard", str(hints), "-o", str(out))
+    assert r.returncode == 2, r.stdout[-400:] + r.stderr[-800:]
+    assert "db-b.yaml" in r.stderr and "group_wait" in r.stderr, r.stderr
+    assert not out.exists() or _bytes(out) == {}, sorted(_bytes(out))
+
+
+def test_migrate_conf_d_refuses_a_destination_outside_the_tree(tmp_path):
+    root = _tree(tmp_path / "conf.d", {
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: ..\n"})
+    r = _mcd(root)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "refusing to move" in r.stderr and "not a path inside" in r.stderr, r.stderr
+    assert "da-guard parse-tree" not in r.stderr, r.stderr
+
+
+def test_threshold_govern_a_failing_da_guard_is_that_tenants_error(tmp_path, monkeypatch):
+    import _lib_parse_tree as pt
+    import threshold_govern as tg
+
+    def boom(*a, **k):
+        raise pt.ParseTreeError("da-guard parse-tree did not finish within 120s")
+    monkeypatch.setattr(tg, "verify_only_changed", boom)
+    monkeypatch.setattr(tg, "http_get_json", lambda url, timeout, headers: (
+        {"raw_yaml": 'tenants:\n  tenant-a:\n    k1: "10"\n'}, None))
+    plan = tg.TenantPlan("tenant-a", [tg.PlannedChange("k1", "10", 15.0, '"15"', 50.0,
+                                                       "HIGH", 15.0, "")])
+    args = type("A", (), {"tenant_api_url": "http://x", "timeout": 1, "config_dir": str(tmp_path),
+                          "identity_email": "", "identity_groups": "", "auth_token": "",
+                          "auth_token_file": ""})()
+    out = tg.open_governance_pr(plan, args)
+    assert out.status == "error" and "verify could not run" in out.message, out
+    monkeypatch.setattr(tg, "verify_only_changed",
+                        lambda *a, **k: (_ for _ in ()).throw(pt.BinaryMissing("no da-guard")))
+    with pytest.raises(pt.BinaryMissing):
+        tg.open_governance_pr(plan, args)
+
+
+def test_patch_config_refuses_keys_that_differ_only_in_case():
+    import patch_config as pc
+    cm = {"data": {"_defaults.yaml": _PC_DEFAULTS,
+                   "Tenant-A.yaml": "tenants:\n  other: {}\n",
+                   "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n"}}
+    with pytest.raises(pc.ConfigMapShapeError, match="differ only in case"):
+        pc.build_patch(cm, "multi-file", "tenant-a", "cpu", "6")

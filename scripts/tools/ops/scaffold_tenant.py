@@ -1040,8 +1040,10 @@ def _confirm_confd_files(out: Path, items: list) -> None:
         sys.exit(EXIT_CALLER_ERROR)
 
 
-def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> None:
-    """Write all output files."""
+def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> tuple[list, list]:
+    """`(conf.d files [(name, text, data)], every write [(path, text)])` of
+    one tenant's outputs; nothing is written here (the output directory is
+    created)."""
     out = Path(output_dir)
     ensure_dir_or_die(out, flag=_OUTPUT_FLAG)
 
@@ -1128,37 +1130,39 @@ def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
                              allow_unicode=True, sort_keys=False)
         )
 
-    # ADR-036 §2 (#2906): the conf.d files, before any of them is written —
-    # each text read back by `da-guard parse-tree` at the path it is written
-    # to (-o is a conf.d layout: `cp` them into, or point -o at, the conf.d)
-    # must hold exactly what was generated, at a path a reader reads.
-    _confirm_confd_files(out, [
+    # The conf.d files (confirmed before anything is written, ADR-036 §2)
+    # and every file in the order it is written.
+    confd = [
         ("_defaults.yaml", defaults_content, defaults_data),
         (f"{tenant_name}.yaml", tenant_content, tenant_data),
         *([("_instance_mapping.yaml", mapping_content, mapping_hint)]
           if mapping_content is not None else []),
-    ])
-
-    write_text_or_die(defaults_path, defaults_content, flag=_OUTPUT_FLAG)
-    print(f"  📄 {defaults_path}")
-    write_text_or_die(tenant_path, tenant_content, flag=_OUTPUT_FLAG)
-    print(f"  📄 {tenant_path}")
-
-    # Write relabel_configs if provided (N:1 topology) — a Prometheus
-    # snippet, not a conf.d file.
+    ]
+    writes = [(defaults_path, defaults_content), (tenant_path, tenant_content)]
+    # relabel_configs (N:1 topology) — a Prometheus snippet, not a conf.d file.
     if relabel_snippet:
-        relabel_path = str(out / f"relabel_configs-{tenant_name}.yaml")
-        write_text_or_die(relabel_path, relabel_snippet, flag=_OUTPUT_FLAG)
-        print(f"  📄 {relabel_path}")
-
+        writes.append((str(out / f"relabel_configs-{tenant_name}.yaml"), relabel_snippet))
     if mapping_content is not None:
-        write_text_or_die(mapping_path, mapping_content, flag=_OUTPUT_FLAG)
-        print(f"  📄 {mapping_path}")
+        writes.append((mapping_path, mapping_content))
+    writes.append((str(out / "scaffold-report.txt"), report))
+    return confd, writes
 
-    # Write report
-    report_path = str(out / "scaffold-report.txt")
-    write_text_or_die(report_path, report, flag=_OUTPUT_FLAG)
-    print(f"  📄 {report_path}")
+
+def _perform_writes(writes: list) -> None:
+    for path, content in writes:
+        write_text_or_die(path, content, flag=_OUTPUT_FLAG)
+        print(f"  📄 {path}")
+
+
+def write_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant_data: dict, report: str, relabel_snippet: str | None = None, mapping_hint: dict | None = None) -> None:
+    """Write all output files — after the conf.d ones are confirmed (ADR-036
+    §2, #2906: each text read back by `da-guard parse-tree` at the path it is
+    written to in -o, a conf.d layout, must hold exactly what was generated,
+    at a path a reader reads; otherwise rc 2 and nothing written)."""
+    confd, writes = _plan_outputs(output_dir, tenant_name, defaults_data, tenant_data,
+                                  report, relabel_snippet, mapping_hint)
+    _confirm_confd_files(Path(output_dir), confd)
+    _perform_writes(writes)
 
 
 def print_catalog() -> None:
@@ -1431,6 +1435,8 @@ def run_from_onboard(args: argparse.Namespace) -> None:
     output_dir = args.output_dir
     print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")
 
+    all_confd: list = []
+    all_writes: list = []
     for tenant_name in tenants:
         # Resolve DB types from hints, fallback to kubernetes only
         db_list = hints.get("db_types", {}).get(tenant_name, [])
@@ -1456,8 +1462,15 @@ def run_from_onboard(args: argparse.Namespace) -> None:
                 tenant_data["tenants"][tenant_name].setdefault("_routing", {}).update(routing)
 
         report = generate_report(tenant_name, selected_dbs, output_dir)
-        write_outputs(output_dir, tenant_name, defaults_data, tenant_data, report)
+        confd, writes = _plan_outputs(output_dir, tenant_name, defaults_data,
+                                      tenant_data, report)
+        all_confd += confd
+        all_writes += writes
 
+    # ADR-036 §2 (#2906): every tenant's conf.d files are confirmed before
+    # any file of the run is written — all or nothing.
+    _confirm_confd_files(Path(output_dir), all_confd)
+    _perform_writes(all_writes)
     print(f"\n  Scaffolded {len(tenants)} tenants to {output_dir}/")
 
 
@@ -1530,6 +1543,9 @@ def main() -> None:
         )
         # 飽和類 _critical 鍵上方插入教育註解（純顯示）
         profiles_content = annotate_saturation_criticals(profiles_content)
+        # ADR-036 §2 (#2906): `_profiles.yaml` is a conf.d file too.
+        _confirm_confd_files(Path(output_dir),
+                             [("_profiles.yaml", profiles_content, profile_data)])
         write_text_or_die(profiles_path, profiles_content, flag=_OUTPUT_FLAG)
         print(f"✅ Profile skeleton generated: {profiles_path}")
         print(f"   Profile: {args.generate_profile} (tier={args.tier})")
