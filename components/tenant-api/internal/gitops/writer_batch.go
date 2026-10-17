@@ -245,7 +245,9 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 			return nil, fmt.Errorf("list conf.d in the batch worktree: %w", err)
 		}
 		if len(tracked) > 0 { // an empty conf.d has nothing to check out
-			if err := w.gitIn(root, "checkout", "--", filepath.ToSlash(rel)); err != nil {
+			// literalPathspec: checkout runs post-checkout, so it gets no
+			// GIT_LITERAL_PATHSPECS (literalPathspecs).
+			if err := w.gitIn(root, "checkout", "--", literalPathspec(filepath.ToSlash(rel))); err != nil {
 				w.closeStaging(st)
 				return nil, fmt.Errorf("check out conf.d in the batch worktree: %w", err)
 			}

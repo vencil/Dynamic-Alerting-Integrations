@@ -93,7 +93,7 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 	ctCmd, ctCtx, ctCancel := w.gitCmd("-C", w.gitDir, "commit-tree", strings.TrimSpace(string(tree)),
 		"-p", base, "-m", tenantCommitMessage(tenantID, trailer...))
 	defer ctCancel()
-	ctCmd.Env = append(ctCmd.Env, // keeps gitEnv's GIT_LITERAL_PATHSPECS
+	ctCmd.Env = append(ctCmd.Env, // keeps gitEnv: no inherited pathspec setting
 		"GIT_AUTHOR_NAME="+authorName, "GIT_AUTHOR_EMAIL="+authorEmail,
 		"GIT_COMMITTER_NAME="+committerName, "GIT_COMMITTER_EMAIL="+committerEmail)
 	out, err := ctCmd.Output()

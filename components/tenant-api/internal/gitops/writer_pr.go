@@ -453,7 +453,7 @@ func (w *Writer) refuseUntrackedNonRegular(filePath, tenantID string) error {
 	if err != nil {
 		return err
 	}
-	// Literal (gitEnv, #3114): conf.d's path and the file's name are names,
+	// Literal (ls-files gets GIT_LITERAL_PATHSPECS, literalPathspecs; #3114): conf.d's path and the file's name are names,
 	// not patterns — a `[`, `*` or `?` in either would glob onto another
 	// tracked file and pass this entry as tracked. rel is relative to the top
 	// level, so the command runs there (pathspec magic such as `:(top)` is off

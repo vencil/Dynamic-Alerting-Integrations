@@ -1,7 +1,8 @@
 package gitops
 
 // #3114: every path tenant-api hands git is a name, never a pattern
-// (gitEnv sets GIT_LITERAL_PATHSPECS=1). conf.d here is `conf[1]`; a
+// (GIT_LITERAL_PATHSPECS=1 on commands that run no hook, `:(literal)` on a
+// file checkout — see literalPathspecs). conf.d here is `conf[1]`; a
 // tracked `conf1` beside it is what the glob `conf[1]` reaches. Each case
 // checks the fixture first (raw git, which globs, does reach the decoy), then
 // that the writer's git command touched or read only the target. Seams: the
@@ -84,20 +85,12 @@ func TestGitEnv_LiteralPathspecs(t *testing.T) {
 	repo, _ := literalRepo(t) // before the Setenvs: its fixture check is raw git
 	t.Setenv("GIT_GLOB_PATHSPECS", "1")
 	t.Setenv("GIT_ICASE_PATHSPECS", "1")
+	t.Setenv("GIT_NOGLOB_PATHSPECS", "1")
 	t.Setenv("GIT_LITERAL_PATHSPECS", "0")
 	cmd, _, cancel := NewWriter(repo, repo).gitCmd("-C", repo, "ls-files", "--", litTarget)
 	defer cancel()
-	last := ""
-	for _, kv := range cmd.Env {
-		if strings.HasPrefix(kv, "GIT_GLOB_PATHSPECS=") || strings.HasPrefix(kv, "GIT_ICASE_PATHSPECS=") {
-			t.Errorf("%q reaches git: git refuses it beside GIT_LITERAL_PATHSPECS", kv)
-		}
-		if strings.HasPrefix(kv, "GIT_LITERAL_PATHSPECS=") {
-			last = kv
-		}
-	}
-	if last != "GIT_LITERAL_PATHSPECS=1" {
-		t.Fatalf("the last GIT_LITERAL_PATHSPECS in git's env = %q, want GIT_LITERAL_PATHSPECS=1", last)
+	if got := pathspecVars(cmd.Env); got != "GIT_LITERAL_PATHSPECS=1" {
+		t.Fatalf("pathspec settings in git's env = %q, want only GIT_LITERAL_PATHSPECS=1", got)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -108,16 +101,69 @@ func TestGitEnv_LiteralPathspecs(t *testing.T) {
 	}
 }
 
+// pathspecVars is every pathspec setting in env, in order, joined by spaces.
+func pathspecVars(env []string) string {
+	var got []string
+	for _, kv := range env {
+		if isPathspecEnv(kv) {
+			got = append(got, kv)
+		}
+	}
+	return strings.Join(got, " ")
+}
+
+// literalPathspecs: the per-command allowlist. A command that runs hooks
+// gets no pathspec setting, whatever it inherited (its hooks would read
+// theirs literally); see TestGitHooks_SeeNoPathspecSetting for the hooks.
+func TestLiteralPathspecs_OnlyCommandsThatRunNoHook(t *testing.T) {
+	t.Setenv("GIT_LITERAL_PATHSPECS", "1")
+	t.Setenv("GIT_NOGLOB_PATHSPECS", "1")
+	w := NewWriter(t.TempDir(), t.TempDir())
+	for _, c := range []struct {
+		args    []string
+		literal bool
+	}{
+		{[]string{"-C", "d", "add", "--", "p"}, true},
+		{[]string{"--no-optional-locks", "-C", "d", "ls-files", "-z", "--", "p"}, true},
+		{[]string{"-C", "d", "log", "-p", "--format=", "--", "p"}, true},
+		{[]string{"--no-optional-locks", "-C", "d", "ls-tree", "HEAD", "--", "p"}, true},
+		{[]string{"-C", "d", "diff", "--cached", "--quiet"}, true},
+		{[]string{"-C", "d", "reset", "-q", "--", "p"}, true},
+		{[]string{"-C", "d", "reset", "-q"}, false},
+		{[]string{"-C", "d", "reset", "--hard", "HEAD"}, false},
+		{[]string{"-C", "d", "checkout", "-q", "HEAD", "--", "p"}, false},
+		{[]string{"-C", "d", "-c", "user.name=add", "commit", "-m", "m"}, false},
+		{[]string{"-C", "d", "push", "origin", "b"}, false},
+		{[]string{"-C", "d", "fetch", "--prune", "origin", "main"}, false},
+		{[]string{"-C", "d", "update-ref", "-m", "m", "HEAD", "a", "b"}, false},
+		{[]string{"-C", "d", "worktree", "add", "--no-checkout", "--detach", "r", "HEAD"}, false},
+		{[]string{"-C", "d", "commit-tree", "t", "-p", "b", "-m", "m"}, false},
+		{[]string{"-C", "d", "branch", "-D", "b"}, false},
+	} {
+		cmd, _, cancel := w.gitCmd(c.args...)
+		cancel()
+		want := ""
+		if c.literal {
+			want = "GIT_LITERAL_PATHSPECS=1"
+		}
+		if got := pathspecVars(cmd.Env); got != want {
+			t.Errorf("git %v: pathspec settings = %q, want %q", c.args, got, want)
+		}
+	}
+}
+
 // commit_cas.go gitCommitOnto: commit-tree gets the commit's identity in
 // its own environment, and that environment must still be gitEnv's — built
-// from os.Environ() instead, it would drop GIT_LITERAL_PATHSPECS. commit-tree
-// takes no pathspec, so the setting is read off the environment git
+// from os.Environ() instead, it would carry the pathspec settings tenant-api
+// inherited. commit-tree takes no pathspec and is not on literalPathspecs'
+// list, so it gets none; the setting is read off the environment git
 // actually ran with: a stub git records it, then runs the real one.
 func TestGitCommitOnto_CommitTreeKeepsGitEnv(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix shell stub; Go tests for this package run in the dev container / Linux CI")
 	}
-	repo, w := literalRepo(t) // GIT_LITERAL_PATHSPECS unset here, so only gitEnv can supply it
+	repo, w := literalRepo(t)
+	t.Setenv("GIT_LITERAL_PATHSPECS", "1") // inherited: gitEnv must drop it
 	record := filepath.Join(t.TempDir(), "commit-tree.env")
 	stub := filepath.Join(t.TempDir(), "git-records-commit-tree.sh")
 	script := "#!/bin/sh\n" +
@@ -147,7 +193,7 @@ func TestGitCommitOnto_CommitTreeKeepsGitEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the stub saw no commit-tree: %v", err)
 	}
-	want := "GIT_LITERAL_PATHSPECS=1\n" +
+	want := "GIT_LITERAL_PATHSPECS=<unset>\n" +
 		"GIT_AUTHOR_NAME=alice\nGIT_AUTHOR_EMAIL=alice@example.com\n" +
 		"GIT_COMMITTER_NAME=tenant-api\nGIT_COMMITTER_EMAIL=bot@example.com\n"
 	if string(got) != want {
@@ -210,7 +256,7 @@ func TestLiteralPathspec_RestoreFromHEADTouchesOnlyTarget(t *testing.T) {
 // write_validator.go restoreFromHEAD: `ls-tree HEAD -- <file>` — a target
 // HEAD does not have is removed, even when the glob names a file HEAD has.
 // ls-tree does not glob even without GIT_LITERAL_PATHSPECS (git 2.43
-// measured), so this one stays green with gitEnv removed; it pins the
+// measured), so this one stays green without the setting; it pins the
 // behavior, not the setting.
 func TestLiteralPathspec_RestoreFromHEADRemovesTargetHEADLacks(t *testing.T) {
 	repo, w := literalRepo(t)
