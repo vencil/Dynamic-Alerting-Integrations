@@ -48,6 +48,16 @@ func createPRAndRegister(d *Deps,
 	if err != nil {
 		return nil, err
 	}
+	// #3123: a batch PR/MR is one tracker entry carrying every tenant it
+	// covers, so the read side can require ALL of them; registering it once
+	// per tenant listed it to anyone who could read any one tenant.
+	if platform.IsBatchBranch(branchName) {
+		entry := *pr
+		entry.TenantID = ""
+		entry.Tenants = append([]string(nil), tenantIDs...)
+		d.PRTracker.RegisterPR(entry)
+		return pr, nil
+	}
 	for _, tid := range tenantIDs {
 		// Defensive copy: tracker stores by value, but make the
 		// copy explicit so future readers don't wonder whether

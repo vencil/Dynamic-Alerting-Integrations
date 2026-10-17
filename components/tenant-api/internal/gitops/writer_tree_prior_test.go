@@ -434,7 +434,9 @@ func TestTreePriorBatch_HardlinkOfWrittenFile(t *testing.T) {
 }
 
 // An op that keeps a grandfathered co-tenant in its file keeps that
-// co-tenant declared there for the ops after it.
+// co-tenant declared there for the ops after it. (#3064: the op is refused
+// itself — its body declares two tenants — and kc-b is still declared in
+// kc-a.yaml for the op after it.)
 func TestTreePriorBatch_KeptCoTenantStillRefused(t *testing.T) {
 	both := "tenants:\n  kc-a:\n    _silent_mode: \"warning\"\n  kc-b:\n    _silent_mode: \"warning\"\n"
 	dir := seedTreeRepo(t, map[string]string{"kc-a.yaml": both})
@@ -468,8 +470,10 @@ func TestTreePriorBatch_NewTenantTwice(t *testing.T) {
 	}
 }
 
-// A duplicate that an earlier op resolves is judged afterwards as a single
-// declaration elsewhere, not as the duplicate the base tree had.
+// A duplicate an earlier op would resolve — dq-q.yaml dropping its dq-t
+// section — can no longer be resolved through the API (#3064): dq-q.yaml is
+// shared, so git-managed, and the op that would split it is refused. The
+// batch is refused whole; the duplicate is fixed in git.
 func TestTreePriorBatch_DuplicateResolvedMidBatch(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{
 		"dq-q.yaml":      "tenants:\n  dq-q:\n    _silent_mode: \"warning\"\n  dq-t:\n    _silent_mode: \"warning\"\n",
@@ -480,13 +484,10 @@ func TestTreePriorBatch_DuplicateResolvedMidBatch(t *testing.T) {
 		batchOp("dq-q", tenantBody("dq-q")),
 		batchOp("dq-t", tenantBody("dq-t")),
 	}, "op@example.com")
-	if !errors.Is(err, ErrTenantDeclaredElsewhere) {
-		t.Fatalf("err = %v, want ErrTenantDeclaredElsewhere (dq-t still lives in team/)", err)
+	if !errors.Is(err, ErrTenantGitManaged) {
+		t.Fatalf("err = %v, want the git-managed refusal of the op on the shared dq-q.yaml", err)
 	}
-	var dup *cfg.DuplicateTenantError
-	if errors.As(err, &dup) {
-		t.Errorf("err carries the base tree's duplicate %v; after op 1 dq-t has one declaring file", dup)
-	}
+	assertCleanOnBase(t, dir, "main", "tenant-api/")
 }
 
 // An op whose file is a symlink to a file the walker also reads under its

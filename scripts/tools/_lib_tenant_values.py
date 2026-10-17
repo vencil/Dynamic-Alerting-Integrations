@@ -358,6 +358,32 @@ class TenantValues(NamedTuple):
     # is what survives the truncation). None from a da-guard older than the
     # field.
     custom_alert_rows: int | None = None
+    # Every element of the tenant's `_custom_alerts`, in declaration order, as
+    # the exporter's resolver judges it (#3042; what the custom-alert compiler
+    # builds its rules from); None from a da-guard older than the field.
+    custom_alerts: "tuple[CustomAlertEntry, ...] | None" = None
+    # Why the tenant's `_custom_alerts` does not decode (no entry, nothing
+    # served); None when it does.
+    custom_alerts_error: str | None = None
+
+
+class CustomAlertEntry(NamedTuple):
+    """One element of served-values' per-tenant `custom_alerts` (#3042).
+    `spec` is the entry as the exporter's resolver decoded it (string values;
+    selectors / selectors_re string maps, group_by strings, min_events an int
+    when written as one). `status` is one of `CUSTOM_ALERT_STATUSES`;
+    `recipe_id` and `severities` are set for a served or disabled entry,
+    `reason` for a rejected or duplicate one."""
+    index: int
+    spec: dict[str, Any]
+    status: str
+    reason: str | None = None
+    recipe_id: str | None = None
+    severities: tuple[str, ...] = ()
+
+
+#: The closed set of served-values' `custom_alerts[*].status`.
+CUSTOM_ALERT_STATUSES = frozenset({"served", "disabled", "rejected", "duplicate"})
 
 
 class ServedKey(NamedTuple):
@@ -399,6 +425,10 @@ class ServedTree(NamedTuple):
     skipped: list[SkippedFile]
     stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
     aliases: dict[str, str]  # the exporter's table: retired base key -> canonical base key
+    # With `partial=True` only: the files the load skips (they do not decode)
+    # and cannot read; their tenants are absent from `tenants`.
+    parse_failed: "tuple[str, ...] | list[str]" = ()
+    unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
 
 
 class UnreadableFile(NamedTuple):
@@ -767,9 +797,13 @@ def load_served_tree(
     timeout: float = DEFAULT_TIMEOUT,
     schedules: bool = False,
     disable_effects: bool = False,
+    partial: bool = False,
 ) -> ServedTree:
     """`load_served_values`'s tenants plus the files the load serves no
-    tenant from. Same arguments and exceptions."""
+    tenant from. Same arguments and exceptions — except that with `partial`
+    a file the load skips or cannot read is no ParseFailedError: the tenants
+    of the rest of the tree are returned, and those files are in the tree's
+    `parse_failed` / `unreadable`."""
     extra = ["--at", at] if at is not None else []
     if schedules:
         extra.append("--schedules")
@@ -778,12 +812,14 @@ def load_served_tree(
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
-    (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
+    (tenants, skipped, aliases, dropped), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
-                          doc.get("aliases")),
-        reads_unreadable=True)
+                          doc.get("aliases"),
+                          ([str(f) for f in doc["parse_failed"]],
+                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]])),
+        reads_unreadable=True, dropped_ok=partial)
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
     if aliases is None:
@@ -850,9 +886,14 @@ def load_served_tree(
             alert_rows = tv.get("custom_alert_rows")
             if alert_rows is not None and (type(alert_rows) is not int or alert_rows < 0):
                 raise TypeError(f"custom_alert_rows is {alert_rows!r}")
+            custom_alerts = (None if "custom_alerts" not in tv
+                             else tuple(_custom_alert_entry(e) for e in tv["custom_alerts"]))
+            custom_alerts_error = tv.get("custom_alerts_error")
+            if custom_alerts_error is not None and not isinstance(custom_alerts_error, str):
+                raise TypeError(f"custom_alerts_error is a {type(custom_alerts_error).__name__}")
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom_alert_rows that are not of their shape ({e!r})",
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
@@ -868,8 +909,24 @@ def load_served_tree(
                     returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
-                                     state_filters, time_boxes, routing, keys, alert_rows)
-    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
+                                     state_filters, time_boxes, routing, keys, alert_rows,
+                                     custom_alerts, custom_alerts_error)
+    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped)
+
+
+def _custom_alert_entry(e: Any) -> CustomAlertEntry:
+    """One `custom_alerts` entry, checked: a status from the closed set, and
+    a recipe_id with severities exactly when it is served or disabled."""
+    status = e["status"]
+    if status not in CUSTOM_ALERT_STATUSES:
+        raise ValueError(f"custom_alerts status {status!r}")
+    index, spec = e["index"], e["spec"]
+    if type(index) is not int or not isinstance(spec, dict):
+        raise TypeError(f"custom_alerts entry index {index!r} / spec {type(spec).__name__}")
+    rid, sevs = e.get("recipe_id"), tuple(e.get("severities") or ())
+    if (status in ("served", "disabled")) != bool(rid and sevs):
+        raise ValueError(f"custom_alerts entry {index} is {status} with recipe_id {rid!r}, severities {sevs!r}")
+    return CustomAlertEntry(index, dict(spec), status, e.get("reason"), rid, tuple(str(s) for s in sevs))
 
 
 def _served_key(e: Any) -> ServedKey:

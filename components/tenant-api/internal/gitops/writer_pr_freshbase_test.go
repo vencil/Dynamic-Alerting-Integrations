@@ -9,8 +9,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// declaredTenants is a DELIBERATELY INDEPENDENT oracle. It must not call
-// addedTenantKeys: that is the production helper under test here, and an oracle
+// declaredTenants is a DELIBERATELY INDEPENDENT oracle. It must not call the
+// production gate (once addedTenantKeys, since #3064 the body-shape and
+// API-managed checks): that is what is under test here, and an oracle
 // borrowed from the subject goes green the moment the subject breaks — the
 // mutation would be unkillable. Ten lines of yaml is cheap enough to own.
 func declaredTenants(t *testing.T, body string) []string {
@@ -48,7 +49,8 @@ func notIn(a, b []string) []string {
 //
 // ⛔ THE GATE AND THE WRITE READ DIFFERENT TREES. `WritePR` validates at Step 1
 // against the tree as it is BEFORE `checkoutBaseClean` + `resolveFreshBaseRef`,
-// and `addedTenantKeys` takes its baseline from the tenant file on THAT tree.
+// and the gate (the #1681 added-section baseline then, since #3064 the
+// API-managed verdict) read the tenant file on THAT tree.
 // Step 3 then swaps the tree for the fresh origin/<base> and Step 4 writes the
 // body there. Step 3b already re-resolves the PATH for exactly this reason
 // (#1673) — but re-resolving the path and never re-running validate leaves the
@@ -91,14 +93,12 @@ func TestWritePR_ReValidatesAgainstTheFreshBase(t *testing.T) {
 		{name: "fresh base dropped the section the stale base grandfathered",
 			freshBase: ownOnlyFalse, splitOut: true, wantErr: true},
 
-		// ⛔ MANDATORY CONTROL. Same body, same code path, fresh base UNCHANGED —
-		// `other` is still grandfathered where the write lands, so this write is
-		// legitimate and must still be accepted. Without this arm, "reject
-		// everything" passes the arm above; #1681 recorded over-rejection as a
-		// real failure mode (a tenant locked out of its own section until the
-		// pod restarts), so it is pinned here rather than assumed.
-		{name: "fresh base still declares it — legitimate edit, must be accepted",
-			freshBase: grandfathered, splitOut: false, wantErr: false},
+		// #3064: the control arm that stood here — the same body on a fresh
+		// base that still declares `other`, accepted as a grandfathered edit
+		// — is gone: a body declaring two tenants is refused outright (it is
+		// not API-shaped), and a base declaring both is git-managed.
+		// TestWritePR_StaleTreeNoLongerOverRejects pins that a legitimate
+		// write is not over-rejected on a stale tree.
 
 		// ⚠️ THE MIRROR DIRECTION IS NOT COVERED HERE, AND IS NOT FIXED.
 		// Stale base LACKS a section the fresh base grandfathered → Step 1's

@@ -65,7 +65,6 @@ __all__ = [
     "configmap_key_problem",
     "declared_tenant_ids",
     "duplicate_declarations",
-    "unselected_carriers",
     "overlay_platform_tenants",
     "defaults_files_in",
     "has_yaml_extension",
@@ -301,25 +300,6 @@ def select_defaults_carrier(carriers: "Iterable[Path]") -> "Path | None":
         return yaml_spelling[-1]
     yml_spelling = [p for p in ordered if Path(p).name.lower() == "_defaults.yml"]
     return yml_spelling[0] if yml_spelling else None
-
-
-def unselected_carriers(entries: "Iterable[Path]") -> "set[str]":
-    """Names of the READABLE defaults carriers among *entries* (one
-    directory's listing) that the chain does NOT select.
-
-    Every plane ignores such a file WHOLE (#1674) — the exporter never parses
-    it, so its `tenants:` block reaches nothing either. A reader that feeds
-    every root file into a per-tenant merge must skip these, or the unread
-    `_defaults.yml` overrides the selected `_defaults.yaml` (#1982 blind
-    review: a flat reader got the wrong file's value). Composed from
-    `readable_carriers` + `select_defaults_carrier` so the choice is the one
-    every plane makes; an UNREADABLE carrier is not in the result — the
-    caller's own read books it as skipped, as before.
-    """
-    readable, _unreadable = readable_carriers(
-        p for p in entries if is_defaults_name(Path(p).name))
-    chosen = select_defaults_carrier(readable)
-    return {p.name for p in readable if chosen is None or p.name != chosen.name}
 
 
 def readable_carriers(carriers: "Iterable[Path]"

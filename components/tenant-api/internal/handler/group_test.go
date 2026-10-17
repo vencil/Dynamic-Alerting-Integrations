@@ -280,15 +280,12 @@ func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
 		t.Errorf("cross-org-only GetGroup status = %d, want 404 (group with no accessible member must be hidden)", w.Code)
 	}
 
-	// Edge: a group with NO members is visible (200, empty members). It used to
-	// be hidden here — hasAccessibleMember is false for an empty list — which
-	// made it a 404 to every caller, platform admins included. #1530/#1531 put
-	// the same visibility predicate on DELETE and the batch endpoint, where
-	// "hidden from everyone" would mean an empty group nobody could delete; an
-	// empty group has no member to leak, so it is visible on every endpoint
-	// (groupVisible). ListGroups agrees: TestListGroups_EmptyGroupVisible.
-	if w := get(t, "empty-grp", orgReadMemberOrg); w.Code != http.StatusOK {
-		t.Errorf("empty-member GetGroup status = %d, want 200 (a group with no members leaks nothing and must stay reachable)", w.Code)
+	// Edge: a group with NO members (#3123, owner decision D2) is visible only
+	// to a platform admin restricted on no axis — it has no member to authorize
+	// an org-scoped caller against, so that caller gets the missing-group 404.
+	// The admin side: TestListGroups_EmptyGroupVisibleToUnrestrictedAdminOnly.
+	if w := get(t, "empty-grp", orgReadMemberOrg); w.Code != http.StatusNotFound {
+		t.Errorf("empty-member GetGroup status = %d, want 404 for an org-scoped caller", w.Code)
 	}
 }
 

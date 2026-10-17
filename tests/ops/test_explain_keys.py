@@ -50,7 +50,22 @@ def test_the_table_lists_every_key_with_its_verdict(conf_d):
     assert row["redis_memory"][2:] == ["exporter", "read", "—", "partial"]
     assert row["_namespaces"][2:4] == ["annotation", "read"]
     assert "db-b" not in p.stdout  # --tenant 只列那個租戶
-    assert "warning: disable_partial: redis_memory in db-a.yaml; still served: redis_memory_critical" in p.stdout
+    # 那條 critical 是 db-a 自己寫的：partial 照列，但不成為 finding（#3046）。
+    assert "disable_partial" not in p.stdout
+
+
+def test_disable_partial_names_the_file_of_an_inherited_sibling(tmp_path):
+    d = tmp_path / "conf.d"
+    (d / "team").mkdir(parents=True)
+    (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (d / "team" / "_defaults.yaml").write_text("defaults:\n  redis_memory_critical: 95\n", encoding="utf-8")
+    (d / "team" / "db-a.yaml").write_text("tenants:\n  db-a:\n    redis_memory: disable\n", encoding="utf-8")
+    p = _run("--config-dir", d)
+    assert ("warning: disable_partial: redis_memory in team/db-a.yaml; still served: "
+            "redis_memory_critical (from team/_defaults.yaml)") in p.stdout, p.stdout
+    f = [x for x in _json(_run("--config-dir", d, "--json"))["findings"] if x["kind"] == "disable_partial"]
+    assert [(x["served_family"], x["served_from"]) for x in f] == [
+        (["redis_memory_critical"], ["team/_defaults.yaml"])]
 
 
 def test_json_carries_value_and_served(conf_d):

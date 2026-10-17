@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/confd"
@@ -69,7 +68,9 @@ type BatchResult struct {
 	// Code is a machine-readable error code for a FAILED op, set only for the
 	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,
 	// TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
-	// config, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not
+	// config, #2373), TENANT_GIT_MANAGED (the op's tenant is git-managed, #3064:
+	// nothing written, change it in git), INTERNAL_ERROR (the conf.d walk behind
+	// that check could not
 	// run, or another server-side failure), the route generator's codes
 	// (GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE,
 	// POLICY_UNAVAILABLE; #2903), and — PR mode, judged on the latest base branch —
@@ -195,8 +196,8 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		taskID := fmt.Sprintf("batch-%s-%04d",
-			time.Now().UTC().Format("20060102"), len(req.Operations))
+		// #3123: an opaque random id (it used to be batch-<date>-<op count>).
+		taskID := async.NewTaskID()
 
 		// v2.6.0: PR-based write-back mode for batch operations (ADR-011)
 		// All operations are consolidated into a single PR/MR.
@@ -208,8 +209,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
-			task := d.Tasks.Submit(taskID, batchTaskFunc(d, req.Operations, email, p))
-			write202Pending(rw, task)
+			submitTask(rw, r, d, taskID, p, batchTaskFunc(d, req.Operations, email, p))
 			return
 		}
 
@@ -831,7 +831,12 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 	var notLoadable *tenantFileNotLoadableError
 	var treeUnreadable *gitops.TreeUnreadableError
 	var targetUnreadable *gitops.TargetUnreadableError
+	var gitManaged *gitops.GitManagedError
 	switch {
+	case errors.As(err, &gitManaged):
+		// #3064: the op's tenant is git-managed; the text names it and a
+		// fixed reason code, nothing else of the file. Nothing written.
+		msg, code = gitManaged.Error(), CodeTenantGitManaged
 	case errors.As(err, &treeUnreadable):
 		// #2939: the tree after the batch holds entries the route generator
 		// cannot read, and no op of the batch replaces them — unresolvable links

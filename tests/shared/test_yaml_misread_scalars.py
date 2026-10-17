@@ -121,6 +121,18 @@ def test_enum_and_sequence_items_are_string_fields(hits):
     assert 'quote it, without a tag: - "true"' in hits(text)[0].message()
 
 
+def test_a_string_enum_with_no_type_is_a_string_field(hits):
+    """The `enum` branch of `schema_scalar_types` (`_json_type_of` of each
+    member): a custom alert's `group_by` item is `{"enum": ["persistentvolumeclaim"]}`
+    with no `type`, so its field type is the members' — string only. Before
+    #2906 `_severity_dedup: no` measured this branch; `severityDedup` now
+    takes a boolean, so it no longer can."""
+    text = ("tenants:\n  t1:\n    _custom_alerts:\n      - name: disk\n"
+            "        recipe: threshold\n        group_by: [true, persistentvolumeclaim]\n")
+    got = [(h.path, h.resolved) for h in hits(text)]
+    assert got == [("/tenants/t1/_custom_alerts/0/group_by/0", "bool")]
+
+
 def test_an_explicit_tag_is_the_tag_yaml_v3_reads(hits, nodes_of):
     """`channel: !!int 5` is the int 5 to yaml.v3: reported as an int, the
     remedy drops the tag. A tag yaml.v3 cannot apply (`!!bool yes`) makes the

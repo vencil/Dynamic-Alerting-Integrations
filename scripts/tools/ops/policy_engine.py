@@ -1342,6 +1342,14 @@ def _main(argv: Optional[list[str]] = None) -> int:
     # would contradict the report.
     defaults_path = str(resolve_defaults_file(
         Path(args.config_dir), skipped_note=POLICIES_SKIPPED_NOTE))
+    # The carrier read is the one parse-tree selects (#2906 review), not
+    # `resolve_defaults_file`'s own selection (kept for its note).
+    try:
+        chosen = _lib_parse_cache.reader_for(args.config_dir).carrier(args.config_dir)
+    except ParseTreeError as exc:
+        return _load_error_exit(exc, args, 0)
+    if chosen is not None:
+        defaults_path = str(chosen)
     if Path(defaults_path).is_file():
         try:
             rules.extend(load_policies(defaults_path, args.config_dir))

@@ -38,7 +38,6 @@ from _lib_confd import (  # noqa: E402
     is_reserved_name,
     list_config_tree,
     overlay_platform_tenants,
-    unselected_carriers,
     unusable_reason,
 )
 sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'ops'))
@@ -79,7 +78,6 @@ def _collect_data(config_dir: str) -> dict:
     # extension folded). The `_`-prefixed control files matched by exact name
     # below are what this tool exists to READ.
     listing = list_config_tree(root)
-    files = [p.relative_to(root).as_posix() for p in listing.files]
 
     unreadable: list[str] = []
     unreadable_files: list[str] = []
@@ -92,15 +90,14 @@ def _collect_data(config_dir: str) -> dict:
         unreadable_files.append(rel)
     entries: list[tuple[str, object, dict]] = []
     # The unselected carrier spelling is read by no plane (#1674); its
-    # `tenants:` block used to reach tenant_ids / profile_refs here.
-    by_dir: dict[Path, list[Path]] = {}
-    for p in listing.files:
-        by_dir.setdefault(p.parent, []).append(p)
-    skip = {(d / n).relative_to(root).as_posix()
-            for d, ps in by_dir.items() for n in unselected_carriers(ps)}
+    # `tenants:` block used to reach tenant_ids / profile_refs here. Which
+    # file that is, is parse-tree's verdict (`not_read`), never a Python
+    # re-selection: one that read a file parse-tree lists there died rc 2
+    # on `NotSelected` (#2906 review). Named in `not_read`, not dropped.
+    read_paths, skipped = reader.split_not_read(listing.files)
+    not_read = [f"{p.relative_to(root).as_posix()} ({why})" for p, why in skipped]
+    files = [p.relative_to(root).as_posix() for p in read_paths]
     for fname in files:
-        if fname in skip:
-            continue
         path = os.path.join(config_dir, fname)
         base = os.path.basename(fname)
         level = Path(fname).parent.as_posix()
@@ -180,6 +177,7 @@ def _collect_data(config_dir: str) -> dict:
         "profile_refs": profile_refs,
         "unreadable": unreadable,
         "unreadable_files": unreadable_files,
+        "not_read": not_read,
         # #2326: directory scope of profiles / policies / tenants.
         "profiles_by_dir": profiles_by_dir,
         "profile_origin": profile_origin,
@@ -363,6 +361,9 @@ def main() -> None:
                   f"parse-tree` (ADR-036): {safe_label(' '.join(str(exc).split()))}",
                   file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+    if data.get("not_read"):
+        print(f"skipped {len(data['not_read'])} file(s) no reader reads (da-guard "
+              f"parse-tree's not_read): {safe_label(', '.join(data['not_read']))}")
     messages = [f"ERROR: cannot read {u}" for u in data.get("unreadable", [])]
     messages += validate(data, strict=args.strict)
 

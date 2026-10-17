@@ -11,10 +11,17 @@ Pinned contracts
    severities its covered tenants declared (no forced critical mirror).
 4. **Injection defence** — a non-bare metric name / reserved selector label is
    rejected at compile time (HTTP-400-able later via the shared module).
-5. **Uniqueness** — duplicate `name` per tenant, and two same-severity alerts on
-   one shape per tenant, are rejected (keeps group_left(name) one-to-one).
-6. **Scope inheritance** — a domain/platform `_defaults.yaml` recipe lands on
-   every subtree tenant (cap count), as ONE shared rule.
+5. **The exporter judges, the compiler compiles (#3042)** — which entries a
+   tenant has, whether one is valid, and whether it repeats an earlier entry's
+   shape+severity are the exporter's answers (da-guard served-values'
+   `custom_alerts`). Served and disabled entries compile; rejected / duplicate
+   ones do not. The compiler's recipe_id must equal the exporter's, or the
+   compile is refused (`CustomAlertParityError`). Name uniqueness (tenant-api)
+   and the per-tenant cap (da-guard / validate-config / tenant-api) are not
+   judged here at all.
+6. **Which list a tenant has** — its own, else its root platform file's
+   `tenants:` entry, else its profile's — replaced, never unioned. A
+   `_defaults.yaml` top-level `_custom_alerts` is not served, so not compiled.
 7. **--check** — a stale committed pack is flagged; a fresh one passes.
 """
 from __future__ import annotations
@@ -23,6 +30,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 from pathlib import Path
 
@@ -38,9 +46,15 @@ sys.path.insert(0, _TOOLS)
 
 import compile_custom_alerts as cc  # noqa: E402
 from custom_alerts import shape as shp  # noqa: E402
+from custom_alerts import entries as ent  # noqa: E402
 from custom_alerts import loader as ld  # noqa: E402
+from custom_alerts.entries import CustomAlertParityError  # noqa: E402
 from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
+import _lib_tenant_values as tv  # noqa: E402
+
+# #3042: the compiler reads a tree as the exporter serves it (da-guard served-values).
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _REPO = Path(__file__).resolve().parents[2]
 _VECTORS = _REPO / "tests" / "dx" / "fixtures" / "recipe_id_vectors.json"
@@ -53,6 +67,18 @@ def _write_tree(root: Path, files: dict) -> None:
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
+
+
+def _shapes(tree: Path):
+    """(shapes, not compiled) for a tree, read as the exporter serves it —
+    the compiler's own path minus the emit (#3042)."""
+    return ent.shapes_from_entries(ent.entries_from_tree(tree).entries)
+
+
+# The words main() prints for what the exporter does not serve. Named here so a
+# test can assert a polarity without every test spelling the sentence.
+_REJECTED = "rejected by the exporter, not compiled"
+_NOT_SERVED = "listed above as not served by the exporter"
 
 
 def _alert_names(pack: dict) -> list:
@@ -153,31 +179,34 @@ def test_severity_union_emits_declared_branches_only(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "20:critical"}\n',
     })
-    shapes, _, _ = ld.build_shapes(tmp_path)
+    shapes, _ = _shapes(tmp_path)
     assert len(shapes) == 1
     assert shapes[0]["severities"] == ["critical", "warning"]
 
 
-def test_accepted_lists_what_compiled_only(tmp_path):
-    """#3042: `accepted` is what the compiler builds a rule for — a
-    quarantined recipe (here: same name as an inherited one) is not in it,
-    and a `disable` threshold / objective is marked."""
+def test_meta_entries_partition_into_compiled_and_not_compiled(tmp_path):
+    """#3042: `_meta["entries"]` is every entry the exporter judged, and
+    `not_compiled` is exactly the ones it does not serve (here: a duplicate of
+    an earlier entry's shape+severity). A `disable` threshold / objective is a
+    `disabled` entry WITH a recipe_id — it compiles."""
     _write_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  m: 1\n_custom_alerts:\n"
-                          '  - {recipe: threshold, name: dup, metric: m_root, op: ">", window: 5m, threshold: "10:warning"}\n',
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
-                  '      - {recipe: threshold, name: dup, metric: m_own, op: ">", window: 5m, threshold: "10:warning"}\n'
+                  '      - {recipe: threshold, name: first, metric: m_own, op: ">", window: 5m, threshold: "10:warning"}\n'
+                  '      - {recipe: threshold, name: again, metric: m_own, op: ">", window: 5m, threshold: "20:warning"}\n'
                   '      - {recipe: threshold, name: turned_off, metric: m_off, op: ">", window: 5m, threshold: "disable"}\n'
                   '      - {recipe: slo_burn_rate, name: slo, metric: m_err, denominator_metric: m_tot, objective: "disable"}\n'
                   '      - {recipe: slo_burn_rate, name: slo2, metric: m_e2, denominator_metric: m_t2, objective: "99.9"}\n',
     })
-    accepted: list = []
-    _shapes, _per, skipped = ld.build_shapes(tmp_path, accepted=accepted)
-    got = {(a["tenant"], a["name"], a["own"], a["disabled"]) for a in accepted}
-    assert got == {("ta", "dup", False, False), ("ta", "turned_off", True, True),
-                   ("ta", "slo", True, True), ("ta", "slo2", True, False)}
-    assert [s["name"] for s in skipped] == ["dup"]
-    assert all(a["recipe_id"] for a in accepted)
+    meta = cc.build_pack(tmp_path)["_meta"]
+    got = {(e.tenant, e.spec["name"], e.status) for e in meta["entries"]}
+    assert got == {("ta", "first", "served"), ("ta", "again", "duplicate"),
+                   ("ta", "turned_off", "disabled"), ("ta", "slo", "disabled"),
+                   ("ta", "slo2", "served")}
+    assert [e.spec["name"] for e in meta["not_compiled"]] == ["again"]
+    compiled = [e for e in meta["entries"] if e.status in ent.COMPILED_STATUSES]
+    assert all(e.recipe_id for e in compiled)
+    # m_own + m_off + the two slo shapes: the duplicate adds none.
+    assert meta["shapes"] == 4
 
 
 def test_single_severity_no_critical_mirror(tmp_path):
@@ -185,7 +214,7 @@ def test_single_severity_no_critical_mirror(tmp_path):
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "10:warning"}\n',
     })
-    shapes, _, _ = ld.build_shapes(tmp_path)
+    shapes, _ = _shapes(tmp_path)
     assert shapes[0]["severities"] == ["warning"]       # NOT [critical, warning]
 
 
@@ -229,31 +258,45 @@ def test_selector_value_is_escaped():
     assert sel == '{path="a\\"b\\\\c"}'                   # quote + backslash escaped
 
 
-# --- 5. uniqueness ---------------------------------------------------------
-def test_duplicate_name_per_tenant_quarantined(tmp_path):
-    # #1008 Part B: fail-soft — the second `dup` is QUARANTINED (recorded in `skipped`),
-    # NOT a whole-compile abort; the first compiles.
+# --- 5. uniqueness: the exporter's duplicate drop, not this compiler's -------
+def test_a_repeated_name_is_not_judged_here(tmp_path):
+    # #3042: name uniqueness per tenant is tenant-api's write check. The exporter
+    # serves both entries (different shapes), so both compile — a compiler that
+    # dropped one would leave a served series with no rule.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: dup, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
                   '      - {recipe: rate, name: dup, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert len(shapes) == 1                       # the first `dup` compiled
-    assert any("duplicate custom-alert name" in s["reason"] for s in skipped)
+    shapes, not_compiled = _shapes(tmp_path)
+    assert len(shapes) == 2
+    assert not_compiled == []
 
 
-def test_two_same_severity_same_shape_quarantined(tmp_path):
-    # #1008 Part B: fail-soft — the second warning alert on the SAME shape is quarantined
-    # (keeps the group_left(name) join 1:1); the first compiles.
+def test_two_same_severity_same_shape_is_the_exporters_duplicate(tmp_path):
+    # The second warning alert on the SAME shape is the exporter's `duplicate` (it
+    # serves only the first; keeps the group_left(name) join 1:1) — not compiled.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: w1, metric: m, op: ">", window: 5m, threshold: "10:warning"}\n'
                   '      - {recipe: threshold, name: w2, metric: m, op: ">", window: 5m, threshold: "20:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    shapes, not_compiled = _shapes(tmp_path)
     assert len(shapes) == 1
-    assert any("same shape" in s["reason"] for s in skipped)
+    assert [(e.spec["name"], e.status) for e in not_compiled] == [("w2", "duplicate")]
+
+
+def test_warning_and_critical_on_one_shape_are_not_duplicates(tmp_path):
+    # warning + critical of the SAME shape are two served rows, so ONE shape with
+    # BOTH branches — the duplicate drop is per shape AND severity.
+    _write_tree(tmp_path, {
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n'
+            '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "2:critical"}\n',
+    })
+    shapes, not_compiled = _shapes(tmp_path)
+    assert not_compiled == []
+    assert [s["severities"] for s in shapes] == [["critical", "warning"]]
 
 
 def test_for_divergence_produces_distinct_shapes(tmp_path):
@@ -267,7 +310,7 @@ def test_for_divergence_produces_distinct_shapes(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: slow, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 15m}\n',
     })
-    shapes, _, _ = ld.build_shapes(tmp_path)
+    shapes, _ = _shapes(tmp_path)
     rids = sorted(s["recipe_id"] for s in shapes)
     assert len(rids) == 2, f"expected 2 distinct shapes (different for), got {rids}"
     assert any(r.endswith("__for1m") for r in rids)
@@ -284,12 +327,12 @@ def test_same_for_still_vectorizes_one_shape(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
                   '      - {recipe: threshold, name: y, metric: m, op: ">", window: 5m, threshold: "1:warning", for: 5m}\n',
     })
-    shapes, _, _ = ld.build_shapes(tmp_path)
+    shapes, _ = _shapes(tmp_path)
     assert len(shapes) == 1, "same for + shape must vectorize to ONE rule (O(M))"
     assert shapes[0]["recipe_id"].endswith("__for5m")
 
 
-# --- 5b. #1008 / F3: injective recipe_id + fail-soft quarantine -------------
+# --- 5b. #1008 / F3: injective recipe_id; what the exporter rejects ----------
 def test_f3_lossy_selector_collision_resolved(tmp_path):
     # S1: selector values differing only in a sanitise-folded char ('us-east-1' vs
     # 'us_east_1') USED to collapse to one recipe_id → cross-tenant compile abort. The
@@ -300,8 +343,8 @@ def test_f3_lossy_selector_collision_resolved(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
             '      - {recipe: threshold, name: r, metric: m, selectors: {region: "us_east_1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert skipped == []
+    shapes, not_compiled = _shapes(tmp_path)
+    assert not_compiled == []
     assert len({s["recipe_id"] for s in shapes}) == 2
 
 
@@ -315,8 +358,8 @@ def test_f3_separator_aliasing_collision_resolved(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
             '      - {recipe: threshold, name: r, metric: m, selectors: {region: "x_1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert skipped == []
+    shapes, not_compiled = _shapes(tmp_path)
+    assert not_compiled == []
     assert len({s["recipe_id"] for s in shapes}) == 2
 
 
@@ -329,51 +372,127 @@ def test_f3_same_shape_still_vectorizes(tmp_path):
         "b.yaml": 'tenants:\n  tb:\n    _custom_alerts:\n'
             '      - {recipe: threshold, name: r, metric: m, selectors: {region: "us-east-1"}, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert skipped == []
+    shapes, not_compiled = _shapes(tmp_path)
+    assert not_compiled == []
     assert len(shapes) == 1
 
 
-def test_failsoft_ratio_missing_denominator_quarantined(tmp_path):
+def test_ratio_missing_denominator_is_rejected_and_the_rest_compiles(tmp_path):
     # F-A: a ratio recipe without denominator_metric used to raise an uncaught KeyError
-    # (exit 1 = whole-platform DoS). It is now quarantined; a sibling valid recipe still
-    # compiles.
+    # (exit 1 = whole-platform DoS). The exporter rejects that one entry; a sibling
+    # valid recipe still compiles.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: ratio, name: bad, metric: m, op: ">", window: 5m, threshold: "0.5:warning"}\n'
             '      - {recipe: threshold, name: ok, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert len(shapes) == 1                            # the valid `ok` recipe compiled
-    assert any(s["name"] == "bad" for s in skipped)
+    shapes, not_compiled = _shapes(tmp_path)
+    assert [s["metric"] for s in shapes] == ["m2"]          # the valid `ok` recipe compiled
+    assert [(e.spec["name"], e.status) for e in not_compiled] == [("bad", "rejected")]
 
 
-def test_failsoft_non_mapping_entry_quarantined(tmp_path):
-    # F-B (loader level): a scalar list item is quarantined instead of crashing the
-    # compile with an AttributeError; a sibling valid recipe still compiles.
+def test_a_non_mapping_entry_makes_the_whole_list_unserved(tmp_path):
+    # F-B: a scalar list item does not crash the compile. ⚠️ It is NOT one entry
+    # dropped, as the old per-recipe quarantine had it: the exporter's decode of the
+    # list fails as a whole, so it serves NONE of the tenant's custom alerts — and
+    # the compiler, building what is served, compiles none, and says why.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - just_a_bare_string\n'
             '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert len(shapes) == 1
-    assert any("not a mapping" in s["reason"] for s in skipped)
+    meta = cc.build_pack(tmp_path)["_meta"]
+    assert meta["shapes"] == 0 and meta["entries"] == []
+    assert list(meta["block_errors"]) == ["ta"]
+    assert "cannot parse _custom_alerts" in meta["block_errors"]["ta"]
 
 
-def test_failsoft_malformed_yaml_file_quarantined(tmp_path):
-    # #1008 Part B: a conf.d FILE that yaml.safe_load can't parse (a control char) is
-    # quarantined at FILE level — the load happens OUTSIDE the per-recipe loop, so without
-    # the file-level fail-soft one bad file (incl. a schema-check-skipped meta file) would
-    # crash the whole compile. Sibling valid files still compile.
+_BAD_FILE_TREE = {
+    "bad.yaml": 'tenants:\n  "x\x1by":\n    _custom_alerts: []\n',   # \x1b: does not decode
+    "good.yaml": 'tenants:\n  t:\n    _custom_alerts:\n'
+        '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+}
+
+
+def test_a_file_the_exporter_cannot_decode_leaves_the_rest_compiling(tmp_path):
+    # #1008 Part B, now the exporter's: a conf.d FILE that does not decode is skipped
+    # by the exporter's load (`parse_failed`) — the rest of the tree is served, so
+    # it compiles — and the file is in `_meta`, never silently absent.
+    _write_tree(tmp_path, _BAD_FILE_TREE)
+    meta = cc.build_pack(tmp_path)["_meta"]
+    assert meta["shapes"] == 1                               # good.yaml compiled
+    assert meta["parse_failed"] == ["bad.yaml"]
+
+
+def test_the_cli_names_a_file_the_exporter_cannot_decode(tmp_path, monkeypatch, capsys):
+    # The library half above records the file; this is the half a reader sees. A
+    # compile that drops a file's tenants without a word is the #1008 incident shape.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _BAD_FILE_TREE)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    cap = capsys.readouterr()
+    assert "✅ Compiled 1 shape(s)" in cap.out               # the rest compiled
+    # ⛔ The compiler's own line, not da-guard's passed-through `da-guard| WARN: skip
+    # unparseable file …` — that one names the file too, and would keep this green
+    # with the compiler saying nothing about what it did not compile.
+    ours = [ln for ln in cap.err.splitlines() if "bad.yaml" in ln and "da-guard|" not in ln]
+    assert ours, f"the compiler must name the file the exporter skips:\n{cap.err}"
+    assert "not compiled" in ours[0], ours[0]
+
+
+# --- 5c. served and disabled compile; rejected and duplicate do not (#3042) --
+def test_disabled_entries_compile_rejected_and_duplicate_do_not(tmp_path):
+    # A switched-off entry has no row BY DESIGN, and gets a rule anyway, so that
+    # switching it back on needs no recompile — with the severity it would serve
+    # (`disable:critical` → critical). A rejected or duplicate entry is not served
+    # and gets none.
     _write_tree(tmp_path, {
-        "bad.yaml": 'tenants:\n  "x\x1by":\n    _custom_alerts: []\n',   # \x1b → PyYAML ReaderError
-        "good.yaml": 'tenants:\n  t:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: ok, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
+        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
+            '      - {recipe: threshold, name: off, metric: m_off, op: ">", window: 5m, threshold: "disable:critical"}\n'
+            '      - {recipe: threshold, name: w1, metric: m, op: ">", window: 5m, threshold: "10:warning"}\n'
+            '      - {recipe: threshold, name: w2, metric: m, op: ">", window: 5m, threshold: "20:warning"}\n'
+            '      - {recipe: threshold, name: typo, metric: m_typo, op: ">", window: 5x, threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
-    assert len(shapes) == 1                               # good.yaml compiled
-    assert any(s["origin"] == "bad.yaml" for s in skipped)
+    shapes, not_compiled = _shapes(tmp_path)
+    assert {s["metric"]: s["severities"] for s in shapes} == {
+        "m_off": ["critical"], "m": ["warning"]}
+    assert [(e.spec["name"], e.status) for e in not_compiled] == [
+        ("w2", "duplicate"), ("typo", "rejected")]
+
+
+# --- 5d. parity: this compiler's recipe_id must be the exporter's (#3042) ----
+_PARITY_SPEC = {"recipe": "threshold", "name": "cpu_hot", "metric": "node_cpu", "op": ">",
+                "window": "5m", "threshold": "80:warning"}
+
+
+def test_parity_a_recipe_id_other_than_the_exporters_is_refused():
+    # A rule built on THIS side's recipe_id joins only series carrying it; if the
+    # exporter serves another, the alert can never fire. Never fail-soft.
+    rid = shp.recipe_id(_PARITY_SPEC)
+    ok = ent.Entry("ta", 0, dict(_PARITY_SPEC), "served", rid, ("warning",))
+    assert len(ent.shapes_from_entries([ok])[0]) == 1          # control: agreeing ids compile
+    with pytest.raises(CustomAlertParityError, match="exporter's recipe_id"):
+        ent.shapes_from_entries([ok._replace(recipe_id=rid + "__drift")])
+    # The other half of parity: a spec the exporter serves and this side rejects.
+    bad = dict(_PARITY_SPEC, window="5x")
+    with pytest.raises(CustomAlertParityError, match="rejects it"):
+        ent.shapes_from_entries([ok._replace(spec=bad)])
+
+
+def test_parity_the_cli_check_exits_2_naming_the_disagreement(tmp_path, monkeypatch, capsys):
+    # End to end on a real tree: the exporter's id comes from Go; this side's is made
+    # to drift, as a Go-only change to the slug would make it.
+    _write_tree(tmp_path / "src", _ONE_RECIPE_SOURCE)
+    real = shp.recipe_id
+    monkeypatch.setattr(shp, "recipe_id", lambda inst: real(inst) + "__drift")
+    with pytest.raises(CustomAlertParityError):
+        cc.build_pack(tmp_path / "src")
+    monkeypatch.setattr(sys, "argv", ["compile", "--check", "--config-dir", str(tmp_path / "src"),
+                                      "--out", str(tmp_path / "pack.yaml")])
+    assert cc.main() == cc.EXIT_CALLER_ERROR == 2
+    err = capsys.readouterr().err
+    assert "read a custom alert differently" in err, err
+    assert "__drift" in err, "the message must name the two ids that disagree"
 
 
 def test_safe_log_strips_control_chars():
@@ -383,35 +502,58 @@ def test_safe_log_strips_control_chars():
     assert cc._safe_log("a\nFAKE\x1b[2Jb\tc") == "a?FAKE?[2Jb?c"
 
 
-# --- 6. scope inheritance + cap count --------------------------------------
-def test_domain_and_platform_inheritance(tmp_path):
+# --- 6. which list a tenant has: the exporter's answer (#3042) --------------
+def _c(name: str, metric: str) -> str:
+    return (f'{{recipe: threshold, name: {name}, metric: {metric}, op: ">", '
+            f'window: 5m, threshold: "1:warning"}}')
+
+
+def test_a_tenants_list_is_the_one_the_exporter_serves_replaced_not_unioned(tmp_path):
+    """The compiler used to union every `_defaults.yaml` `_custom_alerts` on the
+    path into each tenant's list. The exporter serves no such union: a tenant's
+    list is its own, else its root platform file's `tenants:` entry, else its
+    profile's — the first one wins whole. Each tenant here pins one of those,
+    and the metrics that must NOT compile are the union's (pm, sm) and the
+    lists t-own's own list replaces (rm2 from the platform file, prm from its
+    profile)."""
     _write_tree(tmp_path, {
-        "_defaults.yaml": "_custom_alerts:\n"
-            '  - {recipe: absence, name: hb, metric: heartbeat_total, window: 10m, threshold: "0:critical"}\n',
-        "shop.yaml": 'tenants:\n  shop-a:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: q, metric: qd, op: ">", window: 5m, threshold: "1:warning"}\n',
-        "fin/_defaults.yaml": "_custom_alerts:\n"
-            '  - {recipe: ratio, name: pf, metric: pf_total, denominator_metric: pa_total, op: ">", window: 5m, threshold: "0.01:critical"}\n',
-        "fin/pay.yaml": "tenants:\n  pay-a: {}\n",
+        "_defaults.yaml": ("defaults:\n  m: 1\n"
+                           f"_custom_alerts:\n  - {_c('plat', 'pm')}\n"
+                           "tenants:\n"
+                           f"  t-root:\n    _custom_alerts:\n      - {_c('root', 'rm')}\n"
+                           f"  t-own:\n    _custom_alerts:\n      - {_c('root2', 'rm2')}\n"),
+        "_profiles.yaml": f"profiles:\n  gold:\n    _custom_alerts:\n      - {_c('prof', 'prm')}\n",
+        "t.yaml": ("tenants:\n  t-root: {}\n  t-prof:\n    _profile: gold\n"
+                   f"  t-own:\n    _profile: gold\n    _custom_alerts:\n      - {_c('own', 'om')}\n"
+                   "  t-plain: {}\n"),
+        "fin/_defaults.yaml": f"_custom_alerts:\n  - {_c('sub', 'sm')}\n",
+        "fin/f.yaml": "tenants:\n  t-fin: {}\n",
     })
-    shapes, per_tenant, _ = ld.build_shapes(tmp_path)
-    # shop-a: platform absence + own threshold = 2; pay-a: platform absence + fin ratio = 2
-    assert per_tenant == {"shop-a": 2, "pay-a": 2}
-    # absence shape is shared by both tenants → still ONE absence rule
-    rids = {s["recipe_id"] for s in shapes}
-    assert sum(r.startswith("absence__") for r in rids) == 1
+    pack = cc.build_pack(tmp_path)
+    got = {(e.tenant, e.spec["metric"]) for e in pack["_meta"]["entries"]}
+    assert got == {("t-root", "rm"), ("t-prof", "prm"), ("t-own", "om")}
+    # …and the rules are exactly those three shapes: nothing from a top-level
+    # `_defaults.yaml` (root or subtree), nothing from a replaced list.
+    rids = {r["labels"]["recipe_id"] for g in pack["groups"] for r in g["rules"]
+            if r.get("record") == "custom_recipe_info"}
+    assert rids == {f"threshold__{m}__gt__w5m__for1m" for m in ("rm", "prm", "om")}
 
 
 # --- 7. example fixture + --check ------------------------------------------
-def test_example_fixture_compiles_to_twelve_shapes():
+def test_example_fixture_compiles_to_eleven_shapes():
     pack = cc.build_pack(_EXAMPLES)
-    assert pack["_meta"]["shapes"] == 12
+    # 11, not 12 (#3042): finance/_defaults.yaml's top-level ratio recipe is not
+    # served by the exporter (no tenant's list carries it), so it no longer
+    # compiles. It moves to a profile in a later stage of #3042.
+    assert pack["_meta"]["shapes"] == 11
     # shop-a: 10 own declarations (threshold/rate/ratio/p99/absence/forecast +
-    # equals #810 + Shape-X ==/absence liveness pair #832 + slo_burn_rate ADR-031)
-    # = 11 cap units (the slo declaration fans out to critical+warning → counts 2);
-    # pay-a: finance ratio + own threshold.
-    # (absence moved off platform-L0 → no longer inherited by pay-a; see _defaults.yaml note.)
-    assert pack["_meta"]["per_tenant_counts"] == {"pay-a": 2, "shop-a": 11}
+    # equals #810 + Shape-X ==/absence liveness pair #832 + slo_burn_rate ADR-031);
+    # pay-a: its own threshold. All served — nothing is left out.
+    per_tenant: dict = {}
+    for e in pack["_meta"]["entries"]:
+        per_tenant[e.tenant] = per_tenant.get(e.tenant, 0) + 1
+    assert per_tenant == {"pay-a": 1, "shop-a": 10}
+    assert pack["_meta"]["not_compiled"] == []
 
 
 def test_check_flags_stale(tmp_path, monkeypatch):
@@ -434,6 +576,64 @@ def test_write_out_outside_repo_does_not_crash(tmp_path, monkeypatch):
         "compile", "--config-dir", str(_EXAMPLES), "--out", str(out)])
     assert cc.main() == cc.EXIT_OK
     assert out.exists() and "groups:" in out.read_text(encoding="utf-8")
+
+
+# --- 7b. what is compiled joins what is served (#3042) ----------------------
+def _compiled_joins(pack: dict) -> set:
+    """(recipe_id, severity) of every shape alert in the pack, read from the rule
+    itself: the `custom:<rid>:<severity>:core` record it alerts on, whose
+    severity must be the alert's own label."""
+    out = set()
+    for r in _alert_rules(pack):
+        if not r["alert"].startswith("Custom_"):
+            continue
+        cores = set(re.findall(r"custom:([A-Za-z0-9_]+):([a-z]+):core", r["expr"]))
+        assert len(cores) == 1, f"{r['alert']}: expected one core record, got {cores}"
+        rid, sev = cores.pop()
+        assert sev == r["labels"]["severity"], r["alert"]
+        out.add((rid, sev))
+    return out
+
+
+def test_every_rule_compiled_from_the_example_tree_joins_a_served_row():
+    """The point of #3042, pinned on the shipped example tree: every rule the
+    compiler emits joins a series the exporter serves — a served-values row
+    (`values["_custom_alerts"]`: labels.recipe_id + severity) — or a disabled
+    entry, which will serve that row once switched back on. A rule that joins
+    neither can never fire, and nothing else would notice."""
+    served = tv.load_served_tree(_EXAMPLES, partial=True)
+    joins = set()
+    for t in served.tenants.values():
+        for row in t.values.get("_custom_alerts") or []:
+            joins.add((row["labels"]["recipe_id"], row["severity"]))
+        joins.update((e.recipe_id, sev) for e in t.custom_alerts
+                     if e.status == "disabled" for sev in e.severities)
+    compiled = _compiled_joins(cc.build_pack(_EXAMPLES))
+    assert compiled, "the example tree compiled no shape alert — the join is vacuous"
+    assert compiled <= joins, f"rules that join no served series: {sorted(compiled - joins)}"
+    # …and the converse: no served row is left without its rule.
+    assert joins <= compiled, f"served rows with no rule: {sorted(joins - compiled)}"
+
+
+# --- 7c. the recipe-preview path: no da-guard (#3042) -----------------------
+def test_the_preview_path_compiles_without_da_guard(tmp_path, monkeypatch):
+    # The recipe-preview image ships no Go binary: `entries_from_specs` judges the
+    # recipes by this compiler's own rules, and build_pack(entries) must not reach
+    # for da-guard. Both places it could be found are taken away.
+    monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert shutil.which("da-guard") is None, "precondition: no da-guard reachable"
+
+    entries = ent.entries_from_specs({"ta": [dict(_PARITY_SPEC)]})
+    assert [(e.status, e.recipe_id) for e in entries] == [
+        ("served", shp.recipe_id(_PARITY_SPEC))]
+    assert cc.build_pack(entries)["_meta"]["shapes"] == 1
+
+    # An invalid recipe is refused HERE, by this side's validation, naming the entry
+    # — not passed on to fail later as a parity error with no exporter in the room.
+    with pytest.raises(CustomAlertConfigError, match=r"tenant=ta: _custom_alerts\[0\]") as ei:
+        ent.entries_from_specs({"ta": [dict(_PARITY_SPEC, window="5x")]})
+    assert not isinstance(ei.value, CustomAlertParityError), ei.value
 
 
 # --- 8. forecast recipe (ADR-024 §Forecast Recipe, #741) -------------------
@@ -475,16 +675,17 @@ def test_forecast_raw_mode_no_capacity(tmp_path):
     assert "< 0.5" not in txt
 
 
-def test_forecast_requires_horizon_quarantined(tmp_path):
-    # #1008 Part B: fail-soft — a forecast recipe missing `horizon` is quarantined, not a
-    # whole-compile abort.
+def test_forecast_requires_horizon_rejected_by_the_exporter(tmp_path):
+    # #3042: a forecast recipe missing `horizon` is an entry the exporter rejects —
+    # not compiled, not a whole-compile abort.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: forecast, name: q, metric: m, op: ">", threshold: "1:warning"}\n',
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    shapes, not_compiled = _shapes(tmp_path)
     assert shapes == []
-    assert any("horizon" in s["reason"] for s in skipped)
+    assert [e.status for e in not_compiled] == ["rejected"]
+    assert "horizon" in not_compiled[0].reason
 
 
 @pytest.mark.parametrize("bad", ["3h", "90m", "5h", "8h"])
@@ -495,25 +696,27 @@ def test_forecast_horizon_enum_rejected(bad):
 
 def test_forecast_ratio_threshold_at_or_above_band_rejected(tmp_path):
     # W1 footgun guard: a ratio-mode forecast floor >= the current-state band (0.5)
-    # is silently neutered by `custom:fcbase < band`, so it is rejected loudly at load
-    # (shape.validate_forecast_ratio_threshold). 0.5 itself is rejected (>= band).
+    # is silently neutered by `custom:fcbase < band`, so the exporter rejects it (Go's
+    # twin of shape.validate_forecast_ratio_threshold). 0.5 itself is rejected (>= band).
     for bad in ("0.6:warning", "0.5:warning"):
         _write_tree(tmp_path, {
             "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
                 f'      - {{recipe: forecast, name: d, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "{bad}"}}\n',
         })
-        shapes, _per, skipped = ld.build_shapes(tmp_path)   # #1008 Part B: fail-soft
+        shapes, not_compiled = _shapes(tmp_path)
         assert shapes == []
-        assert any("current-state band" in s["reason"] for s in skipped)
+        assert [e.status for e in not_compiled] == ["rejected"], bad
+        assert "band" in not_compiled[0].reason, not_compiled[0].reason
 
 
 def test_forecast_ratio_threshold_below_band_ok(tmp_path):
-    # a sensible low disk-fill floor (< 0.5) loads fine.
+    # a sensible low disk-fill floor (< 0.5) is served, and compiles.
     _write_tree(tmp_path, {
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: forecast, name: d, metric: avail, capacity_metric: cap, op: "<", horizon: 4h, threshold: "0.15:warning"}\n',
     })
-    ld.build_shapes(tmp_path)  # no raise
+    shapes, not_compiled = _shapes(tmp_path)
+    assert len(shapes) == 1 and not_compiled == []
 
 
 def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
@@ -523,91 +726,17 @@ def test_forecast_raw_mode_threshold_not_bounded_by_band(tmp_path):
         "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
             '      - {recipe: forecast, name: q, metric: queue_depth, op: ">", horizon: 12h, threshold: "10000:warning"}\n',
     })
-    ld.build_shapes(tmp_path)  # no raise (raw mode, band does not apply)
+    shapes, not_compiled = _shapes(tmp_path)   # raw mode: the band does not apply
+    assert len(shapes) == 1 and not_compiled == []
 
 
-# --- 9. cost guardrail: max_custom_recipes per-tenant cap (S4) --------------
-def test_own_recipe_cap_quarantines_over_limit(tmp_path):
-    # #1008 Part B: fail-soft — 3 OWN recipes with cap 2: the first 2 compile, the 3rd
-    # (over cap) is quarantined DETERMINISTICALLY (triples in file+declaration order), not
-    # a whole-compile abort.
-    _write_tree(tmp_path, {
-        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
-            '      - {recipe: threshold, name: b, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n'
-            '      - {recipe: threshold, name: c, metric: m3, op: ">", window: 5m, threshold: "1:warning"}\n',
-    })
-    shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=2)
-    assert per_tenant["ta"] == 2 and len(shapes) == 2   # first 2 compiled
-    assert any("max_custom_recipes" in s["reason"] for s in skipped)
-
-
-def test_inherited_recipes_do_not_count_toward_cap(tmp_path):
-    # domain _defaults has 2 policy recipes (inherited, vectorized); tenant has 1
-    # OWN. effective = 3 but OWN = 1 ≤ cap 1 → OK (inherited is uncapped).
-    _write_tree(tmp_path, {
-        "dom/_defaults.yaml": "_custom_alerts:\n"
-            '  - {recipe: threshold, name: p1, metric: pm1, op: ">", window: 5m, threshold: "1:warning"}\n'
-            '  - {recipe: threshold, name: p2, metric: pm2, op: ">", window: 5m, threshold: "1:warning"}\n',
-        "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: own1, metric: om1, op: ">", window: 5m, threshold: "1:warning"}\n',
-    })
-    _shapes, per_tenant, _ = ld.build_shapes(tmp_path, max_custom_recipes=1)  # no raise
-    assert per_tenant["ta"] == 3   # effective = 2 inherited + 1 own (own ≤ cap)
-
-
-def test_own_recipe_cap_at_limit_ok(tmp_path):
-    _write_tree(tmp_path, {
-        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: a, metric: m1, op: ">", window: 5m, threshold: "1:warning"}\n'
-            '      - {recipe: threshold, name: b, metric: m2, op: ">", window: 5m, threshold: "1:warning"}\n',
-    })
-    _shapes, per_tenant, _ = ld.build_shapes(tmp_path, max_custom_recipes=2)  # exactly at cap
-    assert per_tenant["ta"] == 2
-
-
-def test_build_pack_threads_cap():
-    # CLI wiring guard: build_pack(max_custom_recipes=) must reach build_shapes. The
-    # example fixture's shop-a has 9 OWN recipes → cap 5 quarantines the excess (#1008
-    # Part B fail-soft) and surfaces it in _meta["skipped"], so the pack still builds.
-    pack = cc.build_pack(_EXAMPLES, max_custom_recipes=5)
-    skipped = pack["_meta"]["skipped"]
-    assert any("max_custom_recipes" in s["reason"] for s in skipped)
-
-
-def test_negative_cap_rejected(tmp_path):
-    # a negative cap is nonsensical (CLI type=int lets it through) — fail loud
-    # up front rather than reject every tenant with a confusing message. 0 is OK.
-    _write_tree(tmp_path, {"a.yaml": "tenants:\n  ta: {}\n"})
-    with pytest.raises(ld.CustomAlertConfigError, match=">= 0"):
-        ld.build_shapes(tmp_path, max_custom_recipes=-1)
-
-
-def test_own_duplicate_of_inherited_quarantined_not_quota_charged(tmp_path):
-    # phantom-quota guard, now fail-soft (#1008 Part B): a tenant re-declaring a DOMAIN
-    # policy shape is QUARANTINED (severity-uniqueness) BEFORE the quota counter — the
-    # inherited policy compiles, the duplicate is skipped and never eats cap.
-    _write_tree(tmp_path, {
-        "dom/_defaults.yaml": "_custom_alerts:\n"
-            '  - {recipe: threshold, name: pol, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
-        "dom/t.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: dup, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n',
-    })
-    _shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=100)
-    assert per_tenant["ta"] == 1                       # only the inherited policy counts
-    assert any("same shape" in s["reason"] for s in skipped)
-
-
-def test_multi_severity_same_shape_counts_as_two(tmp_path):
-    # warning + critical of the SAME shape = 2 distinct alert rules → counts as 2
-    # toward the cap (correct, not phantom — they ARE two rules).
-    _write_tree(tmp_path, {
-        "a.yaml": 'tenants:\n  ta:\n    _custom_alerts:\n'
-            '      - {recipe: threshold, name: w, metric: m, op: ">", window: 5m, threshold: "1:warning"}\n'
-            '      - {recipe: threshold, name: c, metric: m, op: ">", window: 5m, threshold: "2:critical"}\n',
-    })
-    _shapes, per_tenant, _ = ld.build_shapes(tmp_path, max_custom_recipes=100)
-    assert per_tenant["ta"] == 2
+# --- 9. cost guardrail: NOT this compiler's (#3042) ---------------------------
+# The per-tenant cap (max_custom_recipes, S4) used to be enforced here, by
+# quarantining the recipes over it. It now lives where a write is judged:
+# da-guard `custom_alert_over_cap`, validate-config `custom_alert_cap` and
+# tenant-api's write check. The compiler builds a rule for every entry the
+# exporter serves — a rule nobody's series joins is the only thing it could
+# save, and refusing to compile a served entry would silence a live alert.
 
 
 # --- 10. cross-language validation contract (S5, ADR-024 §S5) ---------------
@@ -654,39 +783,27 @@ def test_slo_one_declaration_fans_out_both_severities(tmp_path):
     _write_tree(tmp_path, {
         "a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n',
     })
-    shapes, per_tenant, skipped = ld.build_shapes(tmp_path)
-    assert skipped == []
+    shapes, not_compiled = _shapes(tmp_path)
+    assert not_compiled == []
     assert len(shapes) == 1
     assert shapes[0]["severities"] == ["critical", "warning"]
     assert shapes[0]["min_events"] == 10                    # default materialised
-    # cap accounting: the declaration IS two alert rules → counts 2 (ADR-031 §guardrail 1)
-    assert per_tenant == {"ta": 2}
+    # (the "counts 2 toward the cap" half of ADR-031 §guardrail 1 is da-guard's
+    # and tenant-api's since #3042 — see section 9.)
 
 
-def test_slo_counts_two_toward_own_cap(tmp_path):
-    # cap 1 cannot fit an slo declaration (it needs 2 units) → quarantined
-    # fail-soft; cap 2 fits exactly.
-    files = {"a.yaml": f'tenants:\n  ta:\n    _custom_alerts:\n      - {_SLO_DECL}\n'}
-    _write_tree(tmp_path, files)
-    shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=1)
-    assert shapes == [] and per_tenant == {}
-    assert any("max_custom_recipes" in s["reason"] for s in skipped)
-    shapes, per_tenant, skipped = ld.build_shapes(tmp_path, max_custom_recipes=2)
-    assert len(shapes) == 1 and per_tenant == {"ta": 2} and skipped == []
-
-
-def test_slo_duplicate_same_shape_quarantined(tmp_path):
+def test_slo_duplicate_same_shape_is_the_exporters_duplicate(tmp_path):
     # a second slo declaration on the SAME shape collides on both fixed
-    # severities → quarantined (keeps the group_left(name) join 1:1).
+    # severities → the exporter's duplicate (keeps the group_left(name) join 1:1).
     _write_tree(tmp_path, {
         "a.yaml": ('tenants:\n  ta:\n    _custom_alerts:\n'
                    f'      - {_SLO_DECL}\n'
                    '      - {recipe: slo_burn_rate, name: co_avail2, metric: co_errors_total, '
                    'denominator_metric: co_requests_total, objective: "99.5"}\n'),
     })
-    shapes, _per, skipped = ld.build_shapes(tmp_path)
+    shapes, not_compiled = _shapes(tmp_path)
     assert len(shapes) == 1
-    assert any("same shape" in s["reason"] for s in skipped)
+    assert [(e.spec["name"], e.status) for e in not_compiled] == [("co_avail2", "duplicate")]
 
 
 @pytest.mark.parametrize("bad_obj", ["100", "0", "0.0", "100.0", "abc", "1e3", "-5", ""])
@@ -889,9 +1006,11 @@ def test_slo_objective_disable_still_compiles(tmp_path):
                    '      - {recipe: slo_burn_rate, name: co_avail, metric: co_errors_total, '
                    'denominator_metric: co_requests_total, objective: "disable"}\n'),
     })
-    shapes, per_tenant, skipped = ld.build_shapes(tmp_path)
-    assert skipped == []
-    assert len(shapes) == 1 and per_tenant == {"ta": 2}
+    tree = ent.entries_from_tree(tmp_path)
+    assert [e.status for e in tree.entries] == ["disabled"]
+    shapes, not_compiled = ent.shapes_from_entries(tree.entries)
+    assert not_compiled == []
+    assert len(shapes) == 1 and shapes[0]["severities"] == ["critical", "warning"]
 
 
 # --- 11. A+ emit-time invariant gate (F2 annotation-injection backstop) -------
@@ -1213,11 +1332,13 @@ def test_an_empty_compile_never_reports_success_with_a_tick(tmp_path, monkeypatc
     assert "✅" in capsys.readouterr().out
 
 
-def test_quarantine_is_diagnosed_as_itself_and_the_flag_is_refused(tmp_path, monkeypatch, capsys):
-    # #1008 fail-soft drops an invalid recipe and compiles the rest, so one mistyped
-    # `window:` in the only tenant that declares anything empties `produced` while the
-    # source still declares it. Answering that with "--allow-empty" would delete every
-    # committed rule to work around a one-character typo.
+def test_a_rejected_entry_is_diagnosed_as_itself_and_the_flag_is_refused(
+        tmp_path, monkeypatch, capsys):
+    # The exporter rejects an invalid entry and serves the rest (#1008 fail-soft, its
+    # side since #3042), so one mistyped `window:` in the only tenant that declares
+    # anything empties `produced` while the source still declares it. Answering that
+    # with "--allow-empty" would delete every committed rule to work around a
+    # one-character typo.
     src, out = tmp_path / "src", tmp_path / "pack.yaml"
     _write_tree(src, _ONE_RECIPE_SOURCE)
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
@@ -1228,8 +1349,8 @@ def test_quarantine_is_diagnosed_as_itself_and_the_flag_is_refused(tmp_path, mon
         _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
-    assert "QUARANTINED" in err
-    assert "renamed" not in err, "a quarantine must not send the reader hunting for a rename"
+    assert _REJECTED in err and _NOT_SERVED in err
+    assert "renamed" not in err, "a rejection must not send the reader hunting for a rename"
     # ⛔ The first version of this fix told the reader NOT to use --allow-empty and
     # then printed a runnable command containing it three lines down — the defect
     # this whole change is about, reproduced inside the fix for it. Assert the
@@ -1240,7 +1361,7 @@ def test_quarantine_is_diagnosed_as_itself_and_the_flag_is_refused(tmp_path, mon
                                       "--config-dir", str(src), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
     check_err = capsys.readouterr().err
-    assert "QUARANTINED" in check_err
+    assert _REJECTED in check_err and _NOT_SERVED in check_err
     assert "compile_custom_alerts.py" not in check_err
 
     # …and the flag itself is refused in this state, not merely discouraged.
@@ -1292,41 +1413,42 @@ _TWO_TENANTS = {
 }
 
 
-def test_quarantine_never_swallows_which_tree_was_read(tmp_path, monkeypatch, capsys):
-    # A rename and a typo can both be true. The first version of the quarantine note
-    # early-returned and took "The compiler read: <dir>" with it — a line the version
-    # BEFORE it printed unconditionally, so that fix was a net loss of disclosure.
+def test_not_served_never_swallows_which_tree_was_read(tmp_path, monkeypatch, capsys):
+    # A rename and a typo can both be true. The first version of the quarantine (now:
+    # not-served) note early-returned and took "The compiler read: <dir>" with it — a
+    # line the version BEFORE it printed unconditionally, so that fix was a net loss
+    # of disclosure.
     src, out = tmp_path / "src", tmp_path / "pack.yaml"
     _write_tree(src, _TWO_TENANTS)
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     capsys.readouterr()
 
     (src / "a.yaml").unlink()                       # gone (see #1603 note above)
-    (src / "b.yaml").write_text(                                   # …and quarantined
+    (src / "b.yaml").write_text(                          # …and rejected by the exporter
         _TWO_TENANTS["b.yaml"].replace("window: 5m", "window: 5x"), encoding="utf-8")
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
-    assert "QUARANTINED" in err
-    assert str(src) in err, "which tree was read must survive the quarantine branch"
+    assert _NOT_SERVED in err
+    assert str(src) in err, "which tree was read must survive the not-served branch"
 
 
-def test_an_empty_compile_blames_quarantine_when_that_is_what_happened(
+def test_an_empty_compile_blames_the_exporters_rejection_when_that_is_what_happened(
         tmp_path, monkeypatch, capsys):
     # No pack on disk means the erase guard has no baseline, so this warning is the
     # only thing said at all — and "the compiler did not see their declarations" is
-    # false when the compiler saw them and threw them out itself.
+    # false when they were read and the exporter rejected them.
     src, out = tmp_path / "src", tmp_path / "greenfield.yaml"
     _write_tree(src, {
         "a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "window: 5x")})
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
-    assert "were QUARANTINED above" in capsys.readouterr().err
+    assert _NOT_SERVED in capsys.readouterr().err
 
     # Positive control: a genuinely empty source gets the discovery checklist instead.
     _write_tree(src, _EMPTY_SOURCE)
     (src / "a.yaml").write_text(_EMPTY_SOURCE["a.yaml"], encoding="utf-8")
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     err2 = capsys.readouterr().err
-    assert "were QUARANTINED above" not in err2
+    assert _NOT_SERVED not in err2
     assert "Check, in this order" in err2
 
 
@@ -1401,7 +1523,7 @@ _TYPO_SOURCE = {"a.yaml": _ONE_RECIPE_SOURCE["a.yaml"].replace("window: 5m", "wi
 
 # ⛔ THE SEED SOURCE IS A COLUMN BECAUSE IT HAD TO BE. With the seed hard-wired
 # to `_ONE_RECIPE_SOURCE`, the row labelled `partial-loss-check` was byte-for-byte
-# identical to `quarantined-vs-pack-check` in every field but its name: it seeded
+# identical to `rejected-vs-pack-check` in every field but its name: it seeded
 # one rule and then presented a source that compiles to zero, which is total loss.
 # The sweep advertised eight states and exercised seven, and the missing one was
 # the state the label named. (CodeRabbit, #1591.) Partial loss needs a seed with
@@ -1410,11 +1532,11 @@ _STATES = [
     # (label, seed source, source files, seed the pack first?, extra flags, --check?)
     ("empty-source-vs-pack", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, True, (), False),
     ("empty-source-vs-pack-check", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, True, (), True),
-    ("quarantined-vs-pack", _ONE_RECIPE_SOURCE, None, True, (), False),
-    ("quarantined-vs-pack-check", _ONE_RECIPE_SOURCE, None, True, (), True),
-    ("quarantined-plus-allow-empty", _ONE_RECIPE_SOURCE, None, True, ("--allow-empty",), False),
+    ("rejected-vs-pack", _ONE_RECIPE_SOURCE, None, True, (), False),
+    ("rejected-vs-pack-check", _ONE_RECIPE_SOURCE, None, True, (), True),
+    ("rejected-plus-allow-empty", _ONE_RECIPE_SOURCE, None, True, ("--allow-empty",), False),
     ("greenfield-empty", _ONE_RECIPE_SOURCE, _EMPTY_SOURCE, False, (), False),
-    ("greenfield-quarantined", _ONE_RECIPE_SOURCE, None, False, (), False),
+    ("greenfield-rejected", _ONE_RECIPE_SOURCE, None, False, (), False),
     ("partial-loss-check", _TWO_TENANTS, {"a.yaml": _TWO_TENANTS["a.yaml"]}, True, (), True),
     ("partial-loss-write", _TWO_TENANTS, {"a.yaml": _TWO_TENANTS["a.yaml"]}, True, (), False),
 ]
@@ -1471,11 +1593,12 @@ def _assert_message_invariants(text: str, tree: str, label: str) -> None:
     if cc.DO_NOT_REGENERATE in text:
         assert "make custom-alerts-compile" not in text, f"{label}: forbids and prescribes"
     # 2. Whenever the tool explains an empty compile, it says whose tree it read.
-    if "Check, in this order" in text or "were QUARANTINED above" in text:
+    if "Check, in this order" in text or _NOT_SERVED in text:
         assert tree in text, f"{label}: explained the emptiness without naming the tree"
-    # 3. It never blames invisibility for recipes it quarantined itself.
-    if "QUARANTINED (fail-soft" in text:
-        assert "Check, in this order" not in text, f"{label}: quarantine blamed on discovery"
+    # 3. It never blames invisibility for entries the exporter does not serve
+    #    (rejected / duplicate; the quarantine of #1008 before #3042).
+    if " by the exporter, not compiled" in text:
+        assert "Check, in this order" not in text, f"{label}: a rejection blamed on discovery"
 
 
 def test_the_sweep_would_notice():
@@ -1490,8 +1613,9 @@ def test_the_sweep_would_notice():
          cc.DO_NOT_REGENERATE + "\n   Run `make custom-alerts-compile` to regenerate."),
         ("explains-without-naming-the-tree",
          "   Check, in this order:\n     1. a declaration the compiler stopped seeing"),
-        ("quarantine-blamed-on-discovery",
-         "  QUARANTINED (fail-soft, #1008)\n   Check, in this order:\n/t"),
+        ("rejection-blamed-on-discovery",
+         "  ⚠ tenant=ta _custom_alerts[0] name='x': " + _REJECTED + ": …\n"
+         "   Check, in this order:\n/t"),
     ]:
         with pytest.raises(AssertionError):
             _assert_message_invariants(text, "/t", label)
@@ -1574,7 +1698,6 @@ class _Args:
     def __init__(self, config_dir=None, out=None):
         self.config_dir = config_dir
         self.out = out
-        self.max_custom_recipes = None  # set by the caller below
 
 
 @pytest.mark.parametrize("config_dir,out,expect", [
@@ -1596,9 +1719,7 @@ def test_the_offer_echoes_a_target_and_never_invents_one(config_dir, out, expect
     # against IS the repo default, so echoing it is the legitimate "the last recipe
     # really was removed" flow, and row 2 is what keeps row 3's fix from being
     # "print nothing, ever".
-    a = _Args(config_dir, out)
-    a.max_custom_recipes = cc._loader.MAX_CUSTOM_RECIPES_DEFAULT
-    cmd = cc._rerun_command(a)
+    cmd = cc._rerun_command(_Args(config_dir, out))
     if expect == "offers NOTHING":
         assert cmd == "", "a redirected --config-dir with no --out must get no command"
         return
@@ -1794,33 +1915,6 @@ def test_an_unreadable_yml_carrier_is_named_not_skipped(tmp_path):
     assert [e for e in fe2 if "db-c.yaml" in str(e)], "the .yaml control stopped firing"
 
 
-def test_a_defaults_carrier_is_read_under_either_extension(tmp_path, monkeypatch):
-    """⚠️ CONTRACT PIN, NOT NEW DETECTION — counterfactual measured.
-
-    #1606 already widened `_dir_defaults_alerts` (it passes no `suffixes`), so this
-    test was green BEFORE this change too: neither of the two mutants that revert this
-    change kills it. It is kept because the platform-policy path is the one whose
-    silent loss is hardest to notice, not because it buys detection here.
-    """
-    # The same axis one level up: a platform-policy recipe lives in `_defaults.*`, and
-    # `_dir_defaults_alerts` selected it by extension too. A tenant that declares
-    # nothing must still inherit it from `_defaults.yml`.
-    policy = ('defaults:\n  mysql_threads_running: 80\n'
-              '_custom_alerts:\n'
-              '  - {recipe: threshold, name: plat, metric: plat_m, op: ">",'
-              ' window: 5m, threshold: "80:warning"}\n')
-    a, b = tmp_path / "A", tmp_path / "B"
-    _write_tree(a, {"_defaults.yaml": policy, "t.yaml": "tenants:\n  t1: {}\n"})
-    _write_tree(b, {"_defaults.yml": policy, "t.yaml": "tenants:\n  t1: {}\n"})
-
-    pa, pb = tmp_path / "a.yaml", tmp_path / "b.yaml"
-    assert _compile_into(a, pa, monkeypatch) == cc.EXIT_OK
-    assert _compile_into(b, pb, monkeypatch) == cc.EXIT_OK
-    rules_a, rules_b = cc._committed_rules(pa), cc._committed_rules(pb)
-    assert rules_a, "the .yaml control produced nothing — the comparison is vacuous"
-    assert rules_a == rules_b
-
-
 def test_a_carrier_the_exporter_does_not_serve_is_not_a_tenant_here(tmp_path):
     """⛔ The CEILING. Everything above pins the floor — this reader must not be
     NARROWER than the exporter's set — and blind review measured that the other
@@ -1919,13 +2013,15 @@ def test_a_hidden_path_is_not_a_recipe_source(tmp_path):
     _hidden_or_visible_tree(hid, hidden=True)
     _hidden_or_visible_tree(vis, hidden=False)
 
-    # ⛔ Control first: visible, the GHOST recipe IS a second shape.
-    vis_shapes, _p, _s = ld.build_shapes(vis)
-    assert len(vis_shapes) == 2, f"visible control lost the GHOST shape: {vis_shapes}"
+    # ⛔ Control first: visible, `snap/acme.yaml` IS read — by the exporter, whose
+    # load then refuses the tree for declaring acme twice (#3042: the compiler's
+    # source is the exporter's reading, so the control is the exporter's answer).
+    with pytest.raises(tv.DaGuardError, match="duplicate tenant"):
+        cc.build_pack(vis)
 
-    shapes, _per, skipped = ld.build_shapes(hid)
+    shapes, not_compiled = _shapes(hid)
     assert [s["metric"] for s in shapes] == ["node_cpu"], shapes
-    assert skipped == [], skipped
+    assert not_compiled == [], not_compiled
     assert cc.build_pack(hid)["_meta"]["shapes"] == 1
     triples, file_errors = ld.collect_instances(hid)
     assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
@@ -1952,37 +2048,20 @@ def test_a_configmap_mount_reads_each_tenant_once(tmp_path):
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"symlinks unavailable here: {exc}")
 
-    def dup_skips(root):
-        return [s for s in ld.build_shapes(root)[2]
-                if "duplicate custom-alert name" in s["reason"]]
+    # ⛔ Control: once the payload directory is visible it IS a second carrier —
+    # the exporter's load reads acme twice and refuses the tree (#3042: the old
+    # control was the compiler's own false `duplicate custom-alert name`).
+    with pytest.raises(tv.DaGuardError, match="duplicate tenant"):
+        cc.build_pack(vis)
 
-    # ⛔ Control: once the payload directory is visible it IS a second carrier.
-    assert dup_skips(vis), "visible control no longer reads the payload twice"
-
-    assert dup_skips(cm) == []
+    meta = cc.build_pack(cm)["_meta"]
+    assert [(e.tenant, e.spec["name"], e.status) for e in meta["entries"]] == [
+        ("acme", "a1", "served")]
+    assert meta["shapes"] == 1
     triples, file_errors = ld.collect_instances(cm)
     assert [(t, i["name"]) for t, i, _o, _own in triples] == [("acme", "a1")]
     assert file_errors == []
     assert _described_alert_names(cm, "acme") == ["a1"]
-
-
-def test_the_cap_survivor_follows_path_order_not_posix_string_order(tmp_path):
-    """⛔ Triple order decides which OWN recipe survives the cap (greedy
-    first-fit). `list_config_tree` orders by POSIX string, where `a-b.yaml`
-    precedes `a/x.yaml` ('-' < '/'); `Path` ordering — what `sorted(rglob)`
-    gave before #2086 — puts `a/x.yaml` first. Taking the listing's order as
-    is flips the survivor and changes the compiled pack."""
-    _write_tree(tmp_path, {
-        "a/x.yaml": _ca_tenant("acme", _ca("from_dir", "m_dir")),
-        "a-b.yaml": _ca_tenant("acme", _ca("from_dash", "m_dash")),
-    })
-    # The two orders really do disagree on this tree, or the test is vacuous.
-    assert sorted(["a/x.yaml", "a-b.yaml"])[0] == "a-b.yaml"
-    assert sorted([Path("a/x.yaml"), Path("a-b.yaml")])[0] == Path("a/x.yaml")
-
-    shapes, _per, skipped = ld.build_shapes(tmp_path, max_custom_recipes=1)
-    assert [s["metric"] for s in shapes] == ["m_dir"], shapes
-    assert [(s["tenant"], s["name"]) for s in skipped] == [("acme", "from_dash")]
 
 
 def test_a_broken_defaults_in_a_hidden_dir_is_not_a_file_error(tmp_path):
@@ -2069,6 +2148,4 @@ def test_both_paths_named_compile_with_no_tree_root(tmp_path, monkeypatch):
 
 def test_no_rerun_command_names_a_default_out_with_no_tree_root(monkeypatch):
     monkeypatch.setattr(cc, "_repo_root", lambda: None)
-    a = _Args(None, None)
-    a.max_custom_recipes = cc._loader.MAX_CUSTOM_RECIPES_DEFAULT
-    assert cc._rerun_command(a) == ""
+    assert cc._rerun_command(_Args(None, None)) == ""

@@ -4,4 +4,4 @@ topic: da-tools
 issues: [3042]
 created: 2026-10-16T17:00:00+00:00
 ---
-- **`validate-config` 新增 `custom_alert_sources`：自訂告警編譯器與 exporter 對不上的地方，只報不擋（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）**：把編譯器實際要產生規則的 recipe，和 exporter 送出門檻的 recipe 按規則實際 join 的（`recipe_id`、severity）與租戶比對。編譯了卻沒送的，規則永遠不會觸發（例如寫在 `_defaults.yaml` 頂層、由編譯器繼承的 recipe）；送了而整份規則包裡沒有同一個（`recipe_id`、severity）規則的，永遠不會告警（例如根 `_defaults.yaml` 的 `tenants:`、profile）。exporter 視為關掉的（門檻 `disable`／`disabled`／`off`／`false`、SLO objective `disable`）不列入。每個問題一行 WARN，結束碼不變；只在裝有編譯器的地方（repo 內）出現。下一階段編譯器會改以 exporter 送出的為準，屆時前者不再編譯、後者開始觸發。
+- **`validate-config` 新增 `custom_alert_sources`：exporter 送出的自訂告警編不出規則時報出來，只報不擋（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）**：編譯器照 exporter 自己的讀法產生規則，所以一條送出（或停用、重新啟用後會送出）的自訂告警沒有規則，只剩一種原因：編譯器與 exporter 對它的讀法不同（`recipe_id` 不同，或編譯器拒收 exporter 收下的設定）。那條門檻沒有規則讀，永遠不會告警，編譯規則包也會被拒。每條一行 WARN，寫出檔案、租戶、條目序號與兩邊的讀法，結束碼不變；只在裝有編譯器的地方（repo 內）出現。

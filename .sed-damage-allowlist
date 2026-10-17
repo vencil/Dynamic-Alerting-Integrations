@@ -203,3 +203,7 @@ tests/ops/test_grar_match_null_key.py
 # (PyYAML loaders, Go renderers, deep_merge, overlay/profile expansion) and
 # reads `da-guard effective` instead — 2495 → ~720 LOC, a real shrink.
 scripts/tools/dx/describe_tenant.py
+# #3042 B1b: the compiler compiles the exporter's reading (custom_alerts/entries.py);
+# the tree walk, cap and quarantine left the loader, which keeps only the walk
+# describe_tenant still shows (until #3042 B2).
+scripts/tools/dx/custom_alerts/loader.py

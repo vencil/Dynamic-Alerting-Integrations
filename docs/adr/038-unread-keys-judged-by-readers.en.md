@@ -18,6 +18,10 @@ Revised 2026-10-16 (corrected from measurement while implementing the registry):
 
 Revised 2026-10-17: no `_` key produces a threshold row any more, and the exporter reads no `_` key the registry does not list, in line with the JSON schema (decision 2); the verdict therefore no longer has `platform_violation`, and such a key is `unread` (decisions 4 and 6).
 
+Revised 2026-10-17: `disable_partial` is reported only when the sibling still served is not written in the tenant's own file, and names the file it comes from; `disable` is to turn off the whole family later (decision 8).
+
+Revised 2026-10-17: the custom alert compiler compiles the exporter's own reading, so the two read `_custom_alerts` in the same layers (decision 2).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -62,8 +66,8 @@ tenants:
     mysql_conections: "70"        # misspelled
     mysql_slave_lagg: disable     # misspelled; meant to turn off mysql_slave_lag
     _routng: disable              # misspelled; meant to disable routing
-    redis_memory: disable         # meant to turn off the redis memory alert
-    redis_memory_critical: "90"
+    redis_memory: disable         # turn off the warning tier
+    redis_memory_critical: "90"   # keep critical only
     _namespaces: [prod-ns]        # annotation for tools
 ```
 
@@ -80,7 +84,7 @@ validate-config stops `_routng`, but nobody stops the rest:
 
 - The tenant thinks the threshold is 70; the effective value is the default 80.
 - The tenant thinks `mysql_slave_lag` is turned off; it is still served as 30.
-- The tenant thinks the redis memory alert is off, but `redis_memory_critical` is still served as 90, so the critical alert still fires.
+- `redis_memory_critical` is still served as 90. Here the tenant wrote it, to keep the critical tier only; but were the same key inherited from a subdirectory `_defaults.yaml` or a profile, a tenant writing `redis_memory: disable` would think the whole alert is off while the critical alert still fires.
 
 ### Why not keep extending the key-name rules
 
@@ -110,7 +114,7 @@ No separate piece of code describing "which keys the generator reads" is written
 Facts that cannot be measured go in one JSON registry, kept inside the exporter's Go module (`components/threshold-exporter/app/pkg/config/`). Its content is limited to the top-level `_` namespace:
 
 - Which **reader class** each reserved key and prefix (`_silent_mode`, `_routing`, `_state_` …) belongs to: `exporter`, `generator`, `custom_alert_compiler`, `policy_engine` (Policy-as-Code, which reads `_policies` from the root `_defaults.yaml`), `annotation` (annotations only for people or tools, for example `_namespaces`). One key can belong to several readers.
-- **In which layers each reader reads the key**: the tenant file, `tenants:` in a root platform file, a profile, `defaults:` of a subdirectory's `_defaults.yaml`, the top level of a root platform file. Readers of one key can read it in different layers: measured, `_custom_alerts` written in a profile is read by the exporter and not by the compiler.
+- **In which layers each reader reads the key**: the tenant file, `tenants:` in a root platform file, a profile, `defaults:` of a subdirectory's `_defaults.yaml`, the top level of a root platform file. Readers of one key can read it in different layers: for example, the registry declares `_severity_dedup` under `defaults:` of a subdirectory's `_defaults.yaml` as read by the exporter and not by the generator.
 - **Retired keys** and the hint text for users.
 - Description text (for the schema description and the explain output).
 
@@ -201,7 +205,7 @@ When `_state_<filter>` points to a filter the platform has not declared, or the 
 
 | Report | When | How it is judged |
 |---|---|---|
-| `disable_partial` | The base key is turned off, but the `_critical` or dimension keys of the same family are still served | One served-values pass compares keys of the same family; no recomputation needed |
+| `disable_partial` | The base key is turned off, but a `_critical` or dimension key of the same family is still served, and that key is not written in the tenant's own file (it comes from a subdirectory `_defaults.yaml`, a profile, a root platform file's `tenants:`, or the root defaults' dimension keys) | One served-values pass compares keys of the same family; no recomputation needed; where each sibling comes from is `da-guard effective`'s source information |
 | `disable_noop` | Removing this `disable` leaves the served values completely unchanged | Counterfactual recomputation: assume this `disable` does not exist, compute again, and see whether the result changes; the recomputation runs inside Go |
 
 - Reserved keys (`_routing: disable`, `_silent_mode: disable` …) are not exempt and are judged per decision 4.
@@ -209,10 +213,11 @@ When `_state_<filter>` points to a filter the platform has not declared, or the 
 - The counterfactual recomputation must look at time windows across the whole day (including scheduled values), not a single instant. Otherwise the judgment inside and outside a window would be opposite.
 - Cost: a tenant's threshold rows depend only on its own config and the platform's, so each tenant is recomputed at its own schedule cuts only, and each recomputation holds only that round's tenants; round k removes the k-th `disable` of every tenant together, so the number of rounds equals the most `disable`s any single tenant has, independent of the number of tenants.
 - A `disable` written in a profile or platform file affects every tenant that uses it and is reported on that file.
-- Both are reported as warnings across the whole tree. Those **newly introduced** by this change also appear in the config-diff PR comment, because that is what reviewers actually read ([ADR-037](./037-config-diff-compares-rendered-output.en.md)).
+- A sibling written in the tenant's own file is deliberate: `X: disable` with `X_critical: 90` means keeping the critical tier only. explain's `disable` column still shows `partial`, but it is no warning; a warning that is reported names the file each sibling still served comes from.
+- Both are reported as warnings across the whole tree. Those **newly introduced** by this change also appear in the config-diff PR comment, because that is what reviewers actually read ([ADR-037](./037-config-diff-compares-rendered-output.en.md)); config-diff does not tell siblings' sources apart and lists every newly introduced partial.
 - The counterfactual recomputation runs only in explain, config-diff and CI, not in tenant-api's write check: the write check has a time limit ([ADR-036](./036-single-parser-effective-config.en.md) §3), and the number of recomputation rounds depends on the config, so it is not fixed.
 
-`disable` turning off only the base key, without also turning off `_critical` and dimension keys, is the current semantics. This ADR only reports it; whether to change it to turn them off together is a breaking change, see [#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046).
+`disable` turning off only the base key, without also turning off `_critical` and dimension keys, is the current semantics. It will change to turning off every key of the same family, whatever its source; keeping the critical tier only is then written `X: "90:critical"` (it serves the same series as `X: disable` with `X_critical: 90`). That is a breaking change and ships with the gates starting to block ([#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)). Not adopted: keeping the siblings the tenant's file writes and turning off only the inherited ones — when the exporter computes thresholds it cannot tell which layer a sibling came from, since profile and subdirectory defaults values are already merged into the tenant's config by then.
 
 ### 9. Letting users check for themselves
 
@@ -259,7 +264,7 @@ db-a
   mysql_conections        db-a.yaml     —           unread   —        ← error: no reader reads it
   mysql_slave_lagg        db-a.yaml     —           unread   noop     ← warning: turns off nothing; mysql_slave_lag still served as 30
   _routng                 db-a.yaml     —           unread   —        ← error
-  redis_memory            db-a.yaml     exporter    read     partial  ← warning: redis_memory_critical still served as 90
+  redis_memory            db-a.yaml     exporter    read     partial  ← not reported: redis_memory_critical is db-a's own, keeping critical only
   redis_memory_critical   db-a.yaml     exporter    read     —
   _namespaces             db-a.yaml     annotation  read     —
 ```
@@ -276,7 +281,6 @@ The input and today's measured output are in "Background"; this table is the ver
 - **The probe does not cover two kinds**: annotation keys (`_namespaces`), and keys that are read but do not change the output. These rely on explicit marks in the registry.
 - **Cost of counterfactual recomputation**: the number of recomputation rounds equals the most `disable`s any single tenant has, and each round is one served-values. It does not go into the write check.
 - **Problems found while measuring, handled separately**:
-  - The custom alert compiler and the exporter use different source rules for `_custom_alerts`: the compiler picks up tenants in `_` files in sub-directories that are not selected; the exporter does not read them ([#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)).
   - The generator reads `_metadata` but does not use it ([#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)).
   - `_severity_dedup` is read only from the tenant file, while other reserved keys inherit from profiles; whether this is intended needs confirming ([#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)).
   - `disable` does not also turn off `_critical` and dimension keys (see decision 8, [#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)).

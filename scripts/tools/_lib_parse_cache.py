@@ -64,7 +64,7 @@ import os
 import pickle
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Optional
+from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 
 import _lib_parse_tree
 from _lib_parse_tree import FileUnreadable, ParseTreeError, Tree  # noqa: F401 (re-exported)
@@ -82,6 +82,10 @@ PICKLE_PROTOCOL = 5
 #: How long one ``parse-tree`` run may take (seconds), as the other
 #: da-guard readers (``_lib_tenant_values.DEFAULT_TIMEOUT``).
 DEFAULT_TIMEOUT = 600
+
+#: The cache-key mode of a carrier verdict (`ConfdReader._verdict`).
+VERDICT_MODE = "parse-tree:carrier-verdict(not_read, defaults_carriers)"
+
 
 class NotSelected(ParseTreeError):
     """A file this tool reads is not one parse-tree selects: the Python walk
@@ -212,6 +216,8 @@ class ConfdReader:
         self.binary = binary
         self.timeout = timeout
         self._tree: Optional[Tree] = None
+        self._verdicts: "dict[str, Optional[tuple[Optional[str], dict]]]" = {}
+        self._carriers_by_dir: "Optional[dict[str, list[str]]]" = None
 
     def tree(self) -> Tree:
         """The tree-mode document (run on first use). Raises ParseTreeError."""
@@ -248,18 +254,136 @@ class ConfdReader:
                 "is used") from None
 
     def not_read(self, path: "str | os.PathLike[str]") -> Optional[str]:
-        """Why no reader reads *path*, as parse-tree's tree-mode document says
-        (its `not_read` entry: e.g. `unselected_defaults_carrier` for the
-        `_defaults` spelling a directory does not select), or None when some
-        reader reads it — `selected` (an unreadable file included: `node`
-        names its kind) — or parse-tree does not list it at all.
+        """Why no reader reads *path*, as parse-tree says (its `not_read`
+        entry: `unselected_defaults_carrier` for the `_defaults` spelling a
+        directory does not select), or None when some reader reads it —
+        `selected` (an unreadable file included: `node` names its kind) — or
+        parse-tree does not list it at all.
 
-        A tool that walks the directory itself asks this before `node`: a
-        file listed here is parse-tree's verdict that nothing reads it (skip
-        it and say so), while a file in neither list is a walk that disagrees
-        with the exporter's (`node` raises `NotSelected`). Runs the tree-mode
-        document (ParseTreeError)."""
-        return self.tree().not_read.get(self.rel(path))
+        ⛔ THE answer to "skip or read" for a tool that walks the tree itself
+        (`_lib_confd.iter_config_files` / `list_config_tree`): never
+        `_lib_confd`'s own carrier selection (`select_defaults_carrier`,
+        `readable_carriers`; `unselected_carriers` is gone for this). Those are a second
+        implementation of the exporter's rule; a file they read and
+        parse-tree lists here makes `read` raise `NotSelected` — rc 2 for a
+        valid tree (#2906 review, twice). A file listed here is skipped and
+        named; a file in neither list is a walk that disagrees with the
+        exporter's (`node` raises `NotSelected`). See `split_not_read`.
+
+        With no cache this is the tree-mode document (ParseTreeError). Under
+        a cache (the generator container, which never runs tree mode) it is
+        parse-tree's file-mode document of the file on disk (`_verdict`, kept
+        in the cache),
+        asked only for a defaults-named file in a directory holding two or
+        more: tree mode's one reason (parse_tree.go `notReadUnselectedCarrier`)
+        is a carrier its directory's chain passes over, and a chain with one
+        candidate passes over none."""
+        rel = self.rel(path)
+        if _ACTIVE is None:
+            return self.tree().not_read.get(rel)
+        if len(self._carrier_names(rel)) < 2:
+            return None
+        verdict = self._verdict(rel)
+        return None if verdict is None else verdict[0]
+
+    def split_not_read(self, paths: "Iterable[str | os.PathLike[str]]"
+                       ) -> "tuple[list[Path], list[tuple[Path, str]]]":
+        """*paths* (a walk of this tree, in its order) split by `not_read`:
+        ``(read, [(path, reason), ...])``. *read* is every path some reader
+        reads (or parse-tree does not list: `read` raises `NotSelected` for
+        it); the second list is what the caller must skip and name."""
+        read: list[Path] = []
+        skipped: list[tuple[Path, str]] = []
+        for p in paths:
+            why = self.not_read(p)
+            if why is None:
+                read.append(Path(p))
+            else:
+                skipped.append((Path(p), why))
+        return read, skipped
+
+    def carrier(self, directory: "str | os.PathLike[str]") -> Optional[Path]:
+        """The defaults carrier parse-tree says *directory*'s chain selects
+        (its `defaults_carriers`), as a path under the root, or None when the
+        directory has none — not `_lib_confd.select_defaults_carrier`'s
+        answer (see `not_read`). Under a cache: the file-mode document of a
+        defaults-named file in the directory. Raises ParseTreeError."""
+        d = self.rel(directory)
+        if _ACTIVE is None:
+            chosen = self.tree().defaults_carriers.get(d)
+        else:
+            chosen = None
+            for name in self._carrier_names("_" if d == "." else d + "/_"):
+                verdict = self._verdict(name if d == "." else f"{d}/{name}")
+                if verdict is not None:
+                    chosen = verdict[1].get(d)
+                    break
+        return None if chosen is None else self.root / chosen
+
+    def _carrier_names(self, rel: str) -> list[str]:
+        """The defaults carriers (`_lib_confd.is_defaults_name`, the
+        exporter's `confdname.IsDefaults`) the shared walk
+        (`_lib_confd.iter_config_files`: regular files, links to one
+        included, hidden entries pruned — run once per reader) finds in
+        *rel*'s directory, by name, sorted; [] unless *rel* itself is one or
+        names no file (``dir/_``)."""
+        from _lib_confd import is_defaults_name, iter_config_files  # lazy: imports this module
+        parent, _, base = rel.rpartition("/")
+        if base != "_" and not is_defaults_name(base):
+            return []
+        if self._carriers_by_dir is None:
+            by_dir: dict[str, list[str]] = {}
+            for p in iter_config_files(self.root):
+                if is_defaults_name(p.name):
+                    d = p.parent.relative_to(self.root).as_posix()
+                    by_dir.setdefault("" if d == "." else d, []).append(p.name)
+            self._carriers_by_dir = by_dir
+        return sorted(self._carriers_by_dir.get(parent, []))
+
+    def _verdict(self, rel: str) -> "Optional[tuple[Optional[str], dict]]":
+        """Under a cache: ``(not_read reason or None, defaults_carriers)`` of
+        parse-tree's file-mode document of *rel* as it is on disk, or None
+        when *rel* cannot be opened (parse-tree names it as unreadable on
+        `read`).
+
+        Kept in the cache under :data:`VERDICT_MODE`, keyed by *rel* and the
+        name and bytes of every defaults carrier in its directory — what the
+        selection reads (`SelectDefaultsCarriers` over the carriers the walk
+        could read): a judgement that changes none of them runs no parse-tree
+        for it. A carrier that cannot be opened enters the key as such."""
+        if rel in self._verdicts:
+            return self._verdicts[rel]
+        parent = rel.rpartition("/")[0]
+        h = hashlib.sha256()
+        data = None
+        for name in self._carrier_names(rel):
+            sib = f"{parent}/{name}" if parent else name
+            try:
+                with open(os.path.join(self.root, sib), "rb") as fh:
+                    content = fh.read()
+            except OSError:
+                content = None
+            if sib == rel:
+                data = content
+            n = sib.encode("utf-8", "surrogateescape")
+            h.update(len(n).to_bytes(8, "big") + n)
+            h.update(b"\x00" if content is None
+                     else b"\x01" + len(content).to_bytes(8, "big") + content)
+        if data is None:
+            self._verdicts[rel] = None
+            return None
+        key = (content_key(rel, h.digest()), VERDICT_MODE)
+        cache = _ACTIVE
+        value = cache.cached(key) if cache is not None else MISS
+        if value is MISS:
+            if cache is not None:
+                cache.parses += 1  # a parse-tree run, as a read's miss
+            tree = _lib_parse_tree.load_file(self.root, rel, data, self.binary, self.timeout)
+            value = (tree.not_read.get(rel), dict(tree.defaults_carriers))
+            if cache is not None:
+                cache.store(key, value)
+        self._verdicts[rel] = value
+        return value
 
     def node(self, path: "str | os.PathLike[str]") -> Any:
         """The file's tagged nodes, from the tree-mode document (shared: do

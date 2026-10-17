@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -33,29 +34,18 @@ type PutTenantResponse struct {
 // Accepts a tenant-only YAML document — the conf.d/{id}.yaml shape, a
 // `tenants:` block containing the {id} section (NOT the platform defaults).
 //
-// #3062: one conf.d file may declare several tenants, so the body DECLARES
-// tenant sections and the write replaces exactly those. Every tenant the
-// body declares must be one the caller may write (the same two judgements
-// as for {id}: the metadata on disk and as the body proposes it; in PR mode
-// again on the fresh base), else 403 with a fixed text naming no tenant. The
-// declared sections are spliced into the file as the writer reads it under
-// its lock (in PR mode, on the fresh base): sections the body does not
-// declare, other root keys and comments are kept, and a splice that would
-// change any of them (an anchor another section aliases) is refused, 409
-// TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable, its detail
-// withheld from a caller who may not read every tenant in the file (#3050);
-// for such a caller an anchor or alias in a body section, an anchor in a
-// section the splice replaces, or an anchor on the root or `tenants:` node
-// is that 409 outright, values never compared (they would be an oracle). A
-// declared tenant another conf.d file also declares is 409
-// TENANT_DECLARED_ELSEWHERE.
-// A file whose sections cannot be told apart (a merge key or an alias in
-// `tenants:` or at the root, or it does not parse) is #2405's. Leaving a
-// section out of the body never deletes it. A file holding nothing but
-// declared sections is replaced by the body byte for byte; otherwise the
-// file is re-encoded with 2-space indentation. See tenant_put_splice.go.
+// #3064: only an API-managed tenant is written — one whose conf.d file is
+// API-shaped (confd.TenantFileManagement: one document declaring only {id},
+// under its own name, without YAML indirection where tenants are declared).
+// Such a file is the tenant's alone, so the body replaces it whole and
+// X-DA-Base-Hash (its source_hash) covers exactly this tenant. A git-managed
+// tenant (any other shape: a file shared with other tenants, a stem that is
+// not the declared id, several documents, top-level anchors) is refused,
+// 409 TENANT_GIT_MANAGED, in both write modes and in the previews. The body
+// must itself be API-shaped (400), so a write never turns the tenant's file
+// into one tenant-api does not manage.
 //
-// The body is validated as sent, so any top-level key other than `tenants`
+// The body is committed verbatim, so any top-level key other than `tenants`
 // (e.g. a stray `defaults:` / `state_filters:` / `profiles:`, or a typo) is
 // rejected with 400 — mirroring tenant-config.schema.json's
 // additionalProperties:false (#705). Validation merges the on-disk
@@ -78,7 +68,12 @@ type PutTenantResponse struct {
 // Supports both GitHub PRs and GitLab MRs via platform.Client interface.
 //
 // @Summary     Update tenant config
-// @Description Validates, writes, and commits a tenant's YAML configuration. The body declares tenant sections (the decoded keys of its tenants mapping: a quoted, tagged or aliased key is the id it decodes to) and the write replaces exactly those in the conf.d file {id} lives in (#3062): every declared tenant must be one the caller may write, and the sections the body does not declare, the file's other root keys and its comments are kept as they are. Leaving a section out never deletes it (the API has no endpoint that removes a tenant). A file holding only declared sections is replaced by the body byte for byte; otherwise the file is re-encoded with 2-space indentation, the declared sections as the body writes them.
+// @Description Validates, writes, and commits a tenant's YAML configuration. The body replaces the tenant's conf.d file whole.
+// @Description Only an API-managed tenant is written (#3064): one whose file (located by its name) is API-shaped — one YAML
+// @Description document declaring only {id}, with no anchor, alias, merge key (<<) or tagged key at the top level or
+// @Description directly under tenants: (anchors and aliases inside the tenant's own section are fine). Any other tenant is
+// @Description git-managed (GET marks it managed_by: git) and every write is refused with 409 TENANT_GIT_MANAGED, in both write
+// @Description modes; change it in git. The body must be API-shaped too (400), so it declares exactly tenants.{id}.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json
@@ -87,9 +82,9 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); The flat _routing_receiver_type is a 400 BAD_REQUEST from the tenant key validation (#2903; the receiver type is _routing.receiver.type). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the current tenant file cannot be spliced into and the caller lacks write permission on all tenants (#2405; nothing written; such a file is replaced by the body whole): it does not parse, or (#3062) its root is not a mapping or has a merge key (<<), its tenants is an alias or not a mapping, or its tenants mapping has a merge key, a key that does not decode to a string or one id twice. Also 400 when the body's tenants mapping has a merge key (<<), a key that does not decode to a string, or declares one tenant twice (#3062; nothing written)"
-// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions. Also when the body declares a tenant other than {id} the caller may not write (#3062): a fixed text that names no tenant; nothing written. A declared tenant whose _metadata in the file does not decode is refused so too, unless the caller may write every tenant with no org-scope, environments or domains. In PR write-back mode the write scope is judged again on the latest base branch, which this server's local copy may lag: a refusal there is the same 403 with tenant_id (for another declared tenant, the same fixed text naming none), and no PR/MR or branch is left"
-// @Failure     409   {object} ErrorResponse "Conflict: code TENANT_CONFIG_NOT_LOADABLE, config_error not_round_trippable, when the declared sections cannot be written into the file without changing content the body does not declare — an alias elsewhere in the file (a value or a key) to an anchor in a declared section whose value or definition changes (#3062; nothing written). For a caller who may not read every tenant the file declares (#3050), any anchor or alias in a section the body declares, any anchor in a declared section of the file it replaces (its key included), or an anchor on the root mapping or on the tenants: value, is this 409 with the fixed text, whatever the values: comparing them would tell that caller whether it guessed a hidden value. The place of the first difference is given only to a caller who may read every tenant the file declares (as GET's raw_yaml, #3050), and named only inside a section the caller may read; anyone else gets a fixed text. Or base hash mismatch (current_source_hash only when GET /tenants/{id} would show the caller that file's source_hash, #3050), pending PR, ambiguous tenant file, the tenant, or a tenant the body declares besides it whose section the file holds (#3062), is also declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE, a fixed text; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it"
+// @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); The flat _routing_receiver_type is a 400 BAD_REQUEST from the tenant key validation (#2903; the receiver type is _routing.receiver.type). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when the body is not API-shaped (#3064): it declares a tenant besides {id}, several documents, or an anchor, alias, merge key or tagged key at the top level or directly under tenants: (nothing written). Also 400 when the current tenant file's tenants: block cannot be decoded for the end-of-life check and the caller lacks write permission on all tenants (#2405; nothing written)"
+// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions. In PR write-back mode the write scope is judged again on the latest base branch, which this server's local copy may lag: a refusal there is the same 403 with tenant_id, and no PR/MR or branch is left"
+// @Failure     409   {object} ErrorResponse "Conflict: code TENANT_GIT_MANAGED (#3064) when the tenant is git-managed — its conf.d file (on the latest base branch in PR write-back mode) is not API-shaped; tenant_id and git_managed_reason (not_tenant_document, several_documents, yaml_indirection, tenant_count, id_mismatch) in the envelope, naming no other tenant; judged before the base hash; nothing written. Or base hash mismatch (current_source_hash only when the current file is API-shaped: the hash GET /tenants/{id} shows), pending PR, ambiguous tenant file, the tenant is also declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE, a fixed text; nothing written), the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced. A tenant file that is itself an unresolvable symlink (dangling, looping, or with a non-directory in its path) does not count: the write replaces it"
 // @Failure     413   {object} ErrorResponse "Payload too large: the body is over TA_MAX_BODY_BYTES (code PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never written truncated (#2778)"
 // @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
 // @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
@@ -153,9 +148,9 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		var notices []string
 		var err error
 		if baseHash != "" {
-			notices, err = d.Writer.WriteSplicedIfUnchanged(r.Context(), tenantID, email, body, baseHash, plan.splicer(d))
+			notices, err = d.Writer.WriteIfUnchanged(r.Context(), tenantID, email, body, baseHash)
 		} else {
-			notices, err = d.Writer.WriteSpliced(r.Context(), tenantID, email, body, plan.splicer(d))
+			notices, err = d.Writer.Write(r.Context(), tenantID, email, body)
 		}
 		if err != nil {
 			if writePutDirectError(rw, r, d, tenantID, err) {
@@ -182,7 +177,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 // timing as when the defer lived in the handler.
 func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *putPlan, email string) {
 	tenantID, yamlContent := plan.tenantID, plan.body
-	gatePre, gatePost, declared := plan.gatePre, plan.gatePost, plan.declared
+	gatePre, gatePost := plan.gatePre, plan.gatePost
 	// Atomically claim the tenant. Returns false if a PR/MR is
 	// already pending OR another request is mid-creation — both map
 	// to 409. The claim (not the async poll cache) is what makes two
@@ -212,6 +207,13 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 	}
 	if !claimed {
 		existingPR, _ := d.PRTracker.PendingPRForTenant(tenantID)
+		// #3123: the PR/MR named here must be one the caller could see on
+		// GET /prs. A batch PR/MR covering tenantID also covers others; for a
+		// caller who cannot read all of them the 409 stands but names no PR —
+		// the same body as the in-flight-claim case, where there is none yet.
+		if !prVisibleTo(d, rbac.RequestPrincipal(r), existingPR) {
+			existingPR = platform.PRInfo{}
+		}
 		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
 			Error: "pending_pr_exists",
 			Code:  CodePendingPR,
@@ -243,11 +245,10 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 	// the metadata write scope before and after the write (#1597). The
 	// generator judges the branch point with the body written (#2903). A
 	// refusal drops the branch.
-	// gatePre/gatePost are the pairs the local gates judged; declared, those
-	// of every other tenant the body declares (#3062), judged here again by
-	// the same two judgements on the same base. The reverse — a tenant the
-	// local tree refuses and the base would allow — was already refused by
-	// the local check: it can only refuse early.
+	// gatePre/gatePost are the pairs the local gates judged. The reverse — a
+	// tenant the local tree refuses and the base would allow — was already
+	// refused by the local check: it can only refuse early. A tenant
+	// git-managed on the base is refused before this check runs (#3064).
 	p := rbac.RequestPrincipal(r)
 	check := func(configDir string) error {
 		// The pre-state check counts the org axis; when the base's tenant
@@ -262,9 +263,9 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 		if ok, err := freshScopeAllowed(d, p, configDir, tenantID, gatePost, post, !judged); err != nil || !ok {
 			return orFreshScopeError(err, &freshBaseScopeError{TenantID: tenantID, Put: true})
 		}
-		return declaredOnBase(d, p, configDir, tenantID, yamlContent, declared)
+		return nil
 	}
-	result, err := d.Writer.WritePRSpliced(r.Context(), tenantID, email, yamlContent, check, plan.splicer(d))
+	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
 		// #2857: the write scope refuses it on the fresh base, or the
 		// base's org file cannot be read.
@@ -276,10 +277,6 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 		var freshOrgs *freshBaseOrgsError
 		if errors.As(err, &freshOrgs) {
 			writeFreshBaseOrgsError(rw, r, freshOrgs)
-			return
-		}
-		// #3062: a tenant the body declares, refused on the fresh base.
-		if writeDeclaredUnwritableOnBase(rw, r, err) {
 			return
 		}
 		// The body matched the branch base, so no commit — and therefore no
@@ -302,10 +299,6 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the batch path).
 		if writeWriteFlowError(rw, r, d, err) {
-			return
-		}
-		// #3062: as in direct mode.
-		if writePutSpliceError(rw, r, err) {
 			return
 		}
 		// #795 F1: malformed body is a CLIENT error → 400 (matches the

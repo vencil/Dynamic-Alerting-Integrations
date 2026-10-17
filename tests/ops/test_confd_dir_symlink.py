@@ -243,14 +243,17 @@ def test_underscore_directory_link_is_named_by_name_filtering_readers(shared: Pa
 
 
 def test_compile_custom_alerts_allow_empty_is_not_refused(nested: Path, tmp_path: Path):
-    """F2: a directory link is not a quarantined recipe; `--allow-empty`
-    must still write (rc 0, as on main) and the link must be named."""
+    """F2: a directory link is not a declaration the exporter refuses;
+    `--allow-empty` must still write (rc 0, as on main) and the link must be
+    named — since #3042 by the exporter's own load (da-guard's stderr, which
+    the compiler prints), as it reads the tree through da-guard."""
     out = tmp_path / "pack.yaml"
     r = _run(COMPILE, "--config-dir", nested, "--out", out, "--allow-empty")
     both = r.stdout + r.stderr
     assert r.returncode == 0, both
-    assert "QUARANTINED" not in both, both
-    assert f"team-a — {SYMLINK_REASON}" in both
+    assert "not served" not in both, both
+    assert "team-a is a symlink to a directory and is not followed" in both, both
+    assert both.count("is a symlink to a directory") == 1, both
     assert out.is_file()
 
 

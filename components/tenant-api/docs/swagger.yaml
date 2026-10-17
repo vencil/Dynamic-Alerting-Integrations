@@ -164,8 +164,17 @@ definitions:
         description: '"open"/"opened", "closed", "merged"'
         type: string
       tenant_id:
-        description: Extracted from branch name
+        description: Extracted from branch name; empty for a batch PR/MR
         type: string
+      tenants:
+        description: |-
+          Tenants are the tenants a batch PR/MR covers, as tenant-api recorded
+          them when it created the PR/MR (#3123). Empty for a single-tenant PR/MR,
+          and for a batch PR/MR this process did not create (e.g. after a
+          restart): such a PR/MR is shown only to callers who read every tenant.
+        items:
+          type: string
+        type: array
       title:
         description: PR/MR title
         type: string
@@ -495,7 +504,9 @@ definitions:
           Code is a machine-readable error code for a FAILED op, set only for the
           failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,
           TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
-          config, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not
+          config, #2373), TENANT_GIT_MANAGED (the op's tenant is git-managed, #3064:
+          nothing written, change it in git), INTERNAL_ERROR (the conf.d walk behind
+          that check could not
           run, or another server-side failure), the route generator's codes
           (GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE,
           POLICY_UNAVAILABLE; #2903), and — PR mode, judged on the latest base branch —
@@ -553,14 +564,11 @@ definitions:
           — a broken file, not a missing tenant. Unrestricted callers (open mode,
           or an admin restricted on no org, environment or domain) get root-relative
           paths; any other caller gets only the file name, and only for a file named
-          after a tenant it could see as a degraded list row.
+          after a tenant it could see as a degraded list row. Other files are left
+          out without trace (not even counted).
         items:
           type: string
         type: array
-      parse_failed_hidden:
-        description: Parse-failed files not named in parse_failed_files because the
-          caller's RBAC scope does not cover them.
-        type: integer
     type: object
   internal_handler.ConfigDerivedState:
     properties:
@@ -920,9 +928,13 @@ definitions:
         minLength: 1
         type: string
       members:
+        description: |-
+          At least one member (#3123): an empty group has nothing to authorize a
+          reader or writer against. Emptying a group is a DELETE.
         items:
           type: string
         maxItems: 1000
+        minItems: 1
         type: array
     required:
     - label
@@ -1001,8 +1013,10 @@ definitions:
           (parses as YAML but cannot be loaded as a tenant config — wrong shape,
           errors only a typed decode detects, or a declared tenant id that is not
           valid UTF-8). threshold-exporter skips such a file whole, so nothing is
-          derived from it: raw_yaml and source_hash are returned (so the file can
-          be opened and fixed; withheld as RawYAMLWithheld says), and resolved_thresholds, custom_alerts,
+          derived from it: raw_yaml and source_hash are returned for an
+          API-managed tenant (so the file can be opened and fixed; withheld as
+          RawYAMLWithheld says) — a file that is not YAML is git-managed (#3064,
+          ManagedBy), so neither is returned for it — and resolved_thresholds, custom_alerts,
           validation_warnings and validation_notices are ABSENT — not empty,
           which would read as "none". Partial writes (PUT .../custom-alerts, the
           batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
@@ -1021,7 +1035,39 @@ definitions:
           additionalProperties: {}
           type: object
         type: array
+      git_managed_reason:
+        description: |-
+          GitManagedReason says why the tenant is git-managed (managed_by: git):
+          not_tenant_document (not YAML, or its root or tenants: is not a
+          mapping), several_documents, yaml_indirection, tenant_count (several
+          tenants), id_mismatch (the one tenant is not the file's name). A
+          fixed code: it names no tenant. Absent when managed_by is api.
+        enum:
+        - not_tenant_document
+        - several_documents
+        - yaml_indirection
+        - tenant_count
+        - id_mismatch
+        type: string
       id:
+        type: string
+      managed_by:
+        description: |-
+          ManagedBy is "api" when the tenant's conf.d file is API-shaped (#3064):
+          one YAML document declaring only this tenant (or none yet), under the
+          file's own name, with no anchor, alias, merge key (<<) or tagged key at
+          the top level or directly under tenants:. Such a file is the tenant's alone:
+          raw_yaml, source_hash and custom_alerts describe this tenant only, and
+          the writes accept it. "git" for every other file (shared with other
+          tenants, a name that is not the declared id, several documents, YAML
+          indirection where tenants are declared, not YAML): the tenant is
+          changed only in git, the answer carries the effective view alone —
+          resolved_thresholds and the validation fields (or config_error) — with
+          raw_yaml, source_hash and custom_alerts ABSENT, and every write is
+          refused with 409 TENANT_GIT_MANAGED.
+        enum:
+        - api
+        - git
         type: string
       masked:
         description: |-
@@ -1039,16 +1085,10 @@ definitions:
       raw_yaml_withheld:
         description: |-
           RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
-          empty, when the file is not shown to the caller: it declares a tenant
-          the caller may not read (#3050; a conf.d file can declare several, and
-          the file is shown whole or not at all), or its tenants cannot be listed
-          with certainty (not YAML; an alias, a merge key, a non-scalar key or a
-          key tagged other than !!str at the top level or in tenants:) and the
-          caller may not read every tenant;
-          or the caller would be shown the masked form but the file cannot be
-          masked with certainty: it is not YAML, holds more than one document, or
-          uses an anchor, alias or merge key (a credential can be placed outside
-          any credential field through one).
+          empty, when the caller would be shown the masked form but the file
+          cannot be masked with certainty: it uses an anchor or alias inside the
+          tenant's section (a credential can be placed outside any credential
+          field through one).
         type: boolean
       resolved_thresholds:
         items:
@@ -1153,10 +1193,10 @@ definitions:
       source_hash_withheld:
         description: |-
           SourceHashWithheld is true, with source_hash empty, when the tenant
-          file declares a tenant the caller may not read, or its tenants cannot
-          be listed with certainty and the caller may not read every tenant
-          (#3050): source_hash is the hash of that whole file, and confirms a
-          guess of it offline. merged_hash is this tenant's merge only.
+          is git-managed (#3064: its file is not API-shaped — shared with other
+          tenants, say), for every caller: source_hash is the hash of that whole
+          file, which no write may use as a base and which confirms a guess of
+          it offline (#3050). merged_hash is this tenant's merge only.
         type: boolean
       tenant_id:
         type: string
@@ -1241,6 +1281,14 @@ definitions:
     type: object
   internal_handler.ValidateResponse:
     properties:
+      code:
+        description: |-
+          Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a
+          git-managed tenant (#3064; warnings carries its text), so a client can
+          tell "change this tenant in git" from a body to fix. Absent otherwise.
+        enum:
+        - TENANT_GIT_MANAGED
+        type: string
       notices:
         items:
           type: string
@@ -1660,10 +1708,9 @@ paths:
       - federation
   /api/v1/federation/tokens/{id}:
     delete:
-      description: 'Revokes a federation token — removes its record and adds it to
-        the gateway revoked set. NOTE: revocation is eventually consistent and propagates
-        to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission
-        on the token''s tenant.'
+      description: |-
+        Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.
+        A caller without that permission gets the same 404 as for a token that does not exist, so a token id reveals nothing about its tenant.
       parameters:
       - description: Token ID
         in: path
@@ -1679,12 +1726,9 @@ paths:
             additionalProperties:
               type: string
             type: object
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/ErrorResponse'
         "404":
-          description: Not Found
+          description: No such token, or the caller lacks admin permission on its
+            tenant (indistinguishable)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -1809,15 +1853,20 @@ paths:
               type: string
             type: object
         "400":
-          description: Bad Request
+          description: Invalid id or body; members must list at least one tenant (an
+            empty group is removed with DELETE)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: Forbidden
+          description: The caller may not write a member tenant (of the request, or
+            of the visible stored group)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: Conflict
+          description: 'Code GROUP_ID_UNAVAILABLE: the id is held by a group the caller
+            cannot see — choose another id; do not retry. The body is the same whatever
+            that group holds; it discloses only that the id is taken. Otherwise a
+            state write lost a race (CONFLICT; retry)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -1963,8 +2012,13 @@ paths:
       - groups
   /api/v1/me:
     get:
-      description: Returns the authenticated user's email, groups, accessible tenants,
-        and permissions.
+      description: 'Returns the authenticated user''s email, groups, accessible tenants,
+        and permissions. Requires an identity only, no grant (#2520): a caller no
+        rule matches (including under a configured _rbac.yaml with zero rules) gets
+        200 with empty permissions and accessible_tenants. Lists only the rules matching
+        the caller — a summary of those rules, not of effective access: a matched
+        rule that grants nothing right now (an org-scoped rule without the org claim
+        under enforce) is still listed.'
       produces:
       - application/json
       responses:
@@ -1981,8 +2035,10 @@ paths:
       - identity
   /api/v1/prs:
     get:
-      description: Returns pending pull/merge requests created by tenant-api, filtered
-        by caller's tenant RBAC.
+      description: |-
+        Returns pending pull/merge requests created by tenant-api, filtered by caller's tenant RBAC.
+        A batch PR/MR (several tenants; `tenant_id` empty, `tenants` lists them) is returned only to callers who may read every tenant it covers.
+        A batch PR/MR whose tenants tenant-api did not record (e.g. created before a restart) is returned only to callers who may read every tenant.
       parameters:
       - description: Filter by tenant ID
         in: query
@@ -2032,30 +2088,29 @@ paths:
     get:
       description: |-
         Returns the raw YAML and resolved thresholds for a single tenant.
-        When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
-        source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
-        skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
-        the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
-        tenant file itself is repaired. A whole-file PUT can replace it. When tenant-api cannot parse the current file,
-        that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting write and no
-        org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused with 400, file
-        unchanged — fix it in git then. When allowed, its end-of-life recipe usage counts as none, so a body with an
-        end-of-life recipe is refused, and other tenants' sections in the body count as added and are refused. A file
-        tenant-api can parse is compared by its actual usage; a file that exists but cannot be read at all (permissions,
-        I/O, a directory) refuses the write. "Cannot parse" is the end-of-life check's decode (the tenants: block, though
-        the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
-        broken files each can parse is not guaranteed to match, so fix the file in git when needed.
+        managed_by says who changes the tenant (#3064). "api": its conf.d file (located by its name) is API-shaped —
+        one YAML document declaring only this tenant (or none yet), with no anchor, alias, merge key (<<) or tagged
+        key at the top level or directly under tenants: — so raw_yaml, source_hash and custom_alerts are that
+        tenant's alone. "git": any other file (shared with other tenants, a name that is not the declared id, several
+        documents, YAML indirection where tenants are declared, not YAML), with git_managed_reason; the answer is the
+        effective view only — resolved_thresholds and validation_warnings / validation_notices, or config_error —
+        and raw_yaml, source_hash and custom_alerts are ABSENT, for every caller. Every write to such a tenant is
+        refused with 409 TENANT_GIT_MANAGED; change it in git.
+        When an API-managed tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml
+        and source_hash, plus `config_error` (invalid_config, as on the list row); threshold-exporter skips such a
+        file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty: the file's
+        content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until it is
+        repaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's
+        tenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting
+        write and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused
+        with 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so
+        a body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,
+        a directory) refuses the write.
         A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
         "<masked: write permission required>" and comments removed, custom_alerts masked the same way and
         source_hash empty (masked: true);
-        or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
-        key, holds several documents or is not YAML.
-        A conf.d file can declare several tenants: when it declares one the caller may not read (#3050), raw_yaml,
-        custom_alerts and source_hash are empty with raw_yaml_withheld: true for every caller, on the config_error
-        answer too — the file is shown whole or not at all, never re-encoded to the caller's own section. When its
-        tenants cannot be listed with certainty (not YAML; an alias, a merge key, a non-scalar key or a key tagged
-        other than !!str, e.g. !!binary, at the top level or in tenants:), it is shown only to a caller with read permission on all tenants (an RBAC rule with
-        tenants: ["*"] and no org-scope, environments or domains).
+        or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
+        (inside the tenant's own section: anywhere else makes the tenant git-managed).
       parameters:
       - description: Tenant ID
         in: path
@@ -2092,16 +2147,13 @@ paths:
     put:
       consumes:
       - application/yaml
-      description: 'Validates, writes, and commits a tenant''s YAML configuration.
-        The body declares tenant sections (the decoded keys of its tenants mapping:
-        a quoted, tagged or aliased key is the id it decodes to) and the write replaces
-        exactly those in the conf.d file {id} lives in (#3062): every declared tenant
-        must be one the caller may write, and the sections the body does not declare,
-        the file''s other root keys and its comments are kept as they are. Leaving
-        a section out never deletes it (the API has no endpoint that removes a tenant).
-        A file holding only declared sections is replaced by the body byte for byte;
-        otherwise the file is re-encoded with 2-space indentation, the declared sections
-        as the body writes them.'
+      description: |-
+        Validates, writes, and commits a tenant's YAML configuration. The body replaces the tenant's conf.d file whole.
+        Only an API-managed tenant is written (#3064): one whose file (located by its name) is API-shaped — one YAML
+        document declaring only {id}, with no anchor, alias, merge key (<<) or tagged key at the top level or
+        directly under tenants: (anchors and aliases inside the tenant's own section are fine). Any other tenant is
+        git-managed (GET marks it managed_by: git) and every write is refused with 409 TENANT_GIT_MANAGED, in both write
+        modes; change it in git. The body must be API-shaped too (400), so it declares exactly tenants.{id}.
       parameters:
       - description: Tenant ID
         in: path
@@ -2143,47 +2195,30 @@ paths:
             is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not
             a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
             with a letter or digit (ADR-035; the route generator refuses a tree that
-            declares any other id; nothing written). Also 400 when the current tenant
-            file cannot be spliced into and the caller lacks write permission on all
-            tenants (#2405; nothing written; such a file is replaced by the body whole):
-            it does not parse, or (#3062) its root is not a mapping or has a merge
-            key (<<), its tenants is an alias or not a mapping, or its tenants mapping
-            has a merge key, a key that does not decode to a string or one id twice.
-            Also 400 when the body''s tenants mapping has a merge key (<<), a key
-            that does not decode to a string, or declares one tenant twice (#3062;
-            nothing written)'
+            declares any other id; nothing written). Also 400 when the body is not
+            API-shaped (#3064): it declares a tenant besides {id}, several documents,
+            or an anchor, alias, merge key or tagged key at the top level or directly
+            under tenants: (nothing written). Also 400 when the current tenant file''s
+            tenants: block cannot be decoded for the end-of-life check and the caller
+            lacks write permission on all tenants (#2405; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: 'Forbidden: insufficient permissions. Also when the body declares
-            a tenant other than {id} the caller may not write (#3062): a fixed text
-            that names no tenant; nothing written. A declared tenant whose _metadata
-            in the file does not decode is refused so too, unless the caller may write
-            every tenant with no org-scope, environments or domains. In PR write-back
-            mode the write scope is judged again on the latest base branch, which
-            this server''s local copy may lag: a refusal there is the same 403 with
-            tenant_id (for another declared tenant, the same fixed text naming none),
+          description: 'Forbidden: insufficient permissions. In PR write-back mode
+            the write scope is judged again on the latest base branch, which this
+            server''s local copy may lag: a refusal there is the same 403 with tenant_id,
             and no PR/MR or branch is left'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: 'Conflict: code TENANT_CONFIG_NOT_LOADABLE, config_error not_round_trippable,
-            when the declared sections cannot be written into the file without changing
-            content the body does not declare — an alias elsewhere in the file (a
-            value or a key) to an anchor in a declared section whose value or definition
-            changes (#3062; nothing written). For a caller who may not read every
-            tenant the file declares (#3050), any anchor or alias in a section the
-            body declares, any anchor in a declared section of the file it replaces
-            (its key included), or an anchor on the root mapping or on the tenants:
-            value, is this 409 with the fixed text, whatever the values: comparing
-            them would tell that caller whether it guessed a hidden value. The place
-            of the first difference is given only to a caller who may read every tenant
-            the file declares (as GET''s raw_yaml, #3050), and named only inside a
-            section the caller may read; anyone else gets a fixed text. Or base hash
-            mismatch (current_source_hash only when GET /tenants/{id} would show the
-            caller that file''s source_hash, #3050), pending PR, ambiguous tenant
-            file, the tenant, or a tenant the body declares besides it whose section
-            the file holds (#3062), is also declared by another conf.d file (code
+          description: 'Conflict: code TENANT_GIT_MANAGED (#3064) when the tenant
+            is git-managed — its conf.d file (on the latest base branch in PR write-back
+            mode) is not API-shaped; tenant_id and git_managed_reason (not_tenant_document,
+            several_documents, yaml_indirection, tenant_count, id_mismatch) in the
+            envelope, naming no other tenant; judged before the base hash; nothing
+            written. Or base hash mismatch (current_source_hash only when the current
+            file is API-shaped: the hash GET /tenants/{id} shows), pending PR, ambiguous
+            tenant file, the tenant is also declared by another conf.d file (code
             TENANT_DECLARED_ELSEWHERE, a fixed text; nothing written), the tenant''s
             conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error
             not_regular_file; nothing written), or code TENANT_TREE_UNREADABLE when
@@ -2307,18 +2342,20 @@ paths:
         409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
         409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
         tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-        whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
-        repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
+        whole-file PUT /api/v1/tenants/{id}, which replaces it (an API-shaped file only: one that is not YAML, or
+        is shared with other tenants, is git-managed and repaired in git). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
         not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
         whole-file PUT refuses it too, so replace it with a regular file in git.
         409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other
         than the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot
         read (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's
         own file cannot be read.
-        422 TENANT_FILE_WITHHELD when the tenant's file also declares a tenant the caller may not read, or its
-        tenants cannot be listed with certainty and the caller lacks read permission on all tenants (#3050): GET
-        withholds that file's custom_alerts and source_hash (raw_yaml_withheld), so no edit can be based on them;
-        nothing written. A 409 CONFLICT carries current_source_hash only for a file GET would show the caller.
+        409 TENANT_GIT_MANAGED when the tenant is git-managed (#3064): its conf.d file is not API-shaped (shared
+        with other tenants, a name that is not the declared id, several documents, YAML indirection where tenants are
+        declared, or not YAML), so GET shows no custom_alerts or source_hash and no edit can be based on them; judged
+        before the base_hash check; nothing written. For an API-managed tenant the file holds that tenant alone, so
+        base_hash (the whole file's source_hash) covers exactly its content. A 409 CONFLICT carries
+        current_source_hash only when the current file is API-shaped.
       parameters:
       - description: Tenant ID
         in: path
@@ -2355,18 +2392,18 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: 'Conflict: base_hash drift (CONFLICT), the tenant file cannot
-            be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant
-            is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code
-            TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling,
-            looping, or with a non-directory in its path) other than the file this
-            write replaces (#2939, ADR-036 §4: the tree after the write is judged;
-            repair it in git; nothing written; unreadable_count always, the entries''
-            names and reasons in the text and in unreadable only for a caller with
-            write permission on all tenants). The tenant''s own file being unreadable
-            in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
-            (config_error unreadable or not_regular_file) for every caller: it is
-            never replaced'
+          description: 'Conflict: the tenant is git-managed (TENANT_GIT_MANAGED, #3064),
+            base_hash drift (CONFLICT), the tenant file cannot be loaded or is not
+            a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by
+            another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE
+            when conf.d holds an unresolvable symlink (dangling, looping, or with
+            a non-directory in its path) other than the file this write replaces (#2939,
+            ADR-036 §4: the tree after the write is judged; repair it in git; nothing
+            written; unreadable_count always, the entries'' names and reasons in the
+            text and in unreadable only for a caller with write permission on all
+            tenants). The tenant''s own file being unreadable in any other way (a
+            failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
+            or not_regular_file) for every caller: it is never replaced'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2374,20 +2411,19 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "422":
-          description: 'TENANT_FILE_WITHHELD (#3050: the tenant file declares a tenant
-            the caller may not read; nothing written). Or refused by the route generator
-            container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree
-            with this write applied does not pass `generate-routes --validate --strict`;
-            findings[] lists the generator''s findings, the ones naming this write''s
-            file or tenant first (related: true), pre_existing set when findings_compared_with_base
-            is true (the tree before the write was judged too); a finding unrelated
-            to this write is shown only to a caller with write permission on all tenants
-            (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with
-            reason memory / incomplete / too_large (the files the write produces are
-            too large to judge in one request) / invalid_request: the generator gave
-            no verdict; or normalized: git attributes (.gitattributes eol, text or
-            a filter) would commit other bytes than the ones the generator judged.
-            Nothing written'
+          description: 'Refused by the route generator container (#2903, ADR-036 §4):
+            code GENERATOR_FINDINGS — the conf.d tree with this write applied does
+            not pass `generate-routes --validate --strict`; findings[] lists the generator''s
+            findings, the ones naming this write''s file or tenant first (related:
+            true), pre_existing set when findings_compared_with_base is true (the
+            tree before the write was judged too); a finding unrelated to this write
+            is shown only to a caller with write permission on all tenants (others
+            get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
+            memory / incomplete / too_large (the files the write produces are too
+            large to judge in one request) / invalid_request: the generator gave no
+            verdict; or normalized: git attributes (.gitattributes eol, text or a
+            filter) would commit other bytes than the ones the generator judged. Nothing
+            written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2435,27 +2471,18 @@ paths:
       description: |-
         Returns unified diff between current file and proposed content.
         The diff header names current/<id>.yaml and proposed/<id>.yaml.
-        The proposed side is what PUT /api/v1/tenants/{id} would write (#3062): the proposal's declared tenant sections
-        spliced into the current file, so a section the proposal leaves out shows as kept (a current file whose tenants
-        cannot be told apart is replaced whole, #2405, for a caller PUT lets replace it).
+        The proposed side is what PUT /api/v1/tenants/{id} would write: the proposal, which replaces the tenant's
+        file whole (#3064: only an API-managed tenant's file, which holds that tenant alone, is written or shown).
         A proposal PUT would refuse is refused here exactly as PUT refuses it — the same status and body, judged in PUT's
-        order (#3062): the write scope on {id} as the file holds it and as the proposal proposes it, every other tenant
-        the proposal declares (a fixed 403), a masked-credential placeholder, the splice into the current file, a declared
-        tenant another conf.d file also declares, validation. In PR write mode the current file is this server's copy,
-        which may lag the base branch PUT judges on.
+        order (#3062): the write scope on {id} as the file holds it and as the proposal proposes it, a masked-credential
+        placeholder, the proposal's own shape (it must declare tenants.{id} alone, API-shaped, #3064), the tenant file's
+        resolution, a git-managed tenant (409 TENANT_GIT_MANAGED, for every caller, #3064), a tenant another conf.d file
+        also declares, validation. In PR write mode the current file is this server's copy, which may lag the base branch
+        PUT judges on.
         A caller who may read the tenant but not write it gets, instead of PUT's 403, the diff of the masked forms of
         both sides (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
         with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 422
         MASKED_PREVIEW_UNAVAILABLE when either side is not YAML, holds several documents, or uses an anchor, alias or merge key.
-        When such a caller may not read every tenant of the current file, a refusal about how the file is written (409
-        not_round_trippable, the anchor rules, #2405's 400) is held until the duplicate-declaration check and validation have run,
-        and if neither refuses the answer is 422 TENANT_FILE_WITHHELD, as for a proposal PUT would accept: every file shape
-        gets the same answer (#3062).
-        For a proposal PUT would accept, every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant
-        the caller may not read (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty
-        (not YAML; an alias, a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:)
-        and the caller lacks read permission on all tenants: the diff would carry that file's lines, and has_diff would
-        confirm a guess of it.
       parameters:
       - description: Tenant ID
         in: path
@@ -2483,24 +2510,21 @@ paths:
         "403":
           description: 'Forbidden: the PUT this previews would be refused with this
             403 (#3062: the same body) — the proposal moves {id} outside the caller''s
-            write scope, or declares a tenant besides {id} the caller may not write
-            (a fixed text naming no tenant)'
+            write scope'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: 'Conflict: the PUT this previews would be refused — code TENANT_CONFIG_NOT_LOADABLE,
-            config_error not_round_trippable, when the proposal''s declared sections
-            cannot be written into the file without changing content it does not declare
-            (#3062; as PUT''s 409), ambiguous tenant file, TENANT_DECLARED_ELSEWHERE,
-            or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink
-            (dangling, looping, or with a non-directory in its path) other than the
-            file this write replaces (#2939, ADR-036 §4: the tree after the write
-            is judged; repair it in git; nothing written; unreadable_count always,
-            the entries'' names and reasons in the text and in unreadable only for
-            a caller with write permission on all tenants). The tenant''s own file
-            being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
-            (config_error unreadable or not_regular_file) for every caller: it is
-            never replaced'
+          description: 'Conflict: the PUT this previews would be refused — code TENANT_GIT_MANAGED
+            when the tenant is git-managed (#3064; as PUT''s 409, for every caller),
+            ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE
+            when conf.d holds an unresolvable symlink (dangling, looping, or with
+            a non-directory in its path) other than the file this write replaces (#2939,
+            ADR-036 §4: the tree after the write is judged; repair it in git; nothing
+            written; unreadable_count always, the entries'' names and reasons in the
+            text and in unreadable only for a caller with write permission on all
+            tenants). The tenant''s own file being unreadable in any other way (a
+            failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
+            or not_regular_file) for every caller: it is never replaced'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2568,10 +2592,12 @@ paths:
         "<masked: write permission required>", with masked: true and
         source_hash and merged_hash empty (either would let a guess of
         a credential be checked offline).
-        source_hash is the hash of the whole tenant file: when that file declares a tenant the caller may not
-        read (#3050), or its tenants cannot be listed with certainty and the caller lacks read permission on all
-        tenants, it is empty with source_hash_withheld: true; and a 500 CONFIG_DECODE_ERROR about such a file
-        carries a fixed text instead of the decoder's message (which quotes the value).
+        source_hash is the hash of the whole tenant file: it is shown only for an API-managed tenant (#3064: its
+        file is API-shaped, as GET /tenants/{id} reports with managed_by: api). For a git-managed tenant it is empty
+        with source_hash_withheld: true, for every caller (every write to it is refused; change it in git).
+        A 500 CONFIG_DECODE_ERROR about a file that declares a tenant the caller may not read (#3050), or whose
+        tenants cannot be listed with certainty while the caller lacks read permission on all tenants, carries a
+        fixed text instead of the decoder's message (which quotes the value).
       parameters:
       - description: Tenant ID
         in: path
@@ -2741,10 +2767,10 @@ paths:
         symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
         when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
         The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
-        holds it and as the body proposes it, every other tenant the body declares (a fixed text naming no tenant), a
-        masked-credential placeholder, the splice into the current file (#2405's rule for a file whose tenants cannot be
-        told apart; for a caller who may not read every tenant of the file, its anchor rules), a declared tenant another
-        conf.d file also declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
+        holds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare
+        tenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false
+        with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), a tenant another conf.d file also
+        declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
         listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
         base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
         This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write

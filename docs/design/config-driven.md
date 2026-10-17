@@ -26,7 +26,7 @@ parent: architecture-and-design.md
 |------|---------|-----------------|------|
 | **Custom Value** | `metric_key: 42` | ✓ 輸出自訂閾值 | 租戶覆蓋預設值 |
 | **Omitted (Default)** | 未在 YAML 中指定 | ✓ 輸出平台預設值 | 使用 `_defaults.yaml` 的 `defaults:` 值 |
-| **Disable** | `metric_key: "disable"` | ✗ 不輸出 | 完全禁用該指標 |
+| **Disable** | `metric_key: "disable"` | ✗ 不輸出這一列 | 只關掉這個 key 的這一列：同族的 `<key>_critical` 與維度鍵 `<key>{…}` 不受影響，從其他層繼承來的照樣送出（`validate-config` 以 `disable_partial` 指名來源檔）。只要 critical 那一級時寫 `metric_key: "90:critical"`（[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)） |
 
 > ⚠️ **適用條件**：上表只對「在 `_defaults.yaml` 的 `defaults:` 有值」的 key 成立。列在 `optional_overrides:` 的**宣告 key**（平台只認得 key 名、不主張值）沒有預設可繼承——**省略＝沒有值＝不輸出 series**，不是「用預設」；那一格實際只有「填值」與「不填（靜默）」兩態。
 
@@ -879,7 +879,7 @@ da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 A
 
 ### 2.15 Custom Alerts（租戶自訂告警，ADR-024 能力 B）
 
-平台與租戶可用平台 authored 的**參數化 recipe**自訂告警，**永不寫 PromQL**（守住宣告式地基）。在 `_custom_alerts` 區塊填表即可，可以寫在三處：租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、profile。exporter 為每個租戶依這個順序取第一處，**不合併**；一組租戶共用的告警寫在 profile、讓它們綁定。`_defaults.yaml`（任何一層的頂層或 `defaults:`）裡的 `_custom_alerts` 不會送出，不做子樹繼承。⚠️ 目前編譯器還不為 profile 與根 `_defaults.yaml` `tenants:` 裡的 recipe 產生規則，寫在那裡的不能指望告警（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）——規則與範例見 [ADR-024 §3「宣告位置」](../adr/024-version-aware-threshold-via-dimensional-label.md)。
+平台與租戶可用平台 authored 的**參數化 recipe**自訂告警，**永不寫 PromQL**（守住宣告式地基）。在 `_custom_alerts` 區塊填表即可，可以寫在三處：租戶自己的條目、根目錄平台檔（例如 `_platform.yaml`）裡該租戶的 `tenants:` 條目、profile。exporter 為每個租戶依這個順序取第一處，**不合併**；一組租戶共用的告警寫在 profile、讓它們綁定。`_defaults.yaml`（任何一層的頂層或 `defaults:`）裡的 `_custom_alerts` 不會送出，不做子樹繼承。編譯器編的就是 exporter 的這份讀法（`da-guard served-values`），所以 exporter 送出的 recipe 都有規則，不論寫在三處的哪一處（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）——規則與範例見 [ADR-024 §3「宣告位置」](../adr/024-version-aware-threshold-via-dimensional-label.md)。
 
 五個核心 recipe：`threshold`（gauge 越界）/ `rate`（counter 增率）/ `ratio`（兩 counter 比值，除零安全）/ `absence`（指標缺席，自我圈定）/ `p99_latency`（histogram 分位數）。label 過濾用安全的 `selectors`（`=`）/ `selectors_re`（`=~`）map，由編譯器組裝（key 過濾 + value 跳脫），杜絕 PromQL 注入。
 

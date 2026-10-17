@@ -147,7 +147,7 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 ### 5.3 單一 recipe 編譯 + 直接重用編譯器
 
-服務是 Python，所以**直接呼叫編譯器**：把表單那一條 recipe 寫進一份暫存設定，請編譯器產生規則和它算出的 recipe 識別字。識別字是編譯器自己算的、不是另外用正則或在 Go 重推——這就是「直接重用、零跨語言重寫」在 Python 服務下自然成立的原因。單一 recipe 在隔離的暫存設定裡編出的規則，正是「你宣告這條 recipe 會長這樣」，恰好是預覽要的。
+服務是 Python，所以**直接呼叫編譯器**：把表單那一條 recipe 直接交給編譯器，請它產生規則和它算出的 recipe 識別字。服務 image 不帶 da-guard，所以這條 recipe 由編譯器自己的驗證判定，不經 exporter 的讀法（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。識別字是編譯器自己算的、不是另外用正則或在 Go 重推——這就是「直接重用、零跨語言重寫」在 Python 服務下自然成立的原因。單獨一條 recipe 編出的規則，正是「你宣告這條 recipe 會長這樣」，恰好是預覽要的。
 
 ## 6. 生產護欄
 

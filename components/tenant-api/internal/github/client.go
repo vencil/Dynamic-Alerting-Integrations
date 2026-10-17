@@ -208,11 +208,8 @@ func (c *Client) ListOpenPRs() ([]platform.PRInfo, error) {
 				HeadRef:   pr.Head.Ref,
 				CreatedAt: pr.CreatedAt,
 			}
-			// Extract tenant ID from branch name: tenant-api/{tenantID}/{timestamp}
-			parts := strings.SplitN(pr.Head.Ref, "/", 3)
-			if len(parts) >= 2 {
-				info.TenantID = parts[1]
-			}
+			// tenant-api/{tenantID}/{timestamp}; "" for a batch branch (#3123).
+			info.TenantID = platform.TenantIDFromBranch(pr.Head.Ref)
 			result = append(result, info)
 		}
 

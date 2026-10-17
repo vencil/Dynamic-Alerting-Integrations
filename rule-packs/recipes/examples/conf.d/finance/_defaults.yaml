@@ -1,12 +1,9 @@
 # Custom Alerts example — a recipe in a subdirectory _defaults.yaml is NOT served:
 # the exporter has no subtree inheritance for _custom_alerts (ADR-024 §3), so no
 # tenant under finance/ gets payment_failure_ratio. The custom-alert compiler
-# still compiles a rule for it, which never fires — `da-tools validate-config`,
-# run in the repo, reports it in its custom_alert_sources row. To make it alert
-# today, move it into each tenant's own entry and delete it here (a same-named
-# recipe here makes the compiler quarantine the tenant's own). Moving it to a
-# profile (the way to share an alert across tenants) comes with the compiler
-# change in #3042.
+# compiles what the exporter serves (#3042), so it builds no rule for it either:
+# this recipe is not compiled. It moves to a profile (the way to share an alert
+# across tenants) in a later stage of #3042.
 _custom_alerts:
   - recipe: ratio
     name: payment_failure_ratio

@@ -1,7 +1,6 @@
 {
   "_comment": "#2386: which `_defaults.yaml` shapes are reported, judged by da-guard (Go: internal/guard TestDefaultsWrapperMatrix) and by validate-config (Python: tests/ops/test_validate_config.py TestDefaultsWrapperMatrix) from this one table. `expect` lists [finding kind, file]; root_defaults_unwrapped is validate-config's `root_defaults` row, defaults_toplevel_ignored its `defaults_wrapper` row. `top_level_read_elsewhere` is the key list both sides exempt (generated from the reserved-key registry, ADR-038). `merge_dropped_keys` is the list both sides leave out because the defaults merge drops it at every level (Go config.MergeDroppedKeys).",
   "top_level_read_elsewhere": [
-    "_custom_alerts",
     "_policies",
     "_routing_defaults",
     "_routing_enforced"
@@ -60,9 +59,21 @@
     {
       "name": "root-mapping-plus-read-elsewhere-and-decoded",
       "files": {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nstate_filters: {}\nmax_metrics_per_tenant: 10\n_routing_defaults: {}\n_routing_enforced:\n  enabled: false\n_custom_alerts: []\n_policies: []\n"
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nstate_filters: {}\nmax_metrics_per_tenant: 10\n_routing_defaults: {}\n_routing_enforced:\n  enabled: false\n_policies: []\n"
       },
       "expect": []
+    },
+    {
+      "name": "root-top-custom-alerts-is-read-by-none",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_custom_alerts: []\n"
+      },
+      "expect": [
+        [
+          "defaults_toplevel_ignored",
+          "_defaults.yaml"
+        ]
+      ]
     },
     {
       "name": "sub-unwrapped",

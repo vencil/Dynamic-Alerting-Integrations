@@ -292,7 +292,7 @@ func entityOf(key string) string {
 		return "federation-policy"
 	}
 	if t, ok := statestore.SubsetTenant(key); ok {
-		return "federation/" + t
+		return statestore.SubsetEntity(t)
 	}
 	return key
 }

@@ -9,16 +9,15 @@ package handler
 //  1. planPut, in the handler, on the serving tree: the id; the write
 //     scope on {id} as the file holds it now (requireOrgWriteAt's rule);
 //     {id}'s file not a regular file; the body; the write scope on {id} as
-//     the body proposes it; every other tenant the body declares
-//     (declaredTenantsJudge: a fixed 403 / 400); a masked-credential
-//     placeholder (#1560).
-//  2. gitops' resolvePut, on the tree the write replaces: the tenant file's
-//     resolution (#1673, #2078, #2939); the body's declared sections spliced
-//     into it (#2405's bit and the anchor rules for a caller the file is
-//     withheld from included); a declared tenant another conf.d file also
-//     declares; validation. PUT runs it in the Writer — under its lock on the
-//     serving tree (direct mode), or on the fresh base (PR mode) — and the
-//     previews on the serving tree without a lock (gitops.PreviewPut).
+//     the body proposes it; a masked-credential placeholder (#1560).
+//  2. gitops: the body-only pre-flight (validateBodyOnly — among others, the
+//     body must be API-shaped: tenants.{id} and no other tenant, #3064), then
+//     resolvePut on the tree the write replaces: the tenant file's
+//     resolution (#1673, #2078, #2939); a git-managed tenant refused (#3064,
+//     409 TENANT_GIT_MANAGED); validation. PUT runs it in the Writer — under
+//     its lock on the serving tree (direct mode), or on the fresh base (PR
+//     mode) — and the previews on the serving tree without a lock
+//     (gitops.PreviewPut).
 //
 // Only the tree step 2 reads differs. A preview's refusal is PUT's, with the
 // same status and body: /diff answers it as PUT does (planPut writes it, and
@@ -27,11 +26,8 @@ package handler
 // about the request itself (the id, the body's size).
 //
 // ⛔ ORDER IS PART OF THE ANSWER. A check that runs earlier in one endpoint
-// than in PUT answers a question PUT never answers: /diff once judged a
-// declared tenant's duplicate elsewhere before (and without) the write scope
-// of that tenant, so for a tenant the caller may not write it said 409 or 200
-// where PUT says the fixed 403 for both — whether that tenant id is declared
-// by another file. No endpoint has a check of its own here.
+// than in PUT answers a question PUT never answers. No endpoint has a check of
+// its own here.
 //
 // Two places where a preview cannot be PUT, by design:
 //
@@ -39,26 +35,17 @@ package handler
 //     scope refusing is not a 403 there but the masked preview (#1560): PUT
 //     refuses that caller before anything else, which the caller knows. The
 //     rest of the sequence runs unchanged (the proposed scope on {id} aside,
-//     which only asks again what was refused) — but for such a caller who
-//     may not read every tenant of the file, a refusal that answers how the
-//     file is written (#2405's, the splice's: anchors, merge keys, what does
-//     not round-trip) is held until the steps after it have run, and if
-//     none of them refuses it is the 422 TENANT_FILE_WITHHELD that caller
-//     gets for a write PUT would accept. That caller is told nothing of the
-//     file's shape: the same answer for every shape. (A caller who may
-//     write {id} hears PUT's refusal, whose one bit — the file's anchors —
-//     is accepted, docs/api/tenant-api-hardening.md.)
+//     which only asks again what was refused); a git-managed tenant is the
+//     same 409 TENANT_GIT_MANAGED its GET marks with managed_by: git.
 //   - PR mode: PUT runs step 2 on the fresh base, under the writer lock;
 //     the serving tree may lag it (#1718). /diff previews on the serving tree,
 //     as it must to diff anything; /validate runs step 2's body-only part
 //     only (gitops.DryRunValidateBodyOnly), so it never refuses on a stale
-//     tree what the PR would accept.
+//     tree what the PR would accept — a git-managed tenant included.
 //
-// After the sequence, /diff decides what it may SHOW: nothing of a file the
-// caller may not read every tenant of (422 TENANT_FILE_WITHHELD, #3050), and
-// for a masked preview nothing it cannot mask with certainty. Those are not
-// verdicts on the write: they come after it, so a withheld caller hears from
-// /diff every refusal PUT would give it, and nothing more.
+// After the sequence, /diff decides what it may SHOW: for a masked preview,
+// nothing it cannot mask with certainty. The file it shows is API-shaped —
+// the tenant's own — or the sequence refused it (#3064).
 
 import (
 	"bytes"
@@ -97,13 +84,6 @@ type putPlan struct {
 	// comment).
 	masked            bool
 	gatePre, gatePost writeGate
-	declared          []declaredGate
-}
-
-// splicer is the gitops.SpliceFunc of this plan: the same for the write and
-// for its preview.
-func (p *putPlan) splicer(d *Deps) gitops.SpliceFunc {
-	return putSplicer(p.tenantID, p.body, gitops.TenantNamesOf(p.r.Context()), putFileShown(p.r, d, p.tenantID))
 }
 
 // readPutBody reads the request body as one endpoint receives it, writing a
@@ -161,20 +141,6 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 			return nil, false
 		}
 	}
-	// #3062: every other tenant the body declares, by the same two
-	// judgements — a fixed text naming no tenant, before anything below
-	// reads what the tree holds for it.
-	gates, status, msg := declaredTenantsJudge(r, d, tenantID, body)
-	switch status {
-	case 0:
-		p.declared = gates
-	case http.StatusForbidden:
-		WriteJSONErrorWithCode(verdict, r, status, CodeForbidden, msg)
-		return nil, false
-	default:
-		WriteJSONError(verdict, r, status, msg)
-		return nil, false
-	}
 	// #1560: a masked-credential placeholder written back is a 400.
 	if err := gitops.PlaceholderPreflight(body); err != nil {
 		writePlaceholderError(verdict, r, err)
@@ -191,20 +157,8 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 // preview runs step 2 on the serving tree, without a lock
 // (gitops.PreviewPut): what PUT would write, or its refusal — errs the
 // validation set PUT wraps in ErrValidation, err any earlier refusal.
-//
-// For a masked preview whose caller may not read every tenant of the file
-// (fileShown), a refusal that answers how the file is written
-// (gitops.ErrSpliceShape: #2405's, the splice's) is
-// gitops.ErrSpliceShapeWithheld instead, and only once nothing else refuses
-// the write: /diff answers it with the 422 TENANT_FILE_WITHHELD that caller
-// gets for a write PUT would accept (see the file comment).
 func (p *putPlan) preview(d *Deps) (gitops.PutResolution, []string, error) {
-	var withheld func([]byte) bool
-	if p.masked {
-		shown := putFileShown(p.r, d, p.tenantID)
-		withheld = func(existing []byte) bool { return !shown(existing) }
-	}
-	return previewWriter(d).PreviewPut(p.r.Context(), p.tenantID, p.body, p.splicer(d), withheld)
+	return previewWriter(d).PreviewPut(p.r.Context(), p.tenantID, p.body)
 }
 
 // previewWriter is d.Writer, or for handler-test literals that set only
@@ -249,10 +203,9 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 		extra := map[string]any{
 			"message": "the tenant configuration was updated by someone else; refresh and retry",
 		}
-		// #3050: the hash GET /tenants/{id} withholds when the file
-		// declares a tenant the caller may not read — judged on the very
-		// bytes it hashes.
-		if pre.Current != "" && tenantFileShown(r, d, tenantID, pre.Current) {
+		// #3064: only the hash of a file GET /tenants/{id} shows — an
+		// API-shaped one, judged on the very bytes it hashes.
+		if pre.Current != "" && tenantFileAPIManaged(d, tenantID, pre.Current) {
 			extra["current_source_hash"] = pre.Current
 		}
 		WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
@@ -270,11 +223,6 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 	// on-disk state is ambiguous — 409, not the 400 fallback.
 	if errors.Is(err, confd.ErrAmbiguousTenantFile) {
 		WriteJSONError(rw, r, http.StatusConflict, err.Error())
-		return false
-	}
-	// #3062: the declared sections cannot be written into the file without
-	// changing what the body does not declare.
-	if writePutSpliceError(rw, r, err) {
 		return false
 	}
 	// #2078: the id is declared by another conf.d file → 409

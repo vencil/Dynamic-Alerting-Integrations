@@ -94,10 +94,12 @@ import (
 // @Description "<masked: write permission required>", with masked: true and
 // @Description source_hash and merged_hash empty (either would let a guess of
 // @Description a credential be checked offline).
-// @Description source_hash is the hash of the whole tenant file: when that file declares a tenant the caller may not
-// @Description read (#3050), or its tenants cannot be listed with certainty and the caller lacks read permission on all
-// @Description tenants, it is empty with source_hash_withheld: true; and a 500 CONFIG_DECODE_ERROR about such a file
-// @Description carries a fixed text instead of the decoder's message (which quotes the value).
+// @Description source_hash is the hash of the whole tenant file: it is shown only for an API-managed tenant (#3064: its
+// @Description file is API-shaped, as GET /tenants/{id} reports with managed_by: api). For a git-managed tenant it is empty
+// @Description with source_hash_withheld: true, for every caller (every write to it is refused; change it in git).
+// @Description A 500 CONFIG_DECODE_ERROR about a file that declares a tenant the caller may not read (#3050), or whose
+// @Description tenants cannot be listed with certainty while the caller lacks read permission on all tenants, carries a
+// @Description fixed text instead of the decoder's message (which quotes the value).
 // @Success     200  {object} TenantEffectiveResponse
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
@@ -153,7 +155,7 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 				switch {
 				case !canSeeCredentials(r, d, tenantID):
 					msg = msgEffectiveDecodeMasked
-				case !confdFileShown(r, d, decodeErr.Path, tenantID, ""):
+				case !confdFileShown(r, d, decodeErr.Path, tenantID):
 					// #3050: the quoted value can be another tenant's — the
 					// file can declare several (a root platform file's
 					// tenants: block too).
@@ -187,10 +189,17 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 			out.SourceHash, out.MergedHash = "", ""
 			out.Masked = true
 		}
-		// #3050: source_hash is the hash of the whole tenant file, which can
-		// declare other tenants — the hash GET /tenants/{id} then withholds.
-		// merged_hash covers this tenant's merge only and stays.
-		if out.SourceHash != "" && !confdFileShown(r, d, ec.SourceFile, tenantID, out.SourceHash) {
+		// #3064: source_hash is the hash of the whole tenant file, shown —
+		// as GET /tenants/{id} shows it — only when that file is API-shaped
+		// (the tenant's alone) and is the very file hashed. For a git-managed
+		// tenant it is withheld from every caller: every write to it is
+		// refused, so the hash has no use as a base, and it would confirm a
+		// guess of a file that can hold other tenants offline (#3050). An
+		// API-shaped file declares this tenant alone (or none), so #3050's
+		// "may the caller read every tenant it declares" (confdFileShown) is
+		// always yes for it and is not asked here. merged_hash covers this
+		// tenant's merge only and stays.
+		if out.SourceHash != "" && !tenantFileAPIManaged(d, tenantID, out.SourceHash) {
 			out.SourceHash = ""
 			out.SourceHashWithheld = true
 		}
@@ -209,10 +218,10 @@ type TenantEffectiveResponse struct {
 	// and merged_hash are then empty.
 	Masked bool `json:"masked,omitempty"`
 	// SourceHashWithheld is true, with source_hash empty, when the tenant
-	// file declares a tenant the caller may not read, or its tenants cannot
-	// be listed with certainty and the caller may not read every tenant
-	// (#3050): source_hash is the hash of that whole file, and confirms a
-	// guess of it offline. merged_hash is this tenant's merge only.
+	// is git-managed (#3064: its file is not API-shaped — shared with other
+	// tenants, say), for every caller: source_hash is the hash of that whole
+	// file, which no write may use as a base and which confirms a guess of
+	// it offline (#3050). merged_hash is this tenant's merge only.
 	SourceHashWithheld bool `json:"source_hash_withheld,omitempty"`
 }
 

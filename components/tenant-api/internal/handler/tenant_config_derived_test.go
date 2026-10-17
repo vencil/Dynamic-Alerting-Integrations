@@ -218,8 +218,13 @@ func TestSearchTenants_ReportsParseFailedFiles(t *testing.T) {
 		}
 		meta := resp.ConfigDerivation
 		// P4: the directory a file lives in is not the caller's to learn.
-		if want := []string{"t-nested.yml", "t-broken.yaml", "t-shape.yaml"}; !reflect.DeepEqual(meta.ParseFailedFiles, want) || meta.ParseFailedHidden != 1 {
-			t.Errorf("scoped parse failures = %v hidden=%d, want %v hidden=1", meta.ParseFailedFiles, meta.ParseFailedHidden, want)
+		if want := []string{"t-nested.yml", "t-broken.yaml", "t-shape.yaml"}; !reflect.DeepEqual(meta.ParseFailedFiles, want) {
+			t.Errorf("scoped parse failures = %v, want %v", meta.ParseFailedFiles, want)
+		}
+		// #3123 D4: no count of the withheld files either — how many other
+		// tenants' files are broken is not the caller's to learn.
+		if strings.Contains(string(body), "parse_failed_hidden") {
+			t.Errorf("scoped response counts the withheld files: %s", body)
 		}
 		if strings.Contains(string(body), "org-beta-secret") {
 			t.Errorf("scoped response names another team's directory: %s", body)
@@ -240,15 +245,15 @@ func TestSearchTenants_ReportsParseFailedFiles(t *testing.T) {
 			t.Fatalf("search failed: %s", body)
 		}
 		meta := resp.ConfigDerivation
-		if len(meta.ParseFailedFiles) != 0 || meta.ParseFailedHidden != 4 {
-			t.Errorf("env-scoped admin parse failures = %v hidden=%d, want [] hidden=4", meta.ParseFailedFiles, meta.ParseFailedHidden)
+		if len(meta.ParseFailedFiles) != 0 || strings.Contains(string(body), "parse_failed_hidden") {
+			t.Errorf("env-scoped admin parse failures = %v, want [] and no withheld count (#3123 D4); body=%s", meta.ParseFailedFiles, body)
 		}
 		if strings.Contains(string(body), "org-beta-secret") {
 			t.Errorf("env-scoped admin learns a directory name: %s", body)
 		}
 	})
 
-	t.Run("metadata-restricted caller sees only a count", func(t *testing.T) {
+	t.Run("metadata-restricted caller sees no file", func(t *testing.T) {
 		t.Parallel()
 		// A broken file's environment is unknown, so an environment-restricted
 		// caller may not learn which tenants are broken (the degraded-row rule).
@@ -263,8 +268,8 @@ func TestSearchTenants_ReportsParseFailedFiles(t *testing.T) {
 			t.Fatalf("search failed: %s", body)
 		}
 		meta := resp.ConfigDerivation
-		if len(meta.ParseFailedFiles) != 0 || meta.ParseFailedHidden != 4 {
-			t.Errorf("restricted parse failures = %v hidden=%d, want [] hidden=4", meta.ParseFailedFiles, meta.ParseFailedHidden)
+		if len(meta.ParseFailedFiles) != 0 || strings.Contains(string(body), "parse_failed_hidden") {
+			t.Errorf("restricted parse failures = %v, want [] and no withheld count (#3123 D4); body=%s", meta.ParseFailedFiles, body)
 		}
 	})
 }

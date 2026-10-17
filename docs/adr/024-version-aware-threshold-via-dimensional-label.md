@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-10-16
+updated_at: 2026-10-17
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -26,6 +26,8 @@ updated_at: 2026-10-16
 兩者均已隨 v2.9.0 落地。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（version-aware）、[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741)（custom alerts）；逐 PR 紀錄見 CHANGELOG。
 
 📝 **修訂（2026-10-16）**：自訂告警的宣告位置以 exporter 實際送出的為準，不做 `_defaults.yaml` 子樹繼承；一組租戶共用的政策改寫在 profile（見 §3「宣告位置」）。決策與實測見 [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)。
+
+📝 **修訂（2026-10-17）**：自訂告警編譯器改照 exporter 送出的編譯（見 §3「宣告位置」）；每租戶上限改由 tenant-api 寫入檢查、da-guard 與 validate-config 擋（見 §4）。
 
 📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
@@ -139,11 +141,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
   `da-guard served-values` 送出的自訂告警：`pay-a` 是 `payment_failure_ratio`，`pay-b` 是 `pending_settlements_high`；`refund_ratio` 兩個租戶都沒有。
 
-  ⚠️ **自訂告警編譯器目前還不照這套來源**，改版在 [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)。兩個方向都會出錯：
-  - profile 與根 `_defaults.yaml` 的 `tenants:` 條目裡的 recipe，exporter 送出門檻、編譯器卻不**為它們**產生規則。只有別處剛好編出同一 shape 與 severity 的規則時才會告警（規則依 shape 向量化、不分租戶），不要依賴這點，也不要把放在 profile 當成停用。上面的範例目前就沒有 `payment_failure_ratio` 的規則。在編譯器改版前，要能告警就寫在租戶自己的條目，或 `_platform.yaml` 的 `tenants:` 條目，兩處擇一（兩處都寫，exporter 只取租戶自己的，編譯器兩處都編）。搬進租戶條目時，同時刪掉 `_defaults.yaml` 裡的同名 recipe——同名時編譯器隔離租戶自己那條，它就只有門檻、沒有規則。
-  - `_defaults.yaml` 裡的 recipe，編譯器仍會產生規則，但沒有門檻送出的租戶永遠不會觸發。
-
-  在 repo 內（裝有編譯器的地方）執行 `da-tools validate-config`，`custom_alert_sources` 一列會列出兩邊對不上的地方；da-tools 映像不帶編譯器，沒有這一列。
+  自訂告警編譯器編的就是這份讀法：它讀 `da-guard served-values` 逐租戶列出的 `custom_alerts`，為 exporter 送出的與停用的條目產生規則，不自己走 conf.d。上面的範例編出 `payment_failure_ratio` 與 `pending_settlements_high` 兩條規則，`refund_ratio` 沒有規則。條目是否有效、是否與前面某條同 shape 同 severity，也都以 exporter 的判定為準。exporter 送出的條目，編譯器若算出不同的 recipe_id 或不收它，編譯就拒絕（exit 2）：那條門檻沒有規則讀它、永遠不會告警。在 repo 內（裝有編譯器的地方）執行 `da-tools validate-config`，`custom_alert_sources` 一列會列出這種條目，只警告；da-tools 映像不帶編譯器，沒有這一列。
 - **Metric discovery = 唯讀的無狀態 Prometheus proxy**：tenant-api 向 Prometheus 查**該租戶**自身的 app-metric 名稱（`{tenant="<authID>"}` 篩），給 portal 當 recipe 的 metric 自動完成來源——不自建會與 Prometheus 漂移的 catalog 狀態。查詢字串強制鎖定（租戶輸入觸不到 matcher 結構、`tenant` label scrape 端 branded、前綴搜尋 escaped），並用既有 per-caller rate limiter 防代理驚群。租戶為「將來會出現」的 metric 預建 recipe 是合法的（GitOps 真空期），故後端**不**硬擋「metric 當下不存在」，改由 portal 軟警告。
 - **Recipe authoring UX = 智慧表單、後端擁有寫入**：portal 的 recipe builder 是純 `(Context) => RecipeObject` 元件、**不擁有寫入**；寫入經 tenant-api 的 `PUT .../custom-alerts`，**後端獨佔 YAML round-trip**（client 只送 / 收 JSON）。寫入用 yaml.Node AST surgery 保留註解 / 縮排，並以整檔 hash 做樂觀並發控制（base_hash 不符 → 409）。
 
@@ -151,7 +149,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 編譯器把 recipe + 參數生成**向量化 `group_left` 規則**：一條 `app_metric > on(tenant[,version]) group_left(...) <該 recipe 的 user_threshold>` 涵蓋所有宣告該 recipe 的租戶——**規則數 = recipe 形狀數（shape），非租戶數**。
 
-**效能誠實**：O(M)-與-N-無關**只對「共享指標」成立**。向量化消掉「同指標扇出複製 N 條」，但**消不掉「不同 metric 必然不同規則」**——租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數線性增長**，不享 rule pack 對 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證。**護欄三件組**：(a) 硬性 `max_custom_recipes` per-tenant cap 封頂（已實作）；(b) 全域 rule-count budget（**規劃中、未實作**——其值待以實測 rule-eval-duration 反推，故與該 benchmark 一同 defer）；(c) 壞 rule 只炸自己的規則檔 group + Prometheus 原生 rule group `limit` + promtool hard gate（已實作）。
+**效能誠實**：O(M)-與-N-無關**只對「共享指標」成立**。向量化消掉「同指標扇出複製 N 條」，但**消不掉「不同 metric 必然不同規則」**——租戶 A 的 `order_created_total` 與 B 的 `payment_failed_total` 必生成兩條。故 custom-alert 規則數隨**自訂告警總數線性增長**，不享 rule pack 對 [benchmarks.md §2](../benchmarks.md) 的 O(M) 保證。**護欄三件組**：(a) 硬性 per-tenant cap 封頂（已實作：tenant-api 寫入檢查拒收、da-guard `custom_alert_over_cap` 與 validate-config `custom_alert_cap` 在 CI 擋）；(b) 全域 rule-count budget（**規劃中、未實作**——其值待以實測 rule-eval-duration 反推，故與該 benchmark 一同 defer）；(c) 壞 rule 只炸自己的規則檔 group + Prometheus 原生 rule group `limit` + promtool hard gate（已實作）。
 
 **部署源 = live conf.d**：編譯源必須是 exporter 實際服務的同一份 conf.d，否則生成規則的 shape 對不上 exporter emit 的 `user_threshold` series → 規則永不 fire（靜默失效）。custom-alert pack 是**租戶自訂、非平台覆蓋**，故從平台的 rule-pack / alert count 統計排除（badge 不變）。
 
@@ -250,7 +248,7 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 - **cardinality 截斷必須確定性**——per-tenant guard 截斷前須對 dimensional keys 確定性排序（無版號 / `default` 優先保護），否則 Go map 隨機序會讓被截的版號隨 scrape 忽隱忽現 → **alert flapping + 重複 page**。
 - **共享 `user_threshold` 跨 pack 洩漏**——非 pilot pack 的 normalize matcher 加 `version=~"|default"`（只收無版號 / default），CI guard 失效時仍保既有告警安全（防 double-count）。
 - **Dashboards / Portal query 假設無 version label**——租戶開始寫 version key 後，未聚合 query 會多出帶 version 的 series → 須審 Grafana / portal panel。
-- **編譯器與 exporter 的來源要一致**——編譯器自己走樹時會為 exporter 不送的 `_custom_alerts` 產生規則（對沒有門檻送出的租戶永遠不會觸發），也會漏掉 exporter 有送的（例如 profile）。來源只由 exporter 判定；編譯器與診斷工具（describe_tenant / blast_radius）改讀 exporter 送出的（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
+- **編譯器與 exporter 的來源要一致**——編譯器自己走樹時會為 exporter 不送的 `_custom_alerts` 產生規則（對沒有門檻送出的租戶永遠不會觸發），也會漏掉 exporter 有送的（例如 profile）。來源只由 exporter 判定：編譯器讀 exporter 送出的（`da-guard served-values`）；診斷工具（describe_tenant / blast_radius）改讀它，仍在 [#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)。
 
 **關鍵不變式**（驗收契約，非 tracking checklist）：(1) 既有未寫 version 的租戶升級後行為 100% 等價（無 series 數變動）；(2) over-cap 截斷跨多次 scrape 截掉的是固定版號（無 flapping）；(3) `mode: silent` recipe 觸發時不進 PagerDuty / Slack、只留 Grafana 痕跡；(4) rolling update 結束、舊版 metric 消失後，正在燒的告警能正常收到 Resolve（不留殭屍告警）；(5) version-aware metric 上的 recipe 自動 graceful-join、label 缺時落 default、不產 NaN / 空集。
 

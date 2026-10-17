@@ -73,18 +73,20 @@ type PutCustomAlertsResponse struct {
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
 // @Description tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
-// @Description whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
-// @Description repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
+// @Description whole-file PUT /api/v1/tenants/{id}, which replaces it (an API-shaped file only: one that is not YAML, or
+// @Description is shared with other tenants, is git-managed and repaired in git). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
 // @Description not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
 // @Description whole-file PUT refuses it too, so replace it with a regular file in git.
 // @Description 409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other
 // @Description than the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot
 // @Description read (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's
 // @Description own file cannot be read.
-// @Description 422 TENANT_FILE_WITHHELD when the tenant's file also declares a tenant the caller may not read, or its
-// @Description tenants cannot be listed with certainty and the caller lacks read permission on all tenants (#3050): GET
-// @Description withholds that file's custom_alerts and source_hash (raw_yaml_withheld), so no edit can be based on them;
-// @Description nothing written. A 409 CONFLICT carries current_source_hash only for a file GET would show the caller.
+// @Description 409 TENANT_GIT_MANAGED when the tenant is git-managed (#3064): its conf.d file is not API-shaped (shared
+// @Description with other tenants, a name that is not the declared id, several documents, YAML indirection where tenants are
+// @Description declared, or not YAML), so GET shows no custom_alerts or source_hash and no edit can be based on them; judged
+// @Description before the base_hash check; nothing written. For an API-managed tenant the file holds that tenant alone, so
+// @Description base_hash (the whole file's source_hash) covers exactly its content. A 409 CONFLICT carries
+// @Description current_source_hash only when the current file is API-shaped.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -94,9 +96,9 @@ type PutCustomAlertsResponse struct {
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse "Not found: no tenant file, or the tenant file is a symlink that cannot be resolved (dangling, looping — a self-loop included — or through a non-directory): it has no content to merge recipes into, so there is no tenant here (a whole-file PUT /api/v1/tenants/{id} replaces such a link)"
-// @Failure     409   {object} ErrorResponse "Conflict: base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
+// @Failure     409   {object} ErrorResponse "Conflict: the tenant is git-managed (TENANT_GIT_MANAGED, #3064), base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
 // @Failure     413   {object} ErrorResponse
-// @Failure     422   {object} ErrorResponse "TENANT_FILE_WITHHELD (#3050: the tenant file declares a tenant the caller may not read; nothing written). Or refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
+// @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
 // @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
@@ -225,20 +227,17 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// before the base_hash check: a matching hash proves only that the
 		// client read THIS file, not that it saw its recipes. The in-lock
 		// WriteIfUnchanged compares the same bytes, so `raw` is the base.
+		// #3064: a git-managed tenant is not written through the API. GET
+		// shows it no custom_alerts and no source_hash, so no edit can be
+		// based on them — and the conflict answer below would hand out the
+		// hash of a file GET does not show. Before the loadability check: a
+		// file that is not YAML is git-managed (its shape cannot be told).
+		if writeTenantGitManaged(w, r, gitops.CheckAPIManaged(tenantID, raw)) {
+			return
+		}
 		var notLoadable *tenantFileNotLoadableError
 		if err := checkPartialWriteBase(tenantID, raw); errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(w, r, notLoadable)
-			return
-		}
-		// #3050: GET withholds this file's custom_alerts and source_hash
-		// from the caller (it declares a tenant the caller may not read), so
-		// no edit of the caller's can be based on them — and the conflict
-		// answer below would hand out the hash GET withholds.
-		if !fileShown(r, d, raw, tenantID) {
-			WriteJSONErrorWithCode(w, r, http.StatusUnprocessableEntity, CodeTenantFileWithheld,
-				"the tenant file also declares a tenant you may not read (or its tenants cannot be listed with "+
-					"certainty), so GET /api/v1/tenants/{id} withholds its custom_alerts and source_hash and no "+
-					"edit can be based on them; nothing was written. Edit the file in git")
 			return
 		}
 
@@ -253,6 +252,14 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// The two checks share one base: `raw` is both what this hash is
 		// computed over and what `merged` is built from, so the in-lock check
 		// passing proves the merge base was still current at commit time.
+		//
+		// #3064: that is why merging OUTSIDE the writer lock is safe, and why
+		// the whole-file hash is the right token. `raw` is API-shaped (checked
+		// above), so the file holds this tenant and nothing else: the hash
+		// covers exactly this tenant's content, and the in-lock comparison
+		// (WriteIfUnchanged, which also refuses a file git-managed by then)
+		// proves the bytes committed are `raw` with only `_custom_alerts`
+		// changed — no other tenant's content is in them to be overwritten.
 		currentHash := cfg.ComputeSourceHash(raw)
 		if req.BaseHash != currentHash {
 			WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
@@ -367,9 +374,10 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			var pre *gitops.PreconditionError
 			if errors.As(err, &pre) {
 				extra := map[string]any{}
-				// #3050: the file changed under the lock; its new version
-				// may declare a tenant the caller may not read.
-				if pre.Current != "" && tenantFileShown(r, d, tenantID, pre.Current) {
+				// #3064: the file changed under the lock; its new version
+				// may no longer be API-shaped, and GET shows no hash of such
+				// a file.
+				if pre.Current != "" && tenantFileAPIManaged(d, tenantID, pre.Current) {
 					extra["current_source_hash"] = pre.Current
 				}
 				WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{

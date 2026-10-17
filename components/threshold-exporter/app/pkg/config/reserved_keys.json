@@ -50,10 +50,10 @@
     "_custom_alerts": {
       "read_by": {
         "exporter": ["tenant", "platform_tenants", "profile"],
-        "custom_alert_compiler": ["tenant", "platform_tenants", "platform_top"]
+        "custom_alert_compiler": ["tenant", "platform_tenants", "profile"]
       },
       "description": "Tenant-authored alert recipes compiled into rule-pack-custom-alerts.yaml.",
-      "note": "The two readers take it from different layers (#3042)."
+      "note": "The compiler compiles the exporter's own reading of the list (da-guard served-values), so the two read the same layers (#3042)."
     },
     "_routing_defaults": {
       "read_by": {"generator": ["platform_top"]},
