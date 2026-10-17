@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -214,17 +215,23 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 
 	// The real index: filePath's entry as the commit has it (read from the
 	// temporary index), and what it holds now, to put back if HEAD does not
-	// move.
-	committedEntry, err := w.gitOutputEnv(w.gitDir, env, "ls-files", "-s", "-z", "--", filePath)
+	// move. Every path here is the index's own (top-level-relative,
+	// indexPath / indexEntries): w.gitDir can be a subdirectory of the
+	// repository (NewWriter roots git at conf.d when no git dir is given).
+	idxPath, err := w.indexPath(filePath)
+	if err != nil {
+		return false, err
+	}
+	committedEntry, err := w.indexEntries(env, filePath)
 	if err != nil {
 		return false, fmt.Errorf("read the committed index entry: %w", err)
 	}
-	priorEntries, err := w.gitOutput(w.gitDir, "ls-files", "-s", "-z", "--", filePath)
+	priorEntries, err := w.indexEntries(nil, filePath)
 	if err != nil {
 		return false, fmt.Errorf("read the index entry: %w", err)
 	}
 	zeroOID := strings.Repeat("0", len(commit))
-	if err := w.setIndexEntries(filePath, zeroOID, committedEntry); err != nil {
+	if err := w.setIndexEntries(idxPath, zeroOID, committedEntry); err != nil {
 		return false, err
 	}
 
@@ -232,10 +239,7 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 		w.beforeCASAdvance()
 	}
 	if err := w.gitExec("update-ref", "-m", "tenant-api: tenant/"+tenantID, "HEAD", commit, base); err != nil {
-		if rerr := w.setIndexEntries(filePath, zeroOID, priorEntries); rerr != nil {
-			slog.Error("gitops: could not put the index entry back after a write that did not commit",
-				"tenant", tenantID, "error", rerr)
-		}
+		w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
 		now, herr := w.currentHEAD()
 		if herr == nil && now != base {
 			slog.Warn("gitops: HEAD moved before the judged write was published",
@@ -247,19 +251,83 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 	return true, nil
 }
 
-// setIndexEntries replaces every entry the real index holds for filePath
-// (all stages) with entries — `ls-files -s -z` output; empty takes
-// filePath out of the index — in one `update-index --index-info`, under
-// git's own index lock. zeroOID is the repository's all-zero object id.
+// unsyncIndexEntry undoes gitCommitOnto's sync of the real index after a
+// ref update that failed: the written path's entry goes back to
+// priorEntries — but only while it is still exactly the entry the sync
+// wrote and HEAD does not hold that blob. Between the sync and the ref
+// update something outside can have changed it: an operator's `git add`
+// of the path (theirs to keep), or a `git commit` that took the real
+// index, our blob with it, and moved HEAD (putting the old entry back
+// would stage a revert of that commit). Then the entry is left as it is.
 // Caller holds w.mu.
-func (w *Writer) setIndexEntries(filePath, zeroOID string, entries []byte) error {
+func (w *Writer) unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID string, committedEntry, priorEntries []byte) {
+	now, err := w.indexEntries(nil, filePath)
+	switch {
+	case err != nil:
+		slog.Error("gitops: could not read the index entry back after a write that did not commit",
+			"tenant", tenantID, "error", err)
+		return
+	case !bytes.Equal(now, committedEntry):
+		slog.Warn("gitops: the index entry changed outside tenant-api during a write that did not commit; left as it is",
+			"tenant", tenantID, "path", idxPath)
+		return
+	case w.headHoldsEntry(idxPath, committedEntry):
+		slog.Warn("gitops: HEAD already holds the written blob; the index entry is left as it is",
+			"tenant", tenantID, "path", idxPath)
+		return
+	}
+	if err := w.setIndexEntries(idxPath, zeroOID, priorEntries); err != nil {
+		slog.Error("gitops: could not put the index entry back after a write that did not commit",
+			"tenant", tenantID, "error", err)
+	}
+}
+
+// headHoldsEntry reports whether HEAD's tree holds, at idxPath, the object
+// of entry (one `ls-files -s -z` entry). false when it cannot tell.
+func (w *Writer) headHoldsEntry(idxPath string, entry []byte) bool {
+	meta, _, ok := bytes.Cut(entry, []byte("\t"))
+	fields := strings.Fields(string(meta))
+	if !ok || len(fields) < 2 {
+		return false
+	}
+	// HEAD:<path> names a path from the top level, as the index does.
+	out, err := w.gitOutput(w.gitDir, "rev-parse", "--verify", "-q", "HEAD:"+idxPath)
+	return err == nil && strings.TrimSpace(string(out)) == fields[1]
+}
+
+// indexPath is filePath as the index names it: relative to the
+// repository's top level (`rev-parse --show-prefix` — w.gitDir's own
+// place under it — plus filePath relative to w.gitDir), slash-separated.
+// `update-index --index-info` takes these paths and nothing else.
+func (w *Writer) indexPath(filePath string) (string, error) {
 	rel, err := filepath.Rel(w.gitDir, filePath)
 	if err != nil {
-		return fmt.Errorf("locate the index entry: %w", err)
+		return "", fmt.Errorf("locate the index entry: %w", err)
 	}
+	prefix, err := w.gitOutput(w.gitDir, "rev-parse", "--show-prefix")
+	if err != nil {
+		return "", fmt.Errorf("locate the index entry: %w", err)
+	}
+	return pathpkg.Clean(strings.TrimSpace(string(prefix)) + filepath.ToSlash(rel)), nil
+}
+
+// indexEntries is every entry an index holds for filePath (env selects a
+// temporary one; nil the real one), `ls-files -s -z` output with
+// top-level-relative names (--full-name) — the form setIndexEntries feeds
+// back to `update-index --index-info`, whatever directory git ran in.
+func (w *Writer) indexEntries(env []string, filePath string) ([]byte, error) {
+	return w.gitOutputEnv(w.gitDir, env, "ls-files", "-s", "-z", "--full-name", "--", filePath)
+}
+
+// setIndexEntries replaces every entry the real index holds for idxPath
+// (top-level-relative, indexPath; all stages) with entries —
+// indexEntries output; empty takes the path out of the index — in one
+// `update-index --index-info`, under git's own index lock. zeroOID is the
+// repository's all-zero object id. Caller holds w.mu.
+func (w *Writer) setIndexEntries(idxPath, zeroOID string, entries []byte) error {
 	// A mode-0 line removes the path, whatever stages it has.
 	var in bytes.Buffer
-	in.WriteString("0 " + zeroOID + "\t" + filepath.ToSlash(rel) + "\x00")
+	in.WriteString("0 " + zeroOID + "\t" + idxPath + "\x00")
 	in.Write(entries)
 	cmd, ctx, cancel := w.gitCmd("-C", w.gitDir, "update-index", "-z", "--index-info")
 	defer cancel()
