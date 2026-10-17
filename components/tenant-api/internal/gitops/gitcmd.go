@@ -137,6 +137,8 @@ func (w *Writer) gitCmdWithTimeout(timeout time.Duration, args ...string) (*exec
 // all other global pathspec settings"), so an inherited one would fail every
 // command — and icase would match a name of another case. A duplicate
 // GIT_LITERAL_PATHSPECS is overridden (the last entry wins in os/exec).
+// GIT_NOGLOB_PATHSPECS is kept on purpose: git runs with it beside the literal
+// setting (no fatal), and it adds nothing a literal pathspec does not already do.
 func gitEnv() []string {
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, kv := range os.Environ() {

@@ -4,7 +4,8 @@ package gitops
 // (gitEnv sets GIT_LITERAL_PATHSPECS=1). conf.d here is `conf[1]`; a
 // tracked `conf1` beside it is what the glob `conf[1]` reaches. Each case
 // checks the fixture first (raw git, which globs, does reach the decoy), then
-// that the writer's git command touched or read only the target. Seams: none
+// that the writer's git command touched or read only the target. Seams: the
+// git binary (w.gitBinary) for commit-tree's environment; otherwise none
 // (internal methods on a real temp repository).
 
 import (
@@ -12,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,9 +23,32 @@ const (
 	litDecoy  = "conf1/t.yaml"
 )
 
-// literalRepo seeds conf[1]/t.yaml and conf1/t.yaml on main.
+// pathspecEnvVars are git's global pathspec settings. A fixture check runs
+// raw git, which reads them from the process environment: an inherited
+// GIT_NOGLOB_PATHSPECS / GIT_LITERAL_PATHSPECS would stop the glob reaching
+// the decoy (the check fails as a broken fixture), and GIT_GLOB_PATHSPECS /
+// GIT_ICASE_PATHSPECS beside a literal one make git refuse to run.
+var pathspecEnvVars = []string{
+	"GIT_LITERAL_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
+}
+
+// clearPathspecEnv unsets pathspecEnvVars for the test (t.Setenv restores
+// them afterwards), so raw git in a fixture check globs as git does by default.
+func clearPathspecEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range pathspecEnvVars {
+		t.Setenv(k, "")
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// literalRepo seeds conf[1]/t.yaml and conf1/t.yaml on main, with the
+// pathspec settings cleared (clearPathspecEnv).
 func literalRepo(t *testing.T) (repo string, w *Writer) {
 	t.Helper()
+	clearPathspecEnv(t)
 	repo = seedTreeRepo(t, map[string]string{
 		litTarget: "target: 1\n",
 		litDecoy:  "decoy: 1\n",
@@ -56,10 +81,10 @@ func stagedSet(t *testing.T, repo string) string {
 }
 
 func TestGitEnv_LiteralPathspecs(t *testing.T) {
+	repo, _ := literalRepo(t) // before the Setenvs: its fixture check is raw git
 	t.Setenv("GIT_GLOB_PATHSPECS", "1")
 	t.Setenv("GIT_ICASE_PATHSPECS", "1")
 	t.Setenv("GIT_LITERAL_PATHSPECS", "0")
-	repo, _ := literalRepo(t)
 	cmd, _, cancel := NewWriter(repo, repo).gitCmd("-C", repo, "ls-files", "--", litTarget)
 	defer cancel()
 	last := ""
@@ -80,6 +105,53 @@ func TestGitEnv_LiteralPathspecs(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != litTarget {
 		t.Errorf("ls-files = %q, want only %q", got, litTarget)
+	}
+}
+
+// commit_cas.go gitCommitOnto: commit-tree gets the commit's identity in
+// its own environment, and that environment must still be gitEnv's — built
+// from os.Environ() instead, it would drop GIT_LITERAL_PATHSPECS. commit-tree
+// takes no pathspec, so the setting is read off the environment git
+// actually ran with: a stub git records it, then runs the real one.
+func TestGitCommitOnto_CommitTreeKeepsGitEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix shell stub; Go tests for this package run in the dev container / Linux CI")
+	}
+	repo, w := literalRepo(t) // GIT_LITERAL_PATHSPECS unset here, so only gitEnv can supply it
+	record := filepath.Join(t.TempDir(), "commit-tree.env")
+	stub := filepath.Join(t.TempDir(), "git-records-commit-tree.sh")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = \"commit-tree\" ]; then\n" +
+		"    printf '%s\\n' \"GIT_LITERAL_PATHSPECS=${GIT_LITERAL_PATHSPECS-<unset>}\" " +
+		"\"GIT_AUTHOR_NAME=$GIT_AUTHOR_NAME\" \"GIT_AUTHOR_EMAIL=$GIT_AUTHOR_EMAIL\" " +
+		"\"GIT_COMMITTER_NAME=$GIT_COMMITTER_NAME\" \"GIT_COMMITTER_EMAIL=$GIT_COMMITTER_EMAIL\" > '" + record + "'\n" +
+		"  fi\n" +
+		"done\n" +
+		"exec git \"$@\"\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	w.gitBinary = stub
+	w.committerName, w.committerEmail = "tenant-api", "bot@example.com"
+
+	base := strings.TrimSpace(gitOut(t, repo, "rev-parse", "HEAD"))
+	body := []byte("target: 2\n")
+	writeRel(t, repo, litTarget, string(body))
+	target := filepath.Join(repo, litTarget)
+	committed, err := w.gitCommitOnto(target, "t", "alice@example.com", body, base)
+	if err != nil || !committed {
+		t.Fatalf("gitCommitOnto = (%v, %v), want a commit", committed, err)
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("the stub saw no commit-tree: %v", err)
+	}
+	want := "GIT_LITERAL_PATHSPECS=1\n" +
+		"GIT_AUTHOR_NAME=alice\nGIT_AUTHOR_EMAIL=alice@example.com\n" +
+		"GIT_COMMITTER_NAME=tenant-api\nGIT_COMMITTER_EMAIL=bot@example.com\n"
+	if string(got) != want {
+		t.Errorf("commit-tree's environment:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -182,6 +254,7 @@ func TestLiteralPathspec_SyncServingPathsTouchesOnlyTarget(t *testing.T) {
 // named conf1 (a directory conf1/ is not matched by it), so that is the
 // decoy here; only conf.d may appear in the staging worktree.
 func TestLiteralPathspec_StagingChecksOutOnlyConfD(t *testing.T) {
+	clearPathspecEnv(t)
 	repo := seedTreeRepo(t, map[string]string{
 		litTarget: "target: 1\n",
 		"conf1":   "decoy\n",
@@ -205,6 +278,7 @@ func TestLiteralPathspec_StagingChecksOutOnlyConfD(t *testing.T) {
 
 // writer_registry.go HistoricalMaxUint: `log -p -- <file>`.
 func TestLiteralPathspec_HistoricalMaxReadsOnlyTarget(t *testing.T) {
+	clearPathspecEnv(t)
 	repo := seedTreeRepo(t, map[string]string{
 		"_reg[1].yaml": "next_id: 5\n",
 		"_reg1.yaml":   "next_id: 99\n",
