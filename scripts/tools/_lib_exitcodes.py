@@ -104,7 +104,7 @@ The same armed envelope covers every caller-error exit, so "rc 2 in
   _lib_exitcodes.run(main)``. *main*'s return value is the exit status; a
   hand-written ``sys.exit(2)`` that printed no envelope gets the generic one
   (``reason: "caller_error"``, ``error``: the last line the tool wrote to
-  stderr that starts with ``ERROR``, else its last line). Every tool that
+  stderr that starts with ``ERROR:``, else its last line). Every tool that
   calls ``arm_crash_envelope`` must enter through
   it (gate: tests/shared/test_single_exit_path.py).
 
@@ -131,10 +131,13 @@ the tool had — 0, 1, 2 or a crash — into 120. Now:
   ``write`` and ``flush`` of the original ``sys.stdout`` (fd 1) — and the
   armed stdout, if that is another object — and records every ``OSError``
   they raise before it propagates. An exception is stdout's failure iff it
-  is one of those, or was raised from / while handling one (the
-  ``__cause__`` / ``__context__`` chain). The same errno from a socket,
-  another fd, or a stderr that ``redirect_stdout`` made ``sys.stdout``
-  stays the tool's own error: a crash, or its named caller error.
+  is one of those, or was explicitly raised from one (``raise ... from``,
+  the ``__cause__`` chain). An exception merely raised while handling one
+  (implicit ``__context__``: a bug in that handler, the tool's next error)
+  is its own — crash report or named reason, own code — and ``raise ...
+  from None`` cuts the chain. The same errno from a socket, another fd, or
+  a stderr that ``redirect_stdout`` made ``sys.stdout`` stays the tool's
+  own error too.
 * that failure, reaching ``exit_on_crash`` or a ``die_caller_error`` /
   ``exit_caller_error`` called while handling it (a tool's broad handler),
   and a failure of the final flush made by an atexit hook registered at
@@ -151,9 +154,21 @@ the tool had — 0, 1, 2 or a crash — into 120. Now:
   hook points it at the null device, so it cannot turn the exit code into
   120 either.
 
+Scope: the import-time tap and the atexit hook apply to EVERY process that
+imports this module — the tools, but also pytest when a test imports a
+tool in-process, and mkdocs builds that load ``check_doc_links``. For such
+a process the only effect is at exit: if the final flush of fd 1 fails it
+ends at the caller-error code with the one line, where it would have
+ended at 120. Its armed state is per process; tests/conftest.py resets
+all of it after every test (``reset_exit_state``), and ``disarm`` forgets
+the armed stdout, so a test's fake or capture stream is never flushed at
+exit.
+
 Output fully handed to the pipe before the reader left keeps the tool's own
-exit code. A failure the tool caught and swallowed counts only if the final
-flush fails as well. ops/patch_config.py seals its streams itself and keeps
+exit code. A failure the tool caught and swallowed (and then exited
+normally) counts only if the final flush fails as well — so the outcome of
+the same tool can depend on buffering: unbuffered, nothing is left to fail
+at exit; buffered, the leftover bytes fail again. ops/patch_config.py seals its streams itself and keeps
 its own codes (#2505). A stdout the SHELL closed before the tool started
 (``tool >&-``) never reaches this: ``sys.stdout`` is None, Python drops the
 output, the exit code is the tool's own and no envelope is printed.
@@ -169,7 +184,12 @@ to stdout: Invalid argument" — still the caller-error code. Writes that do
 not go through ``sys.stdout.write`` / ``flush`` (``sys.stdout.buffer``,
 ``os.write(1, ...)``, a child process on the inherited fd 1) are not
 observed. A child process inherits the fds as the shell left them: the
-null-device stderr below is a Python object, not fd 2.
+null-device stderr below is a Python object, not fd 2. Concurrent writers
+(threads) each record their own failure; only the last few are kept, which
+is enough for the exception being handled. The module is assumed to be
+loaded once: a second copy loaded under another name (``importlib`` from a
+path) has its own records, taps and hook — the first copy's tap still
+records into the first copy.
 
 The ``--json`` tap sees ``sys.stdout.write`` only (``print``,
 ``json.dump``). A tool that armed its envelope must not write around it —
@@ -524,9 +544,27 @@ def arm_crash_envelope(build: Optional[_DocBuilder] = None, **fields: Any) -> No
 
 def disarm_crash_envelope() -> None:
     """Undo ``arm_crash_envelope``: a tool whose own document is already on
-    stdout calls this, so a later crash does not print a second one."""
-    global _crash_envelope_armed
+    stdout calls this, so a later crash does not print a second one.
+    Also forgets the stdout object recorded when arming: an unarmed process
+    never flushes it at exit (a test that armed with a fake or a capture
+    stream must not decide a later exit code)."""
+    global _crash_envelope_armed, _armed_stdout
     _crash_envelope_armed = None
+    _armed_stdout = None
+
+
+def reset_exit_state() -> None:
+    """Every piece of this module's process-global exit state back to its
+    import-time value: the arm and its stdout, the recorded stdout failures,
+    the "already reported" flag, the caller-error and crash codes. For test
+    harnesses that run tools in-process (tests/conftest.py calls it after
+    every test — an idempotent reset, not save-then-restore)."""
+    global _crash_exit_code, _caller_error_code, _stdout_closed_reported
+    disarm_crash_envelope()
+    _stdout_failures.clear()
+    _stdout_closed_reported = False
+    _crash_exit_code = EXIT_CALLER_ERROR
+    _caller_error_code = EXIT_CALLER_ERROR
 
 
 def _print_crash_envelope(exc: BaseException) -> None:
@@ -628,8 +666,9 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
     handlers run.
 
     Two exceptions are not crashes and leave by their own exit instead: a
-    ``CallerError`` (caller-error code, one line, its envelope) and a
-    ``BrokenPipeError`` whose broken end is stdout (the reader left: #3124).
+    ``CallerError`` (caller-error code, one line, its envelope) and any
+    ``OSError`` the stdout tap recorded — or one explicitly raised from it
+    (``raise ... from``) — the lost / failing stdout exit (#3124).
     """
     if isinstance(exc, CallerError):
         die_caller_error(exc.error_line, exc.reason)
@@ -713,13 +752,14 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     status, as ``sys.exit`` reads it. On top of that:
 
     * an ``Exception`` is a crash (``exit_on_crash``) — except a
-      ``CallerError`` or a lost-stdout ``OSError``, which leave by their
+      ``CallerError`` or a recorded stdout ``OSError``, which leave by their
       own exits (see ``exit_on_crash``);
     * an exit with the caller-error code that has printed no envelope yet
       — a hand-written ``sys.exit(2)`` — prints the armed envelope with
       ``reason: "caller_error"`` and, as ``error``, the tool's last stderr
-      line starting with ``ERROR`` (else its last line). Nothing is printed when not armed (no ``--json``) or
-      when the tool already wrote to stdout itself.
+      line starting with ``ERROR:`` (else its last line). Nothing is
+      printed when not armed (no ``--json``) or when the tool already
+      wrote to stdout itself.
 
     Gate: tests/shared/test_single_exit_path.py (every tool that calls
     ``arm_crash_envelope`` enters through here).
@@ -755,16 +795,21 @@ _STDOUT_LOST_ERRNOS = frozenset((errno.EPIPE, errno.EBADF, errno.ECONNRESET))
 
 
 def _recorded_stdout_failure(exc: Optional[BaseException]) -> Optional[tuple[OSError, Any]]:
-    """(failure, stream) when *exc* — or an exception it was raised from or
-    while handling (``__cause__`` / ``__context__``) — is a recorded stdout
-    write failure; else None."""
+    """(failure, stream) when *exc* — or an exception it was explicitly
+    raised from (``raise ... from``, the ``__cause__`` chain) — is a
+    recorded stdout write failure; else None.
+
+    Only the explicit chain: an exception merely raised WHILE handling
+    stdout's failure (``__context__`` — a bug in that handler, the tool's
+    next error) is its own error and keeps its own crash report or reason;
+    ``raise ... from None`` cuts the chain."""
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
         for failed, stream in reversed(_stdout_failures):
             if failed is exc:
                 return failed, stream
-        exc = exc.__cause__ or exc.__context__
+        exc = exc.__cause__
     return None
 
 
@@ -811,7 +856,10 @@ def _flush_stdout_at_exit() -> None:
     """The final flush of stdout — the original one (fd 1) and the armed one
     if that is another object — through the tap, so a failure is recorded
     and named like a mid-run one."""
-    streams = {id(s): s for s in (sys.__stdout__, _armed_stdout) if s is not None}
+    # The armed stdout only while it is still armed: a stale one (a test's
+    # fake or capture stream, already disarmed) is nobody's stdout.
+    armed = _armed_stdout if _crash_envelope_armed is not None else None
+    streams = {id(s): s for s in (sys.__stdout__, armed) if s is not None}
     for out in streams.values():
         if getattr(out, "closed", False):
             continue

@@ -854,3 +854,115 @@ def test_the_final_flush_is_of_the_original_stdout_not_a_rebound_one(tmp_path):
     rc, err = _run_closed(tmp_path, body, "reader-gone")
     assert rc == 2, err
     assert STDOUT_CLOSED_LINE in err, err
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Round 4: no stale exit state; only an EXPLICIT cause chain counts
+# ═══════════════════════════════════════════════════════════════════════════
+_BROKEN_STREAM = (
+    "import io, errno\n"
+    "class Broken(io.TextIOBase):\n"
+    "    def writable(self):\n        return True\n"
+    "    def write(self, s):\n        raise OSError(errno.EPIPE, 'Broken pipe')\n"
+    "    def flush(self):\n        raise OSError(errno.EPIPE, 'Broken pipe')\n")
+
+
+@pytest.mark.parametrize("unarm", ["disarm", "envelope-consumed"])
+def test_a_stdout_armed_earlier_is_not_flushed_once_unarmed(tmp_path, unarm):
+    """M1: an in-process test arms with a stream that fails (a fake, a
+    capture object) and puts the real stdout back. Once the arm is gone,
+    that stream is nobody's stdout: the process must not end at rc 2 over it."""
+    how = ("_lib_exitcodes.disarm_crash_envelope()\n" if unarm == "disarm"
+           else "_lib_exitcodes._crash_envelope_armed = None\n")
+    proc = _run(_script(tmp_path, _BROKEN_STREAM +
+                        "sys.stdout = Broken()\n_lib_exitcodes.arm_crash_envelope()\n"
+                        "sys.stdout = sys.__stdout__\n" + how + "print('fine')\n"))
+    err = proc.stderr.decode("utf-8", "replace")
+    assert (proc.returncode, proc.stdout) == (0, b"fine\n"), err
+    assert "ERROR" not in err, err
+
+
+_STATE_PROBE = "DA_EXIT_STATE_PROBE"
+
+
+@pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
+def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    ns: dict = {}
+    exec(_BROKEN_STREAM, ns)
+    monkeypatch.setattr(sys, "stdout", ns["Broken"]())
+    ec.arm_crash_envelope()          # never disarmed: the conftest must
+    ec.set_crash_exit_code(70)
+    ec.set_caller_error_code(1)
+    ec._record_stdout_failure(OSError(32, "Broken pipe"), sys.stdout)
+    ec._stdout_closed_reported = True
+
+
+@pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
+def test_probe_sees_clean_exit_state():
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    assert (ec._crash_envelope_armed, ec._armed_stdout, ec._stdout_failures,
+            ec._stdout_closed_reported, ec.get_crash_exit_code(),
+            ec.get_caller_error_code()) == (None, None, [], False, 2, 2)
+
+
+def test_exit_state_does_not_leak_between_tests():
+    """M1/S2: a green pytest run must not end at rc 2 because one test left
+    a failing stream armed (order-dependent: measured on
+    test_patch_config_verify -k "test_w1 and EPIPE and json"), and no test
+    may see another's codes, recorded failures or flags."""
+    me = Path(__file__)
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
+         f"{me}::test_probe_leaves_every_piece_of_exit_state_dirty",
+         f"{me}::test_probe_sees_clean_exit_state"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=300, cwd=str(REPO_ROOT), env=dict(os.environ, **{_STATE_PROBE: "1"}))
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0 and "2 passed" in proc.stdout, out[-2000:]
+    assert STDOUT_CLOSED_LINE not in out, out[-2000:]
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_bug_in_a_broken_pipe_handler_is_still_a_crash(tmp_path, buffering):
+    """S1 (p1): the handler for stdout's BrokenPipeError has a bug of its
+    own. Its TypeError only has the BrokenPipeError as implicit context —
+    it is a crash and must be reported as one."""
+    body = ("def main():\n"
+            "    try:\n        print('x' * 1_000_000)\n        sys.stdout.flush()\n"
+            "    except BrokenPipeError:\n        cleanup = None\n        cleanup()\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert f"{CRASH_MARK} (TypeError)" in err and "Traceback" in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_tools_own_error_inside_a_broken_pipe_handler_keeps_its_line_and_code(tmp_path, buffering):
+    """S1 (p2): after stdout's failure the tool hits ANOTHER error and names
+    it with its own code. Implicit context is not a cause: its line and code
+    stand (unless the final flush also fails, which this run does not)."""
+    body = ("def main():\n"
+            "    try:\n        print('x' * 1_000_000)\n        sys.stdout.flush()\n"
+            "    except BrokenPipeError:\n"
+            "        try:\n            open('/nonexistent/d/f', 'w')\n"
+            "        except OSError as e:\n"
+            "            _lib_exitcodes.die_caller_error(f'ERROR: cannot write --output: {e}', "
+            "reason='output_unwritable', code=5)\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert "ERROR: cannot write --output" in err, err
+    assert rc == 5, err
+
+
+def test_raise_from_none_cuts_the_chain(tmp_path):
+    """`raise ... from None` says "not caused by that": the tool's reason stands."""
+    body = _armed(
+        "try:\n"
+        "    try:\n        print('x' * 1_000_000)\n"
+        "    except OSError:\n        raise RuntimeError('render failed') from None\n"
+        "except RuntimeError as e:\n"
+        "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone")
+    assert "ERROR: render failed" in err, err
