@@ -126,8 +126,7 @@ _NOT_PROBED: dict[str, str] = {
                            "(subprocess): its routing half is the generator's probe"),
     "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
                                "to list where they differ (ADR-036 §8)"),
-    "dx/describe_tenant.py": ("pending: moves to da-guard effective / served-values (#2906 "
-                              "ruling 3), not to parse-tree; no probe written yet"),
+    "dx/describe_tenant.py": _GO,
     "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _PENDING,
     "lint/check_account_registry_monotonic.py": _PENDING, "validate_all.py": _PENDING,
     "ops/byo_check.py": _PENDING, "ops/blast_radius.py": _PENDING,
@@ -135,8 +134,8 @@ _NOT_PROBED: dict[str, str] = {
     "ops/maintenance_scheduler.py": _PENDING, "ops/operator_check.py": _PENDING,
     "ops/baseline_discovery.py": _PENDING, "ops/threshold_recommend.py": _PENDING,
     "ops/blind_spot_discovery.py": _PENDING,
-    "dx/compile_custom_alerts.py": _PENDING, "dx/migrate_conf_d.py": _PENDING,
-    "dx/tenant_verify.py": _PENDING, "lint/check_path_metadata_consistency.py": _PENDING,
+    "dx/compile_custom_alerts.py": _GO, "dx/migrate_conf_d.py": _PENDING,
+    "dx/tenant_verify.py": _GO, "lint/check_path_metadata_consistency.py": _PENDING,
     "lint/check_retire_drift.py": _PENDING, "lint/check_scrape_reachability.py": _PENDING,
     "lint/check_threshold_observed_map.py": _PENDING,
     "lint/check_threshold_reachability.py": _PENDING,
