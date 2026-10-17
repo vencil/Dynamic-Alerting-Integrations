@@ -273,8 +273,12 @@ def test_da_guard_older_than_this_tool_is_a_caller_error(tmp_path, monkeypatch):
                         "--json"], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=300)
     rows = {r["check"]: r for r in json.loads(p.stdout)}
-    assert p.returncode == 2, (p.returncode, rows["profiles"])
-    assert rows["profiles"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows["profiles"]
+    # ADR-036 step 4 (#2906): the CLI reads the tree through `da-guard
+    # parse-tree` first; this fake answers it with effective's document, so
+    # no row runs — one caller-error row naming the binary, rc 2.
+    assert p.returncode == 2, (p.returncode, rows)
+    assert list(rows) == ["config_dir"], rows
+    assert rows["config_dir"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows
 
 
 # ── 被丟掉的檔：原因取自 effective 自己的 stderr，不再補跑 served-values（#2115 F4）──
@@ -292,7 +296,8 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     """`_with_exporter_reasons` 曾在 effective 失敗後補跑 served-values 借原因文字；
     `da-guard effective` 的 stderr 自 #2115 C 起就帶原因，補跑已拿掉。量測：profiles 與
     values_not_served 兩列 FAIL、明細有 exporter 的原因行，而 da-guard 只被呼叫
-    `effective`（以計數 wrapper 記錄子命令）。"""
+    `effective`（以計數 wrapper 記錄子命令；ADR-036 步驟 4 起另有讀樹的一次
+    `parse-tree`）。"""
     require_shebang_scripts()  # the counting wrapper is a `#!` script
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
@@ -313,4 +318,5 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
         row = rows[check]
         assert row["status"] == vc.FAIL and row["caller_error"] is False, row
         assert any(d.startswith("  da-guard| ") and reason in d for d in row["details"]), row
-    assert log.read_text(encoding="utf-8").split() == ["effective"]
+    # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective.
+    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective"]

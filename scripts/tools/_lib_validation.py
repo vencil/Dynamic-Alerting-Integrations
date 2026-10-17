@@ -400,10 +400,6 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
         d = defs[branch["$ref"][len("#/definitions/"):]]
         table[d["properties"]["type"]["const"]] = {
             f: resolve(p) for f, p in d["properties"].items() if f != "type"}
-    global _YAML_BOOL_LITERALS
-    _YAML_BOOL_LITERALS = {
-        lit: lit.lower() in ("true", "yes", "on")
-        for lit in defs["yamlBool"]["anyOf"][1]["enum"]}
     _RECEIVER_FIELD_SCHEMAS = table
     return table
 
@@ -525,23 +521,28 @@ def am_duration_seconds(value: Any) -> Optional[float]:
 
 _YAML_BOOL_REF = "#/definitions/yamlBool"
 _HTTP_CONFIG_REF = "#/definitions/httpConfigOrNull"
-_YAML_BOOL_LITERALS: dict[str, bool] = {}
+#: The YAML 1.1 boolean words PyYAML's resolver reads as booleans
+#: (true / false / yes / no / on / off, three spellings each).
+_YAML_BOOL_LITERALS: dict[str, bool] = {
+    spelling: word in ("true", "yes", "on")
+    for word in ("true", "false", "yes", "no", "on", "off")
+    for spelling in (word, word.capitalize(), word.upper())}
 
 
 def yaml_bool_literals() -> dict[str, bool]:
-    """``{literal: value}`` of the YAML 1.1 boolean words (#2295).
-
-    Read from tenant-config.schema.json ``definitions.yamlBool`` (the one
-    authored list). PyYAML
-    already reads these plain words as booleans. ⛔ #2906: the route
-    generator no longer takes any of them as a STRING (quoted, or from
-    JSON) — a boolean field is judged by type alone (ADR-036 §2), see
-    ``is_bool_or_unset``. The list stays the schema's, read by the YAML 1.1
-    boolean-word warning (``_lib_io``) and the schema parity tests.
-    ``y`` / ``n`` are not in it: a documented deliberate refusal.
-    """
-    _receiver_field_schemas()
-    return _YAML_BOOL_LITERALS
+    """``{literal: value}`` of the YAML 1.1 boolean words (#2295): the
+    plain scalars PyYAML reads as booleans. ⛔ #2906: no reader of the
+    routing plane takes any of them as a STRING — the route generator reads
+    yaml.v3 (an unquoted ``yes`` is the string "yes") and judges a boolean
+    field by type alone (ADR-036 §2, ``is_bool_or_unset``), and the schema's
+    ``definitions.yamlBool`` is boolean or null only, so this is no longer a
+    schema list. What still uses the table: the YAML 1.1 boolean-word
+    warning — ``_lib_io.find_yaml11_bool_words`` takes its words from
+    ``_YAML_BOOL_LITERALS`` minus yaml.v3's six (``true`` / ``false`` in
+    three spellings) — and that warning's tests, through this function
+    (tests/shared/test_yaml11_bool_word_warning.py). ``y`` / ``n`` are not in
+    it: PyYAML reads them as strings."""
+    return dict(_YAML_BOOL_LITERALS)
 
 
 def is_bool_or_unset(value: Any) -> bool:

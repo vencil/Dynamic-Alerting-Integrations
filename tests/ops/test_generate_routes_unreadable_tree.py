@@ -87,7 +87,7 @@ class TestTheRecordIsStructural:
         names = [f for f, _ in tree.tenant_file_errors]
         assert names == ["alpha.yaml"], tree.tenant_file_errors
         _, reason = tree.tenant_file_errors[0]
-        assert "failed to parse" in reason and "fix:" in reason, reason
+        assert "could not be read (syntax_error)" in reason and "fix:" in reason, reason
         assert tree.files_read == 1
         assert [f for f, _ in tree.files_skipped] == ["alpha.yaml"]
 
@@ -167,7 +167,7 @@ class TestValidateRefusesAnUnreadableTree:
         assert "FAIL:" in r.stderr and "alpha.yaml" in r.stderr, r.stderr
         assert "could not be read" in r.stderr, r.stderr
         # The pre-existing WARN line is kept.
-        assert "WARN: skip unparseable alpha.yaml" in r.stderr, r.stderr
+        assert "WARN: skip alpha.yaml: could not be read (syntax_error)" in r.stderr, r.stderr
 
     def test_control_both_valid_is_ok_with_counts(self, good_tree):
         r = _gar(["--config-dir", str(good_tree), "--validate"])

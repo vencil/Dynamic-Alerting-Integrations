@@ -1594,8 +1594,12 @@ class TestUnreadableInputIsNeverOurBug:
         ("not-utf8", b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n    x: 1\n"),
         ("not-a-mapping", b"- tenants:\n    db_a:\n      x: 1\n"),
         ("syntax-error", b"tenants:\n  db_a: [1\n"),
+        # Past yaml.v3's 10,000-level limit (parse-tree's syntax_error,
+        # "exceeded max depth"): the 520 levels PyYAML could not read are read
+        # since ADR-036 step 4. Flow style: 24 kB, not the ~144 MB a block
+        # mapping that deep takes.
         ("deeply-nested",
-         ("".join("  " * i + "k%d:\n" % i for i in range(520))).encode()),
+         b"tenants:\n  db_a:\n    x: " + b"[" * 12000 + b"]" * 12000 + b"\n"),
     ]
 
     @pytest.mark.parametrize("label,body", UNREADABLE,
@@ -2215,7 +2219,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             "tenants:\n  demo-a:\n    mysql_threads_running: 90\n"
             "    _routing:\n      receiver:\n        type: webhook\n"
             "        url: https://hooks.example.com/a\n"
-            "      overrides:\n      - alertname: yes\n"
+            "      overrides:\n      - alertname: true\n"
             "        receiver:\n          type: webhook\n"
             "          url: https://hooks.example.com/b\n",
             encoding="utf-8")
@@ -2512,15 +2516,16 @@ class TestTenantIdParity:
         assert r["status"] == vc.FAIL, r
         assert 'tenant "db-m"' in " ".join(r["details"]), r
 
-    def test_a_null_key_is_dropped_because_the_exporter_drops_it(self, tmp_path):
-        """Must-stay-green control for the same loader: without the null rule
-        two trees each carrying a ``null:`` key would read as a duplicate the
-        exporter never sees."""
+    def test_a_null_key_makes_the_file_unexamined_not_a_duplicate(self, tmp_path):
+        """ADR-036 step 4 (#2906): a null key is parse-tree's `null_key` —
+        the file cannot be read, so it declares nothing (never a duplicate
+        `None`), and the row says which files it did not examine."""
         d = self._tree(tmp_path, {
             "a.yaml": "tenants:\n  null:\n    m: 1\n  b:\n    m: 1\n",
             "c.yaml": "tenants:\n  null:\n    m: 2\n  d:\n    m: 2\n"})
         r = vc.check_tenant_uniqueness(d)
-        assert r["status"] == vc.PASS, r
+        assert r["status"] == vc.WARN, r
+        assert "a.yaml, c.yaml" in " ".join(r["details"]), r
 
     # #2114: `test_the_loader_cannot_construct_python_objects` moved with the
     # loader to `tests/shared/test_tenant_id_yaml_spelling_parity.py` — the
@@ -2693,23 +2698,18 @@ _CARRIER_ORACLE = json.loads(pathlib.Path(
     "defaults-carrier-oracle.json").read_text(encoding="utf-8"))["cases"]
 
 #: Oracle rows where this row's verdict differs from the exporter's, each for
-#: a reason that is not the value rule (#1414) and predates it.
-#:   * top level not a mapping — `yaml_syntax` owns that finding; this row
-#:     says "no `defaults:` mapping" rather than repeat it.
-#:   * the rest FAIL here while the exporter accepts: conf.d is read with the
-#:     strict pure-Python loader (#2123 duplicate keys anywhere; one document;
-#:     no tab where libyaml tolerates one), which fails the file before the
-#:     value rule runs — through `_run_check`'s input-error row, as before.
+#: a reason that is not the value rule (#1414) and predates it. The rows FAIL
+#: here while the exporter accepts: conf.d is read through `da-guard
+#: parse-tree` (ADR-036 step 4, #2906), whose closed list refuses what the
+#: exporter's yaml.v3 decode lets by (a duplicate key anywhere, several
+#: documents), and the file fails before the value rule runs — through
+#: `_run_check`'s input-error row. (Before step 4 the PyYAML read also failed
+#: a TAB that yaml.v3 takes, and passed a top level that is not a mapping.)
 _ORACLE_ROW_DEVIATIONS = {
-    "top-level-list": vc.PASS,
-    "top-level-scalar": vc.PASS,
     "multi-document": vc.FAIL,
     "dup-in-unknown-section": vc.FAIL,
     "dup-under-unknown-nested-field": vc.FAIL,
     "dup-in-custom-alerts-recipe": vc.FAIL,
-    "trailing-tab": vc.FAIL,
-    "tab-after-key-colon": vc.FAIL,
-    "tab-in-flow": vc.FAIL,
 }
 
 
@@ -2736,7 +2736,7 @@ class TestRootDefaultsValues:
 
     @pytest.mark.parametrize("value, shown", [
         ('"70"', '`"70"`'),
-        ("disable", "`disable`"),
+        ("disable", '`"disable"`'),  # #2906: a string, shown as one
         ("\n    default: 30", "a mapping"),
         ("\n    - 30", "a list"),
         ("true", "`true`"),
@@ -3098,7 +3098,12 @@ class TestDefaultsWrapperMatrix:
         if wrap["status"] == vc.FAIL:
             got += [["defaults_toplevel_ignored", x.split(": ", 1)[0]]
                     for x in wrap["details"]]
-        assert sorted(got) == sorted(case["expect"]), (root, wrap)
+        # ADR-036 step 4 (#2906): a file `da-guard parse-tree` cannot read
+        # (e.g. `!!set`, outside its tag whitelist) is not judged by these
+        # rows; `yaml_syntax` FAILs it, so the tree is refused all the same.
+        unread = set(vc.check_yaml_syntax(str(d)).get("unusable_files") or [])
+        want = [e for e in case["expect"] if e[1] not in unread]
+        assert sorted(got) == sorted(want), (root, wrap, unread)
 
 
 class TestScheduleNull:
@@ -3319,15 +3324,16 @@ class TestJsonSchemaRow:
         assert not [x for x in quoting if "group_by" in x], quoting
         assert rc == 1
 
+    # #2906: a value yaml.v3 reads as non-string (`yes` is a string to it).
     _SLACK = ("    _routing:\n      receiver:\n        type: slack\n"
               "        api_url: https://hooks.slack.com/services/x\n"
-              "        channel: yes\n")
+              "        channel: 1e3\n")
 
     def test_a_misread_value_under_a_receiver_oneof_is_not_reported(
             self, tmp_path, capsys, cli_argv):
         """The receiver `oneOf` reports the misread field one level ABOVE it
         (`@ /tenants/ta/_routing/receiver`, itself inside the `_routing`
-        object/null `oneOf`); judged as quoted, `"yes"` is a valid channel
+        object/null `oneOf`); judged as quoted, `"1e3"` is a valid channel
         and nothing is left to report."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
@@ -3345,9 +3351,9 @@ class TestJsonSchemaRow:
     # the ranking and hide the real one — the round-2 findings of #2695.
     @pytest.mark.parametrize("body,named", [
         (_SLACK + "      foo: 1\n", "'foo' was unexpected"),
-        (_RECEIVER + "      overrides:\n        - alertname: yes\n"
+        (_RECEIVER + "      overrides:\n        - alertname: 1e3\n"
                      "          group_by: alertname\n", "group_by"),
-        (_RECEIVER + "      overrides:\n        - alertname: yes\n"
+        (_RECEIVER + "      overrides:\n        - alertname: 1e3\n"
                      "          receiver:\n            type: webhok\n"
                      "            url: https://hooks.example.com/b\n",
          "webhok"),
@@ -3391,8 +3397,8 @@ class TestJsonSchemaRow:
         # `"123"` is not a URL either; it outranks the sibling `foo`.
         ("    _routing:\n      receiver:\n        type: webhook\n"
          "        url: 123\n      foo: 1\n", "'123' does not match"),
-        # `"yes"` is not a silent mode.
-        ("    _silent_mode: yes\n", "'yes' is not one of"),
+        # `"true"` is not a silent mode.
+        ("    _silent_mode: true\n", "'true' is not one of"),
         # An empty url, quoted, is still not a URL.
         ("    _routing:\n      receiver:\n        type: webhook\n"
          "        url:\n", "'' should be non-empty"),
@@ -3434,9 +3440,10 @@ class TestJsonSchemaRow:
                                               schemas[1], schemas[2])
         assert len([v for v in violations if "mysql_connections" in v]) == 2
 
-    def test_each_document_and_alias_is_read_as_quoted(self, tmp_path):
-        """Per document of a multi-document file, and through an alias: the
-        aliased node is one node, so marking it once covers every use."""
+    def test_each_use_of_an_alias_is_read_as_quoted(self, tmp_path):
+        """Through an alias: parse-tree expands it where it is used, and each
+        use is a misread value of its own, read as quoted. (A file of several
+        documents is unreadable to parse-tree — `multiple_documents`.)"""
         import jsonschema
         lint_dir = os.path.join(_REPO_ROOT, "scripts", "tools", "lint")
         if lint_dir not in sys.path:
@@ -3452,10 +3459,9 @@ class TestJsonSchemaRow:
             "tenants:\n  ta:\n    mysql_connections: 70\n"
             "    _routing: &r\n      receiver:\n        type: slack\n"
             "        api_url: https://hooks.slack.com/services/x\n"
-            "        channel: yes\n"
+            "        channel: 1e3\n"
             "  tb:\n    _routing: *r\n"
-            "---\n"
-            "tenants:\n  tc:\n    mysql_connections: 70\n"
+            "  tc:\n    mysql_connections: 70\n"
             + self._RECEIVER + "      group_by: alertname\n")})
         _n, violations, _s = ccs.validate_dir(
             d, schemas[0], jsonschema, schemas[1], schemas[2],
@@ -3463,10 +3469,15 @@ class TestJsonSchemaRow:
         assert len(violations) == 1, violations
         assert "/tenants/tc/_routing/group_by" in violations[0], violations
         # Unchanged without the caller's list: every misread value is a
-        # quoting line AND a type error.
+        # quoting line (both alias uses among them), and the schema judges
+        # the values as yaml.v3 read them.
         _n, alone, _s = ccs.validate_dir(d, schemas[0], jsonschema,
                                          schemas[1], schemas[2])
-        assert any("is not of type" in v for v in alone), alone
+        quoting = [v for v in alone if "is read by yaml.v3" in v]
+        assert {v.split(": ")[2] for v in quoting} >= {
+            "/tenants/ta/_routing/receiver/channel",
+            "/tenants/tb/_routing/receiver/channel"}, alone
+        assert any(v.endswith("@ /tenants/tc/mysql_connections") for v in alone), alone
 
     def test_without_jsonschema_the_row_says_it_did_not_check(
             self, tmp_path, monkeypatch, capsys, cli_argv):
@@ -3492,3 +3503,72 @@ class TestJsonSchemaRow:
         row = vc.check_json_schema(os.path.join(
             _REPO_ROOT, "components", "threshold-exporter", "config", "conf.d"))
         assert row["status"] == vc.PASS, row
+
+
+class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
+    """#2906 review (CodeRabbit, Major ×2): `_defaults.yaml` beside
+    `_defaults.yml` in one directory — da-guard parse-tree selects one and
+    lists the other as `not_read` (`unselected_defaults_carrier`). The tools
+    that walk the directory themselves used to read the loser through
+    `ConfdReader.node`, which raises `NotSelected`: validate-config's
+    `yaml_quoting` / `json_schema` rows and check_confd_schema ended as a
+    caller error (rc 2). parse-tree's selection decides now
+    (`ConfdReader.not_read`): the loser is skipped and named, and the
+    `schema` row's `unselected_defaults_carrier` finding is what fails."""
+
+    @staticmethod
+    def _tree(tmp_path):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                          encoding="utf-8")
+        (d / "_defaults.yml").write_text("defaults:\n  mysql_connections: 70\n",
+                                         encoding="utf-8")
+        (d / "tenant-x.yaml").write_text(
+            "tenants:\n  tenant-x:\n    mysql_connections: \"60\"\n", encoding="utf-8")
+        return d
+
+    def test_validate_config(self, tmp_path, capsys, cli_argv):
+        d = self._tree(tmp_path)
+        cli_argv("validate_config", "--config-dir", str(d), "--json")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
+        assert exc.value.code == 1, rows
+        assert not any(r.get("caller_error") for r in rows.values()), rows
+        assert rows["schema"]["status"] == vc.FAIL, rows["schema"]
+        assert any("_defaults.yml is not read" in x for x in rows["schema"]["details"]), rows
+        assert rows["yaml_quoting"]["status"] == vc.PASS, rows["yaml_quoting"]
+        assert rows["json_schema"]["status"] == vc.PASS, rows["json_schema"]
+        assert "_defaults.yml (unselected_defaults_carrier)" in rows["json_schema"]["details"][0]
+
+    def test_check_confd_schema(self, tmp_path):
+        d = self._tree(tmp_path)
+        r = subprocess.run(
+            [sys.executable, os.path.join(_REPO_ROOT, "scripts", "tools", "lint",
+                                          "check_confd_schema.py"), "--config-dir", str(d)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert ("skipped 1 file(s) no reader reads (da-guard parse-tree's not_read): "
+                "_defaults.yml (unselected_defaults_carrier)") in r.stdout, r.stdout
+        # The selected spelling is still checked: a violation in it is found.
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\nbogus_key: 1\n",
+                                          encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, os.path.join(_REPO_ROOT, "scripts", "tools", "lint",
+                                          "check_confd_schema.py"), "--config-dir", str(d)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert r.returncode == 1 and "_defaults.yaml" in r.stderr, r.stdout + r.stderr
+
+    def test_a_file_parse_tree_does_not_list_at_all_still_refuses(self, tmp_path):
+        """The skip is parse-tree's `not_read` verdict only: a walk that
+        disagrees with the exporter's on a file parse-tree lists nowhere is
+        still `NotSelected`, never an empty mapping."""
+        import _lib_parse_cache as pc
+        d = self._tree(tmp_path)
+        reader = pc.ConfdReader(d)
+        assert reader.not_read(d / "_defaults.yml") == "unselected_defaults_carrier"
+        assert reader.not_read(d / "_defaults.yaml") is None
+        assert reader.not_read(d / "tenant-x.yaml") is None
+        with pytest.raises(pc.NotSelected):
+            reader.node(d / "_defaults.yml")

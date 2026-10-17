@@ -39,6 +39,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -192,9 +193,6 @@ var patchDiffCases = []patchDiffCase{
 	// written.
 	{name: "tag-construct-failure-own-block", tenant: "t1", patch: map[string]string{"z": "1"}, want: "base_refused",
 		base: "tenants:\n  t1:\n    secret_x: !!int hunter2\n"},
-	// Known limit: a TAB right after `k:` is no node of its own.
-	{name: "tab-after-key", tenant: "t1", patch: map[string]string{"z": "1"}, want: "known_healed",
-		base: "tenants:\n  t1: {}\n  t2:\n    k:\t\n"},
 
 	// --- read by the generator, merged unchanged ------------------------
 	{name: "flow-sequence-plain-words", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
@@ -209,6 +207,14 @@ var patchDiffCases = []patchDiffCase{
 		base: "tenants:\n  t1: {}\nextra:\n  <<: {a: 1}\n  a: 2\n"},
 	{name: "same-number-other-text", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
 		base: "tenants:\n  t1: {}\nextra:\n  1: a\n  01: b\n"},
+	// Refused by the PyYAML generator, read by yaml.v3 (ADR-036 §2's closed
+	// list): since the generator reads parse-tree (step 4) these merge as
+	// any readable base does. A TAB after `k:` is k: null; 2001-13-45 is a
+	// string (no such date, so no !!timestamp).
+	{name: "tab-after-key", tenant: "t1", patch: map[string]string{"z": "1"}, want: "merged",
+		base: "tenants:\n  t1: {}\n  t2:\n    k:\t\n"},
+	{name: "date-out-of-range", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "merged",
+		base: "tenants:\n  t1: {}\nextra: 2001-13-45\n"},
 
 	// --- unreadable to the generator, refused before the merge (#3063) --
 	// tenantConfigError's ParseTenantFile decodes the file generically as
@@ -243,8 +249,6 @@ var patchDiffCases = []patchDiffCase{
 		base: "tenants:\n  t1: {}\nextra: !foo bar\n"},
 	{name: "map-tag-on-sequence", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!map [1]\n"},
-	{name: "date-out-of-range", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
-		base: "tenants:\n  t1: {}\nextra: 2001-13-45\n"},
 	{name: "python-tag", tenant: "t1", patch: map[string]string{"redis_memory": "3"}, want: "unreadable_kept",
 		base: "tenants:\n  t1: {}\nextra: !!python/name:os.system ''\n"},
 }
@@ -270,6 +274,7 @@ func generatorDiff(t *testing.T, in []map[string]any) []struct {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("python3", filepath.Join("testdata", "batch_patch_diff.py"), root)
+	cmd.Env = append(os.Environ(), "DA_GUARD_BINARY="+daGuardBinary(t))
 	cmd.Stdin = bytes.NewReader(body)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -323,17 +328,6 @@ func TestBatchPatchMerge_OfflineDiffAgainstGenerator(t *testing.T) {
 	for i, c := range patchDiffCases {
 		r := res[i]
 		wantOutcome := c.want
-		if wantOutcome == "known_healed" {
-			// A known limit (ADR-036 §4): the base is unreadable only because
-			// of what yaml.v3 does not keep as a node at all (a TAB after
-			// `k:`), so the round trip "heals" it. Pinned, so a change here
-			// shows up.
-			if outcome[i] != "merged" || r.BaseReadable || !r.MergedReadable {
-				t.Errorf("%s: known_healed changed: mergePatchYAML %s, base readable %v, merged readable %v",
-					c.name, outcome[i], r.BaseReadable, r.MergedReadable)
-			}
-			continue
-		}
 		if wantOutcome == "unreadable_kept" {
 			wantOutcome = "merged"
 			if r.BaseReadable || r.MergedReadable {

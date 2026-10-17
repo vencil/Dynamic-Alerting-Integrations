@@ -8,8 +8,10 @@ per case to stdout as JSON:
    "merged_readable": bool, "merged_error": str,
    "equal": bool, "want": str, "got": str}
 
-Both files are read exactly as the route generator reads a conf.d file
-(_grar_parse.ROUTING_READ, then keep_route_match_null_keys). `want` is the
+Both files are read exactly as the route generator reads a conf.d file:
+`da-guard parse-tree` (ADR-036 step 4), converted by _grar_parse.ROUTING_READ.
+da-guard comes from $DA_GUARD_BINARY (batch_patch_diff_test.go builds it) or
+$PATH. `want` is the
 base as the generator reads it with the same patch laid over
 tenants.<tenant> (each patch value a string; each unset key removed; a
 tenant the base lacks is added); `got` is the merged file as the generator
@@ -29,8 +31,9 @@ import tempfile
 ROOT = sys.argv[1]
 sys.path.insert(0, os.path.join(ROOT, "scripts", "tools"))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "tools", "ops"))
-from _grar_parse import ROUTING_READ, keep_route_match_null_keys  # noqa: E402
-from _lib_parse_cache import read_confd_yaml  # noqa: E402
+from _grar_parse import ROUTING_READ  # noqa: E402
+from _lib_parse_cache import ConfdReader  # noqa: E402
+from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 
 def read(text: str, where: str) -> tuple[bool, object, str]:
@@ -38,12 +41,11 @@ def read(text: str, where: str) -> tuple[bool, object, str]:
     with open(path, "w", encoding="utf-8", newline="") as f:
         f.write(text)
     try:
-        data = read_confd_yaml(path, ROUTING_READ)
-    except Exception as e:  # noqa: BLE001 — any failure is "the generator cannot read it"
-        return False, None, f"{e.__class__.__name__}: {' '.join(str(e).split())}"
-    if data is not None and not isinstance(data, dict):
-        return False, None, f"top level is {type(data).__name__}, not a mapping"
-    return True, keep_route_match_null_keys(data, path), ""
+        # A new reader per file: the tree holds only t.yaml, rewritten each time.
+        data = ConfdReader(where).read(path, ROUTING_READ)
+    except FileUnreadable as e:  # the generator cannot read it (no da-guard: raises)
+        return False, None, f"{e.kind}: {' '.join(e.message.split())}"
+    return True, data, ""
 
 
 def canon(v: object, path: tuple = ()) -> object:

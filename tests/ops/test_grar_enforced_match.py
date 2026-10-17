@@ -73,9 +73,10 @@ def _enforced_routes(d: Path) -> list[dict]:
 
 # Written and not a list: refused. Absent / null / a list: accepted.
 _REFUSED = ["{severity: critical}", "{}", "'severity=\"critical\"'", "''", "42", "0", "yes",
-            # a list element that is not a non-empty string (as PyYAML reads it):
+            # a list element that is not a non-empty string (as yaml.v3 reads
+            # it — an unquoted `yes` is the string "yes", `true` a boolean):
             # the render used to crash on these (TypeError in re.match)
-            "[1]", "[~]", "[yes]", "[{severity: critical}]", "['severity=\"critical\"', '']",
+            "[1]", "[~]", "[true]", "[{severity: critical}]", "['severity=\"critical\"', '']",
             # whitespace only (str.strip(); U+001C counts there): copied into
             # `matchers` verbatim before
             "[' ']", "[\"\\t\\x1c \"]"]

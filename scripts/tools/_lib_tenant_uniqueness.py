@@ -140,11 +140,16 @@ def verdict_for(carriers: Mapping[str, Path]) -> Verdict:
                   if isinstance(c, dict) and c.get("check") == CHECK_NAME), None)
     if entry is None:
         names = sorted(str(c.get("check")) for c in checks if isinstance(c, dict))
+        # Why it stopped short — e.g. its one `config_dir` row when there is
+        # no usable da-guard (#2906) — is in the caller-error rows it did
+        # report: handed on, so the reason is not only a list of row names.
+        callers = [c for c in checks if isinstance(c, dict) and c.get("caller_error")]
         return Verdict(
             UNMEASURED,
             f"validate_config did not report a `{CHECK_NAME}` check; "
             f"it reported: {names}",
-            [], "")
+            [str(line) for c in callers for line in (c.get("details") or [])],
+            next((str(c["suggested_action"]) for c in callers if c.get("suggested_action")), ""))
 
     details = [str(line) for line in (entry.get("details") or [])]
     action = str(entry.get("suggested_action") or "")
