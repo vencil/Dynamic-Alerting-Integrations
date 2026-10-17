@@ -135,6 +135,8 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 **group 可見性**：`GET /groups`、`GET /groups/{id}`、`DELETE /groups/{id}`、`POST /groups/{id}/batch` 共用同一個判斷——caller 至少能讀一個成員，才算看得到。看不到的 group 一律回與「不存在」逐位元組相同的 404，而且在讀 body 之前就回，所以任何一個端點都不會證實它存在。沒有成員的 group（`PUT` 已不能建立，只會是先前留下的）只有規則對 org、environments、domains 都不設限的平台管理員看得到、刪得掉；open mode 照舊全部看得到（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）。`PUT` 是 upsert：id 已被 caller 看不到的 group 佔用時，回固定內容的 409 `GROUP_ID_UNAVAILABLE`，不論那個 group 有哪些成員都逐位元組相同（不可重試，請換 id；與狀態寫入搶輸時的 409 `CONFLICT` 不同）。⚠️ 已接受的揭露：這仍透露「這個 id 已被使用」一個位元——group id 是所有 caller 共用的命名空間，Kubernetes 物件名稱、S3 bucket 名稱也是同樣的取捨；它不再透露該 group 的任何內容。
 
+**逐租戶判斷用的是哪個述詞，擋得住什麼**（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）：上表 `/events`、`/prs`、`/tasks/{id}` 的結果過濾，與 group 可見性，用的都是讀取平面所有列表過濾共用的同一個述詞（`OrgAllowedRead`）。它只判斷兩件事：規則的 `tenants` 是否涵蓋該租戶，以及 org 軸。org 軸上，對標了別的 org 的租戶，org-scoped 呼叫者在 shadow 與 enforce 下都被濾掉；沒標 org 的租戶要開 `--rbac-org-scope-enforce` 才會被濾掉，shadow 下照樣看得到。⚠️ `environments`／`domains` **不是**讀取平面的邊界：這個述詞不看它們，只限制了 environment 或 domain 的 `tenants: ["*"]` 呼叫者，在這些端點上照樣看得到每個租戶的項目。「讀得到全部租戶」（不屬於單一租戶的事件、租戶不明的批次 PR）的門檻則是規則對 `"*"` 有讀取權、且不帶 org-scope、environments、domains，所以上述呼叫者收不到這類項目。
+
 **共用檔的 `PUT`**（[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)，breaking）：conf.d 一份檔可以宣告多個租戶，而 `PUT /tenants/{id}` 寫的是 `{id}` 所在的那份檔。
 
 - **body 宣告哪些租戶**：以 `tenants:` 下的 key **解碼後**的租戶 id 為準：`db-b`、`"db-b"`、`'db-b'`、`!!str db-b`、指向 `db-b` 純量的 alias key、`!!binary` 都是同一個 id。body 的 `tenants:` 層有 merge key（`<<`），或有解碼不成字串、重複宣告同一 id 的 key，回 400。

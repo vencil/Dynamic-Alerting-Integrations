@@ -95,6 +95,15 @@ func filterAccessiblePRs(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p 
 	return out
 }
 
+// prVisibleTo is prVisible for a write handler's Deps. A Deps without an RBAC
+// manager exists only in tests (see requireOrgWriteWithMeta) and sees the PR.
+func prVisibleTo(d *Deps, p *rbac.VerifiedPrincipal, pr platform.PRInfo) bool {
+	if d.RBAC == nil {
+		return true
+	}
+	return prVisible(d.RBAC, d.TenantOrg, p, pr)
+}
+
 // prVisible is the one visibility decision for a pending PR/MR (#3123):
 //   - a batch PR/MR with a recorded tenant list: the caller must be able to
 //     read EVERY covered tenant — its title, body and URL describe them all;

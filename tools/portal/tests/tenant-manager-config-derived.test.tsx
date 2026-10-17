@@ -36,7 +36,6 @@ const searchBody = {
     evaluated_at: '2099-01-01T00:00:00Z',
     config_loaded_at: '2099-01-01T00:00:00Z',
     parse_failed_files: ['t-broken.yaml'],
-    parse_failed_hidden: 2,
   },
 };
 
@@ -60,17 +59,16 @@ describe('derivationNoticeFromSearch', () => {
     expect(derivationNoticeFromSearch({ config_derivation: { parse_failed_files: [] } })).toBeNull();
     expect(derivationNoticeFromSearch({})).toBeNull();
   });
-  it('carries parse-failed files, the hidden count and a load error', () => {
+  it('carries parse-failed files and a load error', () => {
     expect(derivationNoticeFromSearch(searchBody)).toEqual({
-      parseFailedFiles: ['t-broken.yaml'], parseFailedHidden: 2, loadError: '',
+      parseFailedFiles: ['t-broken.yaml'], loadError: '',
     });
     expect(derivationNoticeFromSearch({ config_derivation: { parse_failed_files: [], load_error: 'dup' } }))
-      .toEqual({ parseFailedFiles: [], parseFailedHidden: 0, loadError: 'dup' });
+      .toEqual({ parseFailedFiles: [], loadError: 'dup' });
   });
-  it('reports files hidden by the caller\'s scope even when none is named', () => {
-    // A scoped caller may be told only a count; that alone is a notice.
-    expect(derivationNoticeFromSearch({ config_derivation: { parse_failed_files: [], parse_failed_hidden: 3 } }))
-      .toEqual({ parseFailedFiles: [], parseFailedHidden: 3, loadError: '' });
+  it('has nothing to tell when no file is named and the load succeeded', () => {
+    // #3123: tenant-api no longer counts files outside the caller's scope.
+    expect(derivationNoticeFromSearch({ config_derivation: { parse_failed_files: [] } })).toBeNull();
   });
 });
 
@@ -101,6 +99,7 @@ describe('TenantManager — API mode renders the derived mode', () => {
   it('surfaces the parse-failed files from config_derivation', async () => {
     render(<TenantManager />);
     await waitFor(() => expect(screen.getByText('t-broken.yaml')).toBeInTheDocument());
-    expect(screen.getByText(/2 more outside your access scope/)).toBeInTheDocument();
+    // #3123: no count of files outside the caller's scope any more.
+    expect(screen.queryByText(/outside your access scope/)).toBeNull();
   });
 });

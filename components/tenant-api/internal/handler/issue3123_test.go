@@ -213,6 +213,52 @@ func TestIssue3123_PRs_RecordedTenantsSurviveSync(t *testing.T) {
 	}
 }
 
+// i3123NoRefreshTracker keeps the tracker's cache as registered: its RefreshNow
+// is a forge call that timed out (#644's bounded refresh), so PutTenant's 409
+// path is reached with the batch PR still resolving to the covered tenant.
+type i3123NoRefreshTracker struct{ *platform.PollingTracker }
+
+func (i3123NoRefreshTracker) RefreshNow(context.Context) {}
+
+// #3123 review F2: PUT /tenants/{id}'s 409 pending_pr_exists named the pending
+// PR — for a batch PR also covering tenants the caller cannot read, the URL
+// GET /prs withholds. The 409 stands; it names the PR only when visible.
+func TestIssue3123_PutTenant409NamesOnlyAVisiblePR(t *testing.T) {
+	t.Parallel()
+	f := newOrgEnfFixture(t, nil)
+	pr := platform.PRInfo{Number: 81, WebURL: "https://forge.example/pr/81", State: "open", HeadRef: i3123BatchRef}
+	tracker := i3123NoRefreshTracker{newTestTracker(t, nil)}
+	d := f.deps()
+	d.WriteMode = WriteModePR
+	d.PRTracker = tracker
+	d.PRClient = &mockPlatformClient{createPRFunc: func(string, string, string, []string) (*platform.PRInfo, error) {
+		p := pr
+		return &p, nil
+	}}
+	if _, err := createPRAndRegister(d, "t", "b", i3123BatchRef, nil, []string{orgEnfTenantIn, orgEnfTenantOut}); err != nil {
+		t.Fatal(err)
+	}
+	put := func() *httptest.ResponseRecorder {
+		body := bytes.NewBufferString("tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n")
+		req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, body)
+		req = orgEnfIdentity(req, orgEnfMemberOrg)
+		w := httptest.NewRecorder()
+		wrapWithRBACMiddleware(PutTenant(d), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+		return w
+	}
+	w := put()
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), pr.WebURL) || strings.Contains(w.Body.String(), `"pr_number":81`) {
+		t.Errorf("409 names a batch PR the caller cannot see on GET /prs: %s", w.Body.String())
+	}
+	f.shareOut(t) // now the caller reads every covered tenant
+	if w := put(); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), pr.WebURL) {
+		t.Errorf("caller reading every covered tenant: %d %s, want the 409 naming the PR", w.Code, w.Body.String())
+	}
+}
+
 // #3123 item 2: "batch" is reserved as a tenant id on the write plane.
 func TestIssue3123_BatchIsAReservedTenantID(t *testing.T) {
 	t.Parallel()
@@ -221,6 +267,36 @@ func TestIssue3123_BatchIsAReservedTenantID(t *testing.T) {
 	}
 	if err := ValidateTenantID(platform.BatchTenantID); err != nil {
 		t.Errorf("reads must keep accepting an existing tenant of that name: %v", err)
+	}
+}
+
+// #3123 review F4: a PUT of the reserved id is refused (400) on the write
+// plane, while an existing tenant of that name stays readable. (tenant-api has
+// no tenant DELETE: removing a tenant is a git operation on conf.d, which the
+// reservation does not touch; its federation tokens stay revocable —
+// TestIssue3123_ReservedTenantTokenStillRevocable.)
+func TestIssue3123_PutReservedTenantRefusedReadKept(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, map[string]string{"batch.yaml": "tenants:\n  batch:\n    _silent_mode: \"warning\"\n"})
+	mgr := adminRBAC(t)
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, State: mustDirState(configDir), RBAC: mgr, WriteMode: WriteModeDirect}
+	as := func(r *http.Request) *http.Request {
+		r.Header.Set("X-Forwarded-Email", "admin@example.com")
+		r.Header.Set("X-Forwarded-Groups", "admins")
+		return r
+	}
+	body := bytes.NewBufferString("tenants:\n  batch:\n    _silent_mode: \"critical\"\n")
+	req := as(newRequestWithChiParam("PUT", "/api/v1/tenants/batch", "id", "batch", body))
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(PutTenant(d), mgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "reserved") {
+		t.Errorf("PUT /tenants/batch = %d %s, want 400 naming the reservation", w.Code, w.Body.String())
+	}
+	req = as(newRequestWithChiParam("GET", "/api/v1/tenants/batch", "id", "batch", nil))
+	w = httptest.NewRecorder()
+	wrapWithRBACMiddleware(GetTenant(d), mgr, rbac.PermRead, TenantIDFromPath).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /tenants/batch = %d %s, want 200 (reads unaffected)", w.Code, w.Body.String())
 	}
 }
 

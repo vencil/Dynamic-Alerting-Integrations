@@ -41,3 +41,25 @@ func TestIssue3123_DeleteFederationToken_RefusalIsTheMissingToken404(t *testing.
 		t.Errorf("refused revocation removed the record")
 	}
 }
+
+// #3123 review F4: "batch" is reserved on the tenant WRITE plane only; the
+// cleanup path for an existing tenant of that name — revoking its federation
+// tokens during offboarding — keeps working.
+func TestIssue3123_ReservedTenantTokenStillRevocable(t *testing.T) {
+	t.Parallel()
+	rbacMgr := newRBACManager(t, fedAdminRBAC)
+	fed := newTestFederation(t)
+	_, rec, err := fed.Issue("batch", "ops@example.com", "")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	d := &handler.Deps{RBAC: rbacMgr, Federation: fed}
+	req := newRequestWithChiParam("DELETE", "/api/v1/federation/tokens/"+rec.TokenID, "id", rec.TokenID, nil)
+	req.Header.Set("X-Forwarded-Email", "ops@example.com")
+	req.Header.Set("X-Forwarded-Groups", "fed-admins")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(DeleteFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("revoking a token of tenant \"batch\" = %d %s, want 200", w.Code, w.Body.String())
+	}
+}

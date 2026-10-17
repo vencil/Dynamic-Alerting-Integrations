@@ -132,28 +132,31 @@ func (t *PollingTracker) WatchLoop(stopCh <-chan struct{}) {
 // Exported (vs. internal sync()) so tests can drive the poll
 // deterministically without waiting on the WatchLoop ticker.
 func (t *PollingTracker) Sync() {
+	// #3123: which batch records existed BEFORE the forge call. A record
+	// missing from the listing is dropped only if it was already known then —
+	// one registered while the call was in flight describes a PR the listing
+	// may simply not show yet. A copy of the key set, taken under the lock:
+	// RegisterPR writes the map, so it must not be read outside the lock.
+	t.mu.RLock()
+	before := make(map[string]struct{}, len(t.batchTenants))
+	for ref := range t.batchTenants {
+		before[ref] = struct{}{}
+	}
+	t.mu.RUnlock()
+
 	prs, err := t.lister()
 	if err != nil {
 		slog.Warn("tracker sync failed", "provider", t.provider, "error", err)
 		return
 	}
 
-	// #3123: a batch PR/MR gets back the tenants this process recorded for it,
-	// and only those; records for batches no longer open are dropped.
-	t.mu.RLock()
-	known := t.batchTenants
-	t.mu.RUnlock()
+	// A batch branch names no tenant; its tenants are re-attached below,
+	// under the lock, from the records current at that moment.
 	prs = append([]PRInfo(nil), prs...)
-	open := make(map[string][]string)
 	for i := range prs {
-		if !IsBatchBranch(prs[i].HeadRef) {
-			continue
-		}
-		prs[i].TenantID = ""
-		prs[i].Tenants = nil
-		if tenants, ok := known[prs[i].HeadRef]; ok {
-			prs[i].Tenants = append([]string(nil), tenants...)
-			open[prs[i].HeadRef] = tenants
+		if IsBatchBranch(prs[i].HeadRef) {
+			prs[i].TenantID = ""
+			prs[i].Tenants = nil
 		}
 	}
 
@@ -184,16 +187,27 @@ func (t *PollingTracker) Sync() {
 	}
 
 	t.mu.Lock()
-	t.pendingPRs = prs
-	t.byTenant = byTenant
-	// Keep a record registered while the forge call was in flight: the PR it
-	// describes may simply not be in this listing yet.
-	for ref, tenants := range t.batchTenants {
-		if _, seen := known[ref]; !seen {
-			open[ref] = tenants
+	// #3123: a listed batch PR/MR gets back the tenants this process recorded
+	// for it, and only those. Records for batches no longer listed are
+	// dropped, except one registered during the forge call (not in before).
+	kept := make(map[string][]string, len(t.batchTenants))
+	for i := range prs {
+		if !IsBatchBranch(prs[i].HeadRef) {
+			continue
+		}
+		if tenants, ok := t.batchTenants[prs[i].HeadRef]; ok {
+			prs[i].Tenants = append([]string(nil), tenants...)
+			kept[prs[i].HeadRef] = tenants
 		}
 	}
-	t.batchTenants = open
+	for ref, tenants := range t.batchTenants {
+		if _, known := before[ref]; !known {
+			kept[ref] = tenants
+		}
+	}
+	t.batchTenants = kept
+	t.pendingPRs = prs
+	t.byTenant = byTenant
 	t.lastSync = t.clock.Now()
 	t.mu.Unlock()
 
