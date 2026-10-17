@@ -13,7 +13,7 @@ from unittest import mock
 import pytest
 
 import patch_config as pc  # noqa: E402
-from _patch_config_fake import FakeCluster  # noqa: E402
+from _patch_config_fake import MIRROR, FakeCluster  # noqa: E402
 
 FAST = ["--poll-interval", "0.001", "--reload-timeout", "0.05"]
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
@@ -23,8 +23,7 @@ SCENARIOS = {
                  "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: '70'\n",
                  "t-b.yaml": "tenants:\n  t-b:\n    mysql_connections: '60'\n"},
                 "t-a.yaml", "65", "'65'"),
-    "verify-fail": ({"config.yaml": ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-                                     "  t-b: *s\n")},
+    "verify-fail": ({"config.yaml": "tenants:\n  t-a:\n    mysql_connections: '50'\n", **MIRROR},
                     "config.yaml", "60", "'60'"),
 }
 # verify fails, and so does the rollback patch (the ConfigMap keeps the new bytes)

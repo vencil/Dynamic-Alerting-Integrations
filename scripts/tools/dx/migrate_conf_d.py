@@ -17,6 +17,16 @@ Modes:
 Inference:
     --infer-from metadata   Use _metadata.domain/region/environment to place files
                             (default behavior; skip files without _metadata)
+
+Reading (ADR-036 §2, #2906): which files there are and what each one's
+`_metadata` says come from `da-guard parse-tree` (yaml.v3's reading: an
+unquoted `domain: yes` is the string "yes"), never from PyYAML. Before any
+directory is made or file moved, each planned destination is read back by
+parse-tree in file mode — the file's bytes at the path they are moved to —
+and must be a path a reader selects with the same parse result; otherwise
+nothing is moved and the run exits 2, naming the file. A conf.d file
+parse-tree cannot read, or no usable da-guard (`$DA_GUARD_BINARY`, then
+`$PATH`), is exit 2 as well.
 """
 import argparse
 import json
@@ -35,33 +45,15 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#2231)
-from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231; #2216)
-from _lib_confd import (  # noqa: E402
-    has_yaml_extension,
-    is_hidden_name,
-    warn_nested,
-)
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
+from _lib_confd import warn_nested  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
+import _lib_write_check  # noqa: E402
+from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 
-def _load_yaml(path: Path) -> dict:
-    """Load a YAML file.
-
-    Strict (#2231): a key written twice is a file the exporter drops whole,
-    so it raises YamlFileError like bad syntax — main() exits 2, named —
-    instead of planning a move from whichever value PyYAML kept last.
-
-    #2216: tenant ids are the keys' source text, as the exporter reads them
-    — `010:` is tenant "010", not 8.
-    """
-    if yaml:
-        return load_yaml_file_strict_exporter_keys(str(path)) or {}
-    raise RuntimeError("PyYAML is required. Install: pip install pyyaml")
+class MoveRefused(Exception):
+    """A planned destination parse-tree does not read as the source: nothing
+    is moved (ADR-036 §2)."""
 
 
 def _extract_metadata(data: dict) -> dict | None:
@@ -92,8 +84,14 @@ def _unplaceable_reason(meta) -> str:
     return ""
 
 
-def plan_migration(conf_d: Path) -> list[dict]:
+def plan_migration(conf_d: Path, reader: "_lib_parse_cache.ConfdReader | None" = None
+                   ) -> list[dict]:
     """Scan flat conf.d/ and plan git mv operations.
+
+    The files and their content are `da-guard parse-tree`'s (ADR-036 §2):
+    the top-level files it selects, each read as yaml.v3 reads it. Raises
+    FileUnreadable for a top-level tenant file it cannot read, and
+    ParseTreeError when there is no usable da-guard.
 
     Returns a list of migration actions:
     [
@@ -108,12 +106,15 @@ def plan_migration(conf_d: Path) -> list[dict]:
     ]
     """
     actions = []
-
     # #1911: flat read — a hierarchical conf.d must not look empty.
     warn_nested(conf_d, tool="migrate_conf_d")
+    reader = reader or _lib_parse_cache.ConfdReader(conf_d)
+    tree = reader.tree()
+    top = sorted({rel for rel in (*tree.selected, *tree.not_read) if "/" not in rel})
+
     for fp in sorted(conf_d.iterdir()):
-        if fp.is_dir():
-            # Already nested — skip
+        if fp.is_dir() and not fp.name.startswith("."):
+            # Already nested — skip (a name; parse-tree reads what is in it)
             actions.append({
                 "source": fp.name + "/",
                 "target": fp.name + "/",
@@ -121,28 +122,22 @@ def plan_migration(conf_d: Path) -> list[dict]:
                 "metadata": None,
                 "status": "skip_already_nested",
             })
-            continue
 
-        # is_hidden_name is NOT redundant. base used `fp.suffix`, and
-        # `Path(".yaml").suffix` is the empty string, so a degenerate
-        # name that is ALL extension was skipped for free. The shared
-        # predicate answers only the extension axis, so dropping the
-        # hidden axis here would widen what this tool `git mv`s — the
-        # exporter's walker skips dot-prefixed entries outright.
-        if not has_yaml_extension(fp.name) or is_hidden_name(fp.name):
-            continue
-
-        if fp.name.startswith("_"):
+    for name in top:
+        if name.startswith("_"):
             actions.append({
-                "source": fp.name,
-                "target": fp.name,
+                "source": name,
+                "target": name,
                 "tenant_id": None,
                 "metadata": None,
                 "status": "skip_system_file",
             })
             continue
+        if name not in tree.selected:
+            continue  # a name no reader reads (parse-tree's `not_read`)
+        fp = conf_d / name
 
-        data = _load_yaml(fp)
+        data = reader.read(name)
         meta = _extract_metadata(data)
 
         # Extract tenant ID
@@ -205,7 +200,25 @@ def plan_migration(conf_d: Path) -> list[dict]:
             "status": "ok",
         })
 
+    actions.sort(key=lambda a: a["source"].rstrip("/"))
     return actions
+
+
+def confirm_moves(conf_d: Path, actions: list[dict],
+                  reader: "_lib_parse_cache.ConfdReader | None" = None) -> None:
+    """ADR-036 §2: every "ok" move, before any is made — the source's bytes
+    read by `da-guard parse-tree` in file mode as the file at its target
+    path must be a file a reader selects, with the parse result the source
+    has now. Raises MoveRefused naming the first that is not."""
+    reader = reader or _lib_parse_cache.ConfdReader(conf_d)
+    for a in actions:
+        if a["status"] != "ok":
+            continue
+        data = (conf_d / a["source"]).read_bytes()
+        try:
+            _lib_write_check.confirm(conf_d, a["target"], data, reader.node(a["source"]))
+        except _lib_write_check.WriteRefused as exc:
+            raise MoveRefused(f"{a['source']} -> {a['target']}: {exc}") from None
 
 
 def generate_git_commands(actions: list[dict], conf_d: Path) -> list[str]:
@@ -233,7 +246,7 @@ def generate_git_commands(actions: list[dict], conf_d: Path) -> list[str]:
 
 
 @exit_on_output_write_error
-@exit_on_yaml_file_error  # #2231: bad syntax / duplicate key → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -269,7 +282,17 @@ def main() -> None:
         print(f"❌ conf.d/ not found at {conf_d}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    actions = plan_migration(conf_d)
+    reader = _lib_parse_cache.ConfdReader(conf_d)
+    try:
+        actions = plan_migration(conf_d, reader)
+        confirm_moves(conf_d, actions, reader)
+    except FileUnreadable as exc:
+        print(f"❌ {exc.file}: da-guard parse-tree cannot read it ({exc.kind}: "
+              f"{exc.message}); nothing is planned or moved", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    except MoveRefused as exc:
+        print(f"❌ refusing to move: {exc}; nothing is moved", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
     # Summary
     ok = [a for a in actions if a["status"] == "ok"]

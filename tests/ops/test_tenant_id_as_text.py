@@ -813,16 +813,19 @@ def test_patch_config_keeps_a_profile_outside_tenants_typed():
 
 
 def test_patch_config_refuses_a_write_that_changes_the_declared_tenants(monkeypatch):
-    """The post-rewrite set guard: with the re-read typed again (the reader
+    """The post-rewrite guard: with the re-read typed again (the reader
     before #2237), `010:` is written as `8:` beside a new `010:` — the key
-    would declare {8, 010} where it declared {010}. Refused, nothing sent."""
+    would declare {8, 010} where it declared {010}. Refused, nothing sent.
+    Since ADR-036 §2 (#2906) the guard is the pre-write parse-tree
+    confirmation, which names the key that should not be there."""
     import yaml
     # #2220: the rewrite reads through `strict_load_for_rewrite` now (was
     # `strict_load_exporter_keys`); the typed stand-in is unchanged.
     monkeypatch.setattr(pc, "strict_load_for_rewrite",
                         lambda text, **_kw: yaml.safe_load(text))
     cm = _pc_cm("multi-file", "  010:\n" + _PC_BLOCK)
-    with pytest.raises(pc.ConfigMapShapeError, match="tenants it declares"):
+    with pytest.raises(pc.ConfigMapShapeError,
+                       match=r"content_differs.*at tenants: keys differ; unexpected \['8'\]"):
         pc.build_patch(cm, "multi-file", "010", "connections", "3")
 
 

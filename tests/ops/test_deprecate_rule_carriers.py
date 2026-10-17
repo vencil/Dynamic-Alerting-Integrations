@@ -89,26 +89,39 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
 # ===================================================================
 
 
-def test_execute_writes_every_carrier_and_only_then_says_complete(tmp_path):
-    """(a) The ticket fixture: the key is gone from both spellings, rc 0."""
+def test_execute_writes_the_read_carrier_and_names_the_unread_one(tmp_path):
+    """(a) The ticket fixture: the key is gone from the carrier the exporter
+    reads (`_defaults.yaml`); the `_defaults.yml` beside it no reader reads,
+    so ADR-036 §2 (#2906) forbids writing it — it still holding the key is a
+    named residue, rc 1 (it would come back the day `_defaults.yaml` goes)."""
     root = _ticket_fixture(tmp_path / "conf.d")
+    yml_before = (root / "_defaults.yml").read_bytes()
+
+    r = _run(root, "--execute")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _step1_lines(r.stdout) == ["Step 1: _defaults.yaml",
+                                      "Step 1: _defaults.yml"], r.stdout
+    text = (root / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage" not in text and "disable" not in text, text
+    assert (root / "_defaults.yml").read_bytes() == yml_before
+    tail = _tail(r.stdout)
+    assert "_defaults.yml" in tail and "沒有任何讀取端讀它" in tail, tail
+    alpha = (root / "alpha.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage" not in alpha, alpha
+
+
+def test_execute_with_one_carrier_is_complete(tmp_path):
+    """(a') The same tree without the unread spelling: everything goes, rc 0."""
+    root = _ticket_fixture(tmp_path / "conf.d")
+    (root / "_defaults.yml").unlink()
 
     r = _run(root, "--execute")
 
     assert r.returncode == 0, r.stdout + r.stderr
-    assert _step1_lines(r.stdout) == ["Step 1: _defaults.yaml",
-                                      "Step 1: _defaults.yml"], r.stdout
-    assert "下架完成" in r.stdout
-    assert "下架未完成" not in r.stdout
-    for name in ("_defaults.yaml", "_defaults.yml"):
-        text = (root / name).read_text(encoding="utf-8")
-        assert "cpu_usage" not in text, (
-            f"{name} still carries the metric:\n{text}")
-        assert "disable" not in text, (
-            f"{name} was written with the sentinel instead of losing the "
-            f"key:\n{text}")
-    alpha = (root / "alpha.yaml").read_text(encoding="utf-8")
-    assert "cpu_usage" not in alpha, alpha
+    assert "下架完成" in r.stdout and "下架未完成" not in r.stdout
+    assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "cpu_usage" not in (root / "alpha.yaml").read_text(encoding="utf-8")
 
 
 def test_preview_names_both_carriers_and_writes_nothing(tmp_path):
@@ -118,24 +131,26 @@ def test_preview_names_both_carriers_and_writes_nothing(tmp_path):
 
     r = _run(root)
 
-    assert r.returncode == 0, r.stdout + r.stderr
+    # The unread `_defaults.yml` holding the key is a residue in preview too.
+    assert r.returncode == 1, r.stdout + r.stderr
     assert _step1_lines(r.stdout) == ["Step 1: _defaults.yaml",
                                       "Step 1: _defaults.yml"], r.stdout
-    assert "預覽模式" in r.stdout
+    assert "_defaults.yml" in _tail(r.stdout)
     assert _tree_bytes(root) == before, "preview mode wrote to the tree"
 
 
 def test_an_unreadable_carrier_degrades_the_whole_run_to_preview(tmp_path):
-    """(c) One carrier the exporter cannot read → the run writes NOTHING,
-    names it, rc 1 — the other carrier is left as it was too.
+    """(c) One root `_` file the exporter decodes and cannot read → the run
+    writes NOTHING, names it, rc 1 — the carrier is left as it was too.
 
     ⚠️ The unreadable shape is a broken YAML document, not mode bits: the
-    suite runs as root, where `chmod` denies nothing.
+    suite runs as root, where `chmod` denies nothing. (A `_defaults.yml` no
+    reader reads, beside `_defaults.yaml`, is not decoded by the exporter.)
     """
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
-    _write(root, "_defaults.yml", "defaults: [\n")
+    _write(root, "_shared.yaml", "defaults: [\n")
     _write(root, "alpha.yaml", "tenants:\n  alpha:\n    cpu_usage: 85\n")
     before = _tree_bytes(root)
 
@@ -145,7 +160,7 @@ def test_an_unreadable_carrier_degrades_the_whole_run_to_preview(tmp_path):
     assert "下架完成！" not in r.stdout, r.stdout
     assert "本輪降級為預覽" in r.stdout, r.stdout
     tail = _tail(r.stdout)
-    assert tail.count("_defaults.yml") == 1, tail   # 同一檔同一原因只列一次
+    assert tail.count("_shared.yaml") == 1, tail   # 同一檔同一原因只列一次
     assert _tree_bytes(root) == before, "a degraded run wrote to the tree"
 
 
@@ -549,25 +564,41 @@ _ORACLE_BY_NAME = {c["name"]: c for c in _ORACLE}
 assert len(_ORACLE_BY_NAME) == len(_ORACLE), "duplicate case name in the oracle"
 
 
-# yaml.v3 是 libyaml 的移植；這幾格 pure-Python parser 的判定不同（tab）。
-_LIBYAML_ONLY = {"trailing-tab", "tab-after-key-colon", "tab-in-flow"}
+#: ADR-036 §2 (#2906): the verdict reads parse-tree's nodes. These rows are
+#: outside its closed list (a duplicate key anywhere, a second document, a tag
+#: it does not read, a tag yaml.v3's decode refuses, a plain `<<` value):
+#: parse-tree cannot read the file, so the tool refuses the carrier WHOLE —
+#: fail-closed, also where the exporter loads it or drops only the file (the
+#: same verdict with the key unnamed). Pinned as a set, so a row that leaves
+#: or joins it is a decision, not drift.
+_CLOSED_LIST_ROWS = {
+    "dup-in-custom-alerts-recipe", "dup-in-unknown-section", "merge-token-as-value",
+    "multi-document", "tagged-binary", "tagged-custom", "tagged-float-on-word",
+    "tagged-int-on-float", "tagged-null-on-int",
+}
 
 
 @pytest.mark.parametrize("case_name", sorted(_ORACLE_BY_NAME))
 def test_carrier_health_matches_the_exporter(case_name):
-    """產線的 `exporter_verdicts`（鏡射那一層）對每一格給出 Go
+    """產線的 `exporter_verdicts`（parse-tree 節點的型別判定）對每一格給出 Go
     `TestDefaultsCarrierOracle` 量到的判定：accepted ⇒ 無項；dropped ⇒ 恰一個
     UNPARSEABLE（結構性的 key 為 None）；absent ⇒ 恰一個 NULL_NOT_DECLARED。帶
-    `python` 覆寫欄位的格是刻意的 fail-closed 近似（Go 接受、本工具整檔擋），以
-    覆寫為準。`carrier_health` 在這一層之上再加本工具自己讀不讀得了。"""
+    `python` 覆寫欄位的格，與 parse-tree 封閉清單以外的格（`_CLOSED_LIST_ROWS`），
+    是刻意的 fail-closed（本工具整檔擋），以它為準。`carrier_health` 在這一層
+    之上再加 PyYAML（產生寫回文字）讀不讀得了。"""
     case = _ORACLE_BY_NAME[case_name]
-    if case_name in _LIBYAML_ONLY and not yaml.__with_libyaml__:
-        pytest.skip(f"{case_name}: 沒有 libyaml，pure parser 對 tab 的判定與 yaml.v3 不同")
     got = deprecate_rule.exporter_verdicts(case["doc"].encode("utf-8"))
     want, key = case["exporter"], case["key"]
     if "python" in case:
         assert case["python"] == "unparseable", case
         want, key = "dropped", None
+    if case_name in _CLOSED_LIST_ROWS:
+        assert len(got) == 1 and got[0][0] is None, f"{case_name}: {got}"
+        assert got[0][2] == deprecate_rule.UNPARSEABLE, f"{case_name}: {got}"
+        assert got[0][1].split("：", 1)[0] in (
+            "duplicate_key", "multiple_documents", "tag_not_allowed",
+            "decode_error"), f"{case_name}: {got}"
+        return
     if want == "accepted":
         assert got == [], f"{case_name}: {case['doc']!r} → {got}"
         return
@@ -576,6 +607,10 @@ def test_carrier_health_matches_the_exporter(case_name):
     assert got_key == key, f"{case_name}: {got}"
     assert kind == (deprecate_rule.UNPARSEABLE if want == "dropped"
                     else deprecate_rule.NULL_NOT_DECLARED), f"{case_name}: {got}"
+
+
+def test_every_closed_list_row_exists():
+    assert _CLOSED_LIST_ROWS <= set(_ORACLE_BY_NAME)
 
 
 def test_carrier_health_invalid_utf8_bytes():
@@ -786,8 +821,7 @@ def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
     bad_value = "defaults:\n  x: disable\ntenants:\n  alpha:\n    cpu_usage: '85'\n"
     dup_key = ("tenants:\n  alpha:\n    mem: '1'\n    mem: '2'\n"
                "    cpu_usage: '85'\n")
-    cases = [("root", bad_value, "x: disable"), ("root", dup_key, "重複 key"),
-             ("subtree", bad_value, "x: disable")]
+    cases = [("root", bad_value, "x: disable"), ("subtree", bad_value, "x: disable")]
     for n, (plane, body, hint) in enumerate(cases):
         root = tmp_path / f"conf.d{n}"
         root.mkdir()
@@ -810,6 +844,19 @@ def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
         assert preview.returncode == 1, preview.stdout + preview.stderr
         assert _tail(preview.stdout) == tail, preview.stdout
 
+    # A repeated key is outside parse-tree's closed list (ADR-036 §2): the
+    # tool cannot read the file at all — named unreadable, never written.
+    root = tmp_path / "conf.d-dup"
+    root.mkdir()
+    _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
+    _write(root, "alpha.yaml", dup_key)
+    before = (root / "alpha.yaml").read_bytes()
+    r = _run(root, "--execute")
+    assert r.returncode == 1, r.stdout + r.stderr
+    tail = _tail(r.stdout)
+    assert "alpha.yaml" in tail and "無法讀取" in tail and "duplicate_key" in tail, tail
+    assert (root / "alpha.yaml").read_bytes() == before
+
     clean = tmp_path / "clean"
     clean.mkdir()
     _write(clean, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -821,9 +868,9 @@ def test_a_tenant_file_the_exporter_cannot_decode_is_left_alone(tmp_path):
 
 
 def test_a_tenant_file_the_tool_cannot_parse_takes_the_unreadable_route(tmp_path):
-    """租戶檔本工具的 pure parser 讀不了（tab）: 走「無法讀取」具名 rc 1，沒有
-    第二句 pure-parser 警告，也不寫它。成對反例：載體同一形狀是「本工具讀不了
-    （pure parser 限制）」的體檢項。"""
+    """租戶檔 PyYAML 讀不了、yaml.v3 讀得了（tab）: ADR-036 §2 起掃描照讀（parse-tree），
+    要改寫時 PyYAML 產生不了文字——整輪不寫、結尾具名 rc 1。成對反例：載體同一
+    形狀是「本工具讀不了」的體檢項。"""
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n")
@@ -833,9 +880,9 @@ def test_a_tenant_file_the_tool_cannot_parse_takes_the_unreadable_route(tmp_path
     r = _run(root, "--execute")
 
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "pure parser" not in r.stdout, r.stdout
+    assert "alpha.yaml → [tenants.alpha] cpu_usage: 85" in r.stdout, r.stdout
     tail = _tail(r.stdout)
-    assert "alpha.yaml" in tail and "無法讀取" in tail, tail
+    assert "alpha.yaml" in tail and "PyYAML 讀不了它" in tail, tail
     assert (root / "alpha.yaml").read_bytes() == before
 
 
@@ -992,9 +1039,8 @@ def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
 
 def test_a_tab_the_exporter_accepts_is_named_as_the_tools_own_limit(
         tmp_path, monkeypatch, capsys):
-    """yaml.v3（libyaml）收得下的 tab，本工具的 pure parser 讀不了：擋寫入，但
-    訊息說「本工具讀不了」而不是「exporter 讀不進去」，只列一次、不附
-    `--plane subtree`。沒有 libyaml 時同一格的 exporter 判定未知，同樣不冒充。
+    """yaml.v3 收得下的 tab，PyYAML（產生寫回文字）讀不了：擋寫入，但訊息說「本工具
+    讀不了」而不是「exporter 讀不進去」，只列一次、不附 `--plane subtree`。
     成對反例：拿掉 tab 就 rc 0、照寫。"""
     body = "defaults:\n  cpu_usage: 80\t\n  mem_usage: 90\n"
     root = tmp_path / "conf.d"
@@ -1003,30 +1049,12 @@ def test_a_tab_the_exporter_accepts_is_named_as_the_tools_own_limit(
 
     r = _run(root, "--execute")
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "本工具讀不了（pure parser 限制）" in r.stdout, r.stdout
+    assert "本工具讀不了（寫回的文字由 PyYAML 產生，它讀不了這份檔）" in r.stdout, r.stdout
     assert "exporter 讀不進這份檔" not in r.stdout, r.stdout
-    if yaml.__with_libyaml__:
-        assert "exporter 讀得進去" in r.stdout, r.stdout
+    assert "exporter 讀得進去" in r.stdout, r.stdout
     tail = _tail(r.stdout)
     assert tail.count("_defaults.yaml") == 1, tail
     assert "--plane subtree" not in tail, tail
-    assert (root / "_defaults.yaml").read_text(encoding="utf-8") == body
-
-    # 沒有 libyaml 的那一支：scanner 錯誤本身就標成本工具的限制。
-    monkeypatch.setattr(deprecate_rule, "_LOADER", yaml.SafeLoader)
-    got = deprecate_rule.carrier_health(body.encode("utf-8"))
-    assert len(got) == 1 and got[0][0] is None, got
-    assert got[0][2] == deprecate_rule.UNPARSED_BY_TOOL, got
-    assert "exporter 讀得進去" not in got[0][1], got
-    monkeypatch.setattr(sys, "argv",
-                        ["deprecate_rule.py", "cpu_usage",
-                         "--config-dir", str(root), "--execute"])
-    with pytest.raises(SystemExit) as exc:
-        deprecate_rule.main()
-    out = capsys.readouterr().out
-    assert exc.value.code == 1, out
-    assert "本工具讀不了（pure parser 限制）" in out, out
-    assert "exporter 讀不進這份檔" not in out, out
     assert (root / "_defaults.yaml").read_text(encoding="utf-8") == body
 
     _write(root, "_defaults.yaml", body.replace("\t", ""))
@@ -1044,7 +1072,7 @@ def test_a_write_that_silently_does_nothing_is_not_masked_by_the_rescan(
     _write(root, "_defaults.yaml", "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n")
     before = (root / "_defaults.yaml").read_bytes()
 
-    monkeypatch.setattr(deprecate_rule, "save_yaml_file",
+    monkeypatch.setattr(deprecate_rule, "write_conf_text",
                         lambda *a, **k: None)
     monkeypatch.setattr(sys, "argv",
                         ["deprecate_rule.py", "cpu_usage",

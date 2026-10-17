@@ -14,6 +14,8 @@ Focus areas (highest-risk first):
 import argparse
 import json
 
+import types
+
 import pytest
 
 import threshold_govern as tg
@@ -205,7 +207,7 @@ def test_verify_fails_when_key_removed():
     old = "tenants:\n  db-a:\n    k1: \"10\"\n    k2: \"20\"\n"
     new = "tenants:\n  db-a:\n    k1: \"15\"\n"  # k2 vanished
     err = tg.verify_only_changed(old, new, "db-a", {"k1": '"15"'})
-    assert err and "key set changed" in err
+    assert err and "keys differ; missing ['k2']" in err
 
 
 def test_verify_fails_when_target_got_wrong_value():
@@ -225,7 +227,7 @@ _DUP_OTHER_KEY = ('tenants:\n  tenant-a:\n    k1: "10"\n    k2: "20"\n'
 def test_verify_refuses_a_duplicate_key_elsewhere_in_the_tenant():
     new = _DUP_OTHER_KEY.replace('k1: "10"', 'k1: "15"')
     err = tg.verify_only_changed(_DUP_OTHER_KEY, new, "tenant-a", {"k1": '"15"'})
-    assert err and "did not parse" in err and "duplicate key" in err
+    assert err and "original_unreadable" in err and "duplicate_key" in err
 
 
 def test_open_pr_never_puts_a_file_with_a_duplicate_key(monkeypatch):
@@ -435,7 +437,9 @@ def test_run_apply_throttles_between_opened_prs(monkeypatch):
     _patch_http(monkeypatch, per_tenant=True,
                 put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
     sleeps = []
-    monkeypatch.setattr(tg.time, "sleep", lambda s: sleeps.append(s))
+    # Only the tool's own `time`: the pre-PUT parse-tree check runs da-guard
+    # through subprocess, whose waits sleep too (ADR-036 §2, #2906).
+    monkeypatch.setattr(tg, "time", types.SimpleNamespace(sleep=sleeps.append))
     tg.run(_args(apply=True, max_prs=10, throttle_seconds=2.0))
     # 2 PRs opened → exactly one inter-PR sleep (none after the last)
     assert sleeps == [2.0]

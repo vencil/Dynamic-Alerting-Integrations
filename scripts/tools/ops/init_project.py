@@ -47,14 +47,15 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
+import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
+import _lib_parse_tree  # noqa: E402
+import _lib_write_check  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     configmap_key_problem,
     is_defaults_name,
     is_reserved_name,
-    iter_config_files,
     printable_name,
-    unusable_config_paths,
     unusable_reason,
     warn_nested,
 )
@@ -736,6 +737,11 @@ def _critical_prefill_note(critical: dict) -> str:
 
 
 def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
+    """`_defaults_text_and_doc`'s text."""
+    return _defaults_text_and_doc(rule_packs, namespace)[0]
+
+
+def _defaults_text_and_doc(rule_packs: list[str], namespace: str) -> tuple[str, dict]:
     """Generate _defaults.yaml with selected rule pack defaults.
 
     Also emits the `optional_overrides:` DECLARED-KEY list (#1310) — key names
@@ -821,10 +827,15 @@ def _gen_defaults_yaml(rule_packs: list[str], namespace: str) -> str:
     return header + annotate_defaults_counterexamples(
         yaml.dump(config, default_flow_style=False, allow_unicode=True,
                   sort_keys=False),
-        lang="en")
+        lang="en"), config
 
 
 def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
+    """`_tenant_text_and_doc`'s text."""
+    return _tenant_text_and_doc(tenant, rule_packs)[0]
+
+
+def _tenant_text_and_doc(tenant: str, rule_packs: list[str]) -> tuple[str, dict]:
     """Generate a tenant stub YAML.
 
     ⛔ This is the ONE file a tenant opens, so the header has to be true for
@@ -890,7 +901,7 @@ def _gen_tenant_yaml(tenant: str, rule_packs: list[str]) -> str:
     # stub can only ever advertise keys that file actually declares. And it is
     # the SAME `declared_keys` the header sentence above was rendered from, so
     # "listed at the end of this file" is a fact about this string, not a hope.
-    return append_tenant_declared_stub(header + body, declared_keys, lang='en')
+    return append_tenant_declared_stub(header + body, declared_keys, lang='en'), config
 
 
 def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
@@ -2961,9 +2972,10 @@ def _kustomize_carrier_files(
         writes `_defaults.yaml` (#1942: a carrier left to the customer is
         listed through the enumeration below, under the customer's name,
         never as an init-spelled file that does not exist), and
-      * the config files already at the TOP LEVEL of `conf_dir`, enumerated by
-        `_lib_confd.iter_config_files` (the exporter's own name rule: both
-        spellings, any case, dotfiles skipped).
+      * the config files already at the TOP LEVEL of `conf_dir`, as `da-guard
+        parse-tree` enumerates them (ADR-036 §2: the exporter's own walk —
+        both spellings, any case, dotfiles skipped; a `_defaults` spelling
+        its directory does not select is listed too, from `not_read`).
     The planned half means the answer does not depend on `conf.d/` already
     existing (a first `init`) or on the order `run_init` writes files in.
     (`--dry-run` never calls this: it previews paths, not file contents.)
@@ -2991,8 +3003,8 @@ def _kustomize_carrier_files(
         files"), not a generated comment: a committed comment about the
         tree's shape would go stale the moment the tree changes.
       * config-NAMED but unreadable (broken symlink, a `db-x.yaml/`
-        directory) — `iter_config_files` filters those silently;
-        `unusable_config_paths` names them, worded by `unusable_reason`
+        directory) — parse-tree lists them as unreadable; they are named
+        here, worded by `unusable_reason`
         exactly as `configmap_assemble` words them.
       * a name that can never be a ConfigMap key (`db b.yaml`, `a=b.yaml`,
         `#h.yaml`) — `configmap_key_problem`, the ONE transcription of k8s
@@ -3003,8 +3015,11 @@ def _kustomize_carrier_files(
         names.add('_defaults.yaml')
     if conf_dir is not None:
         warn_nested(conf_dir, tool='init_project')
-        names |= {p.name for p in iter_config_files(conf_dir, recursive=False)}
-        unusable = unusable_config_paths(conf_dir, recursive=False)
+        confd = _ConfdTree(Path(conf_dir))
+        top = [n for n in {*confd.files(), *confd.root_defaults()} if "/" not in n]
+        names |= {n for n in top if (Path(conf_dir) / n).is_file()}
+        unusable = sorted(Path(conf_dir) / n for n in top
+                          if not (Path(conf_dir) / n).is_file())
         for p in unusable[:WARN_LIMIT]:
             print(f"WARN: init_project: {printable_name(p.name)!r} in "
                   f"{conf_dir} {unusable_reason(p)} — it carries a config "
@@ -3531,195 +3546,103 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 #     written. A file init cannot read through beside an existing own path
 #     is named, not refused (see `_plan_confd`).
 #
-# ⛔ init does NOT decide whether the exporter can read a file. Two rounds
-# tried — first a mirror of the exporter's decode, then a strict whitelist
-# around it — and each blind review found new inputs where PyYAML and yaml.v3
-# disagree (escaped keys, JSON escapes, tabs, tags, encodings, directives).
-# The space of differences has no bound. So init asks only the question it
-# can answer from the safe side: could this file POSSIBLY name tenant t
-# (`_possible_mentions`)? If yes, init leaves t alone and says how to check
-# (`da-tools guard defaults-impact`, which reads the tree with the exporter's
-# own walker). Over-matching costs a tenant init did not generate, named on
-# stderr; under-matching would cost a duplicate the exporter rejects the whole
-# tree for — so every doubt counts as a mention.
+# ⛔ init does NOT decide in Python how a YAML file reads. Two rounds tried a
+# mirror of the exporter's decode and then a strict whitelist around it, and
+# each blind review found new inputs where PyYAML and yaml.v3 disagree; a text
+# search for the id over every decoding replaced them. Since ADR-036 §2
+# (#2906) the question "which tenants does this file declare" is `da-guard
+# parse-tree`'s (`_ConfdTree`, `_mentions`): yaml.v3 itself reads the file,
+# so the answer is the exporter's reading, not an approximation of it. A file
+# parse-tree cannot read (its closed list: a syntax error, a duplicate key,
+# a disallowed tag, a non-UTF-8 encoding …) is (d): it may name anyone, init
+# leaves every requested tenant alone and says how to check (`da-tools guard
+# defaults-impact`). Over-matching costs a tenant init did not generate,
+# named on stderr; under-matching would cost a duplicate the exporter
+# rejects the whole tree for — so every doubt still counts as a mention.
 #
 # ⛔ The mention is decided by CONTENT, never by the filename: `team.yaml`
 # declares db-c while named nothing like it.
 
 
-#: Characters that may continue a tenant id — a match flanked by one is part
-#: of a longer word, not a mention.
-_ID_CHAR = r'A-Za-z0-9_.\-'
-#: YAML double-quoted escapes (YAML 1.2 §5.7), plus the escaped line break
-#: (§7.3.1 s-double-escaped: `\` + a line break, then the next line's leading
-#: white space — spaces and tabs — is dropped). ⛔ The break set is yaml.v3's,
-#: not YAML 1.2's: libyaml also breaks on a lone CR, NEL (U+0085), LS
-#: (U+2028) and PS (U+2029), so `"db-\<U+2028>c"` is `db-c` to the exporter
-#: (#1942 round-5 review F1; matrix rows R5-*).
-_YAML_ESCAPE_RE = re.compile(
-    r'\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})'
-    r'|(\r\n|[\r\n\x85\u2028\u2029])[ \t]*|(.))', re.DOTALL)
-_YAML_SIMPLE_ESCAPES = {
-    '0': '\0', 'a': '\a', 'b': '\b', 't': '\t', 'n': '\n', 'v': '\v',
-    'f': '\f', 'r': '\r', 'e': '\x1b', ' ': ' ', '"': '"', '/': '/',
-    '\\': '\\', 'N': '\x85', '_': '\xa0', 'L': ' ', 'P': ' ',
-    '\t': '\t',
-}
-#: An explicit tag: `!` at the start of a token, followed by `!`, `<` or a
-#: tag character. A literal `!` inside prose (`wow !`, `Alert!`) is not one.
-_EXPLICIT_TAG_RE = re.compile(r'(?:^|(?<=[\s\[\]{},:?-]))!(?:[!<]|[A-Za-z])',
-                              re.MULTILINE)
-_ENCODINGS = ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be')
+class _ConfdTree:
+    """conf.d as `da-guard parse-tree` reads it (ADR-036 §2, #2906): which
+    files a reader selects, and each one's content as yaml.v3 reads it —
+    the only source of "who declares which tenant" for init. An absent
+    conf.d is an empty tree (nothing to read, no da-guard asked)."""
 
+    def __init__(self, conf_dir: Path) -> None:
+        self.conf_dir = conf_dir
+        self.tree = (_lib_parse_tree.load(conf_dir, None, _PARSE_TREE_TIMEOUT_S)
+                     if conf_dir.is_dir() else None)
 
-def _yaml_unescape(text: str) -> str:
-    """Resolve YAML double-quoted escapes anywhere in `text`; never raises.
+    def files(self) -> list[str]:
+        """Every file parse-tree selects, conf.d-relative, sorted."""
+        return sorted(self.tree.selected) if self.tree is not None else []
 
-    Applied to the WHOLE text, not only quoted spans: finding the spans
-    means parsing, and parsing is what disagrees. An escape that is not
-    valid (`\\q`, `\\U00110000`) is left as written.
-    """
-    def _one(m: re.Match) -> str:
-        hexa = m.group(1) or m.group(2) or m.group(3)
-        if hexa is not None:
-            try:
-                return chr(int(hexa, 16))
-            except (ValueError, OverflowError):
-                return m.group(0)
-        if m.group(4) is not None:
-            return ''                 # escaped line break joins the lines
-        return _YAML_SIMPLE_ESCAPES.get(m.group(5), m.group(0))
-    return _YAML_ESCAPE_RE.sub(_one, text)
+    def root_defaults(self) -> list[str]:
+        """The root's defaults carriers in every spelling parse-tree saw —
+        the one it selects and any it does not (`not_read`)."""
+        if self.tree is None:
+            return []
+        names = {*self.tree.selected, *self.tree.not_read}
+        return sorted(n for n in names if "/" not in n and is_defaults_name(n))
 
-
-def _tenant_keys_everywhere(text: str) -> set[str]:
-    """Keys of every `tenants:` mapping in EVERY document PyYAML composes.
-
-    Stops quietly at the first document PyYAML cannot parse — what was
-    composed before it still counts; the text match covers the rest.
-    """
-    keys: set[str] = set()
-    try:
-        for doc in yaml.compose_all(text, Loader=yaml.SafeLoader):
-            if not isinstance(doc, yaml.MappingNode):
-                continue
-            for k, v in doc.value:
-                if (isinstance(k, yaml.ScalarNode) and k.value == 'tenants'
-                        and isinstance(v, yaml.MappingNode)):
-                    keys |= {kk.value for kk, _ in v.value
-                             if isinstance(kk, yaml.ScalarNode)}
-    except yaml.YAMLError:
-        pass
-    return keys
-
-
-class _ReadThroughFailed(Exception):
-    """(d): init cannot read this file through; it may mention anyone."""
-
-
-def _all_tenant_keys(path: Path) -> Optional[set[str]]:
-    """EVERY tenant key `path` declares (a), or None when init cannot list them.
-
-    For init's own `conf.d/<t>.yaml` before it rewrites that file: the rewrite
-    keeps only t, so every OTHER key would vanish (owner ruling on #1942,
-    round-1 F2). Unlike `_mentions` this cannot be answered by token search —
-    the other ids are not known in advance — so it needs the whole stream to
-    compose. One decoding only, chosen by BOM: a UTF-16 decoding of a UTF-8
-    file composes into a harmless-looking scalar and would read as "declares
-    nothing". Anything short of a full compose is None, and the caller
-    refuses (fail-closed): not being able to list them is not "there are none".
-    """
-    try:
-        raw = path.read_bytes()
-        if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
-            text = raw.decode('utf-16')
-        elif raw.startswith(b'\xef\xbb\xbf'):
-            text = raw.decode('utf-8-sig')
-        else:
-            text = raw.decode('utf-8')
-        keys: set[str] = set()
-        for doc in yaml.compose_all(text, Loader=yaml.SafeLoader):
-            if not isinstance(doc, yaml.MappingNode):
-                continue
-            for k, v in doc.value:
-                if (isinstance(k, yaml.ScalarNode) and k.value == 'tenants'
-                        and isinstance(v, yaml.MappingNode)):
-                    keys |= {kk.value for kk, _ in v.value
-                             if isinstance(kk, yaml.ScalarNode)}
-        return keys
-    except Exception:  # noqa: BLE001 — any failure means "cannot list them"
-        return None
-
-
-def _possible_mentions_unguarded(path: Path, requested: list[str]) -> set[str]:
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise _ReadThroughFailed(f'it cannot be read: {exc.strerror or exc}')
-    texts = []
-    for enc in _ENCODINGS:
+    def declared(self, rel: str) -> "tuple[Optional[set[str]], str]":
+        """(the tenants rel's `tenants:` mapping declares, '') — or (None, why)
+        when parse-tree cannot read it."""
         try:
-            texts.append(raw.decode(enc))
-        except UnicodeDecodeError:
-            continue
-    if not texts:
-        raise _ReadThroughFailed('no text encoding decodes it')
-    if any(_EXPLICIT_TAG_RE.search(t) for t in texts):
-        raise _ReadThroughFailed('it carries an explicit YAML tag')
-    found: set[str] = set()
-    for text in texts:
-        found |= _tenant_keys_everywhere(text) & set(requested)   # (a)
-        for candidate in (text, _yaml_unescape(text)):          # (b), (c)
-            for t in requested:
-                if t not in found and re.search(
-                        rf'(?<![{_ID_CHAR}]){re.escape(t)}(?![{_ID_CHAR}])',
-                        candidate):
-                    found.add(t)
-    return found
+            node = self.tree.node(rel)
+        except _lib_parse_tree.FileUnreadable as exc:
+            return None, f"da-guard parse-tree cannot read it ({exc.kind}: {exc.message})"
+        tenants = node.get("tenants")
+        if isinstance(tenants, dict) and not _lib_parse_tree.is_scalar(tenants):
+            return set(tenants), ''
+        return set(), ''
 
 
-def _possible_mentions(path: Path, requested: list[str]) -> set[str]:
-    """The requested tenants `path` could POSSIBLY declare (#1942, option 3);
-    `_mentions` with the (d) reason dropped."""
-    return _mentions(path, requested)[0]
+_PARSE_TREE_TIMEOUT_S = 600
 
 
-def _mentions(path: Path, requested: list[str]) -> tuple[set[str], str]:
-    """(the requested tenants `path` could POSSIBLY declare, why it is (d)).
-
-    The second element is '' for a CONCRETE answer — (a), (b) or (c) found
-    each tenant in the file — and the reason text when the answer is (d),
-    "every requested tenant, because init cannot read the file through".
-    The two are kept apart because they license different things: see the
-    coexistence rule in `_plan_confd`.
+def _possible_mentions(path: Path, requested: list[str],
+                       root: Optional[Path] = None) -> set[str]:
+    """The requested tenants `path` could declare (#1942); `_mentions` with
+    the (d) reason dropped."""
+    return _mentions(path, requested, root)[0]
 
 
-    The union of:
-      (a) the keys of every `tenants:` mapping in every document PyYAML
-          composes (decoded key values, so `"db\\x2dc"` is `db-c`);
-      (b) each requested id appearing as a token — not flanked by
-          `[A-Za-z0-9_.-]`, quotes and comments included — in the bytes
-          decoded as UTF-8, UTF-8 with BOM, UTF-16 (BOM), UTF-16LE and
-          UTF-16BE, every decoding that succeeds;
-      (c) the same token match after resolving YAML double-quoted escapes
-          (`\\x2d`, `\\u002d`, `\\/`, an escaped line break …) in each text;
-      (d) EVERY requested tenant when the file cannot be read, no encoding
-          decodes it, it carries an explicit tag (`!!binary`, `!foo` — a tag
-          can turn any bytes into a key), or anything at all goes wrong
-          while judging it.
-    ⛔ Deliberately generous, and deliberately not a verdict about whether
-    the exporter can read the file (see the section comment). Every doubt
-    counts as a mention: the cost is a tenant init leaves to the customer.
-    ⛔ `except Exception` is the point, not laziness: a `ValueError` from a
-    decoder, a `RecursionError` from a deeply nested flow mapping — any of
-    them must become "possibly mentions everything", never a traceback.
+def _mentions(path: Path, requested: list[str],
+              root: Optional[Path] = None) -> tuple[set[str], str]:
+    """(the requested tenants `path` declares, why it is (d)).
+
+    ADR-036 §2 (#2906): what a file declares is `da-guard parse-tree`'s
+    answer — the keys of its `tenants:` mapping as yaml.v3 reads them, the
+    very reading the exporter's tenant scan makes — never a PyYAML parse or
+    a text search. The file's bytes are read in parse-tree's file mode as
+    the file at its path under *root* (default: its own directory).
+
+    The second element is '' for that CONCRETE answer and the reason when
+    parse-tree cannot read the file (a closed-list kind, a file that cannot
+    be read at all): then the answer is (d), "every requested tenant" —
+    every doubt counts as a mention, the cost is a tenant init leaves to the
+    customer. The two are kept apart because they license different things:
+    see the coexistence rule in `_plan_confd`.
     """
+    root = path.parent if root is None else root
+    rel = path.relative_to(root).as_posix()
     try:
-        return _possible_mentions_unguarded(path, requested), ''
-    except _ReadThroughFailed as exc:
-        return set(requested), str(exc)
-    except Exception as exc:  # noqa: BLE001 — see docstring: any failure is (d)
-        return set(requested), f'judging it failed ({type(exc).__name__})'
+        data = path.read_bytes()
+    except OSError as exc:
+        return set(requested), f'it cannot be read: {exc.strerror or exc}'
+    try:
+        tree = _lib_parse_tree.load_file(root, rel, data, None, _PARSE_TREE_TIMEOUT_S)
+        node = tree.node(rel)
+    except _lib_parse_tree.FileUnreadable as exc:
+        return set(requested), (f"da-guard parse-tree cannot read it "
+                                f"({exc.kind}: {exc.message})")
+    tenants = node.get("tenants")
+    if isinstance(tenants, dict) and not _lib_parse_tree.is_scalar(tenants):
+        return set(tenants) & set(requested), ''
+    return set(), ''
 
 
 
@@ -3816,12 +3739,13 @@ class _ConfdPlan(NamedTuple):
 def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     """Decide which conf.d carriers this run may write (#1942).
 
-    One recursive `iter_config_files` walk — the exporter's name rule (both
-    spellings, any case, dot-entries skipped, subdirectories included) — so a
-    file in `conf.d/prod/` counts as the exporter counts it. `_`-prefixed
-    files are control files and declare no tenant (`is_reserved_name`, the
-    exporter's `strings.HasPrefix(name, "_")`). Each tenant file is asked
-    `_possible_mentions` — never whether the exporter can read it.
+    One `da-guard parse-tree` document of conf.d (`_ConfdTree`, ADR-036 §2):
+    the files a reader selects — the exporter's walk (both spellings, any
+    case, dot-entries skipped, subdirectories included) — so a file in
+    `conf.d/prod/` counts as the exporter counts it. `_`-prefixed files are
+    control files and declare no tenant (`is_reserved_name`, the exporter's
+    `strings.HasPrefix(name, "_")`). What each tenant file declares is its
+    `tenants:` keys as parse-tree reads them; a file it cannot read is (d).
 
     ⛔ Paths are compared exactly, never case-folded: `DB-C.YAML` is not init's
     `db-c.yaml`. And because the two ARE one file on a case-insensitive
@@ -3843,14 +3767,14 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         very file, so after the rewrite it would be declared nowhere);
       * 'drops' — tenants this run was NOT asked for (owner ruling on #1942,
         round-1 F2: refuse, do not overwrite; `--force` included). Found by
-        `_all_tenant_keys`; if init cannot list the file's keys it refuses
+        parse-tree; if init cannot list the file's keys it refuses
         the same way. An own file init cannot read through at all (d) keeps
         its existing handling and is not listed here.
     """
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
     requested = list(config['tenants'])
-    root_defaults: list[Path] = []
+    confd = _ConfdTree(conf_dir)
     # Tenant files, `mentions` and `blanket` are all keyed by `_rel(p)` — a
     # str, compared exactly on every platform (see the docstring).
     tenant_files: list[str] = []
@@ -3865,16 +3789,17 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         """init's own path for tenant t, in the same spelling as the keys."""
         return _rel(conf_dir / f'{t}.yaml')
 
-    for p in iter_config_files(conf_dir):
-        if is_reserved_name(p.name):
-            if p.parent == conf_dir and is_defaults_name(p.name):
-                root_defaults.append(p)
+    root_defaults = [conf_dir / n for n in confd.root_defaults()]
+    for rel in confd.files():
+        if is_reserved_name(rel.rsplit('/', 1)[-1]):
             continue
-        f = _rel(p)
+        f = _rel(conf_dir / rel)
         tenant_files.append(f)
-        mentions[f], why = _mentions(p, requested)
+        declared, why = confd.declared(rel)
+        mentions[f] = set(requested) if declared is None else declared & set(requested)
         if why:
             blanket[f] = why
+            mentions[f] = set(requested)
 
     generate: list[str] = []
     skipped: dict[str, list[str]] = {}
@@ -3922,7 +3847,7 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         own = _own(t)
         if own not in mentions or own in blanket:
             continue
-        keys = _all_tenant_keys(conf_dir / f'{t}.yaml')
+        keys = confd.declared(f'{t}.yaml')[0]
         lost = None if keys is None else sorted(keys - set(requested))
         if lost is None or lost:
             conflicts.append(_Conflict('drops', t, [own],
@@ -3991,19 +3916,25 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool,
 
 
 def _read_through_hint(why: str, is_zh: bool) -> str:
-    """How to make a (d) file one init can read through (round-5 F4)."""
+    """How to make a (d) file one init can read through (round-5 F4); *why*
+    names parse-tree's kind (`_mentions`)."""
     if 'tag' in why:
-        return ("移除明確 tag（`!!str`、`!name` 等）——註解或字串裡以 `!` 開頭的字"
-                "（例如 `!Important`、`\"wow !!\"`）也會被當成 tag"
+        return ("移除 parse-tree 不讀的 tag（只讀 `!!str` `!!int` `!!float` `!!bool` "
+                "`!!null` `!!timestamp`；`!name`、`!` 這類一律讀不了）"
                 if is_zh else
-                "remove the explicit tags (`!!str`, `!name` …) — a `!` "
-                "starting a word inside a comment or a string (`!Important`, "
-                "`\"wow !!\"`) counts as a tag too")
-    if 'encoding' in why:
+                "remove the tags parse-tree does not read (it reads `!!str` "
+                "`!!int` `!!float` `!!bool` `!!null` `!!timestamp` only; "
+                "`!name`, `!` and the like are unreadable)")
+    if 'encoding' in why or 'invalid_utf8' in why or 'bom_not_at_start' in why:
         return "把檔案存成 UTF-8" if is_zh else "save the file as UTF-8"
-    if 'cannot be read' in why:
+    if 'cannot be read:' in why or 'read_failure' in why:
         return ("讓執行 init 的使用者讀得到它" if is_zh else
                 "make it readable by the user running init")
+    if 'parse-tree' in why:
+        return ("修掉 da-guard parse-tree 指出的問題（見括號內的 kind 與行號）"
+                if is_zh else
+                "fix what da-guard parse-tree names (the kind and line in the "
+                "parentheses)")
     return ("簡化它（例如極深的巢狀、`\\U00110000` 這類超出範圍的 escape）"
             if is_zh else
             "simplify it (e.g. very deep nesting, or an out-of-range escape "
@@ -4241,6 +4172,11 @@ def _existing_files(output_dir: str) -> set[str]:
     return {str(p.resolve()) for p in root.rglob("*") if p.is_file()}
 
 
+class _ConfdWriteRefused(ValueError):
+    """A generated conf.d text the pre-write parse-tree confirmation refused
+    (ADR-036 §2); raised before any file of the run is written."""
+
+
 def run_init(config: dict, output_dir: str,
              plan: Optional[_ConfdPlan] = None) -> list[str]:
     """Generate all files based on config. Returns list of created file paths.
@@ -4281,19 +4217,26 @@ def run_init(config: dict, output_dir: str,
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
 
+    confd_files: list[tuple[str, str, dict]] = []
     if plan.write_defaults:
-        _write_file(
-            str(conf_dir / '_defaults.yaml'),
-            _gen_defaults_yaml(rule_packs, namespace),
-            created,
-        )
-
+        confd_files.append(('_defaults.yaml',
+                            *_defaults_text_and_doc(rule_packs, namespace)))
     for tenant in plan.generate:
-        _write_file(
-            str(conf_dir / f'{tenant}.yaml'),
-            _gen_tenant_yaml(tenant, rule_packs),
-            created,
-        )
+        confd_files.append((f'{tenant}.yaml',
+                            *_tenant_text_and_doc(tenant, rule_packs)))
+    # ADR-036 §2 (#2906): before ANY file of this run is written, each conf.d
+    # text is read back by `da-guard parse-tree` at the path it is written to
+    # and must hold exactly what was generated, at a path a reader reads.
+    # A refusal raises ValueError (the CLI: rc 1, nothing written); no usable
+    # da-guard is _lib_parse_tree.ParseTreeError (the CLI: rc 2).
+    try:
+        _lib_write_check.confirm_all(conf_dir, [
+            (rel, text, _lib_write_check.from_python(doc))
+            for rel, text, doc in confd_files])
+    except _lib_write_check.WriteRefused as exc:
+        raise _ConfdWriteRefused(f"conf.d/{exc}; nothing was written") from None
+    for rel, text, _doc in confd_files:
+        _write_file(str(conf_dir / rel), text, created)
 
     # ── 2. CI/CD pipelines ─────────────────────────────────
     if ci in ('github', 'both'):
@@ -5562,6 +5505,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
 def main():
     try_utf8_stdout()
     parser = _build_parser()
@@ -5588,7 +5532,13 @@ def main():
     # Snapshot before generation: after the writes there is no way to tell an
     # overwrite from a fresh file (#1447).
     pre_existing = _existing_files(output_dir)
-    created = run_init(config, output_dir, plan)
+    try:
+        created = run_init(config, output_dir, plan)
+    except _ConfdWriteRefused as exc:
+        # ADR-036 §2: a generated conf.d text that does not read back as
+        # generated — refused like a conflict: rc 1, nothing written.
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
     _print_summary(created, output_dir, config, pre_existing, plan)
 
 

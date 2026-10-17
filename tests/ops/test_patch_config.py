@@ -462,13 +462,14 @@ class TestLocateTenantKey:
         assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yaml"
         assert pc.build_patch(cm, "multi-file", "tenant-x", "cpu", "6") is not None
 
-    def test_merge_key_in_other_tenants_is_still_refused(self):
-        """`<<` 可能藏宣告。"""
+    def test_merge_key_in_other_tenants_declares_what_yaml_v3_expands(self):
+        """`<<` 藏的宣告：ADR-036 §2 起宣告取自 da-guard parse-tree，它照 yaml.v3
+        展開 merge——`u` 是 other.yaml 宣告的租戶，不擋 tenant-x。"""
         cm = _cm(**{"_defaults.yaml": _DEFAULTS,
                     "tenant-x.yaml": _decl("tenant-x", cpu="50"),
                     "other.yaml": "b: &b {u: {}}\ntenants:\n  <<: *b\n"})
-        with pytest.raises(pc.ConfigMapShapeError, match="merge"):
-            pc.locate_tenant_key(cm, "tenant-x")
+        assert pc.locate_tenant_key(cm, "tenant-x") == "tenant-x.yaml"
+        assert pc.locate_tenant_key(cm, "u") == "other.yaml"
 
     def test_defaults_deep_duplicate_does_not_block_writes(self):
         cm = _cm(**{"_defaults.yaml": "defaults:\n  cpu: 1\n  cpu: 2\n",
@@ -478,8 +479,8 @@ class TestLocateTenantKey:
     @pytest.mark.parametrize("own", [
         "tenants: {tenant-x: [unclosed\n",
         "tenants:\n  tenant-x: {}\n  tenant-x: {}\n",
-        _DEEP,
-    ], ids=["syntax", "tenants-duplicate", "too-deep"])
+        "[" * 20000 + "]" * 20000 + "\n",
+    ], ids=["syntax", "tenants-duplicate", "past-yaml-v3-depth"])
     def test_broken_own_key_fails_read_and_write(self, own):
         cm = _cm(**{"_defaults.yaml": _DEFAULTS, "tenant-x.yaml": own})
         with pytest.raises(pc.ConfigMapShapeError, match="tenant-x.yaml"):
@@ -723,9 +724,11 @@ class TestNodeReader:
         cm = _two(_T, other)
         assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
 
-    def test_custom_tag_value_is_its_text(self):
+    def test_custom_tag_value_makes_the_key_unreadable(self):
+        """parse-tree 的封閉清單：`!foo` 不在允許的 tag 裡，整份讀不了（ADR-036 §2）。"""
         cm = _two("tenants:\n  tenant-x:\n    cpu: !foo 80\n")
-        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "80")
+        with pytest.raises(pc.ConfigMapShapeError, match="tag_not_allowed"):
+            pc.tenant_block(cm, "tenant-x")
 
     @pytest.mark.parametrize("text", [
         "tenants:\n  tenant-x:\n    cpu: '1'\n    cpu: '2'\n",
@@ -739,32 +742,38 @@ class TestNodeReader:
         "b: &b {cpu: '5'}\ntenants:\n  tenant-x:\n    <<: *b\n",
         "b: &b {tenant-x: {}}\ntenants:\n  <<: *b\n",
     ], ids=["in-block", "in-tenants"])
-    def test_merge_key_on_the_lookup_path_is_refused(self, text):
-        with pytest.raises(pc.ConfigMapShapeError, match="merge"):
-            pc.tenant_block(_two(text), "tenant-x")
+    def test_merge_key_on_the_lookup_path_is_read_as_yaml_v3_expands_it(self, text):
+        """ADR-036 §2：讀取依 parse-tree，`<<` 照 yaml.v3 展開；寫回由寫入前的
+        parse-tree 確認判（展開後內容相同即放行）。"""
+        cm = _two(text)
+        key, block = pc.tenant_block(cm, "tenant-x")
+        assert key == "tenant-x.yaml"
+        assert pc._text(block["cpu"]) == "5" if "cpu" in text else block == {}
+        written = pc.patch_multifile(cm, "tenant-x", "cpu", "6")["data"]
+        assert _own(_cm(**{**cm["data"], **written}), "tenant-x", "cpu") == (
+            "tenant-x.yaml", "6")
 
     def test_merge_key_off_the_lookup_path_is_read_past(self):
         """他租戶區塊裡的 `<<` 不擋 tenant-x。"""
         other = "b: &b {cpu: '1'}\ntenants:\n  other-t:\n    <<: *b\n"
         assert _own(_two(_T, other), "tenant-x", "cpu") == ("tenant-x.yaml", "5")
 
-    def test_null_tenant_key_declares_nothing(self):
-        """null key 不宣告任何租戶。"""
+    def test_null_tenant_key_makes_the_key_unreadable(self):
+        """null key 在 parse-tree 的封閉清單裡（null_key）：整份讀不了。"""
         cm = _two("tenants:\n  ~: {cpu: '1'}\n  tenant-x: {cpu: '5'}\n")
-        assert pc.locate_tenant_key(cm, "~") is None
-        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
+        with pytest.raises(pc.ConfigMapShapeError, match="null_key"):
+            pc.tenant_block(cm, "tenant-x")
 
     def test_non_scalar_key_on_the_lookup_path_is_refused(self):
         text = "tenants:\n  ? [a]\n  : {}\n  tenant-x: {cpu: '5'}\n"
-        with pytest.raises(pc.ConfigMapShapeError, match="non-scalar"):
+        with pytest.raises(pc.ConfigMapShapeError, match="non_scalar_key"):
             pc.tenant_block(_two(text), "tenant-x")
 
-    def test_only_the_first_document_is_read(self):
-        """第二份文件以後的宣告、重複 key、語法錯都不讀。"""
-        cm = _two(_T + "---\ntenants:\n  other-t: {}\n  other-t: {}\n"
-                       "---\nx: [unclosed\n")
-        assert _own(cm, "tenant-x", "cpu") == ("tenant-x.yaml", "5")
-        assert pc.locate_tenant_key(cm, "other-t") is None
+    def test_a_second_document_makes_the_key_unreadable(self):
+        """parse-tree：多份文件是讀不了（multiple_documents），不是只讀第一份。"""
+        cm = _two(_T + "---\ntenants:\n  other-t: {}\n")
+        with pytest.raises(pc.ConfigMapShapeError, match="multiple_documents"):
+            pc.tenant_block(cm, "tenant-x")
 
     @pytest.mark.parametrize("text", ["\ufeff" + _T, _T.replace("\n", "\r\n")],
                              ids=["bom", "crlf"])
@@ -839,19 +848,38 @@ class TestWriteScope:
         assert patched["tenants"] == {"tenant-x": {"cpu": "6"},
                                       "other-t": {"cpu": "1"}}
 
-    def test_self_referential_alias_is_written_without_recursing(self):
+    def test_self_referential_alias_makes_the_key_unreadable(self):
+        """yaml.v3 拒收自我參照的 alias（parse-tree decode_error）：不寫。"""
         cm = _two("a: &x [*x]\n" + _T)
-        patch = pc.patch_multifile(cm, "tenant-x", "cpu", "6")
-        assert _own(_cm(**{**cm["data"], **patch["data"]}), "tenant-x", "cpu") == (
-            "tenant-x.yaml", "6")
+        with pytest.raises(pc.ConfigMapShapeError, match="decode_error"):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "6")
+
+    def test_an_anchor_shared_block_is_refused_before_the_write(self):
+        """ADR-036 §2：PyYAML 改寫共用 anchor 的區塊時連帶改到另一個租戶——寫入前
+        的 parse-tree 確認讀回 `tenants.other-t.cpu` 也變了，整份拒寫（先前要等
+        寫入後由 exporter 驗收才回滾，#1950 列 9）。"""
+        cm = _cm(**{"config.yaml": "tenants:\n  tenant-x: &s {cpu: '5'}\n"
+                                   "  other-t: *s\n"})
+        with pytest.raises(pc.ConfigMapShapeError,
+                           match=r"content_differs.*tenants\.other-t\.cpu"):
+            pc.patch_legacy(cm, "tenant-x", "cpu", "6")
+
+    def test_a_spelling_pyyaml_rewrites_is_refused_naming_it(self):
+        """未動到的 `~` 被 PyYAML 寫成 `null`：原文不同，整份拒寫、點名位置。"""
+        cm = _two("tenants:\n  tenant-x:\n    cpu: '5'\n    mem: ~\n")
+        with pytest.raises(pc.ConfigMapShapeError,
+                           match=r"tenants\.tenant-x\.mem: expected !!null '~', read !!null 'null'"):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "6")
 
 
+# What da-guard parse-tree cannot read (ADR-036 §2). A TAB separator and
+# 1000-deep nesting were here while PyYAML read the keys: yaml.v3 reads both
+# (`test_a_file_yaml_v3_reads_declares_its_tenant`).
 _UNREADABLE = {
-    "tab": 'tenants:\n  tenant-x:\n    cpu:\t"70"\n',
     "syntax": "tenants: {tenant-x: [unclosed\n",
     "root-duplicate": "a: 1\na: 2\ntenants:\n  tenant-x: {cpu: '70'}\n",
     "tenants-duplicate": "tenants:\n  tenant-x: {}\n  tenant-x: {}\n",
-    "too-deep": _DEEP,
+    "past-yaml-v3-depth": "[" * 20000 + "]" * 20000 + "\n",
 }
 
 
@@ -878,41 +906,27 @@ class TestUnreadableKeyWithUndeclaredTenant:
         assert pc.diff_preview(cm, "multi-file", "tenant-x", "cpu", "9")["changed"]
 
 
+class TestDecisionsAreParseTrees:
+    """ADR-036 §2：誰宣告租戶、區塊裡有什麼，取自 da-guard parse-tree。"""
+
+    def test_a_file_yaml_v3_reads_declares_its_tenant(self):
+        """TAB 分隔：PyYAML 讀不了，yaml.v3 照讀——team-x.yaml 宣告 tenant-x；
+        改寫的文字要 PyYAML 產生，它讀不了就拒寫並點名。"""
+        cm = _cm(**{"_defaults.yaml": _DEFAULTS,
+                    "team-x.yaml": 'tenants:\n  tenant-x:\n    cpu:\t"70"\n'})
+        assert pc.locate_tenant_key(cm, "tenant-x") == "team-x.yaml"
+        assert _own(cm, "tenant-x", "cpu") == ("team-x.yaml", "70")
+        with pytest.raises(pc.ConfigMapShapeError, match="team-x.yaml: PyYAML cannot read"):
+            pc.patch_multifile(cm, "tenant-x", "cpu", "9")
+
+    def test_an_unquoted_yes_tenant_is_the_string_yaml_v3_reads(self):
+        """`yes:` 是 yaml.v3 的字串鍵 "yes"（PyYAML 讀成 True）。"""
+        cm = _two("tenants:\n  yes: {cpu: '5'}\n")
+        assert pc.locate_tenant_key(cm, "yes") == "tenant-x.yaml"
+        assert pc.locate_tenant_key(cm, "True") is None
+
+
 class TestReaderBounds:
-
-    def test_duplicate_scan_visits_each_node_once(self, monkeypatch):
-        """alias 扇出（billion laughs）：每個 node 只看一次，不隨路徑數爆炸。
-
-        #2123 起重複 key 檢查是 `_lib_io.find_duplicate_key`（共用）；
-        量的是它對每個 mapping node 呼叫 `duplicate_in_mapping` 的次數——
-        逐路徑走會是 10**6 次，逐 node 走等於相異 mapping node 數。
-        """
-        import _lib_io
-        levels = ["l0: &l0 {a: x, b: x}"] + [
-            f"l{i}: &l{i} [{', '.join([f'*l{i - 1}'] * 10)}]" for i in range(1, 7)]
-        text = "\n".join(levels) + "\n" + _T
-        seen, mappings, stack = set(), 0, [yaml.compose(text)]
-        while stack:
-            n = stack.pop()
-            if id(n) in seen:
-                continue
-            seen.add(id(n))
-            if isinstance(n, yaml.MappingNode):
-                mappings += 1
-                stack += [x for kv in n.value for x in kv]
-            elif isinstance(n, yaml.SequenceNode):
-                stack += n.value
-        visits = []
-        real = _lib_io.duplicate_in_mapping
-        monkeypatch.setattr(_lib_io, "duplicate_in_mapping",
-                            lambda node: visits.append(id(node)) or real(node))
-        pc.read_node(text, "t.yaml")
-        assert len(set(visits)) == mappings
-        assert len(visits) == mappings  # one call per node, not per path
-
-    def test_nesting_too_deep_is_a_shape_error(self):
-        with pytest.raises(pc.ConfigMapShapeError, match="too deeply"):
-            pc.read_node("[" * 5000 + "]" * 5000, "t.yaml")
 
     @pytest.mark.parametrize("cm", [{"data": ["x"]}, ["x"]])
     def test_data_that_is_not_a_mapping_is_a_shape_error(self, cm):
@@ -994,7 +1008,7 @@ class TestWriteAndCliEdges:
 
     def test_non_scalar_key_in_the_tenant_block_is_refused(self):
         cm = _two("tenants:\n  tenant-x:\n    ? [a]\n    : 1\n    cpu: '5'\n")
-        with pytest.raises(pc.ConfigMapShapeError, match="non-scalar"):
+        with pytest.raises(pc.ConfigMapShapeError, match="non_scalar_key"):
             pc.tenant_block(cm, "tenant-x")
 
     def test_default_removes_a_value_that_reads_default(self):

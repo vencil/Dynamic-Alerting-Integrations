@@ -172,9 +172,12 @@ def test_da_guard_exit_2_is_unchecked_not_a_refusal(tmp_path, da_guard_env):
     assert "mysql_threads_running" not in (conf_d / "a.yaml").read_text(encoding="utf-8")
 
 
-def test_a_file_name_da_guard_cannot_put_in_json_is_unchecked(tmp_path, da_guard_env):
-    """F5: a non-UTF-8 file name makes key-refs exit 2 although the exporter
-    takes the tree: 未體檢, not blocked."""
+def test_a_file_name_da_guard_cannot_put_in_json_is_exit_2(tmp_path, da_guard_env):
+    """F5: a non-UTF-8 file name makes da-guard exit 2 although the exporter
+    takes the tree. Since ADR-036 §2 (#2906) the tool reads the tree through
+    `da-guard parse-tree`, which cannot write such a name into JSON either:
+    there is no reading of the tree, so rc 2 and nothing written (it used to
+    be 未體檢 from key-refs alone)."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
@@ -185,10 +188,9 @@ def test_a_file_name_da_guard_cannot_put_in_json_is_unchecked(tmp_path, da_guard
     except (OSError, UnicodeError):
         pytest.skip("this filesystem does not take a non-UTF-8 file name")
     r = _run(conf_d, "--execute")
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "未體檢：da-guard 無法回答" in r.stdout
-    assert "not valid UTF-8" in r.stderr
-    assert "mysql_threads_running" not in (conf_d / "t2.yaml").read_text(encoding="utf-8")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "da-guard parse-tree" in r.stderr and "not valid UTF-8" in r.stderr
+    assert "mysql_threads_running" in (conf_d / "t2.yaml").read_text(encoding="utf-8")
 
 
 def test_a_tenant_file_the_exporter_drops_is_left_alone_and_named(tmp_path, da_guard_env):
@@ -205,14 +207,38 @@ def test_a_tenant_file_the_exporter_drops_is_left_alone_and_named(tmp_path, da_g
     assert "租戶檔 exporter 讀不進去（da-guard：parse_failed）" in r.stdout.split("下架未完成", 1)[1]
 
 
-def test_without_da_guard_the_run_says_unchecked_and_behaves_as_before(tmp_path):
-    """`$DA_GUARD_BINARY` naming no file stops the resolution: 未體檢, the
-    tool's own verdict and rc unchanged (D12: never blocks)."""
+def _key_refs_fails(tmp_path, da_guard):
+    """A da-guard that answers parse-tree and fails key-refs (exit 2)."""
+    wrapper = tmp_path / "da-guard-no-key-refs"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = key-refs ]; then echo 'key-refs: refused' >&2; exit 2; fi\n"
+        f"exec '{da_guard}' \"$@\"\n", encoding="utf-8")
+    wrapper.chmod(0o755)
+    return {**os.environ, "DA_GUARD_BINARY": str(wrapper)}
+
+
+def test_without_da_guard_the_run_is_exit_2_and_writes_nothing(tmp_path):
+    """ADR-036 §2 (#2906): the tree is read through `da-guard parse-tree`; with
+    no da-guard there is no reading of it — rc 2, nothing written."""
     conf_d = _alias_tree(tmp_path)
+    before = (conf_d / "t2.yaml").read_bytes()
     env = {**os.environ, "DA_GUARD_BINARY": str(tmp_path / "no-such-da-guard")}
     r = _run(conf_d, "--execute", env=env)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "da-guard parse-tree" in r.stderr
+    assert (conf_d / "t2.yaml").read_bytes() == before
+
+
+def test_without_key_refs_the_run_says_unchecked_and_behaves_as_before(
+        tmp_path, da_guard_binary):
+    """key-refs unanswerable (parse-tree answering): 未體檢, the tool's own
+    verdict and rc unchanged (D12: never blocks)."""
+    conf_d = _alias_tree(tmp_path)
+    env = _key_refs_fails(tmp_path, da_guard_binary)
+    r = _run(conf_d, "--execute", env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "未體檢：找不到 da-guard" in r.stdout
+    assert "未體檢：da-guard 無法回答" in r.stdout
     summary = r.stdout.split("=" * 60)[-2]
     assert "未體檢" in summary and "下架完成" in summary
     # Without the exporter's answer the alias spelling is not known to the tool.
@@ -325,7 +351,7 @@ def test_the_alias_reminder_shows_only_when_unchecked(tmp_path, da_guard_env):
     conf_d = _alias_tree(tmp_path / "with")
     assert reminder not in _run(conf_d).stdout
     conf_d = _alias_tree(tmp_path / "without")
-    env = {**os.environ, "DA_GUARD_BINARY": str(tmp_path / "no-such-da-guard")}
+    env = _key_refs_fails(tmp_path, da_guard_env)
     assert reminder in _run(conf_d, env=env).stdout
 
 
