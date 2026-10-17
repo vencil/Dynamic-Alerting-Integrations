@@ -52,6 +52,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
+from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
     Finding,
@@ -1508,6 +1509,26 @@ ROUTING_TREE_ERROR_PREFIX = "ERROR (routing tree):"
 def is_routing_tree_error(line: str) -> bool:
     """True for a #2326 routing-tree line in the warning stream."""
     return line.lstrip().startswith(ROUTING_TREE_ERROR_PREFIX)
+
+
+# ── #2906: a boolean / enum field of the wrong type or an unknown value ──
+# (blocking in EVERY mode). `_routing_enforced.enabled`, a tenant's
+# `_severity_dedup`, a domain policy's `require_critical_escalation`, a
+# receiver's `send_resolved` / `require_tls` /
+# `http_config.proxy_from_environment`: judged by type and value only
+# (ADR-036 §2) — a string is never read as the boolean it spells. The
+# generator exits EXIT_VIOLATION before anything is rendered
+# (`_refuse_field_type_errors`), and validate-config's schema row FAILs on
+# the line (``blocking_generation_errors``). Not `POLICY_ERROR_PREFIX`: it
+# does not wait for --strict.
+FIELD_TYPE_ERROR_PREFIX = "ERROR (field type):"
+
+
+def is_field_type_error(line: str) -> bool:
+    """True for a #2906 field-type line in the warning stream."""
+    return line.lstrip().startswith(FIELD_TYPE_ERROR_PREFIX)
+
+
 # ── #2315: one tenant id declared by two tenant files (blocking in EVERY mode) ──
 # The exporter's walker refuses such a tree WHOLE (`*DuplicateTenantError`,
 # pkg/config/tree_scan.go), and so does da-guard. This reader used to merge
@@ -1550,7 +1571,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
     drifting apart (validate-config showed a WARN row at exit 0 while
     ``--validate`` failed); a new blocking category added to one copy only
-    reopens exactly that. Five categories today:
+    reopens exactly that. Six categories today:
 
     * a config entry was dropped as unusable — a ``SkippedEntryWarning``,
       i.e. a line built by ``skipped_entry_warning`` (#2489). Decided by the
@@ -1570,7 +1591,9 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
       reason as ``ReplacedValueWarning``;
     * a duplicate generated receiver name (#2279);
     * a conf.d tree the routing plane refuses (#2326,
-      ``ROUTING_TREE_ERROR_PREFIX``).
+      ``ROUTING_TREE_ERROR_PREFIX``);
+    * a boolean / enum field of the wrong type or an unknown value (#2906,
+      ``FIELD_TYPE_ERROR_PREFIX``).
 
     ADR-007 ``--strict`` policy errors are NOT in here: they are blocking only
     under ``--strict`` and each caller already selects them by
@@ -1579,7 +1602,8 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     return [w for w in warnings
             if isinstance(w, (SkippedEntryWarning, ReplacedValueWarning, IgnoredKeyWarning))
             or is_receiver_name_collision(w)
-            or is_routing_tree_error(w)]
+            or is_routing_tree_error(w)
+            or is_field_type_error(w)]
 
 
 def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:
@@ -1905,6 +1929,76 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
             if isinstance(entry, dict):
                 check_receiver(entry.get("receiver"), f"{where}.routes[{i}]",
                                f"{field_prefix}routes[{i}].")
+    return out
+
+
+def routing_block_receivers(obj: object, *, block: str, where: str,
+                            field_prefix: str = "") -> list[tuple[dict, str, str]]:
+    """``(receiver, label, field)`` of every receiver mapping a routing block
+    renders: its ``receiver``, each ``overrides`` entry's (not in
+    ``routing_enforced``) and each ``routes`` entry's (``routing`` only) —
+    the receivers ``ignored_routing_keys`` looks into. *label* names the
+    receiver in a message (``<where>.overrides[0].receiver``), *field* is its
+    finding path (``<field_prefix>overrides[0].receiver``)."""
+    out: list[tuple[dict, str, str]] = []
+    if not isinstance(obj, dict):
+        return out
+
+    def add(recv: object, label: str, path: str) -> None:
+        if isinstance(recv, dict):
+            out.append((recv, f"{label}.receiver", f"{path}receiver"))
+
+    add(obj.get("receiver"), where, field_prefix)
+    overrides = obj.get("overrides")
+    if block != "routing_enforced" and isinstance(overrides, list):
+        for i, entry in enumerate(overrides):
+            if isinstance(entry, dict):
+                add(entry.get("receiver"), f"{where}.overrides[{i}]",
+                    f"{field_prefix}overrides[{i}].")
+    routes = obj.get("routes")
+    if block == "routing" and isinstance(routes, list):
+        for i, entry in enumerate(routes):
+            if isinstance(entry, dict):
+                add(entry.get("receiver"), f"{where}.routes[{i}]",
+                    f"{field_prefix}routes[{i}].")
+    return out
+
+
+def value_type_text(value: object) -> str:
+    """#2906: a decoded value's type and value, for a field-type message —
+    ``string 'yes'``, ``number 1``, ``null``."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return f"boolean {value!r}"
+    if isinstance(value, str):
+        return f"string {value!r}"
+    if isinstance(value, (int, float)):
+        return f"number {value!r}"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "a mapping"
+    return type(value).__name__
+
+
+def receiver_bool_type_errors(obj: object, *, block: str, where: str,
+                              field_prefix: str = "") -> list[tuple[str, str]]:
+    """#2906: ``(field, message)`` of each receiver boolean field of a routing
+    block that is not a boolean or null (``receiver_bool_problems``) — the
+    receivers of ``routing_block_receivers``. A string is refused whatever
+    it spells: ``send_resolved: "yes"`` / ``"true"`` used to be written out
+    as the boolean, the YAML 1.1 leniency ADR-036 §2 forbids."""
+    out: list[tuple[str, str]] = []
+    for recv, label, path in routing_block_receivers(
+            obj, block=block, where=where, field_prefix=field_prefix):
+        rtype = receiver_type(recv)
+        if rtype not in RECEIVER_TYPES:
+            continue  # unknown_receiver_type / missing_receiver_field name it
+        for fld, value in receiver_bool_problems(rtype, recv):
+            out.append((f"{path}.{fld}",
+                        f"{label}.{fld} must be a boolean (true / false, "
+                        f"unquoted), got {value_type_text(value)}"))
     return out
 
 
@@ -2758,21 +2852,14 @@ def check_domain_policies(
             policy_name, constraints, "enforce_group_by")
         max_repeat = constraints.get("max_repeat_interval")
         min_group_wait = constraints.get("min_group_wait")
-        # #2244: None / false mean "not constrained"; a non-bool value is
-        # fail-open like a non-list list constraint — strict surfaces it.
+        # #2244: None / false mean "not constrained". #2906: a value that is
+        # not a boolean is no longer this function's to report (it used to
+        # be a strict-only ERROR here, and a lenient run switched the
+        # constraint off in silence): the generator's reader records it
+        # (`_grar_parse._record_policy_type_errors`) and the whole tree is
+        # refused in every mode before any policy is checked.
         escalation = constraints.get("require_critical_escalation")
         require_escalation = escalation is True
-        if (strict and escalation is not None
-                and not isinstance(escalation, bool)):
-            messages.append(_fmt(
-                f"domain_policy '{policy_name}': constraint "
-                f"'require_critical_escalation' must be a boolean, got "
-                f"{type(escalation).__name__} {escalation!r} — the "
-                f"constraint cannot be enforced",
-                "set 'require_critical_escalation' to true or false "
-                "(unquoted)",
-                kind="domain_policy_unusable", policy=policy_name,
-                field="constraints.require_critical_escalation"))
 
         # Strict: validate constraint-side durations once per policy —
         # an unparseable bound (e.g. "banana", "-1h") means the constraint

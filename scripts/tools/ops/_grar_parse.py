@@ -63,8 +63,11 @@ from _grar_merge import (  # noqa: E402
     visible_routing_profiles,
 )
 from _grar_validate import (  # noqa: E402
+    FIELD_TYPE_ERROR_PREFIX,
     POLICY_ERROR_PREFIX,
     ROUTING_TREE_ERROR_PREFIX,
+    receiver_bool_type_errors,
+    value_type_text,
     _validate_profile_refs,
     check_domain_policies,
     check_policy_scope,
@@ -363,10 +366,14 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             raw = data["_routing_enforced"]
             # ⛔ #2164: `is True`, never truthiness. PyYAML reads an unquoted
             # `n` / `y` as the STRING 'n' / 'y', and `'n'` is truthy, so
-            # `enabled: n` used to switch NOC routing ON at rc 0. Anything
-            # that is not a YAML boolean is a configuration error: recorded in
-            # `enforced_errors` (→ schema_warnings, blocking under
-            # `--validate`) and NOT enabled. A missing key stays "disabled".
+            # `enabled: n` used to switch NOC routing ON at rc 0. A missing
+            # key stays "disabled".
+            # ⛔ #2906: anything that is not a boolean — `"true"` and `"yes"`
+            # included, and null — refuses the WHOLE tree in every mode
+            # (`field_type_errors`). It used to be a `WARN … skipping` line
+            # that render mode printed and then shipped a config with no
+            # NOC route at rc 0; once the generator reads yaml.v3 (ADR-036
+            # step 4) an unquoted `yes` is such a string too.
             enabled = raw.get("enabled", False) if isinstance(raw, dict) else None
             # #2960: `enabeld: true` leaves NOC routing off — named, as every
             # key the generator does not read, whatever `enabled` says.
@@ -388,13 +395,11 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             elif isinstance(raw, dict) and enabled is False:
                 pass  # explicitly disabled → None
             elif isinstance(raw, dict):
-                result.setdefault("enforced_errors", []).append(
-                    skipped_entry_warning(f"  WARN: _routing_enforced in {fname}: 'enabled' must be "
-                                          f"a YAML boolean (true / false), got "
-                                          f"{type(enabled).__name__} {enabled!r} — platform-enforced "
-                                          f"(NOC) routing is NOT enabled, skipping",
-                                          kind="routing_enforced_enabled_invalid",
-                                          file=fname, field="_routing_enforced.enabled"))
+                _field_type_error(
+                    result, "routing_enforced_enabled_invalid",
+                    f"_routing_enforced in {fname}: 'enabled' must be a boolean "
+                    f"(true / false, unquoted), got {value_type_text(enabled)}",
+                    file=fname, field="_routing_enforced.enabled")
             else:
                 print(f"  WARN: _routing_enforced in {_f} must be a dict "
                       "with 'enabled: true', ignoring", file=sys.stderr)
@@ -407,8 +412,64 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
 
 def _record_ignored_keys(result: dict, obj: object, **kw) -> None:
     """#2960: name the keys *obj* carries that the generator does not read
-    (`ignored_routing_keys`; → schema_warnings, blocking under `--validate`)."""
+    (`ignored_routing_keys`; → schema_warnings, blocking under `--validate`).
+
+    #2906: called for every routing block this reader reads (a tenant's
+    `_routing`, `_routing_defaults` at each level, `_routing_enforced`, each
+    routing profile), so the receivers' boolean fields are judged here too
+    (`_record_receiver_bool_errors`)."""
     result.setdefault("ignored_routing_keys", []).extend(ignored_routing_keys(obj, **kw))
+    _record_receiver_bool_errors(result, obj, **kw)
+
+
+@dataclass(frozen=True)
+class FieldTypeError:
+    """One #2906 field-type finding: a boolean / enum field of the wrong type
+    or with an unknown value. ``kind`` is a ``FINDING_KINDS`` key; ``file``
+    is root-relative; ``message`` names the place, the rule and the value."""
+    kind: str
+    message: str
+    file: str | None = None
+    tenant: str | None = None
+    field: str | None = None
+    policy: str | None = None
+
+
+def _field_type_error(result: dict, kind: str, message: str, *,
+                      file: str | None = None, tenant: str | None = None,
+                      field: str | None = None, policy: str | None = None) -> None:
+    """Record one #2906 field-type finding. The generator refuses the WHOLE
+    tree on any of them, in every mode (`_refuse_field_type_errors`, rc 1).
+    setdefault: tests call the parse helpers with hand-built result dicts."""
+    result.setdefault("field_type_errors", []).append(
+        FieldTypeError(kind, message, file=file, tenant=tenant, field=field,
+                       policy=policy))
+
+
+def field_type_findings(errors: "list[FieldTypeError]", *,
+                        prefix: str = "  ") -> list[Finding]:
+    """#2906: the warning-stream line of each field-type finding
+    (``FIELD_TYPE_ERROR_PREFIX``, blocking in every mode). *prefix* is the
+    indentation: the refusal (``field_type_errors_refusal``) prints the same
+    lines under its own framing line."""
+    return [Finding(f"{prefix}{FIELD_TYPE_ERROR_PREFIX} {e.message}",
+                    kind=e.kind, blocks="always", tenant=e.tenant,
+                    policy=e.policy, file=e.file, field=e.field)
+            for e in errors]
+
+
+def _record_receiver_bool_errors(result: dict, obj: object, *, block: str,
+                                 where: str, field_prefix: str = "",
+                                 tenant: str | None = None,
+                                 file: str | None = None) -> None:
+    """#2906: a receiver boolean (`send_resolved`, `require_tls`,
+    `http_config.proxy_from_environment`) that is not a boolean or null —
+    `"yes"` / `"true"` used to be written out as the boolean they spell."""
+    for fld, message in receiver_bool_type_errors(
+            obj, block=block, where=where, field_prefix=field_prefix):
+        _field_type_error(result, "invalid_receiver_field",
+                          f"{file}: {message}" if file else message,
+                          file=file, tenant=tenant, field=fld)
 
 
 def _record_unknown_routing_keys(result: dict, obj: object, **kw) -> None:
@@ -698,6 +759,34 @@ def _parse_nested_config(data: dict, fname: str, level: str,
     _parse_profiles_and_policies(data, fname, level, result)
 
 
+def _record_policy_type_errors(fname: str, policies: dict, result: dict) -> None:
+    """#2906: a domain policy's boolean constraint that is not a boolean.
+
+    `require_critical_escalation` is true, false or null (not constrained).
+    Anything else — `"true"`, `"yes"`, `1` — refuses the WHOLE tree in every
+    mode. It used to be enforced only when it was the boolean `True`, and
+    reported only under `--strict`: without it a quoted `"true"` switched the
+    constraint off at rc 0, and so will an unquoted `yes` once the generator
+    reads yaml.v3 (ADR-036 step 4).
+    """
+    for name, policy in policies.items():
+        if not isinstance(policy, dict):
+            continue
+        constraints = policy.get("constraints")
+        if not isinstance(constraints, dict) or "require_critical_escalation" not in constraints:
+            continue
+        value = constraints["require_critical_escalation"]
+        if value is None or isinstance(value, bool):
+            continue
+        _field_type_error(
+            result, "domain_policy_unusable",
+            f"{fname}: domain_policy '{name}': constraint "
+            f"'require_critical_escalation' must be a boolean (true / false, "
+            f"unquoted), got {value_type_text(value)}",
+            file=fname, policy=str(name),
+            field="constraints.require_critical_escalation")
+
+
 def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                                  result: dict) -> None:
     """`routing_profiles` / `domain_policies` of one file at directory *level*.
@@ -746,6 +835,8 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
         dp_fname = fname
         if base in _POLICY_FILENAMES:
             policies = data["domain_policies"]
+            if isinstance(policies, dict):
+                _record_policy_type_errors(fname, policies, result)
             if isinstance(policies, dict) and level == ROOT_LEVEL:
                 result["domain_policies"].update(policies)
             elif isinstance(policies, dict):
@@ -779,6 +870,41 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                   "(only allowed in _domain_policy.yaml)", file=sys.stderr)
 
 
+# #2906: the `_severity_dedup` words, as the exporter reads them
+# (pkg/config ResolveSeverityDedup: trimmed, case-insensitive). The disabling
+# half is the platform's disable vocabulary (`_DISABLED_VALUES`, Go
+# `isDisabled`). These are the field's VALUES, not YAML 1.1 boolean words:
+# `yes` / `no` are not among them, quoted or not.
+SEVERITY_DEDUP_ENABLE_WORDS = ("enable", "enabled", "on", "true")
+SEVERITY_DEDUP_DISABLE_WORDS = ("disable", "disabled", "off", "false")
+SEVERITY_DEDUP_WORDS = SEVERITY_DEDUP_ENABLE_WORDS + SEVERITY_DEDUP_DISABLE_WORDS
+
+
+def severity_dedup_mode(value: object) -> str | None:
+    """#2906: ``"enable"`` / ``"disable"`` for a tenant's ``_severity_dedup``
+    value, or ``None`` when the value is refused.
+
+    * null (the key absent, or written with no value) is the default,
+      ``enable``;
+    * a boolean: true is ``enable``, false ``disable`` (an unquoted
+      ``false`` / ``off`` / ``no`` is the boolean False to PyYAML);
+    * a string: one of ``SEVERITY_DEDUP_WORDS`` (trimmed, any case);
+    * anything else — another string (``"no"``, ``"yes"``, ``""``), a
+      number, a list, a mapping — is refused.
+    """
+    if value is None:
+        return "enable"
+    if isinstance(value, bool):
+        return "enable" if value else "disable"
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in SEVERITY_DEDUP_ENABLE_WORDS:
+            return "enable"
+        if word in SEVERITY_DEDUP_DISABLE_WORDS:
+            return "disable"
+    return None
+
+
 def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     """Extract per-tenant config from a tenant overrides dict.
 
@@ -799,13 +925,24 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     if rp_ref and isinstance(rp_ref, str):
         result["tenant_profile_refs"][tenant] = rp_ref.strip()
 
-    # Severity dedup: default "enable", explicit "disable" to opt out
-    raw_dedup = overrides.get("_severity_dedup", "enable")
-    dedup_val = str(raw_dedup).strip().lower()
-    if _is_disabled(dedup_val):
-        result["dedup_configs"][tenant] = "disable"
-    else:
-        result["dedup_configs"][tenant] = "enable"
+    # Severity dedup: default "enable", explicit "disable" to opt out.
+    # ⛔ #2906: judged by type and value (`severity_dedup_mode`); a value it
+    # does not know refuses the WHOLE tree. Before, `str(value).lower()`
+    # fell through to "enable" for anything not a disabling word, so a
+    # quoted "no" (and, once the generator reads yaml.v3, an unquoted `no`)
+    # turned dedup ON in silence.
+    raw_dedup = overrides.get("_severity_dedup")
+    mode = severity_dedup_mode(raw_dedup)
+    if mode is None:
+        _field_type_error(
+            result, "severity_dedup_invalid",
+            f"tenant '{tenant}': _severity_dedup must be enable or disable "
+            f"(also read: {', '.join(SEVERITY_DEDUP_WORDS[1:4])} / "
+            f"{', '.join(SEVERITY_DEDUP_WORDS[5:])}; or true / false, "
+            f"unquoted), got {value_type_text(raw_dedup)}",
+            tenant=tenant, field="_severity_dedup")
+        mode = "enable"
+    result["dedup_configs"][tenant] = mode
 
     # v1.11.0: Metadata extraction
     metadata = overrides.get("_metadata")
@@ -1060,6 +1197,9 @@ def _parse_config_files(config_dir: str) -> dict:
         "domain_policy_origin": {},
         "defaults_keys_by_dir": {},
         "routing_tree_problems": [],
+        # #2906: a boolean / enum field of the wrong type or an unknown
+        # value, one dict per finding (`_field_type_error`) — refused whole.
+        "field_type_errors": [],
         "tenant_declarations": [],   # (file, tenant id) per tenant-file key
         # #2315: {tenant_id: [file, ...]} for every id two tenant files declare.
         "duplicate_tenants": {},
@@ -1561,6 +1701,10 @@ class TenantTree:
     # Nothing is rendered for them here; the generator refuses the whole
     # tree on them in every mode (`_refuse_invalid_tenant_ids`).
     invalid_tenant_ids: list[str] = field(default_factory=list)
+    # #2906: boolean / enum fields of the wrong type or with an unknown
+    # value (`_field_type_error` dicts). The generator refuses the whole
+    # tree on them in every mode (`_refuse_field_type_errors`).
+    field_type_errors: list[FieldTypeError] = field(default_factory=list)
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -1647,6 +1791,9 @@ def load_tenant_tree(
                 blocks="always", file=_f, field=_fld)
         for kind, _f, _fld, msg in parsed.get("routing_tree_problems", [])
         if kind in BLOCKING_TREE_KINDS]
+    # #2906: the field-type findings, blocking in every mode as well.
+    field_type_errors = list(parsed.get("field_type_errors", []))
+    schema_warnings.extend(field_type_findings(field_type_errors))
 
     # Schema validation: check tenant keys against defaults. #2326: a tenant
     # below the root also sees the `defaults:` keys of every carrier on its
@@ -1664,9 +1811,10 @@ def load_tenant_tree(
     # v2.1.0 ADR-007: Validate profile references
     schema_warnings.extend(_validate_profile_refs(parsed))
 
-    # #2164: a `_routing_enforced.enabled` that is not a YAML boolean. The
-    # line carries "WARN … skipping", so `--validate` (and validate-config's
-    # schema row) fail on it; render mode prints it and renders without NOC.
+    # #2989: a `_routing_enforced.match` that is not a list. The line carries
+    # "WARN … skipping", so `--validate` (and validate-config's schema row)
+    # fail on it; render mode prints it and renders without NOC. (#2906: a
+    # non-boolean `enabled` is a field-type finding, above — refused whole.)
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     # #2904: routing written where nothing reads it (routing_in_unread_location)
@@ -1815,4 +1963,5 @@ def load_tenant_tree(
         tenant_file_errors=list(parsed.get("tenant_file_errors", [])),
         routing_tree_problems=tree_problems,
         duplicate_tenants=dict(parsed.get("duplicate_tenants", {})),
-        invalid_tenant_ids=invalid_ids)
+        invalid_tenant_ids=invalid_ids,
+        field_type_errors=field_type_errors)

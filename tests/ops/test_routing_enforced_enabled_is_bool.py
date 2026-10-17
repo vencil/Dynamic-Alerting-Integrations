@@ -6,12 +6,12 @@ platform-enforced (NOC) route ON — `generate-routes --validate` rc 0,
 `validate-config` rc 0. Same for a quoted `'yes'` / `'no'`.
 
 After: a non-boolean `enabled` is a configuration error. It is NOT enabled,
-`--validate` fails on it, render
-mode prints the WARN and renders without the NOC route (the existing
-treatment of an entry dropped as unusable), and validate-config's schema row
-is FAIL. `true` / `false` (and YAML 1.1's `yes` / `no`, which PyYAML reads
-as booleans — the field is boolean, so that reading is the right one) are
-unchanged.
+and validate-config's schema row is FAIL. #2906: the generator refuses the
+WHOLE tree on it in every mode (rc 1, nothing written) — it used to print a
+`WARN … skipping` line and render without the NOC route at rc 0 — and a
+quoted `'true'` is refused like any other string (judged by type, ADR-036
+§2). `true` / `false` (and YAML 1.1's unquoted `yes` / `no`, which PyYAML
+reads as booleans) are unchanged.
 """
 from __future__ import annotations
 
@@ -65,23 +65,27 @@ def test_a_non_boolean_enabled_does_not_enable_noc(enabled, tmp_path):
     assert enforced is None
     hits = [w for w in warnings if "_routing_enforced" in w]
     assert len(hits) == 1, warnings
-    assert "must be a YAML boolean" in hits[0] and "skipping" in hits[0]
+    assert hits[0].lstrip().startswith("ERROR (field type):"), hits[0]
+    assert "'enabled' must be a boolean" in hits[0]
+    assert (hits[0].kind, hits[0].blocks) == ("routing_enforced_enabled_invalid", "always")
 
 
 @pytest.mark.parametrize("enabled", _NOT_BOOL)
 def test_validate_fails_on_it(enabled, tmp_path):
     p = _gen(_tree(tmp_path, enabled), "--validate")
     assert p.returncode == 1, p.stdout + p.stderr
-    assert "'enabled' must be a YAML boolean" in p.stderr
+    assert "'enabled' must be a boolean" in p.stderr
 
 
-@pytest.mark.parametrize("enabled", ["n", "'yes'"])
-def test_render_says_so_and_renders_without_noc(enabled, tmp_path):
+@pytest.mark.parametrize("enabled", ["n", "'yes'", "'true'"])
+def test_render_refuses_the_tree_and_writes_nothing(enabled, tmp_path):
+    """#2906: render used to print the WARN and write a config without the
+    NOC route at rc 0; now the whole tree is refused."""
     out = tmp_path / "am.yaml"
     p = _gen(_tree(tmp_path, enabled), "-o", str(out))
-    assert p.returncode == 0, p.stderr
-    assert "platform-enforced (NOC) routing is NOT enabled" in p.stderr
-    assert "platform-enforced" not in out.read_text(encoding="utf-8")
+    assert p.returncode == 1, p.stderr
+    assert "field value(s) of the wrong type or not recognised" in p.stderr
+    assert not out.exists()
 
 
 @pytest.mark.parametrize("enabled,on", _BOOL)
@@ -108,7 +112,7 @@ def test_validate_config_fails_the_schema_row(enabled, tmp_path, cli_argv, capsy
     rc, rows = _vc_rows(_tree(tmp_path, enabled), cli_argv, capsys)
     assert rc == 1, rows
     assert rows["schema"]["status"] == vc.FAIL, rows["schema"]
-    assert any("must be a YAML boolean" in d for d in rows["schema"]["details"])
+    assert any("'enabled' must be a boolean" in d for d in rows["schema"]["details"])
 
 
 @pytest.mark.parametrize("enabled", ["true", "false"])

@@ -826,7 +826,8 @@ def resolved_routing(config_dir: str) -> dict[str, dict]:
     _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
                                   tree.duplicate_tenants,
                                   tree.routing_tree_problems,
-                                  tree.invalid_tenant_ids)
+                                  tree.invalid_tenant_ids,
+                                  tree.field_type_errors)
     if lines:
         raise RoutingTreeRefused(lines)
     return tree.routing_configs

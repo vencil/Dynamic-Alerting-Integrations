@@ -942,13 +942,15 @@ def trace_alert_routing(
     assembled = False
     # The generator refuses these trees before building anything (unreadable
     # tenant file #1460, duplicate tenant #2315, routing-tree error #2326,
-    # invalid tenant id ADR-035 D3): same judgment, same words, same order.
+    # invalid tenant id ADR-035 D3, field type #2906): same judgment, same
+    # words, same order.
     refusal_rc, refusal = tree_refusal(
         parsed.get("files_read", 0),
         parsed.get("tenant_file_errors") or [],
         parsed.get("duplicate_tenants") or {},
         parsed.get("routing_tree_problems") or [],
-        parsed.get("invalid_tenant_ids") or [])
+        parsed.get("invalid_tenant_ids") or [],
+        parsed.get("field_type_errors") or [])
     if refusal:
         _warn("the generator refuses this config "
               f"(generate_alertmanager_routes.py exits {refusal_rc}):")
@@ -1330,6 +1332,11 @@ def main(argv: list[str] | None = None) -> int:
         for tenant in sorted(set(parsed.get("invalid_tenant_ids", [])), key=str):
             print(f"  WARN: {safe_label(invalid_tenant_id_text(tenant))} — "
                   f"generate-routes refuses this tree", file=sys.stderr)
+        # #2906: a boolean / enum field of the wrong type or an unknown value
+        # — refused whole by generate-routes, in every mode.
+        for err in parsed.get("field_type_errors", []):
+            print(f"  WARN: {safe_label(err.message)} — generate-routes "
+                  f"refuses this tree", file=sys.stderr)
 
     # --trace mode: simulate alert routing path
     if args.trace:

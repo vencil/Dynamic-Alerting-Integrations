@@ -483,25 +483,23 @@ def yaml_bool_literals() -> dict[str, bool]:
 
     Read from tenant-config.schema.json ``definitions.yamlBool`` (the one
     authored list). PyYAML
-    already reads these plain words as booleans; the strings reach here only
-    when quoted, or from JSON, and Go's yaml.v3 reads yes / no / on / off as
-    strings, so both sides take them and the generator writes a boolean.
+    already reads these plain words as booleans. ⛔ #2906: the route
+    generator no longer takes any of them as a STRING (quoted, or from
+    JSON) — a boolean field is judged by type alone (ADR-036 §2), see
+    ``is_bool_or_unset``. The list stays the schema's, read by the YAML 1.1
+    boolean-word warning (``_lib_io``) and the schema parity tests.
     ``y`` / ``n`` are not in it: a documented deliberate refusal.
     """
     _receiver_field_schemas()
     return _YAML_BOOL_LITERALS
 
 
-def _is_yaml_bool(value: Any) -> bool:
-    if value is None or isinstance(value, bool):
-        return True
-    return isinstance(value, str) and value in yaml_bool_literals()
-
-
-def _yaml_bool_true(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return isinstance(value, str) and yaml_bool_literals().get(value, False)
+def is_bool_or_unset(value: Any) -> bool:
+    """#2906: what a boolean field of the route generator accepts — a
+    boolean, or null (unset). Judged by type alone (ADR-036 §2): a string is
+    refused whatever it says, ``"true"`` / ``"yes"`` included. An unquoted
+    ``yes`` is a boolean only because PyYAML (YAML 1.1) built one."""
+    return value is None or isinstance(value, bool)
 
 
 def receiver_bool_fields(rtype: str) -> list[str]:
@@ -510,11 +508,26 @@ def receiver_bool_fields(rtype: str) -> list[str]:
             if prop.get("ref") == _YAML_BOOL_REF]
 
 
-def coerce_yaml_bool(value: Any) -> Any:
-    """A YAML 1.1 boolean word as the boolean it means; anything else as is."""
-    if isinstance(value, str) and value in yaml_bool_literals():
-        return yaml_bool_literals()[value]
-    return value
+def receiver_bool_problems(rtype: str, receiver: Any) -> list[tuple[str, Any]]:
+    """#2906: ``(field, value)`` of each boolean field of a *rtype* receiver
+    that is not ``is_bool_or_unset`` — the schema's ``yamlBool`` properties
+    (``send_resolved``, email ``require_tls``) and
+    ``http_config.proxy_from_environment``. *field* is relative to the
+    receiver (``http_config.proxy_from_environment``). An unknown type has no
+    boolean field here (``unknown_receiver_type`` names it)."""
+    if not isinstance(receiver, dict):
+        return []
+    out = [(f, receiver[f]) for f in receiver_bool_fields(rtype)
+           if f in receiver and not is_bool_or_unset(receiver[f])]
+    for field, prop in _receiver_field_schemas().get(rtype, {}).items():
+        if prop.get("ref") != _HTTP_CONFIG_REF:
+            continue
+        http_config = receiver.get(field)
+        if (isinstance(http_config, dict) and "proxy_from_environment" in http_config
+                and not is_bool_or_unset(http_config["proxy_from_environment"])):
+            out.append((f"{field}.proxy_from_environment",
+                        http_config["proxy_from_environment"]))
+    return out
 
 
 def _type_name(value: Any) -> str:
@@ -551,7 +564,8 @@ def _http_config_problem(value: Any) -> Optional[str]:
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
       generator's ``--validate`` hands the rendered config to amtool, which
       runs it;
-    - ``proxy_from_environment`` is a YAML boolean; true together with a
+    - ``proxy_from_environment`` is a boolean or null (#2906: never a
+      string, whatever it says — ``is_bool_or_unset``); true together with a
       non-empty proxy_url or a no_proxy is refused; no_proxy needs a
       proxy_url key; proxy_connect_header needs a non-empty proxy_url or
       proxy_from_environment.
@@ -586,10 +600,10 @@ def _http_config_problem(value: Any) -> Optional[str]:
     from_env = False
     if "proxy_from_environment" in value:
         pfe = value["proxy_from_environment"]
-        if not _is_yaml_bool(pfe):
+        if not is_bool_or_unset(pfe):
             return (f"field 'http_config.proxy_from_environment' must be true or "
                     f"false, got {_type_name(pfe)}")
-        from_env = _yaml_bool_true(pfe)
+        from_env = pfe is True
     no_proxy_value = value.get("no_proxy")
     if no_proxy_value is not None and not isinstance(no_proxy_value, str):
         return f"field 'http_config.no_proxy' must be a string, got {_type_name(no_proxy_value)}"
@@ -615,9 +629,13 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
     Read from tenant-config.schema.json like the required-field formats:
 
     - every property of the type referencing ``yamlBool`` (``send_resolved``,
-      email ``require_tls``) must be a YAML boolean: true / false, null
-      (unset) or a ``yaml_bool_literals()`` word — ``send_resolved: maybe``
-      makes Alertmanager refuse the whole config;
+      email ``require_tls``) must be a boolean or null (unset) —
+      ``send_resolved: maybe`` makes Alertmanager refuse the whole config,
+      and since #2906 a string is refused whatever it says (``"yes"``,
+      ``"true"``): the generator judges by type (ADR-036 §2). The route
+      generator refuses the whole tree on these before any receiver is
+      built (``receiver_bool_problems``); this check stays for the callers
+      that build a receiver directly;
     - the property referencing ``httpConfigOrNull`` (webhook ``http_config``)
       follows ``_http_config_problem``.
 
@@ -627,7 +645,7 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
     """
     fields = _receiver_field_schemas().get(rtype, {})
     for field in receiver_bool_fields(rtype):
-        if field in receiver and not _is_yaml_bool(receiver[field]):
+        if field in receiver and not is_bool_or_unset(receiver[field]):
             return (f"field '{field}' must be true or false, "
                     f"got {_type_name(receiver[field])}")
     for field, prop in fields.items():

@@ -173,7 +173,8 @@ PLATFORM_DEFAULTS: Final[dict[str, Any]] = {
 # accepted field set). No Go copy judges receivers (ADR-036 §9).
 # Optional values (#2295) are read from the schema at run time
 # (_lib_validation.receiver_optional_problem): a property referencing
-# definitions.yamlBool takes a boolean, null or a YAML 1.1 boolean word, and
+# definitions.yamlBool takes a boolean or null (#2906: the schema's YAML 1.1
+# boolean words are refused as strings — the generator judges by type), and
 # http_config follows Alertmanager's rules (HTTP_CONFIG_AUTH_FIELDS below).
 RECEIVER_TYPES: Final[dict[str, dict[str, Any]]] = {
     "webhook": {
