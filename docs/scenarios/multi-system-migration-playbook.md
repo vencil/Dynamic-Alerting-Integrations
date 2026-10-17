@@ -574,12 +574,14 @@ Phase 3 **只做 cutover 的 label flip**——把 shadow label 拔掉，不處�
 
 ##### ☢️ Step 4 核彈警告：絕對不要用 `helm uninstall` 關舊 Prom
 
-如果客戶用的是 `kube-prometheus-stack` 或類似 Helm chart 部署的 Prometheus，**`helm uninstall` 是 PVC 核彈**：
+舊 Prom 用 Helm chart 部署時，`helm uninstall` 會不會帶走歷史資料，**取決於 PVC 是誰建的**：
 
-- Helm uninstall 會刪掉所有 chart 管理的 resources（StatefulSet / Deployment / ConfigMap / Secret）
-- 如果 PVC 的 `StorageClass` 設 `reclaimPolicy: Delete`（**多數雲廠商預設**），刪除 PVC 會**連帶刪除 PV 與底層 disk**
-- 結果：Step 5「等 14 天才刪 PVC 雙人 sign-off」的安全網**形同虛設**——歷史資料在 `helm uninstall` 執行後**秒級內灰飛煙滅**
-- AM 舊 config / Prom config 同時消失（前面 Phase 4 catalog: `helm uninstall` 連 PVC 一起核平 已警告）
+| PVC 從哪來 | 例子 | `helm uninstall` 之後 |
+|---|---|---|
+| chart 直接產生 PVC 物件 | `prometheus-community/prometheus` 預設（server 是 Deployment） | PVC 跟著被刪；StorageClass 的 `reclaimPolicy` 是 `Delete`（動態佈建的預設）時，PV 與底層 disk 一起刪，**資料救不回來** |
+| StatefulSet 的 `volumeClaimTemplates` | `kube-prometheus-stack`（PVC 由 Prometheus Operator 建的 StatefulSet 產生，不歸 Helm 管） | PVC 預設保留；`prometheusSpec.persistentVolumeClaimRetentionPolicy.whenDeleted: Delete` 時才會刪 |
+
+不論哪一種，chart 管的 StatefulSet／Deployment／ConfigMap／Secret 都會被刪：舊 AM 與 Prom 的設定一起消失，要回滾就不再是把 `replicas` 改回 1。第一種還會讓 Step 5「等 14 天、雙人 sign-off 才刪 PVC」的安全網直接失效。
 
 **正確的 shutdown 方式**：
 
@@ -590,19 +592,19 @@ prometheus:
     replicas: 0   # ← 不用 helm uninstall，改設這個
 ```
 
-或對 raw StatefulSet/Deployment：
+或對不歸 Operator 管的 StatefulSet／Deployment（Operator 管的要改 CR，直接 scale 會被 Operator 改回來）：
 
 ```bash
 # 直接 scale，不 uninstall
-kubectl scale statefulset prometheus-k8s --replicas=0 -n monitoring
+kubectl scale deployment prometheus-server --replicas=0 -n monitoring
 ```
 
 **為什麼 `replicas: 0` 安全**：
 
-- StatefulSet/Deployment 還在、PVC 還 bound（`reclaimPolicy: Retain` 或 `Delete` 都不觸發）
+- StatefulSet/Deployment 還在、PVC 還 bound（PV 的 reclaim policy 只在 PVC 被刪時才作用，`Retain` 或 `Delete` 都不會觸發）。⚠️ 例外：StatefulSet 的 `persistentVolumeClaimRetentionPolicy.whenScaled` 設成 `Delete` 時，縮到 0 也會刪 PVC——先確認它是預設的 `Retain`
 - ConfigMap / Secret / NetworkPolicy 全部保留 → Step 5 雙人 sign-off 才有東西 review
 - 真要救援時 `replicas: 1` 30 秒內 Pod 起回來、資料完整
-- Helm release 仍存在、後續若需 `helm uninstall` 也是先把 PVC `reclaimPolicy: Retain` patch 掉再 uninstall 才安全
+- Helm release 仍存在；之後真要 `helm uninstall`，先把 PV（不是 PVC）的 reclaim policy 改成 `Retain` 再 uninstall：`kubectl patch pv <name> -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'`
 
 **踩坑點 #2**：客戶 SRE 在 Phase 4 Step 5 想「一次清乾淨」跑 `helm uninstall prometheus-stack`——這個 `helm uninstall` 應該**永遠不要在 Phase 4 內執行**。即便 Step 5 PVC 雙人 sign-off 過了，正確流程是：(a) 手動 `kubectl delete pvc <name>` 觀察 1 週、(b) 確認沒事再 `helm uninstall`。把 PVC 刪除與 Helm release 卸載**手動拆成兩步**，避免 chart hooks 或 finalizer 把預期外的 resource 一起帶走。
 
@@ -658,7 +660,7 @@ playbook 的責任到 Phase 4 GA 為止。之後客戶持續使用平台時遇�
 - [ ] AM 舊 config 歸檔（git tag + commit 進客戶 GitOps repo `archive/`）
 
 **Step 4：Prom shutdown**
-- [ ] ☢️ **絕對不要 `helm uninstall`**——會連 PVC 一起刪、歷史資料瞬間蒸發
+- [ ] ☢️ **絕對不要 `helm uninstall`**——設定全部消失；chart 直接產生的 PVC 還會一起被刪（見上方 Step 4 警告）
 - [ ] 用 `replicas: 0`（kube-prometheus-stack: `prometheus.prometheusSpec.replicas: 0`，或 `kubectl scale ... --replicas=0`）
 - [ ] 確認 PVC 仍 bound、ConfigMap / Secret / Helm release 全部保留
 - [ ] 觀察 14 天無 query 投訴
@@ -828,7 +830,7 @@ prod-rest         ✅       ✅       —        —        —
 | **舊 Prom 關閉後某 Grafana dashboard 全紅** | 客戶 dashboard datasource 仍指舊 Prom URL；audit 應在 Phase 4 之前；事後修法是切回 read-only Prom 暫救、再批次改 datasource | (e.g., 客戶 SRE team 自管的 capacity-planning dashboard 用 `legacy-prom` datasource，Phase 4 之前的 grafana-audit 漏抓 dashboard JSON 內 hardcoded UID，Step 4 shutdown 後該 dashboard 全 panel `No data`，capacity review meeting 緊急延期) |
 | **Compliance audit 要 6 個月前資料、舊 Prom retention 只剩 3 個月** | Phase 4 之前應確認 retention ≥ 客戶 audit 需求；事後處理：cold storage export，但會 disrupt audit timeline | (e.g., 客戶 SOX audit Q2 開始問 Q4 前年的 alert 歷史，舊 Prom 90 天 retention 撐不到，cutover 前未確認 audit 需求，緊急從 PVC snapshot 刨 Thanos backup 補資料、audit 延 3 週) |
 | **dual-write 忘了拆、vmagent 對死 endpoint 持續 retry** | Step 3 跳過或忘記；vmagent log 持續 `connection refused`、buffer 累積；最終 OOM | (e.g., Phase 4 Step 4 直接 shutdown 舊 Prom 但 vmagent remote_write 仍指舊 Prom URL，vmagent buffer 無限增長 48h 後 OOMKilled，事故 RCA 才發現 Step 3 在 ticket 上漏勾) |
-| **`helm uninstall` 連 PVC 一起核平**（最嚴重事故類型）| `helm uninstall` 同時刪 ConfigMap + StatefulSet + **PVC**（`reclaimPolicy: Delete` 預設）；歷史資料在秒級內灰飛煙滅 | (e.g., Phase 4 Step 4 客戶 SRE 跑 `helm uninstall prometheus-stack` 圖清爽，60s 內 ConfigMap + PVC + 底層 disk 連環刪除，AM v1 routing 全消失、Prom 30 天歷史資料蒸發、2 個月後 compliance 要原始 routing 規則 + 6 個月 alert 歷史，git history 還原 routing 但 metric 資料只能從 vmagent dual-write 期 partial 回填——錯過 Phase 1 之前的 baseline 全失) |
+| **`helm uninstall` 連 PVC 一起核平**（最嚴重事故類型）| `helm uninstall` 同時刪 ConfigMap + StatefulSet；chart 直接產生的 **PVC** 也一起刪，StorageClass `reclaimPolicy: Delete`（動態佈建的預設）時歷史資料在秒級內灰飛煙滅 | (e.g., Phase 4 Step 4 客戶 SRE 跑 `helm uninstall prometheus-stack` 圖清爽，60s 內 ConfigMap + PVC + 底層 disk 連環刪除，AM v1 routing 全消失、Prom 30 天歷史資料蒸發、2 個月後 compliance 要原始 routing 規則 + 6 個月 alert 歷史，git history 還原 routing 但 metric 資料只能從 vmagent dual-write 期 partial 回填——錯過 Phase 1 之前的 baseline 全失) |
 | **`_defaults.yaml` big-bang 啟用造成 alert 大幅變動誤判為事故** | metric-split 應 per-domain 漸進；big-bang 啟用會讓客戶 ops 看 dashboard 嚇到 | (e.g., 客戶平台 team 想「一次清完」Phase 4 後直接全 cluster 啟用 `_defaults.yaml`，alert volume 一週內變動 ±40%、客戶 ops 緊急 page 平台 team 以為事故，溯源是 metric-split 設計符合預期、但 communication gap) |
 | **Quarter-end / fiscal close 期撞上 grace period** | grace period 預設 30 天碰到月底 / 季底 finance close、無人能配合驗證 | (e.g., Phase 4 Step 1 排在 12/15、grace period 跨年底 + Q1 close + 春節，客戶 finance team 整月不可用、Step 4 shutdown 拖到 3 月才能執行，期間維護成本 doubling) |
 | **PVC 刪除後 1 週客戶突然要查舊資料** | Step 4 後等 14 天才刪 PVC 是預設；某些 case 需更長 | (e.g., 客戶法務 6 週後才告知需要去年某 alert 歷史佐證 SLA 爭議，舊 PVC 已刪、Thanos backup 過期，從 weekly snapshot 還原 partial 資料、爭議走仲裁） |
