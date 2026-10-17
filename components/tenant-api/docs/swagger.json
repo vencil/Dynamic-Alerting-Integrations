@@ -9,7 +9,6 @@
         },
         "version": "v2.8.0"
     },
-    "basePath": "/api/v1",
     "paths": {
         "/api/v1/audit/tenants/{id}/access-report": {
             "get": {
