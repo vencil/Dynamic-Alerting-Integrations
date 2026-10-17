@@ -12,12 +12,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/platform"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // PRWriteResult contains the result of a PR-mode write operation.
@@ -124,15 +128,16 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 }
 
 // PRBaseCheck judges a PR-mode write against the FRESH base the feature
-// branch is cut from: configDir is the working tree, checked out at that
-// branch, before anything of the write is on it. A non-nil error refuses the
-// write — the branch is dropped, nothing is written, committed or pushed —
-// and is returned to the caller unchanged.
+// branch is cut from: configDir is that base's conf.d as git holds it
+// (openFreshBase, #2972 — not the serving tree, whose uncommitted entries
+// the PR does not carry), before anything of the write is on it. A non-nil
+// error refuses the write — the branch is dropped, nothing is written,
+// committed or pushed — and is returned to the caller unchanged.
 type PRBaseCheck func(configDir string) error
 
 // WritePRChecked is WritePR plus check, run under the writer lock after the
 // branch is cut from the fresh origin base and the tenant's file is resolved
-// there, before the body is validated and written (Step 3b'). PUT passes its
+// on it, before the body is validated and written (Step 3b'). PUT passes its
 // authoritative check here — the metadata write scope (#2857) — because its
 // pre-check reads the pod's local tree, which may lag the base. A nil check is WritePR.
 func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
@@ -202,59 +207,20 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
 
-	// Step 3b: resolve the tenant's file now that the feature branch is checked
-	// out (#1673) — the ONLY resolution on this path since #1718.
-	//
-	// It must happen here and nowhere earlier: if the fresh base carries a
-	// rename (`db-a.yml` → `db-a.yaml`, or the reverse), a path taken from the
-	// pre-checkout tree would recreate the old spelling beside the new one — the
-	// exact duplicate #1673 exists to prevent — and an ambiguity that the fresh
-	// base has already cleaned up would refuse a write that is fine where it
-	// lands (#1718). WritePRBatch resolves inside its post-checkout loop for the
-	// same reason.
-	filePath, err := w.tenantFilePath(tenantID)
+	// Step 3b–3c: resolve the tenant's file, run the caller's check and the
+	// authoritative validate — all on the fresh base as git holds it
+	// (prResolveOnBase, #2972). filePath is the file in the serving tree,
+	// which is where Step 4 writes it.
+	filePath, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
 	}
-
-	// Step 3b': the caller's check, on the fresh base (WritePRChecked).
-	if check != nil {
-		if err := check(w.configDir); err != nil {
-			w.abortFeatureBranch(base, branchName)
-			return nil, err
-		}
-	}
-
-	// Step 3c: AUTHORITATIVE validate, against the tree the write actually lands
-	// on (#1681 timing half).
-	//
-	// ⛔ RE-RESOLVING THE PATH WAS ONLY HALF OF #1673. The path now describes the
-	// fresh base, but the DECISION was still Step 1's — taken against the tree as
-	// it was before the checkout. `addedTenantKeys` derives its baseline from the
-	// tenant file's existing `tenants:` keys, so the two trees disagreeing about
-	// that file makes the gate answer a question nobody asked:
-	//
-	//   - stale base declares `other`, fresh base does not → BYPASS: the section
-	//     is grandfathered against a tree the write does not land on, and the
-	//     write ADDS it. (A long-lived pod's local base going stale is the very
-	//     condition resolveFreshBaseRef exists for — TRK-318.)
-	//   - stale base lacks a section the fresh base grandfathered → OVER-REJECT:
-	//     a tenant legitimately sharing a flat file cannot edit its own section
-	//     until the pod restarts.
-	//
-	// Both directions are the same defect, and both are fixed by deciding on the
-	// tree that will receive the bytes. WritePRBatch already does exactly this —
-	// it re-runs readMergeValidate inside its post-checkout loop — so this brings
-	// the single-tenant path in line rather than inventing a second shape.
-	//
-	// notices come from HERE, not Step 1, for the same reason the batch path
-	// discards its pre-flight's: they describe the body as merged against the
-	// base it lands on, and collecting them twice would duplicate them.
-	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
-	if len(errs) > 0 {
+	// Step 3b'': the serving tree's own entry at filePath, which Step 4
+	// replaces there — the one thing of the serving tree this write touches.
+	if err := w.refuseUntrackedNonRegular(filePath, tenantID); err != nil {
 		w.abortFeatureBranch(base, branchName)
-		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
+		return nil, err
 	}
 
 	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
@@ -347,6 +313,158 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		FilePath:   filePath,
 		Notices:    notices,
 	}, nil
+}
+
+// openFreshBase opens the tree a PR-mode write is judged on: a staging
+// worktree at rev, the commit the feature branch is cut from, with conf.d
+// checked out exactly as git holds it (openStaging without the mirror) —
+// the tree the service serves once the PR merges. branch, when not "", is
+// created there (WritePRBatch commits on it); WritePRChecked passes "" and
+// only judges there. The caller MUST closeStaging it.
+//
+// ⛔ ONE TREE FOR BOTH PR PATHS (#2972). The serving working tree, even
+// checked out at the feature branch, also holds what git does not: an
+// uncommitted FIFO, a .gitignore'd entry. Judging there refused a single
+// PR write that WritePRBatch accepted on the same tree, for an entry the
+// merged PR never carries. Both PR paths take every tree-derived verdict —
+// placement, the #2078 walk, #2939's judgeTree, the caller's fresh-base
+// check, the authoritative validate — on this tree.
+func (w *Writer) openFreshBase(rev, branch string) (*stagingTree, error) {
+	return w.openStaging(rev, branch, false)
+}
+
+// prResolveOnBase is WritePRChecked's Steps 3b–3c on the fresh base at
+// branchPoint (openFreshBase), run after the feature branch is checked out
+// in the serving tree and before anything is written there. It returns the
+// tenant's file in the serving tree — the same conf.d-relative name as on
+// the base, which the feature branch carries — and the authoritative
+// validate's notices. Caller holds w.mu and drops the branch on an error.
+func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck) (filePath string, notices []string, err error) {
+	st, err := w.openFreshBase(branchPoint, "")
+	if err != nil {
+		// A conf.d that cannot be reached is the walk failing to run, which
+		// the #2078 guard fails closed on (ErrTenantTreeScan), as the walk
+		// itself would report it. ⛔ Only then: openFreshBase also fails on
+		// git (index.lock contention is ErrWriteOverloaded, a retryable 503),
+		// and the handlers map ErrTenantTreeScan to a 500 before they look
+		// at ErrWriteOverloaded (writeWriteFlowError).
+		if _, serr := os.Stat(w.configDir); serr != nil {
+			return "", nil, fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
+		}
+		return "", nil, err
+	}
+	defer w.closeStaging(st)
+
+	// Step 3b: resolve the tenant's file on the base the write lands on
+	// (#1673) — the ONLY resolution on this path since #1718.
+	//
+	// It must happen here and nowhere earlier: if the fresh base carries a
+	// rename (`db-a.yml` → `db-a.yaml`, or the reverse), a path taken from the
+	// pre-checkout tree would recreate the old spelling beside the new one — the
+	// exact duplicate #1673 exists to prevent — and an ambiguity that the fresh
+	// base has already cleaned up would refuse a write that is fine where it
+	// lands (#1718). WritePRBatch resolves on the same tree, per op.
+	basePath, err := w.resolveTenantFilePath(st.configDir, tenantID, w.stagingScan(st))
+	if err != nil {
+		return "", nil, err
+	}
+
+	// Step 3b': the caller's check, on the fresh base (WritePRChecked).
+	if check != nil {
+		if err := check(st.configDir); err != nil {
+			return "", nil, err
+		}
+	}
+
+	// Step 3c: AUTHORITATIVE validate, against the tree the write actually lands
+	// on (#1681 timing half).
+	//
+	// ⛔ RE-RESOLVING THE PATH WAS ONLY HALF OF #1673. The path now describes the
+	// fresh base, but the DECISION was still Step 1's — taken against the tree as
+	// it was before the checkout. `addedTenantKeys` derives its baseline from the
+	// tenant file's existing `tenants:` keys, so the two trees disagreeing about
+	// that file makes the gate answer a question nobody asked:
+	//
+	//   - stale base declares `other`, fresh base does not → BYPASS: the section
+	//     is grandfathered against a tree the write does not land on, and the
+	//     write ADDS it. (A long-lived pod's local base going stale is the very
+	//     condition resolveFreshBaseRef exists for — TRK-318.)
+	//   - stale base lacks a section the fresh base grandfathered → OVER-REJECT:
+	//     a tenant legitimately sharing a flat file cannot edit its own section
+	//     until the pod restarts.
+	//
+	// Both directions are the same defect, and both are fixed by deciding on the
+	// tree that will receive the bytes. WritePRBatch already does exactly this —
+	// it re-runs readMergeValidate inside its post-checkout loop — so this brings
+	// the single-tenant path in line rather than inventing a second shape.
+	//
+	// notices come from HERE, not Step 1, for the same reason the batch path
+	// discards its pre-flight's: they describe the body as merged against the
+	// base it lands on, and collecting them twice would duplicate them.
+	errs, notices := validateReplacing(st.configDir, tenantID, basePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
+	if len(errs) > 0 {
+		return "", nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
+	}
+	return filepath.Join(w.configDir, filepath.FromSlash(confRelKey(st.configDir, basePath))), notices, nil
+}
+
+// refuseUntrackedNonRegular refuses a PR-mode write whose tenant file, in
+// the SERVING tree, is an entry git does not track and that is not a regular
+// file: a FIFO, a socket, a device, a directory, or a symlink to one. Caller
+// holds w.mu, with the feature branch checked out.
+//
+// ⚠️ THE ONE PLACE PR MODE LOOKS AT THE SERVING TREE (#2972). Every verdict is
+// taken on the fresh base (prResolveOnBase), where such an entry does not
+// exist, so the write would go through: Step 4 renames the body over it and
+// the return to base removes the file the base does not have — the entry, an
+// operator's trace of a fault on tenant-api's copy, silently gone. So it is
+// refused instead, with the TargetUnreadableError direct mode refuses such a
+// tenant file with (TENANT_CONFIG_NOT_LOADABLE), and left where it is.
+//
+// Allowed, as before: nothing there; a tracked path (the checkout put git's
+// content there); an untracked regular file; an unresolvable symlink (no
+// content — ADR-036 §4's repair path). Any other failed stat is refused
+// too: what is there cannot be told apart from content.
+func (w *Writer) refuseUntrackedNonRegular(filePath, tenantID string) error {
+	li, err := os.Lstat(filePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	reason := cfg.UnreadableSpecialFile
+	if err == nil {
+		if li.Mode().IsRegular() {
+			return nil
+		}
+		if li.Mode()&fs.ModeSymlink != 0 {
+			fi, serr := os.Stat(filePath)
+			switch {
+			case serr == nil && fi.Mode().IsRegular():
+				return nil
+			case serr != nil && isUnresolvableLink(filePath):
+				return nil
+			case serr != nil:
+				reason = cfg.UnreadableStatError
+			}
+		}
+	} else {
+		reason = cfg.UnreadableStatError
+	}
+	rel, err := w.confRel()
+	if err != nil {
+		return err
+	}
+	// literal: conf.d's path and the file's name are names, not patterns — a
+	// `[`, `*` or `?` in either would glob onto another tracked file and
+	// pass this entry as tracked.
+	tracked, err := w.gitOutput(w.gitDir, "ls-files", "-z", "--",
+		":(top,literal)"+filepath.ToSlash(filepath.Join(rel, filepath.Base(filePath))))
+	if err != nil {
+		return fmt.Errorf("check whether the tenant file is tracked: %w", err)
+	}
+	if len(tracked) > 0 {
+		return nil
+	}
+	return &TargetUnreadableError{TenantID: tenantID, RelKey: confRelKey(w.configDir, filePath), Reason: reason}
 }
 
 // WritePRBatch merges and writes multiple tenant configs to a single feature branch.
@@ -460,7 +578,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// op (*BatchRejectedError); nothing is committed, pushed or left behind.
 	// notices aggregates every op's advisory channel (#1231 1b), the no-op
 	// ones' included.
-	st, err := w.openStaging(branchPoint, branchName, false)
+	st, err := w.openFreshBase(branchPoint, branchName)
 	if err != nil {
 		return nil, err
 	}
