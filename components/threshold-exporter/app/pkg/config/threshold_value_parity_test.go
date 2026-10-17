@@ -24,6 +24,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -39,6 +40,9 @@ type thresholdValueRow struct {
 	ValuePart *string `json:"value_part,omitempty"`
 	Severity  *string `json:"severity,omitempty"`
 	FloatOK   *bool   `json:"float_ok,omitempty"`
+	// CustomAlertDisabled: a custom alert with this threshold is the
+	// three-state opt-out (resolveOneCustomAlert's errCustomAlertDisabled).
+	CustomAlertDisabled *bool `json:"custom_alert_disabled,omitempty"`
 }
 
 type thresholdValueMatrix struct {
@@ -66,6 +70,10 @@ func thresholdValueVerdict(value string) thresholdValueRow {
 		fok := ferr == nil
 		row.FloatOK = &fok
 	}
+	_, cerr := resolveOneCustomAlert("t", CustomAlertSpec{
+		Name: "a", Recipe: "threshold", Metric: "m", Op: ">", Window: "5m", Threshold: value})
+	off := errors.Is(cerr, errCustomAlertDisabled)
+	row.CustomAlertDisabled = &off
 	return row
 }
 

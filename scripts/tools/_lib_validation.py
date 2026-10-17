@@ -202,6 +202,23 @@ def split_threshold_severity(raw: Any) -> tuple[str, str]:
     return value.strip(GO_SPACE), severity
 
 
+def custom_alert_disabled(threshold: Any) -> bool:
+    """Whether a custom alert with this `threshold` is the three-state
+    opt-out, exactly as resolveOneCustomAlert decides it (#3071): the value
+    half of `split_threshold_severity` is a disabled word (`disable`,
+    `disable:critical`, `OFF`). A suffix the grammar refuses
+    (`disable:bogus`, `disable:`) is a parse error in Go, not an opt-out.
+    Lower-cased the way Go's strings.ToLower does (per character; U+0130 →
+    `i`, which Python's full mapping turns into two characters). Pinned
+    against Go by tests/shared/threshold_value_matrix.json's
+    `custom_alert_disabled` column."""
+    try:
+        value, _severity = split_threshold_severity(threshold)
+    except ValueError:
+        return False
+    return "".join("i" if c == "\u0130" else c.lower() for c in value) in _DISABLED_VALUES
+
+
 def is_valid_tenant_id(tenant: Any) -> bool:
     """Whether *tenant* is a valid tenant id (ADR-035; #2341 R8).
 
