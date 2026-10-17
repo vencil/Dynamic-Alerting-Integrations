@@ -2420,7 +2420,8 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
             if not a["disabled"]:
                 compiled[(a["tenant"], a["recipe_id"], sev)] = a
     # The exporter serves a tenant one row per shape and severity (#3112:
-    # a second one would fail the shape's shared rule for every tenant).
+    # a second one would fail the shape's shared rule for every tenant), so
+    # each list holds one name; a list keeps the row honest if that changes.
     served_rows: dict[tuple, list[str]] = {}
     for t, v in served.items():
         for r in v.values.get("_custom_alerts") or []:
