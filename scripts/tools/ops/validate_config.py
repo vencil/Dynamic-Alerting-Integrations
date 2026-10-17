@@ -241,9 +241,10 @@ READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
 # value that is not a string, and (#2503) a bad group_by entry, so the
 # advice names every kind.
 POLICY_ONLY_SCHEMA_HINT = (
-    "The findings above are --strict errors (ADR-007 domain-policy errors, "
-    "a routing matcher value that is not a string, or a bad group_by "
-    "entry), not tenant key problems: no unknown key was reported in this "
+    "The findings above are ADR-007 domain-policy errors (a policy that "
+    "cannot be used is refused in every mode) or --strict errors (a routing "
+    "matcher value that is not a string, or a bad group_by entry), not "
+    "tenant key problems: no unknown key was reported in this "
     "run. \u26d4 Ignore the generic advice about removing keys: fix what "
     "each error names (the domain policy file, quote the matcher value in "
     "YAML, e.g. team: \"yes\", or quote / remove the group_by entry), then "
@@ -857,8 +858,12 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(
         config_dir, strict_policies=strict)
 
+    # #3116: a domain policy that cannot be used is a field-type error now
+    # (refused in every mode), not a --strict ERROR line; it is still a
+    # policy finding for the advice below.
     policy_errors = [w for w in schema_warnings
-                     if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)]
+                     if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)
+                     or getattr(w, "kind", None) == "domain_policy_unusable"]
     # #2164: the `--validate` predicate for "an entry was dropped as
     # unusable" (`generate_alertmanager_routes._validate_mode`). Today only
     # a non-boolean `_routing_enforced.enabled` puts one in schema_warnings;
