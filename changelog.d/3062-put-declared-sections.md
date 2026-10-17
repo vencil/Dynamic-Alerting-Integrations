@@ -1,7 +1,7 @@
 ---
 section: Security
 topic: tenant-api
-issues: [3062]
+issues: [3062, 3064]
 created: 2026-10-17T04:10:00+00:00
 ---
-- **⚠️ Breaking：`PUT /tenants/{id}` 只替換 body 宣告的租戶段落，同檔其他段落原樣保留（tenant-api；[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)）**：過去對 `{id}` 有寫入權就能刪改同檔其他租戶的段落。現在 body 宣告的每個租戶都要有寫入權（否則固定文字 403；PR 模式在最新 base 重判），宣告段落在寫入鎖內拼進現有檔，其他段落、root key 與註解保留；保留不住回 409 `not_round_trippable`，無法拼接的檔沿用 #2405。省略某段不再刪掉它。讀不到檔內全部租戶的呼叫者，anchor／alias 改以不比值的結構規則拒收。`/diff`、`/validate` 與 PUT 共用同一套拒收判定與順序。另一個行為改變：只能讀 `{id}`、不能寫的呼叫者，`/validate` 一律 `valid: false`（與其 PUT 被拒一致）；其 `/diff` 仍是遮罩預覽，檔內有讀不到的租戶時各種檔案形狀的拒收都回 422 `TENANT_FILE_WITHHELD`。細節見 [API 硬化 §3.1](docs/api/tenant-api-hardening.md)。
+- **⚠️ Breaking：租戶分為 API 管理與 git 管理，共用檔的租戶不再能經 API 寫入（tenant-api；[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)、[#3064](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3064)）**：過去對 `{id}` 有寫入權就能刪改同檔其他租戶的段落。現在只有檔案「API 形狀」的租戶可經 API 寫入：一份 document、只宣告這個租戶且 id 等於檔名、頂層與 `tenants:` 底下沒有 anchor／alias／merge key／帶 tag 的 key。其他形狀（多租戶共用檔、不是 YAML 等）改由 git 管理：`PUT`、custom-alerts、批次與群組批次（兩種寫入模式）一律回 409 `TENANT_GIT_MANAGED`，`/diff` 同，`/validate` 回 `valid: false` 加 `code`。`PUT` 的 body 也必須只宣告 `{id}`。API 管理的租戶，`X-DA-Base-Hash` 與 custom-alerts 的 `base_hash` 照舊。細節見 [API 硬化 §3.1](docs/api/tenant-api-hardening.md)。

@@ -122,41 +122,6 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 	}
 }
 
-// declaredScopeMeta is WriteScopeMeta for the tenants a PUT body declares
-// besides {id} (#3062). Their sections live in the file {id} lives in — the
-// file the PUT splices into — which ResolveTenantFile, matching file names,
-// does not find for them: WriteScopeMeta would read such a tenant as
-// unlabeled, which an enforced metadata axis denies whatever its real
-// labels. So a tenant fileOwner's file declares is read from that file; any
-// other (a section the body would add, which the writer refuses anyway) as
-// WriteScopeMeta reads it. A file that cannot be read fails soft the same
-// way.
-//
-// decoded is false for a section of that file whose `_metadata` does not
-// decode: its labels cannot be read, and the caller refuses the write
-// (declaredTenantsJudge) — as freshDeclaredWriteScope's caller does on the
-// fresh base, so the local tree and the base answer alike, fail closed.
-func declaredScopeMeta(configDir, fileOwner string) func(tenantID string) (pair scopePair, decoded bool) {
-	own := WriteScopeMeta(configDir)
-	src := &platformMetadataSource{configDir: configDir}
-	var data []byte
-	if configDir != "" {
-		if path, err := confd.ResolveTenantFile(configDir, fileOwner); err == nil {
-			if b, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path)); problem == confd.ProblemNone {
-				data = b
-			}
-		}
-	}
-	return func(tenantID string) (scopePair, bool) {
-		if data != nil {
-			if e, dm, ok, decoded := src.declaredIn(data, tenantID); ok {
-				return scopePair{e, dm}, decoded
-			}
-		}
-		return scopePairOf(own, tenantID), true
-	}
-}
-
 // OrgAllowed is the single composition point of tenantorg.OrgsForTenant and
 // rbac.AllowedInOrg (ADR-027 / LD-6 P4b): it resolves the target tenant's
 // organization list AT DECISION TIME and feeds it to the org-scope-aware
@@ -346,43 +311,6 @@ func freshWriteScope(configDir, tenantID string) (pair scopePair, judged bool) {
 		return scopePair{}, false
 	}
 	return scopePair{meta.Environment, meta.Domain}, true
-}
-
-// freshDeclaredWriteScope is freshWriteScope for a tenant a PUT body
-// declares besides {id} (#3062), read where declaredScopeMeta reads it: from
-// fileOwner's file on the base when that file declares it, else as
-// freshWriteScope reads it. fileOwner's file existing on the base but not
-// readable for its metadata (ambiguous, not a regular file, not a tenant
-// file that parses) is judged false, as freshWriteScope judges the tenant's
-// own file. A section there whose `_metadata` does not decode is judged and
-// undecodable (decoded false): its caller refuses the write, as the local
-// check (declaredScopeMeta) does.
-func freshDeclaredWriteScope(configDir, fileOwner, tenantID string) (pair scopePair, judged, decoded bool) {
-	path, err := confd.ResolveTenantFile(configDir, fileOwner)
-	switch {
-	case errors.Is(err, confd.ErrTenantFileNotFound):
-		pair, judged = freshWriteScope(configDir, tenantID)
-		return pair, judged, true
-	case err != nil:
-		return scopePair{}, false, true
-	}
-	data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
-	if problem != confd.ProblemNone {
-		return scopePair{}, false, true
-	}
-	if _, err := cfg.ParseConfigFile(data); err != nil {
-		return scopePair{}, false, true
-	}
-	root, _ := platformMetadataOrNone(configDir, "write")
-	meta, ok, dec := root.MetadataResolver().ResolveFile(tenantID, data)
-	switch {
-	case !ok:
-		pair, judged = freshWriteScope(configDir, tenantID)
-		return pair, judged, true
-	case !dec:
-		return scopePair{}, true, false
-	}
-	return scopePair{meta.Environment, meta.Domain}, true, true
 }
 
 // freshScopeAllowed is the write scope judged on the fresh base a PR-mode

@@ -1,12 +1,15 @@
 package handler
 
-// #3050: a conf.d file can declare several tenants, so every answer built on
-// the whole file — GET's raw_yaml / custom_alerts / source_hash (both
-// shapes), the /diff preview, /effective's source_hash and decode-error text,
-// the current_source_hash of a 409 — is withheld unless the caller may read
-// every tenant the file declares (fileShown, on tenantNamesFor). Each check
-// below inspects the serialized response bytes, then makes the other tenant
-// readable and expects today's answer back.
+// #3050: a conf.d file can declare several tenants, so an answer built on the
+// whole file is withheld unless the caller may read every tenant the file
+// declares (fileShown, on tenantNamesFor). Since #3064 GET /tenants/{id} and
+// the writes do not ask: they show and write only an API-shaped file, the
+// tenant's alone (tenant_git_managed_test.go). What still asks is
+// /effective — its source_hash and decode-error text, about the tenant file
+// and the root platform files, which legitimately hold several tenants. Each
+// check below inspects the serialized response bytes, then makes the other
+// tenant readable and expects the full answer back. The helpers here serve
+// tenant_git_managed_test.go too.
 
 import (
 	"bytes"
@@ -119,77 +122,6 @@ func decodeDetail(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 		t.Fatalf("unmarshal: %v: %s", err, w.Body.String())
 	}
 	return m
-}
-
-func TestGetTenant_WithholdsFileDeclaringUnreadableTenant(t *testing.T) {
-	t.Parallel()
-	for name, file := range wFiles {
-		for _, role := range []string{"writer", "reader"} {
-			t.Run(name+"/"+role, func(t *testing.T) {
-				t.Parallel()
-				f := wFixture(t, role, file.body)
-				w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
-				if w.Code != http.StatusOK {
-					t.Fatalf("status %d: %s", w.Code, w.Body.String())
-				}
-				assertNoOtherTenant(t, "GET", w.Body.Bytes(), file.body)
-				d := decodeDetail(t, w)
-				if d["raw_yaml_withheld"] != true || d["raw_yaml"] != "" || d["source_hash"] != "" || d["masked"] != nil {
-					t.Errorf("want raw_yaml_withheld with raw_yaml and source_hash empty, not masked: %s", w.Body.String())
-				}
-				if got, _ := d["config_error"].(string); got != file.configError {
-					t.Errorf("config_error = %q, want %q", got, file.configError)
-				}
-				if ca, ok := d["custom_alerts"].([]any); ok && len(ca) != 0 {
-					t.Errorf("custom_alerts = %v, want empty", ca)
-				}
-
-				// Once the caller may read every tenant in the file: as today.
-				makeOutReadable(f)
-				w = wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
-				d = decodeDetail(t, w)
-				if d["raw_yaml_withheld"] != nil {
-					t.Fatalf("readable: still withheld: %s", w.Body.String())
-				}
-				switch role {
-				case "writer":
-					if d["raw_yaml"] != file.body || d["source_hash"] != cfg.ComputeSourceHash([]byte(file.body)) {
-						t.Errorf("readable writer: want the file verbatim and its hash: %s", w.Body.String())
-					}
-				case "reader":
-					raw, _ := d["raw_yaml"].(string)
-					if d["masked"] != true || !strings.Contains(raw, orgEnfTenantOut) || strings.Contains(raw, wOutSecret) {
-						t.Errorf("readable reader: want the masked file: %s", w.Body.String())
-					}
-				}
-			})
-		}
-	}
-}
-
-// A file whose tenants cannot be listed (not YAML) is shown only to a caller
-// who may read every tenant — an org-scoped writer is not one even when it
-// may read both tenants the text names; a "*" read rule without scope is.
-func TestGetTenant_UnlistableFileShownOnlyToUnrestrictedReader(t *testing.T) {
-	t.Parallel()
-	file := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" + wOutBlock + "    x: {broken\n"
-
-	f := wFixture(t, "writer", file)
-	makeOutReadable(f)
-	w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
-	d := decodeDetail(t, w)
-	if d["config_error"] != "malformed_yaml" || d["raw_yaml_withheld"] != true {
-		t.Fatalf("org-scoped writer: want malformed_yaml withheld: %s", w.Body.String())
-	}
-	assertNoOtherTenant(t, "GET", w.Body.Bytes(), file)
-
-	// The same file to a caller whose rule has no scope: shown, as today.
-	u := wFixture(t, "unrestricted", file)
-	w = wServe(u, GetTenant(u.deps()), rbac.PermRead, "GET", "", nil)
-	d = decodeDetail(t, w)
-	if d["config_error"] != "malformed_yaml" || d["raw_yaml_withheld"] != nil || d["raw_yaml"] != file {
-		t.Fatalf("unrestricted caller: want the file verbatim: %s", w.Body.String())
-	}
 }
 
 func TestDeclaredTenantIDs(t *testing.T) {
@@ -310,42 +242,6 @@ func TestFileTenantsShown_NilNamesFailsClosed(t *testing.T) {
 	}
 }
 
-func TestDiffTenant_WithheldWhenFileDeclaresUnreadableTenant(t *testing.T) {
-	t.Parallel()
-	file := wFiles["loadable"].body
-	short := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"warning\"\n"
-	for _, role := range []string{"writer", "reader"} {
-		t.Run(role, func(t *testing.T) {
-			t.Parallel()
-			f := wFixture(t, role, file)
-			// A short proposal (the diff would list the whole file).
-			w := wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", short, nil)
-			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), CodeTenantFileWithheld) {
-				t.Errorf("status %d, want 422 %s: %s", w.Code, CodeTenantFileWithheld, w.Body.String())
-			}
-			assertNoOtherTenant(t, "diff", w.Body.Bytes(), file)
-			// The file itself (has_diff false would confirm the guess)
-			// declares the tenant the caller may not read, so may not write:
-			// PUT's fixed 403 for it (#3062), judged before anything is
-			// shown — never a diff.
-			w = wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", file, nil)
-			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), msgDeclaresUnwritableTenant) {
-				t.Errorf("status %d, want PUT's 403: %s", w.Code, w.Body.String())
-			}
-			makeOutReadable(f)
-			w = wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", short, nil)
-			var resp DiffResponse
-			// #3062: the preview is the splice PUT writes, so the short
-			// proposal changes In and keeps Out (no deleted Out line).
-			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
-				!resp.HasDiff || !strings.Contains(resp.Diff, "+    _silent_mode: \"warning\"") ||
-				strings.Contains(resp.Diff, "-  "+orgEnfTenantOut+":") || resp.Masked != (role == "reader") {
-				t.Errorf("readable: %d %s (%v), want the diff of the splice", w.Code, w.Body.String(), err)
-			}
-		})
-	}
-}
-
 func TestGetTenantEffective_SourceHashWithheld(t *testing.T) {
 	t.Parallel()
 	file := wFiles["loadable"].body
@@ -399,69 +295,5 @@ func TestGetTenantEffective_DecodeErrorWithheld(t *testing.T) {
 	w = wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
 	if !strings.Contains(w.Body.String(), wOutOwner) {
 		t.Errorf("readable: %s, want the decoder's message as today", w.Body.String())
-	}
-}
-
-func TestPutTenantCustomAlerts_RefusedOnWithheldFile(t *testing.T) {
-	t.Parallel()
-	file := wFiles["loadable"].body
-	f := wFixture(t, "writer", file)
-	b, _ := json.Marshal(PutCustomAlertsRequest{CustomAlerts: &[]map[string]any{}, BaseHash: "0000000000000000"})
-	ct := map[string]string{"Content-Type": "application/json"}
-	w := wServe(f, PutTenantCustomAlerts(f.deps()), rbac.PermWrite, "PUT", string(b), ct)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), CodeTenantFileWithheld) {
-		t.Fatalf("%d %s, want 422 %s", w.Code, w.Body.String(), CodeTenantFileWithheld)
-	}
-	assertNoOtherTenant(t, "custom-alerts", w.Body.Bytes(), file)
-	if n := f.writes.Load(); n != 0 {
-		t.Errorf("writer commits = %d, want 0", n)
-	}
-	makeOutReadable(f)
-	w = wServe(f, PutTenantCustomAlerts(f.deps()), rbac.PermWrite, "PUT", string(b), ct)
-	if w.Code != http.StatusConflict || decodeDetail(t, w)["current_source_hash"] != cfg.ComputeSourceHash([]byte(file)) {
-		t.Errorf("readable: %d %s, want 409 with current_source_hash as today", w.Code, w.Body.String())
-	}
-}
-
-func TestPutTenant_StaleBaseHashConflictWithholdsHash(t *testing.T) {
-	t.Parallel()
-	file := wFiles["loadable"].body
-	f := wFixture(t, "writer", file)
-	body := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"warning\"\n"
-	stale := map[string]string{BaseHashHeader: "0000000000000000"}
-	w := wServe(f, PutTenant(f.deps()), rbac.PermWrite, "PUT", body, stale)
-	if w.Code != http.StatusConflict || decodeDetail(t, w)["current_source_hash"] != nil {
-		t.Fatalf("%d %s, want 409 without current_source_hash", w.Code, w.Body.String())
-	}
-	assertNoOtherTenant(t, "PUT 409", w.Body.Bytes(), file)
-	makeOutReadable(f)
-	w = wServe(f, PutTenant(f.deps()), rbac.PermWrite, "PUT", body, stale)
-	if w.Code != http.StatusConflict || decodeDetail(t, w)["current_source_hash"] != cfg.ComputeSourceHash([]byte(file)) {
-		t.Errorf("readable: %d %s, want 409 with current_source_hash as today", w.Code, w.Body.String())
-	}
-}
-
-// #3050 round 2: the `tenants:` key written as `? !!binary dGVuYW50cw==`
-// is "tenants" to the exporter, which then declares both tenants. GET must
-// not read it as a file without tenants.
-func TestGetTenant_BinaryTaggedTenantsKeyIsWithheld(t *testing.T) {
-	t.Parallel()
-	file := "? !!binary dGVuYW50cw==\n:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" + wOutBlock
-	c, err := cfg.ParseTenantFile([]byte(file))
-	if err != nil || len(c.Tenants) != 2 {
-		t.Fatalf("exporter: %v %v — want both tenants declared (else this test proves nothing)", c.Tenants, err)
-	}
-	for _, role := range []string{"writer", "reader"} {
-		f := wFixture(t, role, file)
-		w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
-		if d := decodeDetail(t, w); d["raw_yaml_withheld"] != true {
-			t.Errorf("%s: want withheld: %s", role, w.Body.String())
-		}
-		assertNoOtherTenant(t, role+" GET", w.Body.Bytes(), file)
-	}
-	u := wFixture(t, "unrestricted", file)
-	w := wServe(u, GetTenant(u.deps()), rbac.PermRead, "GET", "", nil)
-	if d := decodeDetail(t, w); d["raw_yaml_withheld"] != nil || d["raw_yaml"] != file {
-		t.Errorf("unrestricted: want the file verbatim: %s", w.Body.String())
 	}
 }

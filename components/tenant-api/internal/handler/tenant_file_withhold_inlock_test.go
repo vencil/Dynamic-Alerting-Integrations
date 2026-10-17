@@ -1,9 +1,11 @@
 package handler
 
-// #3050 round 2: the in-lock 409 of PUT .../custom-alerts. The handler's
-// own base_hash check passes; the file changes before the Writer takes its
-// lock; WriteIfUnchanged then answers PreconditionError with the NEW file's
-// hash, which is handed out only when that new file is one GET would show.
+// #3064 (#3050 round 2's in-lock 409, carried over): PUT .../custom-alerts
+// merges outside the writer lock. The handler's own git-managed and base_hash
+// checks pass; the file changes before the Writer takes its lock. If it is
+// now shared (git-managed), the Writer refuses it under the lock — 409
+// TENANT_GIT_MANAGED, no hash of the shared file; if it is still the tenant's
+// own, WriteIfUnchanged answers PreconditionError with the NEW file's hash.
 //
 // The window is held open without a sleep: a write to another tenant holds
 // the single writer token, parked inside its validator (SetValidator, the
@@ -67,16 +69,16 @@ func waitForGoroutine(t *testing.T, want ...string) {
 	t.Fatalf("no goroutine reached %v", want)
 }
 
-func TestPutTenantCustomAlerts_InLockConflictWithholdsHash(t *testing.T) {
+func TestPutTenantCustomAlerts_InLockGitManaged(t *testing.T) {
 	t.Parallel()
 	base := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n"
 	for _, c := range []struct {
 		name, rewrite string
 		wantHash      bool
 	}{
-		// The file now also declares a tenant the caller may not read.
-		{"now declares an unreadable tenant", base + wOutBlock, false},
-		// Control: still only the caller's tenant — the hash, as today.
+		// The file now also declares another tenant: git-managed.
+		{"now shared with another tenant", base + wOutBlock, false},
+		// Control: still only the caller's tenant — CONFLICT and the hash.
 		{"still only this tenant", "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"warning\"\n", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -121,18 +123,25 @@ func TestPutTenantCustomAlerts_InLockConflictWithholdsHash(t *testing.T) {
 			w := <-bDone
 
 			d := decodeDetail(t, w)
-			if w.Code != 409 || d["code"] != CodeConflict {
-				t.Fatalf("%d %s, want the in-lock 409 %s", w.Code, w.Body.String(), CodeConflict)
+			wantCode := CodeConflict
+			if !c.wantHash {
+				wantCode = CodeTenantGitManaged
+			}
+			if w.Code != 409 || d["code"] != wantCode {
+				t.Fatalf("%d %s, want the in-lock 409 %s", w.Code, w.Body.String(), wantCode)
 			}
 			got, has := d["current_source_hash"]
 			switch {
 			case c.wantHash && got != cfg.ComputeSourceHash([]byte(c.rewrite)):
 				t.Errorf("current_source_hash = %v, want the rewritten file's hash", got)
 			case !c.wantHash && has:
-				t.Errorf("current_source_hash = %v handed out for a file GET withholds", got)
+				t.Errorf("current_source_hash = %v handed out for a git-managed file", got)
 			}
 			if !c.wantHash {
 				assertNoOtherTenant(t, "in-lock 409", w.Body.Bytes(), c.rewrite)
+				if b, _ := os.ReadFile(filepath.Join(f.configDir, orgEnfTenantIn+".yaml")); string(b) != c.rewrite {
+					t.Errorf("the shared file changed: %q", b)
+				}
 			}
 		})
 	}

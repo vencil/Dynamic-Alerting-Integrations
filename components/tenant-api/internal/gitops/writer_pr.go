@@ -141,14 +141,6 @@ type PRBaseCheck func(configDir string) error
 // authoritative check here — the metadata write scope (#2857) — because its
 // pre-check reads the pod's local tree, which may lag the base. A nil check is WritePR.
 func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
-	return w.WritePRSpliced(ctx, tenantID, authorEmail, yamlContent, check, nil)
-}
-
-// WritePRSpliced is WritePRChecked for PUT /tenants/{id} (#3062): what the
-// feature branch commits is splice's result on the tenant file as the fresh
-// base holds it (prResolveOnBase), the body judged as WritePRChecked judges
-// it. A nil splice is WritePRChecked.
-func (w *Writer) WritePRSpliced(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck, splice SpliceFunc) (*PRWriteResult, error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -219,7 +211,7 @@ func (w *Writer) WritePRSpliced(ctx context.Context, tenantID, authorEmail, yaml
 	// authoritative validate — all on the fresh base as git holds it
 	// (prResolveOnBase, #2972). filePath is the file in the serving tree,
 	// which is where Step 4 writes it.
-	filePath, content, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check, splice)
+	filePath, content, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
@@ -348,11 +340,10 @@ func (w *Writer) openFreshBase(rev, branch string) (*stagingTree, error) {
 // the base, which the feature branch carries — and the authoritative
 // validate's notices. Caller holds w.mu and drops the branch on an error.
 //
-// content is what Step 4 writes: yamlContent, or splice's result on the
-// tenant file as the fresh base holds it (#3062) — the same commit the
-// feature branch is cut from, so the bytes spliced into are the bytes the
-// branch replaces.
-func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck, splice SpliceFunc) (filePath, content string, notices []string, err error) {
+// content is what Step 4 writes: yamlContent. A tenant git-managed on the
+// fresh base is refused there (#3064, resolvePut), whatever the serving tree
+// holds.
+func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck) (filePath, content string, notices []string, err error) {
 	st, err := w.openFreshBase(branchPoint, "")
 	if err != nil {
 		// A conf.d that cannot be reached is the walk failing to run, which
@@ -406,14 +397,14 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	// discards its pre-flight's: they describe the body as merged against the
 	// base it lands on, and collecting them twice would duplicate them.
 	//
-	// #3062: the splice first, on the base's tenant file, as WriteSpliced
-	// orders it (the precondition has no PR-mode form). resolvePut is the one
-	// copy of steps 3b–3c, shared with the direct write and the previews.
+	// #3062: resolvePut is the one copy of steps 3b–3c, shared with the
+	// direct write and the previews; #3064: it refuses a tenant git-managed
+	// on the base before the caller's check.
 	var afterResolve func(string) error
 	if check != nil {
 		afterResolve = func(string) error { return check(st.configDir) }
 	}
-	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve, splice, nil)
+	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -559,7 +550,8 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			// #2939: so is a tenant file the local tree cannot read; on the
 			// base it lands on, judgeTree refuses it (TargetUnreadableError)
 			// or the read succeeds.
-			if errors.Is(err, ErrMergeBaseNotLoadable) || errors.Is(err, errReadTenantFile) {
+			// #3064: so is a tenant git-managed on the local tree.
+			if errors.Is(err, ErrMergeBaseNotLoadable) || errors.Is(err, errReadTenantFile) || errors.Is(err, ErrTenantGitManaged) {
 				continue
 			}
 			return nil, err

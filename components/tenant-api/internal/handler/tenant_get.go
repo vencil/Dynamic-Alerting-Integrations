@@ -58,8 +58,10 @@ type TenantDetail struct {
 	// (parses as YAML but cannot be loaded as a tenant config — wrong shape,
 	// errors only a typed decode detects, or a declared tenant id that is not
 	// valid UTF-8). threshold-exporter skips such a file whole, so nothing is
-	// derived from it: raw_yaml and source_hash are returned (so the file can
-	// be opened and fixed; withheld as RawYAMLWithheld says), and resolved_thresholds, custom_alerts,
+	// derived from it: raw_yaml and source_hash are returned for an
+	// API-managed tenant (so the file can be opened and fixed; withheld as
+	// RawYAMLWithheld says) — a file that is not YAML is git-managed (#3064,
+	// ManagedBy), so neither is returned for it — and resolved_thresholds, custom_alerts,
 	// validation_warnings and validation_notices are ABSENT — not empty,
 	// which would read as "none". Partial writes (PUT .../custom-alerts, the
 	// batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
@@ -75,17 +77,53 @@ type TenantDetail struct {
 	// of the stored file would let a guess be checked offline.
 	Masked bool `json:"masked,omitempty"`
 	// RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
-	// empty, when the file is not shown to the caller: it declares a tenant
-	// the caller may not read (#3050; a conf.d file can declare several, and
-	// the file is shown whole or not at all), or its tenants cannot be listed
-	// with certainty (not YAML; an alias, a merge key, a non-scalar key or a
-	// key tagged other than !!str at the top level or in tenants:) and the
-	// caller may not read every tenant;
-	// or the caller would be shown the masked form but the file cannot be
-	// masked with certainty: it is not YAML, holds more than one document, or
-	// uses an anchor, alias or merge key (a credential can be placed outside
-	// any credential field through one).
+	// empty, when the caller would be shown the masked form but the file
+	// cannot be masked with certainty: it uses an anchor or alias inside the
+	// tenant's section (a credential can be placed outside any credential
+	// field through one).
 	RawYAMLWithheld bool `json:"raw_yaml_withheld,omitempty"`
+	// ManagedBy is "api" when the tenant's conf.d file is API-shaped (#3064):
+	// one YAML document declaring only this tenant (or none yet), under the
+	// file's own name, with no anchor, alias, merge key (<<) or tagged key at
+	// the top level or directly under tenants:. Such a file is the tenant's alone:
+	// raw_yaml, source_hash and custom_alerts describe this tenant only, and
+	// the writes accept it. "git" for every other file (shared with other
+	// tenants, a name that is not the declared id, several documents, YAML
+	// indirection where tenants are declared, not YAML): the tenant is
+	// changed only in git, the answer carries the effective view alone —
+	// resolved_thresholds and the validation fields (or config_error) — with
+	// raw_yaml, source_hash and custom_alerts ABSENT, and every write is
+	// refused with 409 TENANT_GIT_MANAGED.
+	ManagedBy string `json:"managed_by" enums:"api,git"`
+	// GitManagedReason says why the tenant is git-managed (managed_by: git):
+	// not_tenant_document (not YAML, or its root or tenants: is not a
+	// mapping), several_documents, yaml_indirection, tenant_count (several
+	// tenants), id_mismatch (the one tenant is not the file's name). A
+	// fixed code: it names no tenant. Absent when managed_by is api.
+	GitManagedReason string `json:"git_managed_reason,omitempty" enums:"not_tenant_document,several_documents,yaml_indirection,tenant_count,id_mismatch"`
+}
+
+// Values of TenantDetail.ManagedBy (#3064).
+const (
+	managedByAPI = "api"
+	managedByGit = "git"
+)
+
+// tenantDetailGitManaged is TenantDetail for a git-managed tenant (#3064):
+// the same JSON names, minus every field read off the file's text (raw_yaml,
+// source_hash, custom_alerts), which are absent. For a file that cannot be
+// loaded (config_error), the derived fields are absent too, as on
+// tenantDetailNotLoadable.
+type tenantDetailGitManaged struct {
+	ID string `json:"id"`
+	// Resolved is a pointer so that "no thresholds" ([]) and "absent"
+	// (config_error) stay two answers.
+	Resolved         *[]cfg.ResolvedThreshold `json:"resolved_thresholds,omitempty"`
+	Warnings         []string                 `json:"validation_warnings,omitempty"`
+	Notices          []string                 `json:"validation_notices,omitempty"`
+	ConfigError      string                   `json:"config_error,omitempty"`
+	ManagedBy        string                   `json:"managed_by"`
+	GitManagedReason string                   `json:"git_managed_reason"`
 }
 
 // tenantDetailNotLoadable is TenantDetail for a file with a config_error: the
@@ -96,9 +134,11 @@ type tenantDetailNotLoadable struct {
 	RawYAML     string `json:"raw_yaml"`
 	SourceHash  string `json:"source_hash"`
 	ConfigError string `json:"config_error"`
-	// Masked / RawYAMLWithheld: as on TenantDetail.
-	Masked          bool `json:"masked,omitempty"`
-	RawYAMLWithheld bool `json:"raw_yaml_withheld,omitempty"`
+	// Masked / RawYAMLWithheld / ManagedBy: as on TenantDetail (always
+	// "api" here: a git-managed file is tenantDetailGitManaged).
+	Masked          bool   `json:"masked,omitempty"`
+	RawYAMLWithheld bool   `json:"raw_yaml_withheld,omitempty"`
+	ManagedBy       string `json:"managed_by"`
 }
 
 // sourceHashFor is the source_hash a caller is shown: empty when the caller
@@ -112,15 +152,12 @@ func sourceHashFor(data []byte, masked bool) string {
 	return cfg.ComputeSourceHash(data)
 }
 
-// rawYAMLFor returns what a caller is shown of the tenant file's bytes:
-// nothing (withheld) when the file declares a tenant the caller may not read
-// (#3050, fileShown); otherwise verbatim to one who can see credentials,
-// masked to anyone else, and nothing (withheld) when the masked form cannot
-// be built with certainty.
+// rawYAMLFor returns what a caller is shown of an API-shaped tenant file's
+// bytes (#3064: the file is the tenant's alone; a git-managed one is never
+// read here): verbatim to one who can see credentials, masked to anyone
+// else, and nothing (withheld) when the masked form cannot be built with
+// certainty.
 func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw string, masked, withheld bool) {
-	if !fileShown(r, d, data, tenantID) {
-		return "", false, true
-	}
 	if canSeeCredentials(r, d, tenantID) {
 		return string(data), false, false
 	}
@@ -135,30 +172,29 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 //
 // @Summary     Get tenant config
 // @Description Returns the raw YAML and resolved thresholds for a single tenant.
-// @Description When the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and
-// @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
-// @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
-// @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
-// @Description tenant file itself is repaired. A whole-file PUT can replace it. When tenant-api cannot parse the current file,
-// @Description that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting write and no
-// @Description org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused with 400, file
-// @Description unchanged — fix it in git then. When allowed, its end-of-life recipe usage counts as none, so a body with an
-// @Description end-of-life recipe is refused, and other tenants' sections in the body count as added and are refused. A file
-// @Description tenant-api can parse is compared by its actual usage; a file that exists but cannot be read at all (permissions,
-// @Description I/O, a directory) refuses the write. "Cannot parse" is the end-of-life check's decode (the tenants: block, though
-// @Description the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
-// @Description broken files each can parse is not guaranteed to match, so fix the file in git when needed.
+// @Description managed_by says who changes the tenant (#3064). "api": its conf.d file (located by its name) is API-shaped —
+// @Description one YAML document declaring only this tenant (or none yet), with no anchor, alias, merge key (<<) or tagged
+// @Description key at the top level or directly under tenants: — so raw_yaml, source_hash and custom_alerts are that
+// @Description tenant's alone. "git": any other file (shared with other tenants, a name that is not the declared id, several
+// @Description documents, YAML indirection where tenants are declared, not YAML), with git_managed_reason; the answer is the
+// @Description effective view only — resolved_thresholds and validation_warnings / validation_notices, or config_error —
+// @Description and raw_yaml, source_hash and custom_alerts are ABSENT, for every caller. Every write to such a tenant is
+// @Description refused with 409 TENANT_GIT_MANAGED; change it in git.
+// @Description When an API-managed tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml
+// @Description and source_hash, plus `config_error` (invalid_config, as on the list row); threshold-exporter skips such a
+// @Description file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty: the file's
+// @Description content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until it is
+// @Description repaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's
+// @Description tenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting
+// @Description write and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused
+// @Description with 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so
+// @Description a body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,
+// @Description a directory) refuses the write.
 // @Description A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
 // @Description "<masked: write permission required>" and comments removed, custom_alerts masked the same way and
 // @Description source_hash empty (masked: true);
-// @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
-// @Description key, holds several documents or is not YAML.
-// @Description A conf.d file can declare several tenants: when it declares one the caller may not read (#3050), raw_yaml,
-// @Description custom_alerts and source_hash are empty with raw_yaml_withheld: true for every caller, on the config_error
-// @Description answer too — the file is shown whole or not at all, never re-encoded to the caller's own section. When its
-// @Description tenants cannot be listed with certainty (not YAML; an alias, a merge key, a non-scalar key or a key tagged
-// @Description other than !!str, e.g. !!binary, at the top level or in tenants:), it is shown only to a caller with read permission on all tenants (an RBAC rule with
-// @Description tenants: ["*"] and no org-scope, environments or domains).
+// @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
+// @Description (inside the tenant's own section: anywhere else makes the tenant git-managed).
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -221,6 +257,11 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// such a file for the same reason — checkPartialWriteBase). Not null
 		// either: the spec types them as arrays (Swagger 2.0 has no
 		// nullable) and does not require them, so absence stays valid.
+		// #3064: a git-managed tenant gets the effective view only.
+		if gitReason := confd.TenantFileManagement(data, tenantID); gitReason != "" {
+			getGitManagedTenant(w, r, d, tenantID, data, gitReason)
+			return
+		}
 		if reason := tenantConfigError(data); reason != "" {
 			raw, masked, withheld := rawYAMLFor(r, d, tenantID, data)
 			writeJSON(w, http.StatusOK, tenantDetailNotLoadable{
@@ -230,6 +271,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 				ConfigError:     reason,
 				Masked:          masked,
 				RawYAMLWithheld: withheld,
+				ManagedBy:       managedByAPI,
 			})
 			return
 		}
@@ -286,9 +328,9 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		}
 
 		// #1560: custom_alerts is the same file decoded, so it is masked the
-		// same way — and when the file is withheld it is withheld too: the
-		// decode resolved the aliases that made the file unmaskable, so a
-		// credential can sit under any key in it.
+		// same way — and when the masked file is withheld it is withheld
+		// too: the decode resolved the aliases that made the file
+		// unmaskable, so a credential can sit under any key in it.
 		raw, masked, withheld := rawYAMLFor(r, d, tenantID, data)
 		switch {
 		case withheld:
@@ -308,10 +350,45 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			CustomAlerts:    customAlerts,
 			Masked:          masked,
 			RawYAMLWithheld: withheld,
+			ManagedBy:       managedByAPI,
 		}
 
 		writeJSON(w, http.StatusOK, detail)
 	}
+}
+
+// getGitManagedTenant answers GET /tenants/{id} for a git-managed tenant
+// (#3064): the effective view — the thresholds and validation messages
+// tenant-api derives for this tenant, as for an API-managed one — and
+// nothing read off the file's text: no raw_yaml, no source_hash (it would
+// confirm a guess of the whole shared file), no custom_alerts (an alias or a
+// merge key can carry another tenant's content into it). A file that cannot
+// be loaded answers config_error alone, as tenantDetailNotLoadable does.
+func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, data []byte, gitReason string) {
+	out := tenantDetailGitManaged{ID: tenantID, ManagedBy: managedByGit, GitManagedReason: gitReason}
+	if reason := tenantConfigError(data); reason != "" {
+		out.ConfigError = reason
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	merged, err := d.loadMergedConfig(tenantID, data)
+	if err != nil {
+		slog.Error("tenant GET: conf.d root platform read failed", "tenant", tenantID, "error", err)
+		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgRootPlatformRead)
+		return
+	}
+	// #3039: the file may declare other tenants; messages about those the
+	// caller may not read are counted, not shown.
+	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, merged.ValidateTenantKeysByTenant(),
+		tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
+	resolved := make([]cfg.ResolvedThreshold, 0)
+	for _, rt := range merged.ResolveAt(time.Now()) {
+		if rt.Tenant == tenantID {
+			resolved = append(resolved, rt)
+		}
+	}
+	out.Resolved = &resolved
+	writeJSON(w, http.StatusOK, out)
 }
 
 // msgCustomAlertsUnparseable is the fixed 500 text when a tenant's

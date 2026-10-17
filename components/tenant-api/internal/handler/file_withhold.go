@@ -13,10 +13,15 @@ import (
 )
 
 // fileShown reports whether the caller of r may be shown what is read off a
-// whole conf.d file, data (#3050): its text (GET raw_yaml, the /diff
-// preview), anything decoded from it that an alias or a decode error can
-// carry from elsewhere in it (custom_alerts, the /effective decode error),
-// and its source hash (which confirms a guess of the file offline). A file
+// whole conf.d file, data (#3050), by GET /tenants/{id}/effective: the
+// source hash of the tenant's file and a decode error that can quote a value
+// of any tenant the file declares — the root platform files and the
+// defaults chain included, which legitimately hold several tenants.
+//
+// GET /tenants/{id} and the writes no longer ask (#3064): they show and
+// write only an API-shaped tenant file (confd.TenantFileManagement), which
+// holds the tenant's own content and nothing else, and refuse every other
+// shape (managed_by: git, TENANT_GIT_MANAGED). A file
 // can declare several tenants, so it is shown only when the caller may read
 // every tenant it declares — read by the one rule a message to the caller
 // may name a tenant by, tenantNamesFor (#3039, #1530). own is the tenant the
@@ -158,24 +163,31 @@ func confdFileShown(r *http.Request, d *Deps, rel, own, hash string) bool {
 	return pathShown(r, d, filepath.Join(d.ConfigDir, filepath.FromSlash(rel)), own, hash)
 }
 
-// tenantFileShown is fileShown for the tenant's own file as it is now,
-// resolved as the write that hashed it resolves it (Writer.PreviewCurrent;
-// confd.ResolveTenantFile under d.ConfigDir without a Writer). hash, when not
-// empty, must be the source hash of the bytes read (see pathShown). A file
-// that cannot be read, or does not exist, is not shown (fail closed).
-func tenantFileShown(r *http.Request, d *Deps, tenantID, hash string) bool {
+// tenantFileAPIManaged reports whether the tenant's own file, as it is now,
+// is API-shaped (#3064, confd.TenantFileManagement) and hashes to hash — so a
+// 409 CONFLICT may carry it as current_source_hash: GET /tenants/{id} shows
+// that hash. Resolved as the write that hashed it resolves it
+// (Writer.PreviewCurrent; confd.ResolveTenantFile under d.ConfigDir without a
+// Writer). A file that cannot be read, or does not exist, is not (fail
+// closed).
+func tenantFileAPIManaged(d *Deps, tenantID, hash string) bool {
+	var data []byte
 	if d.Writer == nil {
 		path, err := confd.ResolveTenantFile(d.ConfigDir, tenantID)
 		if err != nil {
 			return false
 		}
-		return pathShown(r, d, path, tenantID, hash)
+		if data, err = confd.ReadRegularFile(path); err != nil {
+			return false
+		}
+	} else {
+		var exists bool
+		var err error
+		if data, exists, err = d.Writer.PreviewCurrent(tenantID); err != nil || !exists {
+			return false
+		}
 	}
-	data, exists, err := d.Writer.PreviewCurrent(tenantID)
-	if err != nil || !exists {
-		return false
-	}
-	return bytesShown(r, d, data, tenantID, hash)
+	return cfg.ComputeSourceHash(data) == hash && confd.TenantFileManagement(data, tenantID) == ""
 }
 
 // pathShown is fileShown for the file at path, read now. A file that cannot

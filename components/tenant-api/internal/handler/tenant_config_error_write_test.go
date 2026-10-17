@@ -47,19 +47,30 @@ const rejExistingAlert = `    _custom_alerts:
 `
 
 // rejFiles maps a case name to db-a.yaml content, the config_error GET
-// reports for it ("" = healthy control), and whether GET withholds its
-// source_hash from a caller who may write db-a only (#3050: the file declares
-// a tenant that caller may not read, or its tenants cannot be listed).
+// reports for it ("" = healthy control), and — #3064 — the git-managed
+// reason of a file that is not API-shaped ("" for db-a's own file): such a
+// file is refused by every write as TENANT_GIT_MANAGED before its
+// loadability is judged, and GET gives no source_hash for it.
 var rejFiles = []struct {
 	name, body, reason string
-	hashWithheld       bool
+	gitManaged         string
 }{
-	{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "invalid_config", true},
-	{"malformed_yaml", "tenants:\n  db-a: [unclosed\n", "malformed_yaml", true},
+	{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "invalid_config", "yaml_indirection"},
+	{"malformed_yaml", "tenants:\n  db-a: [unclosed\n", "malformed_yaml", "not_tenant_document"},
 	// #3063: an explicit tag its text does not satisfy, in the tenant's own
-	// block. The file declares db-a alone, so its hash is shown.
-	{"mismatched_explicit_tag", "tenants:\n  db-a:\n    mysql_connections: !!int zz\n" + rejExistingAlert, "invalid_config", false},
-	{"healthy", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "", false},
+	// block. The file declares db-a alone: API-shaped, its hash shown, and
+	// a partial write refused as TENANT_CONFIG_NOT_LOADABLE.
+	{"mismatched_explicit_tag", "tenants:\n  db-a:\n    mysql_connections: !!int zz\n" + rejExistingAlert, "invalid_config", ""},
+	{"healthy", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "", ""},
+}
+
+// rejRefusal is the code, and a text in the refusal, a partial write of
+// rejFiles row c gets.
+func rejRefusal(name, reason, gitManaged string) (code, text string) {
+	if gitManaged != "" {
+		return CodeTenantGitManaged, "git-managed (" + gitManaged + ")"
+	}
+	return wantNotLoadableCode, "config_error: " + reason
 }
 
 func rejDir(t *testing.T, body string) string {
@@ -107,15 +118,13 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 			if got.ConfigError != c.reason {
 				t.Fatalf("GET config_error = %q, want %q", got.ConfigError, c.reason)
 			}
-			// #3050: the non-UTF-8 and malformed files are not shown to this
-			// caller — one declares a tenant the caller may not read, the
-			// other's tenants cannot be listed — so GET gave no source_hash.
-			// A client that has the hash anyway (it is in git) still gets
-			// this refusal.
+			// #3064: the non-UTF-8 and malformed files are git-managed, so
+			// GET gave no source_hash. A client that has the hash anyway (it
+			// is in git) still gets the git-managed refusal.
 			baseHash := got.SourceHash
-			if c.hashWithheld {
+			if c.gitManaged != "" {
 				if baseHash != "" {
-					t.Fatalf("GET source_hash = %q, want it withheld (#3050)", baseHash)
+					t.Fatalf("GET source_hash = %q, want none for a git-managed file (#3064)", baseHash)
 				}
 				baseHash = cfg.ComputeSourceHash([]byte(c.body))
 			} else if want := cfg.ComputeSourceHash([]byte(c.body)); baseHash != want {
@@ -148,8 +157,12 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 			if err := json.Unmarshal([]byte(rb), &env); err != nil {
 				t.Fatalf("unmarshal %s: %v", rb, err)
 			}
-			if env["code"] != wantNotLoadableCode || env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
-				t.Errorf("envelope = %v, want code %s, tenant_id db-a, config_error %s", env, wantNotLoadableCode, c.reason)
+			if code, _ := rejRefusal(c.name, c.reason, c.gitManaged); c.gitManaged != "" {
+				if env["code"] != code || env["tenant_id"] != "db-a" || env["git_managed_reason"] != c.gitManaged {
+					t.Errorf("envelope = %v, want code %s, tenant_id db-a, git_managed_reason %s", env, code, c.gitManaged)
+				}
+			} else if env["code"] != code || env["tenant_id"] != "db-a" || env["config_error"] != c.reason {
+				t.Errorf("envelope = %v, want code %s, tenant_id db-a, config_error %s", env, code, c.reason)
 			}
 			if msg, _ := env["error"].(string); !strings.Contains(msg, "db-a") {
 				t.Errorf("error message does not name the tenant: %q", msg)
@@ -180,8 +193,9 @@ func TestApplyPatch_RefusesFileExporterRejects(t *testing.T) {
 				}
 				return
 			}
-			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "db-a") {
-				t.Errorf("result = %+v, want status error, code %s, message naming db-a", res, wantNotLoadableCode)
+			if code, text := rejRefusal(c.name, c.reason, c.gitManaged); res.Status != "error" || res.Code != code ||
+				!strings.Contains(res.Message, "db-a") || !strings.Contains(res.Message, text) {
+				t.Errorf("result = %+v, want status error, code %s, message naming db-a and %q", res, code, text)
 			}
 			if after != before {
 				t.Errorf("file changed:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -227,8 +241,8 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 				}
 				return
 			}
-			if res.Status != "error" || res.Code != wantNotLoadableCode || !strings.Contains(res.Message, "db-a") {
-				t.Errorf("result = %+v, want status error, code %s, message naming db-a", res, wantNotLoadableCode)
+			if code, _ := rejRefusal(c.name, c.reason, c.gitManaged); res.Status != "error" || res.Code != code || !strings.Contains(res.Message, "db-a") {
+				t.Errorf("result = %+v, want status error, code %s, message naming db-a", res, code)
 			}
 			if after := mustRead(t, path); after != before {
 				t.Errorf("file changed:\n%s", after)
@@ -270,7 +284,7 @@ const rejTwoOps = `{"operations":[{"tenant_id":"db-b","patch":{"_silent_mode":"w
 // A multi-op PR batch: db-b is healthy, db-a is not. The whole PR is refused
 // and the answer names db-a (F3), under its own code (F4).
 func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
-	for _, c := range rejFiles[:2] {
+	for _, c := range rejFiles[:3] {
 		t.Run(c.name, func(t *testing.T) {
 			dir := setupConfigDir(t, map[string]string{"db-a.yaml": c.body, "db-b.yaml": rejHealthyB, "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
@@ -279,7 +293,8 @@ func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
 
 			w, created := prBatchRun(t, dir, rejTwoOps)
 			// #2900 F4: refused per op on the fresh base, the batch rejected.
-			assertRejectedOp(t, w, 1, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
+			code, text := rejRefusal(c.name, c.reason, c.gitManaged)
+			assertRejectedOp(t, w, 1, "db-a", code, text)
 			if created {
 				t.Error("a PR was created for a file the exporter rejects")
 			}
@@ -301,7 +316,7 @@ func TestBatchTenants_PRMode_RefusesFileExporterRejects(t *testing.T) {
 // refuses it.
 func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 	const repaired = "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
-	for _, c := range rejFiles[:2] {
+	for _, c := range rejFiles[:3] {
 		for _, originRepaired := range []bool{true, false} {
 			name := c.name + "/origin_broken"
 			if originRepaired {
@@ -334,7 +349,8 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 					}
 					return
 				}
-				assertRejectedOp(t, w, 0, "db-a", wantNotLoadableCode, "config_error: "+c.reason)
+				code, text := rejRefusal(c.name, c.reason, c.gitManaged)
+				assertRejectedOp(t, w, 0, "db-a", code, text)
 				if created {
 					t.Error("a PR was created for a file the exporter rejects on the base")
 				}
@@ -387,16 +403,21 @@ var repairCallers = []struct {
 func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 	t.Parallel()
 	const id = "svc-alpha"
+	// #3064: gitManaged rows are not API-shaped — not YAML, not a tenant
+	// document, a tagged key — so git-managed: every caller's PUT is the 409
+	// TENANT_GIT_MANAGED, the platform writer's included, and the file is
+	// repaired in git. #2405's rule still holds for the API-shaped file the
+	// end-of-life guard cannot read (mismatched_explicit_tag).
 	files := []struct {
 		name, body, reason string
-		parseable          bool // for the eol guard: replaceable without platform-wide write
+		gitManaged         bool
 	}{
-		{"unclosed_flow", "tenants:\n  " + id + ": [unclosed\n", "malformed_yaml", false},
-		{"not_yaml", "{{not yaml\n", "malformed_yaml", false},
-		{"top_level_list", "- a\n- b\n", "invalid_config", false},
-		{"tenants_scalar", "tenants: oops\n", "invalid_config", false},
-		{"duplicate_tenants_key", "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\ntenants:\n  " + id + ":\n    mysql_connections: \"71\"\n", "invalid_config", false},
-		{"tenants_list", "tenants:\n  - " + id + "\n", "invalid_config", false},
+		{"unclosed_flow", "tenants:\n  " + id + ": [unclosed\n", "malformed_yaml", true},
+		{"not_yaml", "{{not yaml\n", "malformed_yaml", true},
+		{"top_level_list", "- a\n- b\n", "invalid_config", true},
+		{"tenants_scalar", "tenants: oops\n", "invalid_config", true},
+		{"duplicate_tenants_key", "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\ntenants:\n  " + id + ":\n    mysql_connections: \"71\"\n", "invalid_config", true},
+		{"tenants_list", "tenants:\n  - " + id + "\n", "invalid_config", true},
 		{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"70\"\n", "invalid_config", true},
 		// #3063: an explicit tag its own text does not satisfy. The generic
 		// decode the end-of-life guard reads the current file with refuses
@@ -404,8 +425,6 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 		{"mismatched_explicit_tag", "tenants:\n  " + id + ":\n    mysql_connections: !!int zz\n", "invalid_config", false},
 	}
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
-	// #3062: the sibling the body does not declare, kept.
-	const siblingKept = "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, c := range files {
 		for _, caller := range repairCallers {
 			t.Run(c.name+"/"+caller.name, func(t *testing.T) {
@@ -434,7 +453,16 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 				req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
 				w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
 				after := mustRead(t, filepath.Join(dir, id+".yaml"))
-				if !c.parseable && !caller.platformWritten {
+				if c.gitManaged {
+					if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), CodeTenantGitManaged) {
+						t.Fatalf("PUT status = %d, want 409 %s; body: %s", w.Code, CodeTenantGitManaged, w.Body.String())
+					}
+					if after != c.body {
+						t.Errorf("file changed on a refused PUT:\n%s", after)
+					}
+					return
+				}
+				if !caller.platformWritten {
 					if w.Code != http.StatusBadRequest {
 						t.Fatalf("PUT status = %d, want 400; body: %s", w.Code, w.Body.String())
 					}
@@ -450,9 +478,6 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 					t.Fatalf("PUT status = %d, want 200; body: %s", w.Code, w.Body.String())
 				}
 				want, wantConfigError := repaired, ""
-				if c.parseable {
-					want, wantConfigError = siblingKept, c.reason
-				}
 				if after != want {
 					t.Errorf("file after PUT:\n%s\nwant:\n%s", after, want)
 				}
@@ -462,6 +487,13 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 			})
 		}
 	}
+}
+
+// unreadableForEol is an API-shaped tenant file (#3064) the end-of-life guard
+// cannot read (#3063: an explicit tag its text does not satisfy), so #2405's
+// rule decides who may replace it.
+func unreadableForEol(id string) string {
+	return "tenants:\n  " + id + ":\n    mysql_connections: !!int zz\n"
 }
 
 // #2405: in direct write mode the dry-run (POST /validate) answers what this
@@ -475,7 +507,9 @@ func TestValidateTenant_UnparseableBaseFollowsCaller(t *testing.T) {
 	for _, caller := range repairCallers {
 		t.Run(caller.name, func(t *testing.T) {
 			t.Parallel()
-			dir := setupConfigDir(t, map[string]string{id + ".yaml": "{{not yaml\n", "_defaults.yaml": caDefaults})
+			// #3064: a file that is not YAML is git-managed; #2405's rule is
+			// about an API-shaped file the end-of-life guard cannot read.
+			dir := setupConfigDir(t, map[string]string{id + ".yaml": unreadableForEol(id), "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
 			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
 			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+id+"/validate", "id", id, bytes.NewBufferString(repaired))
@@ -502,7 +536,7 @@ func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, caller := range repairCallers {
 		t.Run(caller.name, func(t *testing.T) {
-			dir := setupConfigDir(t, map[string]string{id + ".yaml": "{{not yaml\n", "_defaults.yaml": caDefaults})
+			dir := setupConfigDir(t, map[string]string{id + ".yaml": unreadableForEol(id), "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
 			runGit(t, dir, "branch", "-M", "main")
 			bare := t.TempDir()
@@ -538,23 +572,14 @@ func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 	}
 }
 
-// #2405 review: the limit of that repair, pinned so a change to it is a
-// decision rather than an accident. The added-section gate (addedTenantKeys)
-// grandfathers only the sections it can read in the current file. When
-// tenant-api cannot parse the current file, a caller scoped to the tenant
-// cannot replace it at all (the file is untouched); a caller with write on all
-// tenants can, with exactly the body sent — a body naming another section is
-// still refused as adding it. The gate is deliberately not relaxed (it fails
-// closed); the documented way to keep the sections is fixing the file in git.
-//
-// #3062: a body declaring the co-resident section is first judged for it —
-// a caller scoped to the tenant may not write it, so that body is a 403
-// (whatever the file); the platform writer passes and meets the gate above.
-//
-// Control: a shared file that is invalid_config only because it also declares
-// a non-UTF-8 tenant id still parses, so a caller scoped to the tenant can
-// write its own section: the co-resident section it does not declare and the
-// non-UTF-8 one are both kept.
+// #3064: a broken file shared with another tenant is git-managed, whoever
+// asks. A body declaring {id} alone is the 409 TENANT_GIT_MANAGED — for the
+// caller scoped to {id} and for the platform writer alike (#2405's bit no
+// longer reaches such a file); a body that also declares the co-resident
+// section is not API-shaped, the 400 body refusal, before the file is read.
+// The file is repaired in git. (Until #3064 the platform writer could
+// replace such a file whole, and a caller scoped to {id} could write its own
+// section of the non-UTF-8 one.)
 func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	t.Parallel()
 	const id, other = "svc-alpha", "svc-beta"
@@ -569,19 +594,15 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 		wantCode                int
 		wantRefusal             string
 	}{
-		{"unparseable_own_section_only_scoped_is_refused", unparseable, ownOnly, "ops", "malformed_yaml", http.StatusBadRequest, "write permission on all tenants"},
-		{"unparseable_own_section_only_platform_writer_replaces", unparseable, ownOnly, "platform", "malformed_yaml", http.StatusOK, ""},
-		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "ops", "malformed_yaml", http.StatusForbidden, "declares a tenant section you may not write"},
-		{"unparseable_with_co_resident_platform_writer_is_refused", unparseable, withOther, "platform", "malformed_yaml", http.StatusBadRequest, "adds tenant section(s) [" + other + "]"},
-		{"non_utf8_with_co_resident_keeps_it", nonUTF8, ownOnly, "ops", "invalid_config", http.StatusOK, ""},
-		{"non_utf8_declaring_co_resident_scoped_is_refused", nonUTF8, withOther, "ops", "invalid_config", http.StatusForbidden, "declares a tenant section you may not write"},
+		{"unparseable_own_section_only_scoped_is_refused", unparseable, ownOnly, "ops", "malformed_yaml", http.StatusConflict, CodeTenantGitManaged},
+		{"unparseable_own_section_only_platform_writer_is_refused", unparseable, ownOnly, "platform", "malformed_yaml", http.StatusConflict, CodeTenantGitManaged},
+		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "ops", "malformed_yaml", http.StatusBadRequest, "and no other tenant"},
+		{"unparseable_with_co_resident_platform_writer_is_refused", unparseable, withOther, "platform", "malformed_yaml", http.StatusBadRequest, "and no other tenant"},
+		{"non_utf8_with_co_resident_is_refused", nonUTF8, ownOnly, "ops", "invalid_config", http.StatusConflict, CodeTenantGitManaged},
+		{"non_utf8_with_co_resident_platform_writer_is_refused", nonUTF8, ownOnly, "platform", "invalid_config", http.StatusConflict, CodeTenantGitManaged},
+		{"non_utf8_declaring_co_resident_scoped_is_refused", nonUTF8, withOther, "ops", "invalid_config", http.StatusBadRequest, "and no other tenant"},
 	}
-	// #3062: what a 200 leaves when the base keeps sections the body does
-	// not declare (else the file is exactly the body).
-	kept := map[string]string{
-		"non_utf8_with_co_resident_keeps_it": "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id +
-			":\n    mysql_connections: \"75\"\n  " + other + ":\n    mysql_connections: \"60\"\n",
-	}
+	kept := map[string]string{}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -633,14 +654,16 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 // not edit (verifyPartialWrite) is refused by every partial write,
 // config_error not_round_trippable, and its bytes stay.
 // batch_patch_diff_test.go holds the invariant to the generator itself.
+//
+// #3064: every shape here is API-shaped — db-a's file holds db-a alone. The
+// shared shapes that stood here until then (a second document for db-z, a
+// section aliased by db-z, a block scalar in db-z's section) are git-managed
+// now, refused before the round-trip check (tenant_git_managed_test.go).
 var roundTripRejFiles = []struct {
 	name, body string
 }{
-	{"multiple_documents", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
-		"---\ntenants:\n  db-z:\n    mysql_connections: \"1\"\n"},
-	{"shared_block", "tenants:\n  db-a: &b\n    mysql_connections: \"70\"\n" + rejExistingAlert + "  db-z: *b\n"},
 	{"block_scalar_leading_blank", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert +
-		"  db-z:\n    _metadata:\n      owner: |-\n\n        team\n"},
+		"    _metadata:\n      owner: |-\n\n        team\n"},
 }
 
 func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
@@ -654,20 +677,6 @@ func TestPartialWrites_RefuseBaseThatCannotRoundTrip(t *testing.T) {
 			list := []map[string]any{{
 				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
 			}}
-
-			// #3050: a caller who may not read db-z is not shown this file,
-			// so its partial write is refused before the round-trip check
-			// (TENANT_FILE_WITHHELD), even with the file's hash in hand.
-			withheld := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
-			wb, _ := json.Marshal(map[string]any{"base_hash": cfg.ComputeSourceHash([]byte(c.body)), "custom_alerts": list})
-			wresp := putCustomAlerts(t, withheld, "db-a", string(wb), "alice@example.com", []string{"dba"})
-			wrb, _ := readBody(wresp)
-			if wresp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(wrb, CodeTenantFileWithheld) {
-				t.Errorf("custom-alerts, db-z unreadable: %d %s; want 422 %s", wresp.StatusCode, wrb, CodeTenantFileWithheld)
-			}
-			if strings.Contains(wrb, "db-z") {
-				t.Errorf("the refusal names another tenant: %q", wrb)
-			}
 
 			// A caller who may read db-z too is shown the file and reaches
 			// the round-trip check.

@@ -91,14 +91,12 @@ func TestWritePR_ReValidatesAgainstTheFreshBase(t *testing.T) {
 		{name: "fresh base dropped the section the stale base grandfathered",
 			freshBase: ownOnlyFalse, splitOut: true, wantErr: true},
 
-		// ⛔ MANDATORY CONTROL. Same body, same code path, fresh base UNCHANGED —
-		// `other` is still grandfathered where the write lands, so this write is
-		// legitimate and must still be accepted. Without this arm, "reject
-		// everything" passes the arm above; #1681 recorded over-rejection as a
-		// real failure mode (a tenant locked out of its own section until the
-		// pod restarts), so it is pinned here rather than assumed.
-		{name: "fresh base still declares it — legitimate edit, must be accepted",
-			freshBase: grandfathered, splitOut: false, wantErr: false},
+		// #3064: the control arm that stood here — the same body on a fresh
+		// base that still declares `other`, accepted as a grandfathered edit
+		// — is gone: a body declaring two tenants is refused outright (it is
+		// not API-shaped), and a base declaring both is git-managed.
+		// TestWritePR_StaleTreeNoLongerOverRejects pins that a legitimate
+		// write is not over-rejected on a stale tree.
 
 		// ⚠️ THE MIRROR DIRECTION IS NOT COVERED HERE, AND IS NOT FIXED.
 		// Stale base LACKS a section the fresh base grandfathered → Step 1's

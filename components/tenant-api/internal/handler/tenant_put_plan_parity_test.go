@@ -6,12 +6,9 @@ package handler
 // refuse exactly when PUT does, with PUT's status, code and text (/validate:
 // valid false with that text, its convention).
 //
-// The first two rows are the oracle a preview path of its own opened (round
-// 4): a caller who may write In but not Out, body declaring both. PUT's
-// answer is the fixed 403 whether or not another conf.d file also declares
-// Out; a /diff that judged the duplicate before (or without) Out's write
-// scope answered 409 in one case and a 200 preview in the other — whether a
-// tenant id the caller may not write is declared elsewhere.
+// #3064: the git_managed_* rows are the API/git-managed line — a tenant
+// whose file is not API-shaped is refused by the three alike, with one code,
+// for every caller (the masked /diff of a reader of {id} included).
 //
 // ⛔ ORDER ROWS. planPut's order is part of its answer, so each pair of
 // neighbouring steps has a row whose body both refuse (the *_and_* rows):
@@ -52,7 +49,6 @@ func paritySec(id, mode string) string {
 
 var (
 	parityShared    = "tenants:\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning")
-	parityElsewhere = map[string]string{parityOut + "-copy.yaml": "tenants:\n" + paritySec(parityOut, "warning")}
 	parityBodyIn    = "tenants:\n" + paritySec(parityIn, "critical")
 	parityBodyInOut = parityBodyIn + paritySec(parityOut, "critical")
 )
@@ -86,11 +82,6 @@ type parityCase struct {
 	// answers instead of the masked preview — a step after the write scope
 	// on {id} that refuses for every caller.
 	maskedRefusal string
-	// diffWithheld: PUT accepts, and /diff shows this caller nothing of
-	// the current file (422 TENANT_FILE_WITHHELD, #3050: it may not read
-	// every tenant the file declares). Otherwise an accepted row's /diff
-	// is the 200 preview.
-	diffWithheld bool
 	// maxBody: Deps.MaxBodyBytes (0: the default).
 	maxBody int64
 	// setup runs on the tree after its git commit (the FIFO rows).
@@ -98,25 +89,32 @@ type parityCase struct {
 }
 
 func parityCases() []parityCase {
+	// parityOwn is {id}'s file API-shaped (#3064): it declares {id} alone.
+	parityOwn := "tenants:\n" + paritySec(parityIn, "warning")
 	return []parityCase{
-		{name: "unwritable_out_declared_elsewhere", file: parityShared, extra: parityElsewhere,
-			groups: "in-team", body: parityBodyInOut, want: http.StatusForbidden},
-		{name: "unwritable_out_not_declared_elsewhere", file: parityShared,
-			groups: "in-team", body: parityBodyInOut, want: http.StatusForbidden},
-		{name: "writable_out_declared_elsewhere", file: parityShared, extra: parityElsewhere,
-			groups: "both-team", body: parityBodyInOut, want: http.StatusConflict, tree: true},
-		{name: "unspliceable_base_without_2405_bit",
-			file:   "tenants:\n" + paritySec(parityIn, "warning") + "  <<: {" + parityOut + ": {_silent_mode: \"warning\"}}\n",
-			groups: "both-team", body: parityBodyIn, want: http.StatusBadRequest, tree: true},
-		{name: "unspliceable_base_with_2405_bit",
-			file:   "tenants:\n" + paritySec(parityIn, "warning") + "  <<: {" + parityOut + ": {_silent_mode: \"warning\"}}\n",
-			groups: "platform", body: parityBodyIn, want: http.StatusOK},
-		{name: "withheld_caller_anchor_on_tenants",
-			file:   "tenants: &t\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning"),
-			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, tree: true},
-		{name: "shown_caller_anchor_on_tenants",
-			file:   "tenants: &t\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning"),
-			groups: "both-team", body: parityBodyIn, want: http.StatusOK},
+		// #3064: a git-managed tenant — its file shared, anchored where
+		// tenants are declared, or declaring another id — is refused by
+		// every write, for every caller, with one code; /diff and /validate
+		// answer it as PUT does. In PR mode PUT judges it on the fresh base,
+		// which /validate does not reach (tree).
+		{name: "git_managed_shared", file: parityShared,
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+		{name: "git_managed_shared_writer_of_both", file: parityShared,
+			groups: "both-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+		{name: "git_managed_shared_platform_writer", file: parityShared,
+			groups: "platform", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+		{name: "git_managed_anchor_on_tenants", file: "tenants: &t\n" + paritySec(parityIn, "warning"),
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: "yaml_indirection", tree: true},
+		{name: "git_managed_merge_key", file: "tenants:\n" + paritySec(parityIn, "warning") + "  <<: {" + parityOut + ": {_silent_mode: \"warning\"}}\n",
+			groups: "platform", body: parityBodyIn, want: http.StatusConflict, wantText: "yaml_indirection", tree: true},
+		{name: "git_managed_id_mismatch", file: "tenants:\n" + paritySec(parityOut, "warning"),
+			groups: "both-team", body: parityBodyIn, want: http.StatusConflict, wantText: "id_mismatch", tree: true},
+		{name: "git_managed_reader_of_id", file: parityShared, groups: "in-readers", body: parityBodyIn,
+			want: http.StatusForbidden, maskedDiff: true, maskedRefusal: CodeTenantGitManaged},
+		// The body must be API-shaped (step 2's body-only pre-flight, which
+		// /validate runs in PR mode too).
+		{name: "body_declares_another_tenant", file: parityOwn, groups: "both-team",
+			body: parityBodyInOut, want: http.StatusBadRequest, wantText: "and no other tenant"},
 		{name: "placeholder", file: parityShared, groups: "in-team",
 			body: "tenants:\n  " + parityIn + ":\n    _silent_mode: \"" + credmask.Placeholder + "\"\n",
 			want: http.StatusBadRequest},
@@ -125,36 +123,53 @@ func parityCases() []parityCase {
 			groups: "prod-ops", metaEnforce: true,
 			body: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n",
 			want: http.StatusForbidden},
-		{name: "invalid_body", file: parityShared, groups: "in-team",
+		{name: "declared_elsewhere", file: parityOwn, extra: map[string]string{"copy.yaml": "tenants:\n" + paritySec(parityIn, "warning")},
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantDeclaredElsewhere, tree: true},
+		{name: "invalid_body", file: parityOwn, groups: "in-team",
 			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", want: http.StatusBadRequest, tree: true},
-		{name: "accepted", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "in-team",
+		{name: "accepted", file: parityOwn, groups: "in-team",
 			body: parityBodyIn, want: http.StatusOK},
-		{name: "withheld_writer_accepted", file: parityShared, groups: "in-team", body: parityBodyIn,
-			want: http.StatusOK, diffWithheld: true},
-		{name: "reader_of_id", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "in-readers",
+		{name: "accepted_anchor_inside_own_section",
+			file:   "tenants:\n  " + parityIn + ":\n    _silent_mode: &m \"warning\"\n    _severity_dedup: *m\n",
+			groups: "in-team", body: parityBodyIn, want: http.StatusOK},
+		{name: "reader_of_id", file: parityOwn, groups: "in-readers",
 			body: parityBodyIn, want: http.StatusForbidden, maskedDiff: true},
 
 		// Order rows (see the file comment): PUT's answer is the first
 		// step's; swapped, it would be the second's.
 		//
 		// The proposed scope on {id} (403, requireOrgWriteProposedAt's
-		// text) before the declared tenants (403, msgDeclaresUnwritableTenant).
-		{name: "proposed_scope_and_unwritable_out",
-			file: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: production\n    _silent_mode: \"warning\"\n" +
-				paritySec(parityOut, "warning"),
+		// text) before the body's shape (400).
+		{name: "proposed_scope_and_body_shape",
+			file:   "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: production\n    _silent_mode: \"warning\"\n",
 			groups: "in-prod-ops", metaEnforce: true,
 			body: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n" +
 				paritySec(parityOut, "critical"),
 			want: http.StatusForbidden, wantText: "this write proposes"},
-		// The declared tenants (403) before the placeholder (400).
-		{name: "unwritable_out_and_placeholder", file: parityShared, groups: "in-team",
+		// The placeholder (400, its violation) before the body's shape
+		// (400, step 2's pre-flight).
+		{name: "placeholder_and_body_shape", file: parityShared, groups: "both-team",
 			body: "tenants:\n  " + parityIn + ":\n    _silent_mode: \"" + credmask.Placeholder + "\"\n" + paritySec(parityOut, "critical"),
-			want: http.StatusForbidden, wantText: msgDeclaresUnwritableTenant},
+			want: http.StatusBadRequest, wantText: "the placeholder shown in place of a credential"},
 		// The placeholder (400, its violation) before step 2's body-only
 		// pre-flight (400, a root key the body may not carry).
 		{name: "placeholder_and_root_key", file: parityShared, groups: "in-team",
 			body: "defaults: {}\ntenants:\n  " + parityIn + ":\n    _silent_mode: \"" + credmask.Placeholder + "\"\n",
 			want: http.StatusBadRequest, wantText: "the placeholder shown in place of a credential"},
+		// The body's shape (400, body only) before the git-managed file
+		// (409, the tree).
+		{name: "body_shape_and_git_managed", file: parityShared, groups: "both-team",
+			body: parityBodyInOut, want: http.StatusBadRequest, wantText: "and no other tenant"},
+		// The git-managed file (409) before validation against the tree
+		// (400).
+		{name: "git_managed_and_invalid_body", file: parityShared, groups: "in-team",
+			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n",
+			want: http.StatusConflict, wantText: CodeTenantGitManaged, tree: true},
+		// The tenant file's resolution (409, another file declares {id})
+		// before the git-managed verdict (409, its own code).
+		{name: "declared_elsewhere_and_git_managed", file: parityShared,
+			extra:  map[string]string{"copy.yaml": "tenants:\n" + paritySec(parityIn, "warning")},
+			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: CodeTenantDeclaredElsewhere, tree: true},
 	}
 }
 
@@ -260,23 +275,13 @@ func runParityCases(t *testing.T, cases []parityCase) {
 				}
 
 				if put.Code == http.StatusOK {
-					// Accepted: /validate says so; /diff previews it — or,
-					// for a caller who may not read the whole file, shows
-					// nothing: 422 TENANT_FILE_WITHHELD, not a verdict on
-					// the write.
+					// Accepted: /validate says so; /diff previews it.
 					if !vr.Valid {
 						t.Errorf("/validate refused what PUT wrote: %v", vr.Warnings)
 					}
-					if c.diffWithheld {
-						if diff.Code != http.StatusUnprocessableEntity || parityEnvelope(t, diff)["code"] != CodeTenantFileWithheld {
-							t.Errorf("/diff for a caller the file is withheld from: %d %s, want 422 %s",
-								diff.Code, diff.Body.String(), CodeTenantFileWithheld)
-						}
-					} else {
-						var dr DiffResponse
-						if diff.Code != http.StatusOK || json.Unmarshal(diff.Body.Bytes(), &dr) != nil || !dr.HasDiff {
-							t.Errorf("/diff of what PUT wrote: %d %s, want the 200 preview", diff.Code, diff.Body.String())
-						}
+					var dr DiffResponse
+					if diff.Code != http.StatusOK || json.Unmarshal(diff.Body.Bytes(), &dr) != nil || !dr.HasDiff {
+						t.Errorf("/diff of what PUT wrote: %d %s, want the 200 preview", diff.Code, diff.Body.String())
 					}
 					return
 				}
@@ -317,68 +322,12 @@ func runParityCases(t *testing.T, cases []parityCase) {
 				if vr.Valid || strings.Join(vr.Warnings, "; ") != parityValidateText(want) {
 					t.Errorf("/validate answered valid=%v %q, want PUT's %q", vr.Valid, vr.Warnings, parityValidateText(want))
 				}
+				// #3064: the git-managed verdict carries its code.
+				if gm := want["code"] == CodeTenantGitManaged; gm != (vr.Code == CodeTenantGitManaged) {
+					t.Errorf("/validate code = %q, PUT's code %v", vr.Code, want["code"])
+				}
 			})
 		}
-	}
-}
-
-// TestDiff_MaskedPreviewHearsNoFileShape: a caller who may read {id} but
-// not write it, and may not read every tenant of {id}'s file, gets from
-// /diff one answer for every shape of that file (#3062). The shapes are the
-// ones a splice refuses (as a writer of {id} is told: 409
-// not_round_trippable, #2405's 400): an anchor on the root or on tenants:,
-// an anchor in {id}'s own section, a merge key in tenants:. For a body PUT
-// would accept that answer is the 422 TENANT_FILE_WITHHELD; for one it
-// would refuse whatever the file, PUT's refusal of it.
-func TestDiff_MaskedPreviewHearsNoFileShape(t *testing.T) {
-	t.Parallel()
-	bases := []struct{ name, file string }{
-		{"plain", parityShared},
-		{"root_anchor", "--- &r\ntenants:\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning")},
-		{"tenants_anchor", "tenants: &t\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning")},
-		{"anchor_in_id_section", "tenants:\n  " + parityIn + ":\n    _silent_mode: &m \"warning\"\n" + paritySec(parityOut, "warning")},
-		{"merge_key", "tenants:\n" + paritySec(parityIn, "warning") + "  <<: {" + parityOut + ": {_silent_mode: \"warning\"}}\n"},
-	}
-	bodies := []struct {
-		name string
-		body string
-		want int
-	}{
-		{"accepted_body", parityBodyIn, http.StatusUnprocessableEntity},
-		{"invalid_body", "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", http.StatusBadRequest},
-	}
-	for _, b := range bodies {
-		t.Run(b.name, func(t *testing.T) {
-			t.Parallel()
-			var first map[string]any
-			for i, base := range bases {
-				c := parityCase{file: base.file, groups: "in-readers", body: b.body}
-				// The fixture has the shape: a writer of {id} is refused
-				// on every base but the plain one.
-				if base.name != "plain" && b.name == "accepted_body" {
-					c.groups = "in-team"
-					if put := parityServe(t, c, false, endpointPut); put.Code == http.StatusOK {
-						t.Fatalf("%s: a writer of {id} was not refused — the base has no shape a splice refuses", base.name)
-					}
-					c.groups = "in-readers"
-				}
-				diff := parityServe(t, c, false, endpointDiff)
-				got := parityEnvelope(t, diff)
-				got["status"] = float64(diff.Code)
-				t.Logf("%s: /diff %d %s", base.name, diff.Code, diff.Body.String())
-				if diff.Code != b.want {
-					t.Errorf("%s: /diff %d, want %d", base.name, diff.Code, b.want)
-				}
-				if b.want == http.StatusUnprocessableEntity && got["code"] != CodeTenantFileWithheld {
-					t.Errorf("%s: /diff code %v, want %s", base.name, got["code"], CodeTenantFileWithheld)
-				}
-				if i == 0 {
-					first = got
-				} else if !jsonEqual(got, first) {
-					t.Errorf("%s: /diff answered %v, the plain base %v — the answer tells the file's shape", base.name, got, first)
-				}
-			}
-		})
 	}
 }
 

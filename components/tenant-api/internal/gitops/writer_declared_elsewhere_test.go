@@ -267,31 +267,24 @@ func TestTenantWrite_NewAndExistingTenantsStillWrite(t *testing.T) {
 }
 
 // Each op of a PR batch is judged on the tree as the ops before it left it.
-// op1 rewrites mv-x.yaml (which also declared mv-y) without mv-y; op2 then
-// creates mv-y.yaml. Judged on the tree before op1, op2 would be refused
-// (mv-y "lives in" mv-x.yaml); on the tree it actually lands on, mv-y is
-// declared nowhere, and the branch loads cleanly.
+// op1 would rewrite mv-x.yaml (which also declares mv-y) without mv-y, and op2
+// create mv-y.yaml. Since #3064 mv-x.yaml is git-managed: op1 is refused on
+// the fresh base, so op2 still finds mv-y in mv-x.yaml — the tree op1 left,
+// i.e. unchanged — and the batch opens no branch.
 func TestWritePRBatch_OpSeesEarlierOpsWrites(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": "tenants:\n" +
 		"  mv-x:\n    _silent_mode: \"warning\"\n" +
 		"  mv-y:\n    _silent_mode: \"warning\"\n"})
 	w := NewWriter(dir, dir)
-	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{
+	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		{TenantID: "mv-x", Merge: func([]byte) (string, error) { return tenantBody("mv-x"), nil }},
 		{TenantID: "mv-y", Merge: func([]byte) (string, error) { return tenantBody("mv-y"), nil }},
 	}, "op@example.com")
-	if err != nil {
-		t.Fatalf("WritePRBatch: %v", err)
+	if !errors.Is(err, ErrTenantGitManaged) || !errors.Is(err, ErrTenantDeclaredElsewhere) {
+		t.Fatalf("WritePRBatch: err = %v, want op1 git-managed and op2 declared elsewhere", err)
 	}
-	gitRun(t, dir, "fetch", "origin", res.BranchName)
-	gitRun(t, dir, "checkout", "-q", "FETCH_HEAD")
-	if _, _, err := cfg.LoadDir(dir, nil); err != nil {
-		t.Fatalf("LoadDir on the PR branch: %v", err)
-	}
-	// op2 must have landed, not silently become a no-op (mv-y would then be
-	// declared nowhere and still load cleanly).
-	if _, err := os.Stat(filepath.Join(dir, "mv-y.yaml")); err != nil {
-		t.Fatalf("mv-y.yaml missing on the PR branch: %v", err)
+	if br := gitOut(t, dir, "branch", "--list", "tenant-api/*"); br != "" {
+		t.Errorf("branch left behind: %s", br)
 	}
 }
 

@@ -829,7 +829,12 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 	var notLoadable *tenantFileNotLoadableError
 	var treeUnreadable *gitops.TreeUnreadableError
 	var targetUnreadable *gitops.TargetUnreadableError
+	var gitManaged *gitops.GitManagedError
 	switch {
+	case errors.As(err, &gitManaged):
+		// #3064: the op's tenant is git-managed; the text names it and a
+		// fixed reason code, nothing else of the file. Nothing written.
+		msg, code = gitManaged.Error(), CodeTenantGitManaged
 	case errors.As(err, &treeUnreadable):
 		// #2939: the tree after the batch holds entries the route generator
 		// cannot read, and no op of the batch replaces them — unresolvable links

@@ -23,6 +23,9 @@ const (
 	plusThird = "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    _silent_mode: \"warning\"\n  third:\n    _silent_mode: \"warning\"\n"
 )
 
+// msgOwnOnly is the part of the #3064 body refusal a test looks for.
+const msgOwnOnly = "tenants.db-a and no other tenant"
+
 func seedBase(t *testing.T, dir, name, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
@@ -37,7 +40,9 @@ func TestWriteRefusesTenantSectionsItWouldAdd(t *testing.T) {
 		name string
 		seed func(t *testing.T, dir string)
 		body string
-		// wantNamed is the section the error must name, so a caller can fix it.
+		// wantNamed is what the error must say, so a caller can fix it. Since
+		// #3064 every row is the body-shape refusal: a body declares its own
+		// tenant and no other.
 		wantNamed string
 	}{
 		// The exporter's duplicate-tenant guard only fires when the smuggled id
@@ -46,14 +51,14 @@ func TestWriteRefusesTenantSectionsItWouldAdd(t *testing.T) {
 		// no downstream backstop at all.
 		{"smuggled id owns a file", func(t *testing.T, dir string) {
 			seedBase(t, dir, "other.yaml", "tenants:\n  other:\n    _silent_mode: \"false\"\n")
-		}, smuggled, "other"},
-		{"smuggled id owns no file", nil, smuggled, "other"},
+		}, smuggled, msgOwnOnly},
+		{"smuggled id owns no file", nil, smuggled, msgOwnOnly},
 		{"base file exists but declares only the id itself", func(t *testing.T, dir string) {
 			seedBase(t, dir, "db-a.yaml", ownOnly)
-		}, smuggled, "other"},
+		}, smuggled, msgOwnOnly},
 		{"grandfathered file, but the write adds a further section", func(t *testing.T, dir string) {
 			seedBase(t, dir, "db-a.yaml", grandfathered)
-		}, plusThird, "third"},
+		}, plusThird, msgOwnOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := initRepoOnMain(t)
@@ -80,21 +85,20 @@ func TestWriteRefusesTenantSectionsItWouldAdd(t *testing.T) {
 	}
 }
 
-// The delta half of the rule: a flat file an operator already wrote stays
-// editable. Absolute rejection would turn a configuration the exporter
-// supports into a permanent write failure for that tenant.
-func TestWriteStillAcceptsAGrandfatheredSection(t *testing.T) {
+// #3064: a flat file an operator wrote — db-a.yaml also declaring `other` —
+// is git-managed. Until #3064 it stayed editable through the API (the delta
+// rule grandfathered its sections); now no write reaches it, not even one
+// whose body declares db-a alone, so `other` cannot be overwritten.
+func TestWriteRefusesAGrandfatheredSharedFile(t *testing.T) {
 	dir := initRepoOnMain(t)
 	seedBase(t, dir, "db-a.yaml", grandfathered)
-	if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", smuggled); err != nil {
-		t.Fatalf("gate rejected an edit to a section the file already declared: %v", err)
+	_, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly)
+	if !errors.Is(err, ErrTenantGitManaged) {
+		t.Fatalf("err = %v, want the git-managed refusal", err)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), "warning") {
-		t.Errorf("accepted write did not reach disk: %q", raw)
+	if err != nil || string(raw) != grandfathered {
+		t.Errorf("db-a.yaml = %q (%v), want unchanged", raw, err)
 	}
 }
 
@@ -176,10 +180,11 @@ func TestAddedTenantKeysFailsClosedWithoutABaseFile(t *testing.T) {
 			t.Errorf("baseRaw %v must yield an empty baseline, got %v", baseRaw, got)
 		}
 	}
-	// validate() is the caller that turns "no configDir" into nil baseRaw, so
-	// assert that end of the wiring too rather than assuming it.
+	// validate() is the caller that turns "no configDir" into nil baseRaw.
+	// Since #3064 the body-shape check refuses such a body before the
+	// baseline is consulted at all.
 	if errs, _ := validate("", "db-a", "", smuggled); len(errs) != 1 ||
-		!strings.Contains(errs[0], "adds tenant section") {
+		!strings.Contains(errs[0], msgOwnOnly) {
 		t.Errorf("validate with no configDir must still refuse an added section, got %v", errs)
 	}
 }
@@ -379,27 +384,26 @@ func TestValidateRefusesAnIDThatWouldLeaveConfigDir(t *testing.T) {
 	}
 }
 
-// TestGrandfatheredSectionSurvivesAYmlSpelling is the #1673 × #1681 seam: the
-// added-section baseline must be read from the file the write will actually
-// land on, not from a synthesised `<id>.yaml`. A tenant whose file is spelled
-// `.yml` would otherwise get an EMPTY baseline, and since the baseline fails
-// closed that turns every edit of a flat file it legitimately shares into a
-// refusal — the gate would lock the tenant out of its own config.
-func TestGrandfatheredSectionSurvivesAYmlSpelling(t *testing.T) {
+// TestSharedFileIsGitManagedInEitherSpelling is the #1673 × #3064 seam: the
+// git-managed verdict is taken on the file the write would actually land on,
+// not a synthesised `<id>.yaml` — a shared file spelled `.yml` would
+// otherwise read as absent, and the write would create a second file beside
+// it.
+func TestSharedFileIsGitManagedInEitherSpelling(t *testing.T) {
 	for _, spelling := range []string{"db-a.yaml", "db-a.yml"} {
 		t.Run(spelling, func(t *testing.T) {
 			dir := initRepoOnMain(t)
 			seedBase(t, dir, spelling, grandfathered)
 
-			if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", smuggled); err != nil {
-				t.Fatalf("gate refused an edit to a section %s already declared: %v", spelling, err)
+			if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly); !errors.Is(err, ErrTenantGitManaged) {
+				t.Fatalf("err = %v, want the git-managed refusal for %s", err, spelling)
 			}
 			raw, err := os.ReadFile(filepath.Join(dir, spelling))
-			if err != nil {
-				t.Fatalf("write did not land on %s: %v", spelling, err)
+			if err != nil || string(raw) != grandfathered {
+				t.Errorf("%s = %q (%v), want unchanged", spelling, raw, err)
 			}
-			if !strings.Contains(string(raw), "warning") {
-				t.Errorf("%s did not receive the write: %q", spelling, raw)
+			if _, err := os.Stat(filepath.Join(dir, "db-a.yaml")); spelling == "db-a.yml" && err == nil {
+				t.Error("the refused write created db-a.yaml beside db-a.yml")
 			}
 		})
 	}
@@ -425,28 +429,26 @@ func TestValidateFailsClosedWhenConfigDirIsEmpty(t *testing.T) {
 	}
 	body := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    _silent_mode: \"all\"\n"
 
-	// Control: with a real configDir the baseline IS read and `other` is
-	// legitimately grandfathered, so this same body is accepted. Without this
-	// arm the test could pass because the body is bad rather than because the
-	// guard held.
-	if errs, _ := validate(dir, "db-a", path, body); len(errs) != 0 {
-		t.Fatalf("control arm: grandfathered body should be accepted with a real configDir, got %v", errs)
-	}
-
-	errs, _ := validate("", "db-a", path, body)
-	if len(errs) == 0 {
-		t.Fatal("configDir=\"\" accepted a body adding a foreign tenant section — the baseline read was not skipped, so the gate failed OPEN")
-	}
-	if !strings.Contains(errs[0], "adds tenant section") {
-		t.Fatalf("rejected for the wrong reason: %v", errs)
+	// #3064: a body declaring `other` is refused whatever the baseline says
+	// (the body-shape check runs first), so neither arm can open the gate.
+	// The control arm that once accepted it — the grandfathered edit — is
+	// gone with the grandfathering.
+	for _, configDir := range []string{dir, ""} {
+		errs, _ := validate(configDir, "db-a", path, body)
+		if len(errs) == 0 {
+			t.Fatalf("configDir=%q accepted a body adding a foreign tenant section", configDir)
+		}
+		if !strings.Contains(errs[0], msgOwnOnly) {
+			t.Fatalf("configDir=%q: rejected for the wrong reason: %v", configDir, errs)
+		}
 	}
 }
 
-// #3039: validate judges every section of the file, so a section the write
-// may keep (grandfathered) can carry another tenant's problems. Without a
-// TenantNames — validate's nil, or a request path that forgot to set one —
-// they are never named and still block; with one that shows the
-// tenant, they are named as before.
+// #3039: validate judged every section of the file, so a section the write
+// kept (grandfathered) could carry another tenant's problems, named only when
+// TenantNames showed that tenant. #3064: such a body is refused before any
+// section is judged, and the refusal names nothing of the other section,
+// whatever TenantNames says.
 func TestValidateNamesAnotherTenantOnlyWhenShown(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -455,14 +457,12 @@ func TestValidateNamesAnotherTenantOnlyWhenShown(t *testing.T) {
 	if err := os.WriteFile(path, []byte(base), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	errs, _ := validateReplacing(dir, "db-a", path, base, false, nil)
-	if got := strings.Join(errs, "; "); len(errs) != 1 || !strings.Contains(got, "another place in the file has problems") ||
-		strings.Contains(got, "tenant=other") || strings.Contains(got, "secret_key_b") {
-		t.Errorf("nil TenantNames: errs = %q, want one line naming nothing", errs)
-	}
-	errs, _ = validateReplacing(dir, "db-a", path, base, false, func(id string) bool { return id == "other" })
-	if got := strings.Join(errs, "; "); len(errs) != 1 || !strings.Contains(got, "tenant=other") || !strings.Contains(got, "secret_key_b") {
-		t.Errorf("shown: errs = %q, want the other tenant's message", errs)
+	for name, names := range map[string]TenantNames{"nil": nil, "shown": func(id string) bool { return id == "other" }} {
+		errs, _ := validateReplacing(dir, "db-a", path, base, false, names)
+		if got := strings.Join(errs, "; "); len(errs) != 1 || !strings.Contains(got, msgOwnOnly) ||
+			strings.Contains(got, "tenant=other") || strings.Contains(got, "secret_key_b") {
+			t.Errorf("%s TenantNames: errs = %q, want the #3064 refusal naming nothing of the other section", name, errs)
+		}
 	}
 }
 

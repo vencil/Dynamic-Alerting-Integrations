@@ -39,6 +39,9 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		{"body does not declare the URL id", "tenants:\n  someone-else:\n    _silent_mode: \"warning\"\n"},
 		{"content after the first document", ownOnly + "---\ntenants:\n  sneaky:\n    _silent_mode: \"all\"\n"},
 		{"string _metadata (#2859)", "tenants:\n  db-a:\n    _metadata: \"environment: production\"\n"},
+		// #3064: a second tenant section is a body-shaped defect now (the
+		// body is API-shaped or refused), no longer a tree-derived one.
+		{"a second tenant section (#3064)", smuggled},
 		// ⛔ THE ONE THAT ACTUALLY GUARDS THE DUPLICATION. The two validators each
 		// call cfg.ValidateTenantCustomAlerts on their own line; every other row
 		// here rides on the shared validateShape and so cannot drift. Without this
@@ -63,20 +66,8 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		})
 	}
 
-	// The tree-derived half: validateBodyOnly must stay silent (it cannot see the
-	// base file and must not pretend to), validate must refuse.
-	t.Run("only validate rejects an added foreign section", func(t *testing.T) {
-		if errs := validateBodyOnly("db-a", smuggled); len(errs) > 0 {
-			t.Errorf("validateBodyOnly refused on tree-derived evidence it does not have: %v", errs)
-		}
-		errs, _ := validate(dir, "db-a", path, smuggled)
-		if len(errs) == 0 {
-			t.Fatal("validate accepted a smuggled tenant section — the #1681 gate is gone")
-		}
-		if !strings.Contains(strings.Join(errs, "; "), "other") {
-			t.Errorf("refusal does not name the added section: %v", errs)
-		}
-	})
+	// The tree-derived half (validateBodyOnly silent, validate refusing) had
+	// one row, an added foreign section; #3064 made it body-shaped (above).
 }
 
 // --- the defect this change exists to fix ------------------------------------
@@ -116,15 +107,33 @@ func seedStaleAndFresh(t *testing.T, stale, fresh map[string]string) string {
 func TestWritePR_StaleTreeNoLongerOverRejects(t *testing.T) {
 	const ownOnlyFalse = "tenants:\n  db-a:\n    _silent_mode: \"false\"\n"
 	const withOther = "tenants:\n  db-a:\n    _silent_mode: \"false\"\n  other:\n    _silent_mode: \"false\"\n"
+	body := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 
-	t.Run("operator grandfathered a section this pod has not seen", func(t *testing.T) {
+	// #3064: git-managed on this pod's stale tree, API-managed on the base
+	// the PR is cut from — the write is judged where it lands, and goes
+	// through.
+	t.Run("operator split the shared file after this pod last fetched", func(t *testing.T) {
+		dir := seedStaleAndFresh(t,
+			map[string]string{"db-a.yaml": withOther},
+			map[string]string{"db-a.yaml": ownOnlyFalse, "other.yaml": "tenants:\n  other:\n    _silent_mode: \"false\"\n"})
+		if _, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body); err != nil {
+			t.Fatalf("legitimate write refused on the STALE tree: %v", err)
+		}
+	})
+
+	// #3064, the security direction: API-managed on the stale tree,
+	// git-managed on the fresh base (the operator shared the file). The
+	// verdict on the base refuses it, and no branch carries the body.
+	t.Run("operator shared the file after this pod last fetched", func(t *testing.T) {
 		dir := seedStaleAndFresh(t,
 			map[string]string{"db-a.yaml": ownOnlyFalse},
 			map[string]string{"db-a.yaml": withOther})
-		// db-a edits its OWN value. Against the FRESH base this ADDS nothing.
-		body := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    _silent_mode: \"false\"\n"
-		if _, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body); err != nil {
-			t.Fatalf("legitimate write refused on the STALE tree: %v", err)
+		_, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body)
+		if !errors.Is(err, ErrTenantGitManaged) {
+			t.Fatalf("err = %v, want the git-managed refusal judged on the fresh base", err)
+		}
+		if br := gitOut(t, dir, "branch", "--list", "tenant-api/*"); br != "" {
+			t.Errorf("branch left behind: %s", br)
 		}
 	})
 
@@ -147,19 +156,31 @@ func TestWritePR_StaleTreeNoLongerOverRejects(t *testing.T) {
 	})
 }
 
+// #3064: the batch pre-flight on the stale tree tolerates a tenant that is
+// git-managed there (ErrTenantGitManaged, like ErrMergeBaseNotLoadable): the
+// fresh base decides — accepted where the file is the tenant's own, refused
+// where it is shared.
 func TestWritePRBatch_StaleTreeNoLongerOverRejects(t *testing.T) {
 	const ownOnlyFalse = "tenants:\n  db-a:\n    _silent_mode: \"false\"\n"
 	const withOther = "tenants:\n  db-a:\n    _silent_mode: \"false\"\n  other:\n    _silent_mode: \"false\"\n"
+	merge := func([]byte) (string, error) {
+		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
+	}
 
 	dir := seedStaleAndFresh(t,
-		map[string]string{"db-a.yaml": ownOnlyFalse},
-		map[string]string{"db-a.yaml": withOther})
-	merge := func([]byte) (string, error) {
-		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  other:\n    _silent_mode: \"false\"\n", nil
-	}
+		map[string]string{"db-a.yaml": withOther},
+		map[string]string{"db-a.yaml": ownOnlyFalse, "other.yaml": "tenants:\n  other:\n    _silent_mode: \"false\"\n"})
 	if _, err := NewWriter(dir, dir).WritePRBatch(context.Background(),
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com"); err != nil {
 		t.Fatalf("legitimate batch write refused on the STALE tree: %v", err)
+	}
+
+	dir = seedStaleAndFresh(t,
+		map[string]string{"db-a.yaml": ownOnlyFalse},
+		map[string]string{"db-a.yaml": withOther})
+	if _, err := NewWriter(dir, dir).WritePRBatch(context.Background(),
+		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com"); !errors.Is(err, ErrTenantGitManaged) {
+		t.Fatalf("err = %v, want the git-managed refusal judged on the fresh base", err)
 	}
 }
 

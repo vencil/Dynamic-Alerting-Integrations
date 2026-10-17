@@ -1,28 +1,23 @@
 package handler
 
-// #3062: a whole-file PUT /api/v1/tenants/{id} writes the file {id} lives in,
-// and one conf.d file may declare several tenants. addedTenantKeys refused a
-// body that ADDS another tenant's section, but a section the file already
-// declared was not looked at: a caller with write access to tenant In only
-// could drop or rewrite tenant Out's section when the two share a file.
-//
-// Since the fix a PUT body DECLARES sections: each one it declares must be a
-// tenant the caller may write, and the sections it does not declare are kept
-// as they are (the server splices the declared ones into the file).
+// #3062 → #3064: a whole-file PUT /api/v1/tenants/{id} writes the file {id}
+// lives in, and one conf.d file may declare several tenants. #3062 spliced
+// the sections a body declares into such a file; #3064 drew the line at the
+// file instead: a tenant whose file is shared is git-managed, and no PUT
+// reaches it — in either write mode, for any caller, whatever the body
+// declares. The other tenant's section can therefore neither be dropped nor
+// rewritten through the API.
 //
 // Rows, each in both write modes:
-//   - omit_out_kept: the old "delete" attack. Leaving Out out of the body no
-//     longer deletes it — omission means "not mine, keep it" — so the write
-//     of In's change is a 200 and Out's section is there, unchanged.
-//   - rewrite_out_denied: declaring Out with other content is a 403 with a
-//     fixed text that names no tenant; the file's bytes do not change and no
-//     commit or branch is left.
-//   - omit_out_kept_when_caller_writes_both: the control for the first row
-//     with a caller who may write both — still kept: omission never deletes
-//     (the API has no endpoint that removes a tenant).
-//   - rewrite_both_when_caller_writes_both: a caller who may write both
-//     changes both sections in one PUT; the body declares everything the
-//     file holds, so the file is the body, byte for byte.
+//   - own_body_refused: the body declares In alone (what a writer of In
+//     sends). 409 TENANT_GIT_MANAGED, the file unchanged, no branch.
+//   - own_body_refused_when_caller_writes_both: the same, for a caller who
+//     may write both: the line is the file's shape, not the caller.
+//   - rewrite_out_refused: the body declares Out too — not API-shaped, the
+//     400 body refusal before the file is read; nothing names Out's values.
+//   - rewrite_both_refused_when_caller_writes_both: likewise.
+//   - own_file_accepted: the control — In's own file, the same body: 200,
+//     the file is the body byte for byte.
 
 import (
 	"bytes"
@@ -46,8 +41,6 @@ const (
 	foreignInChanged = "  " + orgEnfTenantIn + ":\n    _silent_mode: \"disable\"\n"
 	// Body (a): only In, changed — Out is not declared.
 	foreignBodyOmitOut = "tenants:\n" + foreignInChanged
-	// What (a) leaves: In changed, Out as it was.
-	foreignOmitOutResult = "tenants:\n" + foreignInChanged + foreignOutSection
 	// Body (b): In plus a rewritten Out.
 	foreignBodyRewriteOut = "tenants:\n" + foreignInSection +
 		"  " + orgEnfTenantOut + ":\n    _silent_mode: \"disable\"\n"
@@ -159,35 +152,38 @@ func foreignRefused(t *testing.T, w *httptest.ResponseRecorder, f *orgEnfFixture
 
 func TestPutTenant_ForeignSectionInSharedFile(t *testing.T) {
 	t.Parallel()
+	ownFile := "tenants:\n" + foreignInSection
 	for _, mode := range foreignModes {
 		for _, tc := range []struct {
-			name, body string
+			name, file, body string
 			// outWritable: the caller may also write tenant Out.
 			outWritable bool
-			// want: the written file on a 200; "" for the 403 refusal.
-			want string
+			// wantStatus, wantText: the refusal; 200 writes the body.
+			wantStatus int
+			wantText   string
 		}{
-			{"omit_out_kept", foreignBodyOmitOut, false, foreignOmitOutResult},
-			{"rewrite_out_denied", foreignBodyRewriteOut, false, ""},
-			{"omit_out_kept_when_caller_writes_both", foreignBodyOmitOut, true, foreignOmitOutResult},
-			{"rewrite_both_when_caller_writes_both", foreignBodyRewriteBoth, true, foreignBodyRewriteBoth},
+			{"own_body_refused", foreignSharedFile, foreignBodyOmitOut, false, http.StatusConflict, CodeTenantGitManaged},
+			{"own_body_refused_when_caller_writes_both", foreignSharedFile, foreignBodyOmitOut, true, http.StatusConflict, CodeTenantGitManaged},
+			{"rewrite_out_refused", foreignSharedFile, foreignBodyRewriteOut, false, http.StatusBadRequest, "and no other tenant"},
+			{"rewrite_both_refused_when_caller_writes_both", foreignSharedFile, foreignBodyRewriteBoth, true, http.StatusBadRequest, "and no other tenant"},
+			{"own_file_accepted", ownFile, foreignBodyOmitOut, false, http.StatusOK, ""},
 		} {
 			t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
-				w, f, onDisk, branch := foreignPut(t, mode.pr, foreignSharedFile, tc.body, tc.outWritable)
-				if tc.want == "" {
-					foreignRefused(t, w, f, foreignSharedFile, onDisk, branch, http.StatusForbidden,
+				w, f, onDisk, branch := foreignPut(t, mode.pr, tc.file, tc.body, tc.outWritable)
+				if tc.wantStatus != http.StatusOK {
+					foreignRefused(t, w, f, tc.file, onDisk, branch, tc.wantStatus,
 						orgEnfTenantOut, `"warning"`, `"disable"`)
-					if !strings.Contains(w.Body.String(), "declares a tenant section you may not write") {
-						t.Errorf("refusal text: %s", w.Body.String())
+					if !strings.Contains(w.Body.String(), tc.wantText) {
+						t.Errorf("refusal text: %s, want %q", w.Body.String(), tc.wantText)
 					}
 					return
 				}
 				if w.Code != http.StatusOK {
 					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 				}
-				if got := foreignWritten(t, mode.pr, foreignSharedFile, onDisk, branch); got != tc.want {
-					t.Errorf("written file:\n%s\nwant:\n%s", got, tc.want)
+				if got := foreignWritten(t, mode.pr, tc.file, onDisk, branch); got != tc.body {
+					t.Errorf("written file:\n%s\nwant:\n%s", got, tc.body)
 				}
 			})
 		}

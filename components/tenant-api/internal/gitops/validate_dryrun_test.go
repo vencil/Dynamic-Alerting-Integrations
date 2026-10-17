@@ -32,11 +32,9 @@ func TestValidate_CustomAlertsReadErrorCarriesNoPath(t *testing.T) {
 }
 
 // previewDryRun is direct mode's POST /validate as the handler runs it
-// (#3062): PreviewPut with a splice, the production path since
-// DryRunValidate was folded into it. The splice is the handler's answer for
-// a file that holds nothing but the sections the body declares — the body —
-// so the tenant file is read as production reads it.
+// (#3062): PreviewPut, the production path since DryRunValidate was folded
+// into it.
 func previewDryRun(ctx context.Context, w *Writer, tenantID, body string) (errs, notices []string, err error) {
-	res, errs, err := w.PreviewPut(ctx, tenantID, body, func([]byte) (string, error) { return body, nil }, nil)
+	res, errs, err := w.PreviewPut(ctx, tenantID, body)
 	return errs, res.Notices, err
 }

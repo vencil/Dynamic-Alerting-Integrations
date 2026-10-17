@@ -90,24 +90,11 @@ const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be 
 	"(an RBAC rule with tenants: [\"*\"] and no org-scope, environments or domains); " +
 	"otherwise repair the file in git"
 
-// SpliceFunc computes what a whole-file PUT writes (#3062): the body's
-// declared tenant sections spliced into base, the tenant file's CURRENT
-// bytes (nil when it does not exist). The writer calls it under its lock, on
-// the very bytes the write replaces — in PR mode those on the fresh base —
-// after the X-DA-Base-Hash precondition and before validation. It returns
-// ErrSpliceBaseUnparseable (errors.Is) when base cannot be spliced into:
-// the writer then writes the body whole, which needs the #2405 bit
-// (WithReplaceUnparseable). Any other error refuses the write unchanged.
-type SpliceFunc func(base []byte) (string, error)
-
-// ErrSpliceBaseUnparseable is a SpliceFunc's answer for a current file whose
-// tenant sections cannot be told apart — it does not parse, or (#3062) its
-// root is not a mapping or has a merge key, its `tenants` is an alias or not
-// a mapping, its `tenants:` has a merge key, a key that does not decode to a
-// tenant id or an id declared twice: nothing in it can be kept apart from
-// the rest, so only a caller with write permission on all tenants may
-// replace it whole (#2405), whichever of these shapes it has.
-var ErrSpliceBaseUnparseable = errors.New("the current tenant file cannot be parsed")
+// msgBodyNotAPIShaped (with the tenant id) refuses a write body that is not
+// API-shaped (#3064, confd.TenantFileManagement).
+const msgBodyNotAPIShaped = "the body must declare tenants.%s and no other tenant, in one YAML document, " +
+	"without anchors, aliases, merge keys (<<) or tagged keys at the top level or directly under " +
+	"tenants: — tenant-api writes only files that hold one tenant (#3064)"
 
 // replaceUnparseableKey is the context key WithReplaceUnparseable sets.
 type replaceUnparseableKey struct{}
@@ -875,46 +862,7 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 // nil — handlers surface them in the 200 response so the author sees the
 // migration signal on the very write that succeeded with an old spelling.
 func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) (notices []string, err error) {
-	return w.write(ctx, tenantID, authorEmail, yamlContent, "", nil)
-}
-
-// WriteSpliced is Write for PUT /tenants/{id} (#3062): the body is validated
-// as Write validates it, but what is committed is splice's result on the
-// tenant file as read under the lock — the body's declared sections in the
-// current file, everything else kept. See SpliceFunc.
-func (w *Writer) WriteSpliced(ctx context.Context, tenantID, authorEmail, yamlContent string, splice SpliceFunc) (notices []string, err error) {
-	return w.write(ctx, tenantID, authorEmail, yamlContent, "", splice)
-}
-
-// WriteSplicedIfUnchanged is WriteSpliced with WriteIfUnchanged's
-// precondition, checked first, on the bytes splice then reads.
-func (w *Writer) WriteSplicedIfUnchanged(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string, splice SpliceFunc) (notices []string, err error) {
-	if baseHash == "" {
-		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
-	}
-	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash, splice)
-}
-
-// spliceBase runs splice on base (the tenant file as read under the lock,
-// nil when absent) and returns what the write commits. A base splice cannot
-// read is replaced by the body whole only with the #2405 bit; without it the
-// write is refused with the #2405 text, whatever else the body says (an
-// ErrSpliceShape refusal).
-func spliceBase(ctx context.Context, base []byte, yamlContent string, splice SpliceFunc) (string, error) {
-	if splice == nil {
-		return yamlContent, nil
-	}
-	content, err := splice(base)
-	if errors.Is(err, ErrSpliceBaseUnparseable) {
-		if !replaceUnparseableAllowed(ctx) {
-			return "", fmt.Errorf("%w: %w", ErrValidation, spliceShapeText(MsgUnparseableBaseNeedsPlatformWrite))
-		}
-		return yamlContent, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return content, nil
+	return w.write(ctx, tenantID, authorEmail, yamlContent, "")
 }
 
 // WriteIfUnchanged is Write with an optimistic-concurrency precondition:
@@ -940,13 +888,14 @@ func (w *Writer) WriteIfUnchanged(ctx context.Context, tenantID, authorEmail, ya
 	if baseHash == "" {
 		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
 	}
-	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash, nil)
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash)
 }
 
-// write is the shared body of Write / WriteIfUnchanged / WriteSpliced*.
-// baseHash is empty for an unconditional write; splice is nil for a write
-// that commits the body as it is.
-func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string, splice SpliceFunc) (notices []string, err error) {
+// write is the shared body of Write / WriteIfUnchanged. baseHash is empty
+// for an unconditional write. The body replaces the tenant's file whole: the
+// file is the tenant's alone (#3064; a git-managed one is refused in
+// resolvePut).
+func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -1000,8 +949,8 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	//
 	// Optimistic concurrency, under the lock and before validating: a caller
 	// whose base is stale must hear ErrPrecondition (refresh and retry), not a
-	// validation verdict about a file it has not seen — and before the splice,
-	// so a stale base hears it first.
+	// validation verdict about a file it has not seen. It runs after the
+	// git-managed refusal (#3064, see resolvePut).
 	precondition := func(filePath string) error {
 		if baseHash == "" {
 			return nil
@@ -1022,7 +971,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 		return nil
 	}
-	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition, splice, nil)
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -1030,11 +979,6 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 	filePath, existing, content, notices := res.FilePath, res.Existing, res.Content, res.Notices
-	if splice == nil {
-		// resolvePut reads the file only for a splice; the no-op check
-		// reads it here, as before #3062 (a read error leaves it nil).
-		existing, _ = readTenantFile(filePath)
-	}
 
 	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
 	if w.unchangedFile(filePath, existing, content) {
@@ -1407,57 +1351,6 @@ func (w *Writer) ensureNotDeclaredElsewhere(tenantID, target string) error {
 	return w.ensureNotDeclaredElsewhereIn(w.scanTree, tenantID, target)
 }
 
-// ensureDeclaredSectionsNotElsewhere is the #2078 guard for the tenants a
-// spliced PUT body declares besides tenantID (#3062): each one whose section
-// target's current content (base) holds must be declared by no other conf.d
-// file. Such a tenant's write scope is judged on its section in target; a
-// second declaration elsewhere is a copy the exporter refuses the tree over,
-// and which of the two is current nobody can say — so the write is refused,
-// ErrTenantDeclaredElsewhere, as a write of tenantID itself would be.
-//
-// Only tenants base declares are asked: one it does not declare is a section
-// the body adds, which validation refuses whether or not another file holds
-// it — asking would answer, for a tenant the caller may not read, whether
-// another file declares it. A base that does not decode lists nothing, so
-// every tenant the body declares is asked (fail closed). The walk runs at
-// most once, and only when there is a tenant to ask about.
-func (w *Writer) ensureDeclaredSectionsNotElsewhere(walk func() (*cfg.TreeScan, error), tenantID, yamlContent string, base []byte, target string) error {
-	body, err := cfg.ParseConfigFile([]byte(yamlContent))
-	if err != nil {
-		return nil // validation refuses the body
-	}
-	var inBase map[string]map[string]cfg.ScheduledValue
-	if b, berr := cfg.ParseConfigFile(base); berr == nil {
-		inBase = b.Tenants
-	}
-	ids := make([]string, 0, len(body.Tenants))
-	for id := range body.Tenants {
-		if _, ok := inBase[id]; id != tenantID && (ok || inBase == nil) {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	sort.Strings(ids)
-	var scan *cfg.TreeScan
-	var scanErr error
-	walked := false
-	once := func() (*cfg.TreeScan, error) {
-		if !walked {
-			walked = true
-			scan, scanErr = walk()
-		}
-		return scan, scanErr
-	}
-	for _, id := range ids {
-		if err := w.ensureNotDeclaredElsewhereIn(once, id, target); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // ensureNotDeclaredElsewhereIn is ensureNotDeclaredElsewhere judged on the
 // walk that walk returns — scanTree on the write path, scanTreeForRead on
 // the preview path (see previewTenantFilePath).
@@ -1502,6 +1395,12 @@ func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content 
 	existing, rerr := readTenantFile(filePath)
 	if rerr != nil && !os.IsNotExist(rerr) {
 		return "", nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
+	}
+	// #3064: a git-managed tenant is not written through the API — the
+	// batches and every other partial write included. Judged on the bytes
+	// the merge would read, so under the lock on the tree the write lands on.
+	if err := CheckAPIManaged(tenantID, existing); err != nil {
+		return "", existing, err
 	}
 	content, merr := merge(existing)
 	if merr != nil {
@@ -2173,6 +2072,13 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// keeps the containment check in the same function as the path it protects.
 	if err := guardTenantID(tenantID); err != nil {
 		return tcfg, []string{err.Error()}
+	}
+	// #3064: what is written must stay API-shaped — the one tenant, in one
+	// document, declared literally — or the write would turn the tenant's
+	// file into one tenant-api no longer manages (and, through a merge key,
+	// an alias or a tagged key, declare a tenant its text does not show).
+	if confd.TenantFileManagement([]byte(yamlContent), tenantID) != "" {
+		return tcfg, []string{fmt.Sprintf(msgBodyNotAPIShaped, tenantID)}
 	}
 	// #2859: `_metadata` is a mapping (tenant-config schema). The exporter
 	// still reads a string that parses as YAML, but after its decode the two
