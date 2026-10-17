@@ -215,7 +215,9 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 		return idxErr
 	}
 	if idxErr == nil {
-		cerr := w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", filePath)
+		// checkout runs post-checkout, so it gets no GIT_LITERAL_PATHSPECS
+		// (literalPathspecs): the path is made literal itself.
+		cerr := w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", literalPathspec(filePath))
 		if cerr == nil {
 			return nil
 		}

@@ -85,19 +85,23 @@ def test_a_tenant_own_typo_is_one_error_per_tenant(tmp_path):
     assert all(f.severity == "error" for f in unread)
 
 
-def test_an_unregistered_key_the_exporter_serves_is_a_platform_violation(tmp_path):
-    """根 defaults 宣告了沒登記的 `_myth`，exporter 照樣送出：平台的問題，不算租戶拼錯。"""
+def test_an_unregistered_key_the_root_declares_is_unread(tmp_path):
+    """#3045：根 defaults 宣告了沒登記的 `_myth`，exporter 也不送（任何一層都不送）。
+    所以它和其他沒人讀的鍵一樣是 `unread`：寫在租戶自己的檔是 error、算在該租戶；
+    只從根 defaults 繼承的是 notice，報一筆在根 defaults，列出它到達的租戶。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _myth: 5\n",
         "ta.yaml": "tenants:\n  ta:\n    _myth: 7\n",
         "tb.yaml": "tenants:\n  tb:\n    mysql_connections: 60\n"}))
     a, b = _by_key(t, "ta")["_myth"], _by_key(t, "tb")["_myth"]
-    assert (a.verdict, a.severity) == ("platform_violation", "notice")
-    assert (b.verdict, b.severity, b.file) == ("platform_violation", "notice", "_defaults.yaml")
-    # 一筆，報在宣告它的平台檔，兩個租戶都列；不算在 ta 自己的檔上。
-    found = [f for f in t.findings if f.key == "_myth"]
-    assert [(f.kind, f.file, f.tenants) for f in found] == [
-        ("platform_violation", "_defaults.yaml", ("ta", "tb"))]
+    assert (a.read_by, a.verdict, a.severity, a.reason, a.file) == (
+        (), "unread", "error", "unregistered", "ta.yaml")
+    assert (b.read_by, b.verdict, b.severity, b.reason, b.file) == (
+        (), "unread", "notice", "unregistered", "_defaults.yaml")
+    assert a.served is None and b.served is None
+    found = sorted((f.kind, f.severity, f.file, f.tenants) for f in t.findings if f.key == "_myth")
+    assert found == [("unread", "error", "ta.yaml", ("ta",)),
+                     ("unread", "notice", "_defaults.yaml", ("tb",))]
 
 
 def test_no_root_platform_file_leaves_threshold_keys_undecidable(tmp_path):

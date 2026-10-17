@@ -9,8 +9,9 @@ import (
 )
 
 // A `_custom_alerts` entry the exporter drops because an earlier entry
-// already serves its series is refused by the gate; entries that only share
-// a shape and severity are not (#2031).
+// already serves its series (#2031), or a row of its shape and severity under
+// another name or mode (#3112), is refused by the gate; another severity of
+// the shape is not.
 func TestGuard_CustomAlertDuplicateSeries(t *testing.T) {
 	t.Parallel()
 	const thr = "recipe: threshold, metric: qd, op: \">\", window: 5m"
@@ -26,9 +27,17 @@ func TestGuard_CustomAlertDuplicateSeries(t *testing.T) {
 			"      - {recipe: slo_burn_rate, name: avail1, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n" +
 				"      - {recipe: slo_burn_rate, name: avail2, metric: err_total, denominator_metric: req_total, objective: \"99.5\"}\n",
 			[]string{"_custom_alerts[1]"}},
-		"control: another name": {
+		"same shape and severity, another name": {
 			"      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
 				"      - {" + thr + ", name: q_other, threshold: \"200:warning\"}\n",
+			[]string{"_custom_alerts[1]"}},
+		"same shape and severity, another mode": {
+			"      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
+				"      - {" + thr + ", name: q_quiet, threshold: \"200:warning\", mode: silent}\n",
+			[]string{"_custom_alerts[1]"}},
+		"control: another severity": {
+			"      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
+				"      - {" + thr + ", name: q_other, threshold: \"200:critical\"}\n",
 			nil},
 	} {
 		t.Run(name, func(t *testing.T) {

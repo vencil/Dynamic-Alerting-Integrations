@@ -1982,6 +1982,133 @@ def value_type_text(value: object) -> str:
     return type(value).__name__
 
 
+# #3116: the domain-policy constraints that list receiver types.
+RECEIVER_TYPE_CONSTRAINTS = ("forbidden_receiver_types", "allowed_receiver_types")
+
+
+def unknown_receiver_type_entries(raw: object) -> list:
+    """#3116: the entries of a receiver-type constraint list that are not a
+    receiver type the generator renders (a ``RECEIVER_TYPES`` key): a name it
+    does not know (``webhok``, ``opsgenie``), or no string at all (``yes`` is
+    the boolean True to PyYAML, ``~`` null, a mapping, a list).
+
+    A list holding any of them is unusable: the generator's reader records it
+    (``domain_policy_problems`` → ``_grar_parse._record_policy_problems``) and the whole tree is refused
+    in every mode. Before, an unknown name in ``forbidden_receiver_types``
+    forbade nothing at rc 0, and one in ``allowed_receiver_types`` made every
+    receiver a violation without saying why. *raw* that is not a list (null,
+    absent) has no entries here.
+    """
+    if not isinstance(raw, list):
+        return []
+    return [e for e in raw if not (isinstance(e, str) and e in RECEIVER_TYPES)]
+
+
+def unknown_receiver_types_text(field: str, bad: list) -> str:
+    """The field-type message for the *bad* entries of constraint *field*."""
+    return (f"constraint '{field}' lists "
+            f"{', '.join(value_type_text(e) for e in bad)}, which "
+            f"{'is not a receiver type' if len(bad) == 1 else 'are not receiver types'}"
+            f" the generator renders; the receiver types are "
+            f"{', '.join(sorted(RECEIVER_TYPES))}")
+
+
+# #3116: the list-valued constraints (null = not constrained).
+POLICY_LIST_CONSTRAINTS = ("forbidden_receiver_types", "allowed_receiver_types",
+                           "enforce_group_by")
+POLICY_DURATION_CONSTRAINTS = ("max_repeat_interval", "min_group_wait")
+
+
+def domain_policy_problems(policy: object) -> list[tuple[str | None, str]]:
+    """#3116: ``(field, message)`` of every reason one domain policy cannot
+    be enforced as written — the ONE judgment of a policy's shape.
+
+    Each is a ``domain_policy_unusable`` finding, and every one of them
+    refuses the whole tree in every mode: the generator's reader records them
+    (``_grar_parse._record_policy_problems``) as field-type errors, which
+    ``tree_refusal`` refuses. ``check_domain_policies`` skips a policy with
+    any problem and judges the rest; it reports no shape of its own.
+
+    Before #3116 these were spread over the reader and
+    ``check_domain_policies``, most of them ERRORs under ``--strict`` only:
+    without it a misspelt bound, a `tenants` that is not a list or a
+    constraint that is not a list switched the policy (or that constraint)
+    off at rc 0.
+
+    Null is "not set" wherever the schema allows it: a null policy, null
+    ``constraints``, a null constraint value, and a null ``tenants`` (the
+    policy applies to no tenant — it used to be refused as "not a list").
+    The schema decides the shape: ``enforce_group_by`` entries are non-empty
+    strings (``group_by_problems``' ``not_string`` / ``empty``; a mapping
+    entry used to crash the run with a TypeError, rc 2).
+    """
+    if policy is None:
+        return []
+    if not isinstance(policy, dict):
+        return [(None, f"policy must be a mapping, got {value_type_text(policy)} "
+                       f"— define the policy as a mapping with "
+                       f"description/tenants/constraints keys")]
+    out: list[tuple[str | None, str]] = []
+    tenants = policy.get("tenants")
+    if tenants is None:
+        pass
+    elif not isinstance(tenants, list):
+        out.append(("tenants", f"'tenants' must be a list, got "
+                               f"{value_type_text(tenants)} — define 'tenants' "
+                               f"as a YAML list of tenant ids"))
+    else:
+        # The schema's `minLength: 1`: an empty id names no tenant either.
+        bad = [t for t in tenants if not isinstance(t, str) or not t]
+        if bad:
+            out.append(("tenants", f"'tenants' lists "
+                                   f"{', '.join(value_type_text(t) for t in bad)}"
+                                   f", which names no tenant — list each tenant "
+                                   f"id as a plain YAML scalar"))
+    constraints = policy.get("constraints", {})
+    if constraints is None:
+        return out
+    if not isinstance(constraints, dict):
+        out.append(("constraints", f"'constraints' must be a mapping, got "
+                                   f"{value_type_text(constraints)} — define "
+                                   f"'constraints' as a mapping of constraint keys"))
+        return out
+    for fld in POLICY_LIST_CONSTRAINTS:
+        raw = constraints.get(fld)
+        if raw is None:
+            continue
+        if not isinstance(raw, list):
+            out.append((f"constraints.{fld}",
+                        f"constraint '{fld}' must be a list, got "
+                        f"{value_type_text(raw)} — define '{fld}' as a YAML list"))
+        elif fld in RECEIVER_TYPE_CONSTRAINTS:
+            bad = unknown_receiver_type_entries(raw)
+            if bad:
+                out.append((f"constraints.{fld}", unknown_receiver_types_text(fld, bad)))
+        else:
+            # A required label is a label name, as a group_by entry is: the
+            # group_by predicate's element rules (a repeat or `...` is not a
+            # problem in a list of requirements).
+            for idx, kind, value in group_by_problems(raw)[1]:
+                if kind in ("not_string", "empty"):
+                    out.append((f"constraints.{fld}", group_by_problem_text(
+                        f"constraint '{fld}' entry [{idx}]", kind, value)))
+    for fld in POLICY_DURATION_CONSTRAINTS:
+        raw = constraints.get(fld)
+        if raw is not None and _parse_policy_duration(raw) is None:
+            out.append((f"constraints.{fld}",
+                        f"constraint '{fld}' value {value_type_text(raw)} is not "
+                        f"a valid duration — use Prometheus/Go duration syntax "
+                        f"such as '30s', '1h' or '1h30m'; negative values are "
+                        f"not allowed"))
+    escalation = constraints.get("require_critical_escalation")
+    if escalation is not None and not isinstance(escalation, bool):
+        out.append(("constraints.require_critical_escalation",
+                    f"constraint 'require_critical_escalation' must be a "
+                    f"boolean (true / false, unquoted), got "
+                    f"{value_type_text(escalation)}"))
+    return out
+
+
 def receiver_bool_type_errors(obj: object, *, block: str, where: str,
                               field_prefix: str = "") -> list[tuple[str, str]]:
     """#2906: ``(field, message)`` of each receiver boolean field of a routing
@@ -2708,31 +2835,29 @@ def check_domain_policies(
         routing_configs: {tenant: resolved_routing_config}
         domain_policies: {policy_name: {tenants, constraints, ...}}
         strict: if True, return ERROR instead of WARN for violations,
-            append a fix hint to each violation message, and fail LOUD on
-            every malformed input the lenient path silently skips:
-            unparseable/negative durations (policy or tenant side),
-            non-list receiver-type / enforce_group_by constraints,
-            non-mapping policy or constraints blocks, and a non-list
-            tenant group_by. The CLI (`generate_alertmanager_routes.py
-            --strict`) treats these ERROR lines as blocking (exit 1).
-            #2490: the timing bounds (max_repeat_interval /
-            min_group_wait) are compared by ONE function in both modes,
-            ``_timing_bound_violations`` — same parsing, same skips, same
-            findings (a tenant value Alertmanager refuses included); only
-            the level differs (lenient: WARN, no hint, exit code
-            unchanged). A policy bound that is itself unreadable is
-            reported in strict mode only. The other lenient skips listed
-            above are unchanged.
+            append a fix hint to each violation message, and report a
+            tenant group_by that is not a list. The CLI
+            (`generate_alertmanager_routes.py --strict`) treats these ERROR
+            lines as blocking (exit 1). #2490: the timing bounds
+            (max_repeat_interval / min_group_wait) are compared by ONE
+            function in both modes, ``_timing_bound_violations`` — same
+            parsing, same skips, same findings (a tenant value Alertmanager
+            refuses included); only the level differs (lenient: WARN, no
+            hint, exit code unchanged).
+
+    #3116: a policy that is not written correctly — any
+    ``domain_policy_problems`` entry, in any mode — is skipped here; the
+    generator's reader reports it as ``domain_policy_unusable`` and refuses
+    the whole tree in every mode. This function reports no policy shape.
 
     ``require_critical_escalation: true`` (#2244) is judged by
     ``critical_escalation_findings``; a compliant tenant's non-escalation
     destination that can still receive a critical alert (#2312) is a WARN
     in both modes and never blocks.
 
-    Known limitation: a ``domain_policies:`` block in a wrongly named
-    file, or an unparseable ``_domain_policy.yaml``, never reaches this
-    function — those are surfaced (strict → ERROR) by
-    ``load_tenant_configs`` in ``_grar_parse``.
+    A ``domain_policies:`` block in a wrongly named file, or a
+    ``_domain_policy.yaml`` that cannot be used, never reaches this function
+    — the reader (``_grar_parse``) reports those.
 
     Returns list of warning/error messages.
     """
@@ -2752,153 +2877,32 @@ def check_domain_policies(
         return Finding(msg, kind=kind, blocks="strict", tenant=tenant,
                        policy=policy, field=field)
 
-    def _constraint_list(policy_name: str, constraints: dict,
-                         field: str) -> list:
-        """Fetch a list-typed constraint; strict ERRORs on a wrong type.
-
-        None (explicit null, schema-legal) and absent both mean "not
-        constrained". Non-strict keeps the legacy silent-skip outcome.
-        """
-        raw = constraints.get(field)
-        if raw is None:
-            return []
-        if not isinstance(raw, list):
-            if strict:
-                messages.append(_fmt(
-                    f"domain_policy '{policy_name}': constraint '{field}' "
-                    f"must be a list, got {type(raw).__name__} — the "
-                    f"constraint cannot be enforced",
-                    f"define '{field}' as a YAML list",
-                    kind="domain_policy_unusable", policy=policy_name,
-                    field=f"constraints.{field}"))
-            return []
-        return raw
-
-    def _receiver_type_set(policy_name: str, constraints: dict,
-                           field: str) -> set:
-        """A receiver-type constraint as a set of its entries.
-
-        #2758: an entry that is a collection (a mapping, a list, a set —
-        unhashable) names no receiver type: strict ERRORs on it, and it is
-        kept as the non-string placeholder None — it matches no receiver
-        type, yet a non-empty `allowed_receiver_types` stays non-empty and
-        still restricts (as the corpus oracle reads it).
-        """
-        out: set = set()
-        for entry in _constraint_list(policy_name, constraints, field):
-            try:
-                hash(entry)
-            except TypeError:
-                if strict:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}': '{field}' entry "
-                        f"must be a receiver type, got {type(entry).__name__} "
-                        f"— the entry cannot be enforced",
-                        "list each receiver type as a plain YAML scalar",
-                        kind="domain_policy_unusable", policy=policy_name,
-                        field=f"constraints.{field}"))
-                entry = None
-            out.add(entry)
-        return out
-
-    def _type_names(types: set) -> list:
-        """The string entries of a receiver-type set, sorted, for a message.
-
-        A non-string entry (None from `!!null x` or a collection, True from
-        `yes`) equals no receiver type the generator accepts, and mixed with
-        strings it is unorderable (#2758).
-        """
-        return sorted(t for t in types if isinstance(t, str))
-
     for policy_name, policy in sorted(domain_policies.items()):
-        if not isinstance(policy, dict):
-            # Explicit null policy is schema-legal (inert); anything else
-            # non-mapping is fail-open — strict surfaces it.
-            if strict and policy is not None:
-                messages.append(_fmt(
-                    f"domain_policy '{policy_name}': policy must be a "
-                    f"mapping, got {type(policy).__name__} — the policy "
-                    f"cannot be enforced",
-                    "define the policy as a mapping with "
-                    "description/tenants/constraints keys",
-                    kind="domain_policy_unusable", policy=policy_name))
+        # #3116: a policy is judged only as written correctly. One with any
+        # problem (`domain_policy_problems`: a shape, a type, an entry, a
+        # bound) is the reader's to report — it refuses the whole tree in
+        # every mode — and is skipped here; a null policy or null
+        # `constraints` is inert.
+        if not isinstance(policy, dict) or domain_policy_problems(policy):
             continue
-        tenants = policy.get("tenants", [])
-        if not isinstance(tenants, list):
-            messages.append(_fmt(
-                f"domain_policy '{policy_name}': 'tenants' must be a list",
-                "define 'tenants' as a YAML list of tenant ids",
-                kind="domain_policy_unusable", policy=policy_name,
-                field="tenants"))
-            continue
-        constraints = policy.get("constraints", {})
-        if not isinstance(constraints, dict):
-            # Explicit null constraints is schema-legal (inert policy).
-            if strict and constraints is not None:
-                messages.append(_fmt(
-                    f"domain_policy '{policy_name}': 'constraints' must be "
-                    f"a mapping, got {type(constraints).__name__} — the "
-                    f"policy cannot be enforced",
-                    "define 'constraints' as a mapping of constraint keys",
-                    kind="domain_policy_unusable", policy=policy_name,
-                    field="constraints"))
-            continue
+        tenants = policy.get("tenants") or []  # null: no tenant
+        constraints = policy.get("constraints") or {}
 
-        forbidden_types = _receiver_type_set(
-            policy_name, constraints, "forbidden_receiver_types")
-        allowed_types = _receiver_type_set(
-            policy_name, constraints, "allowed_receiver_types")
-        enforce_group_by = _constraint_list(
-            policy_name, constraints, "enforce_group_by")
+        forbidden_types = set(constraints.get("forbidden_receiver_types") or [])
+        allowed_types = set(constraints.get("allowed_receiver_types") or [])
+        enforce_group_by = constraints.get("enforce_group_by") or []
         max_repeat = constraints.get("max_repeat_interval")
         min_group_wait = constraints.get("min_group_wait")
-        # #2244: None / false mean "not constrained". #2906: a value that is
-        # not a boolean is no longer this function's to report (it used to
-        # be a strict-only ERROR here, and a lenient run switched the
-        # constraint off in silence): the generator's reader records it
-        # (`_grar_parse._record_policy_type_errors`) and the whole tree is
-        # refused in every mode before any policy is checked.
-        escalation = constraints.get("require_critical_escalation")
-        require_escalation = escalation is True
+        # #2244: None / false mean "not constrained".
+        require_escalation = constraints.get("require_critical_escalation") is True
 
-        # Strict: validate constraint-side durations once per policy —
-        # an unparseable bound (e.g. "banana", "-1h") means the constraint
-        # would never fire, which must be loud, not silent.
-        # #2490: the bounds are parsed the same way in both modes (the
-        # lenient path used to have its own single-unit reading).
+        # #2490: the bounds are parsed the same way in both modes.
         max_sec: float | None = (None if max_repeat is None
                                  else _parse_policy_duration(max_repeat))
         min_sec: float | None = (None if min_group_wait is None
                                  else _parse_policy_duration(min_group_wait))
-        if strict:
-            for field, raw in (("max_repeat_interval", max_repeat),
-                               ("min_group_wait", min_group_wait)):
-                if raw is not None and _parse_policy_duration(raw) is None:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}': constraint "
-                        f"'{field}' value '{raw}' is not a valid duration "
-                        f"— the constraint cannot be enforced",
-                        "use Prometheus/Go duration syntax such as '30s', "
-                        "'1h' or '1h30m'; negative values are not allowed",
-                        kind="domain_policy_unusable", policy=policy_name,
-                        field=f"constraints.{field}"))
 
         for tenant in tenants:
-            # #2326 review F4: a `tenants:` entry that is not a scalar id (a
-            # mapping, a list) is unhashable and crashed the run here with a
-            # TypeError. It names no tenant, so it enforces nothing — strict
-            # says so (fail loud), lenient skips it, as for the other
-            # malformed shapes above.
-            if not isinstance(tenant, str):
-                if strict:
-                    messages.append(_fmt(
-                        f"domain_policy '{policy_name}': 'tenants' entry "
-                        f"must be a tenant id, got {type(tenant).__name__} "
-                        f"— the entry cannot be enforced",
-                        "list each tenant id as a plain YAML scalar",
-                        kind="domain_policy_unusable", policy=policy_name,
-                        field="tenants"))
-                continue
             if tenant not in routing_configs:
                 continue
             # #2243: a sub-route that renders its own AM receiver
@@ -2954,16 +2958,16 @@ def check_domain_policies(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
                             f"is forbidden",
-                            f"domain forbids {_type_names(forbidden_types)}; switch "
+                            f"domain forbids {sorted(forbidden_types)}; switch "
                             f"{whose} receiver.type to a compliant type "
                             f"or amend the domain policy", **_at("receiver.type")))
                     if allowed_types and recv_type not in allowed_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
-                            f"not in allowed types {_type_names(allowed_types)}",
+                            f"not in allowed types {sorted(allowed_types)}",
                             f"switch {whose} receiver.type to one of "
-                            f"{_type_names(allowed_types)} or amend the domain policy",
+                            f"{sorted(allowed_types)} or amend the domain policy",
                             **_at("receiver.type")))
 
                 # Check max_repeat_interval / min_group_wait — #2490: ONE
