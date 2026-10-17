@@ -318,25 +318,29 @@ func TestDiffTenant_WithheldWhenFileDeclaresUnreadableTenant(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			t.Parallel()
 			f := wFixture(t, role, file)
-			// A short proposal (the diff would list the whole file) and the
-			// file itself (has_diff false would confirm the guess).
-			for _, proposal := range []string{short, file} {
-				w := wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", proposal, nil)
-				if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), CodeTenantFileWithheld) {
-					t.Errorf("status %d, want 422 %s: %s", w.Code, CodeTenantFileWithheld, w.Body.String())
-				}
-				// The proposal is the caller's own; only the current file's
-				// content is checked for.
-				if proposal == short {
-					assertNoOtherTenant(t, "diff", w.Body.Bytes(), file)
-				}
+			// A short proposal (the diff would list the whole file).
+			w := wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", short, nil)
+			if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), CodeTenantFileWithheld) {
+				t.Errorf("status %d, want 422 %s: %s", w.Code, CodeTenantFileWithheld, w.Body.String())
+			}
+			assertNoOtherTenant(t, "diff", w.Body.Bytes(), file)
+			// The file itself (has_diff false would confirm the guess)
+			// declares the tenant the caller may not read, so may not write:
+			// PUT's fixed 403 for it (#3062), judged before anything is
+			// shown — never a diff.
+			w = wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", file, nil)
+			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), msgDeclaresUnwritableTenant) {
+				t.Errorf("status %d, want PUT's 403: %s", w.Code, w.Body.String())
 			}
 			makeOutReadable(f)
-			w := wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", short, nil)
+			w = wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", short, nil)
 			var resp DiffResponse
+			// #3062: the preview is the splice PUT writes, so the short
+			// proposal changes In and keeps Out (no deleted Out line).
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
-				!resp.HasDiff || !strings.Contains(resp.Diff, "-  "+orgEnfTenantOut+":") || resp.Masked != (role == "reader") {
-				t.Errorf("readable: %d %s (%v), want the diff as today", w.Code, w.Body.String(), err)
+				!resp.HasDiff || !strings.Contains(resp.Diff, "+    _silent_mode: \"warning\"") ||
+				strings.Contains(resp.Diff, "-  "+orgEnfTenantOut+":") || resp.Masked != (role == "reader") {
+				t.Errorf("readable: %d %s (%v), want the diff of the splice", w.Code, w.Body.String(), err)
 			}
 		})
 	}

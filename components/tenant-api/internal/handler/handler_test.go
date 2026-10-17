@@ -486,6 +486,9 @@ func TestValidateTenant_WithWarnings(t *testing.T) {
 }
 
 // --- DiffTenant tests ---
+//
+// #3062: /diff refuses what PUT refuses (validation included), so the
+// proposals here are bodies PUT accepts.
 
 func TestDiffTenant_NewTenant_JSON(t *testing.T) {
 	t.Parallel()
@@ -493,7 +496,7 @@ func TestDiffTenant_NewTenant_JSON(t *testing.T) {
 	gw := newTestWriter(configDir)
 
 	h := DiffTenant(&Deps{Writer: gw})
-	reqBody, _ := json.Marshal(DiffRequest{Proposed: "tenants:\n  new-db:\n    cpu: \"80\"\n"})
+	reqBody, _ := json.Marshal(DiffRequest{Proposed: "tenants:\n  new-db:\n    _silent_mode: \"warning\"\n"})
 	body := bytes.NewBuffer(reqBody)
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/new-db/diff", "id", "new-db", body)
 	req.Header.Set("Content-Type", "application/json")
@@ -520,7 +523,7 @@ func TestDiffTenant_NewTenant_JSON(t *testing.T) {
 
 func TestDiffTenant_NoDiff(t *testing.T) {
 	t.Parallel()
-	content := "tenants:\n  db-a:\n    cpu: \"80\"\n"
+	content := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": content,
 	})
@@ -549,12 +552,12 @@ func TestDiffTenant_NoDiff(t *testing.T) {
 func TestDiffTenant_RawYAML(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
-		"db-a.yaml": "tenants:\n  db-a:\n    cpu: \"80\"\n",
+		"db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n",
 	})
 	gw := newTestWriter(configDir)
 
 	h := DiffTenant(&Deps{Writer: gw})
-	body := bytes.NewBufferString("tenants:\n  db-a:\n    cpu: \"90\"\n")
+	body := bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-a/diff", "id", "db-a", body)
 	req.Header.Set("Content-Type", "application/yaml")
 	w := httptest.NewRecorder()
@@ -594,7 +597,7 @@ func TestDiffTenant_JSONAutoDetect(t *testing.T) {
 	gw := newTestWriter(configDir)
 
 	h := DiffTenant(&Deps{Writer: gw})
-	reqBody, _ := json.Marshal(DiffRequest{Proposed: "tenants:\n  db-x:\n    cpu: \"80\"\n"})
+	reqBody, _ := json.Marshal(DiffRequest{Proposed: "tenants:\n  db-x:\n    _silent_mode: \"warning\"\n"})
 	body := bytes.NewBuffer(reqBody)
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/db-x/diff", "id", "db-x", body)
 	// No Content-Type header set — should auto-detect JSON

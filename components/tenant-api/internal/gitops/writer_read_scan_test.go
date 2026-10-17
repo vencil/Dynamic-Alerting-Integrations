@@ -142,7 +142,7 @@ func TestReadScan_ConcurrentReadsShareOneWalk(t *testing.T) {
 	go func() { defer wg.Done(); _, diffErr = w.Diff("rs-a", tenantBody("rs-a")) }()
 	go func() {
 		defer wg.Done()
-		_, _, dryErr = w.DryRunValidate(context.Background(), "rs-a", tenantBody("rs-a"))
+		_, _, dryErr = previewDryRun(context.Background(), w, "rs-a", tenantBody("rs-a"))
 	}()
 	for i := 0; i < 4; i++ {
 		awaitSignal(t, joined, "a read caller to join the walk in flight")
@@ -241,7 +241,7 @@ func TestReadScan_StuckReadWalkFailsLaterReadsUntilItReturns(t *testing.T) {
 	}
 
 	start := time.Now()
-	if _, _, err := w.DryRunValidate(context.Background(), "rs-b", tenantBody("rs-b")); !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
+	if _, _, err := previewDryRun(context.Background(), w, "rs-b", tenantBody("rs-b")); !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
 		t.Errorf("dry-run while stuck: err = %v, want ErrTenantTreeScan wrapping errTreeScanStuck", err)
 	}
 	if _, err := w.Diff("rs-b", tenantBody("rs-b")); !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
