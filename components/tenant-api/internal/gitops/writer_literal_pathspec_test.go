@@ -378,3 +378,40 @@ func TestLiteralPathspec_TrackedCheck(t *testing.T) {
 		t.Errorf("tracked target refused: %v", err)
 	}
 }
+
+// gitSubcommand: global options that take a value skip it in either form;
+// an unknown global option makes the subcommand unknown (""), which gets
+// no literal setting.
+func TestGitSubcommand_GlobalOptions(t *testing.T) {
+	for _, c := range []struct {
+		args    []string
+		sub     string
+		rest    string
+		literal bool
+	}{
+		{[]string{"-C", "d", "add", "--", "p"}, "add", "-- p", true},
+		{[]string{"-c", "k=v", "log", "--", "p"}, "log", "-- p", true},
+		{[]string{"--no-optional-locks", "ls-files", "p"}, "ls-files", "p", true},
+		{[]string{"--git-dir", "add", "--work-tree", "log", "commit", "-m", "m"}, "commit", "-m m", false},
+		{[]string{"--git-dir", "g", "add", "--", "p"}, "add", "-- p", true},
+		{[]string{"--work-tree", "w", "diff"}, "diff", "", true},
+		{[]string{"--namespace", "add", "commit"}, "commit", "", false},
+		{[]string{"--exec-path", "add", "push"}, "push", "", false},
+		{[]string{"--config-env", "add", "commit"}, "commit", "", false},
+		{[]string{"--git-dir=g", "--work-tree=w", "add", "p"}, "add", "p", true},
+		{[]string{"--config-env=k=ENV", "ls-tree", "HEAD"}, "ls-tree", "HEAD", true},
+		{[]string{"--some-new-opt", "add", "commit"}, "", "", false},
+		{[]string{"--some-new-opt=x", "add"}, "", "", false},
+		{[]string{"-X", "add"}, "", "", false},
+		{[]string{"-C", "d"}, "", "", false},
+		{nil, "", "", false},
+	} {
+		sub, rest := gitSubcommand(c.args)
+		if sub != c.sub || strings.Join(rest, " ") != c.rest {
+			t.Errorf("gitSubcommand(%q) = (%q, %q), want (%q, %q)", c.args, sub, rest, c.sub, c.rest)
+		}
+		if got := literalPathspecs(c.args); got != c.literal {
+			t.Errorf("literalPathspecs(%q) = %v, want %v", c.args, got, c.literal)
+		}
+	}
+}

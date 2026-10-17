@@ -150,3 +150,54 @@ func TestGitHooks_SeeNoPathspecSetting_RestoreAndCAS(t *testing.T) {
 	}
 	assertHooksSawNothing(t, envLog, "post-checkout", "reference-transaction")
 }
+
+// The known exception, pinned as an observable fact: `add` and `reset --
+// paths` get GIT_LITERAL_PATHSPECS (literalPathspecs) and run one hook,
+// post-index-change, which therefore sees it. It is accepted because that
+// hook runs after the index is written and git ignores its exit status —
+// the hook here exits 1 and the write must still succeed. The direct batch
+// runs both: `add` in the staging worktree (stagePaths) and `reset -q --`
+// on the serving paths (syncServingPaths), so the hook seeing `1` stops
+// only once neither gets the setting. If that happens, add / reset left
+// the allowlist: update literalPathspecs' comment and the #3114 changelog
+// fragment, which both name this exception.
+func TestGitHooks_PostIndexChangeSeesLiteral(t *testing.T) {
+	clearPathspecEnv(t)
+	dir := seedTreeRepo(t, map[string]string{"x-a.yaml": silentBody("x-a", "warning")})
+	envLog, _ := installEnvHooks(t, dir, "post-index-change")
+	hook := filepath.Join(dir, ".git", "hooks", "post-index-change")
+	b, err := os.ReadFile(hook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, append(b, "exit 1\n"...), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inheritPathspecEnv(t)
+	w := NewWriter(dir, dir)
+	if _, err := w.WriteBatch(context.Background(), []BatchOp{
+		setOp("x-a", silentBody("x-a", "critical")),
+	}, "op@example.com"); err != nil {
+		t.Fatalf("WriteBatch with a failing post-index-change hook: %v", err)
+	}
+	log, err := os.ReadFile(envLog)
+	if err != nil {
+		t.Fatalf("post-index-change never ran: %v", err)
+	}
+	const literal = "LIT=1 GLOB=<unset> ICASE=<unset> NOGLOB=<unset>"
+	sawLiteral := false
+	for _, line := range strings.Split(strings.TrimSpace(string(log)), "\n") {
+		_, settings, _ := strings.Cut(line, " ")
+		switch settings {
+		case literal:
+			sawLiteral = true
+		case hookUnset:
+		default:
+			t.Errorf("post-index-change saw %s, want %q or %q", settings, literal, hookUnset)
+		}
+	}
+	if !sawLiteral {
+		t.Errorf("no post-index-change run saw %q (runs:\n%s) — add / reset -- paths no longer "+
+			"get the literal setting; update literalPathspecs' comment and the #3114 changelog", literal, log)
+	}
+}

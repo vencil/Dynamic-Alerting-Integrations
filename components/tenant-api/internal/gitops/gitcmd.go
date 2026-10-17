@@ -138,10 +138,12 @@ var pathspecEnv = []string{
 // command: git hands its own environment to the hooks it runs, so a hook in
 // the conf repo — a pre-commit that runs `git diff --cached -- '*.yaml'` to
 // lint what is staged — would read its own patterns literally, match
-// nothing and pass. A command that runs hooks therefore gets no pathspec
-// setting at all (its hooks see what they see when an operator runs git by
-// hand), and the paths it takes are made literal one by one with
-// literalPathspec.
+// nothing and pass. A command that runs a hook able to affect its result
+// therefore gets no pathspec setting at all (its hooks see what they see
+// when an operator runs git by hand), and the paths it takes are made
+// literal one by one with literalPathspec. The one hook that does see the
+// literal setting is post-index-change (after add / reset -- paths), which
+// cannot change the result; see literalPathspecs.
 //
 // The inherited settings are dropped on every command: GIT_GLOB_PATHSPECS
 // and GIT_ICASE_PATHSPECS make git refuse to run beside the literal setting
@@ -175,16 +177,21 @@ func isPathspecEnv(kv string) bool {
 
 // literalPathspecs reports whether a git command (args as gitCmd gets
 // them, global options such as `-C dir` first) gets GIT_LITERAL_PATHSPECS:
-// only a command that takes pathspecs AND runs no hook. The list is closed
-// on purpose — a subcommand added later gets no setting until someone has
-// checked it runs no hook; until then, a path it takes goes through
-// literalPathspec.
+// only a command that takes pathspecs AND runs no hook that can change its
+// outcome. The list is closed on purpose — a subcommand added later gets no
+// setting until someone has checked which hooks it runs; until then, a path
+// it takes goes through literalPathspec.
 //
-//   - add, diff, log, ls-files, ls-tree: run no hook.
-//   - reset with `--`: the path form only rewrites index entries; it moves
-//     no ref, so no reference-transaction hook. A reset without `--`
-//     (`reset -q`, `reset --hard HEAD`) updates HEAD / ORIG_HEAD and runs
-//     that hook, so it is left out.
+//   - diff, log, ls-files, ls-tree: run no hook at all.
+//   - add, and reset with `--`: run one hook, post-index-change, and that
+//     hook DOES see GIT_LITERAL_PATHSPECS=1 — the one known exception,
+//     accepted because it runs after the index is written and its exit
+//     status is ignored, so nothing it does can change the command's result
+//     (pinned by TestGitHooks_PostIndexChangeSeesLiteral). The path form of
+//     reset only rewrites index entries; it moves no ref, so no
+//     reference-transaction hook. A reset without `--` (`reset -q`,
+//     `reset --hard HEAD`) updates HEAD / ORIG_HEAD and runs that hook, so
+//     it is left out.
 //
 // Not here, because they run hooks: commit (pre-commit, commit-msg,
 // post-commit, reference-transaction), checkout (post-checkout — a file
@@ -217,15 +224,43 @@ func literalPathspecs(args []string) bool {
 	return false
 }
 
+// gitGlobalOptsWithValue are git's global options that take their value as
+// the next argument (`--git-dir X`); the `--git-dir=X` form is one argument.
+var gitGlobalOptsWithValue = map[string]bool{
+	"-C": true, "-c": true,
+	"--git-dir": true, "--work-tree": true, "--namespace": true,
+	"--exec-path": true, "--config-env": true, "--super-prefix": true,
+}
+
+// gitGlobalFlags are git's global options that take no value.
+var gitGlobalFlags = map[string]bool{
+	"-p": true, "-P": true, "--paginate": true, "--no-pager": true,
+	"--bare": true, "--no-replace-objects": true, "--no-optional-locks": true,
+	"--no-lazy-fetch": true, "--no-advice": true,
+	"--literal-pathspecs": true, "--glob-pathspecs": true,
+	"--noglob-pathspecs": true, "--icase-pathspecs": true,
+}
+
 // gitSubcommand splits args at git's subcommand: global options come
-// before it, and -C / -c take the next argument as their value.
+// before it, and those in gitGlobalOptsWithValue take the next argument as
+// their value. An option it does not know — a flag or one that takes a
+// value, it cannot tell which — makes it return "": where the subcommand is
+// is then unknown, and "" gets no literal setting (the safe direction: the
+// command's hooks see what an operator's would).
 func gitSubcommand(args []string) (sub string, rest []string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "-C" || a == "-c":
+		case gitGlobalOptsWithValue[a]:
 			i++
+		case gitGlobalFlags[a]:
+		case strings.HasPrefix(a, "--") && strings.Contains(a, "="):
+			name, _, _ := strings.Cut(a, "=")
+			if !gitGlobalOptsWithValue[name] {
+				return "", nil
+			}
 		case strings.HasPrefix(a, "-"):
+			return "", nil
 		default:
 			return a, args[i+1:]
 		}
