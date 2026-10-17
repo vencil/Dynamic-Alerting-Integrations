@@ -1291,7 +1291,8 @@ def main():
         arm_crash_envelope()
 
     if not any([args.alertmanager_config, args.rule_files, args.scrape_config]):
-        parser.print_help()
+        # --json: stdout is the document's alone (#3115); the help is prose.
+        parser.print_help(sys.stderr if args.json else None)
         print("\nERROR: At least one phase input is required.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 

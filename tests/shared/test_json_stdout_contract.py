@@ -1190,6 +1190,11 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--alertmanager-config", _broken_yaml_file(t),
                     "-o", _out(t, "onboard3"), "--dry-run", "--json"],
       expect_caller_error=True, doc_check=_caller_error_doc("yaml_file_unreadable")),
+    # #3115 review: no phase input at all — the help text is prose, so under
+    # --json it goes to stderr and stdout keeps the one envelope.
+    R("onboard_platform", "no-inputs",
+      lambda t, s: ["-o", _out(t, "onboard4"), "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
 
     # ── operator_check ─────────────────────────────────────────────────────
     R("operator_check", "check",

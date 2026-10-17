@@ -1210,7 +1210,7 @@ class OutputWriteError(OSError):
         return f"cannot {self.action} {self.path}: {detail} — {hint}"
 
 
-def _die_on_write_error(exc: OutputWriteError, exit_code: int) -> None:
+def _die_on_write_error(exc: OutputWriteError, exit_code: Optional[int]) -> None:
     """Print the one-line message to stderr and exit — no traceback; an armed
     ``--json`` envelope says ``reason: output_unwritable`` (#3115)."""
     # #1538: the path is operator argv — still escape control characters
@@ -1317,13 +1317,14 @@ def write_text_or_die(
     content: str,
     *,
     flag: Optional[str] = None,
-    exit_code: int = EXIT_CALLER_ERROR,
+    exit_code: Optional[int] = None,
 ) -> None:
     """:func:`write_text_secure`, but an unusable path ends the process.
 
     #1641. On :class:`OutputWriteError` prints ``ERROR: <message>`` to stderr
-    and exits with *exit_code* (default ``EXIT_CALLER_ERROR`` = 2, the
-    exit-code SSOT's "IO failure" cell) — no traceback, and NOT rc=1, which
+    and exits with *exit_code* (default: the process caller-error code,
+    ``EXIT_CALLER_ERROR`` = 2 unless the tool set another — the exit-code
+    SSOT's "IO failure" cell) — no traceback, and NOT rc=1, which
     would read as "your config has a violation".
 
     Args:
@@ -1347,7 +1348,7 @@ def write_json_or_die(
     indent: int = 2,
     ensure_ascii: bool = False,
     flag: Optional[str] = None,
-    exit_code: int = EXIT_CALLER_ERROR,
+    exit_code: Optional[int] = None,
 ) -> None:
     """:func:`write_json_secure`, but an unusable path ends the process.
 
@@ -1379,7 +1380,7 @@ def ensure_dir_or_die(
     path: Any,
     *,
     flag: Optional[str] = None,
-    exit_code: int = EXIT_CALLER_ERROR,
+    exit_code: Optional[int] = None,
 ) -> None:
     """:func:`ensure_dir`, but an unusable path ends the process (rc=2)."""
     try:
@@ -1559,7 +1560,7 @@ def exit_on_output_write_error(fn: _F) -> _F:
         try:
             return fn(*args, **kwargs)
         except OutputWriteError as exc:
-            _die_on_write_error(exc, EXIT_CALLER_ERROR)
+            _die_on_write_error(exc, None)
     return _wrapped  # type: ignore[return-value]
 
 
