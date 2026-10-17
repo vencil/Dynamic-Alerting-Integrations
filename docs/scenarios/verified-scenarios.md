@@ -56,7 +56,7 @@ tenants:
 | **B** | 只有「同 pod 多 container 取最大」：`rule-pack-kubernetes-cpu-node-share_test.yaml` 的混合 pod 案例 |
 | **C** | `config_resolve_test.go` 的 `TestResolve_ThreeState` |
 | **D** | 維護靜音：`rule-pack-mariadb-threads_test.yaml`，以及檢查雙臂告警的 maintenance 子句沒有漏掉任一臂的 lint `scripts/tools/lint/check_maintenance_symmetry.py`；到期恢復：`config_silent_mode_test.go`；多層嚴重度：`config_loaddir_test.go` 的 `TestConfigManager_LoadDir_CriticalSuffix` |
-| **E** | 只在設定解析層、且是單一設定的一次解析快照（沒有「改 A 後看 B」）：`TestResolve_ThreeState` 斷言各租戶不同的覆寫值或 `disable` 互不影響；`TestResolveStateFilters_PerTenantDisable` 只涵蓋 state filter 的 `disable`。⚠️ 兩個例外：一份檔案解析失敗時，**那份檔案宣告的每個租戶**都會被拿掉，別的檔照常（`config_broken_tenant_file_reload_test.go`）——所以同檔的多個租戶會一起受影響；某份檔案宣告了另一份檔已有的租戶 id，**整次載入被拒**，所有租戶停在前一版設定（`config_mixed_mode_test.go` 的 `TestMixedMode_DuplicateAcrossModes_RejectedAtLoad`） |
+| **E** | 只在設定解析層、且是單一設定的一次解析快照（沒有「改 A 後看 B」）：`TestResolve_ThreeState` 斷言各租戶不同的覆寫值或 `disable` 互不影響；`TestResolveStateFilters_PerTenantDisable` 只涵蓋 state filter 的 `disable`。⚠️ 兩個例外：一份檔案解析失敗時，**那份檔案宣告的租戶**都會被拿掉（同一次載入裡另一份檔也宣告了它的，改歸那份檔、留下），別的檔照常（`config_broken_tenant_file_reload_test.go`）——所以同檔的多個租戶會一起受影響；某份檔案宣告了另一份檔已有的租戶 id，**整次載入被拒**，所有租戶停在前一版設定（`config_mixed_mode_test.go` 的 `TestMixedMode_DuplicateAcrossModes_RejectedAtLoad`） |
 | **F** | 聚合不翻倍：lint `scripts/tools/lint/check_ha_threshold_aggregation.py`（所有對 `user_threshold` 的聚合必須用 `max`） |
 
 **缺口（目前沒有自動化覆蓋）**：

@@ -241,7 +241,7 @@ PR 提交 → CI 觸發 blast-radius.yml
 
 ⚠️ Tier C 是**可證明無影響**的那一類，不是「沒被分類到」的桶子——未被辨識的欄位落在 Tier B（列出但不高亮），因為 Tier C 印出來的字是「無 threshold/routing/alerting 影響」，那是一個正面宣稱。`effective_config` 裡不以 `_` 開頭的鍵是**閾值**，屬 Tier A（#1419）——例外是平台文件本身的結構鍵（`profiles` / `tenants` / `optional_overrides` / `state_filters` / `max_metrics_per_tenant`），它們**在自己那一層**是結構、歸 Tier B；其底下的路徑仍是閾值。
 
-⚠️ 表上兩格值得單獨說明：**①`_metadata`（真管線目前到不了）** —— `deep_merge` 無條件丟棄它，所以改 `_metadata.db_type` 根本不產生 diff；今天真正走得到 Tier C 的載體是 `_comment` / `_comments` / `_description`。**②純重排（到得了）** —— `describe_tenant` 用同一份 `resolved` 清單依序寫出 `_custom_alerts` 與 `_custom_alerts_resolution`，所以重排一定同時重排兩者；降級規則兩個欄位都認，純重排會落在 Tier C。
+⚠️ 表上兩格值得單獨說明：**①`_metadata`（真管線目前到不了）** —— `deep_merge` 每一層都跳過 override 帶來的 `_metadata`（base 原本有的值留著），所以改租戶的 `_metadata.db_type` 不會產生 diff；今天真正走得到 Tier C 的載體是 `_comment` / `_comments` / `_description`。**②純重排（到得了）** —— `describe_tenant` 用同一份 `resolved` 清單依序寫出 `_custom_alerts` 與 `_custom_alerts_resolution`，所以重排一定同時重排兩者；降級規則兩個欄位都認，純重排會落在 Tier C。
 
 ## 情景 5：大規模遷移後驗證
 
