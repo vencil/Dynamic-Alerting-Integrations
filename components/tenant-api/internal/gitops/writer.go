@@ -1054,7 +1054,7 @@ var ErrMergeFailed = errors.New("merge tenant config")
 // This is the WRITE path's resolver, walking with scanTree. The read-only
 // callers use previewTenantFilePath.
 func (w *Writer) tenantFilePath(tenantID string) (string, error) {
-	return w.resolveTenantFilePath(tenantID, w.scanTree)
+	return w.resolveTenantFilePath(w.configDir, tenantID, w.scanTree)
 }
 
 // previewTenantFilePath is tenantFilePath for the callers that only preview a
@@ -1066,7 +1066,7 @@ func (w *Writer) tenantFilePath(tenantID string) (string, error) {
 // arrived (see scanTreeForRead), which a preview may accept and a write may
 // not.
 func (w *Writer) previewTenantFilePath(tenantID string) (string, error) {
-	return w.resolveTenantFilePath(tenantID, w.scanTreeForRead)
+	return w.resolveTenantFilePath(w.configDir, tenantID, w.scanTreeForRead)
 }
 
 // JudgeWrite is the verdict a write of tenantID would get from the tree
@@ -1086,14 +1086,16 @@ func (w *Writer) JudgeWrite(tenantID string) error {
 	return err
 }
 
-// resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath;
-// walk is the conf.d walk the #2078 guard judges. The same walk then decides
+// resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath
+// and of WritePRChecked's resolution on the fresh base (prResolveOnBase);
+// configDir is the conf.d resolved in and walk is its walk, which the #2078
+// guard judges. The same walk then decides
 // #2939's whole-tree verdict (refuseUnreadableTree): an unreadable conf.d
 // entry refuses the write — and, the preview resolving here too, the
 // preview — with *TreeUnreadableError (git-fixable, or a store fault), or,
 // for path itself when it is not an unresolvable symlink, *TargetUnreadableError.
-func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeScan, error)) (string, error) {
-	path, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
+func (w *Writer) resolveTenantFilePath(configDir, tenantID string, walk func() (*cfg.TreeScan, error)) (string, error) {
+	path, err := confd.TenantFilePathForWrite(configDir, tenantID)
 	if err != nil {
 		return "", err
 	}
@@ -1106,7 +1108,7 @@ func (w *Writer) resolveTenantFilePath(tenantID string, walk func() (*cfg.TreeSc
 	if err := w.ensureNotDeclaredElsewhereIn(walked, tenantID, path); err != nil {
 		return "", err
 	}
-	if err := refuseUnreadableTree(scan, confRelKey(w.configDir, path), tenantID); err != nil {
+	if err := refuseUnreadableTree(scan, confRelKey(configDir, path), tenantID); err != nil {
 		var te *TargetUnreadableError
 		if errors.As(err, &te) {
 			return "", err // its text already names the tenant
