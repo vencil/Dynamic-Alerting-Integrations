@@ -276,6 +276,76 @@ func TestWriteBatch_CommitsOnlyItsOwnPaths(t *testing.T) {
 	}
 }
 
+// A process killed during a direct write leaves its temporary index (and
+// git's lock beside it) in the git dir; PruneCommitIndexes, at startup,
+// removes exactly those — names gitCommitOnto makes, as regular files —
+// and nothing else. The names are taken from a real write (held at the
+// CAS seam), so the prune's pattern is pinned to what the writer creates.
+func TestPruneCommitIndexes_RemovesOnlyLeftoverTempIndexes(t *testing.T) {
+	t.Parallel()
+	dir := oobRepo(t)
+	gitDir := filepath.Join(dir, ".git")
+	w := newTestWriter(dir, dir)
+	var made []string
+	w.beforeCASAdvance = func() {
+		entries, err := os.ReadDir(gitDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), tempIndexPrefix) {
+				made = append(made, e.Name())
+			}
+		}
+	}
+	if _, err := w.Write(context.Background(), oobWritten, "alice@example.com", oobBody(oobWritten, "70")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if len(made) != 1 {
+		t.Fatalf("temporary index files during the write = %v, want one", made)
+	}
+	// What a kill at that point leaves: the index and its lock.
+	stale := []string{made[0], made[0] + ".lock"}
+	for _, n := range stale {
+		if err := os.WriteFile(filepath.Join(gitDir, n), []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Not ours: other names, near-misses of the pattern, a directory with
+	// a matching name, and git's own index.
+	keep := []string{tempIndexPrefix + "notes", tempIndexPrefix + "1-2.lock.bak", "x-" + tempIndexPrefix + "1-2", "unrelated"}
+	for _, n := range keep {
+		if err := os.WriteFile(filepath.Join(gitDir, n), []byte("keep"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	matchingDir := filepath.Join(gitDir, tempIndexPrefix+"3-4")
+	if err := os.Mkdir(matchingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staged := gitT(t, dir, "diff", "--cached", "--name-only")
+
+	if err := w.PruneCommitIndexes(); err != nil {
+		t.Fatalf("PruneCommitIndexes: %v", err)
+	}
+	for _, n := range stale {
+		if _, err := os.Lstat(filepath.Join(gitDir, n)); !os.IsNotExist(err) {
+			t.Errorf("%s is still there (lstat err = %v)", n, err)
+		}
+	}
+	for _, n := range keep {
+		if b, err := os.ReadFile(filepath.Join(gitDir, n)); err != nil || string(b) != "keep" {
+			t.Errorf("%s was touched: %q, %v", n, b, err)
+		}
+	}
+	if fi, err := os.Stat(matchingDir); err != nil || !fi.IsDir() {
+		t.Errorf("a directory with a matching name was removed: %v", err)
+	}
+	if got := gitT(t, dir, "diff", "--cached", "--name-only"); got != staged {
+		t.Errorf("the real index changed: %q, was %q", got, staged)
+	}
+}
+
 // #1535 item 5: the validator is required. A Writer without one refuses
 // every content-changing write with ErrNoValidator — direct and PR mode,
 // single and batch — and nothing is committed or left in the serving tree.

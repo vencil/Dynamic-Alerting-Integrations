@@ -15,11 +15,14 @@ package gitops
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -99,6 +102,47 @@ func (w *Writer) stagePaths(dir string, env, paths []string, validated map[strin
 // tempIndexPrefix names a direct write's temporary index file, in the
 // serving worktree's git dir (gitCommitOnto).
 const tempIndexPrefix = "tenant-api-commit-index-"
+
+// tempIndexName matches exactly the names gitCommitOnto gives a temporary
+// index (tempIndexPrefix<pid>-<unix nanos>) and git's lock file beside it.
+var tempIndexName = regexp.MustCompile(`^` + regexp.QuoteMeta(tempIndexPrefix) + `[0-9]+-[0-9]+(\.lock)?$`)
+
+// PruneCommitIndexes removes the temporary index files (and their .lock)
+// a previous process left in the serving worktree's git dir when it was
+// killed during a direct write: gitCommitOnto removes its own with a defer,
+// which a kill skips. Only regular files whose whole name is one
+// gitCommitOnto makes are removed; nothing else in the git dir is touched.
+// Call it once at startup, before serving and outside the writer lock, as
+// PruneBatchWorktrees: a live write's index would match too.
+//
+// A separate call from PruneBatchWorktrees rather than a step inside it:
+// the two clean different directories (this one the per-worktree git dir,
+// the batches the common dir) for different writers, and neither's
+// failure should keep the other from running.
+func (w *Writer) PruneCommitIndexes() error {
+	out, err := w.gitOutput(w.gitDir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return fmt.Errorf("locate the git dir: %w", err)
+	}
+	dir := strings.TrimSpace(string(out))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read the git dir: %w", err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !tempIndexName.MatchString(e.Name()) {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+			continue
+		}
+		slog.Warn("gitops: removed a temporary commit index left by an earlier process", "path", p)
+	}
+	return errors.Join(errs...)
+}
 
 // gitCommitOnto commits filePath — already written to the serving tree,
 // validated being the bytes the generator judged for it on base — as a
