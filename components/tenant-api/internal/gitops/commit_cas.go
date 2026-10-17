@@ -150,7 +150,9 @@ func (w *Writer) PruneCommitIndexes() error {
 // commit whose parent is base, and advances HEAD onto it only if HEAD is
 // still base. committed is false when the file holds what base holds.
 // ErrConflict: HEAD moved — nothing was published; the caller puts the
-// serving file back (restoreFromHEAD). Caller holds w.mu.
+// serving file back (restoreFromHEAD). A ref update that reports an error
+// after HEAD reached the commit (git killed by its timeout once the ref was
+// written) is a commit: committed is true. Caller holds w.mu.
 //
 // ⛔ THE COMMIT HOLDS THIS PATH AND NOTHING ELSE (#1535). Its tree is
 // written from a TEMPORARY index (GIT_INDEX_FILE): base's tree read into
@@ -239,14 +241,36 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 		w.beforeCASAdvance()
 	}
 	if err := w.gitExec("update-ref", "-m", "tenant-api: tenant/"+tenantID, "HEAD", commit, base); err != nil {
-		w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
+		// An error does not mean the ref did not move: git can be killed
+		// (the per-command timeout) after it wrote the ref. Where HEAD is
+		// now decides, as in publishBatch.
 		now, herr := w.currentHEAD()
-		if herr == nil && now != base {
+		switch {
+		case herr == nil && now == commit:
+			// Published. The real index already agrees with the commit (it
+			// was synced before the ref update), so it is not undone.
+			slog.Warn("gitops: HEAD update reported an error after it took effect",
+				"tenant", tenantID, "commit", commit, "error", err)
+			return true, nil
+		case herr == nil && now == base:
+			// The ref did not move: nothing was published.
+			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
+			return false, fmt.Errorf("advance HEAD: %w", err)
+		case herr == nil:
+			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
 			slog.Warn("gitops: HEAD moved before the judged write was published",
 				"tenant", tenantID, "judged_base", base, "head", now)
 			return false, ErrConflict
+		default:
+			// HEAD unreadable: whether the commit was published is unknown.
+			// unsyncIndexEntry still only undoes the sync while HEAD does
+			// not hold the written blob (it cannot tell either: then it
+			// undoes it), and the caller treats the write as not committed.
+			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
+			slog.Warn("gitops: HEAD unreadable after a failed HEAD update; whether the write was published is unknown",
+				"tenant", tenantID, "commit", commit, "error", herr)
+			return false, fmt.Errorf("advance HEAD: %w", err)
 		}
-		return false, fmt.Errorf("advance HEAD: %w", err)
 	}
 	return true, nil
 }
