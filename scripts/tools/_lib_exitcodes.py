@@ -643,6 +643,7 @@ def _print_armed_envelope(reason: str, error: str) -> None:
     out = _armed_stdout
     if out is None:
         return
+    import io
     import json  # deferred: only an exit in --json mode needs it
     import os
     data = (json.dumps(caller_error_envelope(reason, _one_line(error), base, **fields),
@@ -659,11 +660,16 @@ def _print_armed_envelope(reason: str, error: str) -> None:
         fd = out.fileno()
         while data:
             data = data[os.write(fd, data):]
+    except io.UnsupportedOperation:
+        # A stdout with no fd (StringIO, a capture stream): nowhere to write.
+        # It is an OSError too, so it must be caught first, or "no fd" would
+        # be reported as stdout failing.
+        pass
     except OSError as exc:
         if _recorded_stdout_failure(exc) is None:
             _record_stdout_failure(exc, out)
         _lost_envelope = (exc, out)
-    except ValueError:  # closed or fd-less stdout: there is nowhere to write
+    except ValueError:  # closed stdout: there is nowhere to write
         pass
 
 

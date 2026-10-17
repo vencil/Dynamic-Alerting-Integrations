@@ -1046,6 +1046,24 @@ def test_an_envelope_that_cannot_be_written_is_named(tmp_path, how, where, buffe
     assert own < err.index(named), err
 
 
+@pytest.mark.parametrize("how", ["die_caller_error", "hand-written"])
+def test_an_fd_less_stdout_is_not_a_stdout_failure(how):
+    """A stdout with no fd (a host swapped in StringIO) has nowhere to put the
+    envelope; that is not stdout failing. `fileno()` raises
+    io.UnsupportedOperation, an OSError: only the tool's own line, no named
+    stdout line, the tool's code."""
+    body = ("import io\nsys.stdout = io.StringIO()\n"
+            + _armed(_ENVELOPE_ONLY_EXITS[how]))
+    code = f"import sys\nsys.path.insert(0, {str(TOOLS_DIR)!r})\nimport _lib_exitcodes\n" + body
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
+                          timeout=60, env={**_ENV, "PYTHONIOENCODING": "utf-8"})
+    assert proc.returncode == 2, proc.stderr
+    assert "ERROR: bad input" in proc.stderr, proc.stderr
+    assert "cannot write to stdout" not in proc.stderr, proc.stderr
+    assert STDOUT_CLOSED_LINE not in proc.stderr, proc.stderr
+
+
 @pytest.mark.parametrize("where", ["dev-full", "reader-gone"])
 def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
     """The reported repro: `onboard_platform --json` with no inputs prints
