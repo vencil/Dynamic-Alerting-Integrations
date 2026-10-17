@@ -24,7 +24,7 @@ The platform supports a "three-state" configuration pattern, providing flexible 
 |-------|---------------|-------------------|-------------|
 | **Custom Value** | `metric_key: 42` | ✓ Output custom threshold | Tenant override of default |
 | **Omitted (Default)** | Not specified in YAML | ✓ Output platform default | Uses the `defaults:` value in `_defaults.yaml` |
-| **Disable** | `metric_key: "disable"` | ✗ No output | Completely disable metric |
+| **Disable** | `metric_key: "disable"` | ✗ No output for this row | Switches off this key's row only: the same family's `<key>_critical` and dimensional keys `<key>{…}` are untouched, and one inherited from another layer is still served (`validate-config` names its file as `disable_partial`). To keep the critical tier only, write `metric_key: "90:critical"` ([#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)) |
 
 > ⚠️ **Applicability**: the table above holds only for keys that HAVE a value under `defaults:` in `_defaults.yaml`. A **declared key** listed under `optional_overrides:` (the platform recognises the key name but asserts no value) has nothing to inherit — **omitting it means no value and therefore no series**, not "use the default"; that tier really has only two states: set a value, or stay silent.
 

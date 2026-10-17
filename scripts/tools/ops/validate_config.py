@@ -2329,7 +2329,9 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         who = ", ".join(f.tenants[:WARN_LIMIT]) + (
             f" (+{len(f.tenants) - WARN_LIMIT} more)" if len(f.tenants) > WARN_LIMIT else "")
         why = f" ({f.reason})" if f.reason else ""
-        fam = f"; still served: {', '.join(f.served_family)}" if f.served_family else ""
+        fam = ("; still served: " + ", ".join(
+            f"{k} (from {src or '?'})" for k, src in zip(f.served_family, f.served_from))
+            if f.served_family else "")
         details.append(f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — tenant(s) {who}")
     if verdict.undecidable:
         n = sum(v.verdict == key_verdict.UNDECIDABLE for vs in verdict.keys.values() for v in vs)
