@@ -113,7 +113,8 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
         "at": at,
         "undecidable": verdict.undecidable,
         "tenants": {t: [_entry(v) for v in verdict.keys[t]] for t in shown},
-        "findings": [dict(f._asdict(), tenants=list(f.tenants), served_family=list(f.served_family))
+        "findings": [dict(f._asdict(), tenants=list(f.tenants), served_family=list(f.served_family),
+                          served_from=list(f.served_from))
                      for f in verdict.findings
                      if not tenants or set(f.tenants) & set(tenants)],
     }
@@ -174,8 +175,9 @@ def render_text(doc: dict[str, Any]) -> str:
             who = ", ".join(safe_label(t) for t in f["tenants"][:5]) + (
                 f" (+{len(f['tenants']) - 5} more)" if len(f["tenants"]) > 5 else "")
             why = f" ({f['reason']})" if f["reason"] else ""
-            fam = (f"; still served: {', '.join(safe_label(k) for k in f['served_family'])}"
-                   if f["served_family"] else "")
+            fam = ("; still served: " + ", ".join(
+                f"{safe_label(k)} (from {safe_label(src or '?')})"
+                for k, src in zip(f["served_family"], f["served_from"])) if f["served_family"] else "")
             lines.append(f"  {f['severity']}: {f['kind']}: {safe_label(f['key'])} in "
                          f"{safe_label(f['file'] or '?')}{why}{fam} — {who}")
     if doc["undecidable"]:
