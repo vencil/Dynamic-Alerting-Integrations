@@ -151,7 +151,13 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 - **`/validate` 與 `/diff` 與 `PUT` 走同一套拒收判定**：三者共用一個判定流程，依 `PUT` 的順序執行——`{id}` 的寫入範圍（依檔內現況與 body 提議的 metadata）、body 宣告的其他租戶（固定 403／400）、遮罩後的憑證 placeholder，接著在要被替換的檔上：解析租戶檔、拼接（含 #2405 與上面的 anchor 規則）、重複宣告、驗證。`PUT` 在寫入鎖內（direct）或在最新 base 上（PR 模式）跑後段；`/diff`、`/validate` 在伺服器自己的樹上、不拿鎖跑同一段。所以 `PUT` 會拒的，`/diff` 回同一個狀態碼與 body；`/validate` 回 `valid: false`，`warnings` 是同一段文字（驗證錯誤照舊逐條列出）。順序本身就是答案的一部分：預覽若先判「宣告的他租戶是否被別檔宣告」才判（或不判）它的寫入權，會對呼叫者不可寫的租戶回 409 或 200，而 `PUT` 一律回固定 403——等於回答那個租戶 id 有沒有被別檔宣告。`/diff` 的提議側是拼接後要寫入的內容，body 沒宣告的段落顯示為保留；判定通過後，檔內有讀不到的租戶時照 #3050 回 422 `TENANT_FILE_WITHHELD`（那是不給看，不是拒收寫入）。兩個例外：讀得到 `{id}` 但不能寫的呼叫者，`/diff` 給遮罩後的預覽而不是 `PUT` 的 403（#1560），而這類呼叫者若讀不到檔內全部租戶，凡是回答「檔案怎麼寫」的拒收（拼接保留不住的 409 `not_round_trippable`、上面的 anchor 規則、#2405 無法拼接的 400）都先擱著、讓後面的重複宣告與驗證照跑，後面都不拒時一律回與「`PUT` 會接受」時相同的 422 `TENANT_FILE_WITHHELD`，所以 root／`tenants:` 帶 anchor、無法拼接、一般的檔回應完全相同；其他與輸入有關的拒收（宣告不可寫的他租戶的 403、驗證錯誤）照 `PUT`；PR 模式下 `PUT` 的後段在最新 base 上判，伺服器的樹可能落後，所以 `/validate` 只跑 body 本身的檢查（#1718），`/diff` 以伺服器的樹預覽。
 - **相對先前版本的行為改變：只能讀 `{id}` 的呼叫者打 `/validate`**：`/validate` 的路由只要求讀取權限，先前它不判寫入範圍，這類呼叫者拿得到「body 本身是否有效」的判斷；現在三個端點同判，`{id}` 的寫入範圍不過即 `valid: false`、`warnings` 是 `{id}` 寫入閘門的固定文字，與他的 `PUT` 會被拒一致。只想檢查 body 寫法的讀者，請改用 `/diff`（遮罩預覽，body 驗證錯誤照 `PUT` 回 400）。
 
-⚠️ 這張表描述的是 handler 層。這些端點在路由層還有一道閘門：先要求對 `*` 有對應權限，也就是規則裡要有 `tenants: ["*"]`（可帶 org／metadata 範圍）。只有單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者一律 403 `insufficient permissions for tenant *`，到不了上面的過濾。這個 403 不帶租戶 id，所以不構成 existence oracle。是否刻意見 [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)。
+⚠️ 這張表描述的是 handler 層。URL 不帶租戶 id 的端點在路由層還有一道閘門（[#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)）：呼叫者要**至少能讀一個租戶**（寫入端點：至少能寫一個）——有一條命中他的規則授予該權限，且 `tenants` 至少列了一個合法的 pattern。規則帶 `org-scope` 而呼叫者沒有那個 claim 時，只在 org 軸 shadow 下算數：開了 `--rbac-org-scope-enforce`，這種規則對任何租戶都授不了權。
+
+這個判斷**只看呼叫者自己的規則與 org enforce 旗標**，不看 conf.d 或 `_tenant_orgs.yaml`。所以規則列了一個不存在的租戶也過得了閘門，拿到的是空列表；閘門回 200 還是 403 不透露任何租戶存不存在、屬於哪個 org。過了閘門看得到什麼，全由上表的 handler 過濾決定。沒有規則命中，或 `_rbac.yaml` 有設定卻是零條規則（MED-8），照舊 403，訊息是 `insufficient permissions: no tenant grants read`（寫入端點為 `write`），不帶租戶 id。
+
+相對先前版本的行為改變：先前這道閘門要求對 `*` 有權限，只有規則寫了 `tenants: ["*"]` 的呼叫者過得了；單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者在 `/me`、`/tenants`、`/tenants/search`、`/groups`、`/tasks/{id}`、`/prs`、`/events`、`/federation/tokens`、`POST /tenants/batch` 一律 403。現在這些呼叫者拿得到自己租戶的內容；`/federation/tokens`、`POST /tenants/batch`、`POST /groups/{id}/batch`、`PUT`／`DELETE /groups/{id}` 照舊由 handler 逐租戶判寫入或管理權限。`GET /federation/policy`（平台的指標白名單，不點名任何租戶）也開放給至少能讀一個租戶的呼叫者，租戶管理員挑自己的子集時需要它。反方向收緊的只有一種情況：org-scoped 的 `tenants: ["*"]` 規則、呼叫者沒帶 org claim、且 org 軸是 enforce——它先前過得了閘門、拿到空列表，現在是 403。
+
+仍要求對 `*` 有權限的路由：saved views 的四個端點（見 §3.3）、`PUT /federation/policy`、`POST /federation/accounts/backfill`，以及 `/audit/...`。後三者 handler 的門檻本來就是平台管理員，換成較寬的閘門不會多放任何人進來。
 
 ### 3.2 為什麼 `?tenant=<id>` 不直接回 403
 
@@ -164,6 +170,8 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 `PutView` / `DeleteView` 也接收 `Filters map[string]string`，看起來像 group 的 members。但 view filters 是**任意 metadata 字串**（例 `severity:critical`、`team:platform`），不是嚴格 tenant ID 列表 — 不能對 filter 內容做 RBAC 檢查（不知道該檢查什麼）。view 真正暴露 tenant 資料的時機是 dashboard 用 view 跑 query，那時 tenant 級 RBAC **本來就**會檢查。
 
 → Views 留待未來如果加「filter 必須為 tenant ID 列表」型別約束時再補。
+
+同理，views 沒有擁有者，handler 也不按租戶過濾，所以四個 view 端點的路由閘門仍要求對 `*` 有權限（[#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)），直到有擁有者模型為止；否則任何讀得到一個租戶的人都看得到、改得到每個 view。
 
 ### 3.4 為什麼 `_metadata` 路徑推斷不在範圍內
 

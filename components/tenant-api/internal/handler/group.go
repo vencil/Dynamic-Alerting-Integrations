@@ -164,7 +164,7 @@ func GetGroup(d *Deps) http.HandlerFunc {
 
 		// LD-6 P4c follow-up (#962): mirror ListGroups' RBAC member
 		// filtering. Without it, GetGroup returned the FULL member tenant-id
-		// list to any reader who cleared the route's PermRead("*") gate — the
+		// list to any reader who cleared the route gate — the
 		// read-by-id twin of the group-member enumeration oracle P4c closed for
 		// the list view. Hide the group entirely (an identical 404 to a missing
 		// group, so existence leaks nothing) when the caller can read none of
@@ -433,8 +433,8 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// would authorize against a member list that no longer describes what
 		// gets removed — and the snapshot stays wrong until the next Reload or
 		// WatchLoop tick. Under org-scoped RBAC (ADR-027) that gap is a real
-		// authorization bypass: the route gate only proves platform-wide write,
-		// while OrgAllowed can still deny individual member tenants.
+		// authorization bypass: the route gate only proves write on SOME tenant
+		// (#2520), while OrgAllowed can still deny individual member tenants.
 		var forbiddenOnDisk []string
 		if err := d.mutateState(r.Context(), statestore.KeyGroups, "groups", email,
 			func(current []byte) ([]byte, error) {

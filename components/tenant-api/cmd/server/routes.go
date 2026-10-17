@@ -51,6 +51,29 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	deps := rd.Deps
 	rbacMgr := rd.RBAC
 
+	// The two gates for routes whose URL names no tenant (#2520):
+	//
+	//   - anyTenantRead / anyTenantWrite (MiddlewareAnyTenant): the caller holds
+	//     the permission on at least one tenant (rbac.GrantsSomeTenant). For
+	//     routes whose HANDLER decides visibility per tenant — every one of
+	//     them is listed with its filter in readRouteManifest /
+	//     writeRouteManifest (routes_test.go). A caller granted only ["db-a"]
+	//     or ["db-*"] passes and sees its own tenants; before #2520 these
+	//     routes demanded a literal "*" rule.
+	//   - platformRead / platformWrite (Middleware(perm, nil)): the permission
+	//     on the platform wildcard "*", i.e. a rule listing "*". For resources
+	//     with no per-tenant owner (saved views, until an ownership model
+	//     exists) and for routes whose handler bar is a platform admin anyway
+	//     (federation policy PUT, account backfill, the /audit surface) —
+	//     there the any-tenant gate would admit no caller the handler does not
+	//     then refuse, so they keep the narrower gate.
+	//
+	// Both keep MED-8: a configured _rbac.yaml with zero groups denies all.
+	anyTenantRead := rbacMgr.MiddlewareAnyTenant(rbac.PermRead)
+	anyTenantWrite := rbacMgr.MiddlewareAnyTenant(rbac.PermWrite)
+	platformRead := rbacMgr.Middleware(rbac.PermRead, nil)
+	platformWrite := rbacMgr.Middleware(rbac.PermWrite, nil)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
@@ -85,18 +108,19 @@ func buildRouter(rd routerDeps) *chi.Mux {
 
 	// API v1 — all routes require identity headers (injected by oauth2-proxy)
 	r.Route("/api/v1", func(r chi.Router) {
-		// Identity endpoint (no specific permission required, just authenticated)
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		// Identity endpoint: the caller's own rules — readable by anyone who
+		// can read some tenant (#2520; it used to demand read on "*").
+		r.With(anyTenantRead).
 			Get("/me", handler.Me(deps))
 
 		// Tenant list (read permission, no specific tenant ID)
 		// v2.5.0: RBAC-filtered — only returns tenants the user can access
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(anyTenantRead).
 			Get("/tenants", handler.ListTenants(deps))
 
 		// v2.8.0 Phase .c C-1: server-side search / filter / pagination.
 		// Snapshot cache shared with /tenants via Deps.SearchCache.
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(anyTenantRead).
 			Get("/tenants/search", handler.SearchTenants(deps))
 
 		// Per-tenant routes
@@ -147,67 +171,76 @@ func buildRouter(rd routerDeps) *chi.Mux {
 				Put("/federation", federation.PutTenantFederation(deps))
 		})
 
-		// Batch operations — route-level middleware checks read (authenticated),
+		// Batch operations — route-level middleware checks read on some tenant;
 		// per-tenant write permission is enforced inside the handler.
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(anyTenantRead).
 			Post("/tenants/batch", handler.BatchTenants(deps))
 
-		// Group management (v2.5.0) — RBAC-filtered list.
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		// Group management (v2.5.0) — RBAC-filtered list. Every group route
+		// decides per member (groupVisible; PUT/DELETE also need write on every
+		// member), so the write routes take the any-tenant WRITE gate (#2520).
+		r.With(anyTenantRead).
 			Get("/groups", handler.ListGroups(deps))
 
 		r.Route("/groups/{id}", func(r chi.Router) {
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(anyTenantRead).
 				Get("/", handler.GetGroup(deps))
 
-			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+			r.With(anyTenantWrite).
 				Put("/", handler.PutGroup(deps))
 
-			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+			r.With(anyTenantWrite).
 				Delete("/", handler.DeleteGroup(deps))
 
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(anyTenantRead).
 				Post("/batch", handler.GroupBatch(deps))
 		})
 
-		// Saved Views (v2.5.0 Phase C)
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		// Saved Views (v2.5.0 Phase C). ⛔ Platform "*" gate on purpose (#2520):
+		// a view has no owner and no per-tenant filter — the handlers return and
+		// overwrite every view as stored — so the any-tenant gate would hand
+		// every tenant-scoped caller the whole set. It moves only once views
+		// have an ownership model.
+		r.With(platformRead).
 			Get("/views", handler.ListViews(deps))
 
 		r.Route("/views/{id}", func(r chi.Router) {
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(platformRead).
 				Get("/", handler.GetView(deps))
 
-			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+			r.With(platformWrite).
 				Put("/", handler.PutView(deps))
 
-			r.With(rbacMgr.Middleware(rbac.PermWrite, nil)).
+			r.With(platformWrite).
 				Delete("/", handler.DeleteView(deps))
 		})
 
 		// Task polling (v2.6.0 — async batch operations)
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(anyTenantRead).
 			Get("/tasks/{id}", handler.GetTask(deps))
 
 		// PR/MR tracking (v2.6.0 Phase C — ADR-011 PR-based write-back)
 		// Works for both GitHub PRs and GitLab MRs via platform.Tracker
 		if deps.PRTracker != nil {
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(anyTenantRead).
 				Get("/prs", handler.ListPRs(deps))
 		}
 
 		// Real-time event stream (v2.6.0 — SSE for config change notifications)
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(anyTenantRead).
 			Get("/events", rd.Events)
 
 		// Federation 2-tier policy — platform whitelist (v2.9.0 —
 		// ADR-020 IV-2e). Always registered: the policy is independent
-		// of token signing. PUT's platform-admin check is in the
-		// handler; route-level middleware only confirms authentication.
+		// of token signing. GET is the metric whitelist a tenant admin needs
+		// to choose its subset (PUT /tenants/{id}/federation) — platform
+		// config naming no tenant — so any tenant reader may read it. PUT's
+		// platform-admin check is in the handler; its route keeps the "*"
+		// gate, which every platform admin passes anyway.
 		r.Route("/federation/policy", func(r chi.Router) {
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(anyTenantRead).
 				Get("/", federation.GetFederationPolicy(deps))
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(platformRead).
 				Put("/", federation.PutFederationPolicy(deps))
 		})
 
@@ -215,40 +248,40 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// a deliberate NEW top-level segment — NOT under /tenants/{id} — so it
 		// does not inherit the read-by-id org middleware (an org-scoped reader
 		// must never unlock the platform-wide access map). Route middleware
-		// only confirms authentication (federation-policy precedent above);
-		// the real bar — PlatformAdminNonOrgScoped, tightened vs the bare
+		// checks read on "*" (federation-policy precedent above; #2520 left it
+		// there — the handler bar below implies it, so a wider gate would admit
+		// no one); the real bar — PlatformAdminNonOrgScoped, tightened vs the bare
 		// platform-"*" admin check — lives at the top of the handler with a
 		// constant 403 (no tenant-enumeration oracle).
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(platformRead).
 			Get("/audit/tenants/{id}/access-report", handler.GetTenantAccessReport(deps))
 
-		// P7 what-if dry-run: same /audit segment, same authentication-only
-		// route middleware, same in-handler bar with the byte-identical
+		// P7 what-if dry-run: same /audit segment, same route middleware, same in-handler bar with the byte-identical
 		// constant 403. POST because it carries a candidate _rbac.yaml body —
 		// it computes reports and commits NOTHING (see the write-route
 		// manifest's gateWriteOpPlatformAdmin entry).
-		r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+		r.With(platformRead).
 			Post("/audit/tenants/{id}/access-report/dry-run", handler.DryRunTenantAccessReport(deps))
 
 		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
 		// Registered only when a signing key is configured. Route-level
-		// middleware checks authentication; per-tenant admin permission
+		// middleware checks read on some tenant; per-tenant admin permission
 		// is enforced inside each handler because the tenant ID is in
 		// the body / query / token record, not the URL path.
 		if deps.Federation != nil {
 			r.Route("/federation/tokens", func(r chi.Router) {
-				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				r.With(anyTenantRead).
 					Post("/", federation.CreateFederationToken(deps))
-				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				r.With(anyTenantRead).
 					Get("/", federation.ListFederationTokens(deps))
-				r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+				r.With(anyTenantRead).
 					Delete("/{id}", federation.DeleteFederationToken(deps))
 			})
 
 			// v2.10.0 ADR-021 (#609): one-shot AccountID backfill for the
-			// existing fleet. Route middleware confirms authentication; the
+			// existing fleet. Route middleware checks read on "*"; the
 			// handler enforces platform-admin (the whole-fleet bar).
-			r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+			r.With(platformRead).
 				Post("/federation/accounts/backfill", federation.BackfillAccounts(deps))
 		}
 	})

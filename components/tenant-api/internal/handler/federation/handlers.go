@@ -288,7 +288,7 @@ func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 
 		// Org-scope-aware (ADR-027 / LD-6 P4b) — same bar as issuance.
 		// #3123: refused exactly like a missing token. The route only checks
-		// read on "*", so any authenticated caller reaches this point; a 403
+		// read on some tenant (#2520), so nearly any caller reaches this point; a 403
 		// naming rec.TenantID resolved any token id to its tenant, and even a
 		// bare 403 would confirm the id exists.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), rec.TenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {

@@ -38,8 +38,8 @@ type PRListResponse struct {
 // who may read EVERY one of them (prVisible) — on both the bulk and the
 // `?tenant=` path. One whose tenants are unknown (created before a restart),
 // like any PR not attributed to a tenant, is shown only to a caller who reads
-// every tenant. The route's read check on "*" is no isolation barrier: an
-// org-scoped `tenants: ["*"]` rule passes it.
+// every tenant. The route gate is no isolation barrier: it admits any caller
+// who may read SOME tenant (#2520).
 //
 // @Summary     List pending PRs/MRs
 // @Description Returns pending pull/merge requests created by tenant-api, filtered by caller's tenant RBAC.

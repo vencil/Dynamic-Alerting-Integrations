@@ -58,7 +58,7 @@
 
 ## API 參考
 
-> 慣例:除 Health / Identity / Metrics 外皆需身分(oauth2-proxy header)。「權限」欄為該端點要求的 RBAC 動作;標「逐租戶」者會對每個受影響租戶再驗一次。
+> 慣例:除 Health / Identity / Metrics 外皆需身分(oauth2-proxy header)。「權限」欄為該端點要求的 RBAC 動作;標「逐租戶」者會對每個受影響租戶再驗一次。路徑不帶 `{id}` 租戶的端點,`read` / `write` 指**至少對一個租戶**有該權限([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520);只看呼叫者自己的規則,不看租戶是否存在),回應內容再由 handler 逐租戶過濾;標 `(*)` 的端點則要求規則寫了 `tenants: ["*"]`。
 
 ### Health / Identity / Metrics(無需認證)
 
@@ -126,8 +126,8 @@
 | `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單。`members` 至少一個(清空用 DELETE);id 已被看不到的群組佔用時回 409 `GROUP_ID_UNAVAILABLE`(換 id,勿重試) |
 | `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限)。沒有成員的舊群組只有不受限的 platform admin 看得到、刪得掉 |
 | `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339)。與 `POST /tenants/batch` 相同**全有全無、一次 commit**:任一成員被拒就整批 422 `rejected`、不寫入;`results` 與 `summary` 只列呼叫者讀得到的成員,讀不到的成員被拒時同樣整批拒收。不存在的成員是 `skipped`,不使整批失敗 |
-| `GET` | `/api/v1/views` | read | 列出 saved view |
-| `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
+| `GET` | `/api/v1/views` | read(*) | 列出 saved view |
+| `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write(*) | Saved view CRUD。view 沒有擁有者、不按租戶過濾,所以仍要求 `"*"` 權限,直到有擁有者模型([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)) |
 
 ### Async / 事件
 
@@ -143,8 +143,8 @@
 
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
-| `GET` | `/api/v1/federation/policy` | admin | 取得平台聯邦白名單 |
-| `PUT` | `/api/v1/federation/policy` | admin | 更新白名單(新增 metric 會跑資料層 admission 檢查;軟性警告需 `force=true` + 理由才放行,理由記入該次寫入的 `state_write` 稽核事件 `notes`) |
+| `GET` | `/api/v1/federation/policy` | read | 取得平台聯邦白名單(只有指標名、不點名租戶;租戶管理員挑自己的子集時要用) |
+| `PUT` | `/api/v1/federation/policy` | admin(平台層級) | 更新白名單(新增 metric 會跑資料層 admission 檢查;軟性警告需 `force=true` + 理由才放行,理由記入該次寫入的 `state_write` 稽核事件 `notes`) |
 | `POST` | `/api/v1/federation/tokens` | admin(對 body 的租戶) | 簽發短效 token(預設 4h);token 本體只在回應出現一次 |
 | `GET` | `/api/v1/federation/tokens?tenant_id=<id>` | admin(對該租戶) | 列出該租戶未過期的 token 記錄(不含 token 本體) |
 | `DELETE` | `/api/v1/federation/tokens/{id}` | admin(對該 token 的租戶) | 撤銷 token;最終一致,約 1–2 分鐘內隨設定同步生效。無權撤銷回與 token 不存在相同的 404 |
@@ -332,6 +332,8 @@ groups:
     tenants: ["*"]
     permissions: [read]
 ```
+
+上例的 `db-operators` 只拿得到 `db-a-*`、`db-b-*` 兩組租戶:`/me`、`/tenants`、`/groups`、`/prs`、`/events` 等列表端點的路由閘門只要求**至少對一個租戶**有讀取權([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520);先前要求 `tenants: ["*"]`,這類規則一律 403),列表內容由 handler 逐租戶過濾。閘門只看呼叫者自己的規則:規則列了不存在的租戶也過得了、拿到空列表,所以 200 / 403 不透露租戶存在與否;帶 `org-scope` 的規則在呼叫者沒有該 claim、且 org 軸是 enforce 時不算數。零條規則的設定檔照舊 fail-closed(MED-8)。仍要求 `"*"` 的:views、`PUT /federation/policy`、`POST /federation/accounts/backfill`、`/audit/...`。
 
 支援以環境 / 域 metadata 做進一步過濾(細節見 `internal/rbac/` 註解)。**沒標記該 metadata 的租戶**在受限規則下預設**仍放行**(SHADOW,行為與過去一致),但每次會計入 `tenant_api_scope_would_deny_total{axis="metadata"}`(**單調遞增 counter**、僅重啟歸零)。待 `increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak窗])` 在整個 soak 窗維持 **0**(看增長率非絕對值),並**掃過確認沒有落單租戶**(counter 是 traffic-driven:沒被 list 到的租戶不會觸發)後,設 `--rbac-metadata-scope-enforce`(或 `TA_RBAC_METADATA_SCOPE_ENFORCE=1`;helm `--set rbac.metadataScopeEnforce=true`)切成**沒標記就拒絕**(fail-closed,ADR-027 / LD-6 P1)。
 
