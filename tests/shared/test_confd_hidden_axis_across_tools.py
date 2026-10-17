@@ -478,8 +478,9 @@ def test_the_derivation_did_not_collapse() -> None:
     """A derived set of 0 would make the reconciliation above vacuous."""
     derived = _own_enumerators()
     assert len(derived) >= 20, sorted(derived)
-    # `generate_tenant_metadata` was the third until #2115 0-B/B4: it no
-    # longer lists a directory (the walk is da-guard's), so it left the set.
-    for must in ("dx/describe_tenant.py", "ops/gitops_check.py",
+    # `generate_tenant_metadata` was the third until #2115 0-B/B4, and
+    # `describe_tenant` until #2906: neither lists a directory any more (the
+    # walk is da-guard's), so they left the set — their cells still run.
+    for must in ("dx/custom_alerts/loader.py", "ops/gitops_check.py",
                  "ops/offboard_tenant.py"):
         assert must in derived, (must, sorted(derived))

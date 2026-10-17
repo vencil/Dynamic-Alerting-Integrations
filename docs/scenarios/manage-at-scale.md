@@ -23,7 +23,7 @@ lang: zh
 ## 前置條件
 
 - 已完成 `conf.d/` 階層式結構遷移（參考 [multi-domain-conf-layout](multi-domain-conf-layout.md)）或至少部分域名使用階層式結構（混合模式）
-- 已安裝工具：`scripts/tools/dx/describe_tenant.py`、`scripts/tools/ops/blast_radius.py`、`scripts/tools/dx/migrate_conf_d.py`；`describe_tenant.py` 輸出的 `merged_hash` 讀自 da-guard（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`，da-tools 映像已內建；repo 內 `make da-guard-build` 建到 `.build/da-guard`），沒有 da-guard 時該欄為 `null`，`blast_radius.py` 改為逐欄比對並在 stderr 說明
+- 已安裝工具：`scripts/tools/dx/describe_tenant.py`、`scripts/tools/ops/blast_radius.py`、`scripts/tools/dx/migrate_conf_d.py`；`describe_tenant.py` 輸出的每個值（有效設定、繼承鏈、`merged_hash`）都讀自 `da-guard effective`（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`，da-tools 映像已內建；repo 內 `make da-guard-build` 建到 `.build/da-guard`），沒有 da-guard 時結束碼 2、不輸出（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）；樹裡有 exporter 解析不了或讀不到的檔時 `merged_hash` 為 `null`，`blast_radius.py` 改為逐欄比對並在 stderr 說明
 - GitHub Actions 已啟用 `blast-radius.yml` workflow
 
 ## 情景 1：變更域預設值前評估 Blast Radius

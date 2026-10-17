@@ -155,6 +155,16 @@ tenant from — the same `SkippedFile` list, in the same words, as
 `load_served_tree`'s (da-guard effective's `skipped`, #2115 R3), for a
 caller that needs only /effective and so does not run served-values at all.
 
+`run_effective(conf_d, overlay=None, binary=None)` returns an `EffectiveRun`
+(#2906, describe-tenant's whole read of a tree): `load_effective_tree`'s
+tenants and skipped files, plus what the exporter's load drops —
+`parse_failed`, `unreadable` — and `stderr_lines`, returned rather than
+raised (exit 3 still writes every tenant it resolved). `overlay`, a
+`(rel_path, file)` pair, runs `da-guard effective --overlay rel_path=file`:
+the tree read as if `rel_path` (relative to `conf_d`) held `file`'s bytes.
+A refused overlay is exit 2, `EffectiveError`, as any tree effective
+rejects (a tenant declared twice among them).
+
 `load_key_refs(conf_d, metrics, binary=None)` returns a `KeyRefsTree`
 (#1822): for each metric key asked about, every key of the tree whose
 platform key the exporter judges it to be (`da-guard key-refs`: the check
@@ -490,6 +500,14 @@ class TenantEffective(NamedTuple):
 class EffectiveTree(NamedTuple):
     tenants: dict[str, TenantEffective]
     skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
+
+
+class EffectiveRun(NamedTuple):
+    tenants: dict[str, TenantEffective]
+    skipped: list[SkippedFile]
+    parse_failed: list[str]            # the files the exporter's load skips (do not decode)
+    unreadable: list[UnreadableFile]   # the paths the load cannot stat, read or list
+    stderr_lines: list[str]            # every non-empty line of da-guard's stderr, as written
 
 
 class KeyRef(NamedTuple):
@@ -1116,6 +1134,28 @@ def load_effective_tree(
     return _load_effective(conf_d, binary, timeout, reads_skipped=True)
 
 
+def run_effective(
+    conf_d: str | Path,
+    overlay: "tuple[str, str | Path] | None" = None,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> EffectiveRun:
+    """`da-guard effective` over `conf_d` (with `--overlay`, see the module
+    docstring), every tenant it resolved and what the load drops, without
+    raising `ParseFailedError`. Raises `DaGuardNotFoundError` and
+    `EffectiveError` as `load_effective` does."""
+    extra = [] if overlay is None else ["--overlay", f"{overlay[0]}={overlay[1]}"]
+    (tenants, skipped, parse_failed, unreadable), returncode, stderr = _run_da_guard(
+        EFFECTIVE_SUBCOMMAND, extra, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+                          [str(f) for f in doc["parse_failed"]],
+                          [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
+        reads_unreadable=True, dropped_ok=True)
+    return EffectiveRun(_effective_tenants(tenants, returncode, stderr), skipped,
+                        parse_failed, unreadable, _nonempty_lines(stderr))
+
+
 def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     reads_skipped: bool) -> EffectiveTree:
     (tenants, skipped), returncode, stderr = _run_da_guard(
@@ -1124,6 +1164,11 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
                           if reads_skipped else []),
         reads_unreadable=True)
+    return EffectiveTree(_effective_tenants(tenants, returncode, stderr), skipped)
+
+
+def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, TenantEffective]:
+    """The `tenants` of an effective document, each checked for its shape."""
     out: dict[str, TenantEffective] = {}
     try:
         for tenant_id, t in tenants.items():
@@ -1166,7 +1211,7 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
             returncode, stderr, broken=True) from e
-    return EffectiveTree(out, skipped)
+    return out
 
 
 def load_key_refs(

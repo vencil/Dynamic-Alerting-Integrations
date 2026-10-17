@@ -91,7 +91,7 @@ lang: en
 | `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |
 | `coverage_delta.py` | Per-file + total coverage delta between two runs. |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
-| `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |
+| `describe_tenant.py` | Describe effective tenant config — as the exporter's resolver answers it. |
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |

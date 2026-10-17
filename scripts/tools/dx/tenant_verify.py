@@ -17,11 +17,12 @@ Usage:
 Exit codes:
     0  — verification passed (tenant exists; if --expect-merged-hash given,
          it matched)
-    1  — usage / IO error, or a selected `_defaults.yaml` anywhere in the
-         tree that does not parse or has an unsupported shape (named on
-         stderr), or no merged_hash to report: it is `da-guard effective`'s
-         and da-guard is missing, fails, or does not resolve the tenant
-         (#1549; named on stderr and in the entry's `detail`)
+    1  — usage / IO error, or da-guard is missing, fails or refuses the
+         tree (named on stderr), or no merged_hash to report: it is
+         `da-guard effective`'s, and the exporter's load skips or cannot
+         read a file of the tree, or rejects the whole tree because another
+         tenant is declared twice (#1549; named on stderr and in the
+         entry's `detail`)
     2  — verification failed (--expect-merged-hash mismatch, tenant not
          found, or tenant declared in more than one file); with --all,
          any tenant declared in more than one file
@@ -29,10 +30,10 @@ Exit codes:
     error` line) also ends at 1 — not the da-tools-wide crash code 2,
     which here would read as a mismatch (#3090).
 
-Design note: this tool reuses describe_tenant.ConfDScanner for the
-inheritance chain and source_hash; merged_hash is the one
-`ConfDScanner.merged_hash` reads from `da-guard effective` (the exporter's
-and tenant-api's value, #1549), never one computed in Python. The wrapping here is purposely
+Design note: this tool reuses describe_tenant.ConfDScanner, whose every
+field — the inheritance chain, source_hash and merged_hash — is
+`da-guard effective`'s (the exporter's and tenant-api's value, #1549,
+ADR-036), never one computed in Python. The wrapping here is purposely
 thin — verify is a CLI ergonomics layer (terse output + exit codes) on
 top of the existing describe primitives, NOT a re-implementation. See
 v2.8.0 Phase B closure plan Track A item A5 for context.
@@ -94,6 +95,11 @@ def _load_describe_module():
     return mod
 
 
+def _describe_mod(scanner):
+    """The describe_tenant module `scanner` comes from (its fixed wordings)."""
+    return sys.modules[type(scanner).__module__]
+
+
 def _duplicate_detail(tenant_id, files: list[str]) -> str:
     """tenant-verify's own wording for a duplicate declaration.
 
@@ -138,9 +144,22 @@ def verify_one(scanner,tenant_id: str, expect_merged_hash: str | None) -> tuple[
             "files": list(files),
             "detail": _duplicate_detail(tenant_id, files),
         }, EXIT_VERIFY_FAILED)
+    if scanner.refused is not None:
+        # The exporter rejects the whole tree (another tenant is declared
+        # twice): no tenant of it has a merged_hash.
+        return ({
+            "tenant_id": tenant_id,
+            "error": "merged_hash_unavailable",
+            "detail": _describe_mod(scanner).MERGED_HASH_TREE_REFUSED,
+        }, EXIT_USAGE_ERROR)
     try:
         info = scanner.source_info(tenant_id)
     except KeyError:
+        if scanner.dropped:
+            # The exporter's load skips or cannot read a file of the tree:
+            # the tenant may be in it. Not a mismatch (exit 2) — no hash.
+            return ({"tenant_id": tenant_id, "error": "merged_hash_unavailable",
+                     "detail": _describe_mod(scanner).MERGED_HASH_UNREADABLE_TREE}, EXIT_USAGE_ERROR)
         return ({"tenant_id": tenant_id, "error": "not_found"}, EXIT_VERIFY_FAILED)
 
     if info["merged_hash"] is None:
@@ -173,7 +192,7 @@ def verify_all(scanner) -> list[dict]:
     is still reported. `main` turns any such entry into exit 2 (#2093).
     """
     results = []
-    for tid in sorted(scanner.tenants.keys()):
+    for tid in scanner.tenant_ids():
         info, _ = verify_one(scanner, tid, expect_merged_hash=None)
         results.append(info)
     return results
@@ -264,17 +283,31 @@ def main() -> int:
     describe_mod = _load_describe_module()
     try:
         scanner = describe_mod.ConfDScanner(conf_d)
-    except describe_mod.DefaultsParseError as exc:
-        # #2459: a selected `_defaults.yaml` anywhere in the tree that does
-        # not parse (DefaultsParseError) or has an unsupported shape
-        # (DefaultsShapeError, its subclass) stops the scan, so no
-        # merged_hash is reported for any tenant. Named on stderr as an input error
-        # (exit 1), not a traceback — and not exit 2, which the rollback
-        # checklist reads as "hash mismatch".
-        print(f"error: {exc}", file=sys.stderr)
+    except describe_mod.DescribeError as exc:
+        # da-guard missing, failing or refusing the tree: no merged_hash is
+        # reported for any tenant. Named on stderr as an input error (exit
+        # 1), not a traceback — and not exit 2, which the rollback checklist
+        # reads as "hash mismatch".
+        lines = exc.lines or [str(exc)]
+        print(f"error: {lines[0]}", file=sys.stderr)
+        for line in lines[1:]:
+            print(line, file=sys.stderr)
         return EXIT_USAGE_ERROR
+    if scanner.refused is not None or scanner.dropped:
+        # The exporter rejects the whole tree, or skips / cannot read a file
+        # of it: no merged_hash anywhere. da-guard's own reason, once.
+        what = scanner.refused or ("the exporter's load skips or cannot read file(s) of this tree: "
+                                   + ", ".join(list(scanner.parse_failed)
+                                               + [f"{u.file} ({u.reason})" for u in scanner.unreadable]))
+        print(f"error: {what}", file=sys.stderr)
+        for line in scanner.stderr_lines:
+            print(f"{describe_mod.DA_GUARD_PREFIX}{line}", file=sys.stderr)
 
     if args.all:
+        if scanner.dropped and not scanner.tenants:
+            print(f"error: no tenant resolved, so none is verified (see above): {conf_d}",
+                  file=sys.stderr)
+            return EXIT_USAGE_ERROR
         results = verify_all(scanner)
         dups = _duplicated(results)
         unavailable = [r for r in results if r.get("error") == "merged_hash_unavailable"]
