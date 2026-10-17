@@ -170,6 +170,19 @@ func TestEffectiveOverlay_Refusals(t *testing.T) {
 	}
 }
 
+// A second --overlay is refused, not last-wins: the first would be dropped
+// without a word and the run would answer another question.
+func TestEffectiveOverlay_GivenTwiceRefused(t *testing.T) {
+	t.Parallel()
+	dir := writeParityTree(t, overlayBase)
+	draft := writeDraft(t, "tenants:\n  tenant-z: {}\n")
+	code, stdout, stderr := runOnce(t, effectiveCmd, "--config-dir", dir,
+		"--overlay", "x.yaml="+draft, "--overlay", "tenant-b.yaml="+draft)
+	if code != exitCallerErr || stdout != "" || !strings.Contains(stderr, "one --overlay per run") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %q; want exit %d naming the rule", code, stdout, stderr, exitCallerErr)
+	}
+}
+
 // -h with --overlay exits 0: what `_lib_tenant_values` asks to tell a
 // da-guard that does not know the flag from a refused tree.
 func TestEffectiveOverlay_FlagKnown(t *testing.T) {

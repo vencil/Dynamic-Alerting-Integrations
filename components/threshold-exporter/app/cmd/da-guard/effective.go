@@ -98,11 +98,22 @@ func parseEffectiveFlags(args []string, errOut io.Writer) (effectiveFlags, error
 	fs.SetOutput(errOut)
 	var f effectiveFlags
 	fs.StringVar(&f.configDir, "config-dir", "", "Path to the conf.d/ root. Required.")
-	fs.StringVar(&f.overlay, "overlay", "",
+	// A Func, not a StringVar: a second --overlay would silently replace the
+	// first, and the run would answer a different question than asked.
+	overlaySet := false
+	fs.Func("overlay",
 		"`<rel-path>=<file>`: resolve the tree as if <rel-path> (relative to --config-dir) held <file>'s bytes —\n"+
 			"in place of the listed file there (substitute), or as a new regular file where nothing is (create;\n"+
 			"its parent must be a directory the walk descends). Anything else at <rel-path>, a path leaving the\n"+
-			"tree, or a name the walk does not read is refused (exit 2).")
+			"tree, or a name the walk does not read is refused (exit 2). One per run.",
+		func(v string) error {
+			if overlaySet {
+				return errors.New("given more than once; one --overlay per run")
+			}
+			overlaySet = true
+			f.overlay = v
+			return nil
+		})
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--overlay <rel-path>=<file>]\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, every tenant's effective config as tenant-api's /effective resolves it,\n"+
