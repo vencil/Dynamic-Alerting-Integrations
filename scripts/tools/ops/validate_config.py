@@ -191,16 +191,17 @@ from _lib_python import (  # noqa: E402
     load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
     DOCS_SITE_BASE,
 )
-# #2123: conf.d files are read strictly — a key written twice in one mapping
-# is a YAML error (the exporter's yaml.v3 rejects the file), not last-wins.
-from _lib_io import (  # noqa: E402
-    load_yaml_file_strict, strict_safe_load,
-)
 # #1577 / #2114: tenant declarations are scanned by
 # `_lib_confd.tenant_declarations` since #2315. `check_profiles` reads
 # `_profiles.yaml` through the exporter-key loader (#2297: a profile name is
 # its source text); the tenants' `_profile` refs come from da-guard (#2115).
-from _lib_io import YamlFileError, load_yaml_file_strict_exporter_keys  # noqa: E402  (#2297)
+from _lib_io import YamlFileError  # noqa: E402  (#2297)
+# ADR-036 step 4 (#2906): every row's conf.d read is `da-guard parse-tree`'s,
+# one document per run (`_lib_parse_cache.session` in `main`), as the route
+# generator these rows ask reads it — never a PyYAML reading beside it.
+from _lib_io import load_confd_file  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 # #2115 0-B: the tenants as threshold-exporter reads them (`check_profiles`,
 # and the error row `check_policy_dsl` shares with it).
 from _lib_tenant_values import (  # noqa: E402
@@ -511,55 +512,32 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     errors = []
     unusable = []
     file_count = 0
+    # ADR-036 step 4 (#2906): "loads" is `da-guard parse-tree`'s verdict —
+    # the reading every routing row reads, so this row and theirs cannot
+    # disagree about a file. A file it cannot read is named with its kind
+    # (syntax_error, duplicate_key, invalid_utf8, top_level_not_mapping, …).
+    # A file no reader reads (an unselected `_defaults` spelling, `not_read`)
+    # has no content to judge; the schema row names it.
+    tree = _lib_parse_cache.reader_for(config_dir).tree()
+    root = Path(config_dir)
     for fpath_p in iter_config_files(config_dir):
-        fpath = str(fpath_p)
         file_count += 1
         # Relative path, not bare filename: now that the scan is recursive,
         # two levels can hold the same `_defaults.yaml`.
         try:
-            label = fpath_p.relative_to(Path(config_dir)).as_posix()
+            label = fpath_p.relative_to(root).as_posix()
         except ValueError:
             label = fpath_p.name
-        try:
-            with open(fpath, encoding="utf-8") as f:
-                # Strict (#2123): a duplicate key raises a YAMLError naming
-                # the line, and takes the syntax-error branch below.
-                loaded = strict_safe_load(f)
-        except yaml.YAMLError as e:
-            errors.append(f"{label}: {e}")
+        if label in tree.unreadable:
+            kind, message = tree.unreadable[label]
+            errors.append(f"{label}: could not be read ({kind}): {' '.join(message.split())}"
+                          + (" — every consumer reaches for keys on it and finds none, so "
+                             "nothing in this file is loaded"
+                             if kind == "top_level_not_mapping" else ""))
             unusable.append(label)
-            continue
-        except UnicodeDecodeError as e:
-            errors.append(
-                f"{label}: not valid UTF-8 ({e.reason} at byte {e.start}) — "
-                f"re-save this file as UTF-8")
-            unusable.append(label)
-            continue
-        except Exception as e:  # noqa: BLE001 — see below
-            # ⛔ Deliberately open-ended, and this loop is the ONLY place in
-            # the tool where that is the right shape: it is reading one
-            # named file, so whatever comes back it can say *which* file.
-            # Listing the exception types instead is a bet that keeps
-            # losing — `yaml.safe_load` raises `RecursionError` (not a
-            # YAMLError) on deeply nested input — measured at roughly half the recursion
-            # limit — 495 flow-style, 493 block-style on this host —
-            # and it tracks `sys.getrecursionlimit()` rather than being
-            # a constant —
-            # and before this it escaped to the catch-all in `_run_check`,
-            # which exits 2 and prints "please report this" for a file the
-            # customer wrote and this message could not name.
-            errors.append(f"{label}: could not be read — "
-                          f"{e.__class__.__name__}: {' '.join(str(e).split())}")
-            unusable.append(label)
-            continue
-        if loaded is not None and not isinstance(loaded, dict):
-            errors.append(
-                # Not "so its tenants never load": this same message is
-                # emitted for `_domain_policy.yaml` and
-                # `_routing_profiles.yaml`, which hold no tenants at all.
-                f"{label}: top level must be a mapping, got "
-                f"{type(loaded).__name__} — every consumer reaches for keys "
-                f"on it and finds none, so nothing in this file is loaded")
+        elif label not in tree.selected and label not in tree.not_read:
+            errors.append(f"{label}: da-guard parse-tree does not list this file — this "
+                          f"tool's walk and the exporter's disagree about it")
             unusable.append(label)
 
     # #1469: entries NAMED like a config file that `iter_config_files`
@@ -1184,6 +1162,8 @@ _DA_GUARD_SOURCES = (
     "$PATH: it uses $DA_GUARD_BINARY, or builds .build/da-guard when that is "
     "unset. Then re-run.")
 _PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
+# ADR-036 step 4 (#2906): every row reads conf.d through `da-guard parse-tree`.
+_PARSE_TREE_HINT = _DA_GUARD_SOURCES + " No row was run: every row reads the conf.d through it."
 # Shared by every row that reads through da-guard: a da-guard named as older
 # than this tool (its output lacks a field this tool reads, e.g. effective's
 # `skipped`, or it does not accept the subcommand and flags — the released
@@ -1201,6 +1181,25 @@ _DA_GUARD_BROKEN_HINT = (
     "$DA_GUARD_BINARY at a working da-guard (executable, built from this repo: "
     "`make da-guard-build`) or use the da-tools image, then re-run. The config "
     "tree was not checked; do not edit it for this.")
+
+
+def _parse_tree_failure_row(check: str, exc: Exception,
+                            no_da_guard_hint: str) -> dict[str, object]:
+    """The FAIL row of a check whose conf.d read through `da-guard
+    parse-tree` (ADR-036 step 4, #2906) failed: no da-guard (`BinaryMissing`),
+    one older than this tool, or one that cannot be run or answers as no
+    da-guard does. Always a caller error — the tree was not read."""
+    from _lib_parse_tree import BinaryMissing
+    text = " ".join(str(exc).split())
+    if isinstance(exc, BinaryMissing):
+        hint = no_da_guard_hint
+    elif "older than this tool" in text:
+        hint = _DA_GUARD_TOO_OLD_HINT
+    else:
+        hint = _DA_GUARD_BROKEN_HINT
+    return _make_result(check, FAIL,
+                        ["the conf.d cannot be read through `da-guard parse-tree` (ADR-036):",
+                         text], caller_error=True, hint=hint)
 
 
 def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
@@ -1382,7 +1381,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     profiles_path = str(cfg / "_profiles.yaml")
     # #2297: profile names are the keys' source text, as the exporter keys
     # them — `010:` is "010", the name a tenant's `_profile: 010` reads as.
-    profiles_raw = load_yaml_file_strict_exporter_keys(profiles_path, default={})
+    profiles_raw = load_confd_file(config_dir, profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
@@ -1523,7 +1522,9 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         # #2961: the customer's tree — a tree finding (FAIL, rc 1), as the
         # comment at the --policy-dsl read below says.
         try:
-            rules.extend(pe.load_policies(defaults_path))
+            rules.extend(pe.load_policies(defaults_path, config_dir))
+        except ParseTreeError as exc:
+            return _parse_tree_failure_row("policy_dsl", exc, _POLICY_DSL_NO_DA_GUARD_HINT)
         except pe.InvalidPolicyRules as exc:
             return _make_result("policy_dsl", FAIL,
                                 [f"{os.path.basename(defaults_path)}: {p}" for p in exc.problems],
@@ -2132,7 +2133,7 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
         if carrier is None:
             continue
         try:
-            raw = load_yaml_file_strict(str(carrier), default={})
+            raw = load_confd_file(config_dir, str(carrier), default={})
         except YamlFileError:
             continue  # yaml_syntax names a file that does not load
         if not isinstance(raw, dict):
@@ -2218,7 +2219,7 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
         if reserved and not at_root and not carrier:
             continue  # a nested `_` file: read by no plane
         try:
-            raw = load_yaml_file_strict_exporter_keys(str(p), default={})
+            raw = load_confd_file(config_dir, str(p), default={})
         except YamlFileError:
             continue
         if not isinstance(raw, dict):
@@ -2554,7 +2555,7 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
         return _make_result("root_defaults", PASS,
                             ["no root _defaults.yaml — nothing to check"])
     rel = carrier.name
-    raw = load_yaml_file_strict(str(carrier), default={})
+    raw = load_confd_file(config_dir, str(carrier), default={})
     if not isinstance(raw, dict):
         return _make_result("root_defaults", PASS,
                             [f"{rel}: no `defaults:` mapping — nothing to check"])
@@ -3239,7 +3240,13 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
 # Main
 # ============================================================
 def main() -> None:
-    """CLI entry point: One-stop configuration validation."""
+    """CLI entry point: One-stop configuration validation. Every row reads
+    one `da-guard parse-tree` document of the tree (ADR-036 step 4)."""
+    with _lib_parse_cache.session():
+        _main()
+
+
+def _main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_h('description'))
@@ -3277,6 +3284,17 @@ def main() -> None:
                 "config_dir", FAIL,
                 [f"config-dir not found: {args.config_dir}"],
                 caller_error=True)], as_json=True)
+        sys.exit(EXIT_CALLER_ERROR)
+
+    # ADR-036 step 4 (#2906): no usable `da-guard parse-tree` — no row can
+    # read the tree, so no row runs (a caller error, as for a missing dir).
+    try:
+        _lib_parse_cache.reader_for(args.config_dir).require()
+    except ParseTreeError as exc:
+        row = _parse_tree_failure_row("config_dir", exc, _PARSE_TREE_HINT)
+        print(f"ERROR: {safe_label(' '.join(row['details']))}", file=sys.stderr)
+        if args.json:
+            print_report([row], as_json=True)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Ensure tools dir is in sys.path for imports

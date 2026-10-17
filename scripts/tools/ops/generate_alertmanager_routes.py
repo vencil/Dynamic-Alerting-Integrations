@@ -180,6 +180,7 @@ from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 # parse as allowed_domains, and the comparison the generator container shares.
 from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
 import yaml  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 
 
 # ============================================================
@@ -977,9 +978,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strict", action="store_true",
                         help="Escalate to ERROR and fail (exit 1): domain-policy "
                              "violations (ADR-007), an unquoted routes[].match value "
-                             "or overrides[].alertname / metric_group that PyYAML "
-                             "reads as a non-string (yes, 1:30, ~; #2431 — quote "
-                             "it), a group_by entry that is not a non-empty string, "
+                             "or overrides[].alertname / metric_group that YAML "
+                             "reads as a non-string (8, true, ~, 2024-01-02; #2431 — "
+                             "quote it), a group_by entry that is not a non-empty string, "
                              "repeats a label or mixes '...' with labels (#2503), "
                              "a tenant _routing that is neither a mapping nor a "
                              "disabling string, a _routing_defaults that is not "
@@ -1130,7 +1131,9 @@ def main(argv: list[str] | None = None) -> None:
     code = get_crash_exit_code()
     try:
         args = parser.parse_args(argv)
-        _run(args, findings)
+        # ADR-036 step 4 (#2906): one `da-guard parse-tree` reading per run.
+        with _lib_parse_cache.session():
+            _run(args, findings)
         code = EXIT_OK
     except SystemExit as exc:
         code = _exit_code_of(exc)
@@ -1298,7 +1301,7 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
     # files that did not parse, and that record decides whether anything
     # below is allowed to call itself a result.
     tree = load_tenant_tree(args.config_dir, strict_policies=args.strict)
-    routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
+    routing_configs, dedup_configs, schema_warnings, enforced_routing, _unused = \
         tree.as_tuple()
     # #2766: --findings-json holds exactly the findings this run PRINTS — a
     # refusal prints its own lines and not the schema stream, so the stream

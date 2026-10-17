@@ -1594,8 +1594,10 @@ class TestUnreadableInputIsNeverOurBug:
         ("not-utf8", b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n    x: 1\n"),
         ("not-a-mapping", b"- tenants:\n    db_a:\n      x: 1\n"),
         ("syntax-error", b"tenants:\n  db_a: [1\n"),
+        # Past yaml.v3's 10,000-level limit (parse-tree's syntax_error): the
+        # 520 levels PyYAML could not read are read since ADR-036 step 4.
         ("deeply-nested",
-         ("".join("  " * i + "k%d:\n" % i for i in range(520))).encode()),
+         ("".join("  " * i + "k%d:\n" % i for i in range(12000))).encode()),
     ]
 
     @pytest.mark.parametrize("label,body", UNREADABLE,
@@ -2212,7 +2214,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             "tenants:\n  demo-a:\n    mysql_threads_running: 90\n"
             "    _routing:\n      receiver:\n        type: webhook\n"
             "        url: https://hooks.example.com/a\n"
-            "      overrides:\n      - alertname: yes\n"
+            "      overrides:\n      - alertname: true\n"
             "        receiver:\n          type: webhook\n"
             "          url: https://hooks.example.com/b\n",
             encoding="utf-8")
@@ -2509,15 +2511,16 @@ class TestTenantIdParity:
         assert r["status"] == vc.FAIL, r
         assert 'tenant "db-m"' in " ".join(r["details"]), r
 
-    def test_a_null_key_is_dropped_because_the_exporter_drops_it(self, tmp_path):
-        """Must-stay-green control for the same loader: without the null rule
-        two trees each carrying a ``null:`` key would read as a duplicate the
-        exporter never sees."""
+    def test_a_null_key_makes_the_file_unexamined_not_a_duplicate(self, tmp_path):
+        """ADR-036 step 4 (#2906): a null key is parse-tree's `null_key` —
+        the file cannot be read, so it declares nothing (never a duplicate
+        `None`), and the row says which files it did not examine."""
         d = self._tree(tmp_path, {
             "a.yaml": "tenants:\n  null:\n    m: 1\n  b:\n    m: 1\n",
             "c.yaml": "tenants:\n  null:\n    m: 2\n  d:\n    m: 2\n"})
         r = vc.check_tenant_uniqueness(d)
-        assert r["status"] == vc.PASS, r
+        assert r["status"] == vc.WARN, r
+        assert "a.yaml, c.yaml" in " ".join(r["details"]), r
 
     # #2114: `test_the_loader_cannot_construct_python_objects` moved with the
     # loader to `tests/shared/test_tenant_id_yaml_spelling_parity.py` — the
@@ -2690,23 +2693,18 @@ _CARRIER_ORACLE = json.loads(pathlib.Path(
     "defaults-carrier-oracle.json").read_text(encoding="utf-8"))["cases"]
 
 #: Oracle rows where this row's verdict differs from the exporter's, each for
-#: a reason that is not the value rule (#1414) and predates it.
-#:   * top level not a mapping — `yaml_syntax` owns that finding; this row
-#:     says "no `defaults:` mapping" rather than repeat it.
-#:   * the rest FAIL here while the exporter accepts: conf.d is read with the
-#:     strict pure-Python loader (#2123 duplicate keys anywhere; one document;
-#:     no tab where libyaml tolerates one), which fails the file before the
-#:     value rule runs — through `_run_check`'s input-error row, as before.
+#: a reason that is not the value rule (#1414) and predates it. The rows FAIL
+#: here while the exporter accepts: conf.d is read through `da-guard
+#: parse-tree` (ADR-036 step 4, #2906), whose closed list refuses what the
+#: exporter's yaml.v3 decode lets by (a duplicate key anywhere, several
+#: documents), and the file fails before the value rule runs — through
+#: `_run_check`'s input-error row. (Before step 4 the PyYAML read also failed
+#: a TAB that yaml.v3 takes, and passed a top level that is not a mapping.)
 _ORACLE_ROW_DEVIATIONS = {
-    "top-level-list": vc.PASS,
-    "top-level-scalar": vc.PASS,
     "multi-document": vc.FAIL,
     "dup-in-unknown-section": vc.FAIL,
     "dup-under-unknown-nested-field": vc.FAIL,
     "dup-in-custom-alerts-recipe": vc.FAIL,
-    "trailing-tab": vc.FAIL,
-    "tab-after-key-colon": vc.FAIL,
-    "tab-in-flow": vc.FAIL,
 }
 
 
@@ -3061,7 +3059,12 @@ class TestDefaultsWrapperMatrix:
         if wrap["status"] == vc.FAIL:
             got += [["defaults_toplevel_ignored", x.split(": ", 1)[0]]
                     for x in wrap["details"]]
-        assert sorted(got) == sorted(case["expect"]), (root, wrap)
+        # ADR-036 step 4 (#2906): a file `da-guard parse-tree` cannot read
+        # (e.g. `!!set`, outside its tag whitelist) is not judged by these
+        # rows; `yaml_syntax` FAILs it, so the tree is refused all the same.
+        unread = set(vc.check_yaml_syntax(str(d)).get("unusable_files") or [])
+        want = [e for e in case["expect"] if e[1] not in unread]
+        assert sorted(got) == sorted(want), (root, wrap, unread)
 
 
 class TestScheduleNull:

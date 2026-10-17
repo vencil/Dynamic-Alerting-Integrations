@@ -179,6 +179,13 @@ def test_config_diff_blast_radius_is_the_tenants_go_binds(tmp_path, name, profil
     p = subprocess.run([sys.executable, config_diff.__file__, "--old-dir", str(old),
                         "--new-dir", str(new), "--at", "2026-10-10T00:00:00Z", "--format", "json"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    if "!!binary" in profile:
+        # ADR-036 step 4 (#2906): the route generator reads parse-tree, which
+        # cannot read a `!!binary` file (tag_not_allowed) — so config_diff's
+        # render of that tree is refused and nothing is compared (rc 2).
+        assert p.returncode == 2, (name, where, p.returncode, p.stderr[-1000:])
+        assert "da-guard parse-tree" in p.stderr, (name, where, p.stderr[-1000:])
+        return
     doc = json.loads(p.stdout)
     # 必響：010 確實改了（#1516 P3b 起以 parse-tree 讀出的值比較，列在 platform_settings）。
     # 只斷言「包含」：`!!binary` 寫在 `_defaults.yaml` 的那格，parse-tree 讀不了該檔，

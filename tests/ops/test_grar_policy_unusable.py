@@ -12,7 +12,7 @@
   不是 list（null＝沒有約束，照收）；`enforce_group_by` 的項目不是非空字串（沿用 group_by
   的 `not_string`／`empty` 規則；過去 mapping 項目讓產生器 TypeError、rc 2）；
 * receiver 類型清單有一項不是 `_lib_constants.RECEIVER_TYPES` 的鍵：拼錯的名稱、`opsgenie`、
-  非字串（`yes` 是 True、`1`、`~`、mapping）。類型集合與 tenant-config.schema.json 的 receiver
+  非字串（`true`、`1`、`~`、mapping；未加引號的 `yes` 是字串 "yes"，不是類型名）。類型集合與 tenant-config.schema.json 的 receiver
   定義同一組，由 tests/shared/test_receiver_spec_parity.py 釘住，domain-policy.schema.json 的
   enum 也是；
 * duration bound（`max_repeat_interval`／`min_group_wait`）解析不了；
@@ -107,7 +107,7 @@ CASES = {
     "enforce-group-by-number": (_cons("enforce_group_by: [8]"),
                                 "constraints.enforce_group_by", "fin",
                                 "constraint 'enforce_group_by' entry [0] is int 8"),
-    "enforce-group-by-bool": (_cons("enforce_group_by: [yes]"),
+    "enforce-group-by-bool": (_cons("enforce_group_by: [true]"),
                               "constraints.enforce_group_by", "fin",
                               "constraint 'enforce_group_by' entry [0] is bool True"),
     "enforce-group-by-null-entry": (_cons("enforce_group_by: [tenant, ~]"),
@@ -137,7 +137,8 @@ _BAD_TYPES = {
     "webhok": "string 'webhok'",       # a misspelt name
     "slak": "string 'slak'",
     "opsgenie": "string 'opsgenie'",   # in the schema enum until #3116
-    "yes": "boolean True",             # PyYAML's YAML 1.1 boolean
+    "true": "boolean True",
+    "yes": "string 'yes'",             # a string to yaml.v3 (ADR-036 step 4)
     "1": "number 1",
     "~": "null",
     "{a: 1}": "a mapping",
@@ -165,7 +166,7 @@ def test_each_problem_is_one_domain_policy_unusable_error(tmp_path, name):
 
 
 def test_a_receiver_type_message_lists_the_types(tmp_path):
-    [err] = _errors(_write(tmp_path, _cons("forbidden_receiver_types: [webhok, slack, yes]")))
+    [err] = _errors(_write(tmp_path, _cons("forbidden_receiver_types: [webhok, slack, true]")))
     assert ("lists string 'webhok', boolean True, which are not receiver types"
             in err.message), err.message
     assert err.message.endswith(f"the receiver types are {_TYPES_TEXT}"), err.message

@@ -56,7 +56,6 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, NamedTuple
 import sys
 from pathlib import Path
 
-from _lib_parse_cache import ParseMode, read_confd_yaml  # stdlib-only (#2901)
 
 __all__ = [
     "CONFIG_SUFFIXES",
@@ -1411,27 +1410,19 @@ def tenant_carriers(
     return TenantCarriers(sorted(tenants), invalid, unusable)
 
 
-def _first_document_keys(stream: Any) -> Any:
-    from _lib_yaml_keys import load_first_document_exporter_keys  # lazy: see declared_tenant_ids
-    return load_first_document_exporter_keys(stream)
+def _reader_of(config_dir: "str | os.PathLike[str]", reader: Any) -> Any:
+    # Imported here: `_lib_parse_cache` runs da-guard through modules that
+    # import this one (ADR-036 step 4, #2906).
+    if reader is not None:
+        return reader
+    from _lib_parse_cache import reader_for
+    return reader_for(config_dir)
 
 
-def _strict_keys(stream: Any) -> Any:
-    from _lib_io import strict_load_exporter_keys  # lazy: see declared_tenant_ids
-    return strict_load_exporter_keys(stream)
-
-
-# #2901 (ADR-036 §3): the two reads below parse through `read_confd_yaml`, so
-# the generator container's cache can answer them. The parsers are imported
-# lazily, as before, by the parse functions themselves.
-FIRST_DOCUMENT_KEYS_READ = ParseMode(
-    "_lib_yaml_keys.load_first_document_exporter_keys()", _first_document_keys)
-STRICT_KEYS_READ = ParseMode("_lib_io.strict_load_exporter_keys()", _strict_keys)
-
-
-def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
+def declared_tenant_ids(config_dir: "str | os.PathLike[str]", reader: Any = None) -> set:
     """Tenant ids some TENANT file declares anywhere in the tree: the keys of
-    the FIRST YAML document's `tenants:` mapping in every non-`_` config file.
+    the `tenants:` mapping of every non-`_` config file `da-guard parse-tree`
+    can read.
 
     The ENUMERATION is the exporter walker's (`pkg/config/tree_scan.go`):
     recurse, skip dot-prefixed entries, never read a `_`-prefixed file for
@@ -1440,58 +1431,39 @@ def declared_tenant_ids(config_dir: "str | os.PathLike[str]") -> set:
     declared only in `team-a/tx.yaml` exists even for a reader that routes
     only the root.
 
-    The DECODE is deliberately NOT the walker's, and the difference is
-    stated rather than hidden:
+    The CONTENT is parse-tree's (ADR-036 step 4, #2906; *reader* is a
+    `_lib_parse_cache.ConfdReader` of *config_dir*, the session's when None):
+    the ids are the keys' source TEXT, as yaml.v3 keys the exporter's
+    ``map[string]`` — ``010:`` is ``"010"``, ``yes:`` is ``"yes"``, and
+    ``123:`` / ``"123":`` are one id, which parse-tree refuses as a duplicate.
+    A file parse-tree cannot read (``unreadable``: several documents, a
+    duplicate key, a syntax error, …) declares nothing here; naming it is the
+    calling reader's own job. A file the exporter's full decode rejects but
+    parse-tree reads (a tenant body that is not a mapping, a `defaults:` of
+    the wrong shape) still declares its tenants here — mirroring the Go
+    decoder would be an unbounded differential (#1942).
 
-    * Only the first document counts, as with yaml.v3's `Unmarshal` — a file
-      holding `tenants: {tx: {}}` then `---` declares tx on both sides (a
-      single-document `safe_load` raised on it and stripped tx as an orphan).
-      A failure AFTER the first document does not matter here.
-    * A file the exporter's full decode REJECTS (a duplicate key, a tenant
-      body that is not a mapping, a `defaults:` of the wrong shape) still
-      declares its tenants here. On the exporter side such a tenant does not
-      exist, its platform values do not reach `/metrics`, and the exporter
-      counts a parse failure for the file; the routing plane may still keep
-      the platform's routing values for it, as before this existed. Mirroring
-      the Go decoder here would be an unbounded differential (#1942), so the
-      rule is "first document's `tenants:` keys", named as such.
-
-    * The ids are the keys' raw TEXT (#2114), as yaml.v3 keys the exporter's
-      ``map[string]`` — ``010:`` is ``"010"``, ``yes:`` is ``"yes"``, and
-      ``123:`` / ``"123":`` are one id — read through ``_lib_yaml_keys``, on
-      the same pure-Python parser as before (so a file the flat readers
-      cannot parse declares nothing here either). Before, the keys were
-      PyYAML's YAML 1.1 values (``8``, ``True``, ``123``), so a platform
-      file's ``123:`` never met the tenant file's ``"123":``. The three
-      readers that ask this set about membership through
-      ``overlay_platform_tenants`` (``_grar_parse``, ``diagnose``,
-      ``check_routing_profiles``) key their own tenants the same way. ⚠️ Not
-      every tenant reader in the tool family does yet — the remaining
-      PyYAML-typed ones are tracked in #2115.
-
-    A file that does not parse as YAML at all, or cannot be read, declares
-    nothing; naming it is the calling reader's own job (it has its own record
-    of skipped files). The loader is imported lazily: the rest of this
-    module is pure name predicates.
+    Raises `_lib_parse_tree.ParseTreeError` (no da-guard, a failing one) —
+    never an empty set for a tree that was not read.
     """
+    from _lib_parse_tree import FileUnreadable
+    reader = _reader_of(config_dir, reader)
     ids: set[str] = set()
     for path in iter_config_files(config_dir, recursive=True):
         if is_reserved_name(path.name):
             continue
         try:
-            # First document only; the loader is not advanced past
-            # it, so a later document's error cannot drop this one.
-            data = read_confd_yaml(path, FIRST_DOCUMENT_KEYS_READ)
-        except Exception:  # noqa: BLE001 — declares nothing; see docstring
-            continue
-        if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
-            # Keys are the source text (#2114); the overlay readers key
-            # their tenants the same way, so membership compares text to text.
+            data = reader.read(path)
+        except FileUnreadable:
+            continue  # declares nothing; see docstring
+        if isinstance(data.get("tenants"), dict):
+            # Keys are the source text; the overlay readers key their
+            # tenants the same way, so membership compares text to text.
             ids.update(data["tenants"])
     return ids
 
 
-def tenant_declarations(config_dir: "str | os.PathLike[str]"
+def tenant_declarations(config_dir: "str | os.PathLike[str]", reader: Any = None
                         ) -> "tuple[dict[str, set[str]], list[str]]":
     """``({tenant_id: {label, ...}}, unreadable)`` over the whole tree.
 
@@ -1503,13 +1475,16 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]"
     Selection mirrors the exporter's walker: ``iter_config_files`` (recursive,
     case-insensitive, both spellings) and ``is_reserved_name`` (a ``_`` file
     is never read for tenants). A declaration is a key of a mapping-shaped
-    ``tenants:`` in a file that loads through the strict loader, keyed by its
-    raw text (#2114); a key repeated in one mapping (#2123) makes the file
-    unreadable. A label is the root-relative POSIX path (the file name when
-    it is not under the root). *unreadable* lists the labels of the files
-    that did not load, in walk order — a limit on the answer, which the
-    caller must name.
+    ``tenants:`` in a file `da-guard parse-tree` reads (*reader*, as for
+    ``declared_tenant_ids``), keyed by its source text. A label is the
+    root-relative POSIX path (the file name when it is not under the root).
+    *unreadable* lists the labels of the files parse-tree could not read, in
+    walk order — a limit on the answer, which the caller must name — but a
+    file whose top level is not a mapping, which declares nothing.
+    Raises `_lib_parse_tree.ParseTreeError` as ``declared_tenant_ids`` does.
     """
+    from _lib_parse_tree import FileUnreadable
+    reader = _reader_of(config_dir, reader)
     root = Path(config_dir)
     declared: dict[str, set[str]] = {}
     unreadable: list[str] = []
@@ -1521,15 +1496,13 @@ def tenant_declarations(config_dir: "str | os.PathLike[str]"
         except ValueError:
             label = path.name
         try:
-            # #2114: tenant ids are the key's raw TEXT, as the exporter
-            # keys them — see `_lib_yaml_keys` for the measured table.
-            # #2123: a key repeated in one mapping (by that same
-            # identity) makes the file unreadable here, as in Go.
-            data = read_confd_yaml(path, STRICT_KEYS_READ)
-        except Exception:  # noqa: BLE001 — `yaml_syntax` owns naming the reason
-            unreadable.append(label)
-            continue
-        if not isinstance(data, dict):
+            data = reader.read(path)
+        except FileUnreadable as e:  # `yaml_syntax` owns naming the reason
+            # A top level that is not a mapping is known content: it
+            # declares no tenant (as before ADR-036 step 4). Any other kind
+            # leaves what the file declares unknown.
+            if e.kind != "top_level_not_mapping":
+                unreadable.append(label)
             continue
         tenants = data.get("tenants")
         if not isinstance(tenants, dict):

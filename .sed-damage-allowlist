@@ -192,3 +192,9 @@ docs/api/threshold-exporter-openapi.yaml
 # holds (tenant-api no longer judges policy); only its config-watcher
 # sentence is left. Checked by generate_changelog.py --fragments.
 changelog.d/2280-tenant-api-routing-policy.md
+
+# #2906: test_grar_match_null_key.py rewritten (~24% of its former size): the
+# #2504 PyYAML null-key probe it pinned is gone — a null key now makes the
+# whole file parse-tree's `null_key` unreadable, so the per-path cases
+# collapsed into "the file is refused". Rewritten, not truncated.
+tests/ops/test_grar_match_null_key.py

@@ -100,8 +100,9 @@ def test_enum_and_sequence_items_are_string_fields(schemas):
             "        url: \"https://a.example.com/h\"\n"
             "      group_by: [alertname, on]\n")
     got = {(h.path, h.resolved) for h in _hits(text, schemas)}
-    assert got == {("/tenants/t1/_severity_dedup", "bool"),
-                   ("/tenants/t1/_routing/group_by/1", "bool")}
+    # #2906: `_severity_dedup` takes a boolean too (definitions.severityDedup),
+    # so `no` is no misread string; the YAML 1.1 boolean-word WARN names it.
+    assert got == {("/tenants/t1/_routing/group_by/1", "bool")}
     seq = [h for h in _hits(text, schemas) if h.path.endswith("/1")][0]
     assert 'quote it: - "on"' in seq.message()
 

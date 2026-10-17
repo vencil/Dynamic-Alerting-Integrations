@@ -18,8 +18,9 @@ forked, and never returns. In order:
    order.
 4. Run the generator in this process — ``generate_alertmanager_routes.main``
    with ``--validate --strict --findings-json`` — with the service's parse
-   cache installed (``_lib_parse_cache``), so unchanged files are not parsed
-   again.
+   cache installed (``_lib_parse_cache``), so an unchanged file is not read
+   through ``da-guard parse-tree`` again (ADR-036 step 4: the generator reads
+   conf.d from parse-tree; da-guard is on the image's $PATH).
 5. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
    base tree's files as soon as the tree is read, each new parse-cache entry the moment its
    parse finishes, and the result last — so a process the deadline kills
@@ -333,9 +334,10 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         return {"outcome": "git_read"}
     # #2901 E2: the base tree's files, as soon as they are known — the
     # long-running process pins them even if this process is killed. By the
-    # cache's own key (SHA-256 of the content), not the git blob id.
+    # cache's own key (SHA-256 of the path below conf.d and the content,
+    # ADR-036 step 4), not the git blob id.
     stream.send(frame(b"B", json.dumps(sorted(
-        {_lib_parse_cache.content_key(c) for mode, _o, _p, c in tree
+        {_lib_parse_cache.content_key(p, c) for mode, _o, p, c in tree
          if mode != "160000"})).encode("utf-8")))
     try:
         files = apply_writes(tree_dir, job.request, irregular)

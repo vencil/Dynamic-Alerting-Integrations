@@ -617,11 +617,6 @@ assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 	@kubectl apply -f k8s/crd/assembler-rbac.yaml
 	@echo "✓ CRD + RBAC installed"
 
-.PHONY: validate-routes
-validate-routes: ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking)
-	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
-		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
-
 # da-guard（#2115）：validate-config 的 profiles 列經 da-guard 讀 exporter 的答案，
 # 沒有它該列 FAIL、結束碼 2；policy_dsl 列只在有 policy 規則時才讀租戶，那時才同樣
 # FAIL。repo 內從本 checkout 的 Go 原始碼建（與 tests/conftest.py 的
@@ -649,6 +644,11 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 # 一律掛 $(DA_GUARD_PREREQ)、在指令前加 $(DA_GUARD_ENV)。
 DA_GUARD_PREREQ := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
 DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))"
+
+.PHONY: validate-routes
+validate-routes: $(DA_GUARD_PREREQ) ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking；經 da-guard parse-tree 讀 conf.d：DA_GUARD_BINARY，未設就建 .build/da-guard)
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
+		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
 .PHONY: validate-config
 validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)

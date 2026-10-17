@@ -88,7 +88,8 @@
     "#2708 n5-n9: `{default: null}` (also with `overrides: []`) and no window is that same",
     "null on every layer, a subtree `_defaults.yaml` included: the layer below shows through.",
     "n10-n13: the same with `expires:` / `reason:` beside the null default (no window).",
-    "#2914 row: a threshold profile's `_routing` / `_severity_dedup` are applied by no plane (config.IsRoutingLayerKey): dedup, exporter_dedup and walker all agree."
+    "#2914 row: a threshold profile's `_routing` / `_severity_dedup` are applied by no plane (config.IsRoutingLayerKey): dedup, exporter_dedup and walker all agree.",
+    "ADR-036 step 4 (#2906): the routing plane (`dedup`, `group_wait`) reads parse-tree, which refuses a file of several documents (multiple_documents): such a tenant file declares nothing there, and the generator refuses the tree (tenant_file_unreadable)."
   ],
   "trees": [
     {
@@ -484,7 +485,7 @@
         "tx": {
           "metric": 60,
           "tenant_api": null,
-          "dedup": "disable",
+          "dedup": null,
           "group_wait": null,
           "exporter_dedup": "disable",
           "silent_mode": "warning",

@@ -55,8 +55,9 @@ def _gen(config_dir: str, *extra: str) -> subprocess.CompletedProcess:
         capture_output=True, text=True, encoding="utf-8")
 
 
-_NOT_BOOL = ["n", "y", "'yes'", "'no'", "'true'", "1", "~"]
-_BOOL = [("true", True), ("false", False), ("yes", True), ("no", False)]
+# ADR-036 step 4 (#2906): an unquoted `yes` / `no` is a string to yaml.v3.
+_NOT_BOOL = ["n", "y", "yes", "no", "'yes'", "'no'", "'true'", "1", "~"]
+_BOOL = [("true", True), ("false", False), ("True", True), ("FALSE", False)]
 
 
 @pytest.mark.parametrize("enabled", _NOT_BOOL)

@@ -501,6 +501,21 @@ jobs:
           python-version: "3.13"
       - run: pip install pyyaml -c requirements/ci-constraints.txt
 
+      # ADR-036 step 4 (#2906): the route generator reads conf.d through
+      # `da-guard parse-tree` (yaml.v3); without a da-guard it exits 2. Built
+      # from this checkout, as guard-defaults-impact.yml builds its own.
+      - name: Set up Go (da-guard for the route generator)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+      - name: Build da-guard
+        run: |
+          cd components/threshold-exporter/app
+          go build -buildvcs=false -o "$RUNNER_TEMP/da-guard" ./cmd/da-guard
+          echo "DA_GUARD_BINARY=$RUNNER_TEMP/da-guard" >> "$GITHUB_ENV"
+
       # Schema validation + routing validation + webhook domain allowlist.
       # --strict (ADR-007): domain-policy violations are BLOCKING here —
       # without it check_domain_policies() only ever emitted WARN and a

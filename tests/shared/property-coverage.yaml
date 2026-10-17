@@ -121,6 +121,7 @@ modules:
       strict_load_exporter_keys: "strict_safe_load driven with StrictExporterKeyLoader (#2114 × #2123); identity matrix, python/object refusal and parser pinned in tests/shared/test_yaml_strict_loader.py; key text pinned in tests/shared/test_tenant_id_yaml_spelling_parity.py"
       strict_load_all_exporter_keys: "strict_safe_load_all driven with StrictExporterKeyLoader (#2114 × #2123); same pins as strict_load_exporter_keys"
       load_yaml_file_strict_exporter_keys: "File-reading twin of load_yaml_file_strict with exporter keys (#2114 × #2123); I/O-bound, contract pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
+      load_confd_file: "A conf.d file through da-guard parse-tree (ADR-036 step 4, #2906); I/O and subprocess-bound, contract pinned in tests/ops/test_lib_parse_cache.py and across tools in tests/shared/test_yaml_v3_reading_across_tools.py"
       # #2164 quoting of string fields. The verdict is PyYAML's resolver ×
       # the repo's JSON Schemas; a generator would re-derive both from the
       # code under test, so the tokens and schema shapes are example-pinned.

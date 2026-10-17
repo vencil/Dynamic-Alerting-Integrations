@@ -134,7 +134,7 @@ class TestStrict:
     """`--strict`：每個位置、每個問題元素一行 ERROR。"""
 
     def test_issue_repro_tenant_main(self, tmp_path):
-        d = _tree(tmp_path, _MAIN + "      group_by: [alertname, on, 8]\n")
+        d = _tree(tmp_path, _MAIN + "      group_by: [alertname, true, 8]\n")
         errs = _strict_errors(d)
         assert [e.split(": ", 2)[2].split(" ")[0] for e in errs] == ["group_by[1]", "group_by[2]"], errs
         assert "group_by[1] is bool True, not a string" in errs[0], errs
@@ -151,7 +151,7 @@ class TestStrict:
         assert "routes[0].group_by[1] is '...' alongside other labels" in errs[1], errs
 
     def test_routing_defaults_and_profile_are_judged_resolved(self, tmp_path):
-        extra = {"_routing_defaults.yaml": "_routing_defaults:\n  group_by: [alertname, yes]\n",
+        extra = {"_routing_defaults.yaml": "_routing_defaults:\n  group_by: [alertname, true]\n",
                  "_routing_profiles.yaml": "routing_profiles:\n  p:\n    routes:\n"
                  "    - match: {team: db}\n      group_by: ['']\n"
                  "      receiver: {type: webhook, url: https://hooks.example.com/x}\n"}
@@ -209,7 +209,7 @@ class TestStrict:
 
     @pytest.mark.parametrize("mode", [["--dry-run", "--strict"], ["--validate", "--strict"]])
     def test_cli_strict_rc1(self, tmp_path, mode):
-        d = _tree(tmp_path, _MAIN + "      group_by: [alertname, on, 8]\n")
+        d = _tree(tmp_path, _MAIN + "      group_by: [alertname, true, 8]\n")
         r = _gar(d, *mode)
         assert r.returncode == 1, r.stdout + r.stderr
         assert f"ERROR: tenant '{_T}': group_by[1] is bool True, not a string" in r.stderr
@@ -220,12 +220,12 @@ class TestNonStrictRepair:
     """非 strict：WARN … skipping，輸出修正後的 group_by；五個位置同一套。"""
 
     @pytest.mark.parametrize("written, rendered", [
-        ("[alertname, on, 8]", ["alertname"]),
+        ("[alertname, true, 8]", ["alertname"]),
         ("[alertname, true, true]", ["alertname"]),
         ("[alertname, \"...\"]", ["alertname"]),
         ("[alertname, alertname, tenant]", ["alertname", "tenant"]),
         ("[\"...\", \"...\"]", ["...", "..."]),   # F2: AM accepts it, rendered as written
-        ("[on, 8]", None),        # emptied: no group_by key at all
+        ("[true, 8]", None),        # emptied: no group_by key at all
         ("[\"\"]", None),
         ("[alertname, \"8\"]", ["alertname", "8"]),
     ])
@@ -242,7 +242,7 @@ class TestNonStrictRepair:
     def test_override_and_routes(self, tmp_path):
         routing = (_MAIN + "      group_by: [tenant]\n"
                    "      overrides:\n      - alertname: X\n"
-                   "        group_by: [alertname, on]\n" + _WEBHOOK
+                   "        group_by: [alertname, true]\n" + _WEBHOOK
                    + "      - alertname: Y\n        group_by: [8]\n" + _WEBHOOK
                    + "      routes:\n      - match: {team: db}\n"
                    "        group_by: [alertname, \"...\", alertname]\n" + _WEBHOOK)
@@ -285,7 +285,7 @@ class TestNonStrictRepair:
         assert f"WARN: {_T}: group_by[1] is dict {{'a': 1}}, not a string" in r.stderr
 
     def test_cli_dry_run_rc0_and_output(self, tmp_path):
-        d = _tree(tmp_path, _MAIN + "      group_by: [alertname, on, 8]\n")
+        d = _tree(tmp_path, _MAIN + "      group_by: [alertname, true, 8]\n")
         r = _gar(d, "--dry-run")
         assert r.returncode == 0, r.stdout + r.stderr
         assert (f"WARN: {_T}: group_by[1] is bool True, not a string — quote it in "

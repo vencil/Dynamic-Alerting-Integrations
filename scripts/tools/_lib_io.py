@@ -472,6 +472,31 @@ def load_yaml_file_strict(path: Optional[str], default: Any = None) -> Any:
     return default if data is None else data
 
 
+def load_confd_file(config_dir: "str | os.PathLike[str]", path: Optional[str],
+                    default: Any = None, *, mode: Any = None) -> Any:
+    """A conf.d file's content as `da-guard parse-tree` reads it (ADR-036
+    step 4, #2906) — the by-path read of the routing tools, which do not
+    parse conf.d with PyYAML. *config_dir* is the conf.d root *path* belongs
+    to (the session's reader of it, `_lib_parse_cache.reader_for`); *mode* a
+    `_lib_parse_cache.ParseMode` (default VALUES).
+
+    *default* for a path that is not a file, as `load_yaml_file_strict`. A
+    file parse-tree cannot read raises :class:`YamlFileError` (``cause`` is
+    the `_lib_parse_tree.FileUnreadable`, whose ``kind`` names why), so a
+    caller's "cannot read this file" path reports it with no new branch. An
+    empty file is ``{}``. No usable da-guard raises
+    `_lib_parse_tree.ParseTreeError`, never a default."""
+    if not (path and Path(path).is_file()):
+        return default
+    import _lib_parse_cache  # lazy: it runs da-guard through modules importing this one
+    from _lib_parse_tree import FileUnreadable
+    try:
+        return _lib_parse_cache.reader_for(config_dir).read(
+            path, mode if mode is not None else _lib_parse_cache.VALUES)
+    except FileUnreadable as exc:
+        raise YamlFileError(str(path), exc) from exc
+
+
 def strict_load_exporter_keys(stream: Any, *,
                               raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
                               raw_text_scalars: "frozenset[str] | tuple[str, ...]" = ()

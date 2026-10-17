@@ -501,12 +501,11 @@ def test_http_config_schema_refuses_an_unknown_key():
 
 def test_yaml_true_is_the_true_half_of_yaml_bool():
     """definitions.yamlTrue (the proxy rules' "proxy_from_environment: true")
-    is exactly the yamlBool values that mean true: the boolean True and the
-    true words of the yamlBool enum. (#2906: the generator refuses the words
-    as strings; the schema still takes them, so its two halves must agree.)"""
-    from _lib_validation import yaml_bool_literals
-
+    is exactly the yamlBool value that means true. #2906: yamlBool is
+    boolean or null only — no YAML 1.1 word, quoted or not, as the route
+    generator reads conf.d through yaml.v3 and judges by type — so the true
+    half is the boolean True alone."""
     with open(_SCHEMA, encoding="utf-8") as f:
-        enum = json.load(f)["definitions"]["yamlTrue"]["enum"]
-    want = [True, *(w for w, v in yaml_bool_literals().items() if v)]
-    assert sorted(enum, key=repr) == sorted(want, key=repr)
+        defs = json.load(f)["definitions"]
+    assert defs["yamlBool"]["type"] == ["boolean", "null"] and "anyOf" not in defs["yamlBool"]
+    assert defs["yamlTrue"]["enum"] == [True]

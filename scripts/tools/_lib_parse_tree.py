@@ -15,8 +15,10 @@ Node shapes in ``files[<rel>]``: a mapping is a JSON object, a sequence is a
 JSON array, and a scalar is ``{"text": <source text>, "tag": <resolved tag>,
 "value": <str | bool | null>}`` — `is_scalar` tells a scalar from a mapping.
 
-Used by `ops/migration_audit` and by `ops/config_diff`'s platform-settings
-comparison (ADR-037 decision 3).
+Used by `ops/migration_audit`, by `ops/config_diff`'s platform-settings
+comparison (ADR-037 decision 3) and, through `_lib_parse_cache.ConfdReader`,
+by the route generator and every tool that reads conf.d through it (ADR-036
+step 4, #2906).
 
 Loader API (ADR-036 step 4, #2906)
 ----------------------------------
@@ -60,6 +62,9 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 import guard_dispatch  # noqa: E402
 
 SUBCOMMAND = "parse-tree"
+# The Go runtime's fatal out-of-memory line (runtime.throw), at a line start.
+_GO_OUT_OF_MEMORY = re.compile(
+    r"^fatal error: (?:runtime: )?(?:out of memory|cannot allocate memory)", re.M)
 SCHEMA = "da-guard.parse-tree/v1"
 
 
@@ -86,6 +91,21 @@ def run(root: Path | str, binary: Optional[str], timeout: float) -> dict:
     """`da-guard parse-tree --config-dir <root>`'s document. Raises
     `BinaryMissing` when there is no binary, `ParseTreeError` when it fails or
     its output is not a parse-tree document this reader reads."""
+    return _run([SUBCOMMAND, "--config-dir", str(root)], binary, timeout)
+
+
+def run_file(root: Path | str, rel: str, text: bytes,
+             binary: Optional[str], timeout: float) -> dict:
+    """File mode: `da-guard parse-tree --config-dir <root> --path <rel>
+    --input -` with *text* on stdin — *text* read as the file at *rel*
+    (root-relative, '/'), in the tree as it is once that file is written.
+    Raises as `run` does."""
+    return _run([SUBCOMMAND, "--config-dir", str(root), "--path", rel,
+                 "--input", "-"], binary, timeout, stdin=text)
+
+
+def _run(args: list[str], binary: Optional[str], timeout: float,
+         stdin: Optional[bytes] = None) -> dict:
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
@@ -93,14 +113,20 @@ def run(root: Path | str, binary: Optional[str], timeout: float) -> dict:
         for prefix in ("Error: ", "錯誤: "):
             msg = msg.removeprefix(prefix)
         raise BinaryMissing(msg)
-    cmd = [exe, SUBCOMMAND, "--config-dir", str(root)]
+    cmd = [exe, *args]
     try:
-        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
+                              input=stdin if stdin is not None else b"")
     except subprocess.TimeoutExpired as e:
         raise ParseTreeError(f"da-guard {SUBCOMMAND} did not finish within {timeout}s") from e
     except OSError as e:
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
+    if proc.returncode != 0 and _GO_OUT_OF_MEMORY.search(stderr):
+        # The Go runtime's own fatal line: da-guard hit the memory limit it
+        # inherited (the generator container's RLIMIT_DATA of a judgement,
+        # ADR-036 §3) — the caller's memory limit, not a da-guard defect.
+        raise MemoryError(f"da-guard {SUBCOMMAND} ran out of memory")
     if proc.returncode != 0:
         older = ""
         if proc.returncode == 2 and not _accepts(cmd, timeout):
@@ -172,12 +198,16 @@ def _accepts(cmd: list[str], timeout: float) -> bool:
 
 # ── loader API (ADR-036 step 4, #2906) ──────────────────────────────
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Timestamp:
     """A `!!timestamp` scalar: only its source text. Not a `str` — yaml.v3 and
     the exporter do not read it as one — and not a `datetime`: what instant it
-    names is no reader's question here."""
+    names is no reader's question here. Its repr is the text as written, so a
+    message reads ``got Timestamp 2001-12-15``."""
     text: str
+
+    def __repr__(self) -> str:
+        return self.text
 
 
 # yaml.v3's spellings of the !!float values parse-tree gives no "value" for
@@ -229,26 +259,30 @@ def _new(node: Any) -> tuple[Any, bool]:
     raise ValueError(f"not a parse-tree node: {node!r:.80}")
 
 
-def to_python(node: Any) -> Any:
+def to_python(node: Any, *, text_sequences: "frozenset[str]" = frozenset()) -> Any:
     """A parse-tree node as Python values: a mapping is a `dict` keyed by the
     JSON keys as written (each key's source text), a sequence a `list`, a
     scalar by its tag (see the module docstring). Any other tag or shape
     raises ValueError — `check_shape` refuses those first; this is the second
     line. Iterative: a document deep enough to decode is deep enough to
-    convert."""
+    convert. *text_sequences*: see `to_python_text_sequences`."""
     out, fill = _new(node)
-    stack = [(node, out)] if fill else []
+    stack = [(node, out, False)] if fill else []
     while stack:
-        src, dst = stack.pop()
+        src, dst, as_text = stack.pop()
         items = src.items() if isinstance(src, dict) else enumerate(src)
         for k, child in items:
-            v, more = _new(child)
+            if as_text and is_scalar(child):
+                v, more = scalar_text(child), False
+            else:
+                v, more = _new(child)
             if isinstance(dst, dict):
                 dst[k] = v
             else:
                 dst.append(v)
             if more:
-                stack.append((child, v))
+                stack.append((child, v, isinstance(dst, dict) and k in text_sequences
+                              and isinstance(child, list)))
     return out
 
 
@@ -330,3 +364,19 @@ def tree_of(doc: dict) -> Tree:
 def load(root: Path | str, binary: Optional[str], timeout: float) -> Tree:
     """`run`'s document as a `Tree`. Raises as `run` does, and as `tree_of`."""
     return tree_of(run(root, binary, timeout))
+
+
+def load_file(root: Path | str, rel: str, text: bytes,
+              binary: Optional[str], timeout: float) -> Tree:
+    """`run_file`'s document as a `Tree` (it holds the one file *rel*).
+    Raises as `run_file` does, and as `tree_of`."""
+    return tree_of(run_file(root, rel, text, binary, timeout))
+
+
+def to_python_text_sequences(node: Any, keys: "frozenset[str] | tuple[str, ...]") -> Any:
+    """`to_python`, except that every scalar item of a sequence that is the
+    value of a mapping key in *keys* is that item's source text
+    (`scalar_text`): a domain policy's `tenants: [010]` is ["010"], the text
+    the exporter keys tenant 010 by, never the integer 8. Any other item of
+    such a sequence is converted as `to_python` converts it."""
+    return to_python(node, text_sequences=frozenset(keys))

@@ -5,7 +5,8 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；yaml.v3 讀到的是字
 各檔種由不同的 Go reader 讀（有的保留字串、有的讀成布林、有的根本不讀），所以訊息只陳述
 可驗證的事實，不斷言 merged_hash／effective 的值（盲審第 2 輪 G／F）。本檔釘住：
 
-- 字眼的集合：以 schema 的 `yamlBool` enum（唯一的手寫清單）為準——去掉 yaml.v3 自己也讀成
+- 字眼的集合：PyYAML resolver 讀成布林的 YAML 1.1 字眼（`_lib_validation.yaml_bool_literals`；
+  #2906 起 schema 的 `yamlBool` 只收布林與 null，不再列字眼）——去掉 yaml.v3 自己也讀成
   布林的 true/false 三種拼法，剩下 yes/no/on/off 各三種拼法。
 - 兩條 lint 路徑都看得到：`check_confd_schema`（pre-commit 的 confd-schema hook）印
   `WARN: <檔>:<行>: <欄位路徑>…`、rc 不變；`validate_config` 的 `yaml_quoting` 列轉 WARN、
@@ -60,9 +61,12 @@ _YAML12_BOOLS = {"true", "True", "TRUE", "false", "False", "FALSE"}
 
 
 def _schema_yaml_bool_words() -> set[str]:
-    """The schema's `yamlBool` enum: the one authored list (#2295)."""
+    """The YAML 1.1 boolean words (`_lib_validation.yaml_bool_literals`).
+    #2906: the schema's `yamlBool` lost its word list — it is boolean or
+    null only — so the list is PyYAML's resolver's, pinned below."""
     schema = json.loads(TENANT_SCHEMA.read_text(encoding="utf-8"))
-    return set(schema["definitions"]["yamlBool"]["anyOf"][1]["enum"])
+    assert schema["definitions"]["yamlBool"]["type"] == ["boolean", "null"]
+    return set(_lib_validation.yaml_bool_literals())
 
 
 WORDS = sorted(_schema_yaml_bool_words() - _YAML12_BOOLS)
