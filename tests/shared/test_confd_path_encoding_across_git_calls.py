@@ -216,7 +216,9 @@ def test_a_head1_body_that_is_not_utf8_is_named_rc2(tmp_path, prom_url):
     assert "Traceback" not in result.stderr, result.stderr
     assert result.returncode == 2, (result.stdout, result.stderr)
     assert json.loads(result.stdout)["reason"] == "served_values_unavailable"
-    assert "db-a.yaml" in result.stderr
+    # #3111 review: named as git names it, never by the temporary tree's path.
+    assert "HEAD~1:conf.d/db-a.yaml" in result.stderr, result.stderr
+    assert "backtest-head1-" not in result.stderr, result.stderr
 
 
 def test_ls_tree_lists_nothing_from_a_subdirectory_without_full_tree(tmp_path):
@@ -246,44 +248,6 @@ def test_ls_tree_lists_nothing_from_a_subdirectory_without_full_tree(tmp_path):
         f"`ls-tree` from a subdirectory now lists the tree, so `--full-tree` "
         f"may no longer be load-bearing: {plain.stdout!r}")
     assert full.stdout.endswith(b"\tdb-a.yaml\0"), full.stdout
-
-
-def test_the_dedup_is_process_wide_and_the_reset_clears_it(capsys):
-    """`_warn_dropped_carrier` names a carrier once per run; the reset clears it.
-
-    Since #3111 no change source hands the tool a tenant id that cannot be a
-    PromQL label value (the ids are the exporter's `tenants:` keys), so the
-    end-to-end arm that used to drive this is gone; the gate stays in front
-    of the query, and this drives its dedup in-process.
-
-    ⛔ It also exists because `reset_dropped_carrier_warnings_for_test` had
-    ZERO callers — a test-only setter nobody calls is dead code by this
-    repo's own self-review rule, and its neighbour
-    (`reset_unlistable_warnings_for_test`) does have one. The coverage bot
-    is what surfaced it: every branch this file guards runs in a SUBPROCESS,
-    and coverage cannot see into one, so the whole group reads as uncovered
-    no matter how thoroughly the CLI exercises it.
-    """
-    bt = _import_backtest()
-    bt.reset_dropped_carrier_warnings_for_test()
-    try:
-        bt._warn_dropped_carrier("carrier-x", "a reason")
-        bt._warn_dropped_carrier("carrier-x", "a reason")
-        said_twice = capsys.readouterr().err
-        assert said_twice.count("carrier-x") == 1, (
-            f"the second call was not suppressed: {said_twice!r}")
-
-        bt.reset_dropped_carrier_warnings_for_test()
-        bt._warn_dropped_carrier("carrier-x", "a reason")
-        after_reset = capsys.readouterr().err
-        assert after_reset.count("carrier-x") == 1, (
-            f"the reset did not clear the dedup, so a test cannot drive this "
-            f"branch twice: {after_reset!r}")
-    finally:
-        # ⚠️ Idempotent reset, not save-and-restore: this set is process
-        # global, and leaving an entry behind would silence a warning a later
-        # test is asserting on.
-        bt.reset_dropped_carrier_warnings_for_test()
 
 
 def test_both_change_sources_answer_an_unusable_name_without_a_traceback(

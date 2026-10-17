@@ -38,12 +38,15 @@ Usage:
 """
 import argparse
 import errno
+import hashlib
+import io
 import math
 import os
 import re
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,6 +92,7 @@ import _observed_map_lib as observed_map_lib  # noqa: E402
 from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
+    list_config_tree,
     is_hidden_name,
     warn_nested,
 )
@@ -216,12 +220,6 @@ def count_threshold_breaches(values, threshold, direction="above"):
     return count
 
 
-# Paths this tool could not parse, so each is named once per run rather than
-# once per diff line (same reason as `_WARNED_UNLISTABLE` below: a warning
-# repeated per line trains the operator to skip it).
-_WARNED_DROPPED_CARRIER: set = set()
-
-
 def _fsdecode(raw):
     r"""Decode a path git handed us the way `os.listdir` decodes one.
 
@@ -272,63 +270,27 @@ def _git_bytes(args, quotepath_off=False, stdin=None, timeout=15):
     return result.stdout
 
 
-def _warn_dropped_carrier(shown, reason):
-    r"""Say once that a carrier was dropped, and why.
-
-    ⛔ The charge in #1634 is that a REMOVED threshold vanished silently. The
-    shapes below still vanish -- they are not all fixable here -- but they no
-    longer do it quietly, which is the whole difference the family turns on.
-
-    ⚠️ `shown` may hold a lone surrogate (a name that is not valid UTF-8,
-    decoded by `_fsdecode`). Printing it needs no escaping of our own: the
-    first version of this function ran it through `backslashreplace` first,
-    on the stated grounds that "printing a surrogate raises
-    UnicodeEncodeError, so the warning would itself be the crash". ⛔ That
-    was reasoned, not measured, and it is FALSE -- Python gives `sys.stderr`
-    `errors='backslashreplace'`, so the surrogate prints as `\udcff` on its
-    own. Measured, both defaults and `PYTHONIOENCODING=utf-8:strict`:
-
-        print('legacy-\udcff', file=sys.stderr)   rc=0, prints legacy-\udcff
-
-    The helper bought nothing, had no guard of its own, and its docstring
-    asserted a crash that does not happen -- exactly the shape this whole
-    change exists to remove. It was deleted rather than re-justified.
-    """
-    if shown in _WARNED_DROPPED_CARRIER:
-        return
-    _WARNED_DROPPED_CARRIER.add(shown)
-    print(f"WARNING: dropped {shown} ({reason}); its threshold changes are NOT "
-          f"in this report", file=sys.stderr)
-
-
-def reset_dropped_carrier_warnings_for_test() -> None:
-    """Clear the once-per-run dedup so a test can drive the branch twice."""
-    _WARNED_DROPPED_CARRIER.clear()
-
-
 def tenant_is_queryable(tenant):
-    r"""Whether `tenant` survives the trip into a PromQL query string.
+    r"""Whether `tenant` can go into the query's tenant selector as written.
 
-    #1634: a PromQL label value goes through `urllib.parse.urlencode`, which
-    encodes strict UTF-8 and raises `UnicodeEncodeError` on a lone
-    surrogate — AFTER the Prometheus reachability check, so
-    `--skip-if-unavailable` would not contain it, and rc=1 would read as
-    `EXIT_VIOLATION`. The `--git-diff` diff parser took tenant ids from file
-    names decoded with `surrogateescape`, which is how one reached here.
-    Since #2119 / #3111 every tree is read by the exporter and a tenant id
-    is a `tenants:` key from its JSON, and `--tenant` is validated, so no
-    source produces one today; the check stays the one gate in front of
-    the query, for all three sources (`main`).
+    Not when it holds `"`, `\` or a control character (a PromQL string would
+    end or escape there: the query is invalid, or asks about another
+    tenant), nor when it is not valid UTF-8 (`urlencode` raises on a lone
+    surrogate, #1634). `--tenant` is held to the tenant id rule up front
+    (#3066); a tree's tenant ids are the exporter's `tenants:` keys, which
+    it does not hold to that rule (#3111 review: it serves `a|b"c`), so a
+    change of such a tenant is listed as not backtested (`not_backtestable`)
+    rather than queried or dropped.
     """
     try:
         tenant.encode("utf-8")
     except UnicodeEncodeError:
         return False
-    return True
+    return not any(ch in '"\\' or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in tenant)
 
 
 def _tree_entries(raw):
-    """`[(mode, type, oid, path)]` from `git ls-tree -r -z` output (bytes)."""
+    """`[(mode, type, oid, path)]` from `git ls-tree -z` output (bytes)."""
     out = []
     for record in raw.split(b"\0"):
         if not record:
@@ -339,84 +301,153 @@ def _tree_entries(raw):
     return out
 
 
-def _blobs(oids):
-    """`{oid: bytes}` for every blob in `oids` (one `git cat-file --batch`),
-    or None when git did not answer for all of them."""
-    if not oids:
-        return {}
-    raw = _git_bytes(["cat-file", "--batch"], stdin=b"".join(o.encode("ascii") + b"\n" for o in oids),
+class Head1Unavailable(Exception):
+    """`--git-diff` cannot compare HEAD~1's conf.d/: the message says why
+    (`main` exits 2, `git_diff_unavailable`)."""
+
+
+def _git_blob_id(data, oid):
+    """The git object id of a blob holding `data`, in the hash `oid` is in
+    (40 hex digits: SHA-1, 64: SHA-256)."""
+    algo = hashlib.sha1 if len(oid) == 40 else hashlib.sha256
+    return algo(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _fallback_data_filter(member, dest_path):
+    """`tarfile.data_filter`'s refusals, for a Python that has none: an
+    absolute name or link, one that leaves `dest_path`, a device or FIFO."""
+    if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+        raise tarfile.TarError(f"{member.name!r} is a special file")
+    dest = os.path.realpath(dest_path)
+    target = os.path.realpath(os.path.join(dest, member.name))
+    if os.path.isabs(member.name) or os.path.commonpath([dest, target]) != dest:
+        raise tarfile.TarError(f"{member.name!r} would be extracted outside the destination")
+    if member.issym() or member.islnk():
+        base = os.path.dirname(target) if member.issym() else dest
+        link = os.path.realpath(os.path.join(base, member.linkname))
+        if os.path.isabs(member.linkname) or os.path.commonpath([dest, link]) != dest:
+            raise tarfile.TarError(f"{member.name!r} links outside the destination")
+    return member
+
+
+_DATA_FILTER = getattr(tarfile, "data_filter", None)
+_FILTER_ERRORS = (tarfile.TarError,) + ((tarfile.FilterError,) if hasattr(tarfile, "FilterError") else ())
+
+
+def _verify_confd(root, confd):
+    """Check the written-out `confd` (repo-relative, bytes) against what git
+    records for it at HEAD~1: every file with its content, every symlink
+    with its target, no submodule. Raises Head1Unavailable naming the path.
+
+    This is what catches what `git archive` changes on the way
+    (`export-ignore` drops a file, `export-subst` rewrites one, a link
+    target holding a NUL is cut short) and what a crafted tree does (two
+    entries of one name)."""
+    raw = _git_bytes(["ls-tree", "-r", "-z", "--full-tree", "HEAD~1", "--", confd + b"/"],
                      timeout=120)
     if raw is None:
-        return None
-    out, at = {}, 0
-    for oid in oids:
-        header_end = raw.find(b"\n", at)
-        if header_end < 0:
-            return None
-        header = raw[at:header_end].split(b" ")
-        if len(header) != 3 or header[1] != b"blob":
-            return None  # `<oid> missing`: an object this clone does not have
-        size = int(header[2])
-        out[oid] = raw[header_end + 1:header_end + 1 + size]
-        at = header_end + 1 + size + 1
-    return out
+        raise Head1Unavailable("git could not list HEAD~1's conf.d/ (a timeout?)")
+    for mode, kind, oid, path in _tree_entries(raw):
+        shown = f"HEAD~1:{safe_label(_fsdecode(path))}"
+        if kind == b"commit":
+            raise Head1Unavailable(f"{shown} is a submodule, which a checkout may or may not "
+                                   "populate; this backtest does not guess")
+        target = os.path.join(root, path)
+        try:
+            if mode == b"120000":
+                data = os.readlink(target) if os.path.islink(target) else None
+            elif os.path.isfile(target) and not os.path.islink(target):
+                with open(target, "rb") as f:
+                    data = f.read()
+            else:
+                data = None
+        except OSError:
+            data = None
+        if data is None or _git_blob_id(data, oid) != oid:
+            raise Head1Unavailable(
+                f"{shown} was not written out as git records it (`git archive` "
+                "export-ignore / export-subst, or a crafted tree)")
 
 
 def materialize_head1_confd(dest):
-    """Write the `conf.d/` tree of HEAD~1 (the one beside the cwd, as
-    `git diff HEAD~1 -- conf.d/` would read it) under `dest`, as `git
-    checkout` would: every file with its content, a symlink as a symlink to
-    the target it records, a submodule not at all.
+    """Write the whole HEAD~1 tree under `dest` (`git archive`, extracted
+    with tarfile's `data` filter) and return its `conf.d/` beside the cwd —
+    the one `git diff HEAD~1 -- conf.d/` would read — as a path, or `""`
+    when HEAD~1 has none there (the PR adds it). Raises Head1Unavailable
+    naming why HEAD~1 cannot be compared: git not on PATH, not inside a git
+    work tree, no HEAD~1 (a shallow clone of depth 1 has none), an object
+    the clone does not have, a timeout, a conf.d/ that is a submodule or
+    not a directory, a member the filter refuses inside it (an absolute
+    symlink, one leaving the repository), or a file not written out as git
+    records it (`_verify_confd`).
 
-    Returns the written directory; `""` when HEAD~1 has no `conf.d/` there
-    (the PR adds it); None when git cannot answer — not on PATH, not inside
-    a git work tree, no HEAD~1 (a shallow clone of depth 1 has none), an
-    object the clone does not have, a timeout.
-
-    #3111: `--git-diff` used to parse `git diff` text, which needed its own
-    rules for git's path quoting, a tab-padded header, the tenant taken from
-    the file name, and a Python copy of the exporter's value grammar. The
-    tree is now read by the exporter instead (`extract_changes_from_dirs`),
-    so a file's name is only a path: no name is dropped, and the tenant is
-    the `tenants:` key it always was for the exporter.
+    #3111: `--git-diff` used to parse `git diff` text, with its own rules
+    for git's path quoting, the tenant taken from the file name, and a
+    Python copy of the exporter's value grammar; the tree is now read by
+    the exporter (`extract_changes_from_dirs`). The WHOLE tree is written,
+    not just conf.d/, so a relative symlink out of conf.d/ (or a conf.d/
+    that is itself a symlink) resolves as it does in a checkout. A member
+    the filter refuses outside conf.d/ is left out; a link inside conf.d/
+    to it then fails as a file the exporter cannot read.
     """
+    if _git_bytes(["rev-parse", "--is-inside-work-tree"]) is None:
+        raise Head1Unavailable("git could not run (not on PATH, not inside a git work tree, "
+                               "or a timeout)")
     if _git_bytes(["rev-parse", "--verify", "--quiet", "HEAD~1^{commit}"]) is None:
-        return None
-    # `<rev>:./<path>` is cwd-relative (`<rev>:<path>` is repo-root-relative).
-    kind = _git_bytes(["cat-file", "-t", "HEAD~1:./conf.d"])
-    if kind is None or kind.strip() != b"tree":
-        return ""
-    # ⚠️ `--full-tree`: without it `ls-tree` lists only what lies under the
-    # cwd's own path INSIDE the given tree, i.e. nothing when run from a
-    # subdirectory of the repo (this repo's CI runs from one).
-    raw = _git_bytes(["ls-tree", "-r", "-z", "--full-tree", "HEAD~1:./conf.d"], timeout=120)
-    if raw is None:
-        return None
-    entries = [e for e in _tree_entries(raw) if e[1] == b"blob"]
-    blobs = _blobs(sorted({oid for _m, _k, oid, _p in entries}))
-    if blobs is None:
-        return None
-    root = os.path.join(os.fsencode(dest), b"conf.d")
+        raise Head1Unavailable("there is no parent commit HEAD~1 (a shallow clone needs "
+                               "fetch-depth: 2)")
+    prefix = _git_bytes(["rev-parse", "--show-prefix"])
+    top = _git_bytes(["rev-parse", "--show-toplevel"])
+    if prefix is None or top is None:
+        raise Head1Unavailable("git could not name this directory's path in the repository")
+    confd = prefix.rstrip(b"\n") + b"conf.d"
+    archive = os.path.join(dest, "head1.tar")
+    # ⚠️ Run from the top level: from a subdirectory `git archive` writes
+    # only that subdirectory's part of the tree (measured), which would
+    # leave out what a relative link from conf.d/ points at.
+    if _git_bytes(["-C", top.rstrip(b"\n"), "archive", "--format=tar", "-o", archive, "HEAD~1"],
+                  timeout=600) is None:
+        raise Head1Unavailable("`git archive HEAD~1` failed (an object this clone does not "
+                               "have, or a timeout)")
+    root = os.path.join(dest, "tree")
     os.makedirs(root)
-    # Regular files first, symlinks last: a link is never followed by a write.
-    for mode, _kind, oid, path in sorted(entries, key=lambda e: e[0] == b"120000"):
-        parts = path.split(b"/")
-        if any(part in (b"", b".", b"..") for part in parts):
-            continue  # git does not record such a path; never written outside `root`
-        target = os.path.join(root, *parts)
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        if mode == b"120000":
-            try:
-                os.symlink(blobs[oid], target)
-            except OSError as exc:
-                print(f"WARNING: HEAD~1 conf.d/{safe_label(_fsdecode(path))}: symlink not "
-                      f"recreated ({exc.strerror or exc}); it is not in the HEAD~1 tree "
-                      "compared", file=sys.stderr)
-            continue
-        with open(target, "wb") as f:
-            f.write(blobs[oid])
-        os.chmod(target, 0o600)  # a private copy, read back by this user's da-guard only
-    return os.fsdecode(root)
+    confd_name = os.fsdecode(confd)
+    refused = []
+
+    def keep(member, dest_path):
+        try:
+            return (_DATA_FILTER or _fallback_data_filter)(member, dest_path)
+        except _FILTER_ERRORS as exc:
+            name = member.name.rstrip("/")
+            if (name == confd_name or name.startswith(confd_name + "/")
+                    or confd_name.startswith(name + "/")):
+                refused.append(f"HEAD~1:{safe_label(name)}: {safe_label(str(exc))}")
+            return None
+    try:
+        with tarfile.open(archive) as tar:
+            tar.extractall(root, filter=keep)
+    except (OSError, tarfile.TarError, ValueError) as exc:
+        raise Head1Unavailable("HEAD~1's tree cannot be written out "
+                               f"({safe_label(_head1_relabel(root)(str(exc)))})")
+    finally:
+        os.remove(archive)
+    if refused:
+        raise Head1Unavailable(f"{refused[0]} (refused when writing HEAD~1's tree out)")
+    kind = _git_bytes(["ls-tree", "-z", "--full-tree", "HEAD~1", "--", confd])
+    if kind is None:
+        raise Head1Unavailable("git could not list HEAD~1's conf.d/ (a timeout?)")
+    entries = _tree_entries(kind)
+    if entries and entries[0][1] == b"commit":
+        raise Head1Unavailable(f"HEAD~1:{safe_label(confd_name)} is a submodule, which a "
+                               "checkout may or may not populate; this backtest does not guess")
+    path = os.path.join(os.fsencode(root), confd)
+    if os.path.isdir(path):
+        if entries and entries[0][1] == b"tree":
+            _verify_confd(os.fsencode(root), confd)
+        return os.fsdecode(path)
+    if os.path.lexists(path) or entries:
+        raise Head1Unavailable(f"HEAD~1:{safe_label(confd_name)} is not a directory")
+    return ""
 
 
 # Roots already named as unlistable, so the warning is said once per run.
@@ -603,24 +634,35 @@ def _alert_key(series):
 
 
 def _confd_tree(path):
-    """`path` when it is a conf.d/ tree that holds a config file
-    (`has_yaml_extension`, the exporter's suffixes) anywhere under it, else
-    None: a tree that serves nothing, which `--git-diff` compares as having
-    no tenants (no conf.d/ at HEAD~1 because the PR adds it, none left in
-    the working tree, or one holding only a README). da-guard refuses such
-    a tree outright ("no .yaml files found"), so it is not handed one. A
-    tree that cannot be walked is handed over all the same: da-guard names
-    why it cannot be read."""
+    """`path` when it is a conf.d/ tree in which the exporter finds a config
+    file (`list_config_tree`, the shared mirror of its walker: the suffixes,
+    hidden files and directories skipped), else None: a tree that serves
+    nothing, which `--git-diff` compares as having no tenants (no conf.d/ at
+    HEAD~1 because the PR adds it, none left in the working tree, or one
+    holding only a README or hidden files). da-guard refuses such a tree
+    outright ("no .yaml files found"), so it is not handed one. A tree with
+    an entry that cannot be read is handed over all the same: da-guard
+    names why."""
     if not path or not os.path.isdir(path):
         return None
-    unwalkable = []
-    for _dir, _subdirs, files in os.walk(path, onerror=unwalkable.append):
-        if any(has_yaml_extension(name) for name in files):
-            return path
-    return path if unwalkable else None
+    listing = list_config_tree(path)
+    return path if listing.files or listing.unusable else None
 
 
-def _print_tree_warnings(trees):
+def _head1_relabel(root):
+    """A function naming paths under the written-out HEAD~1 tree `root` as
+    git does (`HEAD~1:<repo path>`), not as a temporary path nobody has."""
+    roots = sorted({os.path.join(r, "") for r in (root, os.path.realpath(root))},
+                   key=len, reverse=True)
+
+    def relabel(text):
+        for r in roots:
+            text = text.replace(r, "HEAD~1:")
+        return text
+    return relabel
+
+
+def _print_tree_warnings(trees, relabel=lambda text: text):
     """`print_load_warnings` for the two trees, each line named once: a line
     both trees carry is printed once and says so, any other names its tree
     by its flag. Every line escaped (`safe_label`); da-guard's own stderr
@@ -635,9 +677,9 @@ def _print_tree_warnings(trees):
         for line, flags in lines.items():
             where = "both trees" if len(set(flags)) > 1 else flags[0]
             if kind == "stderr":
-                print(f"{DA_GUARD_PREFIX}[{where}] {safe_label(line)}", file=sys.stderr)
+                print(f"{DA_GUARD_PREFIX}[{where}] {safe_label(relabel(line))}", file=sys.stderr)
             else:
-                print(f"WARN: [{where}] {safe_label(line)}", file=sys.stderr)
+                print(f"WARN: [{where}] {safe_label(relabel(line))}", file=sys.stderr)
 
 
 def _row_identity(series):
@@ -663,14 +705,16 @@ def _load_side(conf_d, flag, at):
     return flag, (None if conf_d is None else load_served_tree(conf_d, at=at, schedules=True))
 
 
-def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--config-dir")):
+def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--config-dir"),
+                              relabel=lambda text: text):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
     Returns list of dicts: [{tenant, metric, old_value, new_value, keys,
     series}, ...], plus `window` (a list of `"HH:MM-HH:MM"`, UTC) on a
     change that holds in part of the day only. A tree given as None is one
     that serves nothing (`--git-diff` with no `conf.d/` on one side); `flags`
-    names the two trees in warnings, baseline first.
+    names the two trees in warnings, baseline first, and `relabel` rewrites
+    a path in them (`--git-diff`: the HEAD~1 tree's temporary path).
 
     #2119: both trees are read by the exporter (`da-guard served-values`),
     never by re-reading YAML here, so a change written in `_platform.yaml`,
@@ -715,7 +759,7 @@ def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--
     at = now_at()
     trees = [_load_side(conf_d, flag, at)
              for conf_d, flag in ((baseline_dir, flags[0]), (config_dir, flags[1]))]
-    _print_tree_warnings([(flag, tree) for flag, tree in trees if tree is not None])
+    _print_tree_warnings([(flag, tree) for flag, tree in trees if tree is not None], relabel)
     old_tree, new_tree = ({} if tree is None else tree.tenants for _flag, tree in trees)
 
     changes = []
@@ -958,19 +1002,35 @@ def _written_alert(key, parsed):
     return key + "_critical" if parsed[1] == "critical" and not key.endswith("_critical") else key
 
 
-def _written_severities(change):
-    """`[old severity, new severity]` of a change written as `--tenant` gives
-    it, as the exporter reads the values (None for a side without one, or
-    one this backtest cannot read)."""
-    key = _written_key(change)
-    out = []
-    for raw in (change["old_value"], change["new_value"]):
-        try:
-            parsed = parse_threshold_value(key, raw)
-        except ValueError:
-            parsed = None
-        out.append(parsed and parsed[1])
-    return out
+def written_changes(tenant, metric, old_value, new_value):
+    """`--tenant`'s one edit as the /metrics rows it changes (#3111), by the
+    rule `extract_changes_from_dirs` applies to two trees, without da-guard:
+    each side's value is read as the exporter reads it
+    (`parse_threshold_value`), and a side is the row of its severity — the
+    base key's warning row, or the critical row its `<key>_critical` alert
+    compares (`_written_alert`). So `70` -> `70:critical` is two rows, the
+    warning one switched off and the critical one switched on, and `70` ->
+    `70` is none. `metric` is the row's alert key (a dimension part kept),
+    its values the numbers alone, `keys` the key as given.
+
+    A value this backtest cannot read the way the exporter does is one row
+    of the values as written; `not_backtestable` names why."""
+    key = canonical_key(metric, DEPRECATED_KEY_ALIASES)
+    base, brace, dims = key.partition("{")
+    try:
+        sides = [parse_threshold_value(base, raw) for raw in (old_value, new_value)]
+    except ValueError:
+        return [{"tenant": tenant, "metric": metric, "old_value": old_value,
+                 "new_value": new_value}]
+    rows = {}
+    for side, parsed in zip(("old_value", "new_value"), sides):
+        if parsed is not None:
+            name = _written_alert(base, parsed) + brace + dims
+            rows.setdefault(name, {"old_value": None, "new_value": None})[side] = (
+                _render_served(parsed[0]))
+    return [{"tenant": tenant, "metric": name, **values, "keys": [metric]}
+            for name, values in sorted(rows.items())
+            if values["old_value"] != values["new_value"]]
 
 
 def _written_alert_keys(change):
@@ -986,10 +1046,11 @@ def _written_alert_keys(change):
     makes the exporter's whole value unreadable (`parse_threshold_value`
     raises).
 
-    #3111 (e): a side whose alert key no shipped alert compares (`_no_alert`:
-    mongodb's `70:critical`, its pack has no `_critical` alert) is no
-    threshold, as a switched-off side is, and `backtest_change` reads it so;
-    with no side compared by any alert the change is not backtested."""
+    #3111: `written_changes` makes every `--tenant` change one /metrics row,
+    so both sides name one alert. (e): an alert key no shipped alert
+    compares (`_no_alert`: mongodb's `_critical`, its pack has no such
+    alert) compares nothing; with no key left the change is not
+    backtested, the reason naming that key."""
     key = _written_key(change)
     keys, no_alert = [], []
     for raw in (change["old_value"], change["new_value"]):
@@ -1109,7 +1170,13 @@ def not_backtestable(change):
 
     #3017 / #3002: then `alert_comparison`'s reason — a key whose alert the
     observed-map does not record as one per-tenant series compared one way
-    is not backtested, rather than replayed against a guessed query."""
+    is not backtested, rather than replayed against a guessed query.
+
+    #1634 / #3111: a tenant id that cannot go into the PromQL selector as
+    written (`tenant_is_queryable`) is not backtested either."""
+    if not tenant_is_queryable(change["tenant"]):
+        return ("tenant id holds a character a PromQL selector cannot take as written "
+                '(`"`, `\\`, a control character, or bytes that are not UTF-8)')
     if "series" not in change:
         if "{" in change["metric"]:
             return "dimensioned key"
@@ -1146,28 +1213,6 @@ def _not_backtested(change, reason):
 
 # How much of a query error's text a `query_error` row carries (#3059).
 _QUERY_ERROR_MAX = 300
-
-
-def _side_compared(change, parsed):
-    """Whether an alert compares one side of a change (#3060, #3111 (e)). A
-    change read from two trees is one /metrics row, and `alert_comparison`
-    has already found the alert comparing it; a side of a change written as
-    `--tenant` gives it is compared unless no shipped alert compares the key
-    of its severity (`_no_alert`)."""
-    if "series" in change or parsed is None:
-        return True
-    return not _no_alert(_written_alert(_written_key(change), parsed))
-
-
-def severity_change(change):
-    """`(old, new)`: the severities of a change written as `--tenant` gives it
-    whose two sides differ in it, or None (#3060). A side without a threshold
-    has none to compare; a change read from two trees is one /metrics row,
-    whose severity is one of its labels (#3111)."""
-    if "series" in change:
-        return None
-    old_s, new_s = _written_severities(change)
-    return (old_s, new_s) if old_s is not None and new_s is not None and old_s != new_s else None
 
 
 def backtest_change(prom_url, change, lookback_seconds):
@@ -1258,8 +1303,7 @@ def backtest_change(prom_url, change, lookback_seconds):
     # read. None is a switched-off side: the disable / enable transitions.
     key = _written_key(change)
     old_t, new_t = (parse_threshold_value(key, v) for v in (old_value, new_value))
-    # #3111 (e): a side no shipped alert compares is no threshold.
-    old_t, new_t = (t and t[0] if _side_compared(change, t) else None for t in (old_t, new_t))
+    old_t, new_t = (t and t[0] for t in (old_t, new_t))
     old_disabled, new_disabled = old_t is None, new_t is None
 
     if new_disabled and not old_disabled:
@@ -1407,16 +1451,9 @@ def _not_backtested_counts(changes):
 
 
 def _shown_value(change, side, none):
-    """A side's value as the reports show it: `none` without one, and its
-    severity beside it when the two sides' severities differ (#3060) and
-    the value does not already carry it (`--tenant 70:critical` does)."""
+    """A side's value as the reports show it: `none` without one."""
     value = change[f"{side}_value"]
-    if value is None:
-        return none
-    severity = change.get(f"{side}_severity")
-    if severity is None or ":" in str(value):
-        return str(value)
-    return f"{value} ({safe_label(severity) or '\"\"'})"
+    return none if value is None else str(value)
 
 
 def _served_by(change, shown):
@@ -1465,6 +1502,12 @@ def print_text_report(report):
     print()
 
 
+def _markdown_cell(text):
+    """A string from a tree (a tenant id, a key) inside one Markdown table
+    cell: escaped (`safe_label`), its `|` too, so the row keeps its columns."""
+    return safe_label(text).replace("|", "\\|")
+
+
 def generate_markdown(report):
     """Generate Markdown suitable for a PR comment."""
     lines = []
@@ -1497,8 +1540,9 @@ def generate_markdown(report):
         # may hold `|` (a PromQL parse error quoting the query) — escaped so
         # it stays one cell.
         message = c["message"].replace("|", "\\|")
-        served_by = _served_by(c, lambda k: "`" + safe_label(k).replace("|", "\\|") + "`")
-        lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window}{served_by} | "
+        served_by = _served_by(c, lambda k: f"`{_markdown_cell(k)}`")
+        cell = _markdown_cell
+        lines.append(f"| {c['risk']} | {cell(c['tenant'])} | `{cell(c['metric'])}`{window}{served_by} | "
                      f"{old_v} | {new_v} | {message} | {query} |")
 
     lines.append("")
@@ -1522,14 +1566,19 @@ def _exit_unreadable_conf(exc, args):
     _end_not_run(args, "caller_error", "conf_file_unreadable", EXIT_CALLER_ERROR)
 
 
-def _exit_served_values_error(exc, args, recipe_tenants=()):
+def _exit_served_values_error(exc, args, recipe_tenants=(), relabel=None):
     """#2119: da-guard missing, stale or failing, or a file of either tree
     the exporter cannot decode or read → rc 2, named (`print_load_error`, the
     lines `exit_on_served_values_error` prints), never a partial diff. Not
     that decorator, because this tool owes ``--json`` its ``caller_error``
     envelope on every terminal path.
     """
-    print_load_error(exc)
+    if relabel is None:
+        print_load_error(exc)
+    else:  # `--git-diff`: a path in the HEAD~1 tree is named as `HEAD~1:<path>`
+        lines = io.StringIO()
+        print_load_error(exc, lines)
+        print(relabel(lines.getvalue()), end="", file=sys.stderr)
     _end_not_run(args, "caller_error", "served_values_unavailable", EXIT_CALLER_ERROR,
                  recipe_tenants)
 
@@ -1820,15 +1869,19 @@ def main():
     dir_changes = None
     if args.git_diff:
         with tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp:
-            old_confd = materialize_head1_confd(tmp)
-            if old_confd is None:
-                print("--git-diff: git could not run to read HEAD~1's conf.d/ (git not on PATH, "
-                      "not inside a git work tree, or no parent commit — a shallow clone "
-                      "needs fetch-depth: 2); run from a checkout with git installed.\n"
+            try:
+                old_confd = materialize_head1_confd(tmp)
+            except Head1Unavailable as exc:
+                print(f"--git-diff: git could not run to read HEAD~1's conf.d/ — {exc}. Causes: "
+                      "git not on PATH, not inside a git work tree, no parent commit (a "
+                      "shallow clone needs fetch-depth: 2), an object the clone does not "
+                      "have, a timeout, or a conf.d/ at HEAD~1 that cannot be read as a "
+                      "directory; run from a checkout with git installed.\n"
                       "  ⛔ Do not switch to --config-dir to clear this — that "
                       "compares two trees, not your PR.", file=sys.stderr)
                 _end_not_run(args, "caller_error", "git_diff_unavailable", EXIT_CALLER_ERROR,
                              recipe_tenants)
+            relabel = _head1_relabel(os.path.join(tmp, "tree"))
             old_confd, cur_confd = _confd_tree(old_confd), _confd_tree("conf.d")
             if old_confd is None and cur_confd is None:
                 print("WARNING: --git-diff: there is no conf.d/ in this directory at HEAD~1 "
@@ -1836,9 +1889,9 @@ def main():
                       file=sys.stderr)
             try:
                 dir_changes = extract_changes_from_dirs(
-                    cur_confd, old_confd, flags=("HEAD~1", "working tree"))
+                    cur_confd, old_confd, flags=("HEAD~1", "working tree"), relabel=relabel)
             except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
-                _exit_served_values_error(exc, args, recipe_tenants)
+                _exit_served_values_error(exc, args, recipe_tenants, relabel)
 
     # #2119: the two trees are read by da-guard, and this runs BEFORE the
     # Prometheus check for the reason the git check above does:
@@ -1879,25 +1932,7 @@ def main():
     if args.git_diff or args.config_dir:
         changes = dir_changes
     else:  # `--tenant`: the no-source case already exited above
-        changes = [{
-            "tenant": args.tenant,
-            "metric": args.metric,
-            "old_value": args.old_value,
-            "new_value": args.new_value,
-        }]
-
-    # ⛔ #1634: one filter, all three sources — see `tenant_is_queryable` for
-    # why this is not per-path. A carrier whose name is not valid UTF-8 cannot
-    # be backtested (Prometheus cannot be asked about it), so it is dropped —
-    # but NAMED, because "the tenant quietly disappeared from the report" is
-    # the symptom this whole family is about.
-    for change in changes:
-        if not tenant_is_queryable(change["tenant"]):
-            _warn_dropped_carrier(
-                change["tenant"],
-                "the carrier name is not valid UTF-8, so it cannot be a "
-                "PromQL label value")
-    changes = [c for c in changes if tenant_is_queryable(c["tenant"])]
+        changes = written_changes(args.tenant, args.metric, args.old_value, args.new_value)
 
     if not changes:
         print("No threshold changes found.", file=sys.stderr)
@@ -1915,9 +1950,6 @@ def main():
             result["window"] = change["window"]
         if "keys" in change:  # #3111: the keys serving the /metrics row
             result["keys"] = change["keys"]
-        severities = severity_change(change)
-        if severities:  # #3060: `70 -> 70` alone does not say what changed
-            result["old_severity"], result["new_severity"] = severities
         results.append(result)
 
     # Generate report

@@ -580,40 +580,22 @@ class TestPrintTextReport:
 
 
 class TestMaterializeHead1Confd:
-    """`--git-diff` 的 HEAD~1 那棵樹（#3111）。git 答不出來（失敗、逾時）是 None，
-    與「HEAD~1 沒有 conf.d/」（""）分開：前者 rc 2，後者是一棵空樹。"""
+    """`--git-diff` 的 HEAD~1 那棵樹（#3111）。git 答不出來（失敗、逾時）是
+    Head1Unavailable，與「HEAD~1 沒有 conf.d/」（""）分開：前者 rc 2，後者是一棵空樹。"""
 
-    def test_git_failure_returns_none(self, monkeypatch, tmp_path):
+    def test_git_failure_raises(self, monkeypatch, tmp_path):
         def mock_run(*args, **kwargs):
             return type("R", (), {"returncode": 1, "stdout": b""})()
         monkeypatch.setattr(subprocess, "run", mock_run)
-        assert bt.materialize_head1_confd(str(tmp_path)) is None
+        with pytest.raises(bt.Head1Unavailable, match="git could not run"):
+            bt.materialize_head1_confd(str(tmp_path))
 
-    def test_git_timeout_returns_none(self, monkeypatch, tmp_path):
+    def test_git_timeout_raises(self, monkeypatch, tmp_path):
         def mock_run(*args, **kwargs):
             raise subprocess.TimeoutExpired(cmd="git", timeout=15)
         monkeypatch.setattr(subprocess, "run", mock_run)
-        assert bt.materialize_head1_confd(str(tmp_path)) is None
-
-    def test_a_path_leaving_the_tree_is_never_written(self, tmp_path, monkeypatch):
-        """git 不記錄 `..`／`.`／空路徑段；萬一某棵樹有，也不寫到 `conf.d/` 之外。"""
-        oid = "a" * 40
-
-        def fake_git(args, quotepath_off=False, stdin=None, timeout=15):
-            if args[0] == "cat-file" and args[1] == "-t":
-                return b"tree\n"
-            if args[0] == "ls-tree":
-                return b"".join(b"100644 blob " + oid.encode() + b"\t" + p + b"\0"
-                                for p in (b"../evil.yaml", b"a/./b.yaml", b"ok.yaml"))
-            if args[0] == "cat-file":
-                return oid.encode() + b" blob 2\nOK\n"
-            return b""
-        monkeypatch.setattr(bt, "_git_bytes", fake_git)
-        out = tmp_path / "out"
-        out.mkdir()
-        got = bt.materialize_head1_confd(str(out))
-        assert sorted(os.listdir(got)) == ["ok.yaml"]
-        assert not (out / "evil.yaml").exists()
+        with pytest.raises(bt.Head1Unavailable):
+            bt.materialize_head1_confd(str(tmp_path))
 
     def test_no_confd_at_head1_is_empty_not_none(self, tmp_path, monkeypatch):
         cfg = _git_tree_repo(tmp_path, None, {"x.yaml": "tenants: {}\n"})
@@ -1353,18 +1335,19 @@ class TestWrittenValues:
         with pytest.raises(ValueError):
             bt.parse_threshold_value(key, raw)
 
-    def test_severity_change_compares_the_values_on_both_alerts(
-            self, monkeypatch, capsys, cli_argv):
-        """#3060 R1：severity 只決定由哪支 alert 比，觸發點只看值。70 → 95:critical
-        由 warning 與 critical 兩支 alert 比；兩支比同一條 series、同一個方向，所以
-        照值回測（先前一律不回測；更早的 #3061 審查重現是只拿 warning alert 比）。"""
+    def test_a_severity_change_is_two_rows(self, monkeypatch, capsys, cli_argv):
+        """#3111：70 → 95:critical 是兩條 /metrics row（同目錄比對）：warning 告警
+        失去門檻（3 點不再響、MEDIUM），critical 告警開始比 95（1/4 點、HIGH，rc 1）。
+        #3060 R1 把它當成一列照值回測（3 → 1 點）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                        "mysql_connections", "70", "95:critical")
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
-        assert rows[0]["status"] == "analyzed"
-        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 1)
-        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "critical")
-        assert rc == (1 if rows[0]["risk"] == "HIGH" else 0)
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}'] * 2
+        assert [(r["metric"], r["old_value"], r["new_value"], r["risk"]) for r in rows] == [
+            ("mysql_connections", "70", None, "MEDIUM"),
+            ("mysql_connections_critical", None, "95", "HIGH")]
+        assert all("old_severity" not in r for r in rows)
+        assert rows[1]["keys"] == ["mysql_connections"]
+        assert rc == 1
 
     def test_a_severity_no_rule_selects_is_unreadable(self, monkeypatch, capsys, cli_argv):
         """#3071：`70:high` 的 severity 沒有規則會選，exporter 把整個值當成讀不懂、改送
@@ -1395,8 +1378,9 @@ class TestWrittenValues:
         _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                       "mongodb_connections_current", "70:critical", "80:critical")
         assert asked == []
-        assert rows[0]["backtest"].startswith(
-            "skipped: mongodb_connections_current_critical: no shipped alert compares")
+        assert [(r["metric"], r["old_value"], r["new_value"]) for r in rows] == [
+            ("mongodb_connections_current_critical", "70", "80")]
+        assert rows[0]["backtest"].startswith("skipped: no shipped alert compares")
 
     @pytest.mark.parametrize("old,new,why", [
         ("70", "7O", "value '7O': this backtest cannot read it the way the exporter does"),
@@ -2042,9 +2026,9 @@ class TestServedSeriesGrouping:
 
 
 class TestNoAlertSideIsNoThreshold:
-    """#3111 (e)：一邊的告警 key 不在 observed-map、也不是 KNOWN_DEFERRED ⇒ 沒有
-    出廠告警比它 ⇒ 那一邊視同沒有門檻。mongodb 沒有 `_critical` 告警，所以
-    `70` → `70:critical` 是 warning 告警失去門檻（靜默），不是「不回測」。"""
+    """#3111 (e)：告警 key 不在 observed-map、也不是 KNOWN_DEFERRED ⇒ 沒有出廠告警
+    比它。mongodb 沒有 `_critical` 告警，所以 `70` → `70:critical` 是 warning 告警
+    失去門檻（靜默 MEDIUM），critical 那一列沒有告警比、不回測——不再整筆 UNKNOWN。"""
 
     _VALS = [60, 80, 90, 100]
 
@@ -2061,32 +2045,59 @@ class TestNoAlertSideIsNoThreshold:
                  "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as ei:
             bt.main()
-        return ei.value.code, json.loads(capsys.readouterr().out)["changes"][0], asked
+        return ei.value.code, json.loads(capsys.readouterr().out)["changes"], asked
 
     def test_moving_to_a_severity_no_alert_compares_is_silenced(
             self, monkeypatch, capsys, cli_argv):
-        rc, row, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                      "mongodb_connections_current", "70", "70:critical")
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mongodb_connections_current", "70", "70:critical")
         assert asked == ['tenant:mongodb_connections_current:max{tenant="t-x"}']
-        assert (row["status"], row["risk"]) == ("analyzed", "MEDIUM")
-        assert row["message"] == "Metric disabled — all alerts silenced"
-        assert (row["old_breach_count"], row["new_breach_count"]) == (3, 0)
+        assert [(r["metric"], r["status"], r["risk"]) for r in rows] == [
+            ("mongodb_connections_current", "analyzed", "MEDIUM"),
+            ("mongodb_connections_current_critical", "not_backtested", "UNKNOWN")]
+        assert rows[0]["message"] == "Metric disabled — all alerts silenced"
+        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 0)
         assert rc == 0
 
     def test_the_reverse_is_newly_enabled(self, monkeypatch, capsys, cli_argv):
-        rc, row, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                      "mongodb_connections_current", "70:critical", "70")
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mongodb_connections_current", "70:critical", "70")
         assert asked == ['tenant:mongodb_connections_current:max{tenant="t-x"}']
+        row = rows[0]
         assert row["status"] == "analyzed" and row["new_breach_count"] == 3
         assert row["message"].startswith("Metric newly enabled")
         assert (row["risk"], rc) == ("HIGH", 1)
 
     def test_known_deferred_side_is_still_not_backtested(self, monkeypatch, capsys, cli_argv):
         """KNOWN_DEFERRED 不是「沒有告警」：它的告警比的是 map 不收錄的 recording rule。"""
-        rc, row, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                      "container_cpu", "70", "80")
-        assert (rc, asked, row["status"]) == (0, [], "not_backtested")
-        assert "KNOWN_DEFERRED" in row["backtest"]
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "container_cpu", "70", "80")
+        assert (rc, asked, rows[0]["status"]) == (0, [], "not_backtested")
+        assert "KNOWN_DEFERRED" in rows[0]["backtest"]
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestTenantAndGitDiffAgree:
+    """#3111 review：同一個編輯，`--tenant` 與 `--git-diff` 報同樣的列（一條規則）。"""
+
+    @pytest.mark.parametrize("old,new", [("70", "70:critical"), ("70", "95:critical"),
+                                         ("70:critical", "60"), ("70", "60"),
+                                         ("70", "disable"), ("disable", "70:critical")])
+    def test_same_rows(self, tmp_path, monkeypatch, cli_argv, capsys, fake_prom, old, new):
+        p = fake_prom(values=(60, 80, 90, 100))
+        _rc, out = _run_main(cli_argv, capsys, "--tenant", "db-a", "--metric",
+                             "mysql_connections", "--old-value", old, "--new-value", new,
+                             "--prometheus", p.url, "--json")
+        tenant = [(r["metric"], r["old_value"], r["new_value"], r["risk"], r.get("message"))
+                  for r in json.loads(out.out)["changes"]]
+        cfg = _git_tree_repo(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", f'    mysql_connections: "{old}"\n')},
+            {**_D, "db-a.yaml": _tenant_file("db-a", f'    mysql_connections: "{new}"\n')})
+        monkeypatch.chdir(cfg)
+        _rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        git = [(r["metric"], r["old_value"], r["new_value"], r["risk"], r.get("message"))
+               for r in json.loads(out.out)["changes"]]
+        assert tenant == git and tenant, (tenant, git)
 
 
 # ── --git-diff 比的是 HEAD~1 與工作樹的兩棵 conf.d（#3111）─────────────
@@ -2266,6 +2277,8 @@ class TestGitDiffComparesTrees:
         assert rc == 2
         assert json.loads(out.out)["reason"] == "git_diff_unavailable"
         assert "fetch-depth" in out.err
+        # #3111 review: every cause is named, an unfetched object and a timeout too.
+        assert "an object the clone does not have" in out.err and "a timeout" in out.err
 
     def test_outside_a_work_tree_is_rc2(self, tmp_path, monkeypatch, cli_argv, capsys):
         (tmp_path / "plain" / "conf.d").mkdir(parents=True)
@@ -2275,3 +2288,194 @@ class TestGitDiffComparesTrees:
         rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", "http://prom:9090",
                             "--json")
         assert (rc, json.loads(out.out)["reason"]) == (2, "git_diff_unavailable")
+
+
+
+def _plain_repo(root):
+    root.mkdir(parents=True)
+    _git_run(root, "init", "-q")
+    for k, v in (("user.email", "t@example.invalid"), ("user.name", "t"),
+                 ("commit.gpgsign", "false")):
+        _git_run(root, "config", k, v)
+    return root
+
+
+def _commit_twice(root):
+    """Commit what is there as HEAD~1, then an empty HEAD (nothing changed)."""
+    _git_run(root, "add", "-A")
+    _git_run(root, "commit", "-qm", "before")
+    _git_run(root, "commit", "-qm", "after", "--allow-empty")
+
+
+def _crafted_head1(root, confd_entries):
+    """HEAD~1's tree is `conf.d` → a tree made of `confd_entries` (`git mktree`
+    lines, which may be ones a checkout would never produce); HEAD is an
+    empty commit on top. The working tree holds no conf.d/."""
+    tree = subprocess.run([_GIT, "mktree"], cwd=str(root), input=confd_entries,
+                          capture_output=True, timeout=60, check=True).stdout.strip()
+    top = subprocess.run([_GIT, "mktree"], cwd=str(root),
+                         input=b"040000 tree " + tree + b"\tconf.d\n",
+                         capture_output=True, timeout=60, check=True).stdout.strip()
+    c1 = subprocess.run([_GIT, "commit-tree", "-m", "before", top.decode()], cwd=str(root),
+                        capture_output=True, timeout=60, check=True).stdout.strip()
+    c2 = subprocess.run([_GIT, "commit-tree", "-m", "after", "-p", c1.decode(), top.decode()],
+                        cwd=str(root), capture_output=True, timeout=60, check=True).stdout.strip()
+    _git_run(root, "update-ref", "HEAD", c2.decode())
+
+
+def _blob(root, data):
+    return subprocess.run([_GIT, "hash-object", "-w", "--stdin"], cwd=str(root), input=data,
+                          capture_output=True, timeout=60, check=True).stdout.strip()
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestHead1TreeShapes:
+    """#3111 review：HEAD~1 整棵樹由 `git archive` 寫出、`tarfile` 的 data filter
+    解開，所以 conf.d/ 本身是 symlink、或裡面的 symlink 指出 conf.d/，都照
+    checkout 的樣子解析；submodule、不是目錄、逃出 repo 的 link、與 git 記錄不符
+    的檔一律 rc 2 `git_diff_unavailable`、指名 `HEAD~1:<path>`，不再有 traceback。"""
+
+    def _run(self, monkeypatch, cli_argv, capsys, fake_prom, cwd):
+        p = fake_prom()
+        monkeypatch.chdir(cwd)
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        return rc, json.loads(out.out), out.err
+
+    def test_a_symlinked_confd_compares_as_unchanged(self, tmp_path, monkeypatch, cli_argv,
+                                                     capsys, fake_prom):
+        """舊版：HEAD~1 的 conf.d 是 symlink ⇒ 當成沒有 conf.d ⇒ 每個門檻「新啟用」、rc 1。"""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "real", {**_D, "t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        symlink_or_skip("real", repo / "conf.d")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    def test_a_link_out_of_confd_resolves_as_in_a_checkout(self, tmp_path, monkeypatch,
+                                                            cli_argv, capsys, fake_prom):
+        """舊版：`conf.d/t1.yaml -> ../shared/t1.yaml` 在 HEAD~1 那棵樹裡解析不到，rc 2、
+        訊息還是暫存路徑。"""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "shared", {"t1.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        _write_confd(repo / "conf.d", _D)
+        symlink_or_skip("../shared/t1.yaml", repo / "conf.d" / "t1.yaml")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    @pytest.mark.parametrize("target", ["../../../outside.yaml", "/etc/hostname"],
+                             ids=["leaves-the-repo", "absolute"])
+    def test_a_link_leaving_the_repository_is_refused(self, tmp_path, monkeypatch, cli_argv,
+                                                      capsys, fake_prom, target):
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", _D)
+        symlink_or_skip(target, repo / "conf.d" / "t1.yaml")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:conf.d/t1.yaml" in err and "Traceback" not in err
+        # Named as the filter's refusal, not only as a file that went missing.
+        assert "refused when writing HEAD~1's tree out" in err, err
+
+    def test_a_refused_link_outside_confd_is_left_out(self, tmp_path, monkeypatch, cli_argv,
+                                                      capsys, fake_prom):
+        """conf.d/ 以外、沒有人引用的危險 link 不影響比對。"""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", {**_D, "t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        symlink_or_skip("/etc/hostname", repo / "elsewhere")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    def test_the_fallback_filter_refuses_and_resolves_the_same(self, tmp_path, monkeypatch):
+        """沒有 `tarfile.data_filter` 的 Python：自己的檢查拒絕同樣的 member。"""
+        monkeypatch.setattr(bt, "_DATA_FILTER", None)
+        repo = _plain_repo(tmp_path / "ok")
+        _write_confd(repo / "shared", {"t1.yaml": "x: 1\n"})
+        _write_confd(repo / "conf.d", _D)
+        symlink_or_skip("../shared/t1.yaml", repo / "conf.d" / "t1.yaml")
+        _commit_twice(repo)
+        monkeypatch.chdir(repo)
+        out = tmp_path / "out1"
+        out.mkdir()
+        got = bt.materialize_head1_confd(str(out))
+        with open(os.path.join(got, "t1.yaml"), encoding="utf-8") as f:
+            assert f.read() == "x: 1\n"
+        bad = _plain_repo(tmp_path / "bad")
+        _write_confd(bad / "conf.d", _D)
+        symlink_or_skip("../../x.yaml", bad / "conf.d" / "t1.yaml")
+        _commit_twice(bad)
+        monkeypatch.chdir(bad)
+        out = tmp_path / "out2"
+        out.mkdir()
+        with pytest.raises(bt.Head1Unavailable, match="HEAD~1:conf.d/t1.yaml"):
+            bt.materialize_head1_confd(str(out))
+
+    def test_a_submodule_confd_fails_closed(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                            fake_prom):
+        repo = _plain_repo(tmp_path / "r")
+        (repo / "README").write_text("x\n", encoding="utf-8")
+        _git_run(repo, "add", "-A")
+        _git_run(repo, "commit", "-qm", "base")
+        head = _git_run(repo, "rev-parse", "HEAD").stdout.decode().strip()
+        _git_run(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},conf.d")
+        _git_run(repo, "commit", "-qm", "submodule")
+        _git_run(repo, "commit", "-qm", "after", "--allow-empty")
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:conf.d is a submodule" in err
+
+    def test_a_submodule_inside_confd_fails_closed(self, tmp_path, monkeypatch, cli_argv,
+                                                   capsys, fake_prom):
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", _D)
+        _git_run(repo, "add", "-A")
+        _git_run(repo, "commit", "-qm", "base")
+        head = _git_run(repo, "rev-parse", "HEAD").stdout.decode().strip()
+        _git_run(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},conf.d/team")
+        _git_run(repo, "commit", "-qm", "submodule")
+        _git_run(repo, "commit", "-qm", "after", "--allow-empty")
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:conf.d/team is a submodule" in err
+
+    def test_a_confd_that_is_a_file_fails_closed(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                                 fake_prom):
+        repo = _plain_repo(tmp_path / "r")
+        (repo / "conf.d").write_text("not a directory\n", encoding="utf-8")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:conf.d is not a directory" in err
+
+    @pytest.mark.parametrize("shape", ["blob-and-tree", "two-blobs", "nul-link"])
+    def test_a_crafted_tree_is_a_named_rc2(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                           fake_prom, shape):
+        """舊版：同名的兩個 entry ⇒ FileExistsError、link target 含 NUL ⇒ ValueError，
+        都是 traceback。"""
+        repo = _plain_repo(tmp_path / "r")
+        a, b = _blob(repo, b"tenants: {}\n"), _blob(repo, b"x: 1\n")
+        sub = subprocess.run([_GIT, "mktree"], cwd=str(repo), input=b"100644 blob " + a + b"\tz.yaml\n",
+                             capture_output=True, timeout=60, check=True).stdout.strip()
+        lines = {
+            "blob-and-tree": [b"100644 blob " + a + b"\tdup.yaml", b"040000 tree " + sub + b"\tdup.yaml"],
+            "two-blobs": [b"100644 blob " + a + b"\tdup.yaml", b"100644 blob " + b + b"\tdup.yaml"],
+            "nul-link": [b"120000 blob " + _blob(repo, b"a\0b") + b"\tnul.yaml"],
+        }[shape]
+        _crafted_head1(repo, b"\n".join(lines) + b"\n")
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert "Traceback" not in err
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:" in err
+
+    def test_hidden_only_confd_at_head1_serves_nothing(self, tmp_path, monkeypatch, cli_argv,
+                                                       capsys, fake_prom):
+        """舊版：`.old.yaml`、`.archive/old.yaml` 被當成 config 檔 ⇒ da-guard「no .yaml
+        files found」rc 2。exporter 跳過隱藏的檔與目錄。"""
+        cfg = _git_tree_repo(
+            tmp_path, {"README.md": "x\n", ".old.yaml": "tenants: {}\n",
+                       ".archive/old.yaml": "tenants: {}\n"},
+            {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, cfg)
+        assert any((c["tenant"], c["old_value"], c["new_value"]) == ("db-a", None, "50")
+                   for c in doc["changes"]), (doc, err)

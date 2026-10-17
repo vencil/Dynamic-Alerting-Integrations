@@ -826,3 +826,36 @@ def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
     if side == "baseline":  # read by da-guard only (the recipe scan reads --config-dir)
         assert doc["reason"] == "served_values_unavailable"
     assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr
+
+
+def test_a_tenant_id_promql_cannot_take_is_listed_not_queried(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111 review: the exporter serves a `tenants:` key such as `a|b"c`; built
+    into `{tenant="..."}` it made invalid PromQL (rc 2 `query_error`) and broke
+    the Markdown row. Now: not backtested, nothing asked, the cell escaped."""
+    weird = 'a|b"`c'
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "x.yaml": f"tenants:\n  'a|b\"`c':\n    mysql_connections: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
+    md = tmp_path / "r.md"
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert (rc, asked) == (0, [])
+    assert "Not backtested: tenant id holds a character" in out.out
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "a\\|b" in line)
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
+    assert weird not in md.read_text(encoding="utf-8")
+
+
+def test_a_metric_cell_from_the_tree_is_escaped(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111 review: a dimensioned key holding `|` broke its Markdown row."""
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "tx.yaml": f"tenants:\n  tx:\n    'mysql_connections{{db=~\"a|b\"}}': \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
+    md = tmp_path / "r.md"
+    _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "db=~" in line)
+    assert "a\\|b" in row
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
