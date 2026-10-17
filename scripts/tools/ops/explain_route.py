@@ -1323,6 +1323,11 @@ def main(argv: list[str] | None = None) -> int:
         for fname, value in parsed.get("routing_defaults_not_mapping", []):
             print(f"  WARN: {safe_label(routing_defaults_not_mapping_text(fname, value))}",
                   file=sys.stderr)
+        # #2906: a defaults carrier no plane reads — the generator's own line
+        # (blocking under --validate), which replaced the stderr
+        # multi-carrier WARN its reader used to print for this tool too.
+        for line in parsed.get("unselected_carriers", []):
+            print(safe_label(line), file=sys.stderr)
         # #2341 R8: a tenant id generate-routes renders nothing for (it is
         # not in all_tenants, so it is not explained below either) — and,
         # ADR-035 D3, refuses the whole tree for, in every mode.

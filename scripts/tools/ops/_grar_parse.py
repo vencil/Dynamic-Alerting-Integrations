@@ -46,7 +46,6 @@ from _lib_confd import (  # noqa: E402
     tenant_declarations,
     unusable_config_paths,
     unusable_reason,
-    warn_multi_carrier,
 )
 
 from _grar_merge import (  # noqa: E402
@@ -562,16 +561,23 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
         f"delete it")
 
 
-def _enforced_in_unread_file(path: Path, fname: str, result: dict) -> None:
-    """(b) for a file this reader otherwise skips (an unselected carrier
-    spelling below the root). A file that does not parse, or is not a
-    mapping, carries nothing here."""
-    try:
-        data = read_confd_yaml(path, ROUTING_READ)
-    except Exception:  # noqa: BLE001 — see docstring
-        return
-    if isinstance(data, dict) and "_routing_enforced" in data:
-        _refuse_nested_enforced(fname, result)
+def _unselected_carrier(fname: str, chosen: str, level: str,
+                        result: dict) -> None:
+    """#2906: a readable defaults carrier the directory's selection passed
+    over (`select_defaults_carrier`; da-guard parse-tree: `not_read`
+    reason `unselected_defaults_carrier`). No plane reads it, so whatever
+    it says is not in force: a `WARN … skipping` line, blocking under
+    `--validate` like every other line for config that is written and not
+    rendered. The file is never opened here — its content cannot change
+    the verdict (before #2906 a `_routing_enforced` in one below the root
+    was read out of it and refused as `routing_enforced_below_root`)."""
+    where = ("the conf.d root" if level == ROOT_LEVEL
+             else f"directory {level}/")
+    result.setdefault("unselected_carriers", []).append(skipped_entry_warning(
+        f"  WARN: {fname} is not read: {where} has more than one defaults "
+        f"carrier and only {chosen} is read, on every plane (#1674); merge "
+        f"them into one file, skipping",
+        kind="unselected_defaults_carrier", file=fname))
 
 
 # #2904: the routing keys this reader reads at the top level of a defaults
@@ -1282,7 +1288,7 @@ def _parse_config_files(config_dir: str) -> dict:
     # #1674: ONE carrier per directory, chosen by the rule every exporter
     # plane reads (`select_defaults_carrier`, over the carriers that can be
     # read). Any other carrier spelling is ignored WHOLE, as the exporter
-    # ignores it, and named once per directory.
+    # ignores it — never opened — and named once, as its own finding (#2906).
     # #1982: every tenant entry of every file, in read order, applied AFTER
     # the loop — see `_apply_tenant_entries`.
     tenant_entries: list[tuple[str, object, dict]] = []
@@ -1296,8 +1302,14 @@ def _parse_config_files(config_dir: str) -> dict:
     for d, carriers in carriers_by_dir.items():
         readable, _unreadable = readable_carriers(carriers)
         readable_set.update(readable)
-        selected[d] = select_defaults_carrier(readable)
-        warn_multi_carrier(d, readable)
+        chosen = select_defaults_carrier(readable)
+        selected[d] = chosen
+        # #2906: each readable carrier not selected is a finding — this
+        # replaces `warn_multi_carrier`'s stderr line on this path, so the
+        # one fact is printed once, by the stream.
+        for p in sorted((p for p in readable if p != chosen), key=_rel):
+            _unselected_carrier(_rel(p), _rel(chosen),
+                                PurePosixPath(_rel(p)).parent.as_posix(), result)
     for path_p in listed:
         fname = _rel(path_p)
         level = PurePosixPath(fname).parent.as_posix()
@@ -1306,12 +1318,8 @@ def _parse_config_files(config_dir: str) -> dict:
         if is_defaults_name(path_p.name) and (
                 chosen is None or path_p.name != chosen.name):
             if path_p in readable_set:
-                # The unselected spelling: named above, not read — except
-                # that (b) is about ANY file below the root, so a
-                # `_routing_enforced` written into it is still refused
-                # (review of #2326, F1).
-                if level != ROOT_LEVEL:
-                    _enforced_in_unread_file(path_p, fname, result)
+                # The unselected spelling: named above (#2906, a finding),
+                # never opened.
                 continue
             # unreadable: fall through, the read below books it as skipped
         # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
@@ -1822,6 +1830,9 @@ def load_tenant_tree(
     schema_warnings.extend(parsed.get("routing_defaults_errors", []))
     # #2960: keys a routing block carries that the generator does not read.
     schema_warnings.extend(parsed.get("ignored_routing_keys", []))
+    # #2906: a defaults carrier no plane reads (unselected_defaults_carrier),
+    # blocking under `--validate` the same way.
+    schema_warnings.extend(parsed.get("unselected_carriers", []))
     # #2904: a `routing_profiles:` block that is not a mapping — no profile in
     # it is applied: routing_profiles_unusable, a warning that never blocks;
     # the tenants that reference one of its

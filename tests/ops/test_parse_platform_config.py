@@ -415,7 +415,11 @@ def test_parse_config_files_reads_one_carrier_and_no_smuggled_defaults(
     result = _parse_config_files(str(tmp_path))
     assert result["defaults_keys"] == {"cpu_pct"}
     err = capsys.readouterr().err
-    assert "_defaults.yml is ignored on every plane" in err
+    # #2906: the unselected carrier is a finding in the stream now (blocking
+    # under --validate), no longer `warn_multi_carrier`'s stderr line.
+    assert [(f.kind, f.file) for f in result["unselected_carriers"]] == [
+        ("unselected_defaults_carrier", "_defaults.yml")]
+    assert "_defaults.yml is ignored on every plane" not in err
     assert "defaults in _profiles.yaml ignored" in err
 
 
