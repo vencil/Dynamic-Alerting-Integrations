@@ -1156,9 +1156,11 @@ data:
                 /tenants/{id}, custom alerts, tenant and group batches, in every
                 write mode) ended in a server-side error, and they are at least
                 half of all write attempts. Writes are being lost: the caller got
-                a 5xx or 429, a 400 whose detail is withheld (a direct write's git
-                or file failure), or a 403 because the forge refused tenant-api's
-                own token, and nothing was written or no PR/MR was opened. One
+                a 5xx or 429 — a direct write's git or file failure is a 500 whose
+                detail is withheld (#1535) — or a 403 because the forge refused
+                tenant-api's own token. Usually nothing was written and no PR/MR
+                was opened, but a write answered 503 because it timed out may
+                already be committed: refresh before retrying it. One
                 error is the exception: a batch answered 409 with committed: true
                 IS written — its commit landed but did not finish cleanly (the
                 sync after it). Requests refused as invalid or forbidden, and

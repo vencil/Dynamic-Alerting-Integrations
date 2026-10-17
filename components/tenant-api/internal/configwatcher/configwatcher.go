@@ -67,9 +67,9 @@ type ReadFunc func() (data []byte, exists bool, err error)
 //   - WatchLoop (periodic tick) logs a WARN and moves on.
 //   - Reload (post-write refresh) returns the error, but its one production
 //     caller discards it — `_ = mgr.Reload()` in handler/state.go's
-//     reloadState, run on every exit of a groups / views / federation-policy
-//     write (#1535) — and the handler then answers 200 OK, so the caller never
-//     learns the snapshot went stale.
+//     reloadState, run after a groups / views / federation-policy write that
+//     succeeded or may have (#1535) — and the handler then answers, so the
+//     caller never learns the snapshot went stale.
 //
 // The observer records the outcome (ok) of each load so the handler can drive
 // TWO complementary metrics from one observation point:

@@ -145,7 +145,8 @@ func PutView(d *Deps) http.HandlerFunc {
 		// comment in PutGroup for why the in-memory snapshot cannot be the
 		// base of a whole-file rewrite. _views.yaml has exactly the same
 		// shape: one shared object, one snapshot that refreshes only on a
-		// Reload (mutateState's, on every exit — #1535) or a WatchLoop tick.
+		// Reload (mutateState's, after a write that succeeded or may have
+		// — #1535) or a WatchLoop tick.
 		if err := d.mutateState(r.Context(), statestore.KeyViews, "views", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseViewsFile(current)
