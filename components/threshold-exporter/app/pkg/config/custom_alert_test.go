@@ -741,3 +741,120 @@ func TestValidateTenantCustomAlerts_SloBurnRate(t *testing.T) {
 		t.Errorf("disabled slo must be valid and uncounted (cap=2 with 1 active), got %v", got)
 	}
 }
+
+// #3042: CustomAlertEntries judges every entry of the list as the exporter
+// serves it — the rows of its served entries are exactly the rows
+// resolveCustomAlertSpecs serves, and a disabled entry is one that switching
+// back on serves (same recipe_id), else it is rejected.
+func TestCustomAlertEntries(t *testing.T) {
+	list := "" +
+		"      - {recipe: threshold, name: a, metric: m1, op: \">\", window: 5m, threshold: \"80:critical\"}\n" + // 0 served
+		"      - {recipe: threshold, name: off, metric: m2, op: \">\", window: 5m, threshold: \"disable:critical\"}\n" + // 1 disabled
+		"      - {recipe: threshold, name: offbad, metric: m3, op: \">\", window: 5m, threshold: disable, for: 7m}\n" + // 2 rejected: bad for
+		"      - {recipe: bogus, name: x, metric: m4, op: \">\", window: 5m, threshold: \"1\"}\n" + // 3 rejected
+		"      - {recipe: threshold, name: again, metric: m1, op: \">\", window: 5m, threshold: \"90:critical\"}\n" + // 4 duplicate of 0
+		"      - {recipe: slo_burn_rate, name: s, metric: e, denominator_metric: r, objective: \"99.9\"}\n" + // 5 served ×2
+		"      - {recipe: slo_burn_rate, name: soff, metric: e2, denominator_metric: r2, objective: disable}\n" + // 6 disabled ×2
+		"      - {recipe: slo_burn_rate, name: soffbad, metric: e3, denominator_metric: r3, objective: disable, mode: loud}\n" // 7 rejected
+	overrides := customAlertsConfig(t, "t1", list).Tenants["t1"]
+	entries, blockErr := CustomAlertEntries("t1", overrides)
+	if blockErr != "" {
+		t.Fatalf("blockErr = %q", blockErr)
+	}
+	wantStatus := []string{CustomAlertServed, CustomAlertDisabled, CustomAlertRejected, CustomAlertRejected,
+		CustomAlertDuplicated, CustomAlertServed, CustomAlertDisabled, CustomAlertRejected}
+	if len(entries) != len(wantStatus) {
+		t.Fatalf("%d entries, want %d", len(entries), len(wantStatus))
+	}
+	for i, e := range entries {
+		if e.Index != i || e.Status != wantStatus[i] {
+			t.Errorf("entry %d: index %d status %q, want %q (reason %q)", i, e.Index, e.Status, wantStatus[i], e.Reason)
+		}
+		if (e.Status == CustomAlertServed || e.Status == CustomAlertDisabled) != (e.RecipeID != "" && len(e.Severities) > 0) {
+			t.Errorf("entry %d (%s): recipe_id %q severities %v", i, e.Status, e.RecipeID, e.Severities)
+		}
+		if (e.Status == CustomAlertRejected || e.Status == CustomAlertDuplicated) && e.Reason == "" {
+			t.Errorf("entry %d (%s) has no reason", i, e.Status)
+		}
+	}
+	if got := strings.Join(entries[6].Severities, ","); got != "critical,warning" {
+		t.Errorf("disabled slo severities %q", got)
+	}
+	if got := strings.Join(entries[1].Severities, ","); got != "critical" {
+		t.Errorf("disabled threshold keeps its severity: %q", got)
+	}
+
+	if !strings.HasPrefix(entries[2].Reason, "switched off; switched back on it would be rejected: ") {
+		t.Errorf("entry 2 reason %q", entries[2].Reason)
+	}
+
+	// The exporter counts on da_custom_alert_parse_errors (and logs) the
+	// entries it rejects and drops — a switched-off one it would reject only
+	// once switched back on is an opt-out to it, as before #3042: 3 and 4.
+	var logged []string
+	_, _, errCount, _ := resolveCustomAlertSpecs("t1", overrides, func(format string, args ...any) {
+		logged = append(logged, fmt.Sprintf(format, args...))
+	})
+	if errCount != 2 || len(logged) != 2 {
+		t.Errorf("errCount %d, %d log line(s) %q; want 2 (entries 3 and 4)", errCount, len(logged), logged)
+	}
+
+	// The served entries' rows are the rows the exporter serves.
+	rows, _, _, _ := resolveCustomAlertSpecs("t1", overrides, nil)
+	var fromEntries []string
+	for _, e := range entries {
+		if e.Status == CustomAlertServed {
+			for _, sev := range e.Severities {
+				fromEntries = append(fromEntries, e.RecipeID+"|"+sev)
+			}
+		}
+	}
+	var served []string
+	for _, r := range rows {
+		served = append(served, r.CustomLabels["recipe_id"]+"|"+r.Severity)
+	}
+	if strings.Join(fromEntries, ";") != strings.Join(served, ";") {
+		t.Errorf("served entries %v, served rows %v", fromEntries, served)
+	}
+
+	// A disabled entry has the recipe_id it serves once switched back on.
+	for i, on := range map[int]string{
+		1: "      - {recipe: threshold, name: off, metric: m2, op: \">\", window: 5m, threshold: \"80:critical\"}\n",
+		6: "      - {recipe: slo_burn_rate, name: soff, metric: e2, denominator_metric: r2, objective: \"99\"}\n",
+	} {
+		back, _ := CustomAlertEntries("t1", customAlertsConfig(t, "t1", on).Tenants["t1"])
+		if len(back) != 1 || back[0].Status != CustomAlertServed || back[0].RecipeID != entries[i].RecipeID ||
+			strings.Join(back[0].Severities, ",") != strings.Join(entries[i].Severities, ",") {
+			t.Errorf("entry %d switched on: %+v, disabled was %+v", i, back, entries[i])
+		}
+	}
+}
+
+// A block that does not decode has no entry, and says why.
+func TestCustomAlertEntries_BlockError(t *testing.T) {
+	overrides := map[string]ScheduledValue{"_custom_alerts": {Default: "not: [a list"}}
+	entries, blockErr := CustomAlertEntries("t1", overrides)
+	if entries != nil || !strings.Contains(blockErr, "cannot parse _custom_alerts") {
+		t.Errorf("entries %v, blockErr %q", entries, blockErr)
+	}
+	if entries, blockErr := CustomAlertEntries("t1", nil); len(entries) != 0 || blockErr != "" {
+		t.Errorf("no block: entries %v, blockErr %q", entries, blockErr)
+	}
+}
+
+// Fields is what the resolver decoded, not the YAML text: a `true`
+// selector value is "true" and a null "" — the strings RecipeID slugs —
+// and min_events written as an integer stays one.
+func TestCustomAlertSpec_Fields(t *testing.T) {
+	list := "      - {recipe: slo_burn_rate, name: s, metric: e, denominator_metric: r, objective: \"99.9\", min_events: 20, selectors: {flag: true, a: ~}}\n"
+	specs := customAlertsConfig(t, "t1", list).Tenants["t1"]
+	entries, _ := CustomAlertEntries("t1", specs)
+	f := entries[0].Spec.Fields()
+	sel, _ := f["selectors"].(map[string]string)
+	if sel["flag"] != "true" || sel["a"] != "" || f["min_events"] != 20 || f["objective"] != "99.9" {
+		t.Errorf("Fields() = %#v", f)
+	}
+	if _, ok := f["threshold"]; ok {
+		t.Errorf("an absent field is left out: %#v", f)
+	}
+}

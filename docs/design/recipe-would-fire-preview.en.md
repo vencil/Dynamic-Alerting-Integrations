@@ -147,7 +147,7 @@ To make sure a compile failure is never mislabeled as "fired", gate in three lay
 
 ### 5.3 Single-recipe compilation + reusing the compiler directly
 
-The service is Python, so it **calls the compiler directly**: write the form's single recipe into a temporary config, and ask the compiler for the rules plus the recipe id it computed. The id is what the compiler itself computes, not a regex or a Go re-derivation — which is why "reuse directly, zero cross-language rewrite" falls out naturally with a Python service. A single recipe compiled in an isolated temporary config is exactly "here's what your recipe would look like", which is what the preview wants.
+The service is Python, so it **calls the compiler directly**: hand the form's single recipe straight to the compiler, and ask it for the rules plus the recipe id it computed. The service image ships no da-guard, so the recipe is judged by the compiler's own validation rather than the exporter's reading ([#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)). The id is what the compiler itself computes, not a regex or a Go re-derivation — which is why "reuse directly, zero cross-language rewrite" falls out naturally with a Python service. A single recipe compiled on its own is exactly "here's what your recipe would look like", which is what the preview wants.
 
 ## 6. Production guardrails
 

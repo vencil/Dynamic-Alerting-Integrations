@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-10-16
+updated_at: 2026-10-17
 ---
 # ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載
 
@@ -29,6 +29,7 @@ updated_at: 2026-10-16
 | 2026-09-28 | 路由設定也沿目錄逐層繼承 | 決策 9 |
 | 2026-10-08 | 最終設定逐字顯示寫下的值，`/metrics` 不送的值逐鍵標出 | 決策 10 |
 | 2026-10-10 | `describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 改讀 da-guard 的值；爆炸半徑報告另比對自訂告警 | 決策 2 |
+| 2026-10-17 | 自訂告警編譯器改照 exporter 送出的編譯，`_defaults.yaml` 裡的 `_custom_alerts` 不再產生規則 | 決策 5、6 |
 
 ## 名詞
 
@@ -164,7 +165,7 @@ tenants:
 |:--|:--|
 | `state_filters` | `/metrics` 的 `user_state_filter{tenant,filter,severity}` |
 | `_routing_defaults`、`_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run` 的完整輸出，改前改後對照 |
-| `_custom_alerts` | `compile_custom_alerts.py --check` |
+| `_custom_alerts` | `da-guard served-values` 的 `custom_alerts`（`_defaults.yaml` 裡的 `_custom_alerts` 不送出，也不編譯成規則，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3） |
 | `max_metrics_per_tenant` | 見下方 |
 
 這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效。
@@ -185,7 +186,7 @@ tenants:
 讀取者只看文件頂層的鍵，縮排後對它們等於沒寫：
 
 - `_routing_defaults` 縮排後，沒有自己 `_routing`、也沒有 routing profile 的租戶整條 route 消失，路由產生器回 0、沒有錯誤也沒有警告。
-- `_custom_alerts` 縮排後，`compile_custom_alerts.py --check` 回 1 並逐條列出消失的規則；但若接著重新編譯，檢查就轉綠，消失的規則只留在規則包的 diff 裡。
+- `_custom_alerts` 本身縮排前後都不送出、也不編譯成規則：自訂告警編譯器照 exporter 送出的編譯。
 
 ### 7. 雙雜湊與重新載入
 

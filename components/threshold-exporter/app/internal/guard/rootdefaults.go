@@ -109,6 +109,24 @@ func quoteKeys(keys []string) string { return "`" + strings.Join(keys, "`, `") +
 const rootNumbersOnly = "A threshold among them goes under `defaults:`; the root `defaults:` holds numbers only " +
 	"(a non-numeric value there drops the whole block), so another key has no place in this file."
 
+// customAlertsRootFix: no reader takes custom alerts from a `_defaults.yaml`
+// (the exporter never served them; the compiler compiles what it serves,
+// #3042) — where they go. validate_config.py's _CUSTOM_ALERTS_ROOT_FIX is the
+// same sentence.
+const customAlertsRootFix = "`_custom_alerts`: no reader takes custom alerts from a `_defaults.yaml`; " +
+	"write the list in each tenant's own entry under `tenants:`, in a root platform file's `tenants:`, " +
+	"or in a profile its tenants select (#3042)."
+
+// rootFix is the root file's fix for the keys a finding names.
+func rootFix(keys []string) string {
+	for _, k := range keys {
+		if k == "_custom_alerts" {
+			return rootNumbersOnly + " " + customAlertsRootFix
+		}
+	}
+	return rootNumbersOnly
+}
+
 // subtreeTopLevelFix is defaults_toplevel_ignored's fix for a SUBTREE file.
 //
 // ⛔ A KEY SUBTREE DEFAULTS REFUSE IS NOT MOVED UNDER `defaults:` (#2388 r4).
@@ -175,7 +193,7 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 		if wrapped {
 			// Below the root, subtreeTopLevelFix keeps the generic "move them
 			// under `defaults:`" for the keys that may go there (#2388 r4).
-			fix := rootNumbersOnly
+			fix := rootFix(keys)
 			if !root {
 				fix = subtreeTopLevelFix(keys, input.DeclaredStateFilters)
 			}
@@ -196,7 +214,7 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 			Message: fmt.Sprintf("%s: the conf.d root defaults file has no `defaults:` mapping, so /effective "+
 				"(the defaults-chain merge, which then reads the whole document) shows the top-level key(s) %s, "+
 				"but threshold-exporter's root decode does not read them: /metrics does not carry them from "+
-				"this file. %s", f.Name, quoteKeys(keys), rootNumbersOnly),
+				"this file. %s", f.Name, quoteKeys(keys), rootFix(keys)),
 		})
 	}
 	return out

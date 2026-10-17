@@ -58,7 +58,7 @@
 
 ## API 參考
 
-> 慣例:除 Health / Identity / Metrics 外皆需身分(oauth2-proxy header)。「權限」欄為該端點要求的 RBAC 動作;標「逐租戶」者會對每個受影響租戶再驗一次。
+> 慣例:除 Health / Identity / Metrics 外皆需身分(oauth2-proxy header)。「權限」欄為該端點要求的 RBAC 動作;標「逐租戶」者會對每個受影響租戶再驗一次。路徑不帶 `{id}` 租戶的端點,`read` / `write` 指**至少對一個租戶**有該權限([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520);只看呼叫者自己的規則,不看租戶是否存在),回應內容再由 handler 逐租戶過濾;標 `(*)` 的端點則要求規則寫了 `tenants: ["*"]`。
 
 ### Health / Identity / Metrics(無需認證)
 
@@ -72,7 +72,7 @@
 
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
-| `GET` | `/api/v1/me` | read | 當前呼叫者的 email + groups + RBAC 摘要 |
+| `GET` | `/api/v1/me` | 身分(不需授權) | 當前呼叫者的 email + groups + 命中他的規則摘要;沒有任何授權也回 200(空的 `permissions` / `accessible_tenants`),缺身分 401 |
 | `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失;每筆的 `config_derived`(`silent_targets` / `maintenance_active`)見下方「依設定推算的狀態」 |
 | `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);與 `/tenants` 共用快照快取。回應頂層的 `config_derivation` 附推算時間,並列出解析失敗而被跳過的檔案(`parse_failed_files`) |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + `resolved_thresholds`(套根目錄的 defaults carrier、根目錄平台檔的 `tenants:` 區塊與租戶選用的 `_profile`,見下方「單一租戶端點與 conf.d 範圍」);`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409;對該租戶沒有寫入權限的呼叫者看到遮罩後的憑證(見上方「憑證遮罩」) |
@@ -98,7 +98,7 @@
 - **同一份計算**:config 由 `config.LoadDir`(exporter 的冷載入)取得,狀態由 `OperationalStatesAt(now).ByTenant` 在每次請求時判讀,所以 `expires` 以請求當下為準。舊的 `silent_mode` / `maintenance` 欄位是租戶檔裡的原始值(`disable` 也是非空字串),不代表狀態。
 - **快取**:載入結果放在快照快取裡,不是每個請求都重載。載入只在**不必等待**就拿得到 GitOps writer 的鎖時進行,所以不會讀到寫入進行中的樹,讀取也不會等寫入;單次載入持鎖有時限,超時(例如讀到會卡住的檔案)就放開鎖、回傳不帶 `config_derived` 的清單,並在卡住的那次返回前不再開始新的載入。writer 每段寫入結束時(成功或失敗)會把快照標為過期,**過期的快照不會再被當成已知狀態回傳**:writer 正在寫入時,尚未過期的快照照常回傳(`config_loaded_at` 標出它的時間,可能超過 TTL),已過期的則回傳不帶 `config_derived` 的清單;同一時間只有一個請求在重載,其他請求等它的結果,不會把「另一個請求在重載」誤判成「寫入進行中」。PR 模式下,工作樹不在 base branch 上、或有 loader 會讀到的未提交變更(已追蹤檔案的修改,或未追蹤的 `.yaml`/`.yml`)時(例如 PR 寫入後切回 base 失敗),不推算、不快取,各租戶不帶 `config_derived`;其他未追蹤檔案(如寫入中斷留下的暫存檔)不影響。沒有推算時,原始的 `silent_mode` / `maintenance` 也不回傳。API 以外的變更(git pull、ConfigMap 更換)最慢在 TTL 到期後生效——tenant-api 沒有 conf.d watcher。
 - **解析失敗的檔案**:exporter 會跳過無法解析的檔案,這些租戶沒有 `config_derived`(根目錄的租戶檔以上方的降級列出現)。`/tenants/search` 的 `config_derivation.parse_failed_files` 列出這些檔案,讓呼叫端分得出「檔案壞了」與「沒有這個租戶」;子目錄的檔案與 `_` 平台檔只出現在這裡。
-- **誰看得到什麼**:只有不受限的呼叫者(open mode,或規則對 org、environments、domains 都不設限的 platform admin)拿到相對於 conf.d 的完整路徑,以及載入失敗時 loader 的原始訊息(`load_error`,已去掉伺服器上的絕對路徑)。其他呼叫者的 `load_error` 是固定字串,不含任何檔名或租戶 id;`parse_failed_files` 只給檔名(不含目錄),且只列出呼叫者依降級列規則看得到的租戶的檔案,其餘只計入 `parse_failed_hidden`。conf.d 整份載入失敗(例如同一租戶宣告在兩個檔)時,各租戶不帶 `config_derived`。
+- **誰看得到什麼**:只有不受限的呼叫者(open mode,或規則對 org、environments、domains 都不設限的 platform admin)拿到相對於 conf.d 的完整路徑,以及載入失敗時 loader 的原始訊息(`load_error`,已去掉伺服器上的絕對路徑)。其他呼叫者的 `load_error` 是固定字串,不含任何檔名或租戶 id;`parse_failed_files` 只給檔名(不含目錄),且只列出呼叫者依降級列規則看得到的租戶的檔案,其餘不列也不計數(#3123:不再有 `parse_failed_hidden`)。conf.d 整份載入失敗(例如同一租戶宣告在兩個檔)時,各租戶不帶 `config_derived`。
 
 #### 單一租戶端點與 conf.d 範圍
 
@@ -123,19 +123,19 @@
 |--------|------|------|------|
 | `GET` | `/api/v1/groups` | read | 列出群組(自動隱藏成員全不可讀的群組) |
 | `GET` | `/api/v1/groups/{id}` | read | 取得群組 |
-| `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單 |
-| `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限) |
+| `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單。`members` 至少一個(清空用 DELETE);id 已被看不到的群組佔用時回 409 `GROUP_ID_UNAVAILABLE`(換 id,勿重試) |
+| `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限)。沒有成員的舊群組只有不受限的 platform admin 看得到、刪得掉 |
 | `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339)。與 `POST /tenants/batch` 相同**全有全無、一次 commit**:任一成員被拒就整批 422 `rejected`、不寫入;`results` 與 `summary` 只列呼叫者讀得到的成員,讀不到的成員被拒時同樣整批拒收。不存在的成員是 `skipped`,不使整批失敗 |
-| `GET` | `/api/v1/views` | read | 列出 saved view |
-| `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
+| `GET` | `/api/v1/views` | read(*) | 列出 saved view |
+| `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write(*) | Saved view CRUD。view 沒有擁有者、不按租戶過濾,所以仍要求 `"*"` 權限,直到有擁有者模型([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)) |
 
 ### Async / 事件
 
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
-| `GET` | `/api/v1/tasks/{id}` | read | Async task polling;結果以呼叫者 RBAC 過濾,全不可讀回 403 |
-| `GET` | `/api/v1/prs` | read | Pending PR / MR 列表;不可讀的租戶自動隱藏,`?tenant=<id>` 不可讀回空陣列 |
-| `GET` | `/api/v1/events` | read | SSE 即時事件流(`config_change`) |
+| `GET` | `/api/v1/tasks/{id}` | read(限提交者) | Async task polling;task id 為 128-bit 隨機值,非提交者回與不存在相同的 404;結果以呼叫者當下的 RBAC 過濾 |
+| `GET` | `/api/v1/prs` | read | Pending PR / MR 列表;不可讀的租戶自動隱藏,`?tenant=<id>` 不可讀回空陣列;批次 PR/MR 須讀得到它涵蓋的每個租戶 |
+| `GET` | `/api/v1/events` | read | SSE 即時事件流(`config_change`);只送呼叫者讀得到的租戶的事件,不屬於單一租戶的 state 事件只送讀得到全部租戶的呼叫者 |
 
 ### 聯邦(Federation)
 
@@ -143,11 +143,11 @@
 
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
-| `GET` | `/api/v1/federation/policy` | admin | 取得平台聯邦白名單 |
-| `PUT` | `/api/v1/federation/policy` | admin | 更新白名單(新增 metric 會跑資料層 admission 檢查;軟性警告需 `force=true` + 理由才放行,理由記入該次寫入的 `state_write` 稽核事件 `notes`) |
+| `GET` | `/api/v1/federation/policy` | read | 取得平台聯邦白名單(只有指標名、不點名租戶;租戶管理員挑自己的子集時要用) |
+| `PUT` | `/api/v1/federation/policy` | admin(平台層級) | 更新白名單(新增 metric 會跑資料層 admission 檢查;軟性警告需 `force=true` + 理由才放行,理由記入該次寫入的 `state_write` 稽核事件 `notes`) |
 | `POST` | `/api/v1/federation/tokens` | admin(對 body 的租戶) | 簽發短效 token(預設 4h);token 本體只在回應出現一次 |
 | `GET` | `/api/v1/federation/tokens?tenant_id=<id>` | admin(對該租戶) | 列出該租戶未過期的 token 記錄(不含 token 本體) |
-| `DELETE` | `/api/v1/federation/tokens/{id}` | admin(對該 token 的租戶) | 撤銷 token;最終一致,約 1–2 分鐘內隨設定同步生效 |
+| `DELETE` | `/api/v1/federation/tokens/{id}` | admin(對該 token 的租戶) | 撤銷 token;最終一致,約 1–2 分鐘內隨設定同步生效。無權撤銷回與 token 不存在相同的 404 |
 | `POST` | `/api/v1/federation/accounts/backfill` | admin(平台層級) | 替 conf.d 裡還沒有 `account_id` 的租戶一次配發(單一寫入);冪等,重跑不會配新號。回應列出這次配到號的租戶與已有號的租戶數。用途見 [tenant-log-query §2.1](../../docs/integration/tenant-log-query.md) |
 | `GET` | `/api/v1/tenants/{id}/federation` | read | 取得該租戶的聯邦 metric 子集(讀 state store 的 `_federation.<id>.yaml`);無紀錄回空子集 |
 | `PUT` | `/api/v1/tenants/{id}/federation` | admin | 更新該租戶的聯邦 metric 子集(需該租戶 admin;子集不得超出平台白名單);寫入 state store 的 `_federation.<id>.yaml` |
@@ -332,6 +332,8 @@ groups:
     tenants: ["*"]
     permissions: [read]
 ```
+
+上例的 `db-operators` 只拿得到 `db-a-*`、`db-b-*` 兩組租戶:`/tenants`、`/groups`、`/prs`、`/events` 等列表端點的路由閘門只要求**至少對一個租戶**有讀取權([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520);先前要求 `tenants: ["*"]`,這類規則一律 403),列表內容由 handler 逐租戶過濾。閘門只看呼叫者自己的規則:規則列了不存在的租戶也過得了、拿到空列表,所以 200 / 403 不透露租戶存在與否;帶 `org-scope` 的規則在呼叫者沒有該 claim、且 org 軸是 enforce 時不算數。零條規則的設定檔照舊 fail-closed(MED-8)。仍要求 `"*"` 的:views、`PUT /federation/policy`、`POST /federation/accounts/backfill`、`/audit/...`。`/me` 只要求身分、不看授權:它只回呼叫者自己命中的規則,沒有任何授權(含零條規則的 MED-8)也回 200 與空的授權摘要。
 
 支援以環境 / 域 metadata 做進一步過濾(細節見 `internal/rbac/` 註解)。**沒標記該 metadata 的租戶**在受限規則下預設**仍放行**(SHADOW,行為與過去一致),但每次會計入 `tenant_api_scope_would_deny_total{axis="metadata"}`(**單調遞增 counter**、僅重啟歸零)。待 `increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak窗])` 在整個 soak 窗維持 **0**(看增長率非絕對值),並**掃過確認沒有落單租戶**(counter 是 traffic-driven:沒被 list 到的租戶不會觸發)後,設 `--rbac-metadata-scope-enforce`(或 `TA_RBAC_METADATA_SCOPE_ENFORCE=1`;helm `--set rbac.metadataScopeEnforce=true`)切成**沒標記就拒絕**(fail-closed,ADR-027 / LD-6 P1)。
 

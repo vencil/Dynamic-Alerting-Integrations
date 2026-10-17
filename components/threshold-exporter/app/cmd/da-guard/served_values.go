@@ -195,6 +195,31 @@ type servedTenantValues struct {
 	// `_custom_alerts` entry of Values is what survives the truncation.
 	// Always present (0 when none).
 	CustomAlertRows int `json:"custom_alert_rows"`
+	// CustomAlerts: every element of the tenant's `_custom_alerts`, in
+	// declaration order, as the exporter's resolver judges it
+	// (config.CustomAlertEntries): what the custom-alert compiler builds its
+	// rules from (#3042). Not truncated: truncation is per scrape and depends
+	// on the tenant's other keys. Always present ([] when none, and when the
+	// block does not decode — CustomAlertsError then says why).
+	CustomAlerts []servedCustomAlert `json:"custom_alerts"`
+	// CustomAlertsError: why the tenant's `_custom_alerts` does not decode
+	// (the exporter serves none of it); absent when it does.
+	CustomAlertsError string `json:"custom_alerts_error,omitempty"`
+}
+
+// servedCustomAlert is one entry of servedTenantValues.CustomAlerts.
+type servedCustomAlert struct {
+	Index int `json:"index"`
+	// Spec: config.CustomAlertSpec.Fields — the entry as decoded.
+	Spec map[string]any `json:"spec"`
+	// Status: served, disabled, rejected or duplicate (config.CustomAlert*).
+	Status string `json:"status"`
+	// Reason: why a rejected or duplicate entry is not served.
+	Reason string `json:"reason,omitempty"`
+	// RecipeID and Severities, for a served or disabled entry: the rows it
+	// serves (would serve, switched back on), in row order.
+	RecipeID   string   `json:"recipe_id,omitempty"`
+	Severities []string `json:"severities,omitempty"`
 }
 
 // servedKey is one entry of servedTenantValues.Keys.
@@ -649,6 +674,12 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			TimeBoxes:    map[string][]servedTimeBox{},
 
 			CustomAlertRows: config.CustomAlertRowCount(tenant, overrides),
+		}
+		entries, blockErr := config.CustomAlertEntries(tenant, overrides)
+		tv.CustomAlerts, tv.CustomAlertsError = make([]servedCustomAlert, 0, len(entries)), blockErr
+		for _, e := range entries {
+			tv.CustomAlerts = append(tv.CustomAlerts, servedCustomAlert{Index: e.Index, Spec: e.Spec.Fields(),
+				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities})
 		}
 		for _, b := range timeBoxes[tenant] {
 			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)

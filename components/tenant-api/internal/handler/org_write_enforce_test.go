@@ -465,7 +465,7 @@ func TestOrgWriteEnforce_BatchTenants_Async_ResolvesOrgsAtExecutionTime(t *testi
 	taskMgr := async.NewManager(1)
 	defer taskMgr.Close()
 	release := make(chan struct{})
-	taskMgr.Submit("blocker", func(ctx context.Context) ([]async.TaskResult, error) {
+	taskMgr.Submit("blocker", "", func(ctx context.Context) ([]async.TaskResult, error) {
 		<-release
 		return nil, nil
 	})

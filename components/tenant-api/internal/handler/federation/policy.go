@@ -450,7 +450,7 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 		// #2856: a tenant's subset is a record in the state store, keyed by
 		// the id ValidateWritableTenantID accepted above (a DNS-1123 label, so
 		// the key needs no further escaping).
-		if err := d.MutateState(r.Context(), statestore.SubsetKey(tenantID), "federation/"+tenantID, email,
+		if err := d.MutateState(r.Context(), statestore.SubsetKey(tenantID), statestore.SubsetEntity(tenantID), email,
 			func([]byte) ([]byte, error) { return yamlBytes, nil }); err != nil {
 			if handler.WriteStateError(w, r, err) {
 				return

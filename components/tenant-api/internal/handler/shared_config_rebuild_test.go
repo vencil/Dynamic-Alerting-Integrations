@@ -54,7 +54,7 @@ func TestPutGroup_RebuildsFromDiskNotSnapshot(t *testing.T) {
 	put := func(id string) int {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, rebuildRequest(t, "PUT", "/api/v1/groups/"+id, id,
-			`{"label":"`+id+`","members":[]}`))
+			`{"label":"`+id+`","members":["t-rebuild"]}`))
 		return w.Code
 	}
 
@@ -97,7 +97,7 @@ func TestDeleteGroup_RemovesOnlyItsOwnEntry(t *testing.T) {
 	for _, id := range []string{"g-a", "g-b"} {
 		w := httptest.NewRecorder()
 		put.ServeHTTP(w, rebuildRequest(t, "PUT", "/api/v1/groups/"+id, id,
-			`{"label":"`+id+`","members":[]}`))
+			`{"label":"`+id+`","members":["t-rebuild"]}`))
 		if w.Code != http.StatusOK {
 			t.Fatalf("seed %s: status = %d", id, w.Code)
 		}

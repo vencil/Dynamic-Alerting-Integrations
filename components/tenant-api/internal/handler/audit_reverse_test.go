@@ -85,8 +85,8 @@ func newAuditReverseFixture(t *testing.T) *Deps {
 }
 
 // serveAuditReverse runs one request through the SAME middleware shape the
-// route mounts (rbac.Middleware(PermRead, nil) — authenticated only; the bar
-// is in the handler). query is appended verbatim ("" for none); orgClaim==""
+// route mounts (rbac.Middleware(PermRead, nil) — the "*" read gate, a coarse
+// first layer; the bar is in the handler). query is appended verbatim ("" for none); orgClaim==""
 // omits the org claim header.
 func serveAuditReverse(t *testing.T, d *Deps, id, query, groups, orgClaim string) *httptest.ResponseRecorder {
 	t.Helper()

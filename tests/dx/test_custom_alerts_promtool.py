@@ -39,10 +39,13 @@ pytestmark = pytest.mark.skipif(_PROMTOOL is None, reason="promtool not on PATH"
 
 
 @pytest.fixture(scope="module")
-def compiled_pack(tmp_path_factory):
-    """Compile the example fixture into a temp pack the goldens point at."""
+def compiled_pack(tmp_path_factory, da_guard_binary):
+    """Compile the example fixture into a temp pack the goldens point at —
+    read through da-guard, as the compiler reads every tree (#3042)."""
     workdir = tmp_path_factory.mktemp("custom_alerts_promtool")
-    pack = cc.build_pack(_EXAMPLES)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("DA_GUARD_BINARY", da_guard_binary)
+        pack = cc.build_pack(_EXAMPLES)
     (workdir / "rule-pack-custom-alerts.yaml").write_text(
         cc._render(pack["groups"]), encoding="utf-8"
     )
@@ -68,7 +71,7 @@ def test_goldens_present():
     assert len(_GOLDENS) == 9, f"expected 9 goldens (7 recipes + equals + mode_routing), found {[p.name for p in _GOLDENS]}"
 
 
-def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack):
+def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_pack, da_guard_env):
     """ADR §S5: a spec-valid selector VALUE containing a double-quote is escaped
     by the compiler (_escape_value) into a well-formed quoted literal — promtool
     accepts it. Proves the Go preflight accepting any key-valid value is safe:

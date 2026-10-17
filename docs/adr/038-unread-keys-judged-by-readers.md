@@ -26,6 +26,8 @@ updated_at: 2026-10-17
 
 2026-10-17 修訂：`disable_partial` 只在仍送出的同族鍵不是租戶檔自己寫的時候報，並指名它來自哪個檔；`disable` 的語意之後改成連帶關閉（決定 8）。
 
+2026-10-17 修訂：自訂告警編譯器改照 exporter 的讀法編譯，兩者讀 `_custom_alerts` 的層相同（決定 2）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -118,7 +120,7 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 量不到的事實寫在一份 JSON 登錄表，放在 exporter 的 Go module 內（`components/threshold-exporter/app/pkg/config/`），內容限於頂層 `_` 命名空間：
 
 - 每個保留鍵與前綴（`_silent_mode`、`_routing`、`_state_` …）屬於哪個**讀取端類別**：`exporter`、`generator`、`custom_alert_compiler`、`policy_engine`（Policy-as-Code，讀根 `_defaults.yaml` 的 `_policies`）、`annotation`（只給人或工具看的標註，例如 `_namespaces`）。一個鍵可以屬於多個讀取端。
-- 每個讀取端**在哪些層讀這個鍵**：租戶檔、根平台檔的 `tenants:`、profile、子目錄 `_defaults.yaml` 的 `defaults:`、根平台檔的頂層。同一個鍵，各讀取端讀的層可以不同：實測 `_custom_alerts` 寫在 profile 裡，exporter 讀、編譯器不讀。
+- 每個讀取端**在哪些層讀這個鍵**：租戶檔、根平台檔的 `tenants:`、profile、子目錄 `_defaults.yaml` 的 `defaults:`、根平台檔的頂層。同一個鍵，各讀取端讀的層可以不同：例如登錄表宣告子目錄 `_defaults.yaml` 的 `defaults:` 裡的 `_severity_dedup` 由 exporter 讀、產生器不讀。
 - **已退役的鍵**與給使用者的提示文字。
 - 說明文字（給 schema 的 description 與 explain 輸出）。
 
@@ -285,7 +287,6 @@ db-a
 - **探針不涵蓋兩類**：標註類的鍵（`_namespaces`），以及讀了但輸出不變的鍵，靠登錄表的明確標註。
 - **反事實重算的成本**：重算的輪數等於單一租戶最多有幾個 `disable`，每輪是一次 served-values。它不進入寫入檢查。
 - **實測中發現、另案處理的問題**：
-  - 自訂告警編譯器與 exporter 對 `_custom_alerts` 的來源規則不同：編譯器收子目錄非選中的 `_` 檔裡的租戶，exporter 不讀（[#3042](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3042)）。
   - 產生器讀了 `_metadata` 卻沒有使用（[#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)）。
   - `_severity_dedup` 只讀租戶檔，其他保留鍵會繼承 profile；需要確認是否刻意（[#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)）。
   - `disable` 不連帶關掉 `_critical` 與維度鍵（見決定 8，[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)）。

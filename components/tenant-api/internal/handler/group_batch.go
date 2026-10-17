@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -183,8 +183,8 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch, Unset: req.Unset, skipAbsent: true}
 		}
 
-		taskID := fmt.Sprintf("group-batch-%s-%s",
-			groupID, time.Now().UTC().Format("20060102-150405"))
+		// #3123: an opaque random id (it used to be group-batch-<group>-<ts>).
+		taskID := async.NewTaskID()
 
 		if d.prWritePath() {
 			meta := batchPRMeta{
@@ -223,8 +223,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
-			task := d.Tasks.Submit(taskID, batchTaskFunc(d, ops, email, p))
-			write202Pending(w, task)
+			submitTask(w, r, d, taskID, p, batchTaskFunc(d, ops, email, p))
 			return
 		}
 

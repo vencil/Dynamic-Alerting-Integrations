@@ -321,18 +321,12 @@ def preview_recipe(recipe, tenant, scenario):
 
     work = Path(tempfile.mkdtemp(prefix="recipe-preview-"))
     try:
-        confd = work / "conf.d"
-        confd.mkdir()
-        (confd / f"{tenant}.yaml").write_text(
-            yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
-                           sort_keys=False, allow_unicode=True),
-            encoding="utf-8", newline="\n",
-        )
-
-        # ── compile (errors → state:error, never mislabeled firing) ──
+        # ── compile (errors → state:error, never mislabeled firing). The
+        # recipe is handed over as an entry judged by the compiler's own rules
+        # (#3042): this image ships no da-guard to read a tree through. ──
         try:
-            pack = cc.build_pack(confd)
-        except Exception as exc:  # RecipeError / CustomAlertConfigError / loader errors
+            pack = cc.build_pack(cc._entries.entries_from_specs({tenant: [recipe]}))
+        except Exception as exc:  # RecipeError / CustomAlertConfigError
             return _err(f"recipe failed to compile: {exc}", alertname=f"Custom_{slug}")
 
         pack_path = work / "rule-pack-custom-alerts.yaml"

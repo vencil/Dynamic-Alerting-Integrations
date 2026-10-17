@@ -198,3 +198,8 @@ changelog.d/2280-tenant-api-routing-policy.md
 # whole file parse-tree's `null_key` unreadable, so the per-path cases
 # collapsed into "the file is refused". Rewritten, not truncated.
 tests/ops/test_grar_match_null_key.py
+
+# #3042 B1b: the compiler compiles the exporter's reading (custom_alerts/entries.py);
+# the tree walk, cap and quarantine left the loader, which keeps only the walk
+# describe_tenant still shows (until #3042 B2).
+scripts/tools/dx/custom_alerts/loader.py
