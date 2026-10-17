@@ -514,8 +514,8 @@ jobs:
               fi
               gen_out="$RUNNER_TEMP/generator.log"
               set +e
-              # ADR-036 step 4 (#2906): the generator reads conf.d through
-              # `da-guard parse-tree` — this job's own build.
+              # ADR-036 step 4 (#2906) moves the generator onto `da-guard
+              # parse-tree`; it gets this job's own build.
               DA_GUARD_BINARY="$RUNNER_TEMP/da-guard" \
                 python scripts/tools/ops/generate_alertmanager_routes.py \
                   --config-dir "$config_dir" \

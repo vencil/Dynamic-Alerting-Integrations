@@ -36,8 +36,17 @@ def test_each_finding_is_one_warn_line(tmp_path):
     assert r["details"] == [
         "db-a.yaml: error: unread `mysql_conections` (no_row) — tenant(s) db-a",
         "db-a.yaml: warning: disable_noop `mysql_slave_lagg` (disable_noop) — tenant(s) db-a",
-        "db-a.yaml: warning: disable_partial `redis_memory`; still served: redis_memory_critical"
-        " — tenant(s) db-a",
+    ]  # `redis_memory_critical` is db-a's own: keeping the critical tier only (#3046)
+
+
+def test_disable_partial_names_where_the_still_served_sibling_comes_from(tmp_path):
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
+        "team/db-a.yaml": "tenants:\n  db-a:\n    redis_memory: disable\n"}))
+    assert r["details"] == [
+        "team/db-a.yaml: warning: disable_partial `redis_memory`; still served: redis_memory_critical"
+        " (from team/_defaults.yaml) — tenant(s) db-a",
     ]
 
 

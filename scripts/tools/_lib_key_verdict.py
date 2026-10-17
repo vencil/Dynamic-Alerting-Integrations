@@ -92,6 +92,7 @@ class Finding(NamedTuple):
     tenants: tuple[str, ...]
     reason: str | None
     served_family: tuple[str, ...] = ()
+    served_from: tuple[str, ...] = ()   # each of served_family's files (", "-joined when the tenants differ; "?" unknown)
 
 
 class TreeVerdict(NamedTuple):
@@ -232,7 +233,7 @@ def judge(served: dict[str, tv.TenantValues], effective: dict[str, tv.TenantEffe
                                    served_value, has_rows, heads, undecidable, disable_effects,
                                    aliases))
         keys[tenant] = rows
-    return TreeVerdict(keys, _findings(keys, root_defaults), undecidable)
+    return TreeVerdict(keys, _findings(keys, root_defaults, aliases), undecidable)
 
 
 def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource | None, value: Any,
@@ -313,36 +314,60 @@ def _judge_key(tenant: str, key: str, sk: tv.ServedKey | None, src: tv.KeySource
                       disable, tuple(family), value, served_value)
 
 
-def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str]) -> list[Finding]:
+def _findings(keys: dict[str, list[KeyVerdict]], root_defaults: dict[str, str],
+              aliases: dict[str, str] | None = None) -> list[Finding]:
     """Deduplicated by (kind, file, key) for platform-side keys; one per
     tenant key for the tenant's own file. An undeclared state filter is the
     platform's: one finding per key, on the root `_defaults.yaml` that
     should declare it, with every tenant it reaches — never charged to a
     tenant's own file (decision 6, 7)."""
     groups: dict[tuple, list[KeyVerdict]] = {}
+    # (tenant, key) → {sibling: its file} for the siblings a `partial` reports
+    inherited: dict[tuple[str, str], dict[str, str | None]] = {}
     for rows in keys.values():
+        # served-values names a family in the exporter's canonical spelling;
+        # the tenant's rows keep the spelling each file writes (#1231).
+        by_key = {tv.canonical_key(v.key, aliases): v for v in rows}
         for v in rows:
             kinds = []
             if v.verdict == UNREAD:
                 kinds.append("disable_noop" if v.reason == "disable_noop" else v.verdict)
             if v.disable == "partial":
-                kinds.append("disable_partial")
+                # #3046: a sibling the tenant's own file writes is the
+                # tenant's choice (`X: disable` + `X_critical: 90` keeps the
+                # critical tier only); one it inherits — a subtree
+                # `_defaults.yaml`, a profile, a root platform file, the root
+                # defaults' dimensional keys — still serving after the base
+                # is switched off is the surprise to report.
+                fam = {k: getattr(by_key.get(tv.canonical_key(k, aliases)), "file", None)
+                       for k in v.served_family
+                       if getattr(by_key.get(tv.canonical_key(k, aliases)), "layer", None) != "tenant"}
+                if fam:
+                    kinds.append("disable_partial")
+                    inherited[(v.tenant, v.key)] = fam
             for kind in kinds:
                 if v.reason == "state_filter_undeclared":
                     # The platform's to fix: `state_filters:` is declared in
                     # the root `_defaults.yaml` only, never the tenant's own.
-                    gk = (kind, root_defaults.get(v.tenant), v.key, None, ())
+                    gk = (kind, root_defaults.get(v.tenant), v.key, None)
                 else:
                     own = v.layer == "tenant"
-                    gk = (kind, v.file, v.key, v.tenant if own else None,
-                          v.served_family if kind == "disable_partial" else ())
+                    gk = (kind, v.file, v.key, v.tenant if own else None)
                 groups.setdefault(gk, []).append(v)
     out = []
-    for (kind, file, key, _, _family), vs in groups.items():
+    for (kind, file, key, _), vs in groups.items():
         sev = WARNING if kind == "disable_partial" else vs[0].severity or NOTICE
+        # One finding per platform file and key: the tenants it reaches may
+        # inherit different siblings, or one from different files — every
+        # sibling any of them still serves is listed, with every file it
+        # comes from, joined.
+        fam, src = (), ()
+        if kind == "disable_partial":
+            per = [inherited[(v.tenant, v.key)] for v in vs]
+            fam = tuple(dict.fromkeys(k for p in per for k in p))
+            src = tuple(", ".join(sorted({p[k] or "?" for p in per if k in p})) for k in fam)
         out.append(Finding(sev, kind, key, file, tuple(sorted({v.tenant for v in vs})),
-                           None if kind == "disable_partial" else vs[0].reason,
-                           vs[0].served_family if kind == "disable_partial" else ()))
+                           None if kind == "disable_partial" else vs[0].reason, fam, src))
     order = {ERROR: 0, WARNING: 1, NOTICE: 2}
     out.sort(key=lambda f: (order.get(f.severity, 3), f.file or "", f.key, f.kind, f.tenants))
     return out
