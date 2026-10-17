@@ -238,6 +238,12 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 	}
 }
 
+// writeTokenNotFound is the one answer for a token that does not exist OR that
+// the caller may not revoke (#3123), so the two stay byte-identical.
+func writeTokenNotFound(w http.ResponseWriter, r *http.Request, tokenID string) {
+	handler.WriteJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
+}
+
 // DeleteFederationToken handles DELETE /api/v1/federation/tokens/{id}.
 //
 // Revokes the token (ADR-020 Posture B): the bookkeeping record is
@@ -247,12 +253,12 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 //
 // @Summary     Revoke a federation token
 // @Description Revokes a federation token — removes its record and adds it to the gateway revoked set. NOTE: revocation is eventually consistent and propagates to the gateway within ~1-2 minutes (ADR-020 Posture B). Requires admin permission on the token's tenant.
+// @Description A caller without that permission gets the same 404 as for a token that does not exist, so a token id reveals nothing about its tenant.
 // @Tags        federation
 // @Produce     json
 // @Param       id path string true "Token ID"
 // @Success     200 {object} map[string]string
-// @Failure     403 {object} handler.ErrorResponse
-// @Failure     404 {object} handler.ErrorResponse
+// @Failure     404 {object} handler.ErrorResponse "No such token, or the caller lacks admin permission on its tenant (indistinguishable)"
 // @Failure     500 {object} handler.ErrorResponse
 // @Router      /api/v1/federation/tokens/{id} [delete]
 func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
@@ -265,14 +271,17 @@ func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 		if !ok {
-			handler.WriteJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
+			writeTokenNotFound(w, r, tokenID)
 			return
 		}
 
 		// Org-scope-aware (ADR-027 / LD-6 P4b) — same bar as issuance.
+		// #3123: refused exactly like a missing token. The route only checks
+		// read on "*", so any authenticated caller reaches this point; a 403
+		// naming rec.TenantID resolved any token id to its tenant, and even a
+		// bare 403 would confirm the id exists.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), rec.TenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
-			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
-				"admin permission required on tenant "+rec.TenantID)
+			writeTokenNotFound(w, r, tokenID)
 			return
 		}
 
@@ -282,7 +291,7 @@ func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 		if !deleted {
-			handler.WriteJSONError(w, r, http.StatusNotFound, "federation token not found: "+tokenID)
+			writeTokenNotFound(w, r, tokenID)
 			return
 		}
 

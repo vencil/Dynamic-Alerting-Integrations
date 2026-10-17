@@ -162,11 +162,12 @@ func TestOrgWriteEnforce_DeleteFederationToken(t *testing.T) {
 		return w, d
 	}
 
-	t.Run("outsider_denied_403_record_kept", func(t *testing.T) {
+	t.Run("outsider_denied_404_record_kept", func(t *testing.T) {
 		t.Parallel()
 		w, d := run(t, fedOrgOutsider)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+		// #3123: refused like a missing token (TestIssue3123_DeleteFederationToken_*).
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
 		}
 		recs, err := d.Federation.List(fedOrgTenant)
 		if err != nil {

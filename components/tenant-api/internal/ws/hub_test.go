@@ -15,6 +15,12 @@ import (
 // timeout expires. Mirrors the ticker-with-deadline pattern in
 // async/taskmanager_test.go to replace blind time.Sleep — see
 // TRK-219.
+// allowAll / allowAllFor admit every event (#3123): these tests exercise the
+// hub's delivery mechanics, not its per-subscriber filtering.
+func allowAll(Event) bool { return true }
+
+func allowAllFor(*http.Request) Filter { return allowAll }
+
 func waitForClientCount(t *testing.T, h *Hub, want int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.NewTimer(timeout)
@@ -39,7 +45,7 @@ func TestSubscribeUnsubscribe(t *testing.T) {
 	h := NewHub()
 
 	// Subscribe a client
-	ch := h.Subscribe()
+	ch := h.Subscribe(allowAll)
 	if ch == nil {
 		t.Fatal("Subscribe returned nil channel")
 	}
@@ -67,8 +73,8 @@ func TestBroadcast(t *testing.T) {
 	h := NewHub()
 
 	// Subscribe two clients
-	ch1 := h.Subscribe()
-	ch2 := h.Subscribe()
+	ch1 := h.Subscribe(allowAll)
+	ch2 := h.Subscribe(allowAll)
 
 	evt := Event{
 		Type:      "config_change",
@@ -108,7 +114,7 @@ func TestConcurrentBroadcasts(t *testing.T) {
 	numClients := 10
 	clients := make([]chan Event, numClients)
 	for i := 0; i < numClients; i++ {
-		clients[i] = h.Subscribe()
+		clients[i] = h.Subscribe(allowAll)
 	}
 
 	// Broadcast multiple events concurrently
@@ -151,7 +157,7 @@ func TestSlowClientDisconnected(t *testing.T) {
 	h := NewHub()
 
 	// Subscribe a slow client (not reading)
-	_ = h.Subscribe()
+	_ = h.Subscribe(allowAll)
 
 	// Fill the slow client's buffer (capacity 16)
 	for i := 0; i < 16; i++ {
@@ -163,7 +169,7 @@ func TestSlowClientDisconnected(t *testing.T) {
 	}
 
 	// Now subscribe a normal client (after slow buffer is full)
-	normalCh := h.Subscribe()
+	normalCh := h.Subscribe(allowAll)
 
 	// Broadcast one more — should trigger disconnection of slow client
 	// but normal client just subscribed and has an empty buffer
@@ -210,7 +216,7 @@ func TestSSEEndpoint(t *testing.T) {
 	// Start the handler in a goroutine; wait for it to finish before reading body
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(w, req)
+		h.Handler(allowAllFor)(w, req)
 		close(done)
 	}()
 
@@ -305,7 +311,7 @@ func TestSSEStreamingFormat(t *testing.T) {
 	// Run handler in goroutine
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(w, req)
+		h.Handler(allowAllFor)(w, req)
 		close(done)
 	}()
 
@@ -361,7 +367,7 @@ func TestSSEStreamingFormat(t *testing.T) {
 func TestShutdownBroadcastsThenCloses(t *testing.T) {
 	t.Parallel()
 	h := NewHub()
-	ch := h.Subscribe()
+	ch := h.Subscribe(allowAll)
 
 	h.Shutdown(2 * time.Second)
 
@@ -401,7 +407,7 @@ func TestShutdownUnblocksServeHTTP(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(w, req)
+		h.Handler(allowAllFor)(w, req)
 		close(done)
 	}()
 
@@ -458,7 +464,7 @@ func TestSubscribeRefusedAfterShutdown(t *testing.T) {
 	h.Shutdown(2 * time.Second)
 
 	// Subscribe is refused (nil) and does not re-populate the client set.
-	if ch := h.Subscribe(); ch != nil {
+	if ch := h.Subscribe(allowAll); ch != nil {
 		t.Error("Subscribe returned a channel after Shutdown; expected nil")
 	}
 	if n := h.ClientCount(); n != 0 {
@@ -470,7 +476,7 @@ func TestSubscribeRefusedAfterShutdown(t *testing.T) {
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		h.ServeHTTP(w, req)
+		h.Handler(allowAllFor)(w, req)
 		close(done)
 	}()
 	select {
@@ -491,7 +497,7 @@ func BenchmarkBroadcast(b *testing.B) {
 
 	// Subscribe 10 clients
 	for i := 0; i < 10; i++ {
-		h.Subscribe()
+		h.Subscribe(allowAll)
 	}
 
 	evt := Event{
@@ -511,7 +517,7 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ch := h.Subscribe()
+		ch := h.Subscribe(allowAll)
 		h.Unsubscribe(ch)
 	}
 }

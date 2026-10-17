@@ -10,7 +10,23 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
+
+// taskTester is the caller these tests submit and poll as (#3123: a task is
+// visible to its submitter only).
+const taskTester = "tester@example.com"
+
+var taskTesterOwner = taskOwner(&rbac.VerifiedPrincipal{Subject: taskTester, Source: rbac.SourceHumanHopB})
+
+// asTaskTester serves h through the open-mode RBAC middleware as taskTester.
+func asTaskTester(h http.HandlerFunc) http.HandlerFunc {
+	mgr, _ := rbac.NewManager("", nil)
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("X-Forwarded-Email", taskTester)
+		mgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, r)
+	}
+}
 
 // TestGetTask_Found verifies that a submitted task can be polled.
 func TestGetTask_Found(t *testing.T) {
@@ -27,7 +43,7 @@ func TestGetTask_Found(t *testing.T) {
 		}, nil
 	}
 
-	taskMgr.Submit(taskID, fn)
+	taskMgr.Submit(taskID, taskTesterOwner, fn)
 
 	// Create HTTP request for GET /api/v1/tasks/{id}
 	req := httptest.NewRequest("GET", "/api/v1/tasks/"+taskID, nil)
@@ -40,7 +56,7 @@ func TestGetTask_Found(t *testing.T) {
 
 	// Call handler
 	handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
-	handler(w, req)
+	asTaskTester(handler)(w, req)
 
 	// Verify response
 	if w.Code != http.StatusOK {
@@ -88,7 +104,7 @@ func TestGetTask_NotFound(t *testing.T) {
 
 	// Call handler
 	handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
-	handler(w, req)
+	asTaskTester(handler)(w, req)
 
 	// Verify response status is 404
 	if w.Code != http.StatusNotFound {
@@ -135,7 +151,7 @@ func TestGetTask_CompletedTask(t *testing.T) {
 		return results, nil
 	}
 
-	taskMgr.Submit(taskID, fn)
+	taskMgr.Submit(taskID, taskTesterOwner, fn)
 
 	// Poll for completion with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -170,7 +186,7 @@ func TestGetTask_CompletedTask(t *testing.T) {
 
 				// Call handler
 				handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
-				handler(w, req)
+				asTaskTester(handler)(w, req)
 
 				// Verify response
 				if w.Code != http.StatusOK {
@@ -229,7 +245,7 @@ func TestGetTask_OrphanedHint(t *testing.T) {
 	fn := func(ctx context.Context) ([]async.TaskResult, error) {
 		return []async.TaskResult{}, nil
 	}
-	taskMgr1.Submit(taskID, fn)
+	taskMgr1.Submit(taskID, taskTesterOwner, fn)
 
 	// Close first manager (simulates pod shutdown)
 	taskMgr1.Close()
@@ -249,7 +265,7 @@ func TestGetTask_OrphanedHint(t *testing.T) {
 
 	// Call handler
 	handler := GetTask(&Deps{Tasks: taskMgr2, RBAC: newRBACManager(t, "")})
-	handler(w, req)
+	asTaskTester(handler)(w, req)
 
 	// Verify 404 response
 	if w.Code != http.StatusNotFound {
@@ -290,7 +306,7 @@ func TestGetTask_MultiplePolls(t *testing.T) {
 		}, nil
 	}
 
-	taskMgr.Submit(taskID, fn)
+	taskMgr.Submit(taskID, taskTesterOwner, fn)
 
 	// Poll multiple times
 	previousStatus := ""
@@ -305,7 +321,7 @@ func TestGetTask_MultiplePolls(t *testing.T) {
 
 		// Call handler
 		handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
-		handler(w, req)
+		asTaskTester(handler)(w, req)
 
 		// Decode response
 		var task async.Task

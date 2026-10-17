@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
@@ -55,6 +56,13 @@ func ValidateWritableTenantID(id string) error {
 	}
 	if !tenantid.Valid(id) {
 		return fmt.Errorf("tenant ID %q is not valid: %s", id, tenantid.Description)
+	}
+	// #3123: "batch" is the second segment of every batch PR branch
+	// (tenant-api/batch/<ts>); a tenant of that name would cut the same branch
+	// names, and its PRs could not be told from a batch. Reads keep accepting
+	// it, so an existing tenant of that name can still be looked at.
+	if platform.ReservedTenantID(id) {
+		return fmt.Errorf("tenant ID %q is reserved: tenant-api names its batch PR branches %s<timestamp>", id, platform.BatchBranchPrefix)
 	}
 	return nil
 }

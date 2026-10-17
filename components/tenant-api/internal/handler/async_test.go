@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,9 +215,9 @@ func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
 	if !ok || taskID == "" {
 		t.Fatalf("task_id missing: %v", resp["task_id"])
 	}
-	const expectedPrefix = "group-batch-production-dba-"
-	if len(taskID) < len(expectedPrefix) || taskID[:len(expectedPrefix)] != expectedPrefix {
-		t.Errorf("task_id = %q, want prefix %q", taskID, expectedPrefix)
+	// #3123: an opaque random id, naming neither the group nor a time.
+	if len(taskID) != 32 || strings.Contains(taskID, "production-dba") {
+		t.Errorf("task_id = %q, want 32 hex digits", taskID)
 	}
 
 	// Task was actually registered (proves goroutine-pool wiring).
