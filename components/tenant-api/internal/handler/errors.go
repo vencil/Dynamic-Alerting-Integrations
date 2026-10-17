@@ -33,6 +33,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -625,16 +626,43 @@ func writeErrorIsForClient(err error) bool {
 // mapping claimed, and reports whether the failure is the server's (#3054).
 // The status follows the same line as the text (#1535): an error that is about
 // the request (writeErrorIsForClient) is the caller's 400 with its own text;
-// anything else — the commit stage failing, the temp file, reading the tenant
-// file — is the server's, a 500 INTERNAL_ERROR with msgWriteFailed and the
-// detail in the log under the request_id. It used to be a 400 for both, so a
-// client whose body was fine read a failed commit as its own mistake.
+// a write the request's context cancelled or timed out is the 503 a batch
+// answers for it (writeWriteCancelled); anything else — the commit stage
+// failing, the temp file, reading the tenant file — is the server's, a 500
+// INTERNAL_ERROR with msgWriteFailed and the detail in the log under the
+// request_id. It used to be a 400 for all of them, so a client whose body was
+// fine read a failed commit as its own mistake.
 func writeTenantWriteFailure(w http.ResponseWriter, r *http.Request, err error) (fault bool) {
+	if writeWriteCancelled(w, r, err) {
+		return false
+	}
 	if writeErrorIsForClient(err) {
 		WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 		return false
 	}
 	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, writeErrorText(r, err))
+	return true
+}
+
+// msgWriteCancelled is the text of a write — one tenant or a whole batch —
+// stopped by its request's context before it committed (#1535).
+const msgWriteCancelled = "the write was cancelled before it was committed; nothing was written"
+
+// isWriteCancelled reports whether a write failed because its context was
+// cancelled or reached its deadline: not the body's fault, and not a fault of
+// the write plane either — nothing was written, and a retry may succeed.
+func isWriteCancelled(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// writeWriteCancelled answers a cancelled write (isWriteCancelled) with 503
+// and msgWriteCancelled, and reports whether err was one. The single-tenant
+// writes and the direct batch share it (#1535).
+func writeWriteCancelled(w http.ResponseWriter, r *http.Request, err error) bool {
+	if !isWriteCancelled(err) {
+		return false
+	}
+	WriteJSONError(w, r, http.StatusServiceUnavailable, msgWriteCancelled)
 	return true
 }
 

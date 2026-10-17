@@ -862,8 +862,8 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 		msg = "conflict: retry after refresh"
 	case errors.Is(err, gitops.ErrWriteOverloaded):
 		msg = "write plane busy: retry shortly"
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		msg = msgBatchCancelled
+	case isWriteCancelled(err):
+		msg = msgWriteCancelled
 	case errors.Is(err, gitops.ErrTreeNotOnBase):
 		// #1723: fixed text — err names the stranded PR branch, and with
 		// it another tenant's id, which only the server log may see.
@@ -945,8 +945,7 @@ func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 			Code:  CodeConflict,
 			Extra: map[string]any{"committed": false},
 		})
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		WriteJSONError(rw, r, http.StatusServiceUnavailable, msgBatchCancelled)
+	case writeWriteCancelled(rw, r, err):
 	default:
 		WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
 	}
@@ -956,7 +955,6 @@ func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 // direct-mode batch (#2900 F3): one says nothing was written, the other that
 // everything was — never the same words for the two.
 const (
-	msgBatchCancelled           = "the batch was cancelled before it was committed; nothing was written"
 	msgBatchConflict            = "conflict: the repository changed outside tenant-api while the batch ran; nothing was written — refresh and retry"
 	msgBatchCommittedIncomplete = "the batch WAS committed, but the write did not finish cleanly on the server; " +
 		"refresh before changing anything (do not resend the batch blindly)"

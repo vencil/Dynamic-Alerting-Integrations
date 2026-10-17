@@ -26,6 +26,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
@@ -197,5 +198,66 @@ func TestWriteTenantWriteFailure_Classification(t *testing.T) {
 				t.Errorf("fault = %v for status %d", fault, tc.status)
 			}
 		})
+	}
+}
+
+// A write its own request's context stopped — the client went away, or the
+// request reached its deadline — is neither the body's fault nor a failure of
+// the write plane: nothing was written. PUT and custom-alerts answer it as a
+// direct batch does (writeWriteCancelled): 503 with msgWriteCancelled.
+func TestTenantWrites_CancelledContextIsNotInternalError(t *testing.T) {
+	t.Parallel()
+	const tenantYAML = "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
+	type stopFunc func(context.Context) (context.Context, context.CancelFunc)
+	stops := map[string]stopFunc{
+		"cancelled": func(ctx context.Context) (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(ctx)
+			cancel()
+			return ctx, cancel
+		},
+		"deadline": func(ctx context.Context) (context.Context, context.CancelFunc) {
+			return context.WithDeadline(ctx, time.Unix(0, 0))
+		},
+	}
+	endpoints := map[string]func(d *Deps, stop stopFunc) *httptest.ResponseRecorder{
+		"PUT /tenants/{id}": func(d *Deps, stop stopFunc) *httptest.ResponseRecorder {
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/t-a", "id", "t-a",
+				bytes.NewBufferString("tenants:\n  t-a:\n    mysql_connections: \"60\"\n"))
+			ctx, cancel := stop(req.Context())
+			defer cancel()
+			return wmServe(d, PutTenant(d), req.WithContext(ctx))
+		},
+		"PUT /tenants/{id}/custom-alerts": func(d *Deps, stop stopFunc) *httptest.ResponseRecorder {
+			body := `{"base_hash":"` + cfg.ComputeSourceHash([]byte(tenantYAML)) +
+				`","custom_alerts":[{"recipe":"threshold","name":"queue_high","metric":"queue_depth","threshold":"1000","window":"5m"}]}`
+			req := newRequestWithChiParam("PUT", "/api/v1/tenants/t-a/custom-alerts", "id", "t-a", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			ctx, cancel := stop(req.Context())
+			defer cancel()
+			return wmServe(d, PutTenantCustomAlerts(d), req.WithContext(ctx))
+		},
+	}
+	for ename, call := range endpoints {
+		for sname, stop := range stops {
+			t.Run(ename+"/"+sname, func(t *testing.T) {
+				t.Parallel()
+				dir := seedGitTree(t, map[string]string{"t-a.yaml": tenantYAML, "_defaults.yaml": caDefaults})
+				d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect}
+				w := call(d, stop)
+				if w.Code != http.StatusServiceUnavailable {
+					t.Fatalf("status = %d, want 503 (a cancelled write is not a server fault); body: %s", w.Code, w.Body.String())
+				}
+				var got ErrorResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Error != msgWriteCancelled {
+					t.Errorf("error = %q, want %q", got.Error, msgWriteCancelled)
+				}
+				if out, err := exec.Command("git", "-C", dir, "status", "--porcelain").CombinedOutput(); err != nil || len(out) != 0 {
+					t.Errorf("the cancelled write left the tree changed: %s (%v)", out, err)
+				}
+			})
+		}
 	}
 }
