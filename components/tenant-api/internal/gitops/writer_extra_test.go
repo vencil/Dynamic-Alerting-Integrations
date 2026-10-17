@@ -28,30 +28,32 @@ func TestValidate_ValidConfig(t *testing.T) {
 // as a contract: the exporter takes tenant ids from these keys, so a tenant
 // could write a section it does not own — freezing every tenant's config reload
 // when the smuggled id owned a file, and conjuring a tenant no filename-based
-// plane could see when it did not. The rule is now a delta (addedTenantKeys),
-// so what this test measures is which side of that delta a body falls on.
+// plane could see when it did not. The rule became a delta (the #1681
+// added-section gate), so what this test measured was which side of that delta
+// a body fell on.
+//
+// #3064: a written body is API-shaped — it declares the tenant it is written
+// for and no other — so a body declaring two tenants is refused for either,
+// whatever the base file declares (a base declaring both is git-managed, and
+// the writer refuses it before validation).
 func TestValidate_MultipleTenants(t *testing.T) {
 	t.Parallel()
 	yamlBody := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n  db-b:\n    _silent_mode: \"critical\"\n"
 
-	// No baseline (unit-test shape, and no resolved file path): both sections
-	// are additions for whichever id is being written, so both are refused.
 	for _, id := range []string{"db-a", "db-b"} {
 		errs, _ := validate("", id, "", yamlBody)
-		if len(errs) != 1 || !strings.Contains(errs[0], "adds tenant section") {
-			t.Errorf("expected the added-section refusal for %s, got: %v", id, errs)
+		if len(errs) != 1 || !strings.Contains(errs[0], "tenants."+id+" and no other tenant") {
+			t.Errorf("expected the #3064 body refusal for %s, got: %v", id, errs)
 		}
 	}
 
-	// With a base file that already declares both, the same body is an edit of
-	// sections that are already there — the flat-file shape the exporter serves.
 	dir := t.TempDir()
 	base := filepath.Join(dir, "db-a.yaml")
 	if err := os.WriteFile(base, []byte(yamlBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if errs, _ := validate(dir, "db-a", base, yamlBody); len(errs) != 0 {
-		t.Errorf("expected no errors editing a grandfathered file, got: %v", errs)
+	if errs, _ := validate(dir, "db-a", base, yamlBody); len(errs) != 1 || !strings.Contains(errs[0], "no other tenant") {
+		t.Errorf("expected the #3064 body refusal over a base declaring both, got: %v", errs)
 	}
 }
 

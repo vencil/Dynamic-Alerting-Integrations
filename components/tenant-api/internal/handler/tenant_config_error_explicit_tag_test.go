@@ -82,7 +82,13 @@ func TestReadEndpoints_ExplicitTagMismatchIsInvalidConfig(t *testing.T) {
 			if got, _ := detail["config_error"].(string); got != c.wantErr {
 				t.Errorf("GET /tenants/tx config_error = %q, want %q", got, c.wantErr)
 			}
-			if raw, _ := detail["raw_yaml"].(string); raw != c.file {
+			// #3064: a file that also declares ty is git-managed — no
+			// raw_yaml; tx's own file is shown.
+			if strings.Contains(c.file, "\n  ty:\n") {
+				if raw, ok := detail["raw_yaml"]; ok || detail["managed_by"] != "git" {
+					t.Errorf("GET /tenants/tx (shared file): raw_yaml = %v, managed_by = %v; want absent, git", raw, detail["managed_by"])
+				}
+			} else if raw, _ := detail["raw_yaml"].(string); raw != c.file {
 				t.Errorf("GET /tenants/tx raw_yaml = %q, want the file", raw)
 			}
 			for _, k := range []string{"resolved_thresholds", "custom_alerts", "validation_warnings", "validation_notices"} {

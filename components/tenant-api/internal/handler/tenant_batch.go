@@ -68,7 +68,9 @@ type BatchResult struct {
 	// Code is a machine-readable error code for a FAILED op, set only for the
 	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,
 	// TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
-	// config, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not
+	// config, #2373), TENANT_GIT_MANAGED (the op's tenant is git-managed, #3064:
+	// nothing written, change it in git), INTERNAL_ERROR (the conf.d walk behind
+	// that check could not
 	// run, or another server-side failure), the route generator's codes
 	// (GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE,
 	// POLICY_UNAVAILABLE; #2903), and — PR mode, judged on the latest base branch —
@@ -829,7 +831,12 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 	var notLoadable *tenantFileNotLoadableError
 	var treeUnreadable *gitops.TreeUnreadableError
 	var targetUnreadable *gitops.TargetUnreadableError
+	var gitManaged *gitops.GitManagedError
 	switch {
+	case errors.As(err, &gitManaged):
+		// #3064: the op's tenant is git-managed; the text names it and a
+		// fixed reason code, nothing else of the file. Nothing written.
+		msg, code = gitManaged.Error(), CodeTenantGitManaged
 	case errors.As(err, &treeUnreadable):
 		// #2939: the tree after the batch holds entries the route generator
 		// cannot read, and no op of the batch replaces them — unresolvable links

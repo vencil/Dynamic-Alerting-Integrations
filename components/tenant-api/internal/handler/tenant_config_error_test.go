@@ -26,6 +26,9 @@ const (
 	confErrSyntax = "tenants:\n  tc: [unclosed\n"
 	// Control: a usable tenant file.
 	confErrValid = "tenants:\n  tv:\n    mysql_connections: \"70\"\n"
+	// API-shaped (#3064: ti's alone), but a value the typed decode refuses:
+	// invalid_config, and still shown — the file holds ti's content only.
+	confErrOwnInvalid = "tenants:\n  ti:\n    mysql_connections: !!int abc\n"
 )
 
 func confErrDir(t *testing.T) string {
@@ -35,6 +38,7 @@ func confErrDir(t *testing.T) string {
 		"tb.yaml":        confErrNonUTF8,
 		"tc.yaml":        confErrSyntax,
 		"tv.yaml":        confErrValid,
+		"ti.yaml":        confErrOwnInvalid,
 	})
 }
 
@@ -55,7 +59,7 @@ func TestListTenants_ConfigErrorMatchesExporterVerdict(t *testing.T) {
 	for _, r := range rows {
 		got[r.ID] = r.ConfigError
 	}
-	want := map[string]string{"tb": "invalid_config", "tc": "malformed_yaml", "tv": ""}
+	want := map[string]string{"tb": "invalid_config", "tc": "malformed_yaml", "tv": "", "ti": "invalid_config"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("config_error by id = %v, want %v", got, want)
 	}
@@ -64,12 +68,15 @@ func TestListTenants_ConfigErrorMatchesExporterVerdict(t *testing.T) {
 func TestGetTenant_ConfigError(t *testing.T) {
 	t.Parallel()
 	dir := confErrDir(t)
+	// gitReason: #3064 — tb (a `!!binary` key) and tc (not YAML) are not
+	// API-shaped, so git-managed: config_error, but no raw_yaml or hash.
 	cases := []struct {
-		id, raw, wantErr string
+		id, raw, wantErr, gitReason string
 	}{
-		{"tb", confErrNonUTF8, "invalid_config"},
-		{"tc", confErrSyntax, "malformed_yaml"},
-		{"tv", confErrValid, ""},
+		{"tb", confErrNonUTF8, "invalid_config", "yaml_indirection"},
+		{"tc", confErrSyntax, "malformed_yaml", "not_tenant_document"},
+		{"tv", confErrValid, "", ""},
+		{"ti", confErrOwnInvalid, "invalid_config", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.id, func(t *testing.T) {
@@ -100,6 +107,20 @@ func TestGetTenant_ConfigError(t *testing.T) {
 			}
 			if gotErr != c.wantErr {
 				t.Errorf("config_error = %v, want %q", gotErr, c.wantErr)
+			}
+			if c.gitReason != "" {
+				if raw["managed_by"] != "git" || raw["git_managed_reason"] != c.gitReason {
+					t.Errorf("managed_by = %v (%v), want git (%s)", raw["managed_by"], raw["git_managed_reason"], c.gitReason)
+				}
+				for _, k := range []string{"raw_yaml", "source_hash", "resolved_thresholds", "custom_alerts", "validation_warnings", "validation_notices"} {
+					if v, ok := raw[k]; ok {
+						t.Errorf("git-managed: %s present (%#v), want absent", k, v)
+					}
+				}
+				return
+			}
+			if raw["managed_by"] != "api" {
+				t.Errorf("managed_by = %v, want api", raw["managed_by"])
 			}
 			// The editor still gets the file and its hash ...
 			if d.RawYAML != c.raw {
