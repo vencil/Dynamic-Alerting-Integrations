@@ -56,16 +56,10 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_io import strict_safe_load  # noqa: E402  (#2123 duplicate key = YAML error)
+import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 import _lib_tenant_uniqueness as tu  # noqa: E402
 
-# Not optional: `_lib_python` -> `_lib_io` imports PyYAML at module scope, so
-# this module cannot load without it. The `try: import yaml / except
-# ImportError: yaml = None` fallback that used to live here, and the
-# "SKIP: PyYAML not installed" branch it fed, were unreachable (measured by
-# shadowing the module: the import fails earlier in this same import block,
-# inside `_lib_python` -> `_lib_io`).
-import yaml  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -379,7 +373,8 @@ def has_errors(issues: List[str]) -> bool:
 
 
 def validate_merged(output_dir: Path) -> List[str]:
-    """Run basic YAML parse + key validation on assembled config-dir.
+    """Read the assembled config-dir through `da-guard parse-tree` (the
+    exporter's yaml.v3 reading) and report what the exporter cannot read.
 
     Returns list of warning/error messages.
     """
@@ -403,21 +398,54 @@ def validate_merged(output_dir: Path) -> List[str]:
         issues.append(
             f"{WARN_PREFIX}{p.name} {unusable_reason(p)} — not validated, "
             f"the exporter cannot read it either")
+    # ADR-036 step 4 (#2906): the artifact is read the way the exporter
+    # reads it — `da-guard parse-tree` (yaml.v3), one run over the output
+    # directory. No usable da-guard raises `ParseTreeError` (exit 2 in main).
+    reader = _lib_parse_cache.ConfdReader(output_dir)
+    reader.require()
     for f in visible:
         if f in unusable:
             continue
+        # #2906 review: parse-tree decides which files the exporter reads —
+        # one it lists as `not_read` (the `_defaults` spelling a directory
+        # does not select) is not validated, and said so; not an ERROR: the
+        # exporter serves the rest of the tree.
+        why = reader.not_read(f)
+        if why is not None:
+            issues.append(f"{WARN_PREFIX}{f.relative_to(output_dir).as_posix()} is read by "
+                          f"no reader ({why}) — not validated")
+            continue
         try:
-            with open(f, encoding="utf-8") as fh:
-                data = strict_safe_load(fh)
-            if data is None:
-                issues.append(f"{WARN_PREFIX}{f.name} is empty")
-            elif not isinstance(data, dict):
+            root = reader.node(f)
+        except FileUnreadable as e:
+            if e.kind == "top_level_not_mapping":
                 issues.append(
                     f"{ERROR_PREFIX}{f.name} top-level is not a mapping")
-        except yaml.YAMLError as e:
-            issues.append(f"{ERROR_PREFIX}{f.name} parse error: {e}")
+            else:
+                issues.append(f"{ERROR_PREFIX}{f.name} parse error ({e.kind}): "
+                              f"{' '.join(e.message.split())}")
+            continue
+        if root == {} and not _has_content(f):
+            issues.append(f"{WARN_PREFIX}{f.name} is empty")
 
     return issues
+
+
+#: Lines that leave a document with no value: a document marker, or the
+#: whole document written as null (yaml.v3's null spellings).
+_NO_VALUE_LINES = frozenset({"---", "...", "~", "null", "Null", "NULL"})
+
+
+def _has_content(path: Path) -> bool:
+    """Whether *path* holds a value. parse-tree reads an empty file, a
+    comment-only one, a null document and `{}` all as an empty mapping; only
+    the first three are the "empty" placeholder this WARN is about."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return True
+    return any(ln.strip() and not ln.lstrip().startswith("#")
+               and ln.strip() not in _NO_VALUE_LINES for ln in text.splitlines())
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -749,7 +777,16 @@ def main() -> int:
     # Validate
     validation_issues: List[str] = []
     if args.validate:
-        validation_issues = validate_merged(output_dir)
+        try:
+            validation_issues = validate_merged(output_dir)
+        except ParseTreeError as e:
+            msg = ("cannot validate the assembled config-dir through `da-guard "
+                   f"parse-tree` (ADR-036): {' '.join(str(e).split())}")
+            if args.json:
+                print(format_json_report({"status": "caller_error",
+                                          "reason": "da_guard_parse_tree"}))
+            print(f"ERROR: {msg}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
 
     # Manifest
     if args.manifest:

@@ -52,7 +52,9 @@ def _gar(d: Path, *args: str) -> subprocess.CompletedProcess:
         timeout=300)
 
 
-_REFUSED = ["slack", "'slack'", "[x]", "~", "false", "off", "no", "0", "''"]
+# ADR-036 step 4 (#2906): an unquoted `off` is the string "off" to yaml.v3 —
+# a disabling string (below) —, `no` the string "no", refused.
+_REFUSED = ["slack", "'slack'", "[x]", "~", "false", "no", "0", "''"]
 _LINE = "t-x: _routing must be a mapping or a disabling string"
 
 
@@ -73,7 +75,7 @@ class TestTenantRoutingNotMapping:
         assert "ERROR: tenant 't-x': _routing must be a mapping" in strict.stderr
         assert "t-x" not in load_tenant_tree(str(d)).routing_configs
 
-    @pytest.mark.parametrize("value", ["false", "off", "no", "true", "on", "yes"])
+    @pytest.mark.parametrize("value", ["false", "true"])
     def test_unquoted_boolean_gets_the_quote_hint(self, tmp_path, value):
         out = _gar(_tree(tmp_path, value), "--dry-run").stderr
         assert "got boolean" in out and "write a quoted string ('off') or disable" in out, out
@@ -82,7 +84,8 @@ class TestTenantRoutingNotMapping:
         out = _gar(_tree(tmp_path, "slack"), "--dry-run").stderr
         assert "got string 'slack'" in out and "quoted string ('off')" not in out, out
 
-    @pytest.mark.parametrize("value", ["disable", "'off'", "' DISABLED '", "'false'", "Disabled"])
+    @pytest.mark.parametrize("value", ["disable", "'off'", "off", "' DISABLED '", "'false'",
+                                       "Disabled"])
     def test_disabling_string_still_disables(self, tmp_path, value):
         d = _tree(tmp_path, value)
         for mode in (("--validate",), ("--validate", "--strict")):
@@ -127,7 +130,7 @@ class TestRoutingDefaultsNotMapping:
         p = d / where
         p.write_text(p.read_text(encoding="utf-8") if p.exists() else "", encoding="utf-8")
         with p.open("a", encoding="utf-8") as f:
-            f.write("_routing_defaults: off\n")
+            f.write("_routing_defaults: false\n")
         line = f"WARN: _routing_defaults in {where} must be a mapping, got boolean False"
         dry = _gar(d, "--dry-run")
         assert dry.returncode == 0 and line in dry.stderr and "skipping" in dry.stderr, dry.stderr

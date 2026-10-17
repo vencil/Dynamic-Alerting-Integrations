@@ -11,8 +11,9 @@ merge-tagged `tenants` items (the generator reads those as source text),
 refused `require_critical_escalation` values wherever written (in place
 under constraints included: hub #2486 PR-7c round 2, B1), and repeated keys
 where no policy reader looks. Rows with nothing enforced are thinned to one
-in four. Each row holds what the route generator's own reader
-(`_parse_config_files`, PyYAML) makes of it: `unusable` (the file or its
+in four. Each row holds what the route generator's reader before ADR-036 step 4
+(`_parse_config_files` over PyYAML — `_PyYamlReader` below; the generator
+itself reads `da-guard parse-tree` since then) makes of it: `unusable` (the file or its
 domain_policies block is dropped) or, per domain with a non-empty
 `forbidden_receiver_types` or `allowed_receiver_types` or with
 require_critical_escalation True (escalation alone is enforced), its tenants and
@@ -91,6 +92,57 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
+from _lib_io import strict_load_exporter_keys  # noqa: E402
+from _lib_parse_tree import FileUnreadable  # noqa: E402
+
+
+class _PyYamlReader:
+    """The generator's reader before ADR-036 step 4 (#2906), for the frozen
+    `pyyaml` column: each file through PyYAML (`strict_load_exporter_keys`,
+    `tenants` sequences as text), every failure a whole-file drop, as the
+    read loop dropped it. The generator itself reads `da-guard parse-tree`
+    since step 4; this keeps the corpus reproducible without it."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+
+    def require(self) -> None:
+        pass
+
+    def read(self, path, mode=None):
+        rel = Path(path).relative_to(self.root).as_posix()
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = strict_load_exporter_keys(f, raw_text_sequences=("tenants",))
+        except Exception as e:  # noqa: BLE001 — as the read loop: any failure drops the file
+            raise FileUnreadable(rel, "pyyaml", " ".join(str(e).split())) from e
+        if data is None:
+            return {}
+        if not isinstance(data, dict):
+            raise FileUnreadable(rel, "top_level_not_mapping", type(data).__name__)
+        return data
+
+    def _chosen(self, directory) -> "Path | None":
+        from _lib_confd import (is_defaults_name, iter_config_files, readable_carriers,
+                                select_defaults_carrier)
+        carriers = [p for p in iter_config_files(self.root)
+                    if p.parent == Path(directory) and is_defaults_name(p.name)]
+        return select_defaults_carrier(readable_carriers(carriers)[0])
+
+    def split_not_read(self, paths):
+        """The read loop's carrier selection before step 4 (Python's)."""
+        from _lib_confd import is_defaults_name
+        read, skipped = [], []
+        for p in map(Path, paths):
+            chosen = self._chosen(p.parent) if is_defaults_name(p.name) else None
+            if chosen is not None and p != chosen:
+                skipped.append((p, "unselected_defaults_carrier"))
+            else:
+                read.append(p)
+        return read, skipped
+
+    def carrier(self, directory) -> "Path | None":
+        return self._chosen(directory)
 
 CORPUS_PATH = Path(__file__).parent / "merge_key_policy_corpus.json"
 SEED = 2677
@@ -1134,7 +1186,7 @@ def _shapes() -> list[tuple[str, str]]:
 def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
     (root / "_domain_policy.yaml").write_bytes(_encode(doc, encoding))
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-        res = _parse_config_files(str(root))
+        res = _parse_config_files(str(root), _PyYamlReader(root))
     if res["policy_file_errors"]:
         return "unusable"
     out = {}
@@ -1204,7 +1256,7 @@ def _strict_blocks(root: Path) -> list[dict]:
     alone, so every finding is about it — and none depends on a tenant's
     routing (a violation by a tenant is the tenant's, not the file's)."""
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-        tree = load_tenant_tree(str(root), strict_policies=True)
+        tree = load_tenant_tree(str(root), strict_policies=True, reader=_PyYamlReader(root))
     found = {(f.kind, f.policy or "", f.field or "") for f in tree.schema_warnings
              if getattr(f, "blocks", None) in _PRODUCTION_BLOCKS}
     return [{"kind": k, "policy": p, "field": fld} for k, p, fld in sorted(found)]

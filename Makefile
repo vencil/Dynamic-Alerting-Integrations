@@ -571,7 +571,7 @@ export CONFDIR
 SHARDED_OUTDIR := .build/config-dir
 
 .PHONY: configmap-assemble
-configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync；使用: make configmap-assemble CONFDIR=/path/to/your/conf.d）
+configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 GitOps sync；使用: make configmap-assemble CONFDIR=/path/to/your/conf.d DA_GUARD_BINARY=<da-guard>；租戶唯一性檢查需要 da-guard，沒有時結束碼 2）
 	@# ⛔ Selection AND quoting live in the script; the shell never touches a
 	@# file name here. There used to be three independent enumerations of
 	@# "which files ship" (the script's own, plus two make-level `shell`
@@ -589,19 +589,6 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 	@python3 ./scripts/ops/configmap_assemble.py \
 		--config-dir "$$CONFDIR" --output .build/threshold-config.yaml
 
-.PHONY: sharded-assemble
-sharded-assemble: ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d)
-	@mkdir -p .build
-	@python3 ./scripts/tools/ops/assemble_config_dir.py \
-		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --validate \
-		--manifest .build/assembly-manifest.json
-	@echo "✓ manifest: .build/assembly-manifest.json"
-
-.PHONY: sharded-check
-sharded-check: ## Sharded GitOps: 衝突偵測（dry-run）
-	@python3 ./scripts/tools/ops/assemble_config_dir.py \
-		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --check
-
 .PHONY: assembler-render
 assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
 	@mkdir -p .build/config-dir
@@ -616,11 +603,6 @@ assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 	@kubectl apply -f k8s/crd/thresholdconfig-crd.yaml
 	@kubectl apply -f k8s/crd/assembler-rbac.yaml
 	@echo "✓ CRD + RBAC installed"
-
-.PHONY: validate-routes
-validate-routes: ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking)
-	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
-		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
 # da-guard（#2115）：validate-config 的 profiles 列經 da-guard 讀 exporter 的答案，
 # 沒有它該列 FAIL、結束碼 2；policy_dsl 列只在有 policy 規則時才讀租戶，那時才同樣
@@ -649,6 +631,26 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 # 一律掛 $(DA_GUARD_PREREQ)、在指令前加 $(DA_GUARD_ENV)。
 DA_GUARD_PREREQ := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
 DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))"
+
+# Sharded GitOps（#2906）：assemble_config_dir 的 tenant_uniqueness 經 validate-config
+# 讀 conf.d、--validate 經 da-guard parse-tree 讀組裝結果，兩者都要 da-guard。
+.PHONY: sharded-assemble
+sharded-assemble: $(DA_GUARD_PREREQ) ## Sharded GitOps: 合併多個 conf.d/ 來源 (使用: make sharded-assemble SOURCES=team-a/conf.d,team-b/conf.d；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
+	@mkdir -p .build
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/assemble_config_dir.py \
+		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --validate \
+		--manifest .build/assembly-manifest.json
+	@echo "✓ manifest: .build/assembly-manifest.json"
+
+.PHONY: sharded-check
+sharded-check: $(DA_GUARD_PREREQ) ## Sharded GitOps: 衝突偵測（dry-run；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/assemble_config_dir.py \
+		--sources $(SOURCES) --output $(SHARDED_OUTDIR) --check
+
+.PHONY: validate-routes
+validate-routes: $(DA_GUARD_PREREQ) ## 驗證 Alertmanager route config (CI lint 用；--strict 同 CI，domain-policy 違規 blocking；經 da-guard parse-tree 讀 conf.d：DA_GUARD_BINARY，未設就建 .build/da-guard)
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
+		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
 .PHONY: validate-config
 validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)

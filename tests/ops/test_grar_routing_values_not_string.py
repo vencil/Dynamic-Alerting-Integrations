@@ -1,5 +1,9 @@
 """#2431：matcher 值（`routes[i].match.<label>`、`overrides[i].alertname` /
-`metric_group`）PyYAML 讀出來不是字串 → `--strict` 報 ERROR（blocking）。
+`metric_group`）讀出來不是字串 → `--strict` 報 ERROR（blocking）。
+
+ADR-036 步驟 4（#2906）起產生器以 yaml.v3（`da-guard parse-tree`）讀：未加引號的
+`yes`／`on`／`1:30` 是字串，不再報；不是字串的是 `8`、`1.5`、`true`、`~`、
+`2001-12-15`（timestamp）這類。
 
 釘住的契約：
 
@@ -10,8 +14,8 @@
 * `--strict`（`--validate` 與 render 兩條路）：每個值一行 `ERROR:`，rc 1，
   訊息要求加引號。
 * 非 strict 行為不變：routes 照舊 `WARN … skipping`、overrides 照舊以
-  truthiness 判斷、以 `str()` 渲染（`alertname: yes` → `alertname="True"`）。
-* 加了引號的值（`"yes"`、`"1:30"`）不報。
+  truthiness 判斷、以 `str()` 渲染（`alertname: true` → `alertname="True"`）。
+* 加了引號的值（`"true"`、`"90"`）與未加引號的 `yes` 不報。
 
 Fixture 的 tenant 名一律是 demo 名（tenant-agnostic）。
 """
@@ -124,8 +128,8 @@ class TestStrictErrorsPerLayer:
     """每一層寫進來的值，解析後都被判；非 strict 不產 ERROR 行。"""
 
     @pytest.mark.parametrize("value, got", [
-        ("yes", "got bool True"), ("on", "got bool True"), ("1:30", "got int 90"),
-        ("2001-12-15", "got date datetime.date(2001, 12, 15)"),
+        ("true", "got bool True"), ("8", "got int 8"), ("1.5", "got float 1.5"),
+        ("2001-12-15", "got Timestamp 2001-12-15"),
         ("~", "got NoneType None"), ("!!int 5", "got int 5")])
     def test_tenant_file_match_value(self, tmp_path, value, got):
         d = _tree(tmp_path, _route(value))
@@ -133,18 +137,20 @@ class TestStrictErrorsPerLayer:
         assert len(errs) == 1 and "routes[0].match.team must be a string, " + got in errs[0], errs
         assert _errors(d, strict=False) == []
 
-    def test_quoted_match_value_is_clean(self, tmp_path):
-        assert _errors(_tree(tmp_path, _route('"yes"')), strict=True) == []
+    @pytest.mark.parametrize("value", ['"true"', "yes", "on", "1:30"])
+    def test_a_string_match_value_is_clean(self, tmp_path, value):
+        """Quoted, or a word yaml.v3 reads as a string (PyYAML did not)."""
+        assert _errors(_tree(tmp_path, _route(value)), strict=True) == []
 
     def test_platform_overlay(self, tmp_path):
-        overlay = "tenants:\n  " + _T + ":\n    _routing:\n" + _override("alertname: yes")
+        overlay = "tenants:\n  " + _T + ":\n    _routing:\n" + _override("alertname: true")
         d = _tree(tmp_path, extra={"_platform.yaml": overlay})
         assert [e.split(": ", 2)[-1].split(" must")[0] for e in _errors(d, strict=True)] \
             == ["overrides[0].alertname"]
 
     def test_routing_defaults(self, tmp_path):
         defaults = "_routing_defaults:\n" + "".join(
-            line[4:] + "\n" for line in _override("metric_group: 1:30").splitlines())
+            line[4:] + "\n" for line in _override("metric_group: 90").splitlines())
         d = _tree(tmp_path, extra={"_routing_defaults.yaml": defaults})
         errs = _errors(d, strict=True)
         assert len(errs) == 1 and "overrides[0].metric_group must be a string, got int 90" in errs[0]
@@ -156,37 +162,37 @@ class TestStrictErrorsPerLayer:
         errs = _errors(d, strict=True)
         assert len(errs) == 1 and "routes[0].match.team must be a string, got NoneType None" in errs[0]
 
-    def test_tenant_override_alertname_no(self, tmp_path):
-        errs = _errors(_tree(tmp_path, _override("alertname: no")), strict=True)
+    def test_tenant_override_alertname_false(self, tmp_path):
+        errs = _errors(_tree(tmp_path, _override("alertname: false")), strict=True)
         assert len(errs) == 1 and "overrides[0].alertname must be a string, got bool False" in errs[0]
 
 
 class TestCli:
     """`--strict` 下 blocking（rc 1）；不加 `--strict` 行為不變。"""
 
-    def test_validate_strict_fails_on_override_yes(self, tmp_path):
-        d = _tree(tmp_path, _override("alertname: yes"))
+    def test_validate_strict_fails_on_override_true(self, tmp_path):
+        d = _tree(tmp_path, _override("alertname: true"))
         r = _gar(d, "--validate", "--strict")
         assert r.returncode == 1, r.stdout + r.stderr
         assert (f"ERROR: tenant '{_T}': overrides[0].alertname must be a string, "
                 "got bool True — quote it in YAML") in r.stderr
 
     def test_render_strict_refuses_before_writing(self, tmp_path):
-        d = _tree(tmp_path, _route("1:30"))
+        d = _tree(tmp_path, _route("90"))
         r = _gar(d, "--dry-run", "--strict")
         assert r.returncode == 1, r.stdout + r.stderr
         assert "blocking error(s) under --strict" in r.stderr
         assert "DRY RUN OUTPUT" not in r.stdout
 
     def test_non_strict_keeps_the_legacy_rendering(self, tmp_path):
-        d = _tree(tmp_path, _override("alertname: yes"))
+        d = _tree(tmp_path, _override("alertname: true"))
         r = _gar(d, "--dry-run")
         assert r.returncode == 0, r.stdout + r.stderr
         assert 'alertname="True"' in r.stdout
         assert "must be a string" not in r.stderr
 
     def test_non_strict_route_value_still_warns_and_skips(self, tmp_path):
-        d = _tree(tmp_path, _route("yes"))
+        d = _tree(tmp_path, _route("true"))
         r = _gar(d, "--dry-run")
         assert r.returncode == 0, r.stdout + r.stderr
         assert ("WARN: demo-apac: routes[0]: match value for 'team' must be a "
@@ -194,7 +200,7 @@ class TestCli:
         assert "ERROR:" not in r.stderr
 
     def test_quoted_values_pass_strict(self, tmp_path):
-        d = _tree(tmp_path, _override('alertname: "yes"'))
+        d = _tree(tmp_path, _override('alertname: "true"'))
         r = _gar(d, "--validate", "--strict")
         assert r.returncode in (0, 2), r.stdout + r.stderr  # 2 only if amtool is unusable
         assert "must be a string" not in r.stderr

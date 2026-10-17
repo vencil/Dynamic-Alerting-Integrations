@@ -393,31 +393,33 @@ class TestConfdLintCoversProfiles:
         (d / "_routing_profiles.yaml").write_text(text, encoding="utf-8")
         return d
 
+    # #2906: a value yaml.v3 reads as non-string (`yes` is a string to it).
     _YES = ("routing_profiles:\n  team-x:\n    receiver:\n      type: slack\n"
             "      api_url: \"https://hooks.slack.com/services/T/B/x\"\n"
-            "      channel: yes\n")
+            "      channel: 1e3\n")
 
-    def test_channel_yes_in_profile_fails_check_confd_schema(self, tmp_path):
-        """驗收：profile 裡 `channel: yes` 被 lint 擋下（#2164 引號檢查）。"""
+    def test_channel_float_in_profile_fails_check_confd_schema(self, tmp_path):
+        """驗收：profile 裡 `channel: 1e3`（yaml.v3 的浮點數）被 lint 擋下（#2164）。"""
         d = self._tree(tmp_path, self._YES)
         r = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "tools" / "lint"
                                  / "check_confd_schema.py"), "--config-dir", str(d)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert r.returncode == 1, r.stdout + r.stderr
-        assert ("_routing_profiles.yaml:6: /routing_profiles/team-x/receiver/"
-                "channel: unquoted 'yes'") in r.stderr
+        assert ("_routing_profiles.yaml: /routing_profiles/team-x/receiver/"
+                "channel: '1e3' is read by yaml.v3") in r.stderr
 
-    def test_channel_yes_in_profile_fails_validate_config(self, tmp_path):
+    def test_channel_float_in_profile_fails_validate_config(self, tmp_path):
         import validate_config
         d = self._tree(tmp_path, self._YES)
         row = validate_config.check_yaml_quoting(str(d))
         assert row["status"] == validate_config.FAIL, row
-        assert any("_routing_profiles.yaml:6" in x for x in row["details"]), row
+        assert any(x.startswith("_routing_profiles.yaml: /routing_profiles/team-x/")
+                   for x in row["details"]), row
 
     def test_quoted_channel_passes(self, tmp_path):
-        d = self._tree(tmp_path, self._YES.replace("channel: yes",
-                                                   'channel: "yes"'))
+        d = self._tree(tmp_path, self._YES.replace("channel: 1e3",
+                                                   'channel: "1e3"'))
         jsonschema = pytest.importorskip("jsonschema")
         checked, viol, skipped = ccs.validate_dir(
             str(d), _load("tenant-config.schema.json"), jsonschema,

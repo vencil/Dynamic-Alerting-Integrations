@@ -95,6 +95,20 @@ def short_dir() -> Path:
     return Path(tempfile.mkdtemp(prefix="gsvc", dir="/tmp"))
 
 
+def provide_da_guard(bin_dir: Path) -> None:
+    """Put the test session's da-guard (``$DA_GUARD_BINARY``, set for every
+    test by tests/conftest.py) on *bin_dir* as ``da-guard``: the generator
+    reads conf.d through ``da-guard parse-tree`` (ADR-036 step 4), and the
+    service finds it on $PATH as in the image."""
+    src = os.environ.get("DA_GUARD_BINARY", "").strip()
+    if not src:
+        raise RuntimeError("DA_GUARD_BINARY is not set: the harness has no da-guard to provide")
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    dst = bin_dir / "da-guard"
+    if not dst.exists():
+        shutil.copy2(src, dst)  # a copy: no symlink capability needed
+
+
 class Service:
     """The service as a real process; ``stop()`` (or the context manager)
     ends it."""
@@ -115,6 +129,7 @@ class Service:
             + prelude +
             "\nimport generator_service as gs\n"
             "sys.exit(gs.main(sys.argv[1:]))\n", encoding="utf-8")
+        provide_da_guard(bin_dir)
         run_env = dict(os.environ)
         run_env["PATH"] = str(bin_dir)
         run_env.pop("DA_GUARD_BINARY", None)
@@ -224,7 +239,10 @@ class Service:
 def run_cli(confdir: Path, bin_dir: Path, findings: Path,
             policy: Optional[str] = None) -> tuple[int, dict]:
     """``generate-routes --validate --strict`` on *confdir*, as the CLI."""
-    env = {k: v for k, v in os.environ.items() if k != "PATH"}
+    provide_da_guard(bin_dir)
+    # As `Service`: da-guard comes from bin_dir on PATH only, the binary the
+    # service under comparison uses — not an inherited $DA_GUARD_BINARY.
+    env = {k: v for k, v in os.environ.items() if k not in ("PATH", "DA_GUARD_BINARY")}
     env["PATH"] = str(bin_dir)
     argv = [sys.executable, "-s", str(GAR), "--config-dir", str(confdir),
             "--validate", "--strict", "--findings-json", str(findings)]

@@ -7,10 +7,13 @@ ADR-036 moves every Python reader of conf.d onto `da-guard parse-tree` (Go,
 yaml.v3). Before that switch this command shows, on the customer's own tree,
 what the switch changes. It reads the tree twice:
 
-* **today** — the route generator's reader: the files
-  `_grar_parse._parse_config_files` reads (the shared conf.d walk, one
-  defaults carrier per directory), each loaded with the loader it uses
-  (`_lib_io.strict_load_exporter_keys`, `raw_text_sequences=("tenants",)`);
+* **today** — the PyYAML reading the route generator used before ADR-036
+  step 4 (#2906), kept here as this module's own: the files the generator
+  reads (the shared conf.d walk, one defaults carrier per directory), each
+  loaded with `_lib_io.strict_load_exporter_keys`,
+  `raw_text_sequences=("tenants",)` — the PyYAML loader every conf.d reader
+  that is not yet on parse-tree still uses. The generator itself reads
+  parse-tree's document since step 4, so it is not called here;
 * **after** — `da-guard parse-tree --config-dir <dir>` (ADR-036 §2), run as a
   subprocess. Its JSON is the only yaml.v3 reading here: this module never
   parses YAML the Go way itself, and without a da-guard binary it stops
@@ -111,11 +114,12 @@ class AuditError(Exception):
 # ── today: the route generator's reading ─────────────────────────────────
 
 def _read_today(path: Path) -> tuple[Optional[Any], Optional[str]]:
-    """(data, None) or (None, reason): one file as the generator's read loop
-    (`_grar_parse._parse_config_files`) reads it — same open, same loader,
-    same whole-file drops. `tests/ops/test_migration_audit.py` holds this to
-    the generator's frozen verdict on every row of
-    tests/shared/parse_tree_corpus.json."""
+    """(data, None) or (None, reason): one file as the PyYAML reading reads
+    it — the read loop the route generator had before ADR-036 step 4: same
+    open, same loader, same whole-file drops. `tests/ops/test_migration_audit.py`
+    holds this to the generator's frozen verdict on every row of
+    tests/shared/parse_tree_corpus.json (frozen because the generator no
+    longer reads this way)."""
     try:
         with open(path, encoding="utf-8") as f:
             data = strict_load_exporter_keys(f, raw_text_sequences=("tenants",))
@@ -133,8 +137,8 @@ def _read_today(path: Path) -> tuple[Optional[Any], Optional[str]]:
 
 
 def read_tree_today(root: Path) -> tuple[dict[str, Any], dict[str, str]]:
-    """({rel: data} read, {rel: reason} refused) — the files today's route
-    generator reads, by the selection of `_grar_parse._parse_config_files`:
+    """({rel: data} read, {rel: reason} refused) — the files the route
+    generator reads, by its selection (`_grar_parse._parse_config_files`):
     the shared walk (`list_config_tree`), one defaults carrier per directory
     (`select_defaults_carrier` over the readable ones), every unusable entry
     booked as refused."""
@@ -345,6 +349,30 @@ def rewrites(py: Any, v3: dict, raw_text: bool) -> list[dict]:
     return out
 
 
+# Fields whose values the route generator reads from a closed word list
+# (#2906): a rewrite it refuses is no rewrite. `_severity_dedup` takes a
+# boolean, null or one of SEVERITY_DEDUP_WORDS (any case) — `"no"` is refused.
+def _field_options(path: list, options: list[dict]) -> list[dict]:
+    if not (path and path[-1] == "_severity_dedup"):
+        return options
+    from _grar_parse import SEVERITY_DEDUP_WORDS  # the generator's word list, not its reading
+    out: list[dict] = []
+    for o in options:
+        if o["meaning"] == "string":
+            try:
+                word = json.loads(o["text"])
+            except ValueError:
+                continue
+            if not (isinstance(word, str) and word.strip().lower() in SEVERITY_DEDUP_WORDS):
+                continue
+        out.append(o)
+        if o["meaning"] == "boolean":
+            word = '"enable"' if o["text"] == "true" else '"disable"'
+            if all(x["text"] != word for x in options):
+                out.append({"meaning": "string", "text": word})
+    return out
+
+
 def suggestion(options: list[dict], written: Optional[str] = None) -> str:
     """`written`: the value as written (its tag included, its anchor not)."""
     if not options:
@@ -412,7 +440,8 @@ class _Walk:
                     # Today's reader keeps the source text of every item of
                     # a `tenants:` list (raw_text_sequences), whatever it is.
                     raw = len(path) >= 2 and isinstance(path[-1], int) and path[-2] == "tenants"
-                    self._value(path, line, a, b, rewrites(a, b, raw), node)
+                    self._value(path, line, a, b,
+                                _field_options(path, rewrites(a, b, raw)), node)
                 continue
             if isinstance(b, dict) and isinstance(a, dict):
                 pairs = self._pairs(node)
@@ -736,7 +765,7 @@ def render_text(report: dict) -> str:
 # --help in the operator's language (dev-rules §9 L3); report strings stay English.
 _HELP = {
     "en": {
-        "description": ("Read a conf.d with today's route generator reader (PyYAML) and with "
+        "description": ("Read a conf.d with PyYAML (the route generator's reader before ADR-036 step 4) and with "
                         "`da-guard parse-tree` (yaml.v3), and list where they differ "
                         "(ADR-036 §8). Lists differences; judges none."),
         "epilog": ("Exit codes: 0 no difference, 1 a difference is listed, 2 caller error "
@@ -748,7 +777,7 @@ _HELP = {
         "timeout": f"Seconds da-guard may run (default {DEFAULT_TIMEOUT}).",
     },
     "zh": {
-        "description": ("同一棵 conf.d 以今天路由產生器的讀法（PyYAML）與 `da-guard parse-tree`"
+        "description": ("同一棵 conf.d 以 PyYAML（ADR-036 步驟 4 之前路由產生器的讀法）與 `da-guard parse-tree`"
                         "（yaml.v3）各讀一次，列出讀法差異（ADR-036 §8）。只列差異，不做判定。"),
         "epilog": ("結束碼：0 沒有差異、1 列出了差異、2 呼叫錯誤（--config-dir 不存在、找不到 "
                    f"da-guard、da-guard 失敗）。--json：stdout 恰好一份 JSON，schema {SCHEMA}。"),

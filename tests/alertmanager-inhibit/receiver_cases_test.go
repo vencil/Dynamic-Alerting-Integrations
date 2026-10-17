@@ -66,13 +66,12 @@ func pythonStr(t *testing.T, v any) string {
 	return ""
 }
 
-// yaml11Bools are the YAML 1.1 boolean words of tenant-config.schema.json
-// definitions.yamlBool (the authority; this is a copy). Since #2906 the
-// route generator no longer writes such a word given as a STRING out as a
-// boolean: it takes only a boolean or null in these fields and refuses a
-// string (the table's `python_differs` rows). The rows' `am` column still
-// records Alertmanager's verdict on the boolean the word spells, which is
-// what the body below hands it.
+// yaml11Bools are the YAML 1.1 boolean words (PyYAML's resolver;
+// scripts/tools/_lib_validation.yaml_bool_literals). Since #2906 neither the
+// schema (definitions.yamlBool is boolean or null) nor the route generator
+// takes such a word given as a STRING: those rows are `valid: false` with a
+// `strict` reason. The rows' `am` column still records Alertmanager's verdict
+// on the boolean the word spells, which is what the body below hands it.
 var yaml11Bools = map[string]bool{
 	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
 	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
