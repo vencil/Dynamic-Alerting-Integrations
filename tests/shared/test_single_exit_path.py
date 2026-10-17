@@ -638,14 +638,30 @@ def test_or_die_writers_follow_the_caller_error_code(tmp_path, monkeypatch):
 def _stdout_bypasses(tree: ast.AST) -> list[str]:
     """Writes an armed tool could make to stdout without `sys.stdout.write`:
     `sys.stdout.buffer`, `os.write` to fd 1 / stdout's fileno, rebinding
-    `sys.stdout`. (`contextlib.redirect_stdout` is fine: the envelope goes
-    to the stdout object that was armed.)"""
+    `sys.stdout` (also via `setattr`), and the aliases that would hide those
+    from this walk (`from sys import stdout`, `import sys as x`). Binding
+    the stdout OBJECT to another name (`out = sys.stdout`) is not seen — a
+    documented limit; writes through it still go through the tap.
+    (`contextlib.redirect_stdout` is fine: the envelope goes to the stdout
+    object that was armed.)"""
     def is_sys_stdout(n: ast.AST) -> bool:
         return (isinstance(n, ast.Attribute) and n.attr == "stdout"
                 and isinstance(n.value, ast.Name) and n.value.id == "sys")
     found = []
     for n in ast.walk(tree):
-        if isinstance(n, ast.Attribute) and n.attr == "buffer" and is_sys_stdout(n.value):
+        # aliases that would hide the shapes below from this walk
+        if isinstance(n, ast.ImportFrom) and n.module == "sys" and any(
+                a.name in ("stdout", "__stdout__") for a in n.names):
+            found.append(f"{n.lineno}: from sys import stdout")
+        elif isinstance(n, ast.Import) and any(
+                a.name == "sys" and a.asname not in (None, "sys") for a in n.names):
+            found.append(f"{n.lineno}: import sys as <alias>")
+        elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id == "setattr" and len(n.args) >= 2
+              and isinstance(n.args[0], ast.Name) and n.args[0].id == "sys"
+              and isinstance(n.args[1], ast.Constant) and n.args[1].value == "stdout"):
+            found.append(f"{n.lineno}: setattr(sys, 'stdout', ...)")
+        elif isinstance(n, ast.Attribute) and n.attr == "buffer" and is_sys_stdout(n.value):
             found.append(f"{n.lineno}: sys.stdout.buffer")
         elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = n.targets if isinstance(n, ast.Assign) else [n.target]
@@ -688,3 +704,153 @@ def test_an_unarmed_caller_error_with_stderr_closed_keeps_stdout_empty(tmp_path)
     proc = _run_with_fds_closed(
         _script(tmp_path, "_lib_exitcodes.die_caller_error('ERROR: bad input')\n"), close="2>&-")
     assert (proc.returncode, proc.stdout) == (2, b"")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Round 3: "did stdout fail?" is observed (the stdout tap records the
+# failure), never inferred from an errno or from polling another stream
+# ═══════════════════════════════════════════════════════════════════════════
+_SOCKET_EPIPE = ("import socket\n"
+                 "a, b = socket.socketpair()\nb.close()\n"
+                 "a.sendall(b'x' * 1_000_000)\n")
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_socket_epipe_while_the_reader_is_gone_keeps_its_own_reason(tmp_path, buffering):
+    """S1: stdout's reader has left AND the tool's own socket raises EPIPE,
+    which its handler names. Same errno, not stdout's failure: the tool's
+    reason stands. (The tool writes nothing to stdout here — a write would
+    fail first, unbuffered, and that one IS stdout's.)"""
+    body = _armed(
+        "try:\n" + "".join("    " + ln + "\n" for ln in _SOCKET_EPIPE.splitlines()) +
+        "except OSError:\n"
+        "    _lib_exitcodes.die_caller_error('ERROR: api unreachable', reason='api_unreachable')\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 2, err
+    assert "ERROR: api unreachable" in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_socket_epipe_crash_while_the_reader_is_gone_is_a_crash(tmp_path, buffering):
+    body = _armed(_SOCKET_EPIPE)
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 2, err
+    assert f"{CRASH_MARK} (BrokenPipeError)" in err and "Traceback" in err, err
+
+
+def test_another_fd_ebadf_while_stdout_is_closed_is_a_crash(tmp_path):
+    body = _armed("os.write(99, b'x')\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _UNBUFFERED_ENV)
+    assert f"{CRASH_MARK} (OSError)" in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_wrapped_stdout_failure_is_still_the_reader_leaving(tmp_path, buffering):
+    """N2: the handler sees `RuntimeError(...) from <BrokenPipeError>`; the
+    chain leads back to stdout's own failure."""
+    body = _armed(
+        "try:\n"
+        "    try:\n"
+        "        print('x' * 1_000_000)\n"
+        "        sys.stdout.flush()\n"
+        "    except OSError as e:\n"
+        "        raise RuntimeError('render failed') from e\n"
+        "except RuntimeError as e:\n"
+        "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 2, err
+    assert STDOUT_CLOSED_LINE in err and "render failed" not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("how", ["uncaught", "handled"])
+def test_a_full_device_mid_run_is_a_write_error_not_a_crash(tmp_path, how, buffering):
+    """S2: more than a buffer's worth into /dev/full fails mid-run (ENOSPC):
+    named, caller-error code, no traceback."""
+    if not os.path.exists("/dev/full"):
+        pytest.skip("/dev/full does not exist here")
+    work = "print('x' * 1_000_000)\n"
+    if how == "handled":
+        work = ("try:\n    print('x' * 1_000_000)\nexcept OSError as e:\n"
+                "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='r')\n")
+    with open("/dev/full", "wb") as full:
+        proc = _run(_script(tmp_path, _armed(work)), stdout=full.fileno(),
+                    env=_BUFFERING[buffering])
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err
+    assert "ERROR: cannot write to stdout: No space left on device" in err, err
+    assert "Traceback" not in err and CRASH_MARK not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_broken_stderr_under_redirect_stdout_is_not_a_lost_stdout(tmp_path, buffering):
+    """S3: inside `redirect_stdout(sys.stderr)` the progress lines go to
+    stderr, whose reader left. stdout is healthy: the tool's own reason and
+    its envelope, on stdout."""
+    script = _script(tmp_path, _armed(
+        "import contextlib\n"
+        "with contextlib.redirect_stdout(sys.stderr):\n"
+        "    try:\n"
+        "        for i in range(100000):\n"
+        "            print('progress', i)\n"
+        "        sys.stdout.flush()\n"
+        "    except OSError as e:\n"
+        "        _lib_exitcodes.die_caller_error(f'ERROR: progress failed: {e}', reason='progress_failed')\n"))
+    r, w = os.pipe()
+    os.close(r)
+    try:
+        proc = subprocess.run([sys.executable, str(script)], stdout=subprocess.PIPE,
+                              stderr=w, timeout=60, env=_BUFFERING[buffering])
+    finally:
+        os.close(w)
+    assert proc.returncode == 2  # not 120: a broken stderr never changes the code
+    assert json.loads(proc.stdout)["reason"] == "progress_failed", proc.stdout
+
+
+def test_the_lost_stdout_exit_honours_an_explicit_code(tmp_path):
+    """N1: `die_caller_error(..., code=7)` from a stdout-loss handler keeps 7."""
+    body = _armed("try:\n    print('x' * 1_000_000)\nexcept OSError:\n"
+                  "    _lib_exitcodes.die_caller_error('ERROR: x', reason='r', code=7)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone")
+    assert rc == 7, err
+    assert STDOUT_CLOSED_LINE in err, err
+
+
+def test_the_envelope_error_keeps_wide_spaces_and_drops_format_characters(tmp_path):
+    """N3: only line breaks / tabs fold; U+3000 and NBSP stay, so the
+    envelope matches the stderr line; Cf characters (U+202E, U+200B) go."""
+    rc, out, err = _json_run(tmp_path, _armed(
+        "_lib_exitcodes.die_caller_error('ERROR: 設定檔　壞了\\u00a0x \\u202eevil\\u200b', reason='r')\n"))
+    assert rc == 2, err
+    assert json.loads(out)["error"] == "ERROR: 設定檔　壞了\u00a0x ?evil?"
+
+
+def test_the_generic_error_line_must_start_with_error_colon(tmp_path):
+    """N4: `ERRORS: 3` is a count, not the error line."""
+    rc, out, err = _json_run(tmp_path, _armed(
+        "print('ERROR: the real one', file=sys.stderr)\n"
+        "print('ERRORS: 3 found', file=sys.stderr)\nreturn 2\n"))
+    assert json.loads(out)["error"] == "ERROR: the real one"
+
+
+@pytest.mark.parametrize("src, n", [
+    ("from sys import stdout\n", 1),
+    ("import sys as system\n", 1),
+    ("setattr(sys, 'stdout', x)\n", 1),
+    ("from sys import argv, path\nimport sys\n", 0),
+])
+def test_stdout_bypass_predicate_sees_aliases(src, n):
+    """N5 (aliasing the stdout OBJECT itself stays a documented limit)."""
+    assert len(_stdout_bypasses(ast.parse(src))) == n
+
+
+def test_the_final_flush_is_of_the_original_stdout_not_a_rebound_one(tmp_path):
+    """S3 at exit: `sys.stdout` is still bound to stderr when the process
+    ends, and the ORIGINAL stdout's reader has left with output pending. The
+    original stdout is the one flushed (else the interpreter's own flush
+    makes it 120), and the failed stream is the one pointed at the null
+    device (else the named line, written to stderr, would be lost)."""
+    body = "print('partial report')\nsys.stdout = sys.stderr\nsys.exit(0)\n"
+    rc, err = _run_closed(tmp_path, body, "reader-gone")
+    assert rc == 2, err
+    assert STDOUT_CLOSED_LINE in err, err
