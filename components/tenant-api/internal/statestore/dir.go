@@ -33,9 +33,10 @@ import (
 // reports success. Get takes no lock, so such a writer should also write
 // through a dot-named temp file and a rename, as writeAtomic does, and
 // leave the lock file and records readable and writable by tenant-api's
-// uid (a lock file it cannot open fails every Mutate). This backend is for development and try-local only; production
-// runs the ConfigMap store, whose resourceVersion check makes the loser of
-// a race re-read instead of overwrite. dir_external_writer_test.go pins
+// uid (a lock file it cannot open fails every Mutate). This backend is for
+// development and try-local only; production runs the ConfigMap store,
+// whose resourceVersion check makes the loser of a race re-read instead of
+// overwrite. dir_external_writer_test.go pins
 // both halves of this contract.
 type dirStore struct {
 	dir     string
