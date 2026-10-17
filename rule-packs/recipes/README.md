@@ -51,6 +51,7 @@ tenants:
 
 - **防注入**：`metric` 嚴格 `^[a-zA-Z_][a-zA-Z0-9_]*$`（禁冒號/括號/運算子）；label 過濾只能走 `selectors`/`selectors_re`，由編譯器組裝 + value 跳脫。保留 label（`tenant`/`version`/`severity`/…）禁設。
 - **向量化（O(M)）**：相同 shape signature `(recipe, metric, op, window/horizon, quantile, denominator/capacity, selectors, for, min_events)` 的多租戶**共用一條規則**（`on(tenant) group_left`）；規則數 = shape 數，非租戶數。`for` 入 signature（控制平面靜態屬性）；`forecast` 用 `horizon`（推導 lookback）取代 `window`；`slo_burn_rate` 無 `window`（burn 窗固定屬 recipe 語意）、`objective`/`slo_period` 走資料平面**不入 shape**（改值不 re-slug），`min_events` 入 shape（字面值寫進規則）。
+- **每個租戶、每個形狀、每個 severity 只能一條**：規則以 `on(tenant, version)` join 租戶的門檻列，同一租戶兩條同形狀、同 severity 的 recipe（名稱或 mode 不同也一樣）會讓這條共用規則對所有租戶評估失敗。exporter 只送清單中的第一條、丟棄其餘並計入 `da_custom_alert_parse_errors`，da-guard 以 `custom_alert_duplicate_series` 報出（[#3112](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3112)）。
 - **shape slug = `recipe_id`**：去重鍵 + recording-rule 名 + alertname + `user_threshold` 上的選擇 label，是 Go↔Python 跨語言契約（見 [`tests/dx/fixtures/recipe_id_vectors.json`](../../tests/dx/fixtures/recipe_id_vectors.json)）。
 
 ## slo_burn_rate 補充

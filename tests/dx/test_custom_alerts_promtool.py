@@ -88,3 +88,59 @@ def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_
     r = subprocess.run([_PROMTOOL, "check", "rules", str(out)],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert r.returncode == 0, f"promtool rejected escaped selector:\n{r.stdout}\n{r.stderr}"
+
+
+def test_one_tenants_two_alerts_of_one_shape_leave_the_shared_rule_working(tmp_path, da_guard_env):
+    """#3112: the pack has ONE rule per (recipe_id, severity) for every tenant,
+    joined on(tenant, version) to the tenant's threshold row. A tenant writing
+    two alerts of that shape and severity under different names used to get
+    both rows served — two series on the joined side, so the rule's
+    evaluation failed ("many-to-many matching not allowed") and NO tenant of
+    the shape alerted. Driven end to end: the rows are what da-guard
+    served-values says the exporter serves, the rules are the compiled pack."""
+    import yaml
+    sys.path.insert(0, str(_REPO / "scripts" / "tools"))
+    import _lib_tenant_values as tv
+
+    confd = tmp_path / "conf.d"
+    confd.mkdir()
+    thr = "recipe: threshold, metric: m1, op: '>', window: 5m"
+    (confd / "_defaults.yaml").write_text("defaults:\n  cpu: 80\n", encoding="utf-8")
+    (confd / "ta.yaml").write_text(
+        f"tenants:\n  ta:\n    _custom_alerts:\n      - {{{thr}, name: a, threshold: '5:warning'}}\n"
+        f"      - {{{thr}, name: b, threshold: '7:warning'}}\n", encoding="utf-8")
+    (confd / "tb.yaml").write_text(
+        f"tenants:\n  tb:\n    _custom_alerts:\n      - {{{thr}, name: c, threshold: '5:warning'}}\n",
+        encoding="utf-8")
+    pack = cc.build_pack(confd)
+    (tmp_path / "pack.yaml").write_text(cc._render(pack["groups"]), encoding="utf-8")
+
+    def label_set(labels: dict) -> str:
+        return "{" + ",".join(f'{k}="{v}"' for k, v in sorted(labels.items())) + "}"
+
+    series = []
+    for tenant, values in tv.load_served_tree(confd).tenants.items():
+        for row in values.values.get("_custom_alerts") or []:
+            labels = {**row["labels"], "component": "custom", "metric": row["metric"],
+                      "severity": row["severity"], "tenant": tenant}
+            series.append((f"user_threshold{label_set(labels)}", f"{row['value']}x20"))
+        series.append((f'm1{{tenant="{tenant}"}}', "10x20"))
+    (tmp_path / "test.yaml").write_text(yaml.safe_dump({
+        "rule_files": ["pack.yaml"],
+        "evaluation_interval": "1m",
+        "tests": [{
+            "interval": "1m",
+            "input_series": [{"series": s, "values": v} for s, v in series],
+            "promql_expr_test": [{
+                "expr": 'count by (tenant) (ALERTS{alertstate="firing", component="custom"})',
+                "eval_time": "10m",
+                "exp_samples": [{"labels": '{tenant="ta"}', "value": 1},
+                                {"labels": '{tenant="tb"}', "value": 1}],
+            }],
+        }],
+    }, sort_keys=False), encoding="utf-8")
+    result = subprocess.run(
+        [_PROMTOOL, "test", "rules", "test.yaml"],
+        cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
