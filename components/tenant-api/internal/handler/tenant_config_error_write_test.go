@@ -384,18 +384,17 @@ var repairCallers = []struct {
 	{"platform", []string{"platform"}, true},
 }
 
-// #2405: the whole-file PUT is the repair path for every file GET answers with
-// config_error — not only for the non-UTF-8 sibling id. Before the fix, a file
-// whose YAML does not parse, whose `tenants:` is not a mapping, or that
-// repeats a key was refused by the end-of-life guard's read of the current
-// file (400 "cannot read current custom alerts") and could only be fixed in
-// git. Replacing such a file now needs write permission on ALL tenants (an
-// unrestricted "*" rule); any other caller is refused as before, file
-// untouched. A file the guard can parse (the non-UTF-8 sibling) is written by
-// any caller with write on the tenant — but since #3062 a PUT replaces only
-// the sections its body declares, so the sibling section is KEPT (for every
-// caller) and the file is still one GET flags: such a section is repaired in
-// git, as nothing in the API removes a section. The body here carries no
+// #2405: before the fix, a file whose YAML does not parse, whose `tenants:` is
+// not a mapping, or that repeats a key was refused by the end-of-life guard's
+// read of the current file (400 "cannot read current custom alerts") and
+// could only be fixed in git; the fix let a caller with write permission on
+// ALL tenants (an unrestricted "*" rule) replace it. Since #3064 only an
+// API-shaped file is written through the API at all, so the net rule is: an
+// API-shaped file the end-of-life guard cannot decode is replaceable by that
+// caller, every other caller refused with 400, file untouched; every other
+// unloadable shape here (not YAML, not a tenant document, a tagged key) is
+// git-managed — 409 TENANT_GIT_MANAGED for every caller, repaired in git.
+// The body here carries no
 // end-of-life recipe; that the guard still refuses one over such a file is
 // pinned in package gitops (TestEolGuard_UnparseableBaseForbidsEveryEolRecipe)
 // — the embedded recipe status map has no end-of-life recipe to send through

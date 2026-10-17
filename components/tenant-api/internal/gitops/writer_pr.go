@@ -148,7 +148,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// Step 1: PRE-FLIGHT validate, before anything touches git.
 	//
 	// ⛔ THIS IS NOT THE AUTHORITATIVE RUN — Step 3c is. Everything stateful in
-	// validate (the addedTenantKeys baseline, the eol-expansion guard) reads the
+	// validate (the eol-expansion guard, the merged key validation) reads the
 	// tenant file on the tree as it is RIGHT NOW, and Step 3 replaces that tree
 	// with the fresh origin/<base>. Keeping this pre-flight anyway mirrors
 	// WritePRBatch, and for its reason: it maps a bad body to ErrValidation→400
@@ -376,9 +376,11 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	//
 	// ⛔ RE-RESOLVING THE PATH WAS ONLY HALF OF #1673. The path now describes the
 	// fresh base, but the DECISION was still Step 1's — taken against the tree as
-	// it was before the checkout. `addedTenantKeys` derives its baseline from the
-	// tenant file's existing `tenants:` keys, so the two trees disagreeing about
-	// that file makes the gate answer a question nobody asked:
+	// it was before the checkout. The #1681 added-section gate derived its
+	// baseline from the tenant file's existing `tenants:` keys (since #3064 the
+	// question is whether that file is API-managed, judged on the fresh base),
+	// so the two trees disagreeing about that file makes the gate answer a
+	// question nobody asked:
 	//
 	//   - stale base declares `other`, fresh base does not → BYPASS: the section
 	//     is grandfathered against a tree the write does not land on, and the

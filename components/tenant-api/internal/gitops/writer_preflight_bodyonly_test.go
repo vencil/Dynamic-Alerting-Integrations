@@ -319,7 +319,7 @@ func TestWritePRBatch_AmbiguousSpelling(t *testing.T) {
 // path, the branch leaks silently and only this test says so.
 //
 // ⛔ IT ALSO PINS SOMETHING THIS CHANGE MADE LOAD-BEARING. Before the split, the
-// pre-flight ALSO ran addedTenantKeys, so deleting the post-checkout validate
+// pre-flight ALSO ran the #1681 added-section gate, so deleting the post-checkout validate
 // would still have left the #1681 gate standing. It no longer would: for these
 // two entry points the authoritative pass is now the ONLY place the gate runs.
 // That is why this asserts the refusal itself and not just the branch cleanup.

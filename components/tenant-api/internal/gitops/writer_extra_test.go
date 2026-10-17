@@ -28,8 +28,9 @@ func TestValidate_ValidConfig(t *testing.T) {
 // as a contract: the exporter takes tenant ids from these keys, so a tenant
 // could write a section it does not own — freezing every tenant's config reload
 // when the smuggled id owned a file, and conjuring a tenant no filename-based
-// plane could see when it did not. The rule is now a delta (addedTenantKeys),
-// so what this test measured was which side of that delta a body falls on.
+// plane could see when it did not. The rule became a delta (the #1681
+// added-section gate), so what this test measured was which side of that delta
+// a body fell on.
 //
 // #3064: a written body is API-shaped — it declares the tenant it is written
 // for and no other — so a body declaring two tenants is refused for either,

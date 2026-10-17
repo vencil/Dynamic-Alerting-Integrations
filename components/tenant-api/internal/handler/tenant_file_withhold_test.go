@@ -242,6 +242,8 @@ func TestFileTenantsShown_NilNamesFailsClosed(t *testing.T) {
 	}
 }
 
+// A file declaring another tenant is git-managed (#3064): its source_hash is
+// withheld whether or not the caller may read the other tenant.
 func TestGetTenantEffective_SourceHashWithheld(t *testing.T) {
 	t.Parallel()
 	file := wFiles["loadable"].body
@@ -257,8 +259,44 @@ func TestGetTenantEffective_SourceHashWithheld(t *testing.T) {
 	w = wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
 	resp = TenantEffectiveResponse{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil ||
-		resp.SourceHash != cfg.ComputeSourceHash([]byte(file)) || resp.SourceHashWithheld {
-		t.Errorf("readable: %s (%v); want source_hash as today", w.Body.String(), err)
+		resp.SourceHash != "" || !resp.SourceHashWithheld || resp.MergedHash == "" {
+		t.Errorf("readable: %s (%v); want source_hash still withheld (git-managed)", w.Body.String(), err)
+	}
+}
+
+// #3064: /effective shows source_hash only for an API-managed tenant, as GET
+// does — for every caller, the unrestricted one included. The git-managed
+// rows declare this tenant alone, so #3050's "may the caller read every
+// tenant the file declares" says yes to them: only the management verdict
+// withholds the hash there.
+func TestGetTenantEffective_SourceHashOnlyForAPIManaged(t *testing.T) {
+	t.Parallel()
+	own := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n"
+	for _, c := range []struct {
+		name, file string
+		apiManaged bool
+	}{
+		{"api-shaped", own, true},
+		{"anchor at the top level", "x: &a {y: 1}\n" + own, false},
+		{"several documents", own + "---\nx: 1\n", false},
+		{"!!str tenants key", "!!str " + own, false},
+	} {
+		for _, role := range []string{"writer", "unrestricted"} {
+			f := wFixture(t, role, c.file)
+			w := wServe(f, GetTenantEffective(f.deps()), rbac.PermRead, "GET", "", nil)
+			var resp TenantEffectiveResponse
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK || resp.MergedHash == "" {
+				t.Fatalf("%s/%s: %d %s (%v)", c.name, role, w.Code, w.Body.String(), err)
+			}
+			want := ""
+			if c.apiManaged {
+				want = cfg.ComputeSourceHash([]byte(c.file))
+			}
+			if resp.SourceHash != want || resp.SourceHashWithheld == c.apiManaged {
+				t.Errorf("%s/%s: source_hash %q withheld %v, want %q withheld %v",
+					c.name, role, resp.SourceHash, resp.SourceHashWithheld, want, !c.apiManaged)
+			}
+		}
 	}
 }
 

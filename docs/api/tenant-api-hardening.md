@@ -226,7 +226,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 **寫回保護**：`PUT /tenants/{id}` 的 body 只要有任何值**解碼後**等於佔位字串就回 400，引號、`!!str`、block scalar、alias 都一樣；`POST /tenants/{id}/validate` 對同一個 body 回 200 `valid: false` 並列出同一條理由。
 
-**git 管理的租戶不給原文**（[#3064](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3064)，取代 #3050 對租戶檔的隱藏）：上面每個出口回的都是**整份檔**，而 `GET`、`/diff` 與所有寫入只處理 API 形狀、只屬於該租戶的檔（見 §3.1「API 管理與 git 管理」），其他形狀的租戶 `GET` 只回 effective 結果，不回 `raw_yaml`、`source_hash`、`custom_alerts`。`/effective` 仍保留 #3050 的守衛：它的 `source_hash` 是租戶檔的 hash，而解碼錯誤可能來自合法宣告多個租戶的根層平台檔（`_defaults.yaml` 鏈），所以檔內有呼叫者讀不到的租戶（或列不出有哪些租戶，且呼叫者讀不到全部租戶）時，`source_hash` 為空並帶 `source_hash_withheld: true`，解碼失敗的 500 改回固定文字。
+**git 管理的租戶不給原文**（[#3064](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3064)，取代 #3050 對租戶檔的隱藏）：上面每個出口回的都是**整份檔**，而 `GET`、`/diff` 與所有寫入只處理 API 形狀、只屬於該租戶的檔（見 §3.1「API 管理與 git 管理」），其他形狀的租戶 `GET` 只回 effective 結果，不回 `raw_yaml`、`source_hash`、`custom_alerts`。`/effective` 的 `source_hash` 與 `GET` 一致：只在租戶是 API 管理時給，git 管理的租戶對任何呼叫者都是空字串並帶 `source_hash_withheld: true`（寫入一律被拒，這個 hash 沒有用途，又能離線驗證對整份檔的猜測）。`/effective` 仍保留 #3050 對解碼錯誤的守衛：錯誤可能來自合法宣告多個租戶的根層平台檔（`_defaults.yaml` 鏈），所以檔內有呼叫者讀不到的租戶（或列不出有哪些租戶，且呼叫者讀不到全部租戶）時，解碼失敗的 500 改回固定文字。
 
 **hash 也不給**：被遮罩的人拿到的 `source_hash`（`GET`、`/effective`）與 `merged_hash`（`/effective`）是空字串。`merged_hash` 是解碼後合併結果的 hash，被遮罩的人手上有其他所有值，把猜測填回佔位字串的位置、用公開的演算法算一次就能離線驗證猜對沒有，低熵的密碼可以字典攻擊；`source_hash` 是原檔位元組的 hash，同樣能驗證對整份檔的猜測。被遮罩的人不能寫入，也用不到 `source_hash` 當 `base_hash`。
 

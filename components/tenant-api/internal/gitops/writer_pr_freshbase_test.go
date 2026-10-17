@@ -9,8 +9,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// declaredTenants is a DELIBERATELY INDEPENDENT oracle. It must not call
-// addedTenantKeys: that is the production helper under test here, and an oracle
+// declaredTenants is a DELIBERATELY INDEPENDENT oracle. It must not call the
+// production gate (once addedTenantKeys, since #3064 the body-shape and
+// API-managed checks): that is what is under test here, and an oracle
 // borrowed from the subject goes green the moment the subject breaks — the
 // mutation would be unkillable. Ten lines of yaml is cheap enough to own.
 func declaredTenants(t *testing.T, body string) []string {
@@ -48,7 +49,8 @@ func notIn(a, b []string) []string {
 //
 // ⛔ THE GATE AND THE WRITE READ DIFFERENT TREES. `WritePR` validates at Step 1
 // against the tree as it is BEFORE `checkoutBaseClean` + `resolveFreshBaseRef`,
-// and `addedTenantKeys` takes its baseline from the tenant file on THAT tree.
+// and the gate (the #1681 added-section baseline then, since #3064 the
+// API-managed verdict) read the tenant file on THAT tree.
 // Step 3 then swaps the tree for the fresh origin/<base> and Step 4 writes the
 // body there. Step 3b already re-resolves the PATH for exactly this reason
 // (#1673) — but re-resolving the path and never re-running validate leaves the

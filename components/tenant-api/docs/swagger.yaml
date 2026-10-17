@@ -1191,10 +1191,10 @@ definitions:
       source_hash_withheld:
         description: |-
           SourceHashWithheld is true, with source_hash empty, when the tenant
-          file declares a tenant the caller may not read, or its tenants cannot
-          be listed with certainty and the caller may not read every tenant
-          (#3050): source_hash is the hash of that whole file, and confirms a
-          guess of it offline. merged_hash is this tenant's merge only.
+          is git-managed (#3064: its file is not API-shaped — shared with other
+          tenants, say), for every caller: source_hash is the hash of that whole
+          file, which no write may use as a base and which confirms a guess of
+          it offline (#3050). merged_hash is this tenant's merge only.
         type: boolean
       tenant_id:
         type: string
@@ -2590,10 +2590,12 @@ paths:
         "<masked: write permission required>", with masked: true and
         source_hash and merged_hash empty (either would let a guess of
         a credential be checked offline).
-        source_hash is the hash of the whole tenant file: when that file declares a tenant the caller may not
-        read (#3050), or its tenants cannot be listed with certainty and the caller lacks read permission on all
-        tenants, it is empty with source_hash_withheld: true; and a 500 CONFIG_DECODE_ERROR about such a file
-        carries a fixed text instead of the decoder's message (which quotes the value).
+        source_hash is the hash of the whole tenant file: it is shown only for an API-managed tenant (#3064: its
+        file is API-shaped, as GET /tenants/{id} reports with managed_by: api). For a git-managed tenant it is empty
+        with source_hash_withheld: true, for every caller (every write to it is refused; change it in git).
+        A 500 CONFIG_DECODE_ERROR about a file that declares a tenant the caller may not read (#3050), or whose
+        tenants cannot be listed with certainty while the caller lacks read permission on all tenants, carries a
+        fixed text instead of the decoder's message (which quotes the value).
       parameters:
       - description: Tenant ID
         in: path

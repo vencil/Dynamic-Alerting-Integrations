@@ -26,9 +26,11 @@ const t = window.__t || ((zh, en) => en);
  * custom_alerts / source_hash, and every write answers 409
  * TENANT_GIT_MANAGED — so the editor is not opened for it, and a save that
  * meets the 409 says "change it in git" instead of "refresh and retry".
- * A GET that withholds the file (raw_yaml_withheld) or gives no source_hash
- * (a caller without write permission) has nothing an edit could be based on:
- * the editor is not opened either (a save would only be refused).
+ * A GET that withholds the file (raw_yaml_withheld) has no recipes to show:
+ * the editor is not opened. An API-managed tenant's GET with no source_hash
+ * (a caller without write permission: custom_alerts masked) lists the
+ * recipes read-only — no edit, delete, add or save (a save would only be
+ * refused, and there is no base_hash to send).
  * ─────────────────────────────────────────────────────────────────── */
 
 function defaultFetchTenant(tenantId) {
@@ -81,6 +83,9 @@ function CustomAlertsModal(props) {
   // 409 TENANT_GIT_MANAGED ({ error, reason }).
   const [gitReason, setGitReason] = useState('');
   const [gitManagedSave, setGitManagedSave] = useState(null);
+  // #3064: an API-managed tenant read without source_hash (no write
+  // permission): the list is shown, nothing in it can be changed.
+  const [readOnlyList, setReadOnlyList] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState('');
   const [collision, setCollision] = useState('');
@@ -114,14 +119,16 @@ function CustomAlertsModal(props) {
           setPhase('unloadable');
           return;
         }
-        // #3064: withheld (the file cannot be masked with certainty) or no
-        // source_hash (the caller may not write the tenant): an empty or
-        // masked list with no base_hash — a save could only be refused.
-        if (d && (d.raw_yaml_withheld === true || !d.source_hash)) {
+        // #3064: withheld (the file cannot be masked with certainty): GET
+        // gives custom_alerts [] that is not the tenant's list — show none.
+        if (d && d.raw_yaml_withheld === true) {
           setPhase('readOnly');
           return;
         }
         const list = Array.isArray(d.custom_alerts) ? d.custom_alerts : [];
+        // No source_hash: the caller may read, not write, the tenant — the
+        // (masked) list is shown read-only; a save could only be refused.
+        setReadOnlyList(!(d && d.source_hash));
         setRecipes(list);
         setBaseHash(d.source_hash || '');
         setOriginalJSON(JSON.stringify(list));
@@ -308,8 +315,8 @@ function CustomAlertsModal(props) {
           {phase === 'readOnly' && (
             <div className="p-3 rounded-md border-l-2 border-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)]" data-testid="read-only">
               <p className="text-sm">
-                {t('你沒有這個租戶的寫入權限，或它的設定檔無法安全地顯示，所以不開放編輯。',
-                  'You lack write permission on this tenant, or its config file cannot be shown safely, so editing is disabled.')}
+                {t('這個租戶的設定檔無法安全地遮罩顯示，所以不顯示 recipe，也不開放編輯。',
+                  'This tenant\'s config file cannot be masked safely, so its recipes are not shown and editing is disabled.')}
               </p>
             </div>
           )}
@@ -378,6 +385,12 @@ function CustomAlertsModal(props) {
 
           {phase === 'list' && (
             <div data-testid="recipe-list">
+              {readOnlyList && (
+                <p className="mb-3 text-sm pl-2 border-l-2 border-[color:var(--da-color-warning)]" data-testid="read-only-list">
+                  {t('你沒有這個租戶的寫入權限：只能檢視（憑證已遮罩），不開放編輯。',
+                    'You lack write permission on this tenant: view only (credentials masked), editing is disabled.')}
+                </p>
+              )}
               {recipes.length === 0 && (
                 <p className="text-sm text-[color:var(--da-color-muted)] mb-3">{t('尚無自訂告警。', 'No custom alerts yet.')}</p>
               )}
@@ -391,15 +404,15 @@ function CustomAlertsModal(props) {
                     </div>
                     <div className="text-xs text-[color:var(--da-color-muted)]">{summarizeRecipe(r)}</div>
                   </div>
-                  <div className="flex gap-2">
+                  {!readOnlyList && <div className="flex gap-2">
                     <button type="button" className={btn} data-testid={`edit-${r.name}`}
                       onClick={() => { setEditing(r); setPhase('form'); setCollision(''); }}>{t('編輯', 'Edit')}</button>
                     <button type="button" className={btn} data-testid={`delete-${r.name}`}
                       onClick={() => deleteRecipe(r.name)}>{t('刪除', 'Delete')}</button>
-                  </div>
+                  </div>}
                 </div>
               ))}
-              <div className="flex gap-2 mt-4">
+              {!readOnlyList && <div className="flex gap-2 mt-4">
                 <button type="button" className={btn} data-testid="add"
                   onClick={() => { setEditing(null); setPhase('form'); setCollision(''); }}>
                   + {t('新增 recipe', 'Add recipe')}
@@ -408,7 +421,7 @@ function CustomAlertsModal(props) {
                   onClick={save}>
                   {isSubmitting ? t('儲存中…', 'Saving…') : t('儲存並提交', 'Save & commit')}
                 </button>
-              </div>
+              </div>}
             </div>
           )}
 

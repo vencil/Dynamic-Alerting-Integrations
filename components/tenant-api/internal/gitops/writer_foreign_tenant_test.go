@@ -123,66 +123,10 @@ func TestWritePRRefusesTenantSectionsItWouldAdd(t *testing.T) {
 	}
 }
 
-func TestAddedTenantKeys(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		base string // "" = do not create a base file
-		body string
-		want []string
-	}{
-		{"own id only", "", ownOnly, nil},
-		// A body with no foreign key has the same answer whatever the base
-		// says, so the baseline must not be consulted at all — pinned here as
-		// behavior (an unparseable base cannot change the answer) rather than
-		// as a timing assertion.
-		{"own id only, unparseable base", "{{not yaml", ownOnly, nil},
-		{"no baseline → foreign counts as added", "", smuggled, []string{"other"}},
-		{"baseline declares it → grandfathered", grandfathered, smuggled, nil},
-		{"baseline declares it, body adds one more", grandfathered, plusThird, []string{"third"}},
-		{"baseline declares only the id itself", ownOnly, smuggled, []string{"other"}},
-		{"unparseable baseline fails closed", "{{not yaml", smuggled, []string{"other"}},
-		{"sorted", "", "tenants:\n  zz: {}\n  db-a: {}\n  aa: {}\n", []string{"aa", "zz"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if tc.base != "" {
-				seedBase(t, dir, "db-a.yaml", tc.base)
-			}
-			var tcfg cfg.ThresholdConfig
-			if err := yaml.Unmarshal([]byte(tc.body), &tcfg); err != nil {
-				t.Fatal(err)
-			}
-			baseRaw, _ := os.ReadFile(filepath.Join(dir, "db-a.yaml"))
-			got := addedTenantKeys(baseRaw, tcfg, "db-a")
-			if len(got) != len(tc.want) {
-				t.Fatalf("got %v want %v", got, tc.want)
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Fatalf("got %v want %v", got, tc.want)
-				}
-			}
-		})
-	}
-}
-
-// TestAddedTenantKeysFailsClosedWithoutABaseFile pins the shapes that produce
-// no baseline bytes — no configDir (the unit-test shape) and an unreadable or
-// missing file both arrive as nil. Neither may be the one path where the gate
-// silently stops applying.
-func TestAddedTenantKeysFailsClosedWithoutABaseFile(t *testing.T) {
-	var tcfg cfg.ThresholdConfig
-	if err := yaml.Unmarshal([]byte(smuggled), &tcfg); err != nil {
-		t.Fatal(err)
-	}
-	for _, baseRaw := range [][]byte{nil, {}} {
-		if got := addedTenantKeys(baseRaw, tcfg, "db-a"); len(got) != 1 || got[0] != "other" {
-			t.Errorf("baseRaw %v must yield an empty baseline, got %v", baseRaw, got)
-		}
-	}
-	// validate() is the caller that turns "no configDir" into nil baseRaw.
-	// Since #3064 the body-shape check refuses such a body before the
-	// baseline is consulted at all.
+// validate() with no configDir reads no current file; since #3064 the
+// body-shape check refuses a body declaring another tenant before anything
+// is read, so that path cannot be where the refusal stops applying.
+func TestValidateWithoutConfigDirRefusesAForeignSection(t *testing.T) {
 	if errs, _ := validate("", "db-a", "", smuggled); len(errs) != 1 ||
 		!strings.Contains(errs[0], msgOwnOnly) {
 		t.Errorf("validate with no configDir must still refuse an added section, got %v", errs)

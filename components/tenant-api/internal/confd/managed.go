@@ -27,10 +27,10 @@ import (
 // is the drift #3050 / #3062 came from.
 //
 // ⛔ IDS ARE WHAT THE EXPORTER'S DECODER READS, not the node's text: a key is
-// decoded into a string as the exporter's typed decode into map[string] does,
-// and cfg.ParseTenantFile's own tenant set is checked as well, so this can
-// never call a file API-shaped that the exporter reads as declaring another
-// tenant (a `? !!binary ZGItYQ==` key decodes to "db-a").
+// decoded into a string as the exporter's typed decode into map[string] does
+// (a `? !!binary ZGItYQ==` key decodes to "db-a"). The node walk alone is held
+// to cfg.ParseTenantFile shape by shape (TestShapeVerdict_AgreesWithTheExporter);
+// the exporter's own tenant set is unioned in as well, as defence in depth.
 
 // Git-managed reasons (TenantFileManagement). Fixed strings: they describe
 // the file's shape and never name a tenant.
@@ -82,8 +82,43 @@ const (
 // reads, and a merge key, an alias or a tagged key there can declare an id
 // its text does not show.
 func TenantFileManagement(data []byte, stem string) string {
+	ids, reason := walkDeclaredIDs(data)
+	if reason != "" {
+		return reason
+	}
+	// Defence in depth: whatever the exporter's own parse declares is
+	// declared too. TestShapeVerdict_AgreesWithTheExporter shows, shape by
+	// shape, that the walk alone already never calls a file API-shaped that
+	// the exporter reads as declaring another id, so on every shape it
+	// covers this adds nothing; it stays for a shape that table misses. A
+	// file the exporter does not decode is served by no plane
+	// (config_error); the walk is what decides for it.
+	if c, err := cfg.ParseTenantFile(data); err == nil {
+		for id := range c.Tenants {
+			ids = append(ids, id)
+		}
+	}
+	return declaredVerdict(ids, stem)
+}
+
+// shapeVerdict is TenantFileManagement without the exporter's set: the
+// verdict of the node walk alone. Only the differential test calls it — it is
+// what that test holds against cfg.ParseTenantFile, which the union in
+// TenantFileManagement would otherwise make agree by construction.
+func shapeVerdict(data []byte, stem string) string {
+	ids, reason := walkDeclaredIDs(data)
+	if reason != "" {
+		return reason
+	}
+	return declaredVerdict(ids, stem)
+}
+
+// walkDeclaredIDs walks data's YAML nodes: the ids its `tenants:` keys
+// decode to (repeats kept), or the git-managed reason its shape alone gives
+// (TenantFileManagement's rules other than the id check).
+func walkDeclaredIDs(data []byte) (ids []string, reason string) {
 	if len(bytes.TrimSpace(data)) == 0 {
-		return ""
+		return nil, ""
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var docs []*yaml.Node
@@ -93,66 +128,57 @@ func TenantFileManagement(data []byte, stem string) string {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return GitManagedNotTenantDocument
+			return nil, GitManagedNotTenantDocument
 		}
 		docs = append(docs, n)
 	}
 	if len(docs) == 0 {
-		return "" // comments only: no document, no tenant
+		return nil, "" // comments only: no document, no tenant
 	}
 	for _, d := range docs[1:] {
 		if docRoot(d) != nil {
-			return GitManagedSeveralDocuments
+			return nil, GitManagedSeveralDocuments
 		}
 	}
 	root := docRoot(docs[0])
 	if root == nil {
-		return "" // an empty first document declares no tenant
+		return nil, "" // an empty first document declares no tenant
 	}
 	if root.Kind == yaml.AliasNode || root.Anchor != "" {
-		return GitManagedYAMLIndirection
+		return nil, GitManagedYAMLIndirection
 	}
 	if root.Kind != yaml.MappingNode {
-		return GitManagedNotTenantDocument
+		return nil, GitManagedNotTenantDocument
 	}
 	var tenants *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k, v := root.Content[i], root.Content[i+1]
 		name, ok := plainUntaggedKey(k)
 		if !ok || indirect(v) {
-			return GitManagedYAMLIndirection
+			return nil, GitManagedYAMLIndirection
 		}
 		if name != "tenants" {
 			continue
 		}
 		if tenants != nil {
-			return GitManagedNotTenantDocument
+			return nil, GitManagedNotTenantDocument
 		}
 		tenants = v
 	}
-	var ids []string
 	if tenants != nil && !isNull(tenants) { // absent or null: no tenant
 		if tenants.Kind != yaml.MappingNode {
-			return GitManagedNotTenantDocument
+			return nil, GitManagedNotTenantDocument
 		}
 		for i := 0; i+1 < len(tenants.Content); i += 2 {
 			k, v := tenants.Content[i], tenants.Content[i+1]
 			id, ok := plainUntaggedKey(k)
 			if !ok || indirect(v) {
-				return GitManagedYAMLIndirection
+				return nil, GitManagedYAMLIndirection
 			}
 			ids = append(ids, id)
 		}
 	}
-	// The authority: whatever the exporter's own parse declares is declared
-	// too. A file it does not decode is served by no plane (config_error);
-	// the shape read above is what decides for it.
-	if c, err := cfg.ParseTenantFile(data); err == nil {
-		for id := range c.Tenants {
-			ids = append(ids, id)
-		}
-	}
-	return declaredVerdict(ids, stem)
+	return ids, ""
 }
 
 // declaredVerdict is TenantFileManagement's verdict on the ids a file

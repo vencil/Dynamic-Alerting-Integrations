@@ -412,49 +412,6 @@ func rootKeyShapeError(doc *yaml.Node) string {
 	return ""
 }
 
-// addedTenantKeys returns the sorted `tenants:` keys a body declares that are
-// neither the id being written nor already declared by the file this write
-// replaces. Separate from validate so the rule has one copy and a direct test.
-//
-// FAIL CLOSED on every path that yields no baseline — no configDir (the
-// unit-test shape), a missing file (a brand-new tenant), an unreadable or
-// unparseable one: each arrives here as nil or unparseable baseRaw and leaves
-// the baseline empty, so every foreign key counts as added. Only a base file
-// that actually parses can grandfather anything.
-func addedTenantKeys(baseRaw []byte, tcfg cfg.ThresholdConfig, tenantID string) []string {
-	var foreign []string
-	for id := range tcfg.Tenants {
-		if id != tenantID {
-			foreign = append(foreign, id)
-		}
-	}
-	// The baseline only ever REMOVES entries, so a body that declares nothing
-	// but its own id has the same answer whatever the base file says. Returning
-	// here keeps the ordinary single-tenant write from paying a second full
-	// parse of a file that may hold thousands of sections — measured at roughly
-	// 2x the whole of validate() on a 10k-section base.
-	if len(foreign) == 0 {
-		return nil
-	}
-	// No length guard: Unmarshal of nil succeeds with an empty Tenants map.
-	baseline := map[string]struct{}{}
-	var base cfg.ThresholdConfig
-	if yaml.Unmarshal(baseRaw, &base) == nil {
-		for id := range base.Tenants {
-			baseline[id] = struct{}{}
-		}
-	}
-	var added []string
-	for _, id := range foreign {
-		if _, grandfathered := baseline[id]; grandfathered {
-			continue
-		}
-		added = append(added, id)
-	}
-	sort.Strings(added)
-	return added
-}
-
 // guardTenantID rejects an id whose {id}.yaml would not be a tenant config
 // file. It is the writer-side second enforcement of the same confd predicate
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
@@ -908,10 +865,10 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	// now is a verdict on a tree the write does not land on, in both
 	// directions (#1681):
 	//
-	//   - BYPASS: a stale addedTenantKeys baseline still grandfathers a
-	//     section an earlier write removed, and the write puts it back beside
-	//     the id's own file — one id declared by two files.
-	//   - OVER-REJECT: a stale #2078 walk (tenantFilePath) or baseline refuses
+	//   - BYPASS: a stale verdict on the tenant's file (whether it is
+	//     API-managed, #3064) still admits a write to a file an earlier write
+	//     made git-managed.
+	//   - OVER-REJECT: a stale #2078 walk (tenantFilePath) or verdict refuses
 	//     a write that is legal where it lands — an id whose other declaration
 	//     an earlier write is about to remove, or a WriteIfUnchanged whose base
 	//     is stale and should hear ErrPrecondition, not a validation verdict.
@@ -2003,17 +1960,17 @@ func CheckTenantDocSize(yamlContent string) []string {
 // STATIC" (#1718). Three of validate's checks read the tree and are therefore
 // only meaningful against the tree the write lands on:
 //
-//   - addedTenantKeys      ← readTenantFile(tenantFilePath)
 //   - ValidateTenantKeys   ← mergeTenantConfig reads <configDir>'s root defaults
 //     carrier (the one the exporter's chain selects, #1674) and the root
 //     platform files' per-tenant `tenants:` entries (#2208)
-//   - the eol-expansion guard ← the same baseRaw as addedTenantKeys
+//   - the eol-expansion guard ← readTenantFile(tenantFilePath)
 //
-// The middle one is the trap: "key validation" reads like a pure body check and
-// is not — it merges the platform defaults off disk. Both it and addedTenantKeys
-// were MEASURED to reject legitimate writes when the caller's tree is stale
-// (#1718); classifying by name rather than by what the code reads would have
-// left the second one behind.
+// The first one is the trap: "key validation" reads like a pure body check and
+// is not — it merges the platform defaults off disk. It and the #1681
+// added-section baseline (removed by #3064: a body may declare only its own
+// tenant, validateShape) were MEASURED to reject legitimate writes when the
+// caller's tree is stale (#1718); classifying by name rather than by what the
+// code reads would have left the key validation behind.
 //
 // Everything here short-circuits, exactly as before — the first failure is the
 // only one reported.
@@ -2183,45 +2140,27 @@ func validate(configDir, tenantID, tenantFilePath, yamlContent string) (errs, no
 // tenants the file declares a key-validation message may name (#3039,
 // DiscloseKeyValidation). validate passes nil, naming none.
 func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, replaceUnparseable bool, names TenantNames) (errs, notices []string) {
-	// ⛔ THE ORDER OF THE REMAINING CHECKS IS UNCHANGED, DELIBERATELY. Hoisting
-	// ValidateTenantCustomAlerts up into validateShape would have let a recipe
-	// violation short-circuit ahead of addedTenantKeys — i.e. a body that both
-	// smuggles a foreign section AND has a bad recipe would stop reporting the
-	// foreign section, quietly replacing the #1681 gate's message with another.
-	// So this path keeps running the two separately, in the original sequence.
+	// #3064: validateShape refuses a body that declares any tenant but
+	// tenantID (TenantFileManagement on the body), so the #1681 added-section
+	// gate that used to run here against the base file had nothing left to
+	// find and is gone; a smuggled section is reported by validateShape.
 	tcfg, shapeErrs := validateShape(tenantID, yamlContent)
 	if len(shapeErrs) > 0 {
 		return shapeErrs, nil
 	}
-	// Read the file this write replaces ONCE. Two stateful checks need it — the
-	// added-section gate below and the eol-expansion guard at the end — and on a
-	// large flat conf.d file a second full read+parse doubles a validate() that
-	// may run while the single-writer lock is held.
+	// Read the file this write replaces for the eol-expansion guard at the
+	// end.
 	//
 	// ⛔ The path comes from the caller (#1673), never from tenantID + ".yaml":
-	// a tenant whose file is spelled `.yml` would otherwise get an empty
-	// baseline here, and since the baseline fails closed that would refuse
-	// every write to a flat file it had legitimately been sharing.
+	// a tenant whose file is spelled `.yml` would otherwise read as absent
+	// here.
 	// ⛔ Guarded on configDir, NOT on tenantFilePath: with configDir="" the
 	// resolver still yields a non-empty relative path, so an unconditional read
-	// would take a baseline from the CWD and grandfather foreign sections open.
-	// Pinned by TestValidateFailsClosedWhenConfigDirIsEmpty.
+	// would take the current file from the CWD.
 	var baseRaw []byte
 	var baseErr error
 	if configDir != "" {
 		baseRaw, baseErr = readTenantFile(tenantFilePath) // never blocks on a FIFO (#2939)
-	}
-	// DELTA, not absolute: a flat conf.d file may legitimately declare several
-	// tenants and the exporter serves them, so sections already in the file
-	// stay editable and only sections this write ADDS are refused. Every form
-	// of the attack is an addition. Residual, deliberately accepted: whoever
-	// already has a file naming another tenant keeps that reach — reaching that
-	// state needs an operator, not a request.
-	if added := addedTenantKeys(baseRaw, tcfg, tenantID); len(added) > 0 {
-		return []string{fmt.Sprintf(
-			"YAML adds tenant section(s) %v this file does not already declare — a "+
-				"tenant config may only add tenants.%s; write the others through "+
-				"their own endpoint", added, tenantID)}, nil
 	}
 	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
 	// (deprecated-key alias advisories) must never block a write; they ride
