@@ -61,7 +61,7 @@ class TestGitDiffRemoved:
     @pytest.mark.parametrize("extra", [(), ("--skip-if-unavailable",)])
     def test_rc2_naming_the_replacement(self, monkeypatch, capsys, cli_argv, extra):
         for name in ("_observed_map", "prometheus_available", "query_range",
-                     "extract_changes_from_dirs", "changed_recipe_tenants"):
+                     "extract_changes_from_dirs", "load_trees"):
             monkeypatch.setattr(bt, name, _boom)
         cli_argv("backtest_threshold", "--git-diff", "--prometheus", "http://prom:9090", *extra)
         with pytest.raises(SystemExit) as exc_info:
@@ -836,35 +836,24 @@ class TestConfdSpellingParityWithTheExporter:
 
     # ── site 2 of 2: the recipe notice in main() ──────────────────────
     def test_recipe_notice_counts_a_tenant_declared_in_a_yml_carrier(
-        self, monkeypatch, tmp_path, capsys, cli_argv
+        self, monkeypatch, tmp_path, capsys, cli_argv, da_guard_env
     ):
-        """LOWER + UPPER through `main()`'s own recipe scan (`list_config_tree`).
-
-        The operator-facing NOTE is built from `find_custom_alert_tenants`,
-        which reads whatever this filter admits — so a recipe-only tenant
-        living in a `.yml` used to be absent from a notice whose whole job
-        is "there are recipe tenants this flat backtest does not cover".
-        """
+        """LOWER + UPPER through `main()`'s recipe NOTE, which since #3111 is
+        the tenants whose recipes changed as da-guard serves the two trees:
+        a recipe tenant in a `.yml` carrier is a real tenant (#1603); one in a
+        `.txt` file is none the exporter loads."""
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        recipe = ("tenants:\n  {t}:\n    _custom_alerts:\n"
-                  "      - recipe: threshold\n")
-        (conf_d / "acme.yaml").write_text(recipe.format(t="acme"), encoding="utf-8")
-        (conf_d / "beta.yml").write_text(recipe.format(t="beta"), encoding="utf-8")
-        # UPPER — same body, an extension the exporter never loads.
-        (conf_d / "ghost.txt").write_text(recipe.format(t="ghost"), encoding="utf-8")
-
-        cli_argv("backtest_threshold",
-                 "--config-dir", str(conf_d), "--baseline", str(conf_d),
+        files = {name: _tenant_file(t, "    mysql_connections: 70\n")
+                 for name, t in (("acme.yaml", "acme"), ("beta.yml", "beta"),
+                                 ("ghost.txt", "ghost"))}
+        cur, base = _dirs(tmp_path, {**_D, **files},
+                          {**_D, **{n: b + _RECIPE.format(v=150) for n, b in files.items()}})
+        cli_argv("backtest_threshold", "--config-dir", cur, "--baseline", base,
                  "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit):
             bt.main()
-
-        err = capsys.readouterr().err
-        assert "acme" in err, "CONTROL: the .yaml recipe tenant was always named"
-        assert "beta" in err, "#1603: the .yml recipe tenant is a real tenant"
-        assert "ghost" not in err
+        note = [ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("NOTE:")]
+        assert len(note) == 1 and note[0].endswith("(_custom_alerts): acme, beta"), note
 
 
 # ── 回放 alert 實際比較的那條 series（#3017 / #3002）──────────────
@@ -1599,7 +1588,7 @@ def _path_baseline_missing(mp, tmp, prom):
 def _path_served_values(mp, tmp, prom):
     def missing(*a, **kw):
         raise bt.DaGuardNotFoundError("no da-guard")
-    mp.setattr(bt, "extract_changes_from_dirs", missing)
+    mp.setattr(bt, "load_trees", missing)
     mp.setattr(bt, "prometheus_available", _boom)
     d = _plain_confd(tmp)
     return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
@@ -1744,7 +1733,7 @@ class TestOutputPreflight:
                                                capsys):
         """樹、observed-map、Prometheus 一個都沒碰就停（每個都換成 `_boom`）。"""
         for name in ("_observed_map", "prometheus_available", "query_range",
-                     "extract_changes_from_dirs", "changed_recipe_tenants"):
+                     "extract_changes_from_dirs", "load_trees"):
             monkeypatch.setattr(bt, name, _boom)
         bad = _unwritable(tmp_path, "missing_parent", "r.out")
         rc, out = _run_main(cli_argv, capsys, "--config-dir", str(tmp_path), "--baseline",
@@ -2155,7 +2144,79 @@ class TestRecipeNoteFromTheWholeTree:
         text = md.read_text(encoding="utf-8")
         assert "\x1b" not in text and "](http" in text
         line = next(ln for ln in text.splitlines() if "changed custom-alert recipes" in ln)
-        assert bt._code_cell(tid) in line, line
+        # A fence longer than the id's backtick run, so the span holds the whole id.
+        assert line.endswith(": ``a`b[x](http://e)?c?d``"), line
+
+    def test_a_pipe_in_a_tenant_id_is_not_escaped_outside_a_table(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """0bd6f362: the recipe line is running text, not a table row, so the
+        table cell's `\\|` was shown as written."""
+        md = tmp_path / "r.md"
+        self._note(monkeypatch, cli_argv, capsys, tmp_path, {"t.yaml": "tenants:\n  a|b: {}\n"},
+                   {"t.yaml": "tenants:\n  a|b:\n" + _RECIPE.format(v=150)},
+                   "--markdown-output", str(md))
+        line = next(ln for ln in md.read_text(encoding="utf-8").splitlines()
+                    if "changed custom-alert recipes" in ln)
+        assert line.endswith(": `a|b`"), line
+
+    _BOGUS = ("    _custom_alerts:\n      - recipe: {r}\n        name: x\n        metric: m\n"
+              "        op: '>'\n        window: 5m\n        threshold: '1:warning'\n")
+
+    @pytest.mark.parametrize("before, after, named", [
+        # c6: a list the exporter refuses whole is added.
+        ("", _BOGUS.format(r="bogus"), True),
+        # c6 reversed: the refused list is removed.
+        (_BOGUS.format(r="bogus"), "", True),
+        # c3: refused on both sides, with different content.
+        (_BOGUS.format(r="bogus1"), _BOGUS.format(r="bogus2"), True),
+        # control: refused on both sides, unchanged.
+        (_BOGUS.format(r="bogus"), _BOGUS.format(r="bogus"), False),
+    ], ids=["refused-added", "refused-removed", "refused-changed", "refused-unchanged"])
+    def test_a_recipe_list_the_exporter_refuses_is_compared(
+            self, monkeypatch, cli_argv, capsys, tmp_path, before, after, named):
+        """0bd6f362: only the served rows were compared, so a recipe change
+        the exporter refuses whole (it serves no row either side) was not
+        named."""
+        base = "    mysql_connections: 70\n"
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {"db-a.yaml": self._t("db-a", base + before)},
+            {"db-a.yaml": self._t("db-a", base + after)})
+        if named:
+            assert len(notes) == 1 and notes[0].endswith("(_custom_alerts): db-a"), out.err
+        else:
+            assert notes == [], out.err
+
+    @pytest.mark.parametrize("extra", [
+        # c7: an unknown recipe beside a valid one.
+        _BOGUS.format(r="bogus").replace("    _custom_alerts:\n", ""),
+        # c20: a duplicate of the valid one.
+        "      - recipe: threshold\n        name: q2\n"
+        "        metric: mysql_global_status_threads_connected\n        op: '>'\n"
+        "        window: 5m\n        threshold: '150:warning'\n",
+    ], ids=["unknown-recipe", "duplicate"])
+    def test_a_row_refused_beside_served_rows_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path, extra):
+        """Documented limit: a row the exporter refuses while it serves the
+        others leaves the served rows and `unserved` as they were; da-guard
+        reports it on stderr only (which is not parsed), so the tenant is not
+        named. Its stderr line still reaches the log."""
+        good = self._t("db-b", _RECIPE.format(v=150))
+        _rc, notes, out = self._note(monkeypatch, cli_argv, capsys, tmp_path,
+                                     {"db-b.yaml": good}, {"db-b.yaml": good + extra})
+        assert notes == [], out.err
+        assert "rejected" in out.err, out.err
+
+    def test_each_tree_is_read_by_da_guard_once(self, monkeypatch, cli_argv, capsys, tmp_path):
+        """0bd6f362 ran da-guard on each tree twice (recipes, then values)."""
+        calls = []
+        real = bt.load_served_tree
+        monkeypatch.setattr(bt, "load_served_tree",
+                            lambda *a, **kw: calls.append(a) or real(*a, **kw))
+        self._note(monkeypatch, cli_argv, capsys, tmp_path,
+                   {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")},
+                   {"db-a.yaml": self._t("db-a", "    mysql_connections: 50\n")})
+        assert len(calls) == 2, calls
 
     @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
                         reason="as root the permission bits decide nothing")
@@ -2188,6 +2249,16 @@ def _workflow():
 class TestBacktestWorkflow:
     """#3111: the workflow that runs this tool on a PR."""
 
+    def test_the_paths_comment_matches_what_the_tool_says(self):
+        """0bd6f362's comment said a tool-only PR gets "no threshold changes
+        found."; without a reachable Prometheus the skip comes first."""
+        with open(_WORKFLOW, encoding="utf-8") as f:
+            text = f.read()
+        assert "Not everything the result" in text
+        assert bt._NOT_RUN_WHY[("skipped", "prometheus_unavailable")].startswith(
+            "Prometheus is unavailable")
+        assert '"Prometheus is unavailable"' in text
+
     def test_it_runs_when_the_tool_or_the_workflow_changes(self):
         """73c1e2da: `paths` listed only conf.d/**, so a PR changing how the
         backtest runs never ran it."""
@@ -2200,8 +2271,21 @@ class TestBacktestWorkflow:
                        ".github/workflows/backtest.yaml"):
             assert needed in paths, (needed, paths)
 
-    @pytest.mark.parametrize("has_confd", [True, False])
-    def test_a_base_without_confd_skips_with_a_comment(self, tmp_path, has_confd):
+    @pytest.mark.parametrize("files, has_confd", [
+        (None, False),
+        ([], False),
+        # 0bd6f362: a conf.d/ holding no config file passed the check, and the
+        # run ended rc 2 `served_values_unavailable` ("no .yaml files found").
+        (["README.md"], False),
+        ([".hidden.yaml"], False),
+        ([".git/x.yaml"], False),
+        (["notes.yamlx"], False),
+        (["_defaults.yaml"], True),
+        (["team/db-a.yml"], True),
+        (["DB-A.YAML"], True),
+    ], ids=["no-dir", "empty", "readme-only", "hidden-only", "hidden-dir", "not-yaml",
+            "yaml", "nested-yml", "upper-case"])
+    def test_a_base_without_confd_skips_with_a_comment(self, tmp_path, files, has_confd):
         """73c1e2da: a PR adding the first conf.d/ ended rc 2
         `served_values_unavailable`."""
         bash = shutil.which("bash")
@@ -2211,9 +2295,12 @@ class TestBacktestWorkflow:
         check = next(st for st in steps if st.get("id") == "base")
         run = next(st for st in steps if st.get("id") == "backtest")
         assert run["if"] == "steps.base.outputs.has_confd == 'true'"
-        if has_confd:
-            (tmp_path / ".backtest-base/components/threshold-exporter/config/conf.d").mkdir(
-                parents=True)
+        confd = tmp_path / ".backtest-base/components/threshold-exporter/config/conf.d"
+        if files is not None:
+            confd.mkdir(parents=True)
+            for name in files:
+                (confd / name).parent.mkdir(parents=True, exist_ok=True)
+                (confd / name).write_text("x: 1\n", encoding="utf-8")
         out, comment = tmp_path / "gh-output", tmp_path / "comment.md"
         script = check["run"].replace("/tmp/backtest-comment.md", str(comment))
         subprocess.run([bash, "-e", "-c", script], cwd=str(tmp_path), timeout=60, check=True,
@@ -2223,4 +2310,5 @@ class TestBacktestWorkflow:
             assert got == "has_confd=true\n" and not comment.exists()
         else:
             assert got == ""
-            assert "the PR base has no `conf.d/`" in comment.read_text(encoding="utf-8")
+            assert "the PR base has no `conf.d/` config file" in comment.read_text(
+                encoding="utf-8")

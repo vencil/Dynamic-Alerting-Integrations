@@ -756,7 +756,7 @@ def test_a_change_with_nothing_to_query_is_not_reported_as_no_data(
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60")})
     twin_only = [_ident("mysql_cpu", "warning", metric="cpu", twin=True)]
-    monkeypatch.setattr(bt, "extract_changes_from_dirs", lambda cur, base: [
+    monkeypatch.setattr(bt, "extract_changes_from_dirs", lambda cur, base, **kw: [
         {"tenant": "tx", "metric": "k", "old_value": "50", "new_value": "60", "series": twin_only}])
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
@@ -823,8 +823,8 @@ def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
     assert p.returncode == 2, (p.stdout, p.stderr)
     doc = json.loads(p.stdout)
     assert (doc["status"], doc["changes"]) == ("caller_error", [])
-    if side == "baseline":  # read by da-guard only (the recipe scan reads --config-dir)
-        assert doc["reason"] == "served_values_unavailable"
+    # #3111: both trees are read by da-guard only, so every side is this reason.
+    assert doc["reason"] == "served_values_unavailable"
     assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr
 
 

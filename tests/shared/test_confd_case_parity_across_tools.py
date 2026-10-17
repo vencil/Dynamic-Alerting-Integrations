@@ -1863,14 +1863,16 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
 # `backtest_threshold.py`, the commit counted "of 4", and reverting three
 # of them left the whole suite green. The one that was not counted was
 # also the one still broken. #3111 removed `--git-diff` with its diff parser
-# and HEAD~1 lookup; what remains is the `--config-dir` recipe scan.
+# and HEAD~1 lookup, and the `--config-dir` recipe scan with it: the recipe
+# NOTE now reads the two trees da-guard served; the test below pins that it
+# answers the case, spelling, hidden and reserved axes as the exporter does.
 
 def test_config_dir_recipe_scan_sees_either_casing(
         tmp_path: pathlib.Path, da_guard_env) -> None:
-    """The fourth site: `main()`'s own `--config-dir` scan, which feeds the
-    custom-alert notice. It is a SEPARATE listing from
-    `extract_changes_from_dirs`, so the tests above cannot reach it — and
-    reverting it alone left the suite green.
+    """The recipe NOTE (`changed_recipe_tenants`, #3111): the tenants whose
+    recipes changed between the two trees da-guard served. It used to be a
+    separate Python listing that reverting alone left the suite green; it is
+    pinned here through the CLI on the same axes.
 
     Driven through the CLI because that is the only way this site runs.
 

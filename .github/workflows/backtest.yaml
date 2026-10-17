@@ -3,10 +3,15 @@ on:
   pull_request:
     paths:
       - 'components/threshold-exporter/config/conf.d/**'
-      # #3111: the tool, the files it reads and this workflow, so a change to
-      # how the backtest runs is run here too (as config-diff-advisory.yml
-      # lists its own). A PR that changes none of conf.d/ gets "no threshold
-      # changes found." in the sticky comment.
+      # #3111: the tool, the modules that decide what it compares, and this
+      # workflow, so a change to how the backtest runs is run here too (as
+      # config-diff-advisory.yml lists its own). ⚠️ Not everything the result
+      # depends on is in the list — the da-guard Go sources and the other
+      # shared `_lib_*` modules are not — so a change there alone does not run
+      # this; the next conf.d PR does. A PR that changes none of conf.d/ still
+      # gets a comment: without a reachable Prometheus (no PROMETHEUS_URL
+      # secret) it says "Prometheus is unavailable" — that check comes before
+      # the "no threshold changes found." one — and with one, the latter.
       - 'scripts/tools/ops/backtest_threshold.py'
       - 'scripts/tools/ops/_observed_map_lib.py'
       - 'scripts/tools/ops/metric_observed_map.yaml'
@@ -64,12 +69,18 @@ jobs:
       - name: Check the PR base has a conf.d/
         id: base
         run: |
-          if [ -d .backtest-base/components/threshold-exporter/config/conf.d ]; then
+          # At least one *.yaml / *.yml (any case, as the exporter matches it)
+          # under it, hidden files and directories skipped as the exporter
+          # skips them: an empty conf.d/ (or one holding only a README) is a
+          # tree the exporter refuses ("no .yaml files found").
+          confd=.backtest-base/components/threshold-exporter/config/conf.d
+          if [ -d "$confd" ] && [ -n "$(find "$confd" -mindepth 1 -name '.*' -prune -o \
+              \( -iname '*.yaml' -o -iname '*.yml' \) -print -quit)" ]; then
             echo "has_confd=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::the PR base has no conf.d/ to compare against; backtest skipped"
+            echo "::notice::the PR base has no conf.d/ config file to compare against; backtest skipped"
             printf '%s\n' '## Threshold Backtest Results' '' \
-              '> **Backtest not run:** the PR base has no `conf.d/` to compare against.' \
+              '> **Backtest not run:** the PR base has no `conf.d/` config file to compare against.' \
               > /tmp/backtest-comment.md
           fi
 

@@ -373,7 +373,17 @@ def _dimensioned_rows(sides):
     return out
 
 
-def extract_changes_from_dirs(config_dir, baseline_dir):
+def load_trees(config_dir, baseline_dir):
+    """`[("--baseline", ServedTree), ("--config-dir", ServedTree)]`: both trees
+    as /metrics serves them over the UTC day (`schedules`), read at the same
+    instant, each by one da-guard run. Raises what `load_served_tree` raises,
+    naming the tree that failed."""
+    at = now_at()
+    return [(flag, load_served_tree(conf_d, at=at, schedules=True))
+            for flag, conf_d in (("--baseline", baseline_dir), ("--config-dir", config_dir))]
+
+
+def extract_changes_from_dirs(config_dir, baseline_dir, trees=None):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
     Returns list of dicts: [{tenant, metric, old_value, new_value, keys,
@@ -420,9 +430,8 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     part of the day in which either tree's /metrics cannot be gathered: the
     caller exits 2 rather than reporting a partial diff.
     """
-    at = now_at()
-    trees = [(flag, load_served_tree(conf_d, at=at, schedules=True))
-             for flag, conf_d in (("--baseline", baseline_dir), ("--config-dir", config_dir))]
+    if trees is None:
+        trees = load_trees(config_dir, baseline_dir)
     _print_tree_warnings(trees)
     old_tree, new_tree = (tree.tenants for _flag, tree in trees)
 
@@ -470,23 +479,37 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
 # report instead. Recipe would-fire preview: #657.
 # ---------------------------------------------------------------------------
 
-def changed_recipe_tenants(config_dir, baseline_dir):
-    """The tenants whose custom-alert recipes changed between the two trees,
-    sorted: a tenant whose custom-alert rows (`_custom_alerts` as the
-    exporter serves it, `da-guard served-values` — any file it takes a
-    tenant from, `_platform.yaml` and sub-directories included; a recipe's
-    shape, window, `for:`, name, mode, severity and value are all in its
-    rows) differ, a recipe added or removed included. A tenant moved to
-    another file with the same recipes is not one (#3111, #3155). Raises
-    what `load_served_tree` raises."""
-    at = now_at()
-    rows = []
-    for conf_d in (baseline_dir, config_dir):
-        tree = load_served_tree(conf_d, at=at)
-        rows.append({t: json.dumps(tv.values.get("_custom_alerts") or [], sort_keys=True)
-                     for t, tv in tree.tenants.items()})
-    old, new = rows
-    return sorted(t for t in set(old) | set(new) if old.get(t, "[]") != new.get(t, "[]"))
+def _recipe_view(tenant_values):
+    """What the exporter makes of one tenant's custom-alert recipes, as
+    served-values reports it: the rows it serves (`values["_custom_alerts"]`;
+    a recipe's shape, window, `for:`, name, mode, severity and value are all
+    in them) and the list it refuses whole (`unserved["_custom_alerts"]`, as
+    written)."""
+    return json.dumps([tenant_values.values.get("_custom_alerts") or [],
+                       (tenant_values.unserved or {}).get("_custom_alerts")], sort_keys=True)
+
+
+def changed_recipe_tenants(trees):
+    """The tenants whose custom-alert recipes changed between the two trees
+    `load_trees` read, sorted: a tenant whose `_recipe_view` differs — a
+    recipe added, changed or removed, served or refused whole by the
+    exporter (any file it takes a tenant from, `_platform.yaml` and
+    sub-directories included). A tenant moved to another file with the same
+    recipes is not one (#3111, #3155).
+
+    ⚠️ Not named: a change the exporter's served view does not show. One
+    recipe of a list refused next to recipes it serves (an unknown recipe, a
+    duplicate) leaves the served rows as they were and the list is not in
+    `unserved`; served-values' JSON carries no per-recipe refusal (the
+    exporter logs it), and its stderr is not parsed. Top-level
+    `_custom_alerts` of a sub-directory `_defaults.yaml` (read by the
+    custom-alert compiler, not served) is not seen either. config-diff and
+    the compiler judge those."""
+    (_f, old_tree), (_g, new_tree) = trees
+    old = {t: _recipe_view(tv) for t, tv in old_tree.tenants.items()}
+    new = {t: _recipe_view(tv) for t, tv in new_tree.tenants.items()}
+    empty = json.dumps([[], None], sort_keys=True)
+    return sorted(t for t in set(old) | set(new) if old.get(t, empty) != new.get(t, empty))
 
 
 def custom_alert_notice(tenants):
@@ -506,8 +529,9 @@ def custom_alert_notice(tenants):
 
 def custom_alert_markdown(tenants):
     """Markdown block surfacing recipe changes in the PR comment; each
-    tenant id as a fenced, escaped code cell (`_code_cell`)."""
-    listed = ", ".join(_code_cell(t) for t in tenants)
+    tenant id as an escaped, fenced code span (`_code_span`) -- running
+    text, not a table cell, so no `|` escaping."""
+    listed = ", ".join(_code_span(t) for t in tenants)
     return (
         "## Custom-Alert Recipes (not flat-backtested)\n"
         "\n"
@@ -1108,16 +1132,28 @@ def _markdown_cell(text):
     return safe_label(text).replace("|", "\\|")
 
 
-def _code_cell(text):
-    """A string from a tree or built from one (a key, a query holding a
-    tenant id) as inline code in one Markdown table cell: `_markdown_cell`'s
-    escaping, inside a backtick fence longer than any backtick run in it
-    (padded when it starts or ends with one), so neither the code span nor
-    the row can be closed early."""
-    text = _markdown_cell(text)
+def _fenced(text):
+    """`text` inside a backtick fence longer than any backtick run in it
+    (padded when it starts or ends with one), so the code span cannot be
+    closed early."""
     fence = "`" * (max((len(r) for r in re.findall(r"`+", text)), default=0) + 1)
     pad = " " if text.startswith("`") or text.endswith("`") else ""
     return f"{fence}{pad}{text}{pad}{fence}"
+
+
+def _code_span(text):
+    """A string from a tree as inline code in running Markdown text (not a
+    table): escaped (`safe_label`) and fenced (`_fenced`). No `|` escaping:
+    outside a table a `\\|` would be shown as written."""
+    return _fenced(safe_label(text))
+
+
+def _code_cell(text):
+    """A string from a tree or built from one (a key, a query holding a
+    tenant id) as inline code in one Markdown table cell: `_markdown_cell`'s
+    escaping (its `|` too, so the row keeps its columns), fenced
+    (`_fenced`), so neither the code span nor the row can be closed early."""
+    return _fenced(_markdown_cell(text))
 
 
 def generate_markdown(report):
@@ -1420,10 +1456,11 @@ def main():
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
             _end_not_run(args, "caller_error", "baseline_missing", EXIT_CALLER_ERROR)
         try:
-            recipe_tenants = changed_recipe_tenants(args.config_dir, args.baseline)
+            trees = load_trees(args.config_dir, args.baseline)
+            recipe_tenants = changed_recipe_tenants(trees)
             if recipe_tenants:
                 print(custom_alert_notice(recipe_tenants), file=sys.stderr)
-            dir_changes = extract_changes_from_dirs(args.config_dir, args.baseline)
+            dir_changes = extract_changes_from_dirs(args.config_dir, args.baseline, trees=trees)
         except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
             _exit_served_values_error(exc, args, recipe_tenants)
 

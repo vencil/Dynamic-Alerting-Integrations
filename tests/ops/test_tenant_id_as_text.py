@@ -921,7 +921,7 @@ def _ids_backtest(d, spell):
         f"tenants:\n  {spell}:\n    _custom_alerts:\n      - recipe: threshold\n"
         "        name: q\n        metric: m\n        op: '>'\n        window: 5m\n"
         "        threshold: '150:warning'\n")})
-    return set(m.changed_recipe_tenants(str(d / "cur"), str(d / "base")))
+    return set(m.changed_recipe_tenants(m.load_trees(str(d / "cur"), str(d / "base"))))
 
 
 def _ids_custom_alerts(d, spell):
