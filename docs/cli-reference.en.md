@@ -688,7 +688,7 @@ Execute historical backtest of PR threshold changes.
 **Syntax**
 
 ```bash
-da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
+da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> --old-value <v> --new-value <v>] [options]
 ```
 
 **Required Parameters**
@@ -702,6 +702,10 @@ Choose one mode:
 2. **Directory Comparison Mode**: `--config-dir <dir> --baseline <dir>`
    (Compare two config versions)
    Both trees are read by the exporter (`da-guard served-values`, da-guard required; #2119), and the values `/metrics` actually serves are compared per tenant and per threshold key: a change in the platform file, a `_defaults.yaml`, a profile or a sub-directory counts; tenants come from each file's `tenants:`, and a file without `tenants:` serves nothing, so editing it is no change. A key or tenant served on one side only (switched off, added, removed) has no value on the other. Values are compared over the whole UTC day: each old/new pair a key takes is one row; one that does not hold all day carries `window`, the list of every part of the day it holds in (UTC `HH:MM-HH:MM`). The Prometheus backtest is not restricted to those windows: it always covers the whole `--lookback`. The severity decides which alert compares a row, the value when it fires ([#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)): a row whose value or severity differs is a change; when the two sides' severities differ, under `--json` the row carries `old_severity` / `new_severity` and the text and Markdown reports note them beside the values. A change to another severity a rule selects (`70` → `70:critical`) is backtested on its values (the same points fire); to a severity no rule selects (`70:high`, `70:`) that side has no threshold and the change reads as the alert silenced (`Metric disabled — all alerts silenced`), and changing it back as re-enabled. Which alert compares a row is read from the `/metrics` series served-values reports for the key ([#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)), not from the key's name: a row with severity critical (a `<base>_critical` whose `<base>` is declared in the root `defaults:` — even when the tenant switches `<base>` itself off with `disable` — and a key a window overrides to `N:critical`) is compared by the `<metric_key>_critical` alert, a row with severity warning by the `<metric_key>` alert; a row of any other severity (e.g. `60:high`, `60:Critical` — the rules select `severity="warning"` / `"critical"` exactly, case included) is compared by no alert: that side has no threshold, and with neither side of a severity a rule selects the change is not backtested (`severity '...' is selected by no threshold rule`, the same reason `--git-diff` / `--tenant` give) — and a `<base>_critical` whose `<base>` the root `defaults:` does not declare is served as a warning row of metric `<x>_critical`, which no alert selects, so it is not backtested; a retired alias's twin (`legacy_twin: true`) is never read, since data under the retired name is not this threshold's data. When the rows of one change are compared by alerts that disagree on the series or the direction, one replay cannot stand for both and the change is not backtested (`rows compared differently`). The alert's threshold is the `max by(tenant)` of every row of one metric and severity, dimensioned rows included: when the tenant also serves (in either tree, at any time of the day) a dimensioned row of the same metric and severity, the changed base value is not what the alert compares, and the change is not backtested (`dimensioned rows share this alert's threshold (max by tenant)`). Dimensioned keys (a series with `dimensions` / `dimensions_regex` in served-values, e.g. `metric{db="a"}`) are listed but not queried in Prometheus, marked `not_backtested` (`backtest: skipped: dimensioned key`). The text and Markdown reports say how many were not backtested, and why.
+
+3. **Single-change Mode**: `--tenant <id> --metric <key> --old-value <v> --new-value <v>`
+   (Reads no config file; backtests the one change given on the command line)
+   `--tenant` requires `--metric` and at least one of `--old-value` / `--new-value`, otherwise exit 2; the tenant id must be a valid DNS-1123 label. Values are read the same way as in `--git-diff` (see "What the backtest queries" below). When `--git-diff` or `--config-dir` is also given, that source wins and these flags are only argument-checked.
 
 **What the backtest queries** ([#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017), [#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002))
 
@@ -717,7 +721,7 @@ Choose one mode:
 | `--git-diff` | Git Diff mode: read the threshold changes in `git diff HEAD~1 -- conf.d/` (needs git, see Required Parameters above) | false |
 | `--config-dir <DIR>` | Directory Comparison mode: the config directory after the change (with `--baseline`) | (none) |
 | `--baseline <DIR>` | Directory Comparison mode: the config directory before the change (with `--config-dir`) | (none) |
-| `--tenant <ID>` | Single-change mode: the tenant id (requires `--metric`, `--old-value` and `--new-value`) | (none) |
+| `--tenant <ID>` | Single-change mode: the tenant id (requires `--metric` and at least one of `--old-value` / `--new-value`) | (none) |
 | `--metric <KEY>` | Single-change mode: the threshold key (with `--tenant`) | (none) |
 | `--old-value <VALUE>` | Single-change mode: the old threshold value, read the way conf.d is (e.g. `70`, `70:critical`; with `--tenant`) | (none) |
 | `--new-value <VALUE>` | Single-change mode: the new threshold value (with `--tenant`) | (none) |
