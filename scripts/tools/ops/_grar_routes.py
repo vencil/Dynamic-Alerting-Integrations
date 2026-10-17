@@ -21,6 +21,11 @@ Functions:
   Main route generation:
     _build_tenant_routes / generate_routes
 
+  Per-slot render verdicts (#3076):
+    SlotVerdict / tenant_slot_verdicts — for every receiver slot a tenant's
+    routing authors (main receiver, overrides[i], routes[i]), the receiver
+    rendered for it or why none is
+
   Root fallthrough for enforced-only tenants (#2519):
     _build_root_fallthrough_routes / is_root_fallthrough_route
     pin_root_fallthrough_receiver (called where the root receiver is known)
@@ -34,12 +39,15 @@ import copy
 import os
 import sys
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_merge import (  # noqa: E402
+    Finding,
+    SkippedEntryWarning,
     _apply_timing_params,
     _contains_tenant_placeholder,
     _substitute_tenant,
@@ -179,6 +187,122 @@ def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
 
 
 # ============================================================
+# Per-slot render verdicts (#3076)
+# ============================================================
+
+@dataclass(frozen=True)
+class SlotVerdict:
+    """What the generator did with one receiver slot of a tenant's routing.
+
+    ⛔ The one record of "which receivers exist" for a consumer that tests or
+    lists them (notification_tester): it is written at the very branch that
+    renders or drops the slot, so a consumer never decides that again (#3076:
+    the tester's own walk of ``_routing`` tested entries this generator drops).
+
+    slot: ``receiver`` (the main receiver), ``overrides[i]`` / ``routes[i]``
+      (index into the authored list), or ``overrides`` / ``routes`` when that
+      value is not a list (the whole set is dropped).
+    receiver: the authored receiver object of the slot, as written (None when
+      the entry is not a mapping or has no ``receiver``).
+    receiver_name: the Alertmanager receiver rendered for it; None = not
+      rendered.
+    stage: None when rendered, else where it was dropped — ``entry`` (the
+      entry itself: not a mapping, no usable matcher, an unsupported key),
+      ``receiver`` (its receiver: missing, refused by build_receiver_config or
+      by the --policy domain allowlist), ``parent`` (the tenant's main
+      receiver is not rendered, so no child is).
+    reason: the ``SkippedEntryWarning`` line (the same object as in the
+      warning stream) that dropped it; None when rendered.
+    """
+
+    tenant: str
+    slot: str
+    receiver: object
+    receiver_name: str | None
+    stage: str | None
+    reason: Finding | None
+
+    @property
+    def rendered(self) -> bool:
+        return self.receiver_name is not None
+
+
+def _slot_receiver(entry: object) -> object:
+    return entry.get("receiver") if isinstance(entry, dict) else None
+
+
+def _note_rendered(verdicts: list[SlotVerdict] | None, tenant: str, slot: str,
+                   receiver: object, receiver_name: str) -> None:
+    if verdicts is not None:
+        verdicts.append(SlotVerdict(tenant, slot, receiver, receiver_name,
+                                    None, None))
+
+
+def _note_skipped(verdicts: list[SlotVerdict] | None, tenant: str, slot: str,
+                  receiver: object, stage: str, warnings: list[str],
+                  start: int) -> None:
+    """Record *slot* as dropped at *stage*; the reason is the first
+    ``SkippedEntryWarning`` emitted while it was processed (``warnings[start:]``)."""
+    if verdicts is None:
+        return
+    reason = next((w for w in warnings[start:]
+                   if isinstance(w, SkippedEntryWarning)), None)
+    verdicts.append(SlotVerdict(tenant, slot, receiver, None, stage, reason))
+
+
+def _child_slots(cfg: dict) -> list[tuple[str, str, object]]:
+    """``(slot, ref, receiver)`` per child slot *cfg* authors, in render order
+    (overrides, then routes), with the same presence rules as
+    ``expand_routing_overrides`` / ``expand_routing_routes``; ``ref`` is how
+    their WARN lines name the slot."""
+    out: list[tuple[str, str, object]] = []
+    overrides = cfg.get("overrides", [])
+    if overrides:
+        if isinstance(overrides, list):
+            out.extend((f"overrides[{i}]", f"override[{i}]", _slot_receiver(e))
+                       for i, e in enumerate(overrides))
+        else:
+            out.append(("overrides", "'overrides'", None))
+    entries = cfg.get("routes")
+    if not (entries is None or entries == []):
+        if isinstance(entries, list):
+            out.extend((f"routes[{i}]", f"routes[{i}]", _slot_receiver(e))
+                       for i, e in enumerate(entries))
+        else:
+            out.append(("routes", "'routes'", None))
+    return out
+
+
+def _drop_unrendered_main(tenant: str, cfg: dict, warnings: list[str],
+                          verdicts: list[SlotVerdict] | None, start: int) -> None:
+    """The tenant's main receiver is not rendered (its WARN is already in
+    ``warnings[start:]``): record that, and drop every child slot with one
+    blocking line of its own (#3076) — the children hang under the main route,
+    so none of them is rendered either, and until now only the main receiver
+    was named."""
+    _note_skipped(verdicts, tenant, "receiver", cfg.get("receiver"), "receiver",
+                  warnings, start)
+    for slot, ref, receiver in _child_slots(cfg):
+        start = len(warnings)
+        warnings.append(skipped_entry_warning(
+            f"  WARN: {tenant}: {ref} not rendered: the tenant's main receiver "
+            "is not rendered, skipping",
+            kind="parent_receiver_not_rendered", tenant=tenant, field=slot))
+        _note_skipped(verdicts, tenant, slot, receiver, "parent", warnings, start)
+
+
+def tenant_slot_verdicts(tenant: str, routing: dict,
+                         allowed_domains: list[str] | None = None
+                         ) -> list[SlotVerdict]:
+    """Every receiver slot of *tenant*'s resolved *routing*, as
+    ``_build_tenant_routes`` renders or drops it: the main receiver first,
+    then overrides[i], then routes[i] (#3076)."""
+    verdicts: list[SlotVerdict] = []
+    _build_tenant_routes({tenant: routing}, allowed_domains, verdicts=verdicts)
+    return verdicts
+
+
+# ============================================================
 # Routing Override Processing (Tenant-level alert routing overrides)
 # ============================================================
 
@@ -288,7 +412,9 @@ def _build_override_route(idx: int, tenant: str, matchers: list[str],
     return sub_route, warnings
 
 
-def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
+def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains: list[str] | None = None,
+                             verdicts: list[SlotVerdict] | None = None
+                             ) -> tuple[list[dict], list[dict], list[str]]:
     """Expand per-rule routing overrides into sub-routes.
 
     v1.8.0: Supports per-alertname or per-metric_group receiver overrides.
@@ -307,6 +433,8 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         tenant: tenant name for error messages and matchers.
         routing_config: dict containing optional 'overrides' list.
         allowed_domains: domain allowlist for webhook validation (may be None).
+        verdicts: when given, one ``SlotVerdict`` per override slot is
+          appended (#3076).
 
     Returns:
         (sub_routes, override_receivers, warnings) where:
@@ -327,13 +455,16 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'overrides' must be a list, skipping",
                                               kind="invalid_override_entry", tenant=tenant,
                                               field="overrides"))
+        _note_skipped(verdicts, tenant, "overrides", None, "entry", warnings, 0)
         return sub_routes, override_receivers, warnings
 
     for idx, override in enumerate(overrides):
+        slot, start = f"overrides[{idx}]", len(warnings)
         if not isinstance(override, dict):
             warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] must be a dict, skipping",
                                                   kind="invalid_override_entry", tenant=tenant,
                                                   field=f"overrides[{idx}]"))
+            _note_skipped(verdicts, tenant, slot, None, "entry", warnings, start)
             continue
 
         # Validate exactly one of alertname or metric_group is set
@@ -341,6 +472,8 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
             override, idx, tenant)
         warnings.extend(val_warnings)
         if not is_valid:
+            _note_skipped(verdicts, tenant, slot, override.get("receiver"), "entry",
+                          warnings, start)
             continue
 
         # Build matcher list
@@ -350,6 +483,8 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         am_config, recv_warnings = _process_override_receiver(override, idx, tenant, allowed_domains)
         warnings.extend(recv_warnings)
         if am_config is None:
+            _note_skipped(verdicts, tenant, slot, override.get("receiver"), "receiver",
+                          warnings, start)
             continue
 
         # Build sub-route with timing parameters
@@ -363,6 +498,7 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         receiver = {"name": receiver_name}
         receiver.update(am_config)
         override_receivers.append(receiver)
+        _note_rendered(verdicts, tenant, slot, override.get("receiver"), receiver_name)
 
     return sub_routes, override_receivers, warnings
 
@@ -378,7 +514,8 @@ def _route_receiver_name(tenant: str, idx: int) -> str:
 
 
 def expand_routing_routes(tenant: str, routing_config: dict,
-                          allowed_domains: list[str] | None = None
+                          allowed_domains: list[str] | None = None,
+                          verdicts: list[SlotVerdict] | None = None
                           ) -> tuple[list[dict], list[dict], list[str]]:
     """Expand ADR-007 label-match ``routes`` into child routes (#2245).
 
@@ -392,6 +529,8 @@ def expand_routing_routes(tenant: str, routing_config: dict,
     Invalid entries are skipped with a ``WARN … skipping`` line, like invalid
     overrides — which ``--validate`` (and validate-config's routes row)
     treats as blocking.
+
+    *verdicts*: as in ``expand_routing_overrides`` (#3076).
 
     Returns:
         (sub_routes, receivers, warnings), same shape as
@@ -408,16 +547,20 @@ def expand_routing_routes(tenant: str, routing_config: dict,
         warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'routes' must be a list, skipping",
                                               kind="invalid_route_entry", tenant=tenant,
                                               field="routes"))
+        _note_skipped(verdicts, tenant, "routes", None, "entry", warnings, 0)
         return sub_routes, receivers, warnings
 
     for idx, entry in enumerate(entries):
         ctx = f"{tenant}-route-{idx}"
+        slot, start = f"routes[{idx}]", len(warnings)
         # Structural checks (dict, supported keys, equality `match`) are the
         # SAME predicate list_tenant_subroutes uses, so domain policy sees
         # exactly the entries rendered here.
         matchers, matcher_warnings = route_entry_matchers(entry, idx, tenant)
         warnings.extend(matcher_warnings)
         if matchers is None:
+            _note_skipped(verdicts, tenant, slot, _slot_receiver(entry), "entry",
+                          warnings, start)
             continue
 
         receiver_obj = entry.get("receiver")
@@ -426,11 +569,13 @@ def expand_routing_routes(tenant: str, routing_config: dict,
                                                   "'receiver', skipping",
                                                   kind="missing_receiver_field", tenant=tenant,
                                                   field=f"routes[{idx}].receiver"))
+            _note_skipped(verdicts, tenant, slot, receiver_obj, "receiver", warnings, start)
             continue
         am_config, recv_warnings = build_receiver_config(
             receiver_obj, ctx, tenant_id=tenant, field=f"routes[{idx}].receiver")
         warnings.extend(recv_warnings)
         if am_config is None:
+            _note_skipped(verdicts, tenant, slot, receiver_obj, "receiver", warnings, start)
             continue
         if allowed_domains:
             domain_warnings = validate_receiver_domains(
@@ -438,6 +583,8 @@ def expand_routing_routes(tenant: str, routing_config: dict,
                 receiver_field=f"routes[{idx}].receiver")
             warnings.extend(domain_warnings)
             if any("not in allowed_domains" in w for w in domain_warnings):
+                _note_skipped(verdicts, tenant, slot, receiver_obj, "receiver",
+                              warnings, start)
                 continue
 
         receiver_name = _route_receiver_name(tenant, idx)
@@ -454,6 +601,7 @@ def expand_routing_routes(tenant: str, routing_config: dict,
         receiver = {"name": receiver_name}
         receiver.update(am_config)
         receivers.append(receiver)
+        _note_rendered(verdicts, tenant, slot, receiver_obj, receiver_name)
 
     return sub_routes, receivers, warnings
 
@@ -646,7 +794,9 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 # ============================================================
 
 def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None,
-                         sources: list[tuple[str, str]] | None = None) -> tuple[list[dict], list[dict], list[str]]:
+                         sources: list[tuple[str, str]] | None = None,
+                         verdicts: list[SlotVerdict] | None = None,
+                         ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate tenant-specific Alertmanager routes and receivers.
 
     Iterates over all tenants and produces their main routing configuration,
@@ -670,6 +820,11 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
           per receiver emitted, in the same order (#2279: the duplicate-name
           check names where each receiver came from — the name alone is the
           ambiguous thing).
+        verdicts: when given, one ``SlotVerdict`` per receiver slot is
+          appended, per tenant: the main receiver, then overrides[i], then
+          routes[i] (#3076). When the main receiver is not rendered, every
+          child slot is dropped with a blocking ``parent_receiver_not_rendered``
+          line of its own — written whether or not *verdicts* is given.
 
     Returns:
         (routes_list, receivers_list, warnings_list) where:
@@ -685,6 +840,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
 
     for tenant in sorted(routing_configs.keys()):
         cfg = routing_configs[tenant]
+        main_start = len(warnings)
 
         # 驗證 receiver（必要欄位，須為含 type 的 dict）
         receiver_obj = cfg.get("receiver")
@@ -692,6 +848,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
             warnings.append(skipped_entry_warning(f"  WARN: {tenant}: missing required 'receiver', skipping",
                                                   kind="missing_receiver_field", tenant=tenant,
                                                   field="receiver"))
+            _drop_unrendered_main(tenant, cfg, warnings, verdicts, main_start)
             continue
 
         # 從結構化物件建立 receiver config
@@ -699,6 +856,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
                                                          tenant_id=tenant)
         warnings.extend(recv_warnings)
         if am_config is None:
+            _drop_unrendered_main(tenant, cfg, warnings, verdicts, main_start)
             continue
 
         # Domain allowlist 檢查（SSRF 防護）
@@ -707,13 +865,17 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
                 receiver_obj, tenant, allowed_domains, tenant_id=tenant)
             warnings.extend(domain_warnings)
             if any("not in allowed_domains" in w for w in domain_warnings):
+                _drop_unrendered_main(tenant, cfg, warnings, verdicts, main_start)
                 continue
+
+        child_verdicts: list[SlotVerdict] | None = [] if verdicts is not None else None
 
         # v1.8.0: 展開 per-rule routing overrides。#2252：它們是 tenant 主 route
         # 的子路由（見下方 routes 欄位），不是與主 route 同層的兄弟——同層時
         # override 沒寫的 timing / group_by 會繼承 root，而不是 tenant。
         override_sub_routes, override_receivers, override_warnings = \
-            expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains)
+            expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains,
+                                     verdicts=child_verdicts)
         warnings.extend(override_warnings)
         receivers.extend(override_receivers)
         _record_sources(sources, override_receivers, tenant, "overrides",
@@ -722,7 +884,8 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         # #2245：ADR-007 的 label 等值子路由（profile 或 tenant 的 `routes`），
         # 同樣掛在主 route 底下，排在 overrides 之後。
         label_sub_routes, label_receivers, label_warnings = \
-            expand_routing_routes(tenant, cfg, allowed_domains=allowed_domains)
+            expand_routing_routes(tenant, cfg, allowed_domains=allowed_domains,
+                                  verdicts=child_verdicts)
         warnings.extend(label_warnings)
         receivers.extend(label_receivers)
         _record_sources(sources, label_receivers, tenant, "routes",
@@ -761,6 +924,9 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         receivers.append(receiver)
         if sources is not None:
             sources.append((receiver_name, f"tenant '{tenant}' main receiver"))
+        if verdicts is not None:
+            _note_rendered(verdicts, tenant, "receiver", receiver_obj, receiver_name)
+            verdicts.extend(child_verdicts or [])
 
     return routes, receivers, warnings
 

@@ -83,6 +83,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "print_reader_warnings",  # #2906, for notification_tester (gar.*)
     ),
     "_grar_routes": (
+        "SlotVerdict",  # #3076, for notification_tester (gar.*)
         "_build_enforced_routes",
         "_build_inhibit_rules",
         "_build_override_matchers",
@@ -100,6 +101,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "expand_routing_routes",  # #2245 ADR-007 label-match sub-routes
         "generate_inhibit_rules",
         "generate_routes",
+        "tenant_slot_verdicts",  # #3076, for notification_tester (gar.*)
     ),
     "_grar_render": (
         # #2311: amtool verdict statuses, read by validate_config as `gen.…`
