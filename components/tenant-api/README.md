@@ -249,7 +249,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_STATE_STORE` | (空) | **必填**。tenant-api 自己的紀錄（群組、saved views、federation 白名單與子集、AccountID 帳本）存放處：`configmap`（Kubernetes，正式環境）或 `dir`（單機，**僅供開發與 try-local**，見 [dir 模式的外部寫入者](#dir-模式的外部寫入者必須拿-flock)）。不再放在 conf.d（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)） |
 | `TA_STATE_CONFIGMAP` | `tenant-api-state` | `configmap` 模式的 ConfigMap 名稱（Helm chart 預建） |
 | `TA_STATE_NAMESPACE` | (空) | 上述 ConfigMap 所在 namespace;空 = pod 自身 namespace |
-| `TA_STATE_DIR` | (空) | `dir` 模式的目錄，必須在 `TA_CONFIG_DIR` 之外。⛔ 外部程序改其中檔案前必須先對 `$TA_STATE_DIR/.lock` 取得 exclusive flock，否則會被靜默覆蓋（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)） |
+| `TA_STATE_DIR` | (空) | `dir` 模式的目錄，必須在 `TA_CONFIG_DIR` 之外。⛔ 外部程序改其中檔案前必須先對 `$TA_STATE_DIR/.lock` 取得 exclusive flock，否則與 tenant-api 的寫入重疊時會被靜默覆蓋（窗口短且不可預測；[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)） |
 | `TA_RBAC_PATH` | (空) | `_rbac.yaml` 路徑;**不設**(且不帶 `--rbac`)= open-read。⛔ 設成空字串或只有空白、或 `--rbac=` 一律**拒絕啟動**,不會當成沒設而進 open-read([#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)) |
 | `TA_ADDR` | `:8080` | HTTP listen address |
 | `TA_GENERATOR_SOCKET` | (空) | **必填**。產生器容器(`da-tools generator-service`)的 Unix socket;每筆會改變 conf.d 內容的寫入 commit 前都問它(ADR-036,#2903)。不設或只有空白就**拒絕啟動**。產生器必須以同一個 uid 執行、讀同一個 git repo |
@@ -523,8 +523,8 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 
 `dir` 模式每筆紀錄是 `TA_STATE_DIR` 下的一個檔案。tenant-api 寫入時先對 **`$TA_STATE_DIR/.lock`** 取得 exclusive `flock(2)`，在鎖內重讀紀錄、套用變更、以暫存檔加 rename 寫回，才釋放鎖。這把鎖是 **advisory**：只擋同樣去拿它的程序。因此：
 
-- ⛔ **沒拿鎖就改檔，會被 tenant-api 的下一次寫入靜默覆蓋。** tenant-api 讀完紀錄、還沒寫回之前你的修改落地，它寫回的是「它讀到的內容加上它的變更」——你的修改不見了，API 照樣回成功，log 也沒有任何警告。
-- **拿了同一把鎖再讀改寫，修改會保留**：tenant-api 等你釋放鎖後才讀紀錄，以你寫入的內容為基礎。`tenant-api state restore` 就是這樣與運行中的伺服器並存的。
+- ⛔ **沒拿鎖就改檔，與 tenant-api 的寫入重疊時會被靜默覆蓋。** tenant-api 在鎖內才讀紀錄，所以只有落在它某次寫入「讀取 → rename 寫回」之間的外部修改會被蓋掉；這個窗口很短、何時出現無法預測，不能拿「試過沒事」當安全。被蓋掉時它寫回的是「它讀到的內容加上它的變更」——你的修改不見了，API 照樣回成功，log 也沒有任何警告。
+- **拿了同一把鎖再讀改寫，修改會保留**：tenant-api 等你釋放鎖後才讀紀錄，以你寫入的內容為基礎。`tenant-api state restore` 就是這樣與運行中的伺服器並存的。例外：聯邦白名單／子集的 PUT 是整筆取代，見下方限制。
 
 外部寫入者（腳本、手動修改）的規則：
 
@@ -533,16 +533,18 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 3. 不要刪除或替換 `.lock` 本身：flock 鎖的是那個檔案，換掉之後雙方各鎖各的，互斥就不存在了。
 
 ```bash
-# 例：在 try-local 的 state volume 上改一筆紀錄。映像要附 flock(1)；util-linux 的 flock(1) 用的就是 flock(2)
-docker run --rm -v tenant-api-state:/state <附 flock(1) 的映像> \
+# 例：在 try-local 的 state volume 上改一筆紀錄。compose 專案名是 da-try-local，volume 實名帶前綴；
+# --user 必須是 tenant-api 的 uid（try-local 為 10001），見下方限制。alpine 的 busybox flock 用的是 flock(2)
+docker run --rm --user 10001:10001 -v da-try-local_tenant-api-state:/state alpine:3.20 \
   flock /state/.lock sh -c 'sed "s/old/new/" /state/_views.yaml > /state/.edit && mv /state/.edit /state/_views.yaml'
 ```
 
 限制：
 
+- ⛔ `.lock` 與紀錄檔必須是 tenant-api 的 uid 讀寫得到的。以 root 跑外部寫入者時，若 `.lock` 還不存在，flock(1) 會以 root 建一個 0644 的 `.lock`，之後 tenant-api 開它（`O_RDWR`）會 permission denied，**每一次 state 寫入都回 503**；紀錄檔同理（寫回的檔案若 tenant-api 讀不到，讀取與寫入都失敗）。用 tenant-api 的 uid 跑，或事後 `chown`。
 - 鎖只在同一台主機、同一個檔案系統上互斥；非 Unix 平台（以及 AIX、Solaris）的 build 不拿 flock，該處 tenant-api 只有行程內互斥。
 - 拿鎖防的是「並行讀改寫遺失其中一方」。API 本身就是整筆取代的寫入（例如 `PUT /api/v1/federation/policy`、`PUT /api/v1/tenants/{id}/federation`）照語意以請求內容蓋掉整筆紀錄，與有沒有拿鎖無關。
-- 群組、views、聯邦白名單在 tenant-api 內有快照：外部修改要等下一次重載（`--reload-interval`，預設 30s）或 tenant-api 自己的下一次寫入，才會反映到這些 API 的讀取結果。
+- 群組、views、聯邦白名單在 tenant-api 內有快照。快照只在兩種時候更新：同類紀錄經 API 寫入之後（群組寫入只重載群組，views、白名單同理），以及週期重載（`--reload-interval`，預設 30s；內容的 SHA-256 沒變就不重新解析）。外部修改在那之前不會反映到這些 API 的讀取結果。外部寫入了無法解析的 YAML 時，週期重載只記 WARN（與 reload-failure 指標）、保留舊快照；而該紀錄的 API 寫入（群組、views）會因為解析不了現存內容而失敗（500 `CONFIG_DECODE_ERROR`），直到有人把檔案修好。
 - try-local 的 `seed/state-seed.sh` 不拿鎖，因為它在 tenant-api 啟動**之前**執行，沒有並行的寫入者。
 
 ## 開發

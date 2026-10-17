@@ -27,10 +27,13 @@ import (
 // (#1535). Mutate re-reads the record after it holds the lock, so a writer
 // outside tenant-api that holds an exclusive flock on <dir>/.lock across
 // its whole read-modify-write keeps its change. One that skips the lock is
-// silently overwritten — Mutate writes back what it read plus its own
-// change, and reports success. Get takes no lock, so such a writer should
-// also write through a dot-named temp file and a rename, as writeAtomic
-// does. This backend is for development and try-local only; production
+// silently overwritten when its write overlaps a tenant-api write — lands
+// between a Mutate's read and its rename, a short and unpredictable window
+// — because Mutate writes back what it read plus its own change, and
+// reports success. Get takes no lock, so such a writer should also write
+// through a dot-named temp file and a rename, as writeAtomic does, and
+// leave the lock file and records readable and writable by tenant-api's
+// uid (a lock file it cannot open fails every Mutate). This backend is for development and try-local only; production
 // runs the ConfigMap store, whose resourceVersion check makes the loser of
 // a race re-read instead of overwrite. dir_external_writer_test.go pins
 // both halves of this contract.
@@ -44,8 +47,8 @@ type dirStore struct {
 // NewDir returns a Store backed by dir, creating it if needed. It is for
 // development and try-local, not production (see dirStore): anything else
 // that edits files in dir must hold an exclusive flock on
-// filepath.Join(dir, ".lock") for the whole read-modify-write, or
-// tenant-api's next write silently overwrites the edit.
+// filepath.Join(dir, ".lock") for the whole read-modify-write, or a
+// tenant-api write that overlaps the edit silently overwrites it.
 func NewDir(dir string, onWrite OnWrite) (Store, error) {
 	if dir == "" {
 		return nil, errors.New("statestore: state directory is empty")

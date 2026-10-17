@@ -15,8 +15,8 @@ import (
 // #1535: what dirStore promises a writer outside tenant-api (an operator's
 // script, a hand edit). The lock is advisory: flock on <state-dir>/.lock
 // keeps out only the writers that take it too. These tests pin both halves
-// of the contract the docs state — without the lock an outside write is
-// silently overwritten; with the lock it survives, in either order — so
+// of the contract the docs state — without the lock an outside write that
+// overlaps a Mutate is silently overwritten; with the lock it survives, in either order — so
 // the docs cannot drift from the code.
 //
 // The outside writer opens its own file description of the lock file, so
@@ -26,12 +26,13 @@ import (
 const extKey = "_groups.yaml"
 
 // extLock takes the exclusive flock an outside writer must take, the way
-// flock(1) or a script would: its own open of <dir>/.lock.
-func extLock(t *testing.T, dir string, nonBlock bool) (release func(), err error) {
-	t.Helper()
+// flock(1) or a script would: its own open of <dir>/.lock. It returns
+// errors rather than failing the test, since callers run it off the test
+// goroutine.
+func extLock(dir string, nonBlock bool) (release func(), err error) {
 	f, err := os.OpenFile(filepath.Join(dir, lockFile), os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	how := syscall.LOCK_EX
 	if nonBlock {
@@ -118,12 +119,22 @@ func TestDirStore_LockedExternalWriteDuringMutateSurvives(t *testing.T) {
 	if _, err := s.Mutate(context.Background(), extKey, Meta{Entity: "test"}, func(cur []byte) ([]byte, error) {
 		go func() {
 			defer close(done)
-			// Prove it contends: the lock is held by Mutate right now.
-			if _, err := extLock(t, dir, true); !errors.Is(err, syscall.EWOULDBLOCK) {
-				t.Errorf("non-blocking flock during Mutate = %v, want EWOULDBLOCK", err)
-			}
+			// Prove it contends: the lock is held by Mutate right now. If
+			// the probe gets the lock, Mutate does not hold it: release it
+			// and stop, or the blocking take below would wait on our own
+			// probe forever.
+			probe, err := extLock(dir, true)
 			close(blocked)
-			release, err := extLock(t, dir, false)
+			if err == nil {
+				probe()
+				t.Error("non-blocking flock during Mutate succeeded: Mutate does not hold the lock")
+				return
+			}
+			if !errors.Is(err, syscall.EWOULDBLOCK) {
+				t.Errorf("non-blocking flock during Mutate = %v, want EWOULDBLOCK", err)
+				return
+			}
+			release, err := extLock(dir, false)
 			if err != nil {
 				t.Error(err)
 				return
@@ -147,10 +158,16 @@ func TestDirStore_LockedExternalWriteDuringMutateSurvives(t *testing.T) {
 // instead of on what the file held before.
 func TestDirStore_MutateAfterLockedExternalWriteRereads(t *testing.T) {
 	s, dir := newSeededDirStore(t)
-	release, err := extLock(t, dir, false)
+	release, err := extLock(dir, false)
 	if err != nil {
 		t.Fatal(err)
 	}
+	released := false
+	defer func() {
+		if !released {
+			release()
+		}
+	}()
 	ran := make(chan []byte, 1)
 	done := make(chan error, 1)
 	go func() {
@@ -167,6 +184,7 @@ func TestDirStore_MutateAfterLockedExternalWriteRereads(t *testing.T) {
 	}
 	extAppend(t, dir, "external\n")
 	release()
+	released = true
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
