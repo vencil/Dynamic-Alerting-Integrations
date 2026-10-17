@@ -2314,7 +2314,8 @@ class TestGitDiffComparesTrees:
         rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", "http://prom:9090",
                             "--json")
         assert (rc, json.loads(out.out)["reason"]) == (2, "git_diff_unavailable")
-        assert "an object this clone does not have" in out.err
+        # git's own words, not a guessed cause; no fetch-depth hint (HEAD~1 exists).
+        assert "unable to read" in out.err and "fetch-depth" not in out.err, out.err
 
     def test_a_bare_repository_is_rc2_named(self, tmp_path, monkeypatch, cli_argv, capsys):
         """#3111 review: `--is-inside-work-tree` answers `false` (rc 0) in a bare
@@ -2607,7 +2608,7 @@ class TestHead1IsGitsOwnCheckout:
 _SLOW_GIT = """#!{bash}
 "{git}" "$@"
 rc=$?
-case " $* " in *" checkout-index "*) : > "{marker}"; exec sleep 60;; esac
+case " $* " in *" read-tree "*) : > "{marker}"; exec sleep 60;; esac
 exit $rc
 """
 
@@ -2649,3 +2650,148 @@ def test_a_signal_removes_the_head1_checkout(tmp_path, sig, da_guard_env):
             proc.kill()
             proc.wait(timeout=60)
     assert [p.name for p in scratch.iterdir() if p.name.startswith("backtest-head1-")] == []
+
+
+
+def _fetches(trace):
+    """The `git fetch` children a GIT_TRACE2_EVENT file records."""
+    out = 0
+    with open(trace, encoding="utf-8") as f:
+        for line in f:
+            ev = json.loads(line)
+            if ev.get("event") == "child_start" and "fetch" in ev.get("argv", []):
+                out += 1
+    return out
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestHead1CheckoutRound4:
+    """#3111 round 4 review."""
+
+    def _run(self, monkeypatch, cli_argv, capsys, fake_prom, cwd):
+        p = fake_prom()
+        monkeypatch.chdir(cwd)
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        return rc, json.loads(out.out), out.err
+
+    def test_a_blobless_clone_fetches_in_one_batch(self, tmp_path, monkeypatch):
+        """4a87870a：`checkout-index -a` 逐一抓缺的 blob（此 repo 實測 55 次、25.9s）。"""
+        src = _plain_repo(tmp_path / "src")
+        _git_run(src, "config", "uploadpack.allowFilter", "true")
+        _write_confd(src / "conf.d", {f"f{i}.yaml": f"a{i}: 1\n" for i in range(5)})
+        _git_run(src, "add", "-A")
+        _git_run(src, "commit", "-qm", "a")
+        _write_confd(src / "conf.d", {f"f{i}.yaml": f"b{i}: 2\n" for i in range(5)})
+        _git_run(src, "commit", "-qam", "b")
+        dst = tmp_path / "dst"
+        subprocess.run([_GIT, "clone", "-q", "--filter=blob:none", (src).as_uri(), str(dst)],
+                       capture_output=True, timeout=120, check=True)
+        trace = tmp_path / "trace.json"
+        monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace))
+        monkeypatch.chdir(dst)
+        out = tmp_path / "out"
+        out.mkdir()
+        got = bt.materialize_head1_confd(str(out))
+        with open(os.path.join(got, "f0.yaml"), encoding="utf-8") as f:
+            assert f.read() == "a0: 1\n"
+        assert _fetches(trace) == 1
+
+    def test_git_s_own_error_is_reported(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                         fake_prom):
+        """4a87870a：任何 checkout 失敗都報成「缺物件或逾時」並附 fetch-depth 提示。
+        必要的 filter 失敗時，訊息是 git 自己的話。"""
+        repo = _plain_repo(tmp_path / "r")
+        _git_run(repo, "config", "filter.boom.smudge", "false")
+        _git_run(repo, "config", "filter.boom.clean", "cat")
+        _git_run(repo, "config", "filter.boom.required", "true")
+        (repo / ".gitattributes").write_text("*.yaml filter=boom\n", encoding="utf-8")
+        _write_confd(repo / "conf.d", {**_D})
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "filter" in err and "boom" in err, err
+        assert "fetch-depth" not in err and "an object this clone does not have" not in err
+        assert "backtest-head1-" not in err
+
+    def test_an_outside_directory_link_nobody_reads_is_left_alone(
+            self, tmp_path, monkeypatch, cli_argv, capsys, fake_prom):
+        """4a87870a：`conf.d/ext -> /etc` 被拒讀（rc 2），但 exporter 不跟目錄 link。"""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", {**_D, "t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        outside = tmp_path / "outside"
+        _write_confd(outside, {"x.yaml": "tenants: {}\n"})
+        symlink_or_skip(str(outside), repo / "conf.d" / "ext")
+        _commit_twice(repo)
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["status"]) == (0, "no_changes"), (doc, err)
+
+    def test_a_submodule_above_confd_fails_closed(self, tmp_path, monkeypatch, cli_argv,
+                                                  capsys, fake_prom):
+        """4a87870a：conf.d 上層在 HEAD~1 是 gitlink ⇒ 當成沒有租戶，全部「新啟用」rc 1。"""
+        repo = _plain_repo(tmp_path / "r")
+        (repo / "README").write_text("x\n", encoding="utf-8")
+        _git_run(repo, "add", "-A")
+        _git_run(repo, "commit", "-qm", "base")
+        head = _git_run(repo, "rev-parse", "HEAD").stdout.decode().strip()
+        _git_run(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},cfg")
+        _git_run(repo, "commit", "-qm", "submodule")
+        _git_run(repo, "rm", "-q", "--cached", "cfg")
+        _write_confd(repo / "cfg" / "conf.d",
+                     {**_D, "t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        _git_run(repo, "add", "-A")
+        _git_run(repo, "commit", "-qm", "real")
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo / "cfg")
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert "HEAD~1:cfg is a submodule above conf.d/" in err
+
+    def test_an_lfs_pointer_at_head1_is_refused(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                                fake_prom):
+        """4a87870a：HEAD~1 留著 LFS pointer、工作樹是 smudge 後的內容，怪錯邊。"""
+        repo = _plain_repo(tmp_path / "r")
+        _write_confd(repo / "conf.d", {**_D, "t.yaml": (
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:" + "0" * 64 + "\nsize 42\n")})
+        _git_run(repo, "add", "-A")
+        _git_run(repo, "commit", "-qm", "pointer")
+        _write_confd(repo / "conf.d", {"t.yaml": _tenant_file("t-a", "    mysql_connections: 70\n")})
+        _git_run(repo, "commit", "-qam", "smudged")
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, repo)
+        assert (rc, doc["reason"]) == (2, "git_diff_unavailable"), (doc, err)
+        assert ("HEAD~1:conf.d/t.yaml is a Git LFS pointer; this backtest does not fetch LFS "
+                "content") in err
+
+    def test_a_relative_git_dir_from_the_caller(self, tmp_path, monkeypatch, cli_argv, capsys,
+                                                fake_prom):
+        """4a87870a：呼叫端給相對的 GIT_DIR／GIT_WORK_TREE，`-C top` 之後指錯地方。"""
+        cfg = _git_tree_repo(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 70\n")},
+            {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+        monkeypatch.setenv("GIT_DIR", "../.git")
+        monkeypatch.setenv("GIT_WORK_TREE", "..")
+        rc, doc, err = self._run(monkeypatch, cli_argv, capsys, fake_prom, cfg)
+        assert [(c["metric"], c["old_value"], c["new_value"]) for c in doc["changes"]] == [
+            ("mysql_connections", "70", "50")], (doc, err)
+
+
+def test_no_handler_is_installed_when_the_previous_one_cannot_be_restored(monkeypatch):
+    """4a87870a：先前的 handler 是 None（不是從 Python 裝的）時，還原會 TypeError。"""
+    calls = []
+
+    class FakeSignal:
+        SIGTERM = 15
+
+        @staticmethod
+        def getsignal(_sig):
+            return None
+
+        @staticmethod
+        def signal(sig, handler):
+            if handler is None:
+                raise TypeError("signal handler must be signal.SIG_IGN, signal.SIG_DFL, "
+                                "or a callable object")
+            calls.append(handler)
+            return None
+    monkeypatch.setattr(bt, "signal", FakeSignal)
+    with bt._removed_on_signal():
+        pass
+    assert calls == []

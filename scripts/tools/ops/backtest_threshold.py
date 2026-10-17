@@ -290,6 +290,21 @@ def tenant_is_queryable(tenant):
     return not any(ch in '"\\' or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in tenant)
 
 
+def _git_with_stderr(args, env, timeout):
+    """`(ok, stderr text)` of a git call whose failure must be reported in
+    git's own words (#3111 round 4: ENOSPC, an invalid path, a failing
+    required filter are not "a missing object")."""
+    try:
+        result = subprocess.run(["git"] + list(args), capture_output=True, timeout=timeout,
+                                env={**os.environ, **env})
+    except FileNotFoundError:
+        return False, "git is not on PATH"
+    except subprocess.TimeoutExpired:
+        return False, f"timed out after {timeout}s"
+    text = result.stderr.decode("utf-8", "replace").strip()
+    return result.returncode == 0, "; ".join(text.splitlines()[-3:]) or f"exit {result.returncode}"
+
+
 def _tree_entries(raw):
     """`[(mode, type, oid, path)]` from `git ls-tree -z` output (bytes)."""
     out = []
@@ -327,24 +342,25 @@ def materialize_head1_confd(dest):
     read — as a path, or `""` when HEAD~1 has none there (the PR adds it).
 
     #3111: git does the checkout, so this tool re-derives none of its
-    semantics (end-of-line conversion, filters, how a link is written):
-    `git read-tree HEAD~1` into an index of our own (`GIT_INDEX_FILE` in
-    `dest`, never the repository's) and `git checkout-index -a -f` into
-    `dest/tree` (`--work-tree`), from the top level, with LFS smudging
-    skipped (a pointer file is what a conf.d/ would hold anyway, and no
+    semantics (end-of-line conversion, filters, how a link is written): one
+    `git read-tree --reset -u HEAD~1` with an index of our own
+    (`GIT_INDEX_FILE` in `dest`, never the repository's), `--work-tree`
+    `dest/tree` and an absolute `--git-dir`, with LFS smudging skipped (no
     network is asked). The repository, its index and `.git/worktrees` are
     not touched. A relative link out of conf.d/, or a conf.d/ that is itself
     a link, resolves as in any checkout.
 
     Raises Head1Unavailable for what git cannot answer — git not on PATH,
     not inside a git work tree (a bare repository), no HEAD~1 (a shallow
-    clone of depth 1 has none), an object the clone does not have, a
-    timeout — and, `refused`, for the only things this checks itself, both
-    decided on git's objects or on the checkout: a conf.d/ that is or holds
-    a submodule (a checkout may or may not populate it), and a conf.d/ that
-    is not a directory or whose files the exporter would read
-    (`list_config_tree`) resolve outside the checkout (an absolute link, a
-    chain of links leaving it).
+    clone of depth 1 has none), and any checkout failure in git's own words
+    (a missing object, a full disk, a failing filter) — and, `refused`, for
+    what this checks itself, each decided on git's objects or on the
+    checkout: a submodule at, in or above conf.d/ (a checkout may or may not
+    populate it); a conf.d/ that is not a directory inside the checkout; a
+    file the exporter would read (`list_config_tree`; a directory link it
+    does not follow is not one) that resolves outside the checkout (an
+    absolute link, a chain of links leaving it); and such a file left as a
+    Git LFS pointer (`_lfs_pointer`).
     """
     inside = _git_bytes(["rev-parse", "--is-inside-work-tree"])
     if inside is None:
@@ -358,10 +374,25 @@ def materialize_head1_confd(dest):
                                "fetch-depth: 2)")
     prefix = _git_bytes(["rev-parse", "--show-prefix"])
     top = _git_bytes(["rev-parse", "--show-toplevel"])
-    if prefix is None or top is None:
+    git_dir = _git_bytes(["rev-parse", "--absolute-git-dir"])
+    if prefix is None or top is None or git_dir is None:
         raise Head1Unavailable("git could not name this directory's path in the repository")
-    top = top.rstrip(b"\n")
+    git_dir = git_dir.rstrip(b"\n")
     confd = prefix.rstrip(b"\n") + b"conf.d"
+    # A gitlink ABOVE conf.d/ hides it the same way one at it does (#3111
+    # round 4): the checkout leaves an empty directory there.
+    parts = confd.split(b"/")
+    ancestors = [b"/".join(parts[:i]) for i in range(1, len(parts))]
+    if ancestors:
+        above = _git_bytes(["ls-tree", "-z", "--full-tree", "HEAD~1", "--", *ancestors])
+        if above is None:
+            raise Head1Unavailable("git could not list HEAD~1's tree (a timeout?)")
+        for _mode, kind, _oid, path in _tree_entries(above):
+            if kind == b"commit":
+                raise Head1Unavailable(
+                    f"HEAD~1:{safe_label(_fsdecode(path))} is a submodule above conf.d/, which "
+                    "a checkout may or may not populate; this backtest does not guess",
+                    refused=True)
     confd_name = safe_label(os.fsdecode(confd))
     listed = _git_bytes(["ls-tree", "-r", "-t", "-z", "--full-tree", "HEAD~1", "--",
                          confd, confd + b"/"], timeout=120)
@@ -374,12 +405,17 @@ def materialize_head1_confd(dest):
                 "or may not populate; this backtest does not guess", refused=True)
     root = os.path.join(dest, "tree")
     os.makedirs(root)
+    # One unpack-trees pass (`read-tree --reset -u`): in a partial clone it
+    # fetches the missing blobs in ONE batch, where `checkout-index -a`
+    # fetched them one at a time (#3111 round 4, measured). An absolute
+    # `--git-dir` so a relative `GIT_DIR` from the caller cannot point
+    # elsewhere; our own index; LFS left unsmudged (no network), which
+    # `_lfs_pointer` then refuses rather than compare.
     env = {"GIT_INDEX_FILE": os.path.join(dest, "index"), "GIT_LFS_SKIP_SMUDGE": "1"}
-    if (_git_bytes(["-C", top, "read-tree", "HEAD~1"], env=env, timeout=300) is None
-            or _git_bytes(["-C", top, f"--work-tree={root}", "checkout-index", "-a", "-f"],
-                          env=env, timeout=600) is None):
-        raise Head1Unavailable("git could not check HEAD~1 out (an object this clone does "
-                               "not have, or a timeout)")
+    ok, why = _git_with_stderr([f"--git-dir={os.fsdecode(git_dir)}", f"--work-tree={root}",
+                                "read-tree", "--reset", "-u", "HEAD~1"], env, timeout=600)
+    if not ok:
+        raise Head1Unavailable(f"`git read-tree -u HEAD~1` said: {_head1_relabel(dest)(why)}")
     path = os.path.join(os.fsencode(root), confd)
     if not os.path.lexists(path):
         return ""
@@ -387,13 +423,35 @@ def materialize_head1_confd(dest):
         raise Head1Unavailable(f"HEAD~1:{confd_name} is not a directory inside the checkout",
                                refused=True)
     listing = list_config_tree(os.fsdecode(path))
-    for entry in listing.files + listing.unusable:
+    # A directory link is not followed by the exporter (it warns and skips
+    # it), so where it points is nothing this backtest reads (#3111 round 4).
+    for entry in listing.files + [e for e in listing.unusable
+                                  if not (os.path.islink(e) and os.path.isdir(e))]:
         if not _inside(entry, root):
             shown = os.path.relpath(os.fsdecode(entry), root)
             raise Head1Unavailable(
                 f"HEAD~1:{safe_label(shown)} resolves outside the checked-out tree (an "
                 "absolute link, or links leaving the repository)", refused=True)
+    for entry in listing.files:
+        if _lfs_pointer(entry):
+            raise Head1Unavailable(
+                f"HEAD~1:{safe_label(os.path.relpath(os.fsdecode(entry), root))} is a Git LFS "
+                "pointer; this backtest does not fetch LFS content", refused=True)
     return os.fsdecode(path)
+
+
+_LFS_POINTER = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _lfs_pointer(path):
+    """Whether the checked-out file `path` is a Git LFS pointer (the checkout
+    skips smudging): its content is not what the exporter reads from a
+    smudged working tree, so comparing it would blame the wrong side."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(len(_LFS_POINTER)) == _LFS_POINTER
+    except OSError:
+        return False
 
 
 # Roots already named as unlistable, so the warning is said once per run.
@@ -617,14 +675,20 @@ def _head1_relabel(tmp):
 @contextlib.contextmanager
 def _removed_on_signal():
     """While `--git-diff`'s temporary directory exists, SIGTERM unwinds the
-    stack (SystemExit 143) as SIGINT already does (KeyboardInterrupt), so
-    `TemporaryDirectory` removes it — a 60 MB checkout of HEAD~1 is not left
-    behind (#3111). The previous handler is restored on the way out."""
+    stack (SystemExit 143, the shell's status for it) as SIGINT already does
+    (KeyboardInterrupt), so `TemporaryDirectory` removes it — a 60 MB
+    checkout of HEAD~1 is not left behind (#3111). Entered BEFORE the
+    directory is made and left after it is removed. Nothing is installed
+    off the main thread, or when the previous handler is not one Python
+    can restore (`None`)."""
     def stop(signum, _frame):
         raise SystemExit(128 + signum)
     try:
-        previous = signal.signal(signal.SIGTERM, stop)
-    except ValueError:  # not the main thread: nothing to install
+        previous = signal.getsignal(signal.SIGTERM)
+        if previous is None:
+            raise ValueError("a handler not installed from Python")
+        signal.signal(signal.SIGTERM, stop)
+    except ValueError:  # not the main thread, or nothing to restore
         yield
         return
     try:
@@ -1852,8 +1916,8 @@ def main():
     # trees — so the served-values errors below are this mode's too.
     dir_changes = None
     if args.git_diff:
-        with tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp, \
-                _removed_on_signal():
+        with _removed_on_signal(), \
+                tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp:
             relabel = _head1_relabel(tmp)
             try:
                 old_confd = materialize_head1_confd(tmp)
@@ -1862,9 +1926,6 @@ def main():
                 lead = ("HEAD~1's conf.d/ is not one this backtest reads" if refused
                         else "git could not run to check HEAD~1 out")
                 print(f"--git-diff: {lead}: {safe_label(relabel(str(exc)))}.", file=sys.stderr)
-                if not refused:
-                    print("  Run from a checkout with git installed (a shallow clone needs "
-                          "fetch-depth: 2).", file=sys.stderr)
                 print("  ⛔ Do not switch to --config-dir to clear this — that "
                       "compares two trees, not your PR.", file=sys.stderr)
                 _end_not_run(args, "caller_error", "git_diff_unavailable", EXIT_CALLER_ERROR,
