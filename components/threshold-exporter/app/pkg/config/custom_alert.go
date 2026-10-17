@@ -1019,6 +1019,19 @@ func customAlertSeriesCollision(rows []ResolvedThreshold, obj *ResolvedSloObject
 	return CustomAlertDuplicate{}, false
 }
 
+// CustomAlertRowCount is how many custom-alert rows the exporter serves a
+// tenant from the `_custom_alerts` of its built map (overrides): one per
+// user_threshold row — a switched-off recipe serves none, an slo_burn_rate
+// two, an entry dropped as a duplicate none — counted before the per-tenant
+// metric limit (max_metrics_per_tenant) truncates them. The per-tenant cap
+// (MaxCustomRecipesDefault) is judged on it by da-guard's
+// custom_alert_over_cap and, through served-values' custom_alert_rows,
+// validate-config's custom_alert_cap (#3042).
+func CustomAlertRowCount(tenant string, overrides map[string]ScheduledValue) int {
+	rows, _, _, _ := resolveCustomAlertSpecs(tenant, overrides, nil)
+	return len(rows)
+}
+
 // MaxCustomRecipesDefault mirrors the Python loader's MAX_CUSTOM_RECIPES_DEFAULT
 // (S4) — the per-tenant OWN-recipe cap. The CI compiler is the authority; this is
 // the tenant-api shift-left preflight's matching value (ADR §S5). KEEP IN SYNC

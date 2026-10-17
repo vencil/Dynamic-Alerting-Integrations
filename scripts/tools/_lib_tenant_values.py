@@ -342,6 +342,12 @@ class TenantValues(NamedTuple):
     # ADR-038 decision 5: every key of the tenant's merged config and of
     # `unserved` -> whether the exporter reads it, and why not.
     keys: dict[str, "ServedKey"] = {}
+    # The custom-alert rows the tenant's `_custom_alerts` asks /metrics to
+    # serve, counted before the per-tenant metric limit truncates them
+    # (#3042: what the per-tenant cap is judged on; `values["_custom_alerts"]`
+    # is what survives the truncation). None from a da-guard older than the
+    # field.
+    custom_alert_rows: int | None = None
 
 
 class ServedKey(NamedTuple):
@@ -823,9 +829,12 @@ def load_served_tree(
             routing = tv.get("routing")
             if routing is not None and not isinstance(routing, dict):
                 raise TypeError(f"routing is a {type(routing).__name__}")
+            alert_rows = tv.get("custom_alert_rows")
+            if alert_rows is not None and (type(alert_rows) is not int or alert_rows < 0):
+                raise TypeError(f"custom_alert_rows is {alert_rows!r}")
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys or routing that are not of their shape ({e!r})",
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom_alert_rows that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
@@ -841,7 +850,7 @@ def load_served_tree(
                     returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
-                                     state_filters, time_boxes, routing, keys)
+                                     state_filters, time_boxes, routing, keys, alert_rows)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
 
 
