@@ -66,23 +66,28 @@ func pythonStr(t *testing.T, v any) string {
 	return ""
 }
 
-// yaml11Bools are the YAML 1.1 boolean words the pipeline writes out as
-// booleans (#2295) — a copy of tenant-config.schema.json
-// definitions.yamlBool, the authority.
+// yaml11Bools are the YAML 1.1 boolean words of tenant-config.schema.json
+// definitions.yamlBool (the authority; this is a copy). Since #2906 the
+// route generator no longer writes such a word given as a STRING out as a
+// boolean: it takes only a boolean or null in these fields and refuses a
+// string (the table's `python_differs` rows). The rows' `am` column still
+// records Alertmanager's verdict on the boolean the word spells, which is
+// what the body below hands it.
 var yaml11Bools = map[string]bool{
 	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
 	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
 	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
 }
 
-// amReceiverBody is the receiver as the pipeline hands it to
-// Alertmanager. The authority is
-// scripts/tools/ops/_grar_merge.py build_receiver_config: drop `type`,
-// join a list-valued email `to` with ", " (via Python str() per item), and
-// write a YAML 1.1 boolean word given as a string in send_resolved /
-// require_tls / http_config.proxy_from_environment as the boolean (#2295).
-// Table rows carry no rocketchat metadata fields, so every other field is
-// forwarded as is.
+// amReceiverBody is the receiver as Alertmanager receives it for the row.
+// The authority is scripts/tools/ops/_grar_merge.py build_receiver_config:
+// drop `type` and join a list-valued email `to` with ", " (via Python str()
+// per item). A YAML 1.1 boolean word given as a string in send_resolved /
+// require_tls / http_config.proxy_from_environment is handed over as the
+// boolean it spells: the generator itself refuses such a string since
+// #2906 (it takes only a boolean or null), so this is the value the row's
+// `am` column judges, not something the generator writes. Table rows carry
+// no rocketchat metadata fields, so every other field is forwarded as is.
 func amReceiverBody(t *testing.T, receiver map[string]any) (string, map[string]any) {
 	t.Helper()
 	rtype, _ := receiver["type"].(string)

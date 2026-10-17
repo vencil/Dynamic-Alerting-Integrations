@@ -13,8 +13,9 @@
   路由 P（不論 PD 與否）``match(P) ⊆ C_N``（連同 tenant route 自帶的
   ``tenant=<t>``）→ 攔不到；否則報一則 WARN，點名 N 與它攔走的條件。主
   receiver 是否 PD 不影響子路由的判定。兩種模式都不影響 rc。
-* 值為 false / null 不檢查；非 bool 比照 ``_constraint_list``：strict ERROR、
-  非 strict 靜默。沒有主 receiver 的 tenant 略過。
+* 值為 false / null 不檢查。非 bool（含加引號的 ``"true"``）自 #2906 起不歸
+  check_domain_policies 報：產生器讀檔時記下，所有模式拒收整棵樹（rc 1）；
+  先前是 strict ERROR、非 strict 靜默不執行。沒有主 receiver 的 tenant 略過。
 
 Fixture 取自 ADR-007 範例（profiles 用 ``conf.d/examples/_routing_profiles.yaml``），
 tenant 名是 demo 名（tenant-agnostic）。policy 只放本鍵，讓訊息不被其他
@@ -181,21 +182,25 @@ class TestConstraintValue:
                 routing, _policy(sorted(_TENANTS), value), strict=strict) == []
 
     @pytest.mark.parametrize("value", ["true", 1, ["pagerduty"]])
-    def test_non_bool_strict_error_once(self, tmp_path, value):
-        routing = _routing(_tree(tmp_path))
-        msgs = check_domain_policies(routing, _policy(sorted(_TENANTS), value),
-                                     strict=True)
-        assert msgs == [
-            "  ERROR: domain_policy 'finance': constraint "
-            "'require_critical_escalation' must be a boolean, got "
-            f"{type(value).__name__} {value!r} — the constraint cannot be "
-            "enforced — fix: set 'require_critical_escalation' to true or "
-            "false (unquoted)"]
-
-    def test_non_bool_lenient_is_silent(self, tmp_path):
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_non_bool_is_not_checked_here(self, tmp_path, value, strict):
+        """#2906: the value is the reader's to refuse (whole tree, every
+        mode); check_domain_policies neither enforces nor reports it."""
         routing = _routing(_tree(tmp_path))
         assert check_domain_policies(
-            routing, _policy(sorted(_TENANTS), "true"), strict=False) == []
+            routing, _policy(sorted(_TENANTS), value), strict=strict) == []
+
+    @pytest.mark.parametrize("value", ["true", 1, ["pagerduty"]])
+    @pytest.mark.parametrize("extra", [(), ("--strict",)])
+    def test_non_bool_refuses_the_tree(self, tmp_path, value, extra):
+        """#2906: a quoted "true" used to switch the constraint off unless
+        --strict; now every mode refuses the tree, once."""
+        r = _run(_tree(tmp_path, value=value), *extra)
+        assert r.returncode == 1, r.stdout + r.stderr
+        line = ("domain_policy 'finance': constraint 'require_critical_escalation' "
+                "must be a boolean (true / false, unquoted)")
+        assert r.stderr.count(line) == 1, r.stderr
+        assert "OK:" not in r.stdout
 
     def test_tenant_without_main_receiver_is_skipped(self):
         routing = {"t-x": {"group_wait": "30s"}}

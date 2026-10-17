@@ -28,8 +28,6 @@ from _lib_python import (  # noqa: E402
     validate_and_clamp,
     receiver_exactly_one_problem,
     receiver_optional_problem,
-    receiver_bool_fields,
-    coerce_yaml_bool,
     receiver_required_problem,
     RECEIVER_TYPES,
 )
@@ -90,7 +88,8 @@ FINDING_KINDS: dict[str, str] = {
         "domain policy constraint.",
     "domain_policy_unusable":
         "A domain policy file, policy or constraint cannot be read, so it is "
-        "not enforced.",
+        "not enforced. A require_critical_escalation that is not a boolean "
+        "refuses the whole tree in every mode instead.",
     "domain_policy_out_of_scope":
         "A subtree domain policy names a tenant outside its subtree; that "
         "entry is not enforced.",
@@ -131,8 +130,11 @@ FINDING_KINDS: dict[str, str] = {
     "routing_defaults_routes_ignored":
         "routes under _routing_defaults, which the generator drops.",
     "routing_enforced_enabled_invalid":
-        "_routing_enforced.enabled is not a YAML boolean; no enforced route "
-        "is rendered.",
+        "_routing_enforced.enabled is not a boolean (a string such as "
+        "\"true\" included); the whole tree is refused in every mode.",
+    "severity_dedup_invalid":
+        "A tenant's _severity_dedup is neither a boolean nor one of the "
+        "enable / disable words; the whole tree is refused in every mode.",
     "routing_enforced_match_invalid":
         "_routing_enforced.match is written but is not a list of matcher "
         "strings (e.g. a {severity: critical} mapping); no enforced route "
@@ -151,7 +153,9 @@ FINDING_KINDS: dict[str, str] = {
         "rendered.",
     "invalid_receiver_field":
         "A receiver field with a value the generator refuses; the entry is "
-        "not rendered.",
+        "not rendered. A boolean field that is not a boolean (send_resolved, "
+        "require_tls, http_config.proxy_from_environment) refuses the whole "
+        "tree in every mode instead.",
     "conflicting_receiver_field":
         "A receiver sets fields of which exactly one is allowed; the entry "
         "is not rendered.",
@@ -667,20 +671,11 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     # emit AM config: a raw YAML sequence trips Alertmanager's parser with
     # `cannot unmarshal !!seq into string` at config load (amtool check-config),
     # a failure the dict-only Python validation never surfaces.
-    # #2295: a YAML 1.1 boolean word that reached us as a string (quoted, or
-    # from JSON) is written as the boolean it means: Alertmanager's yaml.v2
-    # refuses a quoted 'yes' for a bool field. receiver_optional_problem has
-    # already refused every other non-boolean.
-    for fld in receiver_bool_fields(rtype):
-        if fld in am_entry:
-            am_entry[fld] = coerce_yaml_bool(am_entry[fld])
-    http_config = am_entry.get("http_config")
-    if isinstance(http_config, dict) and "proxy_from_environment" in http_config:
-        am_entry["http_config"] = {
-            **http_config,
-            "proxy_from_environment": coerce_yaml_bool(http_config["proxy_from_environment"]),
-        }
-
+    # ⛔ #2906: no boolean is rewritten here. A boolean field that is a string
+    # (`"yes"`, `"true"`) was refused above (receiver_optional_problem), and
+    # before that the whole tree (`_grar_parse`'s field-type refusal):
+    # turning the word into the boolean it means is the YAML 1.1 leniency
+    # ADR-036 §2 forbids the semantic layer.
     if rtype == "email" and isinstance(am_entry.get("to"), list):
         am_entry["to"] = ", ".join(str(addr) for addr in am_entry["to"])
 
