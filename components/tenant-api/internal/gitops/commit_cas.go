@@ -259,7 +259,9 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 // of the path (theirs to keep), or a `git commit` that took the real
 // index, our blob with it, and moved HEAD (putting the old entry back
 // would stage a revert of that commit). Then the entry is left as it is.
-// Caller holds w.mu.
+// Best effort: the re-read and the update-index are two git calls with no
+// index.lock held between them, so an outside `git add` landing in that gap
+// is overwritten. Caller holds w.mu.
 func (w *Writer) unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID string, committedEntry, priorEntries []byte) {
 	now, err := w.indexEntries(nil, filePath)
 	switch {
