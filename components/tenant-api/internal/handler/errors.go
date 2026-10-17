@@ -645,12 +645,25 @@ func writeTenantWriteFailure(w http.ResponseWriter, r *http.Request, err error) 
 }
 
 // msgWriteCancelled is the text of a write — one tenant or a whole batch —
-// stopped by its request's context before it committed (#1535).
-const msgWriteCancelled = "the write was cancelled before it was committed; nothing was written"
+// stopped by its request's (or async task's) context before it finished
+// (#1535). It does NOT say nothing was written, because that cannot be known
+// here: the git commands run under exec.CommandContext, and the context can
+// end after `git update-ref` (or the commit) has moved the ref but before the
+// process exits and reports it — the kill then turns a landed commit into a
+// context error. So the text tells the caller to look before retrying.
+//
+// A batch whose commit the writer DID see land is never this text:
+// gitops.BatchCommittedError unwraps to ErrConflict only (not to its cause),
+// so isWriteCancelled is false for it, and writeBatchFailure matches it
+// before the cancelled case anyway — it gets msgBatchCommittedIncomplete.
+// What is left for this text is the window the writer cannot see.
+const msgWriteCancelled = "the write was cancelled or timed out before it finished; refresh to see whether it was committed before retrying"
 
 // isWriteCancelled reports whether a write failed because its context was
-// cancelled or reached its deadline: not the body's fault, and not a fault of
-// the write plane either — nothing was written, and a retry may succeed.
+// cancelled or reached its deadline: not the body's fault. It does not mean
+// nothing was written — the context can end after git moved the ref and
+// before the process reported it (msgWriteCancelled) — so the answer asks
+// the caller to refresh rather than promising a clean retry.
 func isWriteCancelled(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

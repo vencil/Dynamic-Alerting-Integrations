@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -202,9 +203,10 @@ func TestWriteTenantWriteFailure_Classification(t *testing.T) {
 }
 
 // A write its own request's context stopped — the client went away, or the
-// request reached its deadline — is neither the body's fault nor a failure of
-// the write plane: nothing was written. PUT and custom-alerts answer it as a
-// direct batch does (writeWriteCancelled): 503 with msgWriteCancelled.
+// request reached its deadline — is not the body's fault. PUT and
+// custom-alerts answer it as a direct batch does (writeWriteCancelled): 503
+// with msgWriteCancelled. Here the context is done before the write starts,
+// so the tree is unchanged; in general it need not be (msgWriteCancelled).
 func TestTenantWrites_CancelledContextIsNotInternalError(t *testing.T) {
 	t.Parallel()
 	const tenantYAML = "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
@@ -259,5 +261,79 @@ func TestTenantWrites_CancelledContextIsNotInternalError(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// msgWriteCancelled must not promise that nothing was written: the context can
+// end after git moved the ref and before the process reported it, so the
+// commit may have landed (#1535 review). It tells the caller to refresh first.
+func TestMsgWriteCancelled_DoesNotClaimNothingWritten(t *testing.T) {
+	t.Parallel()
+	lower := strings.ToLower(msgWriteCancelled)
+	for _, claim := range []string{"nothing was written", "nothing written", "not written", "before it was committed"} {
+		if strings.Contains(lower, claim) {
+			t.Errorf("msgWriteCancelled = %q claims %q, which a cancelled git process cannot guarantee", msgWriteCancelled, claim)
+		}
+	}
+	if !strings.Contains(lower, "refresh") {
+		t.Errorf("msgWriteCancelled = %q does not tell the caller to refresh before retrying", msgWriteCancelled)
+	}
+}
+
+// The batch answers a cancelled or timed-out run with msgWriteCancelled, sync
+// (503) and per op alike — but a batch the writer saw committed is never that
+// answer, even when the cause it carries is the context's: it is the 409 that
+// says it WAS committed.
+func TestBatch_CancelledAnswersAndCommittedWins(t *testing.T) {
+	t.Parallel()
+	for _, err := range []error{context.Canceled, context.DeadlineExceeded,
+		fmt.Errorf("git update-ref: %w", context.DeadlineExceeded)} {
+		w := httptest.NewRecorder()
+		writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, err)
+		var got ErrorResponse
+		if jerr := json.Unmarshal(w.Body.Bytes(), &got); jerr != nil {
+			t.Fatal(jerr)
+		}
+		if w.Code != http.StatusServiceUnavailable || got.Error != msgWriteCancelled {
+			t.Errorf("%v: sync answer = %d %q, want 503 %q", err, w.Code, got.Error, msgWriteCancelled)
+		}
+		if res := batchErrorResult("t-a", err, true); res.Message != msgWriteCancelled {
+			t.Errorf("%v: op result message = %q, want %q", err, res.Message, msgWriteCancelled)
+		}
+	}
+
+	committed := &gitops.BatchCommittedError{Commit: "abc123", Cause: context.DeadlineExceeded}
+	w := httptest.NewRecorder()
+	writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, committed)
+	var got ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusConflict || got.Error != msgBatchCommittedIncomplete {
+		t.Errorf("committed batch with a deadline cause = %d %q, want 409 %q", w.Code, got.Error, msgBatchCommittedIncomplete)
+	}
+}
+
+// writeBatchFailure's default branch hands err.Error() to WriteJSONError as a
+// 500; WriteErrorEnvelope withholds any INTERNAL_ERROR text that is not a fixed
+// public one (#1700), so the client sees msgInternal and never the server path.
+func TestBatchFailure_DefaultBranchWithholdsErrorText(t *testing.T) {
+	t.Parallel()
+	const secret = "/var/lib/tenant-api/conf.d/.git/index.lock"
+	err := errors.New("git commit: open " + secret + ": permission denied")
+	w := httptest.NewRecorder()
+	writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, err)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body: %s", w.Code, w.Body.String())
+	}
+	var got ErrorResponse
+	if jerr := json.Unmarshal(w.Body.Bytes(), &got); jerr != nil {
+		t.Fatal(jerr)
+	}
+	if got.Code != CodeInternal || got.Error != msgInternal {
+		t.Errorf("answer = code %q error %q, want %q %q", got.Code, got.Error, CodeInternal, msgInternal)
+	}
+	if strings.Contains(w.Body.String(), secret) || strings.Contains(w.Body.String(), "permission denied") {
+		t.Errorf("the body carries the original error text: %s", w.Body.String())
 	}
 }
