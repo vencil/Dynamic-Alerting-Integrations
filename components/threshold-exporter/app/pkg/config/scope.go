@@ -260,7 +260,7 @@ type DefaultsFile struct {
 // will simply be nil. The caller (CLI) prints a friendly message
 // and exits success in that case (vacuously safe defaults change).
 func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
-	return scopeEffective(configDir, scopeDir, false, nil)
+	return scopeEffective(configDir, scopeDir, false, nil, ScanOptions{})
 }
 
 // EffectiveTree is ScopeEffective over the whole tree (scopeDir = configDir)
@@ -273,7 +273,7 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 // refused with the exporter's own load's message (LoadDir), since the
 // exporter refuses to serve it — an empty result would read as "no tenants".
 func EffectiveTree(configDir string) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", true, nil)
+	return scopeEffective(configDir, "", true, nil, ScanOptions{})
 }
 
 // EffectiveTreeLogged is EffectiveTree with the exporter's own load logging
@@ -284,13 +284,23 @@ func EffectiveTree(configDir string) (*ScopedTenants, error) {
 // held back and dropped when RootListErr carries the same reason, as
 // LoadDirReport does (withRootWalkWarnHeld). nil logs nothing (EffectiveTree).
 func EffectiveTreeLogged(configDir string, logger *log.Logger) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", true, logger)
+	return scopeEffective(configDir, "", true, logger, ScanOptions{})
+}
+
+// EffectiveTreeWith is EffectiveTreeLogged over the tree as opts makes it
+// read (ScanOptions; `da-guard effective --overlay`, #2906): the one walk
+// reads the overlay's bytes at its path, and every product — tenants,
+// chains, hashes, the exporter's build — is of that tree. A refused overlay
+// is an error wrapping ErrOverlay, with a nil result. The zero opts is
+// EffectiveTreeLogged.
+func EffectiveTreeWith(configDir string, logger *log.Logger, opts ScanOptions) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", true, logger, opts)
 }
 
 // scopeEffective is ScopeEffective; wholeTree is EffectiveTree's mode (key
 // attribution on, an empty tree refused). logger takes the walk's and the
 // build's log lines (EffectiveTreeLogged); nil discards them.
-func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger) (*ScopedTenants, error) {
+func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger, opts ScanOptions) (*ScopedTenants, error) {
 	if logger == nil {
 		logger = discardLogger
 	}
@@ -318,7 +328,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 	// prior) that decodes every tenant file in full since #1957; reusing a
 	// prior across runs is #1977.
 	scanLogger, rootWarn := withRootWalkWarnHeld(logger, absRoot)
-	scan, err := ScanDirTree(absRoot, nil, nil, scanLogger)
+	scan, err := ScanDirTreeWith(absRoot, nil, nil, scanLogger, opts)
 	// As loadDirReport: the root's walk WARN is dropped only when
 	// RootListErr carries it (rootUnlistable below), otherwise logged.
 	rootWarn.release(rootListReported(scan, err))

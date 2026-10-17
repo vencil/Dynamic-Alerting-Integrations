@@ -383,7 +383,7 @@ def test_all_with_duplicate_exits_2_and_keeps_others(
     assert tenants["solo"]["error"] == "merged_hash_unavailable"
     # The entry's detail is fixed wording (no file names on the JSON
     # stream, #1607); da-guard's reason is on stderr.
-    assert tenants["solo"]["detail"] == verify_module._load_describe_module().MERGED_HASH_DA_GUARD_FAILED
+    assert tenants["solo"]["detail"] == verify_module._load_describe_module().MERGED_HASH_TREE_REFUSED
     assert 'duplicate tenant ID "acme"' in captured.err, captured.err
 
 
@@ -428,8 +428,6 @@ _BROKEN_DEFAULTS = {
     "tagged-bool-yes": "defaults:\n  x: !!bool yes\n",
     "document-not-a-mapping": "- 1\n- 2\n",
 }
-# The rest parse, and are refused as an unsupported shape (#2459).
-_PARSE_ERRORS = {"unclosed-flow", "tagged-bool-yes"}
 
 
 @pytest.mark.parametrize("mode", [["db-fin-a"], ["--all"], ["db-fin-a", "--json"]])
@@ -437,18 +435,30 @@ _PARSE_ERRORS = {"unclosed-flow", "tagged-bool-yes"}
 @pytest.mark.parametrize("carrier", ["_defaults.yaml", "finance/_defaults.yaml"])
 def test_unparseable_defaults_is_a_named_usage_error(
         verify_module, conf_d, capsys, cli_argv, carrier, shape, mode):
-    """#2459: exit 1 (this tool's input-error code) naming the file — not
-    the `DefaultsParseError` traceback, and not exit 2, which the rollback
-    checklist reads as a hash mismatch. Fails (the exception escapes
-    `main`) when the catch around `ConfDScanner` is removed."""
+    """#2459: exit 1 (this tool's input-error code) naming the file — not a
+    traceback, and not exit 2, which the rollback checklist reads as a hash
+    mismatch. Since #2906 the exporter judges the file (`da-guard
+    effective`): where it skips it or stops the resolve, no merged_hash is
+    verified and the file is named on stderr; where it serves it, the
+    tenant verifies as on any tree."""
+    import os
+    import subprocess
     (conf_d / carrier).write_text(_BROKEN_DEFAULTS[shape], encoding="utf-8")
+    go = subprocess.run([os.environ["DA_GUARD_BINARY"], "effective", "--config-dir", str(conf_d)],
+                        capture_output=True, text=True, encoding="utf-8", timeout=60)
     cli_argv("tenant-verify", *mode, "--conf-d", str(conf_d))
     code = verify_module.main()
     captured = capsys.readouterr()
-    assert code == 1, captured.err
-    verdict = "does not parse" if shape in _PARSE_ERRORS else "has an unsupported shape"
-    assert f"{conf_d / carrier} {verdict}" in captured.err, captured.err
-    assert captured.out == ""
+    if go.returncode == 0:
+        # The exporter serves this shape at this level (a sub-directory
+        # document that is not a `defaults:` mapping is read whole): it
+        # is verified with Go's hash, as for any tree Go reads.
+        assert code == 0, captured.err
+        return
+    assert code == 1, (captured.out, captured.err)
+    assert "Traceback" not in captured.err
+    assert carrier in captured.err, captured.err
+    assert "merged_hash: " not in captured.out, "nothing verified"
 
 
 def test_control_parseable_defaults_still_verify(verify_module, conf_d, capsys, cli_argv):

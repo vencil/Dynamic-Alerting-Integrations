@@ -3,13 +3,13 @@
 Build the golden fixture scenarios, run describe_tenant.py against each,
 capture expected source_hash + merged_hash, emit golden.json.
 
-merged_hash is describe_tenant's own canonical hash of the effective config
-it reads (`--what-if` prints that one). The merged_hash its `--show-sources`
-prints is read from `da-guard effective` since #1549; where da-guard gives
-one, it must equal the captured value or the scenario fails, so run this with
-da-guard (`bash scripts/ops/with_da_guard.sh python3 tests/golden/build_and_capture.py`
-builds one from this checkout). Without one each row is captured with a NOTE
-and not cross-checked; the Go parity test still checks the Go hashes.
+Every captured value is `da-guard effective`'s (#2906: describe_tenant shows
+Go's values and has no merge or hash of its own). merged_hash is read from
+da-guard directly, because describe_tenant reports none for a tree whose root
+file the exporter drops (not_served.json); where describe_tenant reports
+one, it must be the same. Run this with da-guard
+(`bash scripts/ops/with_da_guard.sh python3 tests/golden/build_and_capture.py`
+builds one from this checkout).
 
 The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
@@ -38,8 +38,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 ROOT = HERE / "fixtures"
 DESCRIBE = HERE.parent.parent / "scripts" / "tools" / "dx" / "describe_tenant.py"
-sys.path.insert(0, str(DESCRIBE.parent))
-import describe_tenant as dt  # noqa: E402  (#1549: its own hash is the golden value)
+sys.path.insert(0, str(DESCRIBE.parent.parent))
+from _lib_tenant_values import run_effective  # noqa: E402  (the golden merged_hash, #2906)
 
 
 def write(path: Path, content: str) -> None:
@@ -721,22 +721,17 @@ def run_describe(scenario_dir: str, tenant_id: str) -> dict:
         print(f"FAIL {scenario_dir}:{tenant_id}: {result.stderr}", file=sys.stderr)
         return {"error": result.stderr}
     out = json.loads(result.stdout)
-    # #1549: the merged_hash describe_tenant prints is read from `da-guard
-    # effective` — null without da-guard, and null for the trees whose root
-    # file the exporter drops (not_served.json). The golden value is
-    # describe_tenant's OWN canonical hash, as before; where da-guard gave
-    # one, the two must agree or the scenario fails.
-    own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config(
-        tenant_id, resolve_custom_alerts=False))
-    go = out.get("merged_hash")
-    if go is not None and go != own:
-        why = f"describe_tenant's own merged_hash {own} != da-guard effective's {go}"
+    # #1549 / #2906: describe_tenant prints no merged_hash for the trees whose
+    # root file the exporter drops (not_served.json); the golden value is
+    # da-guard effective's, read directly, and must equal describe_tenant's
+    # where it prints one.
+    go = run_effective(conf_d).tenants[tenant_id].merged_hash
+    shown = out.get("merged_hash")
+    if shown is not None and shown != go:
+        why = f"describe_tenant's merged_hash {shown} != da-guard effective's {go}"
         print(f"FAIL {scenario_dir}:{tenant_id}: {why}", file=sys.stderr)
         return {"error": why}
-    if go is None:
-        print(f"NOTE {scenario_dir}:{tenant_id}: not cross-checked against da-guard "
-              f"({out.get('merged_hash_error')})", file=sys.stderr)
-    out["merged_hash"] = own
+    out["merged_hash"] = go
     return out
 
 
