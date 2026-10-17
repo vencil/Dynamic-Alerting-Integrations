@@ -46,9 +46,34 @@ var satisfiedTagFiles = map[string]struct{ file, want string }{
 	"!!str over int": {"tenants:\n  tx:\n    mysql_connections: !!str 0x1F\n", "0x1F"},
 }
 
+// genericOnlyFiles are the rest of what the rule rejects: the criterion is the
+// generic decode failing, not a tag mismatch, so a tenant file the typed
+// decode alone accepts goes for any reason the generic decode refuses it —
+// most of them inside a top-level key ThresholdConfig has no field for, which
+// the typed decode skips unread (#3063 blind review, F1).
+var genericOnlyFiles = map[string]string{
+	"duplicate key under an unknown top-level key":   "x-anchors:\n  a: 1\n  a: 2\ntenants:\n  tx:\n    mysql_connections: \"70\"\n",
+	"!!float over text":                              "tenants:\n  tx:\n    mysql_connections: !!float abc\n",
+	"!!bool over text":                               "tenants:\n  tx:\n    _silent_mode: !!bool maybe\n",
+	"!!binary over text that is not base64 (quoted)": "tenants:\n  tx:\n    mysql_connections: !!binary '@@@'\n",
+	"merge of a scalar":                              "x-anchors:\n  <<: 5\ntenants:\n  tx:\n    mysql_connections: \"70\"\n",
+	"unhashable key under an unknown top-level key":  "x-anchors:\n  ? [a]\n  : 1\ntenants:\n  tx:\n    mysql_connections: \"70\"\n",
+	"self-referencing alias":                         "extra: &a {b: *a}\ntenants:\n  tx:\n    mysql_connections: \"70\"\n",
+}
+
 func TestParseTenantFile_RejectsAnExplicitTagItsTextDoesNotSatisfy(t *testing.T) {
 	t.Parallel()
-	for name, file := range mismatchedTagFiles {
+	assertGenericOnlyRejected(t, mismatchedTagFiles)
+}
+
+func TestParseTenantFile_RejectsWhatOnlyTheGenericDecodeRefuses(t *testing.T) {
+	t.Parallel()
+	assertGenericOnlyRejected(t, genericOnlyFiles)
+}
+
+func assertGenericOnlyRejected(t *testing.T, files map[string]string) {
+	t.Helper()
+	for name, file := range files {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// The shape this is about: the typed decode alone accepts it.
@@ -99,6 +124,9 @@ func TestParseTenantFile_AgreesWithTheGenericDecode(t *testing.T) {
 	all := map[string]string{}
 	for k, v := range mismatchedTagFiles {
 		all["mismatch/"+k] = v
+	}
+	for k, v := range genericOnlyFiles {
+		all["generic-only/"+k] = v
 	}
 	for k, v := range satisfiedTagFiles {
 		all["satisfied/"+k] = v.file

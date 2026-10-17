@@ -210,8 +210,17 @@ func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
 // else. The judgement added here is decodeTenantFile's own — the same
 // yaml.Node decoded into `any` — not a third one (a per-scalar tag check
 // would cover the scalar branch and still miss the skipped top-level key).
-// A tag the text satisfies (`!!int 5`, `!!str 5`, `!!float 1.5`,
-// `!!bool true`) decodes generically and is accepted as before.
+//
+// So the criterion is "the generic decode fails", and the mismatched tag is
+// only its commonest case. Everything else the generic decode refuses and
+// the typed decode lets through is rejected too, most of it inside a
+// top-level key with no field (which the typed decode never visits): a
+// duplicate key under an `x-anchors:` helper block, an unhashable key there,
+// a merge of a scalar (`<<: 5`), a broken tag (`!!float abc`,
+// `!!bool maybe`, `!!binary '@@@'`), a self-referencing alias
+// (`extra: &a {b: *a}`). A file whose generic decode succeeds — a tag the
+// text satisfies (`!!int 5`, `!!str 5`, `!!float 1.5`, `!!bool true`)
+// included — is accepted as before.
 //
 // The whole file is rejected, not the one tenant whose block holds the
 // scalar: decodeTenantFile fails for the whole document, so the merge plane
@@ -225,7 +234,7 @@ func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
 //
 // ⚠️ A `_` platform file keeps ParseConfigFile's verdict (WHY NOT IN
 // ParseConfigFile below): rejecting one drops every tenant's defaults, a
-// different decision from this one, which #3063 did not take.
+// different decision from this one, which #3063 did not take (#3131).
 //
 // ⛔ WHY REJECT THE FILE, NOT THE TENANT. A declared tenant id becomes a
 // Prometheus label value, and client_golang's WithLabelValues panics on
