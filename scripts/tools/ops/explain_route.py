@@ -40,6 +40,7 @@ if _HERE not in sys.path:
 
 from generate_alertmanager_routes import (  # noqa: E402
     BaseConfigInputError,
+    SlotVerdict,
     _build_tenant_routes,
     _contains_tenant_placeholder,
     _merge_tenant_routing,
@@ -106,8 +107,10 @@ def rendered_tenant_routes(tenant: str, merged: dict
     overrides first, then the ADR-007 label-match ``routes`` (#2245). Each
     entry is the rendered child route plus ``source`` (``overrides[i]`` /
     ``routes[i]``) and ``receiver_type``. Returns (sub_routes, skipped) —
-    ``skipped`` is every dropped-entry line (``SkippedEntryWarning``, #2489)
-    the generator emitted for an override / ``routes`` entry. No domain allowlist is applied here
+    ``skipped`` is, per override / ``routes`` slot the generator drops, the
+    dropped-entry line (``SkippedEntryWarning``, #2489) that dropped it, read
+    from its per-slot verdict (#3076) — a child of a tenant whose main
+    receiver is missing or refused included. No domain allowlist is applied here
     (explain has no ``--policy``).
 
     #2490: also returns ``replaced`` — every ``ReplacedValueWarning`` line
@@ -115,35 +118,44 @@ def rendered_tenant_routes(tenant: str, merged: dict
     ``--validate`` fails on it) for the main route and its sub-routes. Kept
     apart from ``skipped``: those entries ARE rendered, with another value.
     """
-    if not isinstance(merged, dict) or not merged.get("receiver"):
+    if not isinstance(merged, dict):
         return [], [], []
-    routes, receivers, warnings = _build_tenant_routes({tenant: merged})
+    # #3076: which child slots are in effect, and why the others are not, is
+    # the generator's per-slot verdict (SlotVerdict) — the one the
+    # notification tester reads too. No own walk of `overrides` / `routes`,
+    # no parsing of receiver names, no early return without a main receiver:
+    # a tenant with none still lists each dropped child with the
+    # generator's reason (parent_receiver_not_rendered).
+    verdicts: list[SlotVerdict] = []
+    routes, receivers, warnings = _build_tenant_routes({tenant: merged},
+                                                       verdicts=verdicts)
     types: dict[str, str] = {}
     for recv in receivers:
         for key in recv:
             if key.endswith("_configs"):
                 types[recv["name"]] = key[:-len("_configs")]
-    prefix = f"tenant-{tenant}-"
+    children = {child.get("receiver"): child
+                for parent in routes for child in parent.get("routes", [])}
     out: list[dict] = []
-    for parent in routes:
-        for child in parent.get("routes", []):
-            name = child.get("receiver", "")
-            kind, _, idx = name[len(prefix):].rpartition("-")
-            source = {"override": "overrides", "route": "routes"}.get(kind, kind)
-            entry = {"source": f"{source}[{idx}]"}
-            entry.update(child)
-            entry["receiver_type"] = types.get(name, "")
+    for v in verdicts:
+        if v.slot != "receiver" and v.rendered:
+            entry = {"source": v.slot}
+            entry.update(children[v.receiver_name])
+            entry["receiver_type"] = types.get(v.receiver_name, "")
             out.append(entry)
-    # Skipped sub-route entries only: the main receiver's own problems are
-    # the tenant route's, and a timing clamp is not a skip. #2489: "skipped"
-    # is the line's TYPE, not the word — a clamp WARN whose value is
-    # `skipping` used to be listed here. `warnings` is the generator's own
-    # list, unreformatted, so the mark is intact.
-    markers = ("override[", "routes[", "'overrides'", "'routes'",
-               f"{tenant}-override-", f"{tenant}-route-")
+    # Skipped lines, in the generator's order: the reason of every dropped
+    # child slot (the main receiver's own problems are the tenant route's),
+    # and every dropped-entry line filed under a RENDERED child slot (a
+    # group_by element it dropped, #2503). Selected by the verdicts, the
+    # line's TYPE and its ``field``, never by its text (#2489); `warnings` is
+    # the generator's own list, unreformatted, so the mark is intact.
+    reasons = {id(v.reason) for v in verdicts
+               if v.slot != "receiver" and not v.rendered and v.reason is not None}
+    rendered_slots = {v.slot for v in verdicts if v.slot != "receiver" and v.rendered}
     skipped = [w for w in warnings
                if isinstance(w, SkippedEntryWarning)
-               and any(m in w for m in markers)]
+               and (id(w) in reasons
+                    or (w.field or "").split(".", 1)[0] in rendered_slots)]
     replaced = [w for w in warnings if isinstance(w, ReplacedValueWarning)]
     return out, skipped, replaced
 

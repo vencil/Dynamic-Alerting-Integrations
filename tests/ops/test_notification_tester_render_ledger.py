@@ -340,3 +340,116 @@ def test_explain_route_lists_children_of_a_rejected_main_as_skipped():
     sub_routes, skipped = er.effective_sub_routes("t1", routing)
     assert sub_routes == []
     assert [w.field for w in skipped] == ["overrides[0]", "routes[0]"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# explain-route：同一份逐項判定
+# ═══════════════════════════════════════════════════════════════════════
+_EXPLAIN = os.path.join(_TOOLS_DIR, "ops", "explain_route.py")
+
+
+def _run_explain(conf_dir, *flags):
+    return subprocess.run(
+        [sys.executable, _EXPLAIN, "--config-dir", str(conf_dir), *flags],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+
+
+def test_explain_route_lists_children_of_a_missing_main(tmp_path):
+    """#3076：租戶沒有主 receiver 時，explain-route 也逐一列出被丟掉的子項目與產生器的原因。"""
+    routing = {"overrides": [{"alertname": "A", "receiver": _OK_O}],
+               "routes": [{"match": {"severity": "critical"}, "receiver": _OK_R}]}
+    _write_tree(tmp_path, routing)
+    proc = _run_explain(tmp_path, "--json")
+    assert proc.returncode == 0, proc.stderr
+    (t1,) = [t for t in json.loads(proc.stdout) if t["tenant"] == "t1"]
+    assert t1["sub_routes"] == []
+    assert [w.strip() for w in t1["skipped_sub_routes"]] == [
+        "WARN: t1: override[0] not rendered: the tenant's main receiver is not rendered, skipping",
+        "WARN: t1: routes[0] not rendered: the tenant's main receiver is not rendered, skipping"]
+    text = _run_explain(tmp_path)
+    assert text.returncode == 0, text.stderr
+    assert "Not in effect (skipped by the generator):" in text.stdout
+    assert "override[0] not rendered" in text.stdout
+    assert "routes[0] not rendered" in text.stdout
+
+
+def _slot_ref(label: str, tenant: str) -> str:
+    kind, _, idx = label[len(tenant) + 1:].partition("-")
+    return {"override": f"override[{idx}]", "route": f"routes[{idx}]",
+            "overrides": "'overrides'", "routes": "'routes'"}[kind]
+
+
+# explain-route --json crashes on these trees on main already (a YAML date
+# value in `final` is not JSON serializable; rc 2) — not this ticket's.
+_EXPLAIN_JSON_CRASHES = {"routing-values-yaml11"}
+
+
+def test_explain_tester_and_generator_agree_across_parity_matrix(tmp_path):
+    """explain-route 的生效子路由 == tester 測的子項目 == 產生器產出的子 receiver；
+    tester 沒測的子項目，explain-route 都列在略過清單。"""
+    with open(_MATRIX, encoding="utf-8") as fh:
+        trees = json.load(fh)["trees"]
+    compared = 0
+    for tree in trees:
+        root = tmp_path / tree["name"]
+        root.mkdir()
+        for rel, body in tree["files"].items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_yaml(str(path.parent), path.name, body)
+        try:
+            reports = nt.run_all_tests(str(root), dry_run=True, rate_limit=0)
+        except nt.RoutingTreeRefused:
+            continue
+        proc = _run_explain(root, "--json")
+        if tree["name"] in _EXPLAIN_JSON_CRASHES:
+            assert proc.returncode == 2 and "not JSON serializable" in proc.stderr, \
+                "fixed? drop it from _EXPLAIN_JSON_CRASHES"
+            continue
+        assert proc.returncode == 0, (tree["name"], proc.stderr)
+        explained = {t["tenant"]: t for t in json.loads(proc.stdout)}
+        _r, receivers, _w = gar._build_tenant_routes(
+            gar.load_tenant_tree(str(root)).routing_configs)
+        generated = {r["name"] for r in receivers}
+        for rep in reports:
+            t = rep.tenant
+            main = f"tenant-{t}"
+            gen_children = {n for n in generated
+                            if n.startswith(main + "-override-") or n.startswith(main + "-route-")}
+            tested = {_generator_name(r.receiver_name, t) for r in rep.receivers
+                      if r.status == nt.STATUS_DRY_RUN and not r.receiver_name.endswith("-main")}
+            exp = explained[t]
+            in_effect = {s["receiver"] for s in exp["sub_routes"]}
+            assert in_effect == tested == gen_children, (tree["name"], t)
+            dropped = [r.receiver_name for r in rep.receivers
+                       if r.status != nt.STATUS_DRY_RUN and not r.receiver_name.endswith("-main")]
+            for label in dropped:
+                ref = _slot_ref(label, t)
+                # a receiver refusal names the slot as <t>-override-<i> / <t>-route-<i>
+                assert any(ref in w or f"{label}:" in w
+                           for w in exp["skipped_sub_routes"]), (tree["name"], label)
+        compared += 1
+    assert compared >= 40, compared
+
+
+def test_explain_route_in_effect_children_come_from_the_verdicts():
+    """生效子路由的 source 是產生器的 slot（原始索引），略過的 slot 不列。"""
+    import explain_route as er
+
+    routing, _ = TREES["mixed"]
+    sub_routes, skipped = er.effective_sub_routes("t1", routing)
+    assert [(s["source"], s["receiver"]) for s in sub_routes] == [
+        ("overrides[1]", "tenant-t1-override-1"), ("routes[1]", "tenant-t1-route-1")]
+    assert [w.field for w in skipped] == ["overrides[0]", "routes[0]"]
+
+
+def test_explain_route_keeps_group_by_drops_of_a_rendered_child():
+    """產出的子路由被丟掉的 group_by 元素（#2503）照舊列在略過清單。"""
+    import explain_route as er
+
+    routing = {"receiver": _OK,
+               "overrides": [{"alertname": "A", "group_by": ["alertname", True],
+                              "receiver": _OK_O}]}
+    sub_routes, skipped = er.effective_sub_routes("t1", routing)
+    assert [s["source"] for s in sub_routes] == ["overrides[0]"]
+    assert [w.field for w in skipped] == ["overrides[0].group_by[1]"]
