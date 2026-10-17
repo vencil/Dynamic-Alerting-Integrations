@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the carriers that CI checks own, and how files neither renderer reads are listed. On 2026-10-14 decision 3 started reading where each key is read from parse-tree, which turns on "fully covered, no difference: a note only".
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes. On 2026-10-13 decision 3 gained the carriers that CI checks own, and how files neither renderer reads are listed. On 2026-10-14 decision 3 started reading where each key is read from parse-tree, which turns on "fully covered, no difference: a note only". On 2026-10-17 the table of deferred carriers in decision 3 was updated: `_custom_alerts` at the top of a `_` file no longer has a reader.
 
 ## Summary
 
@@ -89,7 +89,7 @@ Carriers not covered yet, and when they will be:
 
 | Carrier | Why deferred | When |
 |---|---|---|
-| Platform-level `_custom_alerts` (recipes at the top of a `_` file) | Read by the custom-alert compiler, which is neither renderer | When the compiler has comparable output, or the first missed change |
+| Platform-level `_custom_alerts` (recipes at the top of a `_` file) | No reader: the exporter does not serve it, and the custom-alert compiler, compiling the exporter's reading, does not compile it either (see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) §3) | When something reads it |
 | `instance_tenant_mapping` | Read by the tenant mapping generator | When that generator has a stable output format |
 | `max_metrics_per_tenant` | served-values does not output the limit itself | When someone needs it |
 

@@ -24,6 +24,7 @@ lang: en
 | 2026-09-28 | Routing settings are inherited level by level along directories too | Decision 9 |
 | 2026-10-08 | The effective config shows values verbatim as written; values `/metrics` does not serve are named key by key | Decision 10 |
 | 2026-10-10 | The `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is read from da-guard; the blast-radius report compares custom alerts separately | Decision 2 |
+| 2026-10-17 | The custom-alert compiler compiles what the exporter serves, so `_custom_alerts` in a `_defaults.yaml` no longer produces rules | Decisions 5, 6 |
 
 ## Terms
 
@@ -159,7 +160,7 @@ Each key below has its own reader, and a change to it is not necessarily reflect
 |:--|:--|
 | `state_filters` | `user_state_filter{tenant,filter,severity}` on `/metrics` |
 | `_routing_defaults`, `_routing_enforced` | the full output of `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, before vs after |
-| `_custom_alerts` | `compile_custom_alerts.py --check` |
+| `_custom_alerts` | `custom_alerts` in `da-guard served-values` (`_custom_alerts` in a `_defaults.yaml` is not served and not compiled into rules, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) §3) |
 | `max_metrics_per_tenant` | see below |
 
 This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect.
@@ -180,7 +181,7 @@ Indenting a top-level key into `defaults:` to make it "appear in the effective c
 The readers of these keys look only at the document's top level, so an indented key is not there for them:
 
 - With `_routing_defaults` indented, every tenant with neither its own `_routing` nor a routing profile loses its whole route; the route generator exits 0 with no error and no warning.
-- With `_custom_alerts` indented, `compile_custom_alerts.py --check` exits 1 and lists every rule that disappeared; but recompile afterwards and the check turns green, leaving the lost rules visible only in the rule pack's diff.
+- `_custom_alerts` itself is neither served nor compiled into rules, indented or not: the custom-alert compiler compiles what the exporter serves.
 
 ### 7. Dual hash and reload
 

@@ -903,12 +903,12 @@ rulepack-pint: ## pint 規則靜態檢查（alerts/template label-flow gate；CI
 	@python3 ./scripts/tools/lint/check_pint.py
 
 .PHONY: custom-alerts-compile
-custom-alerts-compile: ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；source 必須是 exporter 服務的同一 conf.d，否則 recipe_id 對不上 emit）
-	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
+custom-alerts-compile: $(DA_GUARD_PREREQ) ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；照 exporter 送出的編譯，#3042；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
 
 .PHONY: custom-alerts-compile-check
-custom-alerts-compile-check: ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate）
-	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
+custom-alerts-compile-check: $(DA_GUARD_PREREQ) ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate；需要 da-guard）
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
 .PHONY: recipe-status-json
 recipe-status-json: ## 從 shape.py RECIPE_STATUS 生成 recipe-status.json（ADR-024 §8 A1；committed artifact，Go go:embed 消費；非 build-time 生成 → 無 build-order flaky）

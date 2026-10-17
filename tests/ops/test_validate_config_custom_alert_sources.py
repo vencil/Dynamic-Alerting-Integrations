@@ -1,8 +1,10 @@
-"""validate-config `custom_alert_sources`（#3042）：自訂告警編譯器與 exporter
-對不上的地方，只報不擋。
+"""validate-config `custom_alert_sources`（#3042）：exporter 送出（或停用、重新啟用
+後會送出）的自訂告警，每一條都編得出規則；只報不擋。
 
-兩邊都由各自的程式回答（編譯器的 `build_shapes`、da-guard served-values），
-這一列只按（租戶、名稱、recipe_id）比對、決定怎麼報。
+編譯器照 exporter 自己的讀法編（da-guard served-values 的 `custom_alerts`），所以
+沒有規則只剩一種原因：兩邊對同一條的讀法不同（recipe_id 不同，或編譯器拒收
+exporter 收下的設定）。判斷交給編譯器的 `entries.shapes_from_entries`，這一列只
+決定怎麼報。exporter 拒收或丟掉的條目不歸這一列報（da-guard 與 tenant-api 報）。
 """
 from __future__ import annotations
 
@@ -37,69 +39,67 @@ def _tree(root: Path, files: dict[str, str]) -> str:
 
 
 def _row(d: str) -> dict:
-    return vc.check_custom_alert_sources(d, loader=vc._custom_alert_compiler())
+    return vc.check_custom_alert_sources(d, entries_mod=vc._custom_alert_compiler())
 
 
-def test_a_tenant_own_recipe_passes(tmp_path):
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("own", "m_own")}))
-    assert r["status"] == vc.PASS, r
+@pytest.fixture
+def parted(monkeypatch):
+    """The compiler's recipe_id for an entry named `bad` no longer matches the
+    exporter's — the two readings have parted for that one entry."""
+    entries = vc._custom_alert_compiler()
+    real = entries._shape.recipe_id
+
+    def recipe_id(inst):
+        rid = real(inst)
+        return rid + "_parted" if inst.get("name") == "bad" else rid
+    monkeypatch.setattr(entries._shape, "recipe_id", recipe_id)
+    return entries
 
 
-@pytest.mark.parametrize("files, source", [
-    ({"_defaults.yaml": _ROOT + "_custom_alerts:\n" + _rec("n", "m", indent=2)},
-     "an inherited `_defaults.yaml`"),
-    ({"team/_defaults.yaml": "_custom_alerts:\n" + _rec("n", "m", indent=2)},
-     "an inherited `_defaults.yaml`"),
-    ({"team/_other.yaml": "tenants:\n  t1:\n    _custom_alerts:\n" + _rec("n", "m")},
-     "team/_other.yaml"),
-], ids=["root-defaults-top", "subtree-defaults-top", "subtree-other-file"])
-def test_a_rule_the_exporter_serves_nothing_for_never_fires(tmp_path, files, source):
+@pytest.mark.parametrize("files", [
+    {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("own", "m_own")},
+    {"_platform.yaml": "tenants:\n  t1:\n    _custom_alerts:\n" + _rec("plat", "m_plat")},
+    {"_profiles.yaml": "profiles:\n  p1:\n    _custom_alerts:\n" + _rec("prof", "m_prof"),
+     "team/t1.yaml": _T1 + "    _profile: p1\n"},
+], ids=["tenant", "root-platform", "profile"])
+def test_every_served_alert_has_a_rule(tmp_path, files):
+    """Wherever the exporter takes a tenant's list from, the compiler builds
+    the rule from the same reading."""
     r = _row(_tree(tmp_path, files))
-    assert r["status"] == vc.WARN
-    assert r["details"] == [f"{source}: `n` (threshold__m__gt__w5m__for1m) is compiled, but the "
-                            "exporter serves no threshold for it — the rule never fires — tenant(s) t1"]
+    assert r["status"] == vc.PASS, r
+    assert r["details"] == ["1 custom alert(s) the exporter serves or has switched off, each with "
+                            "a rule the compiler builds"]
+
+
+def test_an_alert_the_compiler_reads_differently_never_alerts(tmp_path, parted):
+    d = _tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("ok", "m1") + _rec("bad", "m2")})
+    r = _row(d)
+    assert r["status"] == vc.WARN and not r["caller_error"]
     assert r["hint"] == vc._CUSTOM_ALERT_SOURCES_HINT
+    assert len(r["details"]) == 1, r["details"]
+    line = r["details"][0]
+    assert line.startswith("team/t1.yaml: tenant t1 `_custom_alerts[1]` (`bad`, threshold__m2__gt__w5m__for1m) "
+                           "is served, but no rule can be compiled for it — it never alerts: "), line
+    assert "threshold__m2__gt__w5m__for1m_parted" in line
 
 
-@pytest.mark.parametrize("files, source", [
-    ({"_defaults.yaml": _ROOT + "tenants:\n  t1:\n    _custom_alerts:\n" + _rec("n", "m")},
-     "_defaults.yaml"),
-    ({"_profiles.yaml": "profiles:\n  p1:\n    _custom_alerts:\n" + _rec("n", "m"),
-      "team/t1.yaml": _T1 + "    _profile: p1\n"},
-     "_profiles.yaml"),
-], ids=["root-defaults-tenants", "profile"])
-def test_a_served_threshold_no_rule_reads_never_alerts(tmp_path, files, source):
-    r = _row(_tree(tmp_path, files))
-    assert r["details"] == [f"{source}: `n` (threshold__m__gt__w5m__for1m) is served, but no rule "
-                            "is compiled for it — it never alerts — tenant(s) t1"]
+def test_a_switched_off_alert_is_judged_too(tmp_path, parted):
+    """A disabled entry gets a rule (switching it back on needs no
+    recompile), so one the compiler reads differently is reported as well."""
+    d = _tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("bad", "m2", threshold="disable")})
+    r = _row(d)
+    assert r["status"] == vc.WARN
+    assert "is switched off (served once back on), but no rule can be compiled" in r["details"][0]
 
 
-def test_a_same_name_clash_is_wrong_on_both_sides(tmp_path):
-    """The exporter serves the tenant's own recipe; the compiler compiles the
-    inherited one and quarantines the tenant's."""
-    r = _row(_tree(tmp_path, {
-        "_defaults.yaml": _ROOT + "_custom_alerts:\n" + _rec("same", "m_root", indent=2),
-        "team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("same", "m_own")}))
-    assert r["details"] == [
-        "an inherited `_defaults.yaml`: `same` (threshold__m_root__gt__w5m__for1m) is compiled, "
-        "but the exporter serves no threshold for it — the rule never fires — tenant(s) t1",
-        "team/t1.yaml: `same` (threshold__m_own__gt__w5m__for1m) is served, but no rule is "
-        "compiled for it — it never alerts — tenant(s) t1"]
-
-
-def test_one_line_per_source_with_every_tenant_it_reaches(tmp_path):
-    r = _row(_tree(tmp_path, {
-        "_defaults.yaml": _ROOT + "_custom_alerts:\n" + _rec("n", "m", indent=2),
-        "t0.yaml": "tenants:\n  t0:\n    mysql_connections: \"60\"\n"}))
-    assert len(r["details"]) == 1 and r["details"][0].endswith("tenant(s) t0, t1")
-
-
-def test_a_disabled_recipe_is_compiled_and_not_served_by_design(tmp_path):
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              + _rec("turned_off", "m_off", threshold="disable")
-                              + "      - {recipe: slo_burn_rate, name: slo, metric: m_err, "
-                                "denominator_metric: m_tot, objective: 'disable'}\n"}))
+@pytest.mark.parametrize("recipes", [
+    _rec("a", "m1") + _rec("a2", "m1", threshold="20:warning"),   # duplicate of [0]
+    _rec("a", "m1") + "      - {recipe: bogus, name: x, metric: m, threshold: '1'}\n",  # rejected
+], ids=["duplicate", "rejected"])
+def test_entries_the_exporter_does_not_serve_are_not_this_rows(tmp_path, recipes):
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + recipes}))
     assert r["status"] == vc.PASS, r
+    assert r["details"][0].startswith("1 custom alert(s) ")
 
 
 @pytest.mark.parametrize("exc", [
@@ -117,12 +117,24 @@ def test_an_unreadable_exporter_side_is_a_warn_not_a_refusal(tmp_path, monkeypat
     assert r["hint"] == vc._CUSTOM_ALERT_SOURCES_INCOMPLETE_HINT
 
 
-def test_the_row_does_not_change_the_exit_code(tmp_path):
-    d = _tree(tmp_path, {"_defaults.yaml": _ROOT + "_custom_alerts:\n" + _rec("n", "m", indent=2)})
+def test_a_da_guard_without_the_entries_is_not_compared(tmp_path, monkeypatch):
+    real = vc.load_served_tree
+
+    def stale(*a, **k):
+        tree = real(*a, **k)
+        return tree._replace(tenants={t: v._replace(custom_alerts=None) for t, v in tree.tenants.items()})
+    monkeypatch.setattr(vc, "load_served_tree", stale)
+    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("own", "m_own")}))
+    assert r["status"] == vc.WARN
+    assert "has no `custom_alerts`" in r["details"][0] and "older than this tool" in r["details"][0]
+
+
+def test_the_row_is_reported_and_does_not_fail_the_run(tmp_path):
+    d = _tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("own", "m_own")})
     p = subprocess.run([sys.executable, vc.__file__, "--config-dir", d, "--json"],
                        capture_output=True, encoding="utf-8", timeout=600)
     rows = {r["check"]: r for r in json.loads(p.stdout)}
-    assert rows["custom_alert_sources"]["status"] == vc.WARN
+    assert rows["custom_alert_sources"]["status"] == vc.PASS
     assert p.returncode == 0, p.stderr
 
 
@@ -134,96 +146,3 @@ def test_without_the_compiler_the_row_is_absent(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         vc.main()
     assert "custom_alert_sources" not in {r["check"] for r in json.loads(capsys.readouterr().out)}
-
-
-@pytest.mark.parametrize("threshold", ["disable", "Disable", "disabled", "off:warning", "FALSE"])
-def test_every_spelling_the_exporter_switches_off_is_left_out(tmp_path, threshold):
-    """The exporter's own opt-out test (isDisabled): disable / disabled / off
-    / false, any case — compiled, not served, by design."""
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              + _rec("turned_off", "m_off", threshold=threshold)}))
-    assert r["status"] == vc.PASS, r
-
-
-def test_the_name_does_not_decide_a_match(tmp_path):
-    """A rule joins on recipe_id and severity; a name the two sides spell
-    differently (unquoted `on`: Python True, Go "on") is the same alert."""
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              "      - {recipe: threshold, name: on, metric: m, op: '>', "
-                              "window: 5m, threshold: '10:warning'}\n"}))
-    assert r["status"] == vc.PASS, r
-
-
-@pytest.mark.parametrize("files", [
-    {"team/t1.yaml": _T1 + "    _custom_alerts: 5\n"},
-    {"_defaults.yaml": _ROOT + "_custom_alerts: 5\n"},
-], ids=["tenant", "root-defaults-top"])
-def test_a_tree_the_compiler_cannot_walk_is_a_warn_not_a_refusal(tmp_path, files):
-    """`_custom_alerts` that is not a list stops the compiler's walk: the row
-    says nothing was compared — it does not FAIL, and the run's exit code is
-    the one the other rows give (here 1, from json_schema)."""
-    d = _tree(tmp_path, files)
-    r = _row(d)
-    assert r["status"] == vc.WARN and not r["caller_error"], r
-    assert r["details"][0].startswith("comparison incomplete: the compiler's custom alerts")
-    p = subprocess.run([sys.executable, vc.__file__, "--config-dir", d, "--json"],
-                       capture_output=True, encoding="utf-8", timeout=600)
-    rows = {x["check"]: x for x in json.loads(p.stdout)}
-    assert rows["custom_alert_sources"]["status"] == vc.WARN
-    assert p.returncode in (0, 1), p.returncode
-
-
-def test_a_served_row_another_tenant_got_a_rule_for_does_alert(tmp_path):
-    """Rules are per (recipe_id, severity) for the whole pack, joined on
-    tenant: t2's served row (from the root `_defaults.yaml` `tenants:`, which
-    the compiler does not read) is alerted on by the rule t1's own recipe
-    compiled."""
-    r = _row(_tree(tmp_path, {
-        "_defaults.yaml": _ROOT + "tenants:\n  t2:\n    _custom_alerts:\n" + _rec("n", "m"),
-        "team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("n", "m"),
-        "t2.yaml": "tenants:\n  t2:\n    mysql_connections: \"5\"\n"}))
-    assert r["status"] == vc.PASS, r
-
-
-def test_a_switched_off_recipe_still_compiles_the_rule(tmp_path):
-    """`a` is off (compiled, not served) and takes the shape; `b`, same shape
-    and severity, is quarantined but the only one served — the rule `a`
-    compiled alerts on it: nothing to report."""
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              + _rec("a", "m", threshold="disable:warning")
-                              + _rec("b", "m", threshold="10:warning")}))
-    assert r["status"] == vc.PASS, r
-
-
-@pytest.mark.parametrize("recipes", [
-    [("a", "10:warning"), ("b", "20:warning")],
-    # The one the compiler keeps is switched off (serves no row): the
-    # exporter serves `b`, and the rule `a` compiled alerts on it.
-    [("a", "disable:warning"), ("b", "10:warning"), ("c", "20:warning")],
-], ids=["two", "kept-one-switched-off"])
-def test_recipes_of_one_shape_and_severity_leave_nothing_to_report(tmp_path, recipes):
-    """#3112: the exporter serves one tenant one recipe per shape and
-    severity (the first one on), so the rule the compiler builds for the
-    shape alerts on the one served — the row once listed every one served."""
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              + "".join(_rec(n, "m", threshold=th) for n, th in recipes)}))
-    assert r["status"] == vc.PASS, r
-
-
-def test_the_pass_line_counts_per_tenant_and_severity(tmp_path):
-    r = _row(_tree(tmp_path, {"team/t1.yaml": _T1 + "    _custom_alerts:\n"
-                              + _rec("a", "m", threshold="10:warning")
-                              + _rec("b", "m", threshold="20:critical")}))
-    assert r["details"] == ["2 compiled custom alert(s), counted per tenant and severity, "
-                            "each with a served threshold; every served one has a rule"]
-
-
-def test_a_root_platform_recipe_beside_the_tenants_own_never_fires(tmp_path):
-    """The exporter takes one source per tenant, its own entry first; the
-    compiler takes both."""
-    r = _row(_tree(tmp_path, {
-        "_platform.yaml": "tenants:\n  t1:\n    _custom_alerts:\n" + _rec("a", "m"),
-        "team/t1.yaml": _T1 + "    _custom_alerts:\n" + _rec("b", "m2")}))
-    assert r["details"] == ["_platform.yaml: `a` (threshold__m__gt__w5m__for1m) is compiled, but "
-                            "the exporter serves no threshold for it — the rule never fires — "
-                            "tenant(s) t1"]

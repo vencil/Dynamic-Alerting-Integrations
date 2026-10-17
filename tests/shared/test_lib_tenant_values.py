@@ -818,3 +818,47 @@ def test_disable_effects_are_asked_for_and_read(tmp_path, da_guard):
     # 對照：沒要求就不算（也不付重算的成本）
     plain = tv.load_served_values(conf_d, binary=da_guard)["t"].keys
     assert plain["mysql_conections"].disable is None
+
+
+def test_custom_alerts_are_read_entry_by_entry(tmp_path, da_guard):
+    """#3042：served-values 的 `custom_alerts` 依宣告順序讀成 CustomAlertEntry；
+    整段解不開的租戶沒有條目，`custom_alerts_error` 說明原因。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "a.yaml": "tenants:\n  ta:\n    _custom_alerts:\n"
+                  "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: '80:critical'}\n"
+                  "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: disable}\n",
+        "b.yaml": "tenants:\n  tb:\n    _custom_alerts: 'not: [a list'\n",
+    })
+    tree = tv.load_served_tree(conf_d, binary=da_guard)
+    ta = tree.tenants["ta"].custom_alerts
+    assert [(e.index, e.status, e.severities) for e in ta] == [(0, "served", ("critical",)),
+                                                              (1, "disabled", ("warning",))]
+    assert ta[0].recipe_id == "threshold__m1__gt__w5m__for1m" and ta[0].spec["name"] == "a"
+    assert tree.tenants["tb"].custom_alerts == () and tree.tenants["tb"].custom_alerts_error
+
+
+@pytest.mark.parametrize("entry, why", [
+    ('{"index": 0, "spec": {}, "status": "bogus"}', "status"),
+    ('{"index": 0, "spec": {}, "status": "served"}', "recipe_id"),
+], ids=["unknown-status", "served-without-recipe-id"])
+def test_a_custom_alert_entry_not_of_its_shape_is_refused(tmp_path, entry, why):
+    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
+                                   '"unreadable": [], "aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
+                                   f'"keys": {{}}, "custom_alerts": [{entry}]}}}}}}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "custom alerts that are not of their shape" in str(ei.value) and why in str(ei.value)
+
+
+def test_partial_reads_the_rest_of_a_tree_with_a_file_that_does_not_decode(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "a.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n",
+        "bad.yaml": "tenants:\n  tb: [unclosed\n",
+    })
+    with pytest.raises(tv.ParseFailedError):
+        tv.load_served_tree(conf_d, binary=da_guard)
+    tree = tv.load_served_tree(conf_d, binary=da_guard, partial=True)
+    assert "ta" in tree.tenants and tree.parse_failed == ["bad.yaml"]
