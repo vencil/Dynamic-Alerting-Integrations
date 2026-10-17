@@ -491,3 +491,69 @@ def test_each_new_entry_is_handed_on_as_it_is_made(tmp_path):
     _cached_read(d, b, cache)
     assert [k for k, _ in seen] == list(cache.new) and len(seen) == 2
     assert pc.restricted_loads(seen[1][1]) == {"tenants": {"beta": {}}}
+
+
+# ── the key is the parse's own bytes (the file changes between read and parse) ──
+
+_OLD = "tenants: {alpha: {}}\n"
+_NEW = "tenants: {beta: {}}\n"
+
+
+def _change_then(orig, f: Path):
+    """*orig*, after rewriting *f* — the file changes between the reader's
+    read of its bytes and parse-tree's parse."""
+    def run(*a, **k):
+        f.write_text(_NEW, encoding="utf-8")
+        return orig(*a, **k)
+    return run
+
+
+def test_file_mode_stores_the_parse_of_the_bytes_it_keyed(tmp_path, monkeypatch):
+    """File mode parses the bytes the key was computed from (fed on stdin):
+    the stored value is the old content's, under the old content's key."""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    f = d / "a.yaml"
+    f.write_text(_OLD, encoding="utf-8")
+    old_key = (pc.content_key("a.yaml", _OLD.encode()), _grar_parse.ROUTING_READ.name)
+    monkeypatch.setattr(pt, "load_file", _change_then(pt.load_file, f))
+    cache = pc.ParseCache()
+    assert _cached_read(d, f, cache) == {"tenants": {"alpha": {}}}
+    assert list(cache.new) == [old_key]
+    assert pc.restricted_loads(cache.new[old_key]) == {"tenants": {"alpha": {}}}
+
+
+def test_every_miss_is_file_mode_on_the_keyed_bytes(tmp_path, monkeypatch):
+    """With a cache installed no read is answered from a tree-mode run (which
+    would read each file again itself): a cold cache over many files runs
+    file mode once per file, and each file changed after its bytes were
+    read is stored as the parse of the bytes it was keyed on."""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    names = [f"t{i:02d}.yaml" for i in range(20)]
+    for n in names:
+        (d / n).write_text(f"tenants: {{{n[:-5]}: {{}}}}\n", encoding="utf-8")
+    trees, files = [], []
+    orig_load, orig_file = pt.load, pt.load_file
+
+    def file_mode(root, rel, data, *a, **k):
+        files.append(rel)
+        (d / rel).write_text(_NEW, encoding="utf-8")  # changed under the read
+        return orig_file(root, rel, data, *a, **k)
+
+    monkeypatch.setattr(pt, "load", lambda *a, **k: trees.append(a) or orig_load(*a, **k))
+    monkeypatch.setattr(pt, "load_file", file_mode)
+    cache = pc.ParseCache()
+    pc.install(cache)
+    try:
+        reader = pc.ConfdReader(d)
+        got = [reader.read(d / n, _grar_parse.ROUTING_READ) for n in names]
+    finally:
+        pc.install(None)
+    assert trees == [] and files == names
+    assert got == [{"tenants": {n[:-5]: {}}} for n in names]
+    for n, want in zip(names, got):
+        key = (pc.content_key(n, f"tenants: {{{n[:-5]}: {{}}}}\n".encode()),
+               _grar_parse.ROUTING_READ.name)
+        assert pc.restricted_loads(cache.new[key]) == want
+    assert len(cache.new) == len(names)

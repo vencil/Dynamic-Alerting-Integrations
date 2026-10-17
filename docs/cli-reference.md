@@ -1809,7 +1809,7 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 
 **用途**：GitOps 配置管理；自動產生告警路由與通知接收器。
 
-**讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：conf.d 一律經 `da-guard parse-tree`（yaml.v3）讀，與 exporter 同一種讀法；未加引號的 `yes`／`no`／`on`／`off` 是字串。需要 da-guard：`$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard`（da-tools 映像已內建；repo 內 `make da-guard-build`）；沒有或執行失敗時結束碼 2，什麼都不讀。`parse-tree` 讀不了的檔（`kind` 見 [ADR-036](adr/036-single-parser-effective-config.md) §2）整份略過並在拒收訊息裡帶上 `kind`。`validate-config`、`policy-engine`、`explain-route`、`notification-tester` 經產生器讀 conf.d，同樣需要 da-guard。
+**讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：conf.d 一律經 `da-guard parse-tree`（yaml.v3）讀，與 exporter 同一種讀法；未加引號的 `yes`／`no`／`on`／`off` 是字串。需要 da-guard：`$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard`（da-tools 映像已內建；repo 內 `make da-guard-build`）；沒有或執行失敗時結束碼 2，什麼都不讀；巢狀深到接近 yaml.v3 上限（10,000 層）、本工具解不開 `parse-tree` 的 JSON 時也一樣（實測 9,999 層的巢狀陣列；9,990 層照讀，超過上限則是該檔 `syntax_error`）。`parse-tree` 讀不了的檔（`kind` 見 [ADR-036](adr/036-single-parser-effective-config.md) §2）整份略過並在拒收訊息裡帶上 `kind`。`validate-config`、`policy-engine`、`explain-route`、`notification-tester` 經產生器讀 conf.d，同樣需要 da-guard。
 
 **語法**
 

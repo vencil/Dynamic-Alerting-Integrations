@@ -29,12 +29,13 @@ The generator container (``ops/generator_service``) installs a
 :class:`ParseCache` in each judgement process. Then a read is: the file's
 bytes → :func:`content_key` of its path and content → look up
 ``(key, mode name)`` → on a miss, ``parse-tree`` in file mode on those bytes
-(``--path <rel> --input -``) and keep a pickled copy of the result. After
-:data:`FILE_MODE_MISSES` misses in one judgement the reader runs tree mode
-once instead and answers the rest of the misses from it. The key is
-computed from the path and the content, so a changed file can never be
-answered with an older file's result; the mode is in the key because one
-content read two ways gives two results.
+(``--path <rel> --input -``) and keep a pickled copy of the result.
+Every miss is file mode: the key is computed from the bytes this process
+read, and the value stored under it is the parse of those same bytes (fed
+on stdin), never a tree-mode document — parse-tree would read the file
+again itself, and the file may have changed in between. A changed file can
+thus never be answered with an older or a newer file's result; the mode is
+in the key because one content read two ways gives two results.
 
 ⛔ SHA-256, whatever the repository's object format — never the git blob id.
 In a SHA-1 repository a blob id can be collided (chosen prefix), and two
@@ -81,11 +82,6 @@ PICKLE_PROTOCOL = 5
 #: How long one ``parse-tree`` run may take (seconds), as the other
 #: da-guard readers (``_lib_tenant_values.DEFAULT_TIMEOUT``).
 DEFAULT_TIMEOUT = 600
-
-#: Cache misses one reader answers with file mode before it runs tree mode
-#: once for the rest (a request writes a few files; a cold cache misses all).
-FILE_MODE_MISSES = 8
-
 
 class NotSelected(ParseTreeError):
     """A file this tool reads is not one parse-tree selects: the Python walk
@@ -216,7 +212,6 @@ class ConfdReader:
         self.binary = binary
         self.timeout = timeout
         self._tree: Optional[Tree] = None
-        self._file_reads = 0
 
     def tree(self) -> Tree:
         """The tree-mode document (run on first use). Raises ParseTreeError."""
@@ -276,13 +271,13 @@ class ConfdReader:
         if value is not MISS:
             return value
         cache.parses += 1
+        # Always file mode on `data`, the very bytes the key was computed
+        # from (fed on stdin): the stored value can only be their parse. A
+        # tree-mode document would be parse-tree's own, later read of the
+        # file — it may have changed in between, and its value under this
+        # key would be the parse of other content.
         try:
-            if self._tree is None and self._file_reads < FILE_MODE_MISSES:
-                self._file_reads += 1
-                tree = _lib_parse_tree.load_file(self.root, rel, data, self.binary,
-                                                 self.timeout)
-            else:
-                tree = self.tree()
+            tree = _lib_parse_tree.load_file(self.root, rel, data, self.binary, self.timeout)
             value = mode.convert(self._node(tree, rel))
         except MemoryError:
             cache.memory_error = True
