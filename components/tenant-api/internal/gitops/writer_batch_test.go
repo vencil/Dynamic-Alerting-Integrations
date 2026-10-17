@@ -188,24 +188,25 @@ func TestWritePRBatch_CommitFailureLeavesNothing(t *testing.T) {
 		"p-a.yaml": []byte(silentBody("p-a", "warning")), "p-new.yaml": nil})
 }
 
-// The direct twin of TestWritePRBatch_OpSeesEarlierOpsWrites: op1 drops mv-y
-// from the shared mv-x.yaml, so op2's mv-y.yaml is the id's only declaration
-// on the tree it lands on — judged there, it is accepted. Judged on the tree
-// before op1 (or on an in-memory overlay the placement walk cannot see), it
-// would be refused as declared elsewhere.
+// The direct twin of TestWritePRBatch_OpSeesEarlierOpsWrites. op1 would drop
+// mv-y from the shared mv-x.yaml so that op2's mv-y.yaml is the id's only
+// declaration — but since #3064 mv-x.yaml is git-managed, so op1 is refused,
+// op2 is judged on the tree op1 did not change (mv-y declared elsewhere), and
+// nothing is written. A shared file is split in git.
 func TestWriteBatch_OpIsJudgedOnEarlierOpsWrites(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": "tenants:\n" +
 		"  mv-x:\n    _silent_mode: \"warning\"\n" +
 		"  mv-y:\n    _silent_mode: \"warning\"\n"})
 	w := NewWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
-	if _, err := w.WriteBatch(context.Background(), []BatchOp{
+	_, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("mv-x", tenantBody("mv-x")),
 		setOp("mv-y", tenantBody("mv-y")),
-	}, "op@example.com"); err != nil {
-		t.Fatalf("WriteBatch: %v", err)
+	}, "op@example.com")
+	if !errors.Is(err, ErrTenantGitManaged) || !errors.Is(err, ErrTenantDeclaredElsewhere) {
+		t.Fatalf("WriteBatch: err = %v, want op1 git-managed and op2 declared elsewhere", err)
 	}
-	if n := gitOut(t, dir, "rev-list", "--count", head+"..HEAD"); n != "1" {
-		t.Errorf("commits = %s, want 1", n)
+	if n := gitOut(t, dir, "rev-list", "--count", head+"..HEAD"); n != "0" {
+		t.Errorf("commits = %s, want 0", n)
 	}
 }

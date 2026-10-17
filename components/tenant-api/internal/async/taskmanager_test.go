@@ -67,7 +67,7 @@ func TestSubmitAndGet(t *testing.T) {
 		}, nil
 	}
 
-	m.Submit(taskID, fn)
+	m.Submit(taskID, "", fn)
 
 	// Use Get() (returns a snapshot) to avoid racing with the worker goroutine.
 	retrieved, ok := m.Get(taskID)
@@ -111,7 +111,7 @@ func TestWorkerCompletion(t *testing.T) {
 		return results, nil
 	}
 
-	m.Submit(taskID, fn)
+	m.Submit(taskID, "", fn)
 
 	// Note: we intentionally do NOT assert on the initial status here.
 	// With a zero-cost TaskFunc and a single worker, the task can
@@ -171,7 +171,7 @@ func TestWorkerFailure(t *testing.T) {
 		return nil, errors.New(expectedErr)
 	}
 
-	m.Submit(taskID, fn)
+	m.Submit(taskID, "", fn)
 
 	// Poll until failure.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -207,7 +207,7 @@ func TestWorkerFailureKeepsResults(t *testing.T) {
 	m := NewManager(1)
 	defer m.Close()
 	results := []TaskResult{{TenantID: "a", Status: "error", Message: "refused"}, {TenantID: "b", Status: "not_applied"}}
-	m.Submit("rejected", func(ctx context.Context) ([]TaskResult, error) {
+	m.Submit("rejected", "", func(ctx context.Context) ([]TaskResult, error) {
 		return results, errors.New("batch rejected")
 	})
 	deadline := time.Now().Add(2 * time.Second)
@@ -299,7 +299,7 @@ func TestComputeSummary(t *testing.T) {
 	}
 }
 
-// TestDuplicateSubmit verifies that duplicate taskIDs return the existing task.
+// TestDuplicateSubmit verifies that a duplicate taskID is refused (#3123).
 func TestDuplicateSubmit(t *testing.T) {
 	t.Parallel()
 	m := NewManager(1)
@@ -310,8 +310,11 @@ func TestDuplicateSubmit(t *testing.T) {
 		return nil, nil
 	}
 
-	m.Submit(taskID, fn)
-	m.Submit(taskID, fn) // duplicate — should not create a new task
+	m.Submit(taskID, "", fn)
+	// #3123: a duplicate is refused; it used to return the existing task.
+	if _, err := m.Submit(taskID, "", fn); err == nil {
+		t.Error("duplicate Submit: err = nil, want ErrDuplicateTaskID")
+	}
 
 	// Verify only one task exists via Get() (returns a snapshot).
 	retrieved, ok := m.Get(taskID)
@@ -340,7 +343,7 @@ func TestClose(t *testing.T) {
 		}
 	}
 
-	m.Submit(taskID, fn)
+	m.Submit(taskID, "", fn)
 
 	// TRK-224: replace blind 50ms sleep with a poll for "task is actually
 	// being run by a worker" — the original sleep was a hack to give the
@@ -398,7 +401,7 @@ func TestContextCancellation(t *testing.T) {
 		}
 	}
 
-	m.Submit(taskID, fn)
+	m.Submit(taskID, "", fn)
 
 	// Wait for the task function to start before closing.
 	<-started
@@ -431,7 +434,7 @@ func TestTaskTimestamps(t *testing.T) {
 		return []TaskResult{}, nil
 	}
 
-	m.Submit(taskID, fn)
+	m.Submit(taskID, "", fn)
 
 	// Use Get() (returns a snapshot) to avoid racing with the worker goroutine.
 	task, ok := m.Get(taskID)
@@ -468,7 +471,7 @@ func TestMultipleWorkers(t *testing.T) {
 				{TenantID: "tenant-a", Status: "ok"},
 			}, nil
 		}
-		m.Submit(taskID, fn)
+		m.Submit(taskID, "", fn)
 	}
 
 	// Poll until all tasks complete.
@@ -527,12 +530,12 @@ func TestWorkerSurvivesPanickingTask(t *testing.T) {
 	m.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 	defer m.Close()
 
-	m.Submit("boom", func(ctx context.Context) ([]TaskResult, error) {
+	m.Submit("boom", "", func(ctx context.Context) ([]TaskResult, error) {
 		keys := map[interface{}]bool{}
 		keys[[]int{1}] = true // the runtime panic #2913 hit: hash of unhashable type
 		return nil, nil
 	})
-	m.Submit("after", func(ctx context.Context) ([]TaskResult, error) {
+	m.Submit("after", "", func(ctx context.Context) ([]TaskResult, error) {
 		return []TaskResult{{TenantID: "tenant-a", Status: "ok"}}, nil
 	})
 

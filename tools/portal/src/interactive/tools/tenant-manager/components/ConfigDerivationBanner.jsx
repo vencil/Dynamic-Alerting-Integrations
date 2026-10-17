@@ -21,7 +21,7 @@ const bannerStyle = {
 
 function ConfigDerivationBanner({ notice, t }) {
   if (!notice) return null;
-  const { parseFailedFiles, parseFailedHidden, loadError } = notice;
+  const { parseFailedFiles, loadError } = notice;
   return (
     <div role="status" aria-live="polite" aria-atomic="true" style={bannerStyle}>
       {loadError && (
@@ -30,18 +30,12 @@ function ConfigDerivationBanner({ notice, t }) {
           <code>{loadError}</code>
         </div>
       )}
-      {(parseFailedFiles.length > 0 || parseFailedHidden > 0) && (
+      {parseFailedFiles.length > 0 && (
         <div>
           {t('以下設定檔解析失敗、已被略過，其租戶無法依設定推算狀態（根目錄的租戶檔會以帶設定錯誤的列出現）：', 'These config files failed to parse and were skipped; their tenants have no derived state (a root tenant file appears as a row with a config error): ')}
           {parseFailedFiles.map((f, i) => (
             <span key={f}>{i > 0 ? ', ' : ''}<code>{f}</code></span>
           ))}
-          {parseFailedHidden > 0 && (
-            <span>
-              {parseFailedFiles.length > 0 ? ' ' : ''}
-              {t(`（另有 ${parseFailedHidden} 個不在你的權限範圍內）`, `(${parseFailedHidden} more outside your access scope)`)}
-            </span>
-          )}
         </div>
       )}
     </div>

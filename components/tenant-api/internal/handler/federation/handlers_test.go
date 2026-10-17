@@ -277,8 +277,9 @@ func TestDeleteFederationToken_ForbiddenWithoutAdmin(t *testing.T) {
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(DeleteFederationToken(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 403", w.Code)
+	// #3123: refused like a missing token.
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
 	}
 	if _, ok, _ := fed.Get(rec.TokenID); !ok {
 		t.Error("token record should survive a forbidden delete")

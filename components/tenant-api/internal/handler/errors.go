@@ -81,7 +81,12 @@ const (
 	// CodeStateFull marks an HTTP 507: the write would push tenant-api's
 	// state store past its size budget (#2856). Retrying does not help.
 	CodeStateFull = "STATE_FULL"
-	CodeUpstream  = "UPSTREAM_ERROR"
+	// CodeGroupIDUnavailable marks the 409 of a PUT /groups/{id} whose id is
+	// held by a group the caller cannot see (#3123). It is NOT CONFLICT:
+	// clients retry a CONFLICT (a state write that lost a race), and retrying
+	// this one cannot succeed — the caller must pick another id.
+	CodeGroupIDUnavailable = "GROUP_ID_UNAVAILABLE"
+	CodeUpstream           = "UPSTREAM_ERROR"
 	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
 	// middleware's 401 mirrors this value in its own package-local const
 	// (internal/rbac/middleware.go) — the depguard domain-no-handler ratchet
@@ -174,16 +179,19 @@ const (
 	// documents, an anchor, alias or merge key). Falling back to the raw
 	// diff would show the credentials the mask exists to hide.
 	CodeMaskedPreviewUnavailable = "MASKED_PREVIEW_UNAVAILABLE"
-	// CodeTenantFileWithheld marks a 422, for any caller, from a request
-	// whose answer is built on a tenant file the caller is not shown
-	// (#3050, fileShown: it declares a tenant the caller may not read, or its
-	// tenants cannot be listed with certainty and the caller may not read
-	// every tenant) — the file GET /tenants/{id} answers with
-	// raw_yaml_withheld. POST /tenants/{id}/diff: the preview would carry
-	// that file's lines, and a "no diff" would confirm a guess of it. PUT
-	// /tenants/{id}/custom-alerts: the edit would be based on the
-	// custom_alerts and source_hash GET withheld. Nothing written.
-	CodeTenantFileWithheld = "TENANT_FILE_WITHHELD"
+	// CodeTenantGitManaged marks a 409 refusing a write, or a write's
+	// preview, for a git-managed tenant (#3064): its conf.d file is not
+	// API-shaped (confd.TenantFileManagement — shared with other tenants,
+	// declaring a tenant other than its name, several documents, YAML
+	// indirection where tenants are declared), so tenant-api neither shows
+	// nor writes it; GET /tenants/{id} marks it managed_by: git. 409, not
+	// 422: the request is well-formed and would be accepted for an
+	// API-managed tenant — it conflicts with the state of the file, as
+	// TENANT_CONFIG_NOT_LOADABLE does, and like it a refresh-and-retry
+	// cannot succeed (unlike CONFLICT). The envelope carries tenant_id and
+	// git_managed_reason (a fixed code naming no other tenant). Nothing
+	// written.
+	CodeTenantGitManaged = "TENANT_GIT_MANAGED"
 	// CodeGeneratorFindings marks a 422 from a write the generator container
 	// judged and refused (#2903, ADR-036 §4): the conf.d tree at the commit
 	// the write lands on, with the write applied, does not pass
@@ -377,6 +385,23 @@ func writeTenantTreeUnreadable(w http.ResponseWriter, r *http.Request, d *Deps, 
 	return true
 }
 
+// writeTenantGitManaged answers a write refused for a git-managed tenant
+// (#3064, gitops.GitManagedError) with 409 TENANT_GIT_MANAGED, and reports
+// whether err was one. The text names the tenant the request is about and
+// the fixed reason code — nothing else of the file.
+func writeTenantGitManaged(w http.ResponseWriter, r *http.Request, err error) bool {
+	var gm *gitops.GitManagedError
+	if !errors.As(err, &gm) {
+		return false
+	}
+	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
+		Error: gm.Error(),
+		Code:  CodeTenantGitManaged,
+		Extra: map[string]any{"tenant_id": gm.TenantID, "git_managed_reason": gm.Reason},
+	})
+	return true
+}
+
 // writeTenantPlacementError renders the #2078 write-guard outcomes and the
 // #2939 whole-tree refusal, and reports whether err was one of them. The
 // full error (with the other file's path) goes to slog only; the response
@@ -389,8 +414,9 @@ func writeTenantTreeUnreadable(w http.ResponseWriter, r *http.Request, d *Deps, 
 //   - gitops.TargetUnreadableError      → 409 TENANT_CONFIG_NOT_LOADABLE
 //   - gitops.ErrTenantTreeScan          → 500 INTERNAL_ERROR (the conf.d walk
 //     could not run; the guard fails closed rather than risk a duplicate)
+//   - gitops.ErrTenantGitManaged        → 409 TENANT_GIT_MANAGED (#3064)
 func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
-	if writeTenantTreeUnreadable(w, r, d, err) || writeTenantTargetUnreadable(w, r, err) {
+	if writeTenantTreeUnreadable(w, r, d, err) || writeTenantTargetUnreadable(w, r, err) || writeTenantGitManaged(w, r, err) {
 		return true
 	}
 	switch {
@@ -587,6 +613,7 @@ func writeErrorIsForClient(err error) bool {
 		errors.Is(err, gitops.ErrReservedTenantID) ||
 		errors.Is(err, gitops.ErrInvalidTenantID) ||
 		errors.Is(err, gitops.ErrMergeFailed) ||
+		errors.Is(err, gitops.ErrTenantGitManaged) ||
 		errors.Is(err, confd.ErrAmbiguousTenantFile) ||
 		errors.Is(err, confd.ErrNotRegularFile)
 }

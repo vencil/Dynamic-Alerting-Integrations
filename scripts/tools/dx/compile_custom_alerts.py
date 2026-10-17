@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml.
 
-ADR-024 Capability B (#741 S1+S2). Reads `_custom_alerts` declarations from a
-conf.d tree, groups them by shape signature, and emits ONE vectorised
+ADR-024 Capability B (#741 S1+S2). Reads every tenant's `_custom_alerts` as
+the exporter serves it, groups the entries by shape, and emits ONE vectorised
 `group_left` rule per shape (rule count = shape count, NOT per-tenant fan-out —
 preserves the rule-pack O(M) invariant). Tenants never write PromQL.
+
+What is compiled is the exporter's reading, not this compiler's (#3042): the
+entries da-guard served-values lists for each tenant (`custom_alerts/entries.py`)
+— the ones the exporter serves, plus the switched-off ones (a rule ready for
+when the tenant switches one back on). Which list a tenant has, whether an entry
+is valid, whether it repeats an earlier one's shape and severity, and the
+per-tenant cap are not judged here: the exporter, da-guard and tenant-api's
+write check judge them. An entry the exporter does not serve gets no rule and a
+stderr line. This compiler's recipe_id for an entry must equal the exporter's,
+or the compile is refused (exit 2) — the rule would join no served series.
+da-guard is required (`$DA_GUARD_BINARY`, or `da-guard` on PATH;
+`scripts/ops/with_da_guard.sh` builds one); without it, exit 2.
 
 The generated pack flows through the EXISTING fan-out unchanged (both glob
 `rule-pack-*.yaml`): generate_rulepack_configmaps.py → configmap, and
@@ -29,7 +41,7 @@ default is `__file__`-anchored. `--check` still defaults: it compares, not write
 pack (via check_rulepack_sync), so a stale / hand-edited pack is a hard failure.
 
 ⛔ A compile that produces NOTHING will not overwrite a pack that has rules
-(`--allow-empty` to override, refused while recipes are quarantined). A source
+(`--allow-empty` to override, refused while declarations go unserved). A source
 file the compiler stops seeing — renamed, moved, or a name its discovery does not
 match — is indistinguishable from "the last recipe was removed" at this layer, and
 the write is irreversible in the working tree. See `_erases_committed_rules`.
@@ -49,7 +61,9 @@ the write is irreversible in the working tree. See `_erases_committed_rules`.
 Exit codes:
     0  wrote file / in sync (--check)
     1  drift detected (--check) / refused to erase the committed pack (write)
-    2  error (no --out on a write, invalid declaration tree, missing source, …)
+    2  error (no --out on a write, missing source, no da-guard, a tree the
+       exporter rejects as a whole, the compiler and the exporter reading an
+       entry differently, …)
 """
 from __future__ import annotations
 
@@ -80,9 +94,10 @@ except Exception:  # pragma: no cover
 
 # import the compiler package (scripts/tools/dx/custom_alerts/)
 sys.path.insert(0, _THIS_DIR)
-from custom_alerts import loader as _loader  # noqa: E402
+from custom_alerts import entries as _entries  # noqa: E402
 from custom_alerts import recipes as _recipes  # noqa: E402
 from custom_alerts import shape as _shape  # noqa: E402
+from custom_alerts.entries import CustomAlertParityError  # noqa: E402
 from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
 
 
@@ -209,10 +224,19 @@ def _safe_log(value) -> str:
     return safe_label(value)
 
 
-def build_pack(config_dir: Path,
-               max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT) -> dict:
-    """Build the rule-pack dict (groups) from a conf.d tree."""
-    shapes, per_tenant, skipped = _loader.build_shapes(config_dir, max_custom_recipes=max_custom_recipes)
+def build_pack(source) -> dict:
+    """Build the rule-pack dict (groups) from `source`: a conf.d tree (a path),
+    read as the exporter serves it (`entries.entries_from_tree`, da-guard
+    served-values), or `_custom_alerts` entries already in hand
+    (`entries.Entry`; the recipe-preview path, without da-guard).
+
+    Raises CustomAlertParityError when this compiler reads an entry the
+    exporter serves differently, and what `entries_from_tree` raises."""
+    if isinstance(source, (str, os.PathLike)):
+        tree = _entries.entries_from_tree(Path(source))
+    else:
+        tree = _entries.TreeEntries(list(source), {}, [], [])
+    shapes, not_compiled = _entries.shapes_from_entries(tree.entries)
 
     recording: List[dict] = []
     alerts: List[dict] = []
@@ -263,9 +287,23 @@ def build_pack(config_dir: Path,
     _assert_annotations_template_safe(groups)
     return {
         "groups": groups,
-        "_meta": {"shapes": len(shapes), "info": len(info), "per_tenant_counts": per_tenant,
-                  "skipped": skipped},
+        # entries: what was read; not_compiled: the entries the exporter does
+        # not serve (rejected, duplicate); block_errors: {tenant: why its list
+        # does not decode}; parse_failed / unreadable: files the exporter's
+        # load skips — their tenants have no entry.
+        "_meta": {"shapes": len(shapes), "info": len(info), "entries": tree.entries,
+                  "not_compiled": not_compiled, "block_errors": tree.block_errors,
+                  "parse_failed": tree.parse_failed, "unreadable": tree.unreadable,
+                  "served": tree.served},
     }
+
+
+def _not_served_count(meta: dict) -> int:
+    """How many things the source declares that the exporter serves none of:
+    entries it rejects or drops, lists that do not decode, files its load
+    skips."""
+    return (len(meta["not_compiled"]) + len(meta["block_errors"])
+            + len(meta["parse_failed"]) + len(meta["unreadable"]))
 
 
 def _render(groups: List[dict]) -> str:
@@ -410,8 +448,6 @@ def _rerun_command(args) -> str:
         parts.append(f"--out {_shell_quote(_repo_root() / OUT_REL)}")
     else:
         return ""  # no offer: see the third case above
-    if args.max_custom_recipes != _loader.MAX_CUSTOM_RECIPES_DEFAULT:
-        parts.append(f"--max-custom-recipes {args.max_custom_recipes}")
     parts.append("--allow-empty")
     return " ".join(parts)
 
@@ -475,8 +511,9 @@ def _shell_quote(value) -> str:
     return shlex.quote(str(value))
 
 
-def _deliberate_empty_offer(args, quarantined: int) -> str:
-    """The paste-able way to write an empty pack on purpose — withheld while quarantined.
+def _deliberate_empty_offer(args, not_served: int) -> str:
+    """The paste-able way to write an empty pack on purpose — withheld while the
+    source declares something the exporter does not serve.
 
     ⛔ THIS FUNCTION EXISTS BECAUSE THE FIRST VERSION CONTRADICTED ITSELF. The
     quarantine branch said "Do NOT pass --allow-empty here" and three lines later
@@ -484,7 +521,7 @@ def _deliberate_empty_offer(args, quarantined: int) -> str:
     change is about — a message naming the cheaper, destructive move — reproduced
     one layer down, inside the fix for it. A reader who skims takes the command.
     """
-    if quarantined:
+    if not_served:
         return ""
     command = _rerun_command(args)
     if not command:
@@ -504,7 +541,7 @@ def _deliberate_empty_offer(args, quarantined: int) -> str:
             f"     {command}")
 
 
-def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
+def _nothing_compiled_diagnosis(config_dir: Path, not_served: int) -> str:
     """Why this compile produced no rules — ordered by what to check first.
 
     ⛔ THE QUARANTINE BRANCH IS NOT A NICETY. #1008 fail-soft drops an invalid
@@ -513,7 +550,9 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
     declares that recipe. Measured: the first version of this message sent that
     reader looking for a renamed file and offered them the flag that erases the
     pack — a one-character fix answered with a destructive one. The compiler is
-    holding `skipped` two dozen lines further up; it can simply say so.
+    holding the count two dozen lines further up; it can simply say so. (Since
+    #3042 the drop is the exporter's — an entry it rejects, a list or a file it
+    cannot decode — and the count is of those.)
 
     ⛔ THE QUARANTINE NOTE IS ADDITIVE, NOT A REPLACEMENT, and getting that wrong was
     a regression of its own. The first version early-returned, which swallowed "the
@@ -523,10 +562,10 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
     tick and rc=0. Whose tree was read is never the wrong thing to say.
     """
     head = f"   The compiler read: {config_dir}\n"
-    if quarantined:
+    if not_served:
         return (f"{head}"
-                f"   {quarantined} recipe(s) were QUARANTINED above — the source still declares "
-                f"them, they just failed to compile.\n"
+                f"   {not_served} declaration(s) were listed above as not served by the exporter — "
+                f"the source still declares them, they just did not compile.\n"
                 f"   {DO_NOT_ALLOW_EMPTY}\n"
                 f"   ⚠ Fixing them may still leave fewer rules than the pack has — check the "
                 f"count after recompiling.")
@@ -534,7 +573,7 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
             f"   Check, in this order:\n"
             f"     1. a declaration the compiler stopped seeing — a renamed, moved or deleted\n"
             f"        source file, or a filename its discovery does not match;\n"
-            f"     2. a source file whose contents no longer parse (it would be quarantined above);\n"
+            f"     2. a source file whose contents no longer parse (it would be listed above);\n"
             f"     3. the last declaration really was removed — that is a legitimate end state.")
 
 
@@ -549,10 +588,6 @@ def main() -> int:
     parser.add_argument("--out", default=None,
                         help=f"output rule pack path — REQUIRED to write. Optional "
                              f"for --check, which compares against {OUT_REL} (#1582)")
-    parser.add_argument("--max-custom-recipes", type=int,
-                        default=_loader.MAX_CUSTOM_RECIPES_DEFAULT,
-                        help=f"per-tenant cap on OWN recipes (default: "
-                             f"{_loader.MAX_CUSTOM_RECIPES_DEFAULT}; inherited policy uncapped)")
     parser.add_argument("--allow-empty", action="store_true",
                         help="write a pack with no rules over one that has rules "
                              "(refused by default; only when removing the last recipe is intended)")
@@ -599,34 +634,59 @@ def main() -> int:
         print(f"ERROR: config dir not found: {config_dir}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    # #3042: the source is the exporter's own reading of the tree (da-guard
+    # served-values), imported here and not at module level — the
+    # recipe-preview image imports this module and ships neither it nor
+    # da-guard.
+    import _lib_tenant_values as tv
+
     try:
-        pack = build_pack(config_dir, max_custom_recipes=args.max_custom_recipes)
+        pack = build_pack(config_dir)
+    except CustomAlertParityError as e:
+        # Never fail-soft: a rule built on this compiler's reading would join
+        # a series the exporter does not serve.
+        print(f"ERROR: the compiler and the exporter read a custom alert differently "
+              f"(#3042) — refusing to compile: {e}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except CustomAlertConfigError as e:
-        # surface compile-time validation errors as caller errors (exit 2)
         print(f"ERROR: invalid custom-alert declarations: {e}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except (tv.DaGuardNotFoundError, tv.DaGuardError) as e:
+        # No da-guard, or a tree the exporter's load rejects as a whole (a
+        # tenant declared twice, …): nothing it serves to compile from.
+        tv.print_load_error(e)
         return EXIT_CALLER_ERROR
 
     groups = pack["groups"]
     meta = pack["_meta"]
 
-    # #1008 Part B: surface quarantined (fail-soft) recipes LOUDLY. A shared compiler
-    # gate must not abort the whole compile on one bad recipe (that blocks every
-    # tenant's PR merge — a cross-tenant DoS), so an invalid recipe is dropped and the
-    # rest compile. Report each drop to stderr + the pack _meta so it is never silent
-    # (a quarantined recipe does not deploy). NOT a hard failure by design.
-    skipped = meta.get("skipped", [])
-    for s in skipped:
-        print(f"  ⚠ custom-alert QUARANTINED (fail-soft, #1008): tenant={_safe_log(s['tenant'])} "
-              f"name={s['name']!r} ({_safe_log(s['origin'])}): {_safe_log(s['reason'])}", file=sys.stderr)
-    if skipped:
-        print(f"  ⚠ {len(skipped)} custom-alert recipe(s) quarantined — compiled the rest. "
-              f"A quarantined recipe does NOT deploy; fix it (or it stays dropped).",
-              file=sys.stderr)
+    # The exporter's own load warnings (a directory symlink it does not
+    # follow, a file it serves no tenant from, …), as every da-guard reader
+    # prints them: they say which declarations it never saw.
+    tv.print_load_warnings(meta["served"])
+
+    # What the source declares and the exporter does not serve gets no rule —
+    # said here, never silently. Not a failure: the exporter's own report
+    # (da-guard, tenant-api's write check) is where such an entry is refused.
+    for path in meta["parse_failed"]:
+        print(f"  ⚠ the exporter's load skips {_safe_log(path)} (it does not decode): "
+              f"the custom alerts of its tenants are not compiled.", file=sys.stderr)
+    for path in meta["unreadable"]:
+        print(f"  ⚠ the exporter's load cannot read {_safe_log(path)}: "
+              f"the custom alerts of its tenants are not compiled.", file=sys.stderr)
+    for tenant, reason in sorted(meta["block_errors"].items()):
+        print(f"  ⚠ tenant={_safe_log(tenant)}: the exporter serves none of its "
+              f"_custom_alerts, not compiled: {_safe_log(reason)}", file=sys.stderr)
+    for e in meta["not_compiled"]:
+        print(f"  ⚠ tenant={_safe_log(e.tenant)} _custom_alerts[{e.index}] "
+              f"name={e.spec.get('name')!r}: {e.status} by the exporter, not compiled: "
+              f"{_safe_log(e.reason or '')}", file=sys.stderr)
+    not_served = _not_served_count(meta)
 
     # Non-fatal recipe-lifecycle notices (ADR-024 #6): deprecated/eol recipes in
     # use still compile (no silent alert loss); surface them to stderr so a GitOps
     # PR / CI log flags the migration debt without breaking the build.
-    for notice in _loader.collect_lifecycle_notices(config_dir):
+    for notice in _entries.lifecycle_notices(meta["entries"]):
         print(f"  ⚠ recipe-lifecycle: {notice}", file=sys.stderr)
 
     # Prerequisite notice (#692 P0③ W3): disk-fill recipes (kubelet_volume_stats_*)
@@ -676,8 +736,8 @@ def main() -> int:
                       f"compiles to NOTHING while the committed pack has "
                       f"{len(committed)} rule(s).\n"
                       f"   {DO_NOT_REGENERATE}\n"
-                      f"{_nothing_compiled_diagnosis(config_dir, len(skipped))}"
-                      f"{_deliberate_empty_offer(args, len(skipped))}", file=sys.stderr)
+                      f"{_nothing_compiled_diagnosis(config_dir, not_served)}"
+                      f"{_deliberate_empty_offer(args, not_served)}", file=sys.stderr)
             else:
                 # ⛔ THE CASUALTY LIST IS THE HALF THAT WAS MISSING. This branch used
                 # to say "regenerate" and nothing else, including for partial loss —
@@ -711,18 +771,18 @@ def main() -> int:
               f"{shown} currently has {len(committed)}.\n"
               f"   Writing would remove every custom alert from the pack, and the "
               f"working-tree copy is gone once it is written.\n"
-              f"{_nothing_compiled_diagnosis(config_dir, len(skipped))}"
-              f"{_deliberate_empty_offer(args, len(skipped))}", file=sys.stderr)
+              f"{_nothing_compiled_diagnosis(config_dir, not_served)}"
+              f"{_deliberate_empty_offer(args, not_served)}", file=sys.stderr)
         return EXIT_VIOLATION
 
     # ⛔ THE FLAG IS NOT A UNIVERSAL OVERRIDE. `--allow-empty` says "I mean to ship a
-    # pack with no rules"; quarantined recipes say "the source still declares rules,
-    # they just did not compile". Those two cannot both be true, and honouring the
+    # pack with no rules"; declarations the exporter does not serve say "the source
+    # still declares rules, they just did not compile". Those two cannot both be true, and honouring the
     # flag here would answer a mistyped `window:` by deleting every rule in the pack.
-    if args.allow_empty and skipped and not produced:
+    if args.allow_empty and not_served and not produced:
         print(f"❌ refusing to write: --allow-empty says the source has no declarations, "
-              f"but {len(skipped)} recipe(s) were quarantined above — the source declares "
-              f"them and they failed to compile.\n"
+              f"but {not_served} declaration(s) were listed above as not served — the source "
+              f"declares them and they did not compile.\n"
               f"   Fix or remove those declarations; the flag is for a source that is "
               f"genuinely empty.", file=sys.stderr)
         return EXIT_VIOLATION
@@ -742,20 +802,14 @@ def main() -> int:
         # ⛔ AND IT REUSES THE DIAGNOSIS RATHER THAN GUESSING. Saying "the compiler did
         # not see their declarations" is false when the compiler saw them and threw
         # them out itself — the same misattribution this change already fixed once, one
-        # branch over. `skipped` is in hand here too.
+        # branch over. `not_served` is in hand here too.
         print(f"⚠ Compiled 0 shape(s) → {shown} — the pack now contains no rules.")
-        print(_nothing_compiled_diagnosis(config_dir, len(skipped)), file=sys.stderr)
+        print(_nothing_compiled_diagnosis(config_dir, not_served), file=sys.stderr)
     # ⛔ THE CASUALTY NOTE BELONGS ON THE PATH THAT ACTUALLY DELETES, TOO. It was on
     # `--check` only, i.e. on the branch that changes nothing — while the write that
     # really drops the rules said `✅ Compiled N shape(s)` and named none of them.
     if meta["shapes"]:
         print(_net_rule_change_note(produced, committed), end="", file=sys.stderr)
-    if meta["per_tenant_counts"]:
-        worst = max(meta["per_tenant_counts"].values())
-        print(f"   per-tenant EFFECTIVE recipe counts (own + inherited): "
-              f"{meta['per_tenant_counts']} (max={worst}). OWN-recipe cap "
-              f"{args.max_custom_recipes} enforced at compile (inherited policy "
-              f"is vectorized + uncapped).")
     return EXIT_OK
 
 

@@ -183,7 +183,8 @@ func TestCredentialMask_GetTenantWithheldWhenUnmaskable(t *testing.T) {
         type: slack
         api_url: *hook
 `,
-		// Not YAML: served with config_error, raw_yaml and source_hash.
+		// Not YAML: config_error, and (#3064) git-managed — its shape cannot
+		// be told — so no raw_yaml for anyone, the writer included.
 		"malformed": "tenants:\n  mask-probe:\n    _routing: {receiver: {api_url: CANARY-BROKEN\n",
 	}
 	for name, file := range cases {
@@ -198,6 +199,16 @@ func TestCredentialMask_GetTenantWithheldWhenUnmaskable(t *testing.T) {
 				t.Fatalf("viewer GET leaks a credential: %s", w.Body.String())
 			}
 			m := decodeJSON(t, w)
+			if name == "malformed" {
+				for _, role := range []string{"viewers", "writers"} {
+					w = f.get(t, role)
+					m = decodeJSON(t, w)
+					if _, has := m["raw_yaml"]; has || m["managed_by"] != "git" || strings.Contains(w.Body.String(), "CANARY") {
+						t.Errorf("%s GET of a malformed file: %s; want managed_by git, no raw_yaml", role, w.Body.String())
+					}
+				}
+				return
+			}
 			if m["raw_yaml_withheld"] != true || m["raw_yaml"] != "" {
 				t.Errorf("viewer GET: raw_yaml_withheld = %v, raw_yaml = %q; want true and empty", m["raw_yaml_withheld"], m["raw_yaml"])
 			}
@@ -423,7 +434,9 @@ func TestCredentialMask_DiffOverBodyCapIsNotTruncated(t *testing.T) {
 
 func TestCredentialMask_DiffRefusesUnmaskableCurrentFile(t *testing.T) {
 	t.Parallel()
-	f := newMaskFixture(t, "a: &x 1\nb: *x\n# CANARY-IN-FILE\n")
+	// #3064: the anchor sits inside the tenant's own section (one at the
+	// top level would make the tenant git-managed, refused before masking).
+	f := newMaskFixture(t, "tenants:\n  "+maskTenantID+":\n    _silent_mode: &x \"warning\"\n    _severity_dedup: *x\n# CANARY-IN-FILE\n")
 	// A proposal PUT accepts (#3062: one PUT refuses is refused as PUT
 	// refuses it), so what is judged is the current file's masking.
 	w := f.diff(t, "viewers", "tenants:\n  "+maskTenantID+":\n    _silent_mode: \"warning\"\n")

@@ -46,10 +46,8 @@ type ConfigDerivedMeta struct {
 	EvaluatedAt time.Time `json:"evaluated_at"`
 	// When conf.d was last loaded into the cache the states were evaluated from.
 	ConfigLoadedAt time.Time `json:"config_loaded_at"`
-	// conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (open mode, or an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row.
+	// conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (open mode, or an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).
 	ParseFailedFiles []string `json:"parse_failed_files"`
-	// Parse-failed files not named in parse_failed_files because the caller's RBAC scope does not cover them.
-	ParseFailedHidden int `json:"parse_failed_hidden,omitempty"`
 	// Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's message names other tenants.
 	LoadError string `json:"load_error,omitempty"`
 }
@@ -217,8 +215,8 @@ func (s *tenantSnapshot) withConfigDerived(in []TenantSummary, now time.Time) []
 //     decision filterTenantsByRBAC makes for a tenant whose file is unusable
 //     (ScopeAllowedUnknownMetadata: a broken file's environment/domain are
 //     unknown, not unlabeled). Everything else, platform `_` files included,
-//     is only counted, so the caller still learns the derivation is
-//     incomplete.
+//     is left out without trace (#3123: it used to be counted, which told a
+//     scoped caller how many files outside its scope are broken).
 func (s *tenantSnapshot) configDerivedMeta(d *Deps, p *rbac.VerifiedPrincipal, now time.Time) ConfigDerivedMeta {
 	meta := ConfigDerivedMeta{
 		EvaluatedAt:      now,
@@ -243,8 +241,10 @@ func (s *tenantSnapshot) configDerivedMeta(d *Deps, p *rbac.VerifiedPrincipal, n
 			orgs, _ := d.TenantOrg.OrgsForTenant(id)
 			ok = d.RBAC.ScopeAllowedUnknownMetadata(p, id, orgs)
 		}
+		// #3123: a file outside the caller's scope is left out entirely. It used
+		// to be counted (parse_failed_hidden), which told a scoped caller how
+		// many other tenants' files are broken.
 		if !ok {
-			meta.ParseFailedHidden++
 			continue
 		}
 		meta.ParseFailedFiles = append(meta.ParseFailedFiles, base)

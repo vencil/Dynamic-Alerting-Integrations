@@ -24,15 +24,15 @@ function operationalModeFromSummary(summary) {
 
 // derivationNoticeFromSearch returns what the search response's
 // `config_derivation` says the derivation could not read, or null when
-// there is nothing to tell the operator.
+// there is nothing to tell the operator. (tenant-api no longer counts the
+// files outside the caller's scope — #3123 removed parse_failed_hidden.)
 function derivationNoticeFromSearch(body) {
   const d = body && body.config_derivation;
   if (!d) return null;
   const files = Array.isArray(d.parse_failed_files) ? d.parse_failed_files : [];
-  const hidden = typeof d.parse_failed_hidden === 'number' ? d.parse_failed_hidden : 0;
   const loadError = d.load_error || '';
-  if (files.length === 0 && hidden === 0 && !loadError) return null;
-  return { parseFailedFiles: files, parseFailedHidden: hidden, loadError };
+  if (files.length === 0 && !loadError) return null;
+  return { parseFailedFiles: files, loadError };
 }
 
 export { operationalModeFromSummary, derivationNoticeFromSearch };

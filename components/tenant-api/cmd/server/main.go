@@ -403,25 +403,17 @@ func main() {
 	if err := writer.PruneBatchWorktrees(); err != nil {
 		slog.Warn("could not prune leftover batch worktrees", "error", err)
 	}
-	// v2.6.0: Register callback for real-time event broadcasting
+	// v2.6.0: Register callback for real-time event broadcasting. #3123: the
+	// event is addressed to its tenant; EventStream delivers it only to
+	// subscribers who may read that tenant.
 	writer.SetOnWrite(func(tenantID string) {
-		eventHub.Broadcast(ws.Event{
-			Type:      "config_change",
-			TenantID:  tenantID,
-			Timestamp: time.Now(),
-			Detail:    "tenant config updated",
-		})
+		eventHub.Broadcast(handler.ConfigChangeEvent(tenantID))
 	})
 
 	// #2856: the state store, and the one-time move of these records out of
 	// conf.d. Import never overwrites a record the store already holds.
 	stateStore, err := wireStateStore(*sf, func(entity string) {
-		eventHub.Broadcast(ws.Event{
-			Type:      "config_change",
-			TenantID:  entity,
-			Timestamp: time.Now(),
-			Detail:    "tenant-api state updated",
-		})
+		eventHub.Broadcast(handler.StateChangeEvent(entity))
 	})
 	if err != nil {
 		log.Fatalf("FATAL: %v", err)
@@ -742,7 +734,7 @@ func main() {
 	r := buildRouter(routerDeps{
 		Deps:            deps,
 		RBAC:            rbacMgr,
-		Events:          eventHub.ServeHTTP,
+		Events:          handler.EventStream(deps, eventHub), // #3123: filtered per subscriber
 		DevBypass:       *devBypassAuth,
 		DevBypassEmail:  *devBypassEmail,
 		DevBypassGroups: *devBypassGroups,

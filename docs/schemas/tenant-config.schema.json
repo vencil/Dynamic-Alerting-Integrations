@@ -1306,7 +1306,7 @@
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",
           "title": "Custom Alerts in a _defaults.yaml — not served (ADR-024 §3)",
-          "description": "The exporter does NOT serve `_custom_alerts` declared here: there is no subtree inheritance for custom alerts (`da-guard effective` marks them not_served for tenants with no other source). Until the custom-alert compiler builds only from what the exporter serves (#3042), it still compiles rules for recipes declared here, and those rules never fire for tenants that get no threshold; `da-tools validate-config`, run where the compiler is installed, reports them in its `custom_alert_sources` row."
+          "description": "The exporter does NOT serve `_custom_alerts` declared here: there is no subtree inheritance for custom alerts (`da-guard effective` marks them not_served for tenants with no other source). The custom-alert compiler compiles what the exporter serves (#3042), so it builds no rule for them either."
         }
       },
       "additionalProperties": true

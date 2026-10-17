@@ -887,69 +887,248 @@ func resolveTenantCustomAlertsLogf(tenant string, overrides map[string]Scheduled
 func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) (
 	[]ResolvedThreshold, []ResolvedSloObjective, int, []CustomAlertDuplicate,
 ) {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	sv, ok := overrides["_custom_alerts"]
-	if !ok || strings.TrimSpace(sv.Default) == "" {
-		return nil, nil, 0, nil
-	}
-	var specs []CustomAlertSpec
-	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
-		// whole block unparseable → count as 1 error; the tenant gets NO custom
-		// alerts but the rest of its config is unaffected.
-		logCustomAlertError(logf, tenant, "<block>", fmt.Errorf("cannot parse _custom_alerts: %w", err))
+	walked, blockErr := walkCustomAlertSpecs(tenant, overrides, logf)
+	if blockErr != nil {
 		return nil, nil, 1, nil
 	}
 	var out []ResolvedThreshold
 	var objectives []ResolvedSloObjective
 	var dups []CustomAlertDuplicate
+	errCount := 0
+	for _, w := range walked {
+		switch w.entry.Status {
+		case CustomAlertServed:
+			out = append(out, w.rows...)
+			if w.objective != nil {
+				objectives = append(objectives, *w.objective)
+			}
+		case CustomAlertRejected:
+			if !w.switchedOff {
+				errCount++
+			}
+		case CustomAlertDuplicated:
+			dups = append(dups, w.dup)
+			errCount++
+		}
+	}
+	return out, objectives, errCount, dups
+}
+
+// Statuses of CustomAlertEntry — a closed set.
+const (
+	// CustomAlertServed: the exporter serves the entry's rows.
+	CustomAlertServed = "served"
+	// CustomAlertDisabled: switched off (`threshold: disable`, `objective:
+	// disable`, …) — no row, by design; given a value it would be served.
+	CustomAlertDisabled = "disabled"
+	// CustomAlertRejected: the exporter rejects the entry (Reason says why);
+	// a switched-off entry that would be rejected given a value is this too.
+	CustomAlertRejected = "rejected"
+	// CustomAlertDuplicated: an earlier entry of the list already serves its
+	// shape and severity (CustomAlertDuplicate); the exporter drops it.
+	CustomAlertDuplicated = "duplicate"
+)
+
+// CustomAlertEntry is one element of a tenant's built `_custom_alerts` list
+// as the exporter's resolver reads it (#3042): the spec as decoded, what the
+// exporter does with it, and — for a served or disabled entry — its
+// recipe_id and the severities of the rows it serves (would serve, when
+// disabled). The custom-alert compiler builds its rules from these.
+type CustomAlertEntry struct {
+	Index      int
+	Spec       CustomAlertSpec
+	Status     string
+	Reason     string
+	RecipeID   string
+	Severities []string
+}
+
+// CustomAlertEntries is CustomAlertEntry for every element of the tenant's
+// `_custom_alerts` (overrides: its built map), in declaration order — read by
+// the same walk resolveCustomAlertSpecs serves rows from, so the two cannot
+// part. A block that does not decode has no entry: blockErr says why (""
+// when the block decodes or is absent).
+func CustomAlertEntries(tenant string, overrides map[string]ScheduledValue) (entries []CustomAlertEntry, blockErr string) {
+	walked, err := walkCustomAlertSpecs(tenant, overrides, nil)
+	if err != nil {
+		return nil, err.Error()
+	}
+	entries = make([]CustomAlertEntry, 0, len(walked))
+	for _, w := range walked {
+		entries = append(entries, w.entry)
+	}
+	return entries, ""
+}
+
+// walkedCustomAlert is one entry of walkCustomAlertSpecs with what serving it
+// takes: its rows and user_slo_objective (served), or the earlier entry it
+// repeats (duplicate).
+type walkedCustomAlert struct {
+	entry     CustomAlertEntry
+	rows      []ResolvedThreshold
+	objective *ResolvedSloObjective
+	dup       CustomAlertDuplicate
+	// switchedOff: rejected only once switched back on. The exporter serves
+	// it no row either way and has always taken it as a valid opt-out — it
+	// is not counted on da_custom_alert_parse_errors nor logged.
+	switchedOff bool
+}
+
+// walkCustomAlertSpecs decodes the tenant's `_custom_alerts` and judges each
+// entry in declaration order. A disabled entry is resolved once more with a
+// value in place of the switched-off one (disabledProbe): it is disabled when
+// that is served, rejected otherwise, so a disabled entry is exactly one that
+// switching back on serves. The error is the block's: it does not decode.
+func walkCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) ([]walkedCustomAlert, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	sv, ok := overrides["_custom_alerts"]
+	if !ok || strings.TrimSpace(sv.Default) == "" {
+		return nil, nil
+	}
+	var specs []CustomAlertSpec
+	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
+		// whole block unparseable → count as 1 error; the tenant gets NO custom
+		// alerts but the rest of its config is unaffected.
+		err = fmt.Errorf("cannot parse _custom_alerts: %w", err)
+		logCustomAlertError(logf, tenant, "<block>", err)
+		return nil, err
+	}
+	out := make([]walkedCustomAlert, 0, len(specs))
 	var owner map[customSeriesID]int // series → index of the entry that serves it; one entry cannot repeat another
 	if len(specs) > 1 {
 		owner = make(map[customSeriesID]int, len(specs)+1)
 	}
-	errCount := 0
 	for i, spec := range specs {
+		w := walkedCustomAlert{entry: CustomAlertEntry{Index: i, Spec: spec}}
 		rts, err := resolveOneCustomAlert(tenant, spec)
 		if errors.Is(err, errCustomAlertDisabled) {
-			continue // three-state opt-out: no series, NOT an error
+			// three-state opt-out: no series, NOT an error — when switching
+			// it back on would be served.
+			probe, perr := disabledProbe(tenant, spec)
+			if perr != nil {
+				w.entry.Status, w.switchedOff = CustomAlertRejected, true
+				w.entry.Reason = "switched off; switched back on it would be rejected: " + perr.Error()
+			} else {
+				w.entry.Status = CustomAlertDisabled
+				w.entry.RecipeID, w.entry.Severities = probe[0].CustomLabels["recipe_id"], rowSeverities(probe)
+			}
+			out = append(out, w)
+			continue
 		}
 		if err != nil {
 			logCustomAlertError(logf, tenant, spec.Name, err)
-			errCount++
+			w.entry.Status, w.entry.Reason = CustomAlertRejected, err.Error()
+			out = append(out, w)
 			continue
 		}
+		w.entry.RecipeID, w.entry.Severities = rts[0].CustomLabels["recipe_id"], rowSeverities(rts)
 		// slo_burn_rate: echo the raw objective for the user_slo_objective gauge.
 		// Reaching here means resolveSloBurnRate already ParseFloat'ed it (the
 		// disable case exited via errCustomAlertDisabled above → no gauge).
-		var obj *ResolvedSloObjective
-		if spec.Recipe == "slo_burn_rate" && len(rts) > 0 {
+		if spec.Recipe == "slo_burn_rate" {
 			if v, perr := strconv.ParseFloat(spec.Objective.value, 64); perr == nil {
-				obj = &ResolvedSloObjective{Tenant: tenant, RecipeID: rts[0].CustomLabels["recipe_id"], Objective: v}
+				w.objective = &ResolvedSloObjective{Tenant: tenant, RecipeID: w.entry.RecipeID, Objective: v}
 			}
 		}
 		if owner != nil {
-			if d, dup := customAlertSeriesCollision(rts, obj, owner); dup {
+			if d, dup := customAlertSeriesCollision(rts, w.objective, owner); dup {
 				d.Index, d.Name, d.OfName = i, spec.Name, specs[d.Of].Name
-				dups = append(dups, d)
-				logCustomAlertError(logf, tenant, spec.Name, fmt.Errorf(
-					"its series %s is of the shape and severity _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName))
-				errCount++
+				reason := fmt.Sprintf("its series %s is of the shape and severity _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName)
+				logCustomAlertError(logf, tenant, spec.Name, errors.New(reason))
+				w.entry.Status, w.entry.Reason, w.dup = CustomAlertDuplicated, reason, d
+				w.entry.RecipeID, w.entry.Severities = "", nil
+				w.objective = nil
+				out = append(out, w)
 				continue
 			}
 			for _, r := range rts {
 				owner[customRowID(r)] = i
 			}
-			if obj != nil {
-				owner[customSeriesID{objective: true, recipeID: obj.RecipeID}] = i
+			if w.objective != nil {
+				owner[customSeriesID{objective: true, recipeID: w.objective.RecipeID}] = i
 			}
 		}
-		out = append(out, rts...)
-		if obj != nil {
-			objectives = append(objectives, *obj)
+		w.entry.Status, w.rows = CustomAlertServed, rts
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// disabledProbe resolves a switched-off spec with a value in its place — the
+// threshold's value half (its severity kept) or the objective — so every
+// other check runs. The value is one every recipe accepts (inside the
+// forecast ratio band); it enters no recipe_id.
+func disabledProbe(tenant string, spec CustomAlertSpec) ([]ResolvedThreshold, error) {
+	probe := spec
+	if spec.Recipe == "slo_burn_rate" {
+		probe.Objective = taggedScalar{value: "99", tag: spec.Objective.tag}
+	} else {
+		_, severity, err := parseCustomAlertThreshold(spec.Threshold)
+		if err != nil {
+			return nil, err
+		}
+		probe.Threshold = strconv.FormatFloat(forecastCurrentBand/2, 'f', -1, 64) + ":" + severity
+	}
+	return resolveOneCustomAlert(tenant, probe)
+}
+
+// Fields is the spec as the resolver decoded it, keyed by its YAML names,
+// absent fields left out: every value a string, except selectors /
+// selectors_re (string → string), group_by (strings) and a min_events written
+// as a YAML integer (int). It is what the resolver judged — not the text as
+// written: a YAML `true` selector value is "true", a null is "" (#3042, the
+// custom-alert compiler builds its rules from it).
+func (s CustomAlertSpec) Fields() map[string]any {
+	out := map[string]any{}
+	str := func(k, v string) {
+		if v != "" {
+			out[k] = v
 		}
 	}
-	return out, objectives, errCount, dups
+	str("recipe", s.Recipe)
+	str("name", s.Name)
+	str("metric", s.Metric)
+	str("op", s.Op)
+	str("window", s.Window)
+	str("threshold", s.Threshold)
+	str("quantile", string(s.Quantile))
+	str("denominator_metric", s.DenominatorMetric)
+	str("horizon", s.Horizon)
+	str("capacity_metric", s.CapacityMetric)
+	str("mode", s.Mode)
+	str("for", s.For)
+	str("slo_period", s.SloPeriod)
+	if s.Selectors != nil {
+		out["selectors"] = s.Selectors
+	}
+	if s.SelectorsRe != nil {
+		out["selectors_re"] = s.SelectorsRe
+	}
+	if s.GroupBy != nil {
+		out["group_by"] = s.GroupBy
+	}
+	if s.Objective.tag != "" {
+		out["objective"] = s.Objective.value
+	}
+	if s.MinEvents != nil {
+		if n, err := strconv.Atoi(s.MinEvents.raw); err == nil && s.MinEvents.tag == "!!int" {
+			out["min_events"] = n
+		} else {
+			out["min_events"] = s.MinEvents.raw
+		}
+	}
+	return out
+}
+
+// rowSeverities is the severity of each row, in row order.
+func rowSeverities(rows []ResolvedThreshold) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.Severity
+	}
+	return out
 }
 
 // CustomAlertDuplicate is one `_custom_alerts` entry the exporter drops
@@ -1032,10 +1211,11 @@ func CustomAlertRowCount(tenant string, overrides map[string]ScheduledValue) int
 	return len(rows)
 }
 
-// MaxCustomRecipesDefault mirrors the Python loader's MAX_CUSTOM_RECIPES_DEFAULT
-// (S4) — the per-tenant OWN-recipe cap. The CI compiler is the authority; this is
-// the tenant-api shift-left preflight's matching value (ADR §S5). KEEP IN SYNC
-// with scripts/tools/dx/custom_alerts/loader.py::MAX_CUSTOM_RECIPES_DEFAULT.
+// MaxCustomRecipesDefault is the per-tenant cap on a tenant's OWN custom-alert
+// rows (S4, #3042), judged by tenant-api's write check, da-guard's
+// custom_alert_over_cap and validate-config's custom_alert_cap — the compiler
+// does not judge it. scripts/tools/_lib_constants.py::MAX_CUSTOM_RECIPES is the
+// Python copy (tests/ops/test_validate_config_custom_alert_cap.py pins the two).
 const MaxCustomRecipesDefault = 20
 
 // ValidateTenantCustomAlerts is the tenant-api shift-left preflight (ADR §S5):

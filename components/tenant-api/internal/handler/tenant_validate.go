@@ -22,15 +22,19 @@ type ValidateResponse struct {
 	Valid    bool     `json:"valid"`
 	Warnings []string `json:"warnings,omitempty"`
 	Notices  []string `json:"notices,omitempty"`
+	// Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a
+	// git-managed tenant (#3064; warnings carries its text), so a client can
+	// tell "change this tenant in git" from a body to fix. Absent otherwise.
+	Code string `json:"code,omitempty" enums:"TENANT_GIT_MANAGED"`
 }
 
 // ValidateTenant handles POST /api/v1/tenants/{id}/validate
 //
 // Dry-run without writing: the verdict is PUT's own refusal sequence (#3062,
 // planPut and gitops.PreviewPut, tenant_put_plan.go) — the write scope, the
-// declared tenants, the placeholder, then in direct mode the steps PUT runs
-// on the tree (resolution, splice, validation, #2124), in PR mode only the
-// body-only pre-flight (#1718). Routing and the domain policy are not part
+// placeholder, then in direct mode the steps PUT runs on the tree
+// (resolution, the git-managed refusal of #3064, validation, #2124), in PR
+// mode only the body-only pre-flight (#1718). Routing and the domain policy are not part
 // of it: the route generator judges those on the write (PUT's 422
 // GENERATOR_FINDINGS, #2903), and the dry-run does not call it. A refusal
 // of the request itself (the id, the body's size) is this route's 400 /
@@ -44,10 +48,10 @@ type ValidateResponse struct {
 // @Description symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
 // @Description when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
 // @Description The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
-// @Description holds it and as the body proposes it, every other tenant the body declares (a fixed text naming no tenant), a
-// @Description masked-credential placeholder, the splice into the current file (#2405's rule for a file whose tenants cannot be
-// @Description told apart; for a caller who may not read every tenant of the file, its anchor rules), a declared tenant another
-// @Description conf.d file also declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
+// @Description holds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare
+// @Description tenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false
+// @Description with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), a tenant another conf.d file also
+// @Description declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
 // @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
 // @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
 // @Description This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
@@ -93,13 +97,18 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 			res, errs, err = plan.preview(d)
 			notices = res.Notices
 		}
+		var code string
 		if err != nil {
 			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}
+			if errors.Is(err, gitops.ErrTenantGitManaged) {
+				code = CodeTenantGitManaged
+			}
 		}
 		writeJSON(w, http.StatusOK, ValidateResponse{
 			Valid:    len(errs) == 0,
 			Warnings: errs,
 			Notices:  notices,
+			Code:     code,
 		})
 	}
 }
@@ -129,11 +138,11 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 	if errors.As(err, &tu) {
 		return targetUnreadableText(tu)
 	}
-	// #3062: the splice PUT runs refused the write — PUT's 409 text (its
-	// detail withheld as PUT withholds it), or PUT's 400 (#2405).
-	var se *putSpliceError
-	if errors.As(err, &se) {
-		return se.Error()
+	// #3064: a git-managed tenant — PUT's 409 TENANT_GIT_MANAGED text,
+	// which names this tenant and a fixed reason code only.
+	var gm *gitops.GitManagedError
+	if errors.As(err, &gm) {
+		return gm.Error()
 	}
 	switch {
 	case errors.Is(err, gitops.ErrValidation):

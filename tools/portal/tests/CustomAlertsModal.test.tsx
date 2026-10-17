@@ -135,6 +135,86 @@ describe('CustomAlertsModal', () => {
     expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // edits kept
   });
 
+  // #3064: a git-managed tenant (its file shared with other tenants, say) is
+  // edited in git. GET marks it managed_by: git with no custom_alerts and no
+  // source_hash; every write is a 409 TENANT_GIT_MANAGED.
+  it('#3064: GET managed_by git does not open the editor and says the tenant is managed in git', async () => {
+    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', resolved_thresholds: [], managed_by: 'git', git_managed_reason: 'tenant_count' }));
+    const save = vi.fn();
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('git-managed')).toBeInTheDocument());
+    expect(screen.getByTestId('git-managed').textContent).toContain('tenant_count');
+    expect(screen.getByTestId('git-managed').textContent).toMatch(/managed in git/);
+    expect(screen.queryByTestId('recipe-list')).toBeNull();
+    expect(screen.queryByTestId('add')).toBeNull();
+    expect(screen.queryByTestId('save')).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('#3064: a git-managed tenant with config_error is shown as git-managed, not as a file to repair here', async () => {
+    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', config_error: 'malformed_yaml', managed_by: 'git', git_managed_reason: 'not_tenant_document' }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
+    await waitFor(() => expect(screen.getByTestId('git-managed')).toBeInTheDocument());
+    expect(screen.queryByTestId('config-not-loadable')).toBeNull();
+  });
+
+  it('#3064: GET with raw_yaml_withheld (no source_hash) does not open an empty editor', async () => {
+    // Before: the modal ignored raw_yaml_withheld, listed [] and the save
+    // was a 400 (no base_hash).
+    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', raw_yaml: '', source_hash: '', custom_alerts: [], raw_yaml_withheld: true, managed_by: 'api' }));
+    const save = vi.fn();
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('read-only')).toBeInTheDocument());
+    expect(screen.queryByTestId('recipe-list')).toBeNull();
+    expect(screen.queryByTestId('save')).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('#3064: an API-managed tenant read without source_hash (masked caller) lists the recipes read-only', async () => {
+    // Regression guard: the #3064 change first refused to open the modal on
+    // any GET without source_hash, so a read-only caller lost the list they
+    // could see before.
+    const ft = vi.fn(() => Promise.resolve({
+      id: 'tenant-x', source_hash: '', masked: true, managed_by: 'api',
+      custom_alerts: [{ recipe: 'threshold', name: 'a', metric: 'm', threshold: '1', window: '5m' }],
+    }));
+    const save = vi.fn();
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('recipe-a')).toBeInTheDocument());
+    expect(screen.getByTestId('read-only-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('read-only')).toBeNull();
+    expect(screen.queryByTestId('edit-a')).toBeNull();
+    expect(screen.queryByTestId('delete-a')).toBeNull();
+    expect(screen.queryByTestId('add')).toBeNull();
+    expect(screen.queryByTestId('save')).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('#3064 control: with a source_hash the list is editable (no read-only note)', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'a', metric: 'm', threshold: '1', window: '5m' }]);
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    expect(screen.getByTestId('edit-a')).toBeInTheDocument();
+    expect(screen.queryByTestId('read-only-list')).toBeNull();
+  });
+
+  it('#3064: a 409 TENANT_GIT_MANAGED on save says "managed in git", keeps the edits, no refresh-and-retry', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    const serverError = 'tenant tenant-x is git-managed (tenant_count): its config file is not one tenant-api writes';
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 409,
+      data: { error: serverError, code: 'TENANT_GIT_MANAGED', tenant_id: 'tenant-x', git_managed_reason: 'tenant_count' },
+    }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('git-managed-save')).toBeInTheDocument());
+    expect(screen.getByTestId('git-managed-save').textContent).toContain(serverError);
+    expect(screen.queryByTestId('conflict')).toBeNull();
+    expect(screen.queryByTestId('not-loadable')).toBeNull();
+    expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // edits kept
+  });
+
   it('#2406 control: a base_hash 409 (code CONFLICT) still shows the conflict box', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
     const save = vi.fn(() => Promise.resolve({

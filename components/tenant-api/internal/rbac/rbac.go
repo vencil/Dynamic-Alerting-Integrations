@@ -713,6 +713,91 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 	return passSS
 }
 
+// GrantsSomeTenant is the bar of the "any tenant" route gate
+// (MiddlewareAnyTenant, #2520): may p hold `want` on at least one tenant?
+// It replaces Allowed(p, "*", want) on the collection routes, which only a
+// literal "*" rule passes — a caller granted ["db-a"] or ["db-*"] used to get
+// 403 on /me, /tenants, /groups … before the handler's per-tenant filters
+// (filterTenantsByRBAC, filterByRBAC / OrgAllowedRead, groupVisible, prVisible,
+// eventVisible) could show them their own tenants.
+//
+// ⛔ The predicate is "some rule COULD grant `want` on some tenant", decided
+// from the principal and _rbac.yaml ALONE — never "p can read at least one
+// EXISTING tenant". Reasons:
+//
+//   - No new oracle. The answer depends on nothing but the caller's own rules
+//     (and the org enforce flag) — the same facts GET /me hands back once the
+//     gate is passed. An existence-based bar would make the 403/200 split a
+//     function of conf.d and _tenant_orgs.yaml, so every route behind the gate
+//     — including the ones whose handlers answer the same for "absent" and
+//     "not yours" (federation tokens, batch, groups PUT) — would become a probe
+//     of "does a tenant matching my pattern / in my org exist". With this bar,
+//     a rule naming a tenant that does not exist passes and the handlers
+//     return what they would for any reader: an empty list.
+//   - Consistent with the filters. Each filter decides per tenant with the same
+//     ruleMatches / ruleGrants / tenant pattern / org-scope evaluation; this is
+//     its existential closure over every POSSIBLE tenant (any id, any metadata,
+//     any org labels). Whatever passes here can still see only what those
+//     filters let through, and anything a filter could ever show passes here.
+//   - No per-request conf.d walk, and no gate that flips when a tenant is
+//     created or deleted (an SSE stream or a UI session would start answering
+//     403 without its rules changing).
+//
+// A rule counts iff ruleMatches(p) && ruleGrants(want) && it names at least
+// one well-formed tenant pattern && its org-scope can pass for some tenant:
+//
+//   - no org-scope → yes;
+//   - org-scope and p carries a value for the claim → yes (a tenant labeled
+//     with that org passes in both modes; whether one exists is data);
+//   - org-scope and p carries NO value → only while the org axis is in shadow
+//     (an unlabeled tenant passes); under --rbac-org-scope-enforce such a rule
+//     grants nothing on any tenant (scopeSetModes), so it does not count.
+//
+// The metadata axes (environments / domains) never disqualify a rule: a tenant
+// labeled with an allowed value passes on every plane and in both modes.
+//
+// Zero-group config keeps the historical semantics exactly: MED-8
+// (failClosedOnEmpty) denies everything; path-less open mode grants read only.
+//
+// Records no would-deny: this is not a per-tenant decision, and counting here
+// would pollute the soak series the enforce flips are gated on.
+func (m *Manager) GrantsSomeTenant(p *VerifiedPrincipal, want Permission) bool {
+	cfg := m.Get()
+	if len(cfg.Groups) == 0 {
+		if m.failClosedOnEmpty {
+			return false // MED-8: configured but empty _rbac.yaml → deny
+		}
+		return want == PermRead // open mode — authenticated users have read access only
+	}
+	subject := subjectFor(p)
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if !subject.ruleMatches(rule) || !ruleGrants(rule, want) {
+			continue
+		}
+		if !namesSomeTenant(rule.Tenants) {
+			continue
+		}
+		if rule.OrgScope != "" && subject.claims[rule.OrgScope] == "" && m.orgScopeEnforce {
+			continue // no org claim: matches no labeled tenant, and enforce hides unlabeled ones
+		}
+		return true
+	}
+	return false
+}
+
+// namesSomeTenant reports whether at least one pattern can match some tenant
+// id. validateConfig already rejects malformed patterns at load; this is the
+// same fail-closed backstop tenantMatches keeps for a rule built in a test.
+func namesSomeTenant(patterns []string) bool {
+	for _, pat := range patterns {
+		if validTenantPattern(pat) {
+			return true
+		}
+	}
+	return false
+}
+
 // AllowedInOrg is now scope-aware on BOTH axes (#1597). It used to take no
 // environment/domain and never read rule.Environments / rule.Domains, so a
 // rule's `environments:` constrained only what a subject could SEE (list plane,

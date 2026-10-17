@@ -28,8 +28,8 @@ func TestValidateShapeRefusesStringMetadata(t *testing.T) {
 		"mapping": "tenants:\n  db-a:\n    _metadata:\n      environment: production\n",
 		"null":    "tenants:\n  db-a:\n    _metadata:\n",
 		"absent":  "tenants:\n  db-a:\n    _silent_mode: warning\n",
-		// A flat file's other sections are not this write's to judge.
-		"another tenant's string": "tenants:\n  db-a:\n    _silent_mode: warning\n  db-b:\n    _metadata: \"owner: b\"\n",
+		// A flat file's other section used to be accepted here (not this
+		// write's to judge); since #3064 such a body is refused whole.
 	}
 	for name, body := range accepted {
 		t.Run("accepted/"+name, func(t *testing.T) {

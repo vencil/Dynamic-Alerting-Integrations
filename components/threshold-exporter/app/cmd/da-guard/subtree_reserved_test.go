@@ -211,43 +211,35 @@ func TestGuard_SubtreeReservedKeyFollowsScope(t *testing.T) {
 	}
 }
 
-// #2388 r1b: `_custom_alerts` (guard.TopLevelReadElsewhere) at the TOP level
-// of an unwrapped subtree `_defaults.yaml` is the custom-alert compiler's
-// documented spelling (it reads every level's top-level list; the repo's own
-// rule-packs/recipes/examples/conf.d/finance/_defaults.yaml is written so) and
-// is not reported; the same list under a `defaults:` mapping is read by
-// nothing and is reported. Measured with compile_custom_alerts.py: 12 shapes
-// unwrapped, 11 wrapped (the subtree's recipe dropped).
-func TestGuard_SubtreeCustomAlertsTopLevelIsNotReserved(t *testing.T) {
+// #3042: a subtree `_defaults.yaml`'s `_custom_alerts` is read by no one, at
+// its top level or under `defaults:` (the compiler compiles what the exporter
+// serves, and the exporter has never served it): both are reported, with
+// where the list is read instead — and not as a key the exporter stops
+// applying, which it never did.
+func TestGuard_SubtreeCustomAlertsAreReadByNoOne(t *testing.T) {
 	t.Parallel()
 	const recipe = "_custom_alerts:\n  - recipe: ratio\n    name: payment_failure_ratio\n" +
 		"    metric: payment_failed_total\n    denominator_metric: payment_attempts_total\n" +
 		"    op: \">\"\n    window: 5m\n    threshold: \"0.01:critical\"\n"
 	indented := "defaults:\n" + "  " + strings.ReplaceAll(strings.TrimSuffix(recipe, "\n"), "\n", "\n  ") + "\n"
-	for _, tc := range []struct {
-		name, subtree string
-		want          int
-	}{
-		{name: "top-level-unwrapped", subtree: recipe, want: 0},
-		{name: "inside-defaults", subtree: indented, want: 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, subtree := range map[string]string{"top-level-unwrapped": recipe, "inside-defaults": indented} {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
-			files["finance/_defaults.yaml"] = tc.subtree
+			files["finance/_defaults.yaml"] = subtree
 			code, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
-			if len(got) != tc.want {
-				t.Fatalf("findings = %+v, want %d", got, tc.want)
+			if len(got) != 1 {
+				t.Fatalf("findings = %+v, want 1", got)
 			}
 			if code != exitOK {
 				t.Errorf("exit = %d, want %d", code, exitOK)
 			}
-			if tc.want == 1 {
-				f := got[0]
-				if f.TenantID != "t1" || f.Field != "_custom_alerts" ||
-					!strings.Contains(f.Message, "move `_custom_alerts` out of `defaults:` to the top level") {
-					t.Errorf("finding = %+v", f)
-				}
+			f := got[0]
+			if f.TenantID != "t1" || f.Field != "_custom_alerts" ||
+				!strings.Contains(f.Message, "no reader takes custom alerts from a `_defaults.yaml`") ||
+				!strings.Contains(f.Message, "in a profile its tenants select") ||
+				strings.Contains(f.Message, "stops applying") {
+				t.Errorf("finding = %+v", f)
 			}
 		})
 	}
