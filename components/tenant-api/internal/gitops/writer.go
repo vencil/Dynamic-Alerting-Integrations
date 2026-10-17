@@ -113,7 +113,7 @@ type replaceUnparseableKey struct{}
 
 // WithReplaceUnparseable marks ctx as carrying a caller with platform-wide
 // write permission, allowing Write / WriteIfUnchanged / WritePR /
-// DryRunValidate to replace a current tenant file that cannot be parsed
+// PreviewPut to replace a current tenant file that cannot be parsed
 // (#2405). Absent the mark, such a write is refused. The permission decision is
 // the handler's (rbac.PlatformUnrestricted); the Writer only reads the bit, so
 // the check stays under the writer lock, on the file the write lands on.
@@ -145,7 +145,7 @@ type tenantNamesKey struct{}
 
 // WithTenantNames marks ctx with the caller's TenantNames, read by every
 // validation the Writer runs for the request (Write / WriteIfUnchanged /
-// WriteMerged / WriteBatch / WritePR / WritePRBatch / DryRunValidate).
+// WriteMerged / WriteBatch / WritePR / WritePRBatch / PreviewPut).
 func WithTenantNames(ctx context.Context, n TenantNames) context.Context {
 	return context.WithValue(ctx, tenantNamesKey{}, n)
 }
@@ -892,7 +892,8 @@ func (w *Writer) WriteSplicedIfUnchanged(ctx context.Context, tenantID, authorEm
 // spliceBase runs splice on base (the tenant file as read under the lock,
 // nil when absent) and returns what the write commits. A base splice cannot
 // read is replaced by the body whole only with the #2405 bit; without it the
-// write is refused with the #2405 text, whatever else the body says.
+// write is refused with the #2405 text, whatever else the body says (an
+// ErrSpliceShape refusal).
 func spliceBase(ctx context.Context, base []byte, yamlContent string, splice SpliceFunc) (string, error) {
 	if splice == nil {
 		return yamlContent, nil
@@ -900,7 +901,7 @@ func spliceBase(ctx context.Context, base []byte, yamlContent string, splice Spl
 	content, err := splice(base)
 	if errors.Is(err, ErrSpliceBaseUnparseable) {
 		if !replaceUnparseableAllowed(ctx) {
-			return "", fmt.Errorf("%w: %s", ErrValidation, MsgUnparseableBaseNeedsPlatformWrite)
+			return "", fmt.Errorf("%w: %w", ErrValidation, spliceShapeText(MsgUnparseableBaseNeedsPlatformWrite))
 		}
 		return yamlContent, nil
 	}
@@ -989,7 +990,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	// validate's baseline and for the commit, so the three cannot disagree.
 	//
 	// #3062: resolvePut is the one copy of these steps, shared with the PR
-	// write (on the fresh base) and the previews (PreviewPut, DryRunValidate).
+	// write (on the fresh base) and the previews (PreviewPut).
 	//
 	// Optimistic concurrency, under the lock and before validating: a caller
 	// whose base is stale must hear ErrPrecondition (refresh and retry), not a
@@ -1015,7 +1016,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 		return nil
 	}
-	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition, splice)
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition, splice, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1023,6 +1024,11 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 	filePath, existing, content, notices := res.FilePath, res.Existing, res.Content, res.Notices
+	if splice == nil {
+		// resolvePut reads the file only for a splice; the no-op check
+		// reads it here, as before #3062 (a read error leaves it nil).
+		existing, _ = readTenantFile(filePath)
+	}
 
 	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
 	if w.unchangedFile(filePath, existing, content) {
@@ -1121,7 +1127,7 @@ func (w *Writer) tenantFilePath(tenantID string) (string, error) {
 }
 
 // previewTenantFilePath is tenantFilePath for the callers that only preview a
-// write and take no lock — Diff and DryRunValidate: the same resolution and
+// write and take no lock — Diff and PreviewPut: the same resolution and
 // the same #2078 guard, but the walk comes from scanTreeForRead, shared with
 // concurrent readers and bounded by the read path's own breaker.
 //
@@ -1216,7 +1222,7 @@ var (
 //
 // ⚠️ That bounds new walks only AFTER the first timeout. The write path's
 // walks are serialised by w.mu, so it has at most one walk running. The
-// read-only callers (Diff, DryRunValidate) take no lock and do NOT come
+// read-only callers (Diff, PreviewPut) take no lock and do NOT come
 // here: they walk through scanTreeForRead, which shares one in-flight walk
 // between them and counts its stuck walks in stuckReadTreeScans — so a walk
 // a reader left blocked fails later reads only, never a write. A blocked
@@ -1268,7 +1274,7 @@ type treeScanFlight struct {
 }
 
 // scanTreeForRead is the read path's conf.d walk, for the callers that only
-// preview a write and take no lock (Diff, DryRunValidate — via
+// preview a write and take no lock (Diff, PreviewPut — via
 // previewTenantFilePath). It is scanTree's bounded walk with two differences
 // (#2153):
 //
@@ -2027,8 +2033,8 @@ func TenantDocBytesFromEnv(envValue string) (n int64, malformed bool) {
 //
 // It was exported (#1722) because POST /tenants/{id}/validate then re-assembled
 // validate()'s checks by hand and had to call this gate itself. Since #2124 the
-// dry-run gets its verdict from DryRunValidate, which runs validate() — and so
-// this gate — itself; the handler no longer calls it. It stays exported for the
+// dry-run gets its verdict from the write path's own validate() (#3062:
+// PreviewPut), and so from this gate; the handler no longer calls it. It stays exported for the
 // handler-side symmetry test that measures a fixture against the cap.
 //
 // ⚠️ WHAT IT MEASURES DEPENDS ON THE CALLER, so the message must not assert one.

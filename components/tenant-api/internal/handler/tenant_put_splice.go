@@ -319,6 +319,11 @@ func (e *putSpliceError) Error() string {
 		e.TenantID, configErrorNotRoundTrippable, e.Detail)
 }
 
+// Is makes a putSpliceError a gitops.ErrSpliceShape refusal: it answers how
+// the current file is written, which a masked preview's caller the file is
+// withheld from is not told (tenant_put_plan.go).
+func (e *putSpliceError) Is(target error) bool { return target == gitops.ErrSpliceShape }
+
 // msgSpliceDetailWithheld is putSpliceError's Detail for a caller the
 // current file is not shown to (#3050): which anchors, aliases or blocks it
 // holds is its content.

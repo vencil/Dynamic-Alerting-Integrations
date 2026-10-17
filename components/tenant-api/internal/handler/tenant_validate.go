@@ -50,6 +50,9 @@ type ValidateResponse struct {
 // @Description conf.d file also declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
 // @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
 // @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
+// @Description This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
+// @Description it gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on
+// @Description the body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json

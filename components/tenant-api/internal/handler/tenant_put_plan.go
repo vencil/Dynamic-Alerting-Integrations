@@ -39,7 +39,15 @@ package handler
 //     scope refusing is not a 403 there but the masked preview (#1560): PUT
 //     refuses that caller before anything else, which the caller knows. The
 //     rest of the sequence runs unchanged (the proposed scope on {id} aside,
-//     which only asks again what was refused).
+//     which only asks again what was refused) — but for such a caller who
+//     may not read every tenant of the file, a refusal that answers how the
+//     file is written (#2405's, the splice's: anchors, merge keys, what does
+//     not round-trip) is held until the steps after it have run, and if
+//     none of them refuses it is the 422 TENANT_FILE_WITHHELD that caller
+//     gets for a write PUT would accept. That caller is told nothing of the
+//     file's shape: the same answer for every shape. (A caller who may
+//     write {id} hears PUT's refusal, whose one bit — the file's anchors —
+//     is accepted, docs/api/tenant-api-hardening.md.)
 //   - PR mode: PUT runs step 2 on the fresh base, under the writer lock;
 //     the serving tree may lag it (#1718). /diff previews on the serving tree,
 //     as it must to diff anything; /validate runs step 2's body-only part
@@ -183,8 +191,20 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 // preview runs step 2 on the serving tree, without a lock
 // (gitops.PreviewPut): what PUT would write, or its refusal — errs the
 // validation set PUT wraps in ErrValidation, err any earlier refusal.
+//
+// For a masked preview whose caller may not read every tenant of the file
+// (fileShown), a refusal that answers how the file is written
+// (gitops.ErrSpliceShape: #2405's, the splice's) is
+// gitops.ErrSpliceShapeWithheld instead, and only once nothing else refuses
+// the write: /diff answers it with the 422 TENANT_FILE_WITHHELD that caller
+// gets for a write PUT would accept (see the file comment).
 func (p *putPlan) preview(d *Deps) (gitops.PutResolution, []string, error) {
-	return previewWriter(d).PreviewPut(p.r.Context(), p.tenantID, p.body, p.splicer(d))
+	var withheld func([]byte) bool
+	if p.masked {
+		shown := putFileShown(p.r, d, p.tenantID)
+		withheld = func(existing []byte) bool { return !shown(existing) }
+	}
+	return previewWriter(d).PreviewPut(p.r.Context(), p.tenantID, p.body, p.splicer(d), withheld)
 }
 
 // previewWriter is d.Writer, or for handler-test literals that set only

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -57,6 +58,10 @@ type DiffResponse struct {
 // @Description both sides (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
 // @Description with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 422
 // @Description MASKED_PREVIEW_UNAVAILABLE when either side is not YAML, holds several documents, or uses an anchor, alias or merge key.
+// @Description When such a caller may not read every tenant of the current file, a refusal about how the file is written (409
+// @Description not_round_trippable, the anchor rules, #2405's 400) is held until the duplicate-declaration check and validation have run,
+// @Description and if neither refuses the answer is 422 TENANT_FILE_WITHHELD, as for a proposal PUT would accept: every file shape
+// @Description gets the same answer (#3062).
 // @Description For a proposal PUT would accept, every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant
 // @Description the caller may not read (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty
 // @Description (not YAML; an alias, a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:)
@@ -105,6 +110,13 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		res, errs, err := plan.preview(d)
 		if err == nil && len(errs) > 0 {
 			err = validationError(errs)
+		}
+		if errors.Is(err, gitops.ErrSpliceShapeWithheld) {
+			// A masked preview of a file this caller may not read whole: the
+			// answer it gets for a write PUT accepts, whatever the file's
+			// shape (tenant_put_plan.go).
+			writePreviewWithheld(rw, r)
+			return
 		}
 		if err != nil {
 			writePutDirectError(rw, plan.r, d, tenantID, err)

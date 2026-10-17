@@ -12,6 +12,13 @@ package handler
 // Out; a /diff that judged the duplicate before (or without) Out's write
 // scope answered 409 in one case and a 200 preview in the other — whether a
 // tenant id the caller may not write is declared elsewhere.
+//
+// ⛔ ORDER ROWS. planPut's order is part of its answer, so each pair of
+// neighbouring steps has a row whose body both refuse (the *_and_* rows):
+// swap the two and PUT answers that row with the other refusal, and the
+// row turns red. readBody → the proposed scope on {id} is no such pair: the
+// second reads what the first returns. The FIFO pairs are in
+// tenant_put_plan_order_unix_test.go.
 
 import (
 	"bytes"
@@ -35,6 +42,7 @@ const (
 		"  - name: in-readers\n    tenants: [\"" + parityIn + "\"]\n    permissions: [read]\n" +
 		"  - name: both-team\n    tenants: [\"" + parityIn + "\", \"" + parityOut + "\"]\n    permissions: [read, write]\n" +
 		"  - name: prod-ops\n    tenants: [\"parity-*\"]\n    permissions: [read, write]\n    environments: [production]\n" +
+		"  - name: in-prod-ops\n    tenants: [\"" + parityIn + "\"]\n    permissions: [read, write]\n    environments: [production]\n" +
 		"  - name: platform\n    tenants: [\"*\"]\n    permissions: [read, write]\n"
 )
 
@@ -60,6 +68,9 @@ type parityCase struct {
 	body        string
 	// want is PUT's status in direct mode; refusals are compared in full.
 	want int
+	// wantText is in PUT's refusal (the order rows: which step answered,
+	// when both would answer with want).
+	wantText string
 	// tree: the refusal comes from the steps PUT runs on the tree the
 	// write replaces — in PR mode on the fresh base, which /validate does
 	// not reach (#1718): it answers valid there (see tenant_put_plan.go).
@@ -71,6 +82,19 @@ type parityCase struct {
 	// own write gate on {id} (requireOrgWriteAt's text): refused alike,
 	// another text.
 	maskedDiff bool
+	// maskedRefusal: for a maskedDiff row, the code of the refusal /diff
+	// answers instead of the masked preview — a step after the write scope
+	// on {id} that refuses for every caller.
+	maskedRefusal string
+	// diffWithheld: PUT accepts, and /diff shows this caller nothing of
+	// the current file (422 TENANT_FILE_WITHHELD, #3050: it may not read
+	// every tenant the file declares). Otherwise an accepted row's /diff
+	// is the 200 preview.
+	diffWithheld bool
+	// maxBody: Deps.MaxBodyBytes (0: the default).
+	maxBody int64
+	// setup runs on the tree after its git commit (the FIFO rows).
+	setup func(t *testing.T, dir string)
 }
 
 func parityCases() []parityCase {
@@ -103,9 +127,34 @@ func parityCases() []parityCase {
 			want: http.StatusForbidden},
 		{name: "invalid_body", file: parityShared, groups: "in-team",
 			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", want: http.StatusBadRequest, tree: true},
-		{name: "accepted", file: parityShared, groups: "in-team", body: parityBodyIn, want: http.StatusOK},
+		{name: "accepted", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "in-team",
+			body: parityBodyIn, want: http.StatusOK},
+		{name: "withheld_writer_accepted", file: parityShared, groups: "in-team", body: parityBodyIn,
+			want: http.StatusOK, diffWithheld: true},
 		{name: "reader_of_id", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "in-readers",
 			body: parityBodyIn, want: http.StatusForbidden, maskedDiff: true},
+
+		// Order rows (see the file comment): PUT's answer is the first
+		// step's; swapped, it would be the second's.
+		//
+		// The proposed scope on {id} (403, requireOrgWriteProposedAt's
+		// text) before the declared tenants (403, msgDeclaresUnwritableTenant).
+		{name: "proposed_scope_and_unwritable_out",
+			file: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: production\n    _silent_mode: \"warning\"\n" +
+				paritySec(parityOut, "warning"),
+			groups: "in-prod-ops", metaEnforce: true,
+			body: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n" +
+				paritySec(parityOut, "critical"),
+			want: http.StatusForbidden, wantText: "this write proposes"},
+		// The declared tenants (403) before the placeholder (400).
+		{name: "unwritable_out_and_placeholder", file: parityShared, groups: "in-team",
+			body: "tenants:\n  " + parityIn + ":\n    _silent_mode: \"" + credmask.Placeholder + "\"\n" + paritySec(parityOut, "critical"),
+			want: http.StatusForbidden, wantText: msgDeclaresUnwritableTenant},
+		// The placeholder (400, its violation) before step 2's body-only
+		// pre-flight (400, a root key the body may not carry).
+		{name: "placeholder_and_root_key", file: parityShared, groups: "in-team",
+			body: "defaults: {}\ntenants:\n  " + parityIn + ":\n    _silent_mode: \"" + credmask.Placeholder + "\"\n",
+			want: http.StatusBadRequest, wantText: "the placeholder shown in place of a credential"},
 	}
 }
 
@@ -121,11 +170,15 @@ func parityServe(t *testing.T, c parityCase, pr bool, ep putEndpoint) *httptest.
 	if out, err := exec.Command("git", "-C", dir, "branch", "-M", "main").CombinedOutput(); err != nil {
 		t.Fatalf("git branch -M main: %v\n%s", err, out)
 	}
+	if c.setup != nil {
+		c.setup(t, dir)
+	}
 	mgr := newRBACManager(t, parityRBAC)
 	if c.metaEnforce {
 		mgr.EnableMetadataWriteScopeEnforce()
 	}
-	d := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: mgr, WriteMode: WriteModeDirect}
+	d := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: mgr, WriteMode: WriteModeDirect,
+		MaxBodyBytes: c.maxBody}
 	if pr {
 		d.WriteMode, d.PRClient, d.PRTracker = WriteModePR, &mockPlatformClient{}, &mockPlatformTracker{}
 	}
@@ -177,7 +230,14 @@ func parityValidateText(env map[string]any) string {
 
 func TestPutPlan_EndpointsRefuseAsPut(t *testing.T) {
 	t.Parallel()
-	for _, c := range parityCases() {
+	runParityCases(t, parityCases())
+}
+
+// runParityCases sends each case to the three endpoints, in both write
+// modes, and asserts they answer as PUT does.
+func runParityCases(t *testing.T, cases []parityCase) {
+	t.Helper()
+	for _, c := range cases {
 		for _, pr := range []bool{false, true} {
 			mode := map[bool]string{false: "direct", true: "pr"}[pr]
 			t.Run(c.name+"/"+mode, func(t *testing.T) {
@@ -191,21 +251,32 @@ func TestPutPlan_EndpointsRefuseAsPut(t *testing.T) {
 				if put.Code != c.want {
 					t.Fatalf("PUT status = %d, want %d", put.Code, c.want)
 				}
+				if c.wantText != "" && !strings.Contains(put.Body.String(), c.wantText) {
+					t.Fatalf("PUT answered %s, want the refusal %q", put.Body.String(), c.wantText)
+				}
 				var vr ValidateResponse
 				if val.Code != http.StatusOK || json.Unmarshal(val.Body.Bytes(), &vr) != nil {
 					t.Fatalf("/validate: %d %s", val.Code, val.Body.String())
 				}
 
 				if put.Code == http.StatusOK {
-					// Accepted: /validate says so; /diff previews it (or, for
-					// a caller who may not read the whole file, shows nothing:
-					// 422 TENANT_FILE_WITHHELD — not a verdict on the write).
+					// Accepted: /validate says so; /diff previews it — or,
+					// for a caller who may not read the whole file, shows
+					// nothing: 422 TENANT_FILE_WITHHELD, not a verdict on
+					// the write.
 					if !vr.Valid {
 						t.Errorf("/validate refused what PUT wrote: %v", vr.Warnings)
 					}
-					if diff.Code != http.StatusOK &&
-						(diff.Code != http.StatusUnprocessableEntity || !strings.Contains(diff.Body.String(), CodeTenantFileWithheld)) {
-						t.Errorf("/diff refused what PUT wrote: %d %s", diff.Code, diff.Body.String())
+					if c.diffWithheld {
+						if diff.Code != http.StatusUnprocessableEntity || parityEnvelope(t, diff)["code"] != CodeTenantFileWithheld {
+							t.Errorf("/diff for a caller the file is withheld from: %d %s, want 422 %s",
+								diff.Code, diff.Body.String(), CodeTenantFileWithheld)
+						}
+					} else {
+						var dr DiffResponse
+						if diff.Code != http.StatusOK || json.Unmarshal(diff.Body.Bytes(), &dr) != nil || !dr.HasDiff {
+							t.Errorf("/diff of what PUT wrote: %d %s, want the 200 preview", diff.Code, diff.Body.String())
+						}
 					}
 					return
 				}
@@ -213,12 +284,17 @@ func TestPutPlan_EndpointsRefuseAsPut(t *testing.T) {
 				want := parityEnvelope(t, put)
 				// /diff: PUT's refusal, status and body — but the masked
 				// preview for a caller who may read {id} and not write it.
-				if c.maskedDiff {
+				switch {
+				case c.maskedDiff && c.maskedRefusal != "":
+					if got := parityEnvelope(t, diff)["code"]; got != c.maskedRefusal {
+						t.Errorf("/diff for a reader of {id}: %d %s, want code %s", diff.Code, diff.Body.String(), c.maskedRefusal)
+					}
+				case c.maskedDiff:
 					var dr DiffResponse
 					if diff.Code != http.StatusOK || json.Unmarshal(diff.Body.Bytes(), &dr) != nil || !dr.Masked {
 						t.Errorf("/diff for a reader of {id}: %d %s, want the masked preview", diff.Code, diff.Body.String())
 					}
-				} else {
+				default:
 					got := parityEnvelope(t, diff)
 					if diff.Code != put.Code || !jsonEqual(got, want) {
 						t.Errorf("/diff answered %d %v, PUT %d %v", diff.Code, got, put.Code, want)
@@ -243,6 +319,66 @@ func TestPutPlan_EndpointsRefuseAsPut(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestDiff_MaskedPreviewHearsNoFileShape: a caller who may read {id} but
+// not write it, and may not read every tenant of {id}'s file, gets from
+// /diff one answer for every shape of that file (#3062). The shapes are the
+// ones a splice refuses (as a writer of {id} is told: 409
+// not_round_trippable, #2405's 400): an anchor on the root or on tenants:,
+// an anchor in {id}'s own section, a merge key in tenants:. For a body PUT
+// would accept that answer is the 422 TENANT_FILE_WITHHELD; for one it
+// would refuse whatever the file, PUT's refusal of it.
+func TestDiff_MaskedPreviewHearsNoFileShape(t *testing.T) {
+	t.Parallel()
+	bases := []struct{ name, file string }{
+		{"plain", parityShared},
+		{"root_anchor", "--- &r\ntenants:\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning")},
+		{"tenants_anchor", "tenants: &t\n" + paritySec(parityIn, "warning") + paritySec(parityOut, "warning")},
+		{"anchor_in_id_section", "tenants:\n  " + parityIn + ":\n    _silent_mode: &m \"warning\"\n" + paritySec(parityOut, "warning")},
+		{"merge_key", "tenants:\n" + paritySec(parityIn, "warning") + "  <<: {" + parityOut + ": {_silent_mode: \"warning\"}}\n"},
+	}
+	bodies := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"accepted_body", parityBodyIn, http.StatusUnprocessableEntity},
+		{"invalid_body", "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", http.StatusBadRequest},
+	}
+	for _, b := range bodies {
+		t.Run(b.name, func(t *testing.T) {
+			t.Parallel()
+			var first map[string]any
+			for i, base := range bases {
+				c := parityCase{file: base.file, groups: "in-readers", body: b.body}
+				// The fixture has the shape: a writer of {id} is refused
+				// on every base but the plain one.
+				if base.name != "plain" && b.name == "accepted_body" {
+					c.groups = "in-team"
+					if put := parityServe(t, c, false, endpointPut); put.Code == http.StatusOK {
+						t.Fatalf("%s: a writer of {id} was not refused — the base has no shape a splice refuses", base.name)
+					}
+					c.groups = "in-readers"
+				}
+				diff := parityServe(t, c, false, endpointDiff)
+				got := parityEnvelope(t, diff)
+				got["status"] = float64(diff.Code)
+				t.Logf("%s: /diff %d %s", base.name, diff.Code, diff.Body.String())
+				if diff.Code != b.want {
+					t.Errorf("%s: /diff %d, want %d", base.name, diff.Code, b.want)
+				}
+				if b.want == http.StatusUnprocessableEntity && got["code"] != CodeTenantFileWithheld {
+					t.Errorf("%s: /diff code %v, want %s", base.name, got["code"], CodeTenantFileWithheld)
+				}
+				if i == 0 {
+					first = got
+				} else if !jsonEqual(got, first) {
+					t.Errorf("%s: /diff answered %v, the plain base %v — the answer tells the file's shape", base.name, got, first)
+				}
+			}
+		})
 	}
 }
 

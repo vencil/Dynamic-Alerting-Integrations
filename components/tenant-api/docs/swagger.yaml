@@ -2447,6 +2447,10 @@ paths:
         both sides (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
         with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 422
         MASKED_PREVIEW_UNAVAILABLE when either side is not YAML, holds several documents, or uses an anchor, alias or merge key.
+        When such a caller may not read every tenant of the current file, a refusal about how the file is written (409
+        not_round_trippable, the anchor rules, #2405's 400) is held until the duplicate-declaration check and validation have run,
+        and if neither refuses the answer is 422 TENANT_FILE_WITHHELD, as for a proposal PUT would accept: every file shape
+        gets the same answer (#3062).
         For a proposal PUT would accept, every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant
         the caller may not read (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty
         (not YAML; an alias, a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:)
@@ -2743,6 +2747,9 @@ paths:
         conf.d file also declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
         listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
         base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
+        This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
+        it gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on
+        the body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.
       parameters:
       - description: Tenant ID
         in: path
