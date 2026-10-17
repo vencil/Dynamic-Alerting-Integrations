@@ -542,7 +542,11 @@ def read_file_alone(path: "str | os.PathLike[str]", mode: ParseMode = VALUES, *,
     data = p.read_bytes()
     with tempfile.TemporaryDirectory(prefix="da-parse-") as empty:
         try:
-            return read_text_as(empty, p.name, data, mode, binary=binary, timeout=timeout)
+            # A fixed neutral name, not p.name: the content is judged the
+            # same under any name, and a name that is not UTF-8 (which JSON
+            # cannot carry as --path) must not refuse a readable file.
+            return read_text_as(empty, "standalone.yaml", data, mode,
+                                binary=binary, timeout=timeout)
         except FileUnreadable as exc:
             raise FileUnreadable(str(path), exc.kind, exc.message) from None
 

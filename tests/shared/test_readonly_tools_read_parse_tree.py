@@ -61,13 +61,20 @@ def _write(root: pathlib.Path, files: dict[str, "str | bytes"]) -> pathlib.Path:
 
 @pytest.fixture
 def no_yaml_parse(monkeypatch):
-    """Every PyYAML parse raises (both parsers)."""
+    """Every PyYAML parse raises (both parsers) — and is recorded, so a tool
+    that swallows the AssertionError (`except Exception: continue`) still
+    fails the test at teardown instead of passing on its fallback."""
+    calls: "list[str]" = []
+
     def refuse(self, *a, **kw):
-        raise AssertionError(f"PyYAML parse during the run: {a[:1]!r:.120}")
+        calls.append(f"{a[:1]!r:.120}")
+        raise AssertionError(f"PyYAML parse during the run: {calls[-1]}")
 
     monkeypatch.setattr(yaml.reader.Reader, "__init__", refuse)
     if hasattr(yaml, "CParser"):
         monkeypatch.setattr(yaml.CParser, "__init__", refuse)
+    yield calls
+    assert not calls, f"PyYAML parsed during the run: {calls}"
 
 
 @pytest.fixture
@@ -80,9 +87,12 @@ def no_parse_tree_binary(monkeypatch):
 
 
 def test_the_closure_guard_fires_on_a_yaml_parse(no_yaml_parse):
-    """Must-fire control for `no_yaml_parse`."""
+    """Must-fire control for `no_yaml_parse`: the parse raises and is
+    recorded (cleared here, or this control's own teardown would fail)."""
     with pytest.raises(AssertionError, match="PyYAML parse"):
         yaml.safe_load("a: 1\n")
+    assert len(no_yaml_parse) == 1
+    no_yaml_parse.clear()
 
 
 def _exit_code(fn, *args) -> int:
@@ -311,6 +321,18 @@ def test_policy_file_parse_tree_cannot_read_is_named(tmp_path, capsys):
 
 def test_policy_engine_without_da_guard_is_exit_2(tmp_path, no_parse_tree_binary):
     assert _pe_main(tmp_path, _PE_POLICY) == 2
+
+
+def test_a_policy_file_whose_name_is_not_utf8_is_read(tmp_path):
+    """A standalone file is judged under a fixed name: its own name (here
+    not UTF-8, which parse-tree's JSON cannot carry as --path) is no part
+    of how its content reads."""
+    pe = _tool("policy_engine")
+    d = _write(tmp_path / "conf.d", _PE)
+    policy = os.path.join(os.fsencode(tmp_path), b"pol\xff.yaml")
+    with open(policy, "wb") as f:
+        f.write(_PE_POLICY.encode())
+    assert _exit_code(pe.main, ["--config-dir", str(d), "--policy", os.fsdecode(policy), "--ci"]) == 0
 
 
 # ── check_retire_drift ───────────────────────────────────────────────────
