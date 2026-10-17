@@ -60,6 +60,9 @@ def _collect_data(config_dir: str) -> dict:
     tenant may live at any depth. File names are relative to the root (a root
     file keeps its bare name).
     """
+    # One reader for every read below (#2906 review): the session's when
+    # `main` runs one, else this call's own — one parse-tree document either way.
+    reader = _lib_parse_cache.reader_for(config_dir)
     profiles: dict = {}
     policies: dict = {}
     tenant_ids: set[str] = set()
@@ -112,7 +115,7 @@ def _collect_data(config_dir: str) -> dict:
         # file parse-tree cannot read is a YamlFileError naming its kind.
         try:
             data = load_confd_file(config_dir, path,
-                                   mode=_lib_parse_cache.TENANT_LISTS_AS_TEXT)
+                                   mode=_lib_parse_cache.TENANT_LISTS_AS_TEXT, reader=reader)
         except YamlFileError as exc:
             unreadable.append(str(exc))
             unreadable_files.append(fname)
@@ -162,7 +165,7 @@ def _collect_data(config_dir: str) -> dict:
         if not is_reserved_name(os.path.basename(fname)):
             tenant_dirs.setdefault(tenant, Path(fname).parent.as_posix())
     merged, platform_orphans = overlay_platform_tenants(
-        entries, lambda: declared_tenant_ids(config_dir, _lib_parse_cache.reader_for(config_dir)))
+        entries, lambda: declared_tenant_ids(config_dir, reader))
     for tenant, overrides in merged.items():
         tenant_ids.add(tenant)
         ref = overrides.get("_routing_profile")

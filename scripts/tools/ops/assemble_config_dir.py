@@ -406,6 +406,15 @@ def validate_merged(output_dir: Path) -> List[str]:
     for f in visible:
         if f in unusable:
             continue
+        # #2906 review: parse-tree decides which files the exporter reads —
+        # one it lists as `not_read` (the `_defaults` spelling a directory
+        # does not select) is not validated, and said so; not an ERROR: the
+        # exporter serves the rest of the tree.
+        why = reader.not_read(f)
+        if why is not None:
+            issues.append(f"{WARN_PREFIX}{f.relative_to(output_dir).as_posix()} is read by "
+                          f"no reader ({why}) — not validated")
+            continue
         try:
             root = reader.node(f)
         except FileUnreadable as e:

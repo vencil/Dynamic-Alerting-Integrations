@@ -603,8 +603,15 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
     read, so nobody reports it.
     """
     from _lib_confd import is_defaults_document_name
+    # #2906 review: parse-tree's verdict on which files are read — a file it
+    # lists as `not_read` (the `_defaults` spelling a directory does not
+    # select) is read by no reader, so no row reads it either; the `schema`
+    # row names it (`unselected_defaults_carrier`).
+    reader = _lib_parse_cache.reader_for(config_dir)
     out: list[tuple[Path, str, str]] = []
     for fpath in iter_config_files(config_dir):
+        if reader.not_read(fpath) is not None:
+            continue
         name = fpath.name
         if is_defaults_document_name(name):
             schema_name = _PLATFORM_SCHEMA
@@ -748,10 +755,12 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     profiles = schemas[_PROFILES_SCHEMA]
     try:
         ccs.checked_schema_registry(tenant, platform, profiles)
+        not_read: list[str] = []
         checked, violations, skipped = ccs.validate_dir(
             config_dir, tenant, jsonschema, platform, profiles,
             quoting_reported_for=frozenset(
-                label for _p, label, _s in _quoting_scope(config_dir)))
+                label for _p, label, _s in _quoting_scope(config_dir)),
+            not_read=not_read)
     except ccs.UnresolvableSchemaRef as exc:
         return _make_result("json_schema", FAIL, [str(exc)],
                             caller_error=True)
@@ -769,6 +778,9 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
         return _make_result("json_schema", FAIL, errors)
     note = (f"; {len(skipped)} other `_` file(s) have their own shape and "
             f"are not read here" if skipped else "")
+    # #2906 review: a file no reader reads (parse-tree's `not_read`) is not
+    # checked; said here, the `schema` row names why.
+    note += (f"; not checked, no reader reads: {', '.join(not_read)}" if not_read else "")
     return _make_result(
         "json_schema", PASS,
         [f"{checked} document(s) valid against tenant-config / "

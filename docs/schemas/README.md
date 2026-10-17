@@ -234,7 +234,7 @@ The schema is referenced by `validate_config.py` for comprehensive validation:
 python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
-> Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.md#validate-config).
+> Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=$PWD/.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.md#validate-config).
 
 ### IDE Linting
 
@@ -242,7 +242,7 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 
 ```bash
 make da-guard-build   # 或用 da-tools 映像內建的 /usr/local/bin/da-guard
-DA_GUARD_BINARY=.build/da-guard python3 scripts/tools/lint/check_confd_schema.py --config-dir conf.d
+DA_GUARD_BINARY=$PWD/.build/da-guard python3 scripts/tools/lint/check_confd_schema.py --config-dir conf.d
 ```
 
 這支閘門經 `da-guard parse-tree` 讀 conf.d（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)，與 exporter 同一種 yaml.v3 讀法），所以需要 da-guard：`$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard`；沒有時結束碼 2。schema 判定的是 yaml.v3 讀到的值。

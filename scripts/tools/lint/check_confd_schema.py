@@ -374,8 +374,15 @@ def validate_dir(config_dir: str, schema: dict, validator,
                  profiles_schema: dict | None = None,
                  warnings: list[str] | None = None, *,
                  quoting_reported_for: frozenset[str] | None = None,
+                 not_read: list[str] | None = None,
                  ) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
+
+    `not_read`, when given, collects `<rel> (<reason>)` for each file
+    parse-tree says no reader reads (its `not_read` list: the `_defaults`
+    spelling a directory does not select) — skipped here, not checked: the
+    route generator names it (`unselected_defaults_carrier`). Without the
+    list such a file is still skipped.
 
     `warnings`, when given, collects the `WARN:` lines (#2509: a YAML 1.1
     boolean word in a boolean field) — findings that do not fail the gate,
@@ -435,6 +442,13 @@ def validate_dir(config_dir: str, schema: dict, validator,
         as_quoted = (quoting_reported_for is not None
                      and rel in quoting_reported_for)
         try:
+            # #2906 review: parse-tree decides which files are read, not this
+            # walk — a file it lists as `not_read` is read by nothing.
+            why = reader.not_read(path)
+            if why is not None:
+                if not_read is not None:
+                    not_read.append(f"{rel} ({why})")
+                continue
             root = reader.node(path)
         except FileUnreadable as exc:
             if exc.kind == "top_level_not_mapping":
@@ -612,6 +626,7 @@ def main() -> int:
     violations: list[str] = []
     warnings: list[str] = []
     skipped: list[str] = []
+    not_read_all: list[str] = []
     multi = len(args.config_dir) > 1
     for config_dir in args.config_dir:
         # ADR-036 step 4: no usable da-guard is rc 2 on every tree, an empty
@@ -624,10 +639,11 @@ def main() -> int:
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
         d_warnings: list[str] = []
+        d_not_read: list[str] = []
         try:
             d_checked, d_violations, d_skipped = validate_dir(
                 config_dir, schema, jsonschema, platform_schema, profiles_schema,
-                warnings=d_warnings)
+                warnings=d_warnings, not_read=d_not_read)
         except _CallerError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -636,11 +652,15 @@ def main() -> int:
         violations.extend(v.replace("ERROR: ", f"ERROR: {prefix}", 1) for v in d_violations)
         warnings.extend(w.replace("WARN: ", f"WARN: {prefix}", 1) for w in d_warnings)
         skipped.extend(f"{prefix}{s}" for s in d_skipped)
+        not_read_all.extend(f"{prefix}{s}" for s in d_not_read)
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config, "
               f"platform-defaults or routing-profiles schema (own shape/validator): "
               f"{safe_label(', '.join(skipped))}")
+    if not_read_all:
+        print(f"skipped {len(not_read_all)} file(s) no reader reads (da-guard parse-tree's "
+              f"not_read): {safe_label(', '.join(not_read_all))}")
     # #2509: printed whatever the verdict, and never a failure on their own
     # (the hook runs `verbose: true` so pre-commit shows them on a pass).
     for msg in warnings:

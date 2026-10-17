@@ -59,17 +59,22 @@ var (
 )
 
 // daGuardBinary is the da-guard the Python generator runs: $DA_GUARD_BINARY
-// when set, else one `go build` of components/threshold-exporter/app's
-// cmd/da-guard per test binary (into a directory removed with the process's
-// temp files). requireOrSkip when neither works.
+// when set (a relative path is relative to the repository root — `go test`
+// runs in the package directory, so it cannot mean the shell's directory),
+// else one `go build` of components/threshold-exporter/app's cmd/da-guard
+// per test binary (into a directory removed with the process's temp files).
+// requireOrSkip when neither works.
 func daGuardBinary(t *testing.T) string {
 	t.Helper()
 	daGuardOnce.Do(func() {
+		root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(realGeneratorScript(t)))))
 		if p := strings.TrimSpace(os.Getenv("DA_GUARD_BINARY")); p != "" {
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(root, p)
+			}
 			daGuardPath = p
 			return
 		}
-		root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(realGeneratorScript(t)))))
 		dir, err := os.MkdirTemp("", "da-guard-bin")
 		if err != nil {
 			daGuardErr = err.Error()

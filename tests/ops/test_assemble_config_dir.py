@@ -315,6 +315,16 @@ class TestValidateMerged:
         issues = validate_merged(Path(config_dir))
         assert issues == ["WARN: empty.yaml is empty"], issues
 
+    def test_an_unselected_defaults_spelling_is_a_warn_not_a_crash(self, config_dir):
+        """#2906 review: `_defaults.yaml` beside `_defaults.yml` — parse-tree
+        reads one and lists the other as `not_read`; that one is named as a
+        WARN, the selected one is still validated."""
+        _write_file(os.path.join(config_dir, "_defaults.yaml"), "defaults:\n  m: 1\n")
+        _write_file(os.path.join(config_dir, "_defaults.yml"), "defaults:\n  m: 2\n")
+        issues = validate_merged(Path(config_dir))
+        assert issues == ["WARN: _defaults.yml is read by no reader "
+                          "(unselected_defaults_carrier) — not validated"], issues
+
     def test_an_explicit_empty_mapping_is_no_finding(self, config_dir):
         _write_file(os.path.join(config_dir, "a.yaml"), "{}\n")
         assert validate_merged(Path(config_dir)) == []

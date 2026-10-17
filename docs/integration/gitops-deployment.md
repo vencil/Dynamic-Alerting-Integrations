@@ -126,8 +126,11 @@ ALLOW_SAMPLE_CONFDIR=1 make configmap-assemble
 ```yaml
 # ArgoCD pre-sync hook 或 Flux Kustomization postBuild
 steps:
+  # 先備好 da-guard（#2906）：從本 checkout 建（需要 Go），或改在內建
+  # /usr/local/bin/da-guard 的 da-tools 映像裡跑這一步。
+  - run: make da-guard-build
   # ⛔ CONFDIR 指向你自己 config repo 的 conf.d/，不是預設那棵範例樹
-  - run: make configmap-assemble CONFDIR=tenants/conf.d
+  - run: make configmap-assemble CONFDIR=tenants/conf.d DA_GUARD_BINARY=$PWD/.build/da-guard
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
 

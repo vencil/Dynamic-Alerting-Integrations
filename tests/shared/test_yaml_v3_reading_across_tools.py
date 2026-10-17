@@ -180,10 +180,15 @@ def _outcome(tool: str, variant: str) -> tuple:
         for name, text in tree.items():
             pathlib.Path(d, name).write_text(text.replace("{VALUE}", _VARIANTS[variant]),
                                              encoding="utf-8")
+        # The tool runs in `tmp`: a relative $DA_GUARD_BINARY is made absolute
+        # against this process's directory first (#2906 review).
+        env = dict(os.environ)
+        if env.get("DA_GUARD_BINARY", "").strip():
+            env["DA_GUARD_BINARY"] = os.path.abspath(env["DA_GUARD_BINARY"])
         r = subprocess.run(
             [sys.executable, str(TOOLS / script)] + [a.format(d=d, out=out) for a in argv],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=tmp, timeout=180)
+            cwd=tmp, env=env, timeout=180)
         files = tuple(pathlib.Path(out, f).read_text(encoding="utf-8", errors="replace")
                       if pathlib.Path(out, f).exists() else None for f in outputs)
 

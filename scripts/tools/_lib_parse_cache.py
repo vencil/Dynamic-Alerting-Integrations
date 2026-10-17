@@ -247,6 +247,20 @@ class ConfdReader:
                 "this tool's file walk and the exporter's disagree; nothing of the tree "
                 "is used") from None
 
+    def not_read(self, path: "str | os.PathLike[str]") -> Optional[str]:
+        """Why no reader reads *path*, as parse-tree's tree-mode document says
+        (its `not_read` entry: e.g. `unselected_defaults_carrier` for the
+        `_defaults` spelling a directory does not select), or None when some
+        reader reads it — `selected` (an unreadable file included: `node`
+        names its kind) — or parse-tree does not list it at all.
+
+        A tool that walks the directory itself asks this before `node`: a
+        file listed here is parse-tree's verdict that nothing reads it (skip
+        it and say so), while a file in neither list is a walk that disagrees
+        with the exporter's (`node` raises `NotSelected`). Runs the tree-mode
+        document (ParseTreeError)."""
+        return self.tree().not_read.get(self.rel(path))
+
     def node(self, path: "str | os.PathLike[str]") -> Any:
         """The file's tagged nodes, from the tree-mode document (shared: do
         not mutate). Raises FileUnreadable / NotSelected / ParseTreeError."""

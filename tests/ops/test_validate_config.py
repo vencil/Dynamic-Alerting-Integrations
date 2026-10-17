@@ -1594,10 +1594,12 @@ class TestUnreadableInputIsNeverOurBug:
         ("not-utf8", b"tenants:\n  db_a:\n    # \xb4\xfa\xb8\xd5\n    x: 1\n"),
         ("not-a-mapping", b"- tenants:\n    db_a:\n      x: 1\n"),
         ("syntax-error", b"tenants:\n  db_a: [1\n"),
-        # Past yaml.v3's 10,000-level limit (parse-tree's syntax_error): the
-        # 520 levels PyYAML could not read are read since ADR-036 step 4.
+        # Past yaml.v3's 10,000-level limit (parse-tree's syntax_error,
+        # "exceeded max depth"): the 520 levels PyYAML could not read are read
+        # since ADR-036 step 4. Flow style: 24 kB, not the ~144 MB a block
+        # mapping that deep takes.
         ("deeply-nested",
-         ("".join("  " * i + "k%d:\n" % i for i in range(12000))).encode()),
+         b"tenants:\n  db_a:\n    x: " + b"[" * 12000 + b"]" * 12000 + b"\n"),
     ]
 
     @pytest.mark.parametrize("label,body", UNREADABLE,
@@ -3498,3 +3500,72 @@ class TestJsonSchemaRow:
         row = vc.check_json_schema(os.path.join(
             _REPO_ROOT, "components", "threshold-exporter", "config", "conf.d"))
         assert row["status"] == vc.PASS, row
+
+
+class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
+    """#2906 review (CodeRabbit, Major ×2): `_defaults.yaml` beside
+    `_defaults.yml` in one directory — da-guard parse-tree selects one and
+    lists the other as `not_read` (`unselected_defaults_carrier`). The tools
+    that walk the directory themselves used to read the loser through
+    `ConfdReader.node`, which raises `NotSelected`: validate-config's
+    `yaml_quoting` / `json_schema` rows and check_confd_schema ended as a
+    caller error (rc 2). parse-tree's selection decides now
+    (`ConfdReader.not_read`): the loser is skipped and named, and the
+    `schema` row's `unselected_defaults_carrier` finding is what fails."""
+
+    @staticmethod
+    def _tree(tmp_path):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                          encoding="utf-8")
+        (d / "_defaults.yml").write_text("defaults:\n  mysql_connections: 70\n",
+                                         encoding="utf-8")
+        (d / "tenant-x.yaml").write_text(
+            "tenants:\n  tenant-x:\n    mysql_connections: \"60\"\n", encoding="utf-8")
+        return d
+
+    def test_validate_config(self, tmp_path, capsys, cli_argv):
+        d = self._tree(tmp_path)
+        cli_argv("validate_config", "--config-dir", str(d), "--json")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
+        assert exc.value.code == 1, rows
+        assert not any(r.get("caller_error") for r in rows.values()), rows
+        assert rows["schema"]["status"] == vc.FAIL, rows["schema"]
+        assert any("_defaults.yml is not read" in x for x in rows["schema"]["details"]), rows
+        assert rows["yaml_quoting"]["status"] == vc.PASS, rows["yaml_quoting"]
+        assert rows["json_schema"]["status"] == vc.PASS, rows["json_schema"]
+        assert "_defaults.yml (unselected_defaults_carrier)" in rows["json_schema"]["details"][0]
+
+    def test_check_confd_schema(self, tmp_path):
+        d = self._tree(tmp_path)
+        r = subprocess.run(
+            [sys.executable, os.path.join(_REPO_ROOT, "scripts", "tools", "lint",
+                                          "check_confd_schema.py"), "--config-dir", str(d)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert ("skipped 1 file(s) no reader reads (da-guard parse-tree's not_read): "
+                "_defaults.yml (unselected_defaults_carrier)") in r.stdout, r.stdout
+        # The selected spelling is still checked: a violation in it is found.
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\nbogus_key: 1\n",
+                                          encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, os.path.join(_REPO_ROOT, "scripts", "tools", "lint",
+                                          "check_confd_schema.py"), "--config-dir", str(d)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        assert r.returncode == 1 and "_defaults.yaml" in r.stderr, r.stdout + r.stderr
+
+    def test_a_file_parse_tree_does_not_list_at_all_still_refuses(self, tmp_path):
+        """The skip is parse-tree's `not_read` verdict only: a walk that
+        disagrees with the exporter's on a file parse-tree lists nowhere is
+        still `NotSelected`, never an empty mapping."""
+        import _lib_parse_cache as pc
+        d = self._tree(tmp_path)
+        reader = pc.ConfdReader(d)
+        assert reader.not_read(d / "_defaults.yml") == "unselected_defaults_carrier"
+        assert reader.not_read(d / "_defaults.yaml") is None
+        assert reader.not_read(d / "tenant-x.yaml") is None
+        with pytest.raises(pc.NotSelected):
+            reader.node(d / "_defaults.yml")

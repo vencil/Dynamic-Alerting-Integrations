@@ -240,7 +240,9 @@ def run_cli(confdir: Path, bin_dir: Path, findings: Path,
             policy: Optional[str] = None) -> tuple[int, dict]:
     """``generate-routes --validate --strict`` on *confdir*, as the CLI."""
     provide_da_guard(bin_dir)
-    env = {k: v for k, v in os.environ.items() if k != "PATH"}
+    # As `Service`: da-guard comes from bin_dir on PATH only, the binary the
+    # service under comparison uses — not an inherited $DA_GUARD_BINARY.
+    env = {k: v for k, v in os.environ.items() if k not in ("PATH", "DA_GUARD_BINARY")}
     env["PATH"] = str(bin_dir)
     argv = [sys.executable, "-s", str(GAR), "--config-dir", str(confdir),
             "--validate", "--strict", "--findings-json", str(findings)]

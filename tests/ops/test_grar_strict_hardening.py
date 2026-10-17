@@ -978,8 +978,9 @@ class TestTheSharedReaderNamesWhatItCannotRead:
         whose limit is 10,000 levels — 700 is read; past the limit it is
         parse-tree's `syntax_error`, recorded like any other."""
         with tempfile.TemporaryDirectory() as d:
+            # Flow style (24 kB; a block mapping that deep is ~144 MB).
             write_yaml(d, "_domain_policy.yaml",
-                       "".join("  " * i + "k%d:\n" % i for i in range(12000)))
+                       "domain_policies:\n  fin: " + "[" * 12000 + "]" * 12000 + "\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)

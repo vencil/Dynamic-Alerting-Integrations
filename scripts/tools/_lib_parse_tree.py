@@ -121,10 +121,26 @@ def run_file(root: Path | str, rel: str, text: bytes,
                  "--input", "-"], binary, timeout, stdin=text)
 
 
+def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:
+    """Make `$DA_GUARD_BINARY` in *environ* (default: this process's) an
+    absolute path, against the current working directory — the meaning a
+    relative path has in the shell that set it. Call it before changing
+    directory, or before starting a process with another `cwd`, so the
+    binary the user named is the one that runs. Unset or blank: unchanged."""
+    env = os.environ if environ is None else environ
+    value = env.get("DA_GUARD_BINARY", "")
+    if value.strip() and not os.path.isabs(value):
+        env["DA_GUARD_BINARY"] = os.path.abspath(value)
+
+
 def _run(args: list[str], binary: Optional[str], timeout: float,
          stdin: Optional[bytes] = None) -> dict:
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
+    if exe is not None:
+        # Resolved now, against the current directory (a relative
+        # `$DA_GUARD_BINARY`, an explicit path, a relative `$PATH` entry).
+        exe = os.path.abspath(exe)
     if exe is None:
         msg = dispatcher.binary_missing_message(binary).strip()
         for prefix in ("Error: ", "錯誤: "):

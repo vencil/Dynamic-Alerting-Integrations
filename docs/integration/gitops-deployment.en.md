@@ -149,8 +149,11 @@ Use in CI pipeline:
 ```yaml
 # ArgoCD pre-sync hook or Flux Kustomization postBuild
 steps:
+  # da-guard first (#2906): build it from this checkout (needs Go), or run the
+  # step in the da-tools image, which ships /usr/local/bin/da-guard.
+  - run: make da-guard-build
   # ⛔ CONFDIR points at your own config repo's conf.d/, not the sample tree
-  - run: make configmap-assemble CONFDIR=tenants/conf.d
+  - run: make configmap-assemble CONFDIR=tenants/conf.d DA_GUARD_BINARY=$PWD/.build/da-guard
   - run: kubectl apply -f .build/threshold-config.yaml -n monitoring
 ```
 
