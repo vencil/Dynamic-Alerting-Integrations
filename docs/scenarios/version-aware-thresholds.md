@@ -88,4 +88,4 @@ repo 內 `k8s/03-monitoring/deployment-kube-state-metrics.yaml` 已內建此 arg
 
 ### 已知邊界
 
-`VersionAwareThresholdInert` 抓的是「KSM 完全沒暴露 pod label」。若 allowlist 設了但**只含別的 label**（沒有 `app.kubernetes.io/version`），runtime sentinel 不會 fire——這個 partial-misconfig 由 CI 的 static lint 負責攔（部署前）。
+`VersionAwareThresholdInert` 抓的是「KSM 完全沒暴露 pod label」。若 allowlist 設了但**只含別的 label**（沒有 `app.kubernetes.io/version`），runtime sentinel 不會 fire。repo 的 static lint `check_ksm_version_allowlist.py` 只檢查本 repo `k8s/` 底下的 manifest；你自己部署的 KSM（例如 kube-prometheus-stack 帶的那一個）沒有東西替你擋，部署後在 Prometheus 查 `count(kube_pod_labels{label_app_kubernetes_io_version!=""})`：Pod 確實掛了這個 label 卻查不到結果，就是 allowlist 沒含它。

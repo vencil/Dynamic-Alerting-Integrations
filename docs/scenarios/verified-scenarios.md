@@ -43,7 +43,7 @@ tenants:
 | **B — 弱環節偵測** | 多節點 / 多指標取「最差值」自動告警 | 一個節點壞掉就抓得到，不被平均稀釋 |
 | **C — 三態控制** | 有平台預設的指標可 custom / default / disable（宣告 key 無預設可繼承，只有「填值 / 靜默」兩態） | 精準控制每個告警的開關與閾值 |
 | **D — 維護模式** | 維護窗口自動靜音、到期自動恢復 | 計劃性維護不洗版，且不會忘記開回來 |
-| **E — 多租戶隔離** | 改租戶 A 的配置**絕不**影響租戶 B | 多租戶安全的根本保證 |
+| **E — 多租戶隔離** | 改租戶 A 的閾值或開關不影響租戶 B（兩個例外見下表 E 列） | 多租戶安全的根本保證 |
 | **F — HA 故障切換** | Pod 掛掉服務不中斷、聚合值不翻倍 | 高可用 + 數據正確性 |
 
 ### 每項保證由什麼守
@@ -56,7 +56,7 @@ tenants:
 | **B** | 只有「同 pod 多 container 取最大」：`rule-pack-kubernetes-cpu-node-share_test.yaml` 的混合 pod 案例 |
 | **C** | `config_resolve_test.go` 的 `TestResolve_ThreeState` |
 | **D** | 維護靜音：`rule-pack-mariadb-threads_test.yaml`，以及檢查雙臂告警的 maintenance 子句沒有漏掉任一臂的 lint `scripts/tools/lint/check_maintenance_symmetry.py`；到期恢復：`config_silent_mode_test.go`；多層嚴重度：`config_loaddir_test.go` 的 `TestConfigManager_LoadDir_CriticalSuffix` |
-| **E** | 只在設定解析層、且是單一設定的一次解析快照（沒有「改 A 後看 B」）：`TestResolve_ThreeState` 斷言各租戶不同的覆寫值或 `disable` 互不影響；`TestResolveStateFilters_PerTenantDisable` 只涵蓋 state filter 的 `disable` |
+| **E** | 只在設定解析層、且是單一設定的一次解析快照（沒有「改 A 後看 B」）：`TestResolve_ThreeState` 斷言各租戶不同的覆寫值或 `disable` 互不影響；`TestResolveStateFilters_PerTenantDisable` 只涵蓋 state filter 的 `disable`。⚠️ 兩個例外：一份檔案解析失敗時，**那份檔案宣告的每個租戶**都會被拿掉，別的檔照常（`config_broken_tenant_file_reload_test.go`）——所以同檔的多個租戶會一起受影響；某份檔案宣告了另一份檔已有的租戶 id，**整次載入被拒**，所有租戶停在前一版設定（`config_mixed_mode_test.go` 的 `TestMixedMode_DuplicateAcrossModes_RejectedAtLoad`） |
 | **F** | 聚合不翻倍：lint `scripts/tools/lint/check_ha_threshold_aggregation.py`（所有對 `user_threshold` 的聚合必須用 `max`） |
 
 **缺口（目前沒有自動化覆蓋）**：

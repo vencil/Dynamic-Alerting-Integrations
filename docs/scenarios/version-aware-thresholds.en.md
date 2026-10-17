@@ -88,4 +88,4 @@ This repo's `k8s/03-monitoring/deployment-kube-state-metrics.yaml` already ships
 
 ### Known boundary
 
-`VersionAwareThresholdInert` catches "KSM exposes no pod labels at all". If the allowlist is set but **contains only a different label** (no `app.kubernetes.io/version`), the runtime sentinel will not fire — that partial-misconfig is caught by the CI static lint (before deploy) instead.
+`VersionAwareThresholdInert` catches "KSM exposes no pod labels at all". If the allowlist is set but **contains only a different label** (no `app.kubernetes.io/version`), the runtime sentinel will not fire. The repo's static lint `check_ksm_version_allowlist.py` checks only the manifests under this repo's `k8s/`; nothing guards a KSM you deploy yourself (the one kube-prometheus-stack ships, say). After deploying, query `count(kube_pod_labels{label_app_kubernetes_io_version!=""})` in Prometheus: if your pods do carry that label and the query returns nothing, the allowlist does not include it.

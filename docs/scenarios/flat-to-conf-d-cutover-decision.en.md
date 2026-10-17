@@ -44,7 +44,7 @@ The platform **supports both layouts coexisting** (mixed mode), but this is inte
 The platform **fully supports** flat layout (since v2.7.0; no EOL planned), but you'll miss out on:
 
 - **Cascading defaults**: change a threshold once → all dependent tenants in that region/env update automatically; flat requires per-tenant edits
-- **Blast-radius scope signal**: dashboard `da_config_blast_radius_tenants_affected{scope=domain}` always reads `tenant` in flat mode — no impact-radius visibility
+- **Blast-radius scope signal**: in flat mode the `scope` of `da_config_blast_radius_tenants_affected` is only ever `tenant` (a tenant file changed) or `global` (the root `_defaults.yaml` changed), never `domain` / `region` — you cannot see which layer a change landed in
 - **Natural GitOps PR chunking**: large flat changes go as a single PR; hierarchy-aware chunking auto-slices into per-domain PRs
 - **Hierarchy-aware rollback during migration**: the incremental migration playbook's reverse-order rollback assumes hierarchy; flat can only revert PR-by-PR
 
