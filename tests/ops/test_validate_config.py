@@ -2036,6 +2036,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
         # really does read `--config-dir`.
         assert carriers == {
             # #3042. Reads the tree through da-guard (served-values and
+            # effective) under `--config-dir`.
+            "custom_alert_cap",
+            # #3042. Reads the tree through da-guard (served-values and
             # effective) and the custom-alert compiler under `--config-dir`.
             "custom_alert_sources",
             # #2386. Reads every level's `_defaults.yaml` under `--config-dir`.

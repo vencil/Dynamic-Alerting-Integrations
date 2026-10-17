@@ -34,6 +34,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     warn_dir_symlink_once,
     warn_multi_carrier,
 )
+from _lib_constants import MAX_CUSTOM_RECIPES  # noqa: E402  (#3042)
 from _lib_io import strict_load_exporter_keys, strict_safe_load  # noqa: E402  (#2123; #2216)
 
 from . import shape as _shape
@@ -51,7 +52,9 @@ class CustomAlertConfigError(ValueError):
 # so they do NOT count toward this cap. Provisional default; the final value is
 # to be back-derived from a rule-eval-duration benchmark (ADR-024 AC #5).
 # Override via build_shapes(..., max_custom_recipes=) / `--max-custom-recipes`.
-MAX_CUSTOM_RECIPES_DEFAULT = 20
+# The number is _lib_constants.MAX_CUSTOM_RECIPES, the one validate-config's
+# custom_alert_cap row and tenant-api's write check use too (#3042).
+MAX_CUSTOM_RECIPES_DEFAULT = MAX_CUSTOM_RECIPES
 
 
 def _load_yaml(path: Path) -> dict:
