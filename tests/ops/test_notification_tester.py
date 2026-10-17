@@ -43,51 +43,49 @@ from factories import make_receiver, make_routing_config, make_tenant_yaml, writ
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# extract_receivers
+# receiver slots — taken from the route generator's verdict (#3076)
 # ═══════════════════════════════════════════════════════════════════════
-class TestExtractReceivers:
-    """Receiver 提取邏輯測試。"""
+def _slots(tenant, config):
+    """(label, status) per slot of a dry run, in report order."""
+    report = nt.test_tenant_receivers(tenant, config, dry_run=True, rate_limit=0)
+    return [(r.receiver_name, r.status) for r in report.receivers]
+
+
+class TestReceiverSlots:
+    """Receiver 清單取自路由產生器的逐項判定（取代先前的 extract_receivers）。"""
 
     def test_no_routing(self):
-        """無 _routing 區塊的 tenant 應返回空列表。"""
-        result = nt.extract_receivers("db-a", {"mysql_connections": 100})
-        assert result == []
+        """無 _routing 區塊的 tenant 沒有任何項目。"""
+        assert _slots("db-a", {"mysql_connections": 100}) == []
 
     def test_routing_not_dict(self):
-        """_routing 不是 dict 時應返回空列表。"""
-        result = nt.extract_receivers("db-a", {"_routing": "invalid"})
-        assert result == []
+        """_routing 不是 dict 時沒有任何項目。"""
+        assert _slots("db-a", {"_routing": "invalid"}) == []
 
     def test_single_webhook_receiver(self):
-        """提取單一 webhook receiver。"""
-        config = {
-            "_routing": {
-                "receiver": {"type": "webhook", "url": "https://hooks.example.com/alert"},
-            },
-        }
-        result = nt.extract_receivers("db-a", config)
-        assert len(result) == 1
-        assert result[0]["type"] == "webhook"
-        assert result[0]["url"] == "https://hooks.example.com/alert"
+        config = {"_routing": {"receiver": {"type": "webhook",
+                                            "url": "https://hooks.example.com/alert"}}}
+        report = nt.test_tenant_receivers("db-a", config, dry_run=True, rate_limit=0)
+        assert [(r.receiver_type, r.url_tested) for r in report.receivers] == [
+            ("webhook", "https://hooks.example.com/alert")]
 
     def test_main_plus_overrides(self):
-        """提取主 receiver 加上 override receivers。"""
         config = {
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://main.example.com"},
                 "overrides": [
-                    {"match": "CriticalAlert", "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/T/B/X"}},
-                    {"match": "DiskFull", "receiver": {"type": "pagerduty", "service_key": "key123"}},
+                    {"alertname": "CriticalAlert",
+                     "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/T/B/X"}},
+                    {"metric_group": "disk",
+                     "receiver": {"type": "pagerduty", "service_key": "key123"}},
                 ],
             },
         }
-        result = nt.extract_receivers("db-a", config)
-        assert len(result) == 3
-        types = [r["type"] for r in result]
-        assert types == ["webhook", "slack", "pagerduty"]
+        report = nt.test_tenant_receivers("db-a", config, dry_run=True, rate_limit=0)
+        assert [r.receiver_type for r in report.receivers] == ["webhook", "slack", "pagerduty"]
 
     def test_routes_receivers_follow_overrides(self):
-        """ADR-007 `routes` 的 receiver 也提取，排在 overrides 之後（#2245）。"""
+        """ADR-007 `routes` 排在 overrides 之後（#2245）；產生器不產出的項目照列、不測。"""
         config = {
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://main.example.com"},
@@ -97,52 +95,53 @@ class TestExtractReceivers:
                 "routes": [
                     {"match": {"severity": "critical"},
                      "receiver": {"type": "pagerduty", "service_key": "k"}},
-                    {"match": {"severity": "warning"}},  # 無 receiver → 略過
+                    {"match": {"severity": "warning"}},  # 無 receiver
                     "not-a-mapping",
                 ],
             },
         }
-        result = nt.extract_receivers("tenant-x", config)
-        assert [(r["type"], r["_label"]) for r in result] == [
-            ("webhook", "tenant-x-main"), ("slack", "tenant-x-override-0"),
-            ("pagerduty", "tenant-x-route-0")]
+        assert _slots("tenant-x", config) == [
+            ("tenant-x-main", nt.STATUS_DRY_RUN),
+            ("tenant-x-override-0", nt.STATUS_DRY_RUN),
+            ("tenant-x-route-0", nt.STATUS_DRY_RUN),
+            ("tenant-x-route-1", nt.STATUS_INVALID_CONFIG),
+            ("tenant-x-route-2", nt.STATUS_NOT_RENDERED)]
 
     def test_override_without_receiver(self):
-        """Override 項目若缺少 receiver 應跳過。"""
+        """缺 receiver 的 override 不送出，報 INVALID_CONFIG（#3076 前直接不列）。"""
         config = {
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://main.example.com"},
-                "overrides": [
-                    {"match": "SomeAlert"},  # no receiver
-                ],
+                "overrides": [{"alertname": "SomeAlert"}],
             },
         }
-        result = nt.extract_receivers("db-a", config)
-        assert len(result) == 1
+        assert _slots("db-a", config) == [("db-a-main", nt.STATUS_DRY_RUN),
+                                          ("db-a-override-0", nt.STATUS_INVALID_CONFIG)]
 
     def test_receiver_missing_type(self):
-        """receiver 缺少 type 欄位應跳過。"""
-        config = {
-            "_routing": {
-                "receiver": {"url": "https://no-type.example.com"},
-            },
-        }
-        result = nt.extract_receivers("db-a", config)
-        assert result == []
+        """缺 type 的主 receiver 不送出，報 INVALID_CONFIG（#3076 前直接不列）。"""
+        config = {"_routing": {"receiver": {"url": "https://no-type.example.com"}}}
+        assert _slots("db-a", config) == [("db-a-main", nt.STATUS_INVALID_CONFIG)]
 
     def test_label_assignment(self):
-        """確認 _label 自動指派。"""
         config = {
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://example.com"},
                 "overrides": [
-                    {"receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"}},
+                    {"alertname": "A",
+                     "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"}},
                 ],
             },
         }
-        result = nt.extract_receivers("tenant-x", config)
-        assert result[0]["_label"] == "tenant-x-main"
-        assert result[1]["_label"] == "tenant-x-override-0"
+        labels = [label for label, _ in _slots("tenant-x", config)]
+        assert labels == ["tenant-x-main", "tenant-x-override-0"]
+
+    @pytest.mark.parametrize("slot,label", [
+        ("receiver", "t-main"), ("overrides[3]", "t-override-3"),
+        ("routes[0]", "t-route-0"), ("overrides", "t-overrides"),
+        ("routes", "t-routes")])
+    def test_slot_label(self, slot, label):
+        assert nt._slot_label("t", slot) == label
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -734,9 +733,9 @@ class TestConnectionErrorClassification:
         fake = nt.ReceiverTestResult(receiver_name="r", receiver_type="webhook",
                                      status=status)
         recv = make_receiver("webhook", url="https://hooks.example.com")
-        with patch("notification_tester.extract_receivers", return_value=[recv]), \
-                patch("notification_tester.test_receiver", return_value=fake):
-            report = nt.test_tenant_receivers("t", {}, rate_limit=0)
+        with patch("notification_tester.test_receiver", return_value=fake):
+            report = nt.test_tenant_receivers("t", {"_routing": {"receiver": recv}},
+                                              rate_limit=0)
         assert (report.passed, report.failed, report.skipped) == (0, 1, 0)
 
 
@@ -839,7 +838,8 @@ class TestTenantOrchestration:
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://a.example.com"},
                 "overrides": [
-                    {"receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"}},
+                    {"alertname": "A",
+                     "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"}},
                 ],
             },
         }
@@ -862,7 +862,8 @@ class TestTenantOrchestration:
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://a.example.com"},
                 "overrides": [
-                    {"receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"}},
+                    {"alertname": "A",
+                     "receiver": {"type": "slack", "api_url": "https://hooks.slack.com/x"}},
                 ],
             },
         }
@@ -958,7 +959,7 @@ class TestRunAllTests:
                        "overrides": [{"alertname": "X", "receiver": bad_recv}]}
         else:
             routing = {"receiver": ok,
-                       "routes": [{"matchers": {"severity": "critical"},
+                       "routes": [{"match": {"severity": "critical"},
                                    "receiver": bad_recv}]}
         write_yaml(str(tmp_path), "db-bad.yaml", make_tenant_yaml(
             "db-bad", keys={"mysql_connections": 5}, routing=routing))
@@ -1242,7 +1243,7 @@ def _email(label="mail", **fields):
 @pytest.mark.usefixtures("_no_proxy")
 class TestGeneratorVerdict:
     """receiver 本身的設定被產生器（build_receiver_config）拒收的，不得被
-    tester 拿去測或報 DRY_RUN（路由層的略過不在此範圍，#3076）；壞主機名、
+    tester 拿去測或報 DRY_RUN（路由層的略過見 test_notification_tester_render_ledger.py，#3076）；壞主機名、
     超出範圍的 port 標 INVALID_URL，不得 traceback 或被折算到別的 port。"""
 
     @pytest.mark.parametrize("url", [_LONG_LABEL_URL, _EMPTY_LABEL_URL],
@@ -1403,7 +1404,7 @@ class TestGeneratorVerdict:
             write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
                 "db-a", keys={"mysql_connections": 5},
                 routing={"receiver": {"type": "webhook", "url": _LONG_LABEL_URL},
-                         "routes": [{"matchers": {"severity": "critical"},
+                         "routes": [{"match": {"severity": "critical"},
                                      "receiver": {"type": "webhook", "url": good_url}}]}))
             write_yaml(str(tmp_path), "db-b.yaml", make_tenant_yaml(
                 "db-b", keys={"mysql_connections": 5},

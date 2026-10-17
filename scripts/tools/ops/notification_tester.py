@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """notification_tester.py — Multi-channel notification connectivity testing.
 
-Extracts every tenant's receivers from its `_routing` as the route generator
-(generate_alertmanager_routes) resolves it — `_routing_defaults` chain,
-routing profile, platform `tenants:` overlay, subdirectory tenant files —
-sends test messages to each receiver, and reports connectivity status.
-Per-tenant receivers only: the platform-enforced (`_routing_enforced`, NOC)
-receiver the generator also renders is not tested. A conf.d tree the route generator refuses is refused here too (rc 2).
+Takes every tenant's receivers from what the route generator
+(generate_alertmanager_routes) renders for its `_routing` as the generator
+resolves it — `_routing_defaults` chain, routing profile, platform `tenants:`
+overlay, subdirectory tenant files — sends test messages to each rendered
+receiver, and reports connectivity status. Per-tenant receivers only: the
+platform-enforced (`_routing_enforced`, NOC) receiver the generator also
+renders is not tested. A conf.d tree the route generator refuses is refused here too (rc 2).
 
-A receiver whose own config the route generator refuses
-(build_receiver_config) is never sent: INVALID_URL when its URL field (or
-email smarthost) is given but malformed, else INVALID_CONFIG (a missing,
-empty or null URL field included). On top of that the port must be 1-65535.
-Hostname encoding (IDNA) is checked only when a request is sent, so --dry-run
-does not cover it. Not covered yet (#3076): what the
-generator skips at the routing level is still tested — an override or routes
-entry it skips (an override with no alertname / metric_group, routes[i] with
-an unsupported key), and a tenant's whole overrides / routes set, which it
-does not render when the main receiver is refused.
+#3076: the receiver list is the generator's own per-slot verdict
+(`tenant_slot_verdicts`: the main receiver, overrides[i], routes[i]), not a
+walk of `_routing` of our own. A slot the generator does not render is never
+sent and counts as failed: INVALID_URL / INVALID_CONFIG when its own receiver
+is refused (build_receiver_config) — INVALID_URL when the URL field (or email
+smarthost) is given but malformed, else INVALID_CONFIG, a missing, empty or
+null URL field included — and NOT_RENDERED, with the generator's reason, when
+the entry is dropped at the routing level (an override with no alertname /
+metric_group, routes[i] with an unsupported key, or any child of a tenant
+whose main receiver is not rendered). On top of that the port must be
+1-65535. Hostname encoding (IDNA) is checked only when a request is sent, so
+--dry-run does not cover it. The --policy domain allowlist is not applied (this tool takes no --policy).
 
 Usage:
   # Test all receivers for all tenants in config directory
@@ -88,6 +91,7 @@ from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
+from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
@@ -144,6 +148,9 @@ STATUS_INVALID_CONFIG = "INVALID_CONFIG"
 STATUS_HTTP_ERROR = "HTTP_ERROR"
 STATUS_DRY_RUN = "DRY_RUN"
 STATUS_SKIPPED = "SKIPPED"
+# #3076: the route generator does not render this slot (routing-level skip);
+# never sent, counted as failed.
+STATUS_NOT_RENDERED = "NOT_RENDERED"
 
 
 # ---------------------------------------------------------------------------
@@ -173,75 +180,27 @@ class TenantTestReport:
 
 
 # ---------------------------------------------------------------------------
-# Receiver extraction from tenant config
+# Receiver slots: the route generator's per-slot verdict (#3076)
 # ---------------------------------------------------------------------------
-def _type_is_set(receiver: dict[str, Any]) -> bool:
-    """Whether ``type`` is present and neither null nor "" (#2839)."""
-    raw = receiver.get("type")
-    return raw is not None and raw != ""
+def _slot_label(tenant_name: str, slot: str) -> str:
+    """The report label of a generator slot: ``<tenant>-main`` /
+    ``-override-<i>`` / ``-route-<i>`` (``overrides`` / ``routes`` when that
+    value is not a list). The index is the authored one, as in the
+    generator's receiver name."""
+    if slot == "receiver":
+        return f"{tenant_name}-main"
+    field_name, _, idx = slot.partition("[")
+    kind = {"overrides": "override", "routes": "route"}.get(field_name, field_name)
+    return f"{tenant_name}-{kind}-{idx.rstrip(']')}" if idx else f"{tenant_name}-{field_name}"
 
 
-def extract_receivers(
-    tenant_name: str,
-    tenant_config: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Extract receiver definitions from a tenant config dict.
+def slot_verdicts(tenant_name: str, routing: dict[str, Any]) -> list[Any]:
+    """The route generator's verdict for every receiver slot of *routing*
+    (``_grar_routes.tenant_slot_verdicts``): what it renders, and why it
+    drops the rest. No domain allowlist (this tool has no --policy)."""
+    import generate_alertmanager_routes as gar  # the generator's own verdict
 
-    Handles:
-      - _routing.receiver (single receiver)
-      - _routing.overrides[].receiver (per-rule overrides)
-      - _routing.routes[].receiver (ADR-007 label-match sub-routes, #2245)
-
-    ``run_all_tests`` hands this the routing the route generator resolved
-    (#2752), so a profile's or `_routing_defaults`' receivers are here too.
-
-    Args:
-        tenant_name: Tenant identifier (for labeling).
-        tenant_config: Tenant config dict from YAML.
-
-    Returns:
-        List of dicts, each with 'name', 'type', and type-specific fields.
-    """
-    receivers: list[dict[str, Any]] = []
-    routing = tenant_config.get("_routing")
-    if not isinstance(routing, dict):
-        return receivers
-
-    # Extraction keeps every receiver whose `type` is set (not missing, null
-    # or ""), so a non-string type — falsy ones like 0, false, {}, [] too —
-    # reaches test_receiver and is reported instead of dropped (#2839).
-    # Main receiver
-    main_recv = routing.get("receiver")
-    if isinstance(main_recv, dict) and _type_is_set(main_recv):
-        recv = dict(main_recv)
-        recv.setdefault("_label", f"{tenant_name}-main")
-        receivers.append(recv)
-
-    # Override receivers
-    overrides = routing.get("overrides")
-    if isinstance(overrides, list):
-        for idx, override in enumerate(overrides):
-            if not isinstance(override, dict):
-                continue
-            recv = override.get("receiver")
-            if isinstance(recv, dict) and _type_is_set(recv):
-                r = dict(recv)
-                r.setdefault("_label", f"{tenant_name}-override-{idx}")
-                receivers.append(r)
-
-    # ADR-007 label-match sub-route receivers (#2245)
-    routes = routing.get("routes")
-    if isinstance(routes, list):
-        for idx, entry in enumerate(routes):
-            if not isinstance(entry, dict):
-                continue
-            recv = entry.get("receiver")
-            if isinstance(recv, dict) and _type_is_set(recv):
-                r = dict(recv)
-                r.setdefault("_label", f"{tenant_name}-route-{idx}")
-                receivers.append(r)
-
-    return receivers
+    return gar.tenant_slot_verdicts(tenant_name, routing)
 
 
 # ---------------------------------------------------------------------------
@@ -447,9 +406,8 @@ def test_receiver(
     # #3048: whether the receiver's own config is usable is the route
     # generator's verdict (build_receiver_config) — the one every receiver it
     # renders goes through. A receiver it refuses there is not tested (or
-    # passed in dry-run). Routing-level skips (an override / routes entry the
-    # generator drops, or a tenant's overrides / routes when its main receiver
-    # is refused) are not seen here and are still tested (#3076).
+    # passed in dry-run). run_all_tests only hands in receivers the generator
+    # rendered (#3076), so this matters for a receiver handed in directly.
     refusal = _generator_refusal(receiver, label, rtype)
     if refusal is not None:
         status, detail = refusal
@@ -501,7 +459,8 @@ def _generator_refusal(
     rtype: str,
 ) -> Optional[tuple[str, str]]:
     """(status, detail) when ``build_receiver_config`` refuses *receiver*,
-    else None.
+    else None. For a receiver handed in directly; ``run_all_tests`` takes the
+    same verdict from the generator's slot verdicts instead (#3076).
 
     The detail is the generator's own line without its framing (``WARN:
     <label>:`` and ``, skipping``). A URL field (email: smarthost) that is
@@ -514,16 +473,35 @@ def _generator_refusal(
     am_config, warnings = build_receiver_config(receiver_obj, label)
     if am_config is not None:
         return None
-    if not warnings:
-        return STATUS_INVALID_CONFIG, "the route generator refuses this receiver"
-    finding = warnings[0]
+    return _refusal_status(receiver, rtype, warnings[0] if warnings else None)
+
+
+def _generator_detail(finding: object) -> str:
+    """The generator's line without its framing (``WARN: <where>:`` and
+    ``, skipping``)."""
     detail = str(finding).strip()
-    prefix = f"WARN: {label}: "
-    if detail.startswith(prefix):
-        detail = detail[len(prefix):]
+    if detail.startswith("WARN: "):
+        head, sep, rest = detail[len("WARN: "):].partition(": ")
+        detail = rest if sep and " " not in head else detail[len("WARN: "):]
     if detail.endswith(", skipping"):
         detail = detail[:-len(", skipping")]
-    url_fields = {f"receiver.{f}": f for f in RECEIVER_URL_FIELDS.get(rtype, [])}
+    return detail
+
+
+def _refusal_status(
+    receiver: dict[str, Any],
+    rtype: str,
+    finding: Optional[object],
+    field_prefix: str = "",
+) -> tuple[str, str]:
+    """(status, detail) for a receiver the generator refused with *finding*
+    (the first refusal line; *field_prefix* is the slot path its ``field``
+    starts with, e.g. ``overrides[0].``)."""
+    if finding is None:
+        return STATUS_INVALID_CONFIG, "the route generator refuses this receiver"
+    detail = _generator_detail(finding)
+    url_fields = {f"{field_prefix}receiver.{f}": f
+                  for f in RECEIVER_URL_FIELDS.get(rtype, [])}
     refused_field = url_fields.get(getattr(finding, "field", None))
     # The generator files "" and null as invalid_receiver_field, but they are
     # "not given" (FIELD_UNSET) like a missing key: INVALID_CONFIG, as before.
@@ -774,13 +752,23 @@ def test_tenant_receivers(
         TenantTestReport with per-receiver results.
     """
     report = TenantTestReport(tenant=tenant_name)
-    receivers = extract_receivers(tenant_name, tenant_config)
-
-    if not receivers:
+    routing = tenant_config.get("_routing")
+    if not isinstance(routing, dict):
         return report
 
-    for idx, recv in enumerate(receivers):
-        result = test_receiver(recv, timeout=timeout, dry_run=dry_run)
+    # #3076: the generator's verdict per slot, in render order (main,
+    # overrides[i], routes[i]); only what it renders is tested.
+    verdicts = slot_verdicts(tenant_name, routing)
+    left_to_send = sum(1 for v in verdicts if v.rendered)
+    for verdict in verdicts:
+        label = _slot_label(tenant_name, verdict.slot)
+        if verdict.rendered:
+            recv = dict(verdict.receiver)
+            recv["_label"] = label
+            result = test_receiver(recv, timeout=timeout, dry_run=dry_run)
+            left_to_send -= 1
+        else:
+            result = _unrendered_result(verdict, label)
         report.receivers.append(result)
 
         if result.status == STATUS_OK or result.status == STATUS_DRY_RUN:
@@ -791,10 +779,33 @@ def test_tenant_receivers(
             report.failed += 1
 
         # Rate limiting between requests
-        if rate_limit > 0 and idx < len(receivers) - 1:
+        if verdict.rendered and rate_limit > 0 and left_to_send > 0:
             time.sleep(rate_limit)
 
     return report
+
+
+def _unrendered_result(verdict: Any, label: str) -> ReceiverTestResult:
+    """The result for a slot the generator does not render (#3076): never
+    sent. Its own receiver refused → INVALID_URL / INVALID_CONFIG, as for a
+    receiver handed in directly; dropped at the routing level → NOT_RENDERED
+    with the generator's reason."""
+    recv = verdict.receiver if isinstance(verdict.receiver, dict) else {}
+    rtype = receiver_type(recv)
+    reason: Optional[Finding] = verdict.reason
+    if verdict.stage == "receiver":
+        type_err = _non_string_type_problem(recv)
+        if type_err:
+            status, detail = STATUS_INVALID_CONFIG, type_err
+        else:
+            prefix = "" if verdict.slot == "receiver" else f"{verdict.slot}."
+            status, detail = _refusal_status(recv, rtype, reason, prefix)
+    else:
+        status = STATUS_NOT_RENDERED
+        detail = (_generator_detail(reason) if reason is not None
+                  else "the route generator does not render this entry")
+    return ReceiverTestResult(receiver_name=label, receiver_type=rtype,
+                              status=status, detail=detail)
 
 
 class RoutingTreeRefused(Exception):
@@ -896,6 +907,7 @@ _STATUS_SYMBOLS = {
     STATUS_INVALID_URL: "✗",
     STATUS_INVALID_CONFIG: "✗",
     STATUS_HTTP_ERROR: "✗",
+    STATUS_NOT_RENDERED: "✗",
 }
 
 

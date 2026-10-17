@@ -109,6 +109,7 @@ from _grar_parse import field_type_findings  # noqa: E402
 
 # ── Re-exports from _grar_routes ───────────────────────────────────
 from _grar_routes import (  # noqa: E402, F401
+    SlotVerdict,
     _build_enforced_routes,
     _build_inhibit_rules,
     _build_override_matchers,
@@ -126,6 +127,7 @@ from _grar_routes import (  # noqa: E402, F401
     expand_routing_routes,
     generate_inhibit_rules,
     generate_routes,
+    tenant_slot_verdicts,
 )
 
 # ── Re-exports from _grar_render ───────────────────────────────────
