@@ -52,10 +52,10 @@ import (
 // silently and the Watcher records both (configwatcher.WatchLoop and
 // configwatcher.Reload):
 //   - rbac / tenantorg / federation-policy run a periodic WatchLoop.
-//   - groups / views (and federation-policy again) are Reload()ed after a write,
-//     and every production caller DISCARDS that error — `_ = mgr.Reload()` in
-//     handler/group.go:236,317, handler/view.go:175,239 and
-//     handler/federation/policy.go:157 — then answers 200 OK. Equally silent.
+//   - groups / views (and federation-policy again) are Reload()ed after a write
+//     — on every exit of it, success or error (#1535) — and that one production
+//     caller DISCARDS the error — `_ = mgr.Reload()` in handler/state.go's
+//     reloadState — and the handler then answers. Equally silent.
 //
 // A new manager appends its label here in the same commit that adds it. This is
 // an ARRAY, not a slice, so the `counters` / `states` stores below are sized FROM

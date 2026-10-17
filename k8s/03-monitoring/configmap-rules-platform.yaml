@@ -1115,9 +1115,9 @@ data:
           # --- tenant-api conf.d writes mostly failing (#3054) ---
           # tenant_api_writes_total{result} counts every conf.d write attempt — one
           # per git commit or PR/MR attempt, a batch once — by its answer: ok (2xx),
-          # conflict (409), error (a server-side failure: 5xx/429, a direct write's
-          # git or file failure answered 400, the forge refusing tenant-api's own
-          # token with 403, a batch committed but not finished cleanly answered
+          # conflict (409), error (a server-side failure: 5xx/429 — a direct
+          # write's git or file failure is a 500 since #1535 —, the forge refusing
+          # tenant-api's own token with 403, a batch committed but not finished cleanly answered
           # 409 committed: true). Requests refused as invalid or forbidden, and
           # failures after the client went away, are not counted. All three series are
           # emitted from process start, so the ratio always has its denominator.

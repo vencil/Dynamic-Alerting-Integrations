@@ -144,8 +144,8 @@ func PutView(d *Deps) http.HandlerFunc {
 		// Rebuild from the STORED copy, inside the state store's read-modify-write (#2856) — see the
 		// comment in PutGroup for why the in-memory snapshot cannot be the
 		// base of a whole-file rewrite. _views.yaml has exactly the same
-		// shape: one shared object, one snapshot that only refreshes on the
-		// Reload a failed write never reaches.
+		// shape: one shared object, one snapshot that refreshes only on a
+		// Reload (mutateState's, on every exit — #1535) or a WatchLoop tick.
 		if err := d.mutateState(r.Context(), statestore.KeyViews, "views", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseViewsFile(current)
@@ -163,8 +163,6 @@ func PutView(d *Deps) http.HandlerFunc {
 			writeConfigFileError(w, r, err)
 			return
 		}
-
-		_ = d.Views.Reload()
 
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
@@ -220,8 +218,6 @@ func DeleteView(d *Deps) http.HandlerFunc {
 			writeConfigFileError(w, r, err)
 			return
 		}
-
-		_ = d.Views.Reload()
 
 		writeJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
