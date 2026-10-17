@@ -306,8 +306,8 @@ function CustomAlertsModal(props) {
                 {gitReason && <>{' '}(<span className="font-mono">{gitReason}</span>)</>}
               </p>
               <p className="text-sm mt-1">
-                {t('它的設定檔不只屬於這個租戶（例如與其他租戶共用），tenant-api 不提供原文，也不接受從這裡寫入。請直接在 git 修改設定檔。',
-                  'Its config file is not this tenant\'s alone (it may be shared with other tenants), so tenant-api neither shows nor writes it. Edit the config file in git.')}
+                {t('它的設定檔不是 tenant-api 能管理的形狀（例如與其他租戶共用、檔名與租戶不符、含多份 document 或頂層 YAML anchor／alias），tenant-api 不提供原文，也不接受從這裡寫入。請直接在 git 修改設定檔。',
+                  'Its config file is not in a shape tenant-api manages (for example shared with other tenants, named differently from the tenant, several documents, or top-level YAML anchors/aliases), so tenant-api neither shows nor writes it. Edit the config file in git.')}
               </p>
             </div>
           )}
