@@ -940,6 +940,16 @@ RECIPES: list[Recipe] = [
                     "--skip-if-unavailable", "--json"],
       expect_caller_error=True,
       doc_check=_caller_error_doc("no_change_source")),
+    # #3089: an output path that cannot be written is found BEFORE the
+    # Prometheus check, so `--skip-if-unavailable` does not print a
+    # `skipped` envelope next to rc 2; the parent here does not exist.
+    R("backtest_threshold", "output-unwritable",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
+                    "--old-value", "100", "--new-value", "150",
+                    "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable",
+                    "-o", _out(t, "absent/backtest.json"), "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("output_unwritable")),
 
     # ── batch_diagnose  (⚠ known multi-mode trap) ──────────────────────────
     R("batch_diagnose", "dry-run",

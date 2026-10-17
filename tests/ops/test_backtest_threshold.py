@@ -10,6 +10,7 @@
   6. generate_markdown() — Markdown 格式
 """
 
+import errno
 import json
 import os
 import subprocess
@@ -18,6 +19,8 @@ import tempfile
 from unittest.mock import patch
 
 import pytest
+
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 import backtest_threshold as bt  # noqa: E402
 
@@ -1760,3 +1763,286 @@ class TestCallerErrorEnvelopes:
                             "--json", *(["--skip-if-unavailable"] if skip else []))
         assert rc == 2
         self._envelope(out, "no_change_source")
+
+
+# ── 每一條結束路徑都寫出要求的檔、開工前先檢查輸出路徑（#3089）──────────
+
+
+def _recipe_confd(root):
+    d = root / "recipe-conf.d"
+    d.mkdir()
+    (d / "ta.yaml").write_text(
+        "tenants:\n"
+        "  ta:\n"
+        "    mysql_connections: 100\n"
+        "    _custom_alerts:\n"
+        '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",\n'
+        '         window: 5m, threshold: "80:warning"}\n',
+        encoding="utf-8")
+    return d
+
+
+def _plain_confd(root):
+    d = root / "plain-conf.d"
+    d.mkdir()
+    (d / "tenant-one.yaml").write_text(
+        "tenants:\n  tenant-one:\n    mysql_connections: 100\n", encoding="utf-8")
+    return d
+
+
+_TENANT = ("--tenant", "t-x", "--metric", "mysql_connections",
+           "--old-value", "100", "--new-value", "50")
+
+
+def _path_skip(mp, tmp, prom):
+    mp.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+    return [*_TENANT, "--prometheus", "http://prom:9090", "--skip-if-unavailable"]
+
+
+def _path_skip_with_recipe(mp, tmp, prom):
+    mp.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+    d = _recipe_confd(tmp)
+    return ["--config-dir", str(d), "--baseline", str(d),
+            "--prometheus", "http://prom:9090", "--skip-if-unavailable"]
+
+
+def _path_no_changes(mp, tmp, prom):
+    mp.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+    d = _plain_confd(tmp)
+    return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
+
+
+def _path_prometheus_unavailable(mp, tmp, prom):
+    mp.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+    return [*_TENANT, "--prometheus", "http://prom:9090"]
+
+
+def _path_observed_map(mp, tmp, prom):
+    mp.setattr(bt, "_OBSERVED_MAP", None)
+    mp.setattr(bt.observed_map_lib, "DEFAULT_MAP_PATH", str(tmp / "nope.yaml"))
+    mp.setattr(bt, "prometheus_available", _boom)
+    return [*_TENANT, "--prometheus", "http://prom:9090", "--skip-if-unavailable"]
+
+
+def _path_git_diff(mp, tmp, prom):
+    mp.setattr(bt, "_git_bytes", lambda *a, **k: None)
+    mp.setattr(bt, "prometheus_available", _boom)
+    return ["--git-diff", "--prometheus", "http://prom:9090"]
+
+
+def _path_baseline_missing(mp, tmp, prom):
+    mp.setattr(bt, "prometheus_available", _boom)
+    return ["--config-dir", str(_plain_confd(tmp)), "--prometheus", "http://prom:9090"]
+
+
+def _path_served_values(mp, tmp, prom):
+    def missing(*a, **kw):
+        raise bt.DaGuardNotFoundError("no da-guard")
+    mp.setattr(bt, "extract_changes_from_dirs", missing)
+    mp.setattr(bt, "prometheus_available", _boom)
+    d = _plain_confd(tmp)
+    return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
+
+
+def _path_conf_unreadable(mp, tmp, prom):
+    mp.setattr(bt, "prometheus_available", _boom)
+    d = tmp / "bad-conf.d"
+    d.mkdir()
+    (d / "db.yaml").write_bytes(b"tenants:\n  db:\n    x: \xff\n")
+    return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
+
+
+def _path_query_error(mp, tmp, prom):
+    p = prom(errors={"t-x": 400})
+    return [*_TENANT, "--prometheus", p.url]
+
+
+def _path_high(mp, tmp, prom):
+    p = prom()
+    return [*_TENANT, "--prometheus", p.url]
+
+
+# (id, argv builder, rc, (status, reason) or None for a report with no status,
+#  words the markdown must say)
+_EVERY_PATH = [
+    ("skip", _path_skip, 0, ("skipped", "prometheus_unavailable"),
+     ("Backtest not run", "Prometheus")),
+    ("skip-recipe", _path_skip_with_recipe, 0, ("skipped", "prometheus_unavailable"),
+     ("Backtest not run", "Prometheus", "Custom-Alert Recipes", "`ta`")),
+    ("no-changes", _path_no_changes, 0, ("no_changes", "no_threshold_changes_detected"),
+     ("Backtest not run", "no threshold changes")),
+    ("prometheus-unavailable", _path_prometheus_unavailable, 2,
+     ("caller_error", "prometheus_unavailable"), ("Backtest not run", "prometheus_unavailable")),
+    ("observed-map", _path_observed_map, 2, ("caller_error", "observed_map_unavailable"),
+     ("Backtest not run", "observed_map_unavailable")),
+    ("git-diff", _path_git_diff, 2, ("caller_error", "git_diff_unavailable"),
+     ("Backtest not run", "git_diff_unavailable")),
+    ("baseline-missing", _path_baseline_missing, 2, ("caller_error", "baseline_missing"),
+     ("Backtest not run", "baseline_missing")),
+    ("served-values", _path_served_values, 2, ("caller_error", "served_values_unavailable"),
+     ("Backtest not run", "served_values_unavailable")),
+    ("conf-unreadable", _path_conf_unreadable, 2, ("caller_error", "conf_file_unreadable"),
+     ("Backtest not run", "conf_file_unreadable")),
+    ("query-error", _path_query_error, 2, ("partial", "query_error"),
+     ("Threshold Backtest Results", "not measured")),
+    ("high", _path_high, 1, None, ("Threshold Backtest Results", "HIGH")),
+]
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestOutputsOnEveryPath:
+    """#3089 (a)：preflight 之後每一條結束路徑都寫出 `-o` 與 `--markdown-output`。
+
+    `-o` 是該路徑在 `--json` 時印的同一份 JSON；markdown 非空、寫出原因。
+    rc 照舊（skip 0、no_changes 0、HIGH 1、其餘 2）。修前只有正常報告那條
+    寫 `-o`，skip／no_changes 只在有 recipe 租戶時寫 markdown。"""
+
+    @pytest.mark.parametrize("pid,build,rc,disc,words", _EVERY_PATH,
+                             ids=[p[0] for p in _EVERY_PATH])
+    def test_both_files_match_the_stdout_envelope(
+            self, pid, build, rc, disc, words, monkeypatch, tmp_path, cli_argv, capsys,
+            fake_prom):
+        out_json, out_md = tmp_path / "out" / "r.json", tmp_path / "out" / "r.md"
+        out_json.parent.mkdir()
+        argv = build(monkeypatch, tmp_path, fake_prom)
+        got_rc, out = _run_main(cli_argv, capsys, *argv, "--json",
+                                "-o", str(out_json), "--markdown-output", str(out_md))
+        assert got_rc == rc, out.err
+        doc = json.loads(out.out)
+        if disc is None:
+            assert "status" not in doc
+        else:
+            assert (doc["status"], doc["reason"]) == disc
+        assert out_json.is_file(), f"{pid}: -o was not written"
+        assert json.loads(out_json.read_text(encoding="utf-8")) == doc
+        assert out_md.is_file(), f"{pid}: --markdown-output was not written"
+        md = out_md.read_text(encoding="utf-8")
+        assert md.strip(), f"{pid}: the markdown is empty"
+        for w in words:
+            assert w in md, f"{pid}: the markdown does not say {w!r}:\n{md}"
+
+    @pytest.mark.parametrize("pid,build,rc", [(p[0], p[1], p[2]) for p in _EVERY_PATH],
+                             ids=[p[0] for p in _EVERY_PATH])
+    def test_text_mode_writes_both_and_keeps_rc(
+            self, pid, build, rc, monkeypatch, tmp_path, cli_argv, capsys, fake_prom):
+        out_json, out_md = tmp_path / "r.json", tmp_path / "r.md"
+        out_json.write_text("stale\n", encoding="utf-8")   # an existing file is fine
+        argv = build(monkeypatch, tmp_path, fake_prom)
+        got_rc, out = _run_main(cli_argv, capsys, *argv,
+                                "-o", str(out_json), "--markdown-output", str(out_md))
+        assert got_rc == rc, out.err
+        assert "check the value given to" not in out.err   # no write error
+        assert json.loads(out_json.read_text(encoding="utf-8"))["lookback"] == "7d"
+        assert out_md.read_text(encoding="utf-8").strip()
+
+
+def _unwritable(tmp, shape, name):
+    if shape == "missing_parent":
+        return tmp / "absent" / name
+    if shape == "parent_is_file":
+        (tmp / "blocker").write_text("file\n", encoding="utf-8")
+        return tmp / "blocker" / name
+    if shape == "dangling_symlink":   # #3089 review: a link to a missing directory
+        link = tmp / name
+        symlink_or_skip(tmp / "absent" / name, link)
+        return link
+    p = tmp / name          # target_is_dir
+    p.mkdir()
+    return p
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestOutputPreflight:
+    """#3089 (b)：參數檢查之後、git／served-values／observed-map／Prometheus
+    之前，先確認 `-o` 與 `--markdown-output` 寫得進去。寫不進去 ⇒ 一行
+    `ERROR: cannot write …`、rc 2、`--json` 印 `output_unwritable` envelope；
+    什麼都還沒查，所以 stdout 不會先印一份正常報告。"""
+
+    @pytest.mark.parametrize("flag,named", [("-o", "-o/--output"),
+                                            ("--markdown-output", "--markdown-output")])
+    @pytest.mark.parametrize("shape", ["missing_parent", "parent_is_file", "target_is_dir",
+                                       "dangling_symlink"])
+    @pytest.mark.parametrize("pid,build", [("skip", _path_skip), ("no-changes", _path_no_changes)])
+    def test_skip_and_no_changes_are_rc2_output_unwritable(
+            self, pid, build, shape, flag, named, monkeypatch, tmp_path, cli_argv, capsys,
+            fake_prom):
+        bad = _unwritable(tmp_path, shape, "r.out")
+        argv = build(monkeypatch, tmp_path, fake_prom)
+        rc, out = _run_main(cli_argv, capsys, *argv, "--json", flag, str(bad))
+        assert rc == 2
+        doc = json.loads(out.out)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "output_unwritable")
+        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+        lines = [ln for ln in out.err.splitlines() if ln.startswith("ERROR:")]
+        assert len(lines) == 1, out.err
+        assert lines[0].startswith(f"ERROR: cannot write {bad}: ")
+        assert f"check the value given to {named}" in lines[0]
+        assert "Traceback" not in out.err
+
+    @pytest.mark.parametrize("flag", ["-o", "--markdown-output"])
+    def test_report_path_stops_before_any_work(self, flag, monkeypatch, tmp_path, cli_argv,
+                                               capsys):
+        """git、observed-map、Prometheus 一個都沒碰就停（每個都換成 `_boom`）。"""
+        for name in ("_git_bytes", "_observed_map", "prometheus_available", "query_range",
+                     "extract_changes_from_dirs", "load_conf_files"):
+            monkeypatch.setattr(bt, name, _boom)
+        bad = _unwritable(tmp_path, "missing_parent", "r.out")
+        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", "http://prom:9090",
+                            "--json", flag, str(bad))
+        assert rc == 2
+        assert json.loads(out.out)["reason"] == "output_unwritable"
+        assert not bad.parent.exists()
+
+    def test_the_other_output_is_not_written_either(self, monkeypatch, tmp_path, cli_argv,
+                                                    capsys):
+        monkeypatch.setattr(bt, "prometheus_available", _boom)
+        good = tmp_path / "r.md"
+        rc, out = _run_main(cli_argv, capsys, *_TENANT, "--prometheus", "http://prom:9090",
+                            "-o", str(_unwritable(tmp_path, "target_is_dir", "r.json")),
+                            "--markdown-output", str(good))
+        assert rc == 2 and out.out == ""
+        assert not good.exists()
+
+    @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                        reason="as root the permission bits decide nothing")
+    @pytest.mark.parametrize("where", ["file", "parent"])
+    def test_permission_bits_are_read(self, where, tmp_path):
+        """EACCES: a read-only existing file, or a read-only parent directory."""
+        d = tmp_path / "d"
+        d.mkdir()
+        target = d / "r.json"
+        if where == "file":
+            target.write_text("old", encoding="utf-8")
+            target.chmod(0o444)
+        else:
+            d.chmod(0o500)
+        try:
+            exc = bt._unwritable_output(str(target), "-o/--output")
+            assert exc is not None and exc.errno == errno.EACCES
+        finally:
+            d.chmod(0o700)
+
+    def test_a_regular_file_someone_else_owns_is_unwritable(self, tmp_path, monkeypatch):
+        """The secure writer's chmod 0600 fails on a file another user owns
+        (EPERM) after writing it: judged unwritable up front (#3105)."""
+        target = tmp_path / "r.json"
+        target.write_text("old", encoding="utf-8")
+        target.chmod(0o666)
+        owner = target.stat().st_uid
+        monkeypatch.setattr(bt.os, "geteuid", lambda: owner + 1)
+        exc = bt._unwritable_output(str(target), "-o/--output")
+        assert exc is not None and exc.errno == errno.EPERM
+
+    def test_a_device_is_not_judged_by_its_owner(self, tmp_path, monkeypatch):
+        """`-o /dev/null`: the writer does not chmod a device (#3105), so who
+        owns it does not matter."""
+        monkeypatch.setattr(bt.os, "geteuid", lambda: 12345)
+        assert bt._unwritable_output("/dev/null", "-o/--output") is None
+
+    def test_argument_errors_still_come_first(self, monkeypatch, tmp_path, cli_argv, capsys):
+        """參數錯先於 preflight：reason 仍是 tenant_args_missing。"""
+        bad = _unwritable(tmp_path, "missing_parent", "r.json")
+        rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--prometheus", "http://prom:9090",
+                            "--json", "-o", str(bad))
+        assert rc == 2
+        assert json.loads(out.out)["reason"] == "tenant_args_missing"
