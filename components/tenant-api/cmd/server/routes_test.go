@@ -59,8 +59,9 @@ const (
 	// (rbac.PlatformAdminNonOrgScoped) at the top of the handler with a
 	// constant 403 — the write-method mirror of gateReadPlatformAdmin.
 	// Deliberately NOT gateReadOp: that label claims the route middleware
-	// enforces PermRead on {id}; here the middleware only authenticates and
-	// the real bar lives in the handler (ADR-027 / LD-6 P7).
+	// enforces PermRead on {id}; here the route mounts the "*" read gate as a
+	// coarse first layer and the real bar lives in the handler (ADR-027 /
+	// LD-6 P7).
 	gateWriteOpPlatformAdmin = "read-op semantics; platform-admin bar in handler (non-org-scoped, constant 403)"
 )
 

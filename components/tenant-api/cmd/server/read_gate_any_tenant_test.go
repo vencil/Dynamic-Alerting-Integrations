@@ -530,6 +530,7 @@ func TestAnyTenantGate_PlatformRoutesStayOnStar(t *testing.T) {
 			{http.MethodDelete, "/api/v1/views/v-all", ""},
 			{http.MethodPut, "/api/v1/federation/policy", `{"whitelist":[]}`},
 			{http.MethodGet, "/api/v1/audit/tenants/alpha-one/access-report", ""},
+			{http.MethodPost, "/api/v1/audit/tenants/alpha-one/access-report/dry-run", `{}`},
 			{http.MethodPost, "/api/v1/federation/accounts/backfill", ""},
 		} {
 			// The org-scoped "*" rule passes the "*" READ gate (org-blind,
@@ -538,8 +539,20 @@ func TestAnyTenantGate_PlatformRoutesStayOnStar(t *testing.T) {
 			if c.group == "orgs" && rt.method == http.MethodGet && strings.HasPrefix(rt.path, "/api/v1/views") {
 				continue
 			}
-			if w := f.do(t, c, rt.method, rt.path, rt.body); w.Code != http.StatusForbidden {
+			w := f.do(t, c, rt.method, rt.path, rt.body)
+			if w.Code != http.StatusForbidden {
 				t.Errorf("%s %s as %q: %d, want 403; body=%s", rt.method, rt.path, c.group, w.Code, w.Body.String())
+				continue
+			}
+			// Which layer refused: the "*" read gate for a caller without a
+			// "*" read grant; the handler's own platform-admin bar for the
+			// "*" reader that gets past it (the gate is a coarse first layer,
+			// not the bar). The views' writes sit behind the "*" WRITE gate,
+			// which the read-only "*" rule does not pass.
+			fromGate := strings.Contains(w.Body.String(), "insufficient permissions for tenant *")
+			if want := c.group != "orgs" || strings.HasPrefix(rt.path, "/api/v1/views"); fromGate != want {
+				t.Errorf("%s %s as %q: 403 from the route gate = %v, want %v; body=%s",
+					rt.method, rt.path, c.group, fromGate, want, w.Body.String())
 			}
 		}
 	}
