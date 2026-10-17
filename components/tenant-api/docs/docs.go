@@ -2621,7 +2621,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373), INTERNAL_ERROR (the conf.d walk behind that check could not\nrun, or another server-side failure), the route generator's codes\n(GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE,\nPOLICY_UNAVAILABLE; #2903), and — PR mode, judged on the latest base branch —\nFORBIDDEN (write scope) and CONFIG_DECODE_ERROR (the base's\n_tenant_orgs.yaml cannot be read). Empty for every other failure and for an\nop that was not refused.",
+                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE,\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373), TENANT_GIT_MANAGED (the op's tenant is git-managed, #3064:\nnothing written, change it in git), INTERNAL_ERROR (the conf.d walk behind\nthat check could not\nrun, or another server-side failure), the route generator's codes\n(GENERATOR_FINDINGS, GENERATOR_REJECTED, VALIDATOR_UNAVAILABLE,\nPOLICY_UNAVAILABLE; #2903), and — PR mode, judged on the latest base branch —\nFORBIDDEN (write scope) and CONFIG_DECODE_ERROR (the base's\n_tenant_orgs.yaml cannot be read). Empty for every other failure and for an\nop that was not refused.",
                     "type": "string"
                 },
                 "message": {
