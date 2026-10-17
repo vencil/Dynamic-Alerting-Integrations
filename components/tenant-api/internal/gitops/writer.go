@@ -1675,9 +1675,12 @@ func (w *Writer) PreviewCurrent(tenantID string) ([]byte, bool, error) {
 // preview, #1560). exists=false renders proposed as a new file. Equal texts
 // give "".
 //
-// The diff runs on two temporary files named current/<id>.yaml and
-// proposed/<id>.yaml in a private directory, from inside it, so the header
-// names those relative paths: no conf.d or temp-dir path reaches the caller.
+// The header names current/<id>.yaml and proposed/<id>.yaml: no conf.d or
+// temp-dir path reaches the caller. The tenant id never reaches git or the
+// filesystem, though (#3062; CodeQL go/command-injection, go/path-injection):
+// the diff runs, from inside a private directory, on two temporary files with
+// the fixed names diffCurrentFile / diffProposedFile, and relabelDiffHeader
+// then puts the id into the header lines as plain text.
 func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed string) (string, error) {
 	if !exists {
 		// New file — show the entire proposed content as an addition
@@ -1696,24 +1699,52 @@ func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed strin
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	name := tenantID + ".yaml"
-	for sub, text := range map[string]string{"current": current, "proposed": proposed} {
-		if err := os.Mkdir(filepath.Join(dir, sub), 0o700); err != nil {
+	for _, f := range []struct{ sub, text string }{
+		{"current", current},
+		{"proposed", proposed},
+	} {
+		if err := os.Mkdir(filepath.Join(dir, f.sub), 0o700); err != nil {
 			return "", fmt.Errorf("create temp dir: %w", err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, sub, name), []byte(text), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, f.sub, diffFileName), []byte(f.text), 0o600); err != nil {
 			return "", fmt.Errorf("write temp file: %w", err)
 		}
 	}
 
-	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", "current/"+name, "proposed/"+name)
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", diffCurrentFile, diffProposedFile)
 	defer cancel()
 	cmd.Dir = dir
 	// git diff exits 1 when there are differences — that's expected, so the error
 	// is intentionally discarded. A deadline-killed diff likewise returns empty
 	// output here (this is a read-only advisory diff, not a write path).
 	out, _ := cmd.Output()
-	return string(out), nil
+	return relabelDiffHeader(string(out), tenantID+".yaml"), nil
+}
+
+// The fixed temporary file names DiffTexts hands git, relative to its private
+// directory. Fixed so that nothing a request carries is a git argument or a
+// path component (#3062).
+const (
+	diffFileName     = "tenant.yaml"
+	diffCurrentFile  = "current/" + diffFileName
+	diffProposedFile = "proposed/" + diffFileName
+)
+
+// relabelDiffHeader renames the fixed file names in a `git diff --no-index`
+// output's header (diff --git, ---, +++, a "Binary files" line) to
+// current/<shown> and proposed/<shown>. Only the text before the first hunk
+// is touched, so a content line that happens to spell a fixed name is kept
+// as written.
+func relabelDiffHeader(out, shown string) string {
+	header, body := out, ""
+	if i := strings.Index(out, "\n@@"); i >= 0 {
+		header, body = out[:i], out[i:]
+	}
+	header = strings.NewReplacer(
+		diffCurrentFile, "current/"+shown,
+		diffProposedFile, "proposed/"+shown,
+	).Replace(header)
+	return header + body
 }
 
 // writeFileAtomic replaces filePath with content via a temp file in the
