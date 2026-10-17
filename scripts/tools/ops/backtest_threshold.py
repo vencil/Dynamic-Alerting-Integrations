@@ -1889,7 +1889,7 @@ def main():
     )
     source.add_argument(
         "--tenant",
-        help="Single tenant (requires --metric, --old-value, --new-value)",
+        help="Single tenant (requires --metric and at least one of --old-value/--new-value)",
     )
 
     parser.add_argument("--baseline", help="Baseline config directory (with --config-dir)")

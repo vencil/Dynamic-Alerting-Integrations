@@ -214,6 +214,13 @@ da-tools check-alert <alert_name> <tenant> [options]
 | `<alert_name>` | Alert 名稱 | `MariaDBHighConnections` |
 | `<tenant>` | Tenant ID | `db-a` |
 
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--json` | JSON 輸出。本來就只輸出 JSON，接受這個旗標只為相容 | true |
+
 **輸出**
 
 JSON 格式，包含 alert 狀態（firing / pending / inactive）。
@@ -273,6 +280,7 @@ da-tools diagnose <tenant> [options]
 | `--config-dir <PATH>` | 租戶配置目錄；給了才查 profile 與繼承鏈 | （無） |
 | `--show-inheritance` | 只印完整的繼承鏈解析（需要 `--config-dir`） | false |
 | `--json` | JSON 輸出。本來就只輸出 JSON，接受這個旗標只為相容 | true |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選項。
 
@@ -335,9 +343,11 @@ da-tools batch-diagnose [options]
 | `--tenants <LIST>` | 逗號分隔租戶列表（若不指定則自動探索） | （自動） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
 | `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)）。期限也傳到檢查裡的每次呼叫：`kubectl` 在期限前稍早（`min(0.5 秒, --timeout/4)`）被終止，不會在整批結束後留下行程（`--timeout` 很短（低於約 0.5 秒）或機器負載高時不保證）；期限已過就不再啟動 `kubectl` 或送出 Prometheus 查詢（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)） | `60` |
-| `--output <FILE>` | 輸出至檔案（JSON 格式） | stdout |
+| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案；stdout 照樣印報告 | （無） |
+| `--json` | stdout 只印 JSON，不印文字報告 | false |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | K8s namespace（auto-discover 用） | `monitoring` |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
 
@@ -389,6 +399,7 @@ da-tools baseline --tenant <name> [options]
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
 | `-o, --output-dir <DIR>` | 輸出目錄；兩個 CSV 都寫在這裡（見下方「輸出」），目錄不存在會建立 | `baseline_output` |
 | `--dry-run` | 僅顯示要觀測的指標，不實際採樣 | false |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
 
@@ -459,12 +470,18 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
+| `--mapping <FILE>` | Mapping 模式：`prefix-mapping.yaml` 路徑（見上方） | （無） |
+| `--old <QUERY>` | Query 模式：舊 Recording Rule 的 PromQL（搭配 `--new`） | （無） |
+| `--new <QUERY>` | Query 模式：新 Recording Rule 的 PromQL（搭配 `--old`） | （無） |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--watch` | 持續監控模式（每 N 秒比對一次） | false |
 | `--interval <SEC>` | 監控間隔（秒，≥ 0，可帶小數；`0` = 輪與輪之間不等待，由 `--rounds` 封頂；負數、`nan`、`inf` 回 `2`） | `60` |
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
 | `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1%。必須是 ≥ 0 的有限數，`inf`、`nan`、負值回 2 | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
 | `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡 | `validation_output` |
+| `--stability-window <N>` | `--auto-detect-convergence` 判定收斂所需的連續全部 match 輪數 | `5` |
+| `--convergence-output <FILE>` | readiness JSON 的寫入路徑（`--watch --auto-detect-convergence`） | `-o/--output-dir` 下的 `cutover-readiness.json` |
 
 **輸出**
 
@@ -519,6 +536,7 @@ da-tools cutover --readiness-json <FILE> --tenant <name> [options]
 | `--force` | readiness JSON 的 `ready` 為 false 也照樣切換；`--readiness-json` 仍然必填 | false |
 | `--namespace <NS>` | K8s namespace | `monitoring` |
 | `--json-output` | 另在 stdout 印一份 JSON 報告 | false |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **自動化步驟**
 
@@ -573,6 +591,7 @@ da-tools blind-spot --config-dir <path> [options]
 |------|------|--------|
 | `--exclude-jobs <LIST>` | 排除的 job 清單（逗號分隔） | （無） |
 | `--json-output` | JSON 結構化輸出 | false |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
 
@@ -666,7 +685,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 **語法**
 
 ```bash
-da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
+da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
 ```
 
 **必需參數**
@@ -681,6 +700,10 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
    （比對兩個配置版本）
    兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。severity 只決定由哪支告警比較這一列，觸發點只看值（[#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)）：值或 severity 任一邊不同都是一列變更，兩邊 severity 不同時 `--json` 該列帶 `old_severity`／`new_severity`、文字與 Markdown 報告在值旁註明。只改 severity 到另一個有規則選的 severity（`70` → `70:critical`）照值回測（觸發點不變）；改到規則不選的 severity（`70:high`、`70:`）那一邊視同沒有門檻，判為告警被靜默（`Metric disabled — all alerts silenced`），改回來則是重新啟用。每一列由哪支告警比較，取自 served-values 對該 key 回報的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（例如 `60:high`、`60:Critical`——規則只選 `severity="warning"`／`"critical"`，大小寫也要一致）沒有告警比較：那一邊視同沒有門檻，兩邊都沒有規則選的 severity 時不回測（`severity '...' is selected by no threshold rule`，與 `--git-diff`／`--tenant` 同一個理由）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不讀，舊名底下的資料不算這個門檻的資料。一列的 row 若由比較不同 series 或不同方向的告警比較，一次回放代表不了兩者，該列不回測（`rows compared differently`）。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。
 
+3. **單一變更模式**：`--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
+   （不讀任何配置檔，直接回測手給的一筆變更）
+   `--tenant` 須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個，否則結束碼 2；租戶 id 須是合法的 DNS-1123 label。值的讀法同 `--git-diff`（見下方「回測查什麼」）。同時給了 `--git-diff` 或 `--config-dir` 時以它們為準，這幾個旗標只做參數檢查。
+
 **回測查什麼**（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017)、[#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002)）
 
 - 每筆變更只查一次 Prometheus：該 key 的告警拿來和門檻比較的那條 recording rule（[`metric_observed_map.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/metric_observed_map.yaml) 的 `observed_series`），加上 `{tenant="<租戶>"}`。越界照告警的比較方向計數：`>` 的告警數高於門檻的點，`<` 的告警（下界，例如 `db2_bufferpool_hit_ratio`、`kafka_broker_count`）數低於門檻的點。先前一律以 `>` 計數，並依序猜 `<key>`、`tenant:<key>:max`、`<key>{namespace=...}` 三種名稱——將近一半的 key，告警比的不是其中任何一條。
@@ -692,8 +715,19 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
+| `--git-diff` | Git Diff 模式：讀 `git diff HEAD~1 -- conf.d/` 的門檻變更（需要 git，見上方「必需參數」） | false |
+| `--config-dir <DIR>` | 目錄比對模式：變更後的配置目錄（須搭配 `--baseline`） | （無） |
+| `--baseline <DIR>` | 目錄比對模式：變更前的配置目錄（須搭配 `--config-dir`） | （無） |
+| `--tenant <ID>` | 單一變更模式：租戶 id（須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個） | （無） |
+| `--metric <KEY>` | 單一變更模式：門檻 key（搭配 `--tenant`） | （無） |
+| `--old-value <VALUE>` | 單一變更模式：舊門檻值，讀法同 conf.d（如 `70`、`70:critical`；搭配 `--tenant`） | （無） |
+| `--new-value <VALUE>` | 單一變更模式：新門檻值（搭配 `--tenant`） | （無） |
+| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--lookback <DURATION>` | 歷史回測期間，格式為 `<數字><d\|h\|m>`（如 `7d`／`24h`）。不符合格式的值（含裸數字 `7`、空字串）⇒ 結束碼 2 並列出接受的格式（#1625；之前會被靜默當成 `7d`） | `7d` |
-| `--output <FILE>` | 輸出至 JSON 或 CSV | stdout |
+| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案，內容與這次 `--json` 會印的相同（寫入時機見下方「輸出」）；文字報告照樣印到 stdout | （無） |
+| `--json` | stdout 只印 JSON，不印文字報告 | false |
+| `--markdown-output <FILE>` | 另把 Markdown 報告寫到檔案（給 PR 留言用） | （無） |
+| `--skip-if-unavailable` | 只有「Prometheus 連不上」改為結束碼 0；其他呼叫端錯誤（見下方結束碼表）仍是 2 | false |
 
 **輸出**
 
@@ -1051,7 +1085,7 @@ da-tools alert-correlate --input <FILE> [--window <DURATION>] [--min-score <FLOA
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
 | `--prometheus <URL>` | Prometheus 端點（線上模式） | `$PROMETHEUS_URL` |
-| `--input <FILE>` | Alertmanager JSON 檔案（離線模式） | — |
+| `-i, --input <FILE>` | Alertmanager JSON 檔案（離線模式） | — |
 | `--window <DURATION>` | 時間窗口大小（Prometheus duration，如 `5m`）。⚠️ 純數字**解不出來**（`10` → `None`），必須帶單位 | `5m` |
 | `--lookback <DURATION>` | 回溯時間範圍 | `24h` |
 | `--min-score <FLOAT>` | 最低關聯分數閾值 | `0.3` |
@@ -1102,6 +1136,10 @@ da-tools drift-detect --dirs <DIR1>,<DIR2>[,<DIR3>...] [--labels <L1>,<L2>,...] 
 | `--json` | JSON 輸出 | — |
 | `--markdown` | Markdown 報告輸出 | — |
 | `--ci` | CI 模式（有非預期漂移時 exit 1） | — |
+| `--mode <MODE>` | `configmap`：比對多個目錄（`--dirs` 至少 2 個）；`operator`：比對一個本地目錄與叢集內的 PrometheusRule CRD（`--dirs` 恰好 1 個） | `configmap` |
+| `--kubeconfig <FILE>` | kubeconfig 路徑（僅 operator 模式） | — |
+| `--context <NAME>` | Kubernetes context 名稱（僅 operator 模式） | — |
+| `--namespace <NS>` | 監控 namespace（僅 operator 模式） | `monitoring` |
 
 **範例**
 
@@ -1195,6 +1233,14 @@ da-tools config-history --config-dir <PATH> <action>
 | `show` | 顯示快照詳情 | `<id>` |
 | `diff` | 比較兩個快照 | `<id_a> <id_b>` |
 
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir <PATH>` | conf.d 目錄（必填，寫在子命令之前） | （無） |
+| `-m, --message <TEXT>` | `snapshot`：快照訊息 | （空） |
+| `--limit <N>` | `log`：只顯示最後 N 筆（`0` 等於全部） | （全部） |
+
 **範例**
 
 ```bash
@@ -1235,6 +1281,10 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
 | `--dry-run` | 顯示會產生的檔案但不寫入 | — |
 | `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ 自有檔若還宣告了這次沒要求的租戶，`--force` 同樣拒絕（見上方）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：可能已由你其他檔案宣告的租戶／其他拼法的 defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明） | — |
+| `-o, --output-dir <DIR>` | 輸出根目錄 | `.`（目前目錄） |
+| `--namespace <NS>` | Kubernetes 監控 namespace | `monitoring` |
+| `--da-tools-image <IMAGE>` | 產生的 CI pipeline 與 pre-commit 設定使用的 da-tools 映像；給空字串結束碼 2 | 執行這次 init 的 da-tools 版本的映像 |
+| `--config-source <SOURCE>` | 配置來源：只支援 `configmap`；`git`（GitOps Native Mode）暫不支援，給了結束碼 2（[#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349)） | `configmap` |
 
 **範例**
 
@@ -1264,6 +1314,18 @@ da-tools gitops-check <subcommand> [options]
 | `repo` | 驗證 Git 倉庫可達性與分支存在 | `--url <git-url> [--branch main]` |
 | `local` | 驗證本地 clone 的 conf.d/ 結構 | `--dir <path>` |
 | `sidecar` | 檢查 K8s git-sync sidecar 部署就緒度 | `[--namespace monitoring]` |
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--url <GIT-URL>` | `repo`：Git 倉庫 URL（必填） | （無） |
+| `--branch <BRANCH>` | `repo`：要檢查的分支 | `main` |
+| `--path <PATH>` | `repo`：配置在倉庫內的路徑 | `configs/` |
+| `--dir <PATH>` | `local`：本地配置目錄（必填） | （無） |
+| `--namespace <NS>` | `sidecar`：K8s namespace | `monitoring` |
+| `--json` | 三個子命令都接受：JSON 輸出 | false |
+| `--ci` | 三個子命令都接受：只有 fail 結束碼 1，warning 結束碼 0（不帶時 warning 也是 1） | false |
 
 **範例**
 
@@ -1685,6 +1747,11 @@ da-tools operator-check [options]
 |------|------|--------|
 | `--namespace <NS>` | K8s namespace 探索 | `monitoring`（自動探索） |
 | `--json` | JSON 格式輸出 | false |
+| `--rule-packs-dir <DIR>` | Rule Pack YAML 目錄；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 `rule-pack-*.yaml` 數比 | `rule-packs/` |
+| `--config-dir <DIR>` | 租戶配置目錄。⚠️ 目前沒有任何檢查讀它：接受，但不影響結果 | `conf.d/` |
+| `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過 | （無） |
+| `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
+| `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 不可用一律 2） | false |
 
 **檢查項目**
 
@@ -1825,7 +1892,7 @@ da-tools generate-routes --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--output <FILE>` | 輸出至檔案。**只有 render（預設）與 `--output-configmap` 會讀它，且不能配 `--dry-run`**；配 `--validate` / `--apply` / `--dry-run` 是呼叫端錯誤（結束碼 2），不會靜默不寫（#1650） | stdout |
+| `-o, --output <FILE>` | 輸出至檔案。**只有 render（預設）與 `--output-configmap` 會讀它，且不能配 `--dry-run`**；配 `--validate` / `--apply` / `--dry-run` 是呼叫端錯誤（結束碼 2），不會靜默不寫（#1650） | stdout |
 | `--output-configmap` | 產出完整 Kubernetes ConfigMap YAML | false |
 | `--base-config <FILE>` | 自訂 Alertmanager 基礎配置。**僅 `--output-configmap` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略 | 內建預設（**僅在未提供本旗標時**；供了但讀不到／不是合法 YAML／頂層不是 mapping 一律結束碼 2，不會退回預設） |
 | `--dry-run` | 僅輸出預覽，不寫入檔案。**`--validate` / `--apply` 不讀它**（結束碼 2） | false |
@@ -1971,7 +2038,26 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹；判定結束（含被終止）後刪除 |
 | `--policy <FILE>` | 部署端 policy 檔（`allowed_domains`、`min_generator_version`），每次判定都重讀 |
 | `--warm-ref <ref>` | 啟動時預熱的 commit（預設 `HEAD`；空字串關閉）。解析不到只記 log 與 metric，不影響可用性 |
-| 其他 | 判定期限上限、保留給呼叫端的時間、子程序的 `RLIMIT_DATA`、快取上限、佇列長度、同時連線數、讀取中與排隊中的 body 總量、單一請求大小與寫入筆數等，預設值見 `--help` |
+
+**其他參數**
+
+| 參數 | 用途 | 預設 |
+|------|------|------|
+| `--max-judgement-seconds <SEC>` | 一筆請求的時間上限，排隊時間也算在內 | `20.0` |
+| `--deadline-reserve-seconds <SEC>` | 從呼叫端的 `deadline_ms` 裡留給呼叫端自己的時間 | `5.0` |
+| `--memory-limit-bytes <BYTES>` | 每個判定子程序的 `RLIMIT_DATA` | `201326592` |
+| `--cache-max-bytes <BYTES>` | 不在最新 base 樹裡的內容可保留的解析快取量，最久沒用的先丟 | `33554432` |
+| `--max-cache-transfer-bytes <BYTES>` | 一次判定可交回的新解析快取量，超過的丟掉 | `67108864` |
+| `--max-queue <N>` | 可排隊等待的請求數；再多的以 `busy` 拒收 | `32` |
+| `--max-connections <N>` | 同時服務的用戶端連線數；超過時新連線回 `busy` 後關閉 | `40` |
+| `--max-body-bytes <BYTES>` | 單一請求 body 的上限；超過回 413 | `4194304` |
+| `--max-inflight-body-bytes <BYTES>` | 讀取中與排隊中的 body 總量（讀 body 前依 `Content-Length` 預留）；超過時該請求回 `busy`。小於 `--max-body-bytes` 時拒絕啟動 | `4194304` |
+| `--read-timeout-seconds <SEC>` | 收一個請求 header 的時間，body 另給同樣的時間 | `10.0` |
+| `--max-result-bytes <BYTES>` | 判定子程序可送回的結果大小上限 | `16777216` |
+| `--max-writes <N>` | 單一請求的寫入筆數上限；超過回 400 | `10000` |
+| `--warm-seconds <SEC>` | 一次預熱的時間上限；有請求進來時預熱立刻結束 | `300.0` |
+| `--git <PATH>` | git 執行檔 | `git` |
+| `--da-guard-binary <PATH>` | 用來回報版本的 da-guard | `$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard` |
 
 **端點**
 
@@ -2017,6 +2103,26 @@ da-tools scaffold [options]
 | `--db <LIST>` | 逗號分隔 DB 類型清單 | （互動詢問） |
 | `--namespaces <LIST>` | 逗號分隔 K8s namespace 清單 | （互動詢問） |
 | `-o, --output-dir <DIR>` | 輸出目錄 | `scaffold_output` |
+| `--catalog` | 列出支援的 exporter 後結束 | false |
+| `--generate-profile <NAME>` | 改為產生 `_profiles.yaml` 骨架，profile 名為此值；需要 `--db` | （無） |
+| `--tier <TIER>` | `--generate-profile` 的門檻層級：`prod` 或 `staging` | `prod` |
+| `--from-onboard <FILE>` | 讀 `onboard-hints.json`，依 onboard 結果為每個租戶產生配置 | （無） |
+| `--profile <NAME>` | 租戶 YAML 引用這個 profile（`_profile`），只寫明確覆寫的值 | （無） |
+| `--topology <TOPOLOGY>` | 租戶對應拓撲（ADR-006）：`1:1`、`N:1`（需 `--namespaces`）、`1:N`（產生 mapping 提示，需 `--mapping-instance` 與 `--mapping-filter`）；缺了只印 WARN | `1:1` |
+| `--mapping-instance <NAME>` | `1:N` 拓撲的來源 instance 名稱（如 `oracle-prod-01`） | （無） |
+| `--mapping-filter <PROMQL>` | `1:N` 拓撲的 PromQL 篩選（如 `schema=~"app_a_.*"`） | （無） |
+| `--silent-mode <MODE>` | 寫入 `_silent_mode`：告警照常觸發（TSDB 有紀錄）但不發通知；`warning`／`critical`／`all`，`disable` 等於不寫 | （不寫） |
+| `--severity-dedup <MODE>` | `disable` 時寫入 `_severity_dedup: disable`；`enable`（critical 觸發時抑制 warning 通知）是預設，不寫 | `enable` |
+| `--routing-receiver <ADDR>` | 告警路由 receiver 的位址（依 `--routing-receiver-type` 是 URL 或 email 清單）；給了才寫 `_routing` | （無） |
+| `--routing-receiver-type <TYPE>` | receiver 類型：`webhook`／`email`／`slack`／`teams`／`rocketchat`／`pagerduty` | `webhook` |
+| `--routing-smarthost <HOST:PORT>` | email receiver 的 SMTP smarthost（如 `smtp.example.com:587`） | （無；email receiver 用 `localhost:25`） |
+| `--routing-group-by <LIST>` | 逗號分隔的 `group_by` label | （無；寫 `_routing` 時用 `alertname,tenant`） |
+| `--routing-group-wait <DURATION>` | `group_wait`（範圍 5s–5m） | （無；寫 `_routing` 時用 `30s`） |
+| `--routing-group-interval <DURATION>` | `group_interval`（範圍 5s–5m） | （無；寫 `_routing` 時用 `5m`） |
+| `--routing-repeat-interval <DURATION>` | `repeat_interval`（範圍 1m–72h） | （無；寫 `_routing` 時用 `4h`） |
+| `--routing-profile <NAME>` | 寫入 `_routing_profile` 引用（ADR-007），如 `team-sre-apac` | （無） |
+
+`--profile` 起的租戶設定旗標（到 `--routing-profile` 為止）只在非互動模式（`--tenant` 加 `--db`）套用；互動模式與 `--from-onboard` 不讀它們。
 
 **支援的 DB 類型**
 
@@ -2080,6 +2186,8 @@ da-tools migrate <input_file> [options]
 | `--interactive` | 遇到不確定時詢問使用者 | false |
 | `--no-prefix` | 停用 custom_ 前綴（不建議） | false |
 | `--no-ast` | 強制使用舊版 regex 引擎 | false |
+| `--prefix <PREFIX>` | 自訂指標前綴 | `custom_` |
+| `--no-dictionary` | 停用啟發式字典比對 | false |
 
 **輸出**
 
@@ -2450,6 +2558,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | 參數 | 說明 |
 |------|------|
 | `--tenant-config <PATH>` | 單一租戶配置檔案（整個目錄用 `--config-dir <DIR>`）。⚠️ 不要縮寫成 `--config`：argparse 會把它當成 `--config-dir`，對著一個檔案路徑回答「沒有 custom_ 指標」、rc 0 |
+| `--config-dir <DIR>` | 整個租戶配置目錄（與 `--tenant-config` 二擇一）；讀的是 exporter 實際發出的閾值，見下方說明 |
 
 **選項**
 
