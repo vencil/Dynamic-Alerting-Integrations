@@ -129,8 +129,17 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 | `POST /api/v1/groups/{id}/batch` | 回應列出 group 的全部成員 | `results[]` 只列 caller 可讀的成員，`summary` 也只算這些（[#1530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1530)；同步、非同步、PR 模式皆同）；caller 看不到的 group 回 404 |
 | `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 過濾 `Results[]` 為 caller 可讀的子集，`summary` 依過濾後的結果重算；已有結果但一筆都不可讀時回 403（還沒有結果的 task 照回 200）|
 | `GET /api/v1/prs` | 回傳所有 pending PR/MR | bulk 模式：自動過濾不可讀租戶；`?tenant=<id>` 模式：不可讀回**空列表**（不 403，避免 existence oracle）|
+| `PUT /api/v1/tenants/{id}` | 只要求對 `{id}` 有寫入權限，body 整檔寫入 `{id}` 所在的檔；同檔其他租戶的段落可被刪掉或改寫 | body **宣告**的每個租戶都要有寫入權限，只替換這些段落，其餘原樣保留（**breaking**，[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)，見下方「共用檔的 `PUT`」）|
 
 **group 可見性**：`GET /groups`、`GET /groups/{id}`、`DELETE /groups/{id}`、`POST /groups/{id}/batch` 共用同一個判斷——group 沒有成員，或 caller 至少能讀一個成員，才算看得到。看不到的 group 一律回與「不存在」逐位元組相同的 404，而且在讀 body 之前就回，所以任何一個端點都不會證實它存在。沒有成員的 group 對所有人可見（它沒有成員可洩漏；先前它對所有人都是 404，連平台管理員也刪不掉）。⚠️ 已知限制：`PUT` 是 upsert，對看不到的既有 group 回 403、對新 id 回 200，這個差異仍會透露 group id 已被使用；要消除得把 group id 依 org 分區，不在本次範圍。
+
+**共用檔的 `PUT`**（[#3062](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3062)，breaking）：conf.d 一份檔可以宣告多個租戶，而 `PUT /tenants/{id}` 寫的是 `{id}` 所在的那份檔。
+
+- **body 宣告哪些租戶**：以 `tenants:` 下的 key **解碼後**的租戶 id 為準：`db-b`、`"db-b"`、`'db-b'`、`!!str db-b`、指向 `db-b` 純量的 alias key、`!!binary` 都是同一個 id。body 的 `tenants:` 層有 merge key（`<<`），或有解碼不成字串、重複宣告同一 id 的 key，回 400。
+- **授權**：body 宣告的每個租戶都要過與 `{id}` 相同的寫入閘門（RBAC 寫入權限加 org scope，磁碟上的 metadata 與 body 提議的 metadata 都判）。有任何一個不過就回 403，訊息是固定文字，不點名、不透露是哪個租戶或它是否存在，不寫入。PR 模式在最新 base 上重判的只有 `{id}` 本身；其他被宣告的租戶依 pod 本機的設定判。
+- **拼接**：寫入時在寫入鎖內讀出現在的檔（PR 模式是切分支的最新 base 上那份），把 body 宣告的每個段落以 YAML 節點整段替換進 `tenants:`（已存在的就地替換，沒有的附加在後面；新增其他租戶的段落仍照舊被拒）。body 沒宣告的段落、`tenants` 以外的 root key、註解與其後的 document 都原樣保留。**省略某段不會刪掉它**；API 沒有刪除租戶的端點，要移除段落請在 git 改。檔內只有被宣告的段落時直接寫入 body 本身（逐位元組）；否則整檔重新輸出，縮排統一成 2 格，註解保留。`X-DA-Base-Hash` 先判，再拼接，再驗證；驗證判的是 body。
+- **保留不住就拒收**：拼接後把原檔與結果都解析成節點比對，被宣告段落以外的每個節點寫出來都要相同（判法同下方 §3.9 的「部分更新不得改到沒編輯的內容」，替換單位是整個 `tenants.<宣告的 id>`），整份檔的 anchor 依序相同，別處的 alias 所指的內容也要相同；被宣告的段落解碼後要等於 body 的。例如別的租戶以 alias 引用被替換段落裡的 anchor，而 body 改了它的值、拿掉或重複定義了那個 anchor；或檔案的 `tenants:` 層或 root 有 `<<`。回 409 `TENANT_CONFIG_NOT_LOADABLE`，`config_error` 為 `not_round_trippable`，訊息只在呼叫者讀得到的段落內寫出差異位置，其他位置只說「另一處」，不寫入。
+- **讀不出租戶的檔**：現在的檔不能解析、`tenants:` 不是 mapping、有解碼不成字串或重複的 key 時無法拼接，沿用 #2405：只有對所有租戶都有寫入權限的人能以 body 整檔取代，其他人回 400。
 
 ⚠️ 這張表描述的是 handler 層。這些端點在路由層還有一道閘門：先要求對 `*` 有對應權限，也就是規則裡要有 `tenants: ["*"]`（可帶 org／metadata 範圍）。只有單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者一律 403 `insufficient permissions for tenant *`，到不了上面的過濾。這個 403 不帶租戶 id，所以不構成 existence oracle。是否刻意見 [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)。
 

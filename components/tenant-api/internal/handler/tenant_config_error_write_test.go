@@ -366,8 +366,11 @@ var repairCallers = []struct {
 // file (400 "cannot read current custom alerts") and could only be fixed in
 // git. Replacing such a file now needs write permission on ALL tenants (an
 // unrestricted "*" rule); any other caller is refused as before, file
-// untouched. A file the guard can parse (the non-UTF-8 sibling) is replaceable
-// by any caller with write on the tenant, as it was. The body here carries no
+// untouched. A file the guard can parse (the non-UTF-8 sibling) is written by
+// any caller with write on the tenant — but since #3062 a PUT replaces only
+// the sections its body declares, so the sibling section is KEPT (for every
+// caller) and the file is still one GET flags: such a section is repaired in
+// git, as nothing in the API removes a section. The body here carries no
 // end-of-life recipe; that the guard still refuses one over such a file is
 // pinned in package gitops (TestEolGuard_UnparseableBaseForbidsEveryEolRecipe)
 // — the embedded recipe status map has no end-of-life recipe to send through
@@ -388,6 +391,8 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 		{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"70\"\n", "invalid_config", true},
 	}
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
+	// #3062: the sibling the body does not declare, kept.
+	const siblingKept = "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, c := range files {
 		for _, caller := range repairCallers {
 			t.Run(c.name+"/"+caller.name, func(t *testing.T) {
@@ -431,11 +436,15 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 				if w.Code != http.StatusOK {
 					t.Fatalf("PUT status = %d, want 200; body: %s", w.Code, w.Body.String())
 				}
-				if after != repaired {
-					t.Errorf("file after PUT:\n%s\nwant:\n%s", after, repaired)
+				want, wantConfigError := repaired, ""
+				if c.parseable {
+					want, wantConfigError = siblingKept, c.reason
 				}
-				if got := getConfigError(); got != "" {
-					t.Errorf("after: GET config_error = %q, want none", got)
+				if after != want {
+					t.Errorf("file after PUT:\n%s\nwant:\n%s", after, want)
+				}
+				if got := getConfigError(); got != wantConfigError {
+					t.Errorf("after: GET config_error = %q, want %q", got, wantConfigError)
 				}
 			})
 		}
@@ -525,9 +534,14 @@ func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 // still refused as adding it. The gate is deliberately not relaxed (it fails
 // closed); the documented way to keep the sections is fixing the file in git.
 //
+// #3062: a body declaring the co-resident section is first judged for it —
+// a caller scoped to the tenant may not write it, so that body is a 403
+// (whatever the file); the platform writer passes and meets the gate above.
+//
 // Control: a shared file that is invalid_config only because it also declares
-// a non-UTF-8 tenant id still parses for that gate, so the co-resident section
-// IS grandfathered and survives for a caller scoped to the tenant.
+// a non-UTF-8 tenant id still parses, so a caller scoped to the tenant can
+// write its own section: the co-resident section it does not declare and the
+// non-UTF-8 one are both kept.
 func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	t.Parallel()
 	const id, other = "svc-alpha", "svc-beta"
@@ -544,9 +558,16 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 	}{
 		{"unparseable_own_section_only_scoped_is_refused", unparseable, ownOnly, "ops", "malformed_yaml", http.StatusBadRequest, "write permission on all tenants"},
 		{"unparseable_own_section_only_platform_writer_replaces", unparseable, ownOnly, "platform", "malformed_yaml", http.StatusOK, ""},
-		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "ops", "malformed_yaml", http.StatusBadRequest, "adds tenant section(s) [" + other + "]"},
+		{"unparseable_with_co_resident_is_refused", unparseable, withOther, "ops", "malformed_yaml", http.StatusForbidden, "declares a tenant section you may not write"},
 		{"unparseable_with_co_resident_platform_writer_is_refused", unparseable, withOther, "platform", "malformed_yaml", http.StatusBadRequest, "adds tenant section(s) [" + other + "]"},
-		{"non_utf8_with_co_resident_keeps_it", nonUTF8, withOther, "ops", "invalid_config", http.StatusOK, ""},
+		{"non_utf8_with_co_resident_keeps_it", nonUTF8, ownOnly, "ops", "invalid_config", http.StatusOK, ""},
+		{"non_utf8_declaring_co_resident_scoped_is_refused", nonUTF8, withOther, "ops", "invalid_config", http.StatusForbidden, "declares a tenant section you may not write"},
+	}
+	// #3062: what a 200 leaves when the base keeps sections the body does
+	// not declare (else the file is exactly the body).
+	kept := map[string]string{
+		"non_utf8_with_co_resident_keeps_it": "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id +
+			":\n    mysql_connections: \"75\"\n  " + other + ":\n    mysql_connections: \"60\"\n",
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -575,8 +596,12 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 			}
 			after := mustRead(t, filepath.Join(dir, id+".yaml"))
 			if c.wantCode == http.StatusOK {
-				if after != c.body {
-					t.Errorf("file after PUT = %q, want exactly the body %q", after, c.body)
+				want, ok := kept[c.name]
+				if !ok {
+					want = c.body
+				}
+				if after != want {
+					t.Errorf("file after PUT = %q, want %q", after, want)
 				}
 				return
 			}

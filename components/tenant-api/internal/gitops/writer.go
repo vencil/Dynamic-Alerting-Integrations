@@ -89,6 +89,23 @@ const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be 
 	"(an RBAC rule with tenants: [\"*\"] and no org-scope, environments or domains); " +
 	"otherwise repair the file in git"
 
+// SpliceFunc computes what a whole-file PUT writes (#3062): the body's
+// declared tenant sections spliced into base, the tenant file's CURRENT
+// bytes (nil when it does not exist). The writer calls it under its lock, on
+// the very bytes the write replaces — in PR mode those on the fresh base —
+// after the X-DA-Base-Hash precondition and before validation. It returns
+// ErrSpliceBaseUnparseable (errors.Is) when base cannot be spliced into:
+// the writer then writes the body whole, which needs the #2405 bit
+// (WithReplaceUnparseable). Any other error refuses the write unchanged.
+type SpliceFunc func(base []byte) (string, error)
+
+// ErrSpliceBaseUnparseable is a SpliceFunc's answer for a current file whose
+// declared tenants cannot be read (it does not parse, its `tenants:` is not
+// a mapping, a key does not decode to a tenant id, an id is declared twice):
+// nothing in it can be kept apart from the rest, so only a caller with write
+// permission on all tenants may replace it whole (#2405).
+var ErrSpliceBaseUnparseable = errors.New("the current tenant file cannot be parsed")
+
 // replaceUnparseableKey is the context key WithReplaceUnparseable sets.
 type replaceUnparseableKey struct{}
 
@@ -850,7 +867,45 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 // nil — handlers surface them in the 200 response so the author sees the
 // migration signal on the very write that succeeded with an old spelling.
 func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) (notices []string, err error) {
-	return w.write(ctx, tenantID, authorEmail, yamlContent, "")
+	return w.write(ctx, tenantID, authorEmail, yamlContent, "", nil)
+}
+
+// WriteSpliced is Write for PUT /tenants/{id} (#3062): the body is validated
+// as Write validates it, but what is committed is splice's result on the
+// tenant file as read under the lock — the body's declared sections in the
+// current file, everything else kept. See SpliceFunc.
+func (w *Writer) WriteSpliced(ctx context.Context, tenantID, authorEmail, yamlContent string, splice SpliceFunc) (notices []string, err error) {
+	return w.write(ctx, tenantID, authorEmail, yamlContent, "", splice)
+}
+
+// WriteSplicedIfUnchanged is WriteSpliced with WriteIfUnchanged's
+// precondition, checked first, on the bytes splice then reads.
+func (w *Writer) WriteSplicedIfUnchanged(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string, splice SpliceFunc) (notices []string, err error) {
+	if baseHash == "" {
+		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
+	}
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash, splice)
+}
+
+// spliceBase runs splice on base (the tenant file as read under the lock,
+// nil when absent) and returns what the write commits. A base splice cannot
+// read is replaced by the body whole only with the #2405 bit; without it the
+// write is refused with the #2405 text, whatever else the body says.
+func spliceBase(ctx context.Context, base []byte, yamlContent string, splice SpliceFunc) (string, error) {
+	if splice == nil {
+		return yamlContent, nil
+	}
+	content, err := splice(base)
+	if errors.Is(err, ErrSpliceBaseUnparseable) {
+		if !replaceUnparseableAllowed(ctx) {
+			return "", fmt.Errorf("%w: %s", ErrValidation, MsgUnparseableBaseNeedsPlatformWrite)
+		}
+		return yamlContent, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return content, nil
 }
 
 // WriteIfUnchanged is Write with an optimistic-concurrency precondition:
@@ -876,12 +931,13 @@ func (w *Writer) WriteIfUnchanged(ctx context.Context, tenantID, authorEmail, ya
 	if baseHash == "" {
 		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
 	}
-	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash)
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash, nil)
 }
 
-// write is the shared body of Write / WriteIfUnchanged. baseHash is empty for
-// an unconditional write.
-func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
+// write is the shared body of Write / WriteIfUnchanged / WriteSpliced*.
+// baseHash is empty for an unconditional write; splice is nil for a write
+// that commits the body as it is.
+func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string, splice SpliceFunc) (notices []string, err error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -954,22 +1010,38 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 	}
 
+	// #3062: what is committed — the body's declared sections spliced into
+	// the file as it is now, under the lock (after the precondition, so a
+	// stale base hears ErrPrecondition first). A read error leaves existing
+	// nil: never a no-op below.
+	existing, rerr := readTenantFile(filePath)
+	content := yamlContent
+	if splice != nil {
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
+		}
+		if content, err = spliceBase(ctx, existing, yamlContent, splice); err != nil {
+			return nil, err
+		}
+	}
+
+	// The body is what is judged: the sections it does not declare are the
+	// file's own, kept byte for byte by splice's verification, and are not
+	// this write's to refuse.
 	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
 
 	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
-	// A read error leaves existing nil: never a no-op.
-	existing, _ := readTenantFile(filePath)
-	if w.unchangedFile(filePath, existing, yamlContent) {
+	if w.unchangedFile(filePath, existing, content) {
 		return notices, nil
 	}
 
-	// #2903 (ADR-036 §4): the generator judges HEAD with this body written
+	// #2903 (ADR-036 §4): the generator judges HEAD with this content written
 	// over the file, still under the lock — nothing is written before it
 	// passes.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(yamlContent))
+	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
 	if err != nil {
 		return nil, err
 	}
@@ -978,7 +1050,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		filePath,
 		tenantID,
 		authorEmail,
-		[]byte(yamlContent),
+		[]byte(content),
 		judgedBase,
 	); err != nil {
 		return nil, err

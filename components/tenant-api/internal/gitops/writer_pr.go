@@ -141,6 +141,14 @@ type PRBaseCheck func(configDir string) error
 // authoritative check here — the metadata write scope (#2857) — because its
 // pre-check reads the pod's local tree, which may lag the base. A nil check is WritePR.
 func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
+	return w.WritePRSpliced(ctx, tenantID, authorEmail, yamlContent, check, nil)
+}
+
+// WritePRSpliced is WritePRChecked for PUT /tenants/{id} (#3062): what the
+// feature branch commits is splice's result on the tenant file as the fresh
+// base holds it (prResolveOnBase), the body judged as WritePRChecked judges
+// it. A nil splice is WritePRChecked.
+func (w *Writer) WritePRSpliced(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck, splice SpliceFunc) (*PRWriteResult, error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -211,7 +219,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// authoritative validate — all on the fresh base as git holds it
 	// (prResolveOnBase, #2972). filePath is the file in the serving tree,
 	// which is where Step 4 writes it.
-	filePath, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check)
+	filePath, content, notices, err := w.prResolveOnBase(ctx, branchPoint, tenantID, yamlContent, check, splice)
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
@@ -226,14 +234,14 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
 	// judges the branch point — the feature branch's HEAD, nothing committed
 	// on it yet — with the body written over the file.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(yamlContent))
+	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
 	}
 	var validated []byte
 	if judgedBase != "" {
-		validated = []byte(yamlContent)
+		validated = []byte(content)
 	}
 
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
@@ -241,7 +249,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// direct write (writeFileAtomic): a tenant file that is a symlink —
 	// dangling, or pointing outside conf.d — becomes a regular file, and
 	// nothing is written where it pointed (#2939, ADR-036 §4's repair path).
-	if err := w.writeTenant(filePath, []byte(yamlContent), 0644); err != nil {
+	if err := w.writeTenant(filePath, []byte(content), 0644); err != nil {
 		// Rollback: force back to a clean base (the file we just wrote is now a
 		// dirty tracked change) + drop the branch.
 		w.abortFeatureBranch(base, branchName)
@@ -339,7 +347,12 @@ func (w *Writer) openFreshBase(rev, branch string) (*stagingTree, error) {
 // tenant's file in the serving tree — the same conf.d-relative name as on
 // the base, which the feature branch carries — and the authoritative
 // validate's notices. Caller holds w.mu and drops the branch on an error.
-func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck) (filePath string, notices []string, err error) {
+//
+// content is what Step 4 writes: yamlContent, or splice's result on the
+// tenant file as the fresh base holds it (#3062) — the same commit the
+// feature branch is cut from, so the bytes spliced into are the bytes the
+// branch replaces.
+func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck, splice SpliceFunc) (filePath, content string, notices []string, err error) {
 	st, err := w.openFreshBase(branchPoint, "")
 	if err != nil {
 		// A conf.d that cannot be reached is the walk failing to run, which
@@ -349,9 +362,9 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 		// and the handlers map ErrTenantTreeScan to a 500 before they look
 		// at ErrWriteOverloaded (writeWriteFlowError).
 		if _, serr := os.Stat(w.configDir); serr != nil {
-			return "", nil, fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
+			return "", "", nil, fmt.Errorf("%w: tenant %s: %w", ErrTenantTreeScan, tenantID, err)
 		}
-		return "", nil, err
+		return "", "", nil, err
 	}
 	defer w.closeStaging(st)
 
@@ -366,13 +379,13 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	// lands (#1718). WritePRBatch resolves on the same tree, per op.
 	basePath, err := w.resolveTenantFilePath(st.configDir, tenantID, w.stagingScan(st))
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 
 	// Step 3b': the caller's check, on the fresh base (WritePRChecked).
 	if check != nil {
 		if err := check(st.configDir); err != nil {
-			return "", nil, err
+			return "", "", nil, err
 		}
 	}
 
@@ -401,11 +414,24 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	// notices come from HERE, not Step 1, for the same reason the batch path
 	// discards its pre-flight's: they describe the body as merged against the
 	// base it lands on, and collecting them twice would duplicate them.
+	//
+	// #3062: the splice first, on the base's tenant file, as WriteSpliced
+	// orders it (the precondition has no PR-mode form).
+	content = yamlContent
+	if splice != nil {
+		existing, rerr := readTenantFile(basePath)
+		if rerr != nil && !os.IsNotExist(rerr) {
+			return "", "", nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
+		}
+		if content, err = spliceBase(ctx, existing, yamlContent, splice); err != nil {
+			return "", "", nil, err
+		}
+	}
 	errs, notices := validateReplacing(st.configDir, tenantID, basePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	if len(errs) > 0 {
-		return "", nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
+		return "", "", nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
-	return filepath.Join(w.configDir, filepath.FromSlash(confRelKey(st.configDir, basePath))), notices, nil
+	return filepath.Join(w.configDir, filepath.FromSlash(confRelKey(st.configDir, basePath))), content, notices, nil
 }
 
 // refuseUntrackedNonRegular refuses a PR-mode write whose tenant file, in

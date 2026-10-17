@@ -806,6 +806,8 @@ func TestOrgWriteEnforce_StarSemantics_ViewsWriteUnchanged(t *testing.T) {
 // neither the tenant nor its keys: it says only "another place in the
 // file" (the details go to the log). A tenant the caller may read is named.
 // The rule is tenantNamesFor, the one describePath and disclosedFindings use.
+// #3062: a PUT whose body declares the other tenant is refused before any
+// validation while the caller may not write it (a fixed 403, naming no one).
 func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 	t.Parallel()
 	const flat = "tenants:\n" +
@@ -836,6 +838,10 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 		// refused before validation, TENANT_FILE_WITHHELD (#3050: the edit
 		// would be based on what GET withholds). 0: answered as code.
 		withheldCode int
+		// undeclarableCode: while the other tenant cannot be written, a body
+		// declaring it is refused before validation (#3062: a PUT may only
+		// declare tenants the caller may write). 0: answered as code.
+		undeclarableCode int
 	}{
 		{"batch PATCH", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := httptest.NewRequest("POST", "/api/v1/tenants/batch", batchBody(t))
@@ -843,13 +849,13 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(BatchTenants(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusUnprocessableEntity, false, 0},
+		}, http.StatusUnprocessableEntity, false, 0, 0},
 		{"PUT", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(flat))
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(PutTenant(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusBadRequest, false, 0},
+		}, http.StatusBadRequest, false, 0, http.StatusForbidden},
 		{"custom alerts", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			b, err := json.Marshal(PutCustomAlertsRequest{CustomAlerts: &[]map[string]any{}, BaseHash: cfg.ComputeSourceHash([]byte(flat))})
 			if err != nil {
@@ -860,19 +866,19 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(PutTenantCustomAlerts(f.deps()), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusBadRequest, false, http.StatusUnprocessableEntity},
+		}, http.StatusBadRequest, false, http.StatusUnprocessableEntity, 0},
 		{"dry-run", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+orgEnfTenantIn+"/validate", "id", orgEnfTenantIn, bytes.NewBufferString(flat))
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(ValidateTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusOK, true, 0},
+		}, http.StatusOK, true, 0, 0},
 		{"GET", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("GET", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, nil)
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(GetTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusOK, true, 0},
+		}, http.StatusOK, true, 0, 0},
 	}
 	// answer is the text checked: the whole body, except GET's, whose
 	// raw_yaml is the file itself once the caller may read every tenant in
@@ -897,6 +903,10 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			case c.withheldCode != 0:
 				if w.Code != c.withheldCode || !strings.Contains(body, CodeTenantFileWithheld) {
 					t.Fatalf("status %d (want %d %s): %s", w.Code, c.withheldCode, CodeTenantFileWithheld, body)
+				}
+			case c.undeclarableCode != 0:
+				if w.Code != c.undeclarableCode || !strings.Contains(body, "declares a tenant section you may not write") {
+					t.Fatalf("status %d (want %d, the declared tenant refused): %s", w.Code, c.undeclarableCode, body)
 				}
 			case w.Code != c.code || !strings.Contains(body, "another place in the file"):
 				t.Fatalf("status %d (want %d), want the other tenant said to be another place: %s", w.Code, c.code, body)
@@ -961,6 +971,8 @@ func TestValidationMessagesNameOnlyReadableTenants_PRMode(t *testing.T) {
 		// hidden: what only a reader of orgEnfTenantOut may see; readable:
 		// what that reader is shown in its place.
 		hidden, readable []string
+		// undeclarableCode: as in the direct-mode test (#3062).
+		undeclarableCode int
 	}{
 		{"PUT", flatKeys, func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, bytes.NewBufferString(flatKeys))
@@ -968,7 +980,7 @@ func TestValidationMessagesNameOnlyReadableTenants_PRMode(t *testing.T) {
 			wrapWithRBACMiddleware(PutTenant(prDeps(f)), f.rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
 		}, http.StatusBadRequest,
-			[]string{orgEnfTenantOut, "secret_key_b"}, []string{"tenant=" + orgEnfTenantOut, "secret_key_b"}},
+			[]string{orgEnfTenantOut, "secret_key_b"}, []string{"tenant=" + orgEnfTenantOut, "secret_key_b"}, http.StatusForbidden},
 		{"batch PATCH", flatRoundTrip, func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			b, err := json.Marshal(BatchRequest{Operations: []BatchOperation{
 				{TenantID: orgEnfTenantIn, Patch: map[string]string{"_silent_mode": "warning"}}}})
@@ -981,14 +993,19 @@ func TestValidationMessagesNameOnlyReadableTenants_PRMode(t *testing.T) {
 			wrapWithRBACMiddleware(BatchTenants(prDeps(f)), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
 		}, http.StatusUnprocessableEntity,
-			[]string{orgEnfTenantOut}, []string{"tenants." + orgEnfTenantOut + ".d"}},
+			[]string{orgEnfTenantOut}, []string{"tenants." + orgEnfTenantOut + ".d"}, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			f := newOrgEnfFixture(t, map[string]string{orgEnfTenantIn + ".yaml": c.file})
 			w := c.call(t, f)
 			body := w.Body.String()
-			if w.Code != c.code || !strings.Contains(body, "another place in the file") {
+			switch {
+			case c.undeclarableCode != 0:
+				if w.Code != c.undeclarableCode || !strings.Contains(body, "declares a tenant section you may not write") {
+					t.Fatalf("status %d (want %d, the declared tenant refused): %s", w.Code, c.undeclarableCode, body)
+				}
+			case w.Code != c.code || !strings.Contains(body, "another place in the file"):
 				t.Fatalf("status %d (want %d), want the other tenant said to be another place: %s", w.Code, c.code, body)
 			}
 			for _, h := range c.hidden {
