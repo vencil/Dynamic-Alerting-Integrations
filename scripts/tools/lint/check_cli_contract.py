@@ -11,6 +11,12 @@
   V6  反向：結束碼表列的非零碼，script 沒有任何出口以 AST 解得到它（argparse 的 2 算可達）。
       script 有解不開的出口時整支不判（揭露）。只有未捕捉例外（traceback）會給的 1 沒有出口
       可追，那一列以 ``datools-cmd-ignore: <理由>`` 豁免
+  V7  V3 的反向（#3110）：parser 宣告的每個選項字串（含短旗標、子命令的選項）都要是該命令
+      cli-reference 選項表第一欄的一列；同節的散文、code span、範例都不算。沒有選項表的章節
+      = 每個選項都報。``-h``／``--help`` 與 ``help=argparse.SUPPRESS`` 的選項不要求（後者揭露
+      計數）；entrypoint 會注入的 ``--prometheus`` 只要 parser 自己宣告就照樣要列（注入只是
+      ``$PROMETHEUS_URL`` 的後備）。沒有 ``####`` 章節的命令不判——那是 check_cli_coverage 的事。
+      逃生門只有帳本（沒有列可以掛 ``datools-cmd-ignore``）
   V5  fence 裡的命令交給該 subcommand 真的 ``ArgumentParser.parse_args`` 會失敗（缺必填、多餘的
       位置參數、``choices``／``type=`` 不收、互斥、個數不對）——只在 V0–V2 沒抓到東西時判；
       synopsis 行（``[options]``、``...``）不判；含 placeholder 的命令只判「缺必填」與「多餘位置參數」；
@@ -90,7 +96,7 @@ PORTAL_PLAYGROUND_FILES = ("commands.js", "engine.js")
 PORTAL_REQUIRE_ENV = "CLI_CONTRACT_REQUIRE_NODE"
 _JS_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.S)
 INLINE_IGNORE = "datools-cmd-ignore"
-VERDICTS = ("V0", "V1", "V2", "V3", "V4", "V5", "V6")
+VERDICTS = ("V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7")
 _TICKET_RE = re.compile(r"^#\d+$")
 
 # Tokens the dispatcher itself answers before any script runs.
@@ -180,6 +186,9 @@ class ParserModel(NamedTuple):
     # The live parser the model was read from. V5 hands it the documented
     # argv (``judge_parse``); None for a model built without one.
     parser: argparse.ArgumentParser | None = None
+    # Option strings of actions declared ``help=argparse.SUPPRESS``: parsed,
+    # but the tool itself says they are not public. V7 does not require them.
+    hidden: frozenset[str] = frozenset()
 
 
 class _Captured(Exception):
@@ -205,6 +214,7 @@ def _arity(action: argparse.Action) -> Any:
 
 def _model(parser: argparse.ArgumentParser) -> ParserModel:
     options: set[str] = set()
+    hidden: set[str] = set()
     arity: dict[str, Any] = {}
     positionals: list[tuple[str, Any, tuple[str, ...] | None]] = []
     subparsers: dict[str, ParserModel] | None = None
@@ -219,6 +229,8 @@ def _model(parser: argparse.ArgumentParser) -> ParserModel:
             for opt in action.option_strings:
                 options.add(opt)
                 arity[opt] = _arity(action)
+            if action.help == argparse.SUPPRESS:
+                hidden.update(action.option_strings)
             continue
         if isinstance(action, argparse._SubParsersAction):
             subparsers = {name: _model(sub) for name, sub in action.choices.items()}
@@ -231,7 +243,7 @@ def _model(parser: argparse.ArgumentParser) -> ParserModel:
         else:
             decidable = False
     return ParserModel(frozenset(options), arity, tuple(positionals),
-                       subparsers, slot, parser)
+                       subparsers, slot, parser, frozenset(hidden))
 
 
 def introspect_parsers() -> tuple[dict[str, ParserModel], list[str], list[str],
@@ -1505,6 +1517,9 @@ class ReferenceFacts(NamedTuple):
     sections: set[str]          # commands with a `####` section in this doc
     exit_tables: set[str]       # commands with an exit-code table in this doc
     unmatched_sections: int     # `####` headings that name no command
+    # V7 disclosures, as sets so two reference docs do not double-count
+    no_option_table: set[str] = set()            # sections V7 reported whole
+    suppressed: set[tuple[str, str]] = set()     # (command, hidden option)
 
 
 def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
@@ -1523,6 +1538,8 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
     exit_rows: list[tuple[str, set[int], int, str | None]] = []
     exit_table_line: dict[str, int] = {}
     sections: set[str] = set()
+    section_line: dict[str, int] = {}
+    tabled: dict[str, set[str]] = {}   # command -> flags in its option tables
     unmatched = 0
     option_rows = exit_count = 0
     for number, raw, fence in walk_lines(doc.read_text(encoding="utf-8").splitlines()):
@@ -1535,6 +1552,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
         if heading:
             command = heading.group(1)
             sections.add(command)
+            section_line.setdefault(command, number)
             header = pending = table_header = None
             continue
         if _H4.match(raw) or _SECTION_END.match(raw):
@@ -1594,6 +1612,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
             continue
         # option table row
         flags = _FLAG_IN_CELL.findall(cells[0])
+        tabled.setdefault(command, set()).update(flags)
         model = parsers.get(command)
         if not flags:
             stats["table_rows_positional"] += 1
@@ -1673,8 +1692,48 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                 stats["ignored"] += 1
                 f = f._replace(ignored=reason)
             findings.append(f)
+    # Carrier B, reverse (V7): a declared option no option-table row names
+    no_option_table: set[str] = set()
+    suppressed: set[tuple[str, str]] = set()
+    for cmd in sorted(sections):
+        model = parsers.get(cmd)
+        if model is None:
+            continue
+        required, hidden = _documentable(model)
+        suppressed |= {(cmd, o) for o in hidden}
+        rows = tabled.get(cmd, set())
+        if required and cmd not in tabled:
+            no_option_table.add(cmd)
+        for flag in sorted(required):
+            stats["scored"] += 1
+            if flag in rows:
+                continue
+            findings.append(Finding(
+                "V7", rel, section_line[cmd], cmd, flag,
+                f"`{cmd}` declares `{flag}` but no option-table row of its section "
+                f"names it (#3110) — prose and examples do not count. Add the row "
+                f"(a short alias goes in the same cell: `-o, --output <FILE>`)."
+                + ("" if cmd in tabled else " This section has no option table.")))
     return findings, ReferenceFacts(option_rows, exit_count, sections,
-                                    set(documented), unmatched)
+                                    set(documented), unmatched,
+                                    no_option_table, suppressed)
+
+
+def _documentable(model: ParserModel) -> tuple[frozenset[str], frozenset[str]]:
+    """(option strings V7 requires a row for, hidden ones it does not), over
+    the parser and all its sub-parsers. ``-h``/``--help`` is in neither.
+
+    Hidden is per action: a string ``help=SUPPRESS`` in one sub-parser but
+    public in another is required, so the union of hidden strings is never
+    subtracted from the required set — only what no action makes public is
+    reported as hidden."""
+    required = set(model.options) - model.hidden - _PARSER_GLOBAL
+    hidden = set(model.hidden) - _PARSER_GLOBAL
+    for sub in (model.subparsers or {}).values():
+        r, h = _documentable(sub)
+        required |= r
+        hidden |= h
+    return frozenset(required), frozenset(hidden - required)
 
 
 def _all_options(model: ParserModel) -> frozenset[str]:
@@ -1882,7 +1941,9 @@ _STAT_KEYS = (
     "exit_undecidable_scripts", "commands_without_exit_table", "ignored",
     "unscanned_carrier_files", "portal_commands", "portal_unavailable",
     "cmd_synopsis", "cmd_injected_assumed", "cmd_parse_placeholder_value",
-    "cmd_parse_crashed", "table_cmd_rows", "table_flags_by_union")
+    "cmd_parse_crashed", "table_cmd_rows", "table_flags_by_union",
+    "v7_sections_without_option_table", "v7_suppressed_options",
+    "v7_sections_without_parser")
 
 
 class PortalCommand(NamedTuple):
@@ -2068,6 +2129,9 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     per_doc: dict[str, dict[str, int]] = {}
     no_table: set[str] = set()
     no_script: set[str] = set()
+    v7_no_option_table: set[str] = set()
+    v7_suppressed: set[tuple[str, str]] = set()
+    v7_no_parser: set[str] = set()
     for doc in reference_docs:
         rel = _rel(doc, repo_root)
         found, facts = scan_reference(doc, rel, parsers, injected_for, exit_codes,
@@ -2078,6 +2142,10 @@ def scan(parsers: dict[str, ParserModel] | None = None,
         no_table |= {c for c in facts.sections
                      if c in parsers and c not in facts.exit_tables}
         no_script |= {c for c in facts.exit_tables if c not in exit_codes}
+        v7_no_option_table |= facts.no_option_table
+        v7_suppressed |= facts.suppressed
+        v7_no_parser |= {c for c in facts.sections
+                         if c in command_map and c not in parsers}
         for carrier, label in (("option_rows", "option-table flags"),
                                ("exit_codes", "exit codes")):
             if not per_doc[rel][carrier]:
@@ -2093,6 +2161,9 @@ def scan(parsers: dict[str, ParserModel] | None = None,
     # both reference docs is one script.
     stats["commands_without_exit_table"] = len(no_table)
     stats["exit_tables_no_script"] = len(no_script)
+    stats["v7_sections_without_option_table"] = len(v7_no_option_table)
+    stats["v7_suppressed_options"] = len(v7_suppressed)
+    stats["v7_sections_without_parser"] = len(v7_no_parser)
     stats["exit_undecidable_scripts"] = len(
         {c for c, ec in exit_codes.items() if ec.undecidable})
     if not stats["scored"]:
@@ -2115,7 +2186,9 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"scanned: {s['cmd_segments']} fenced command segments, {s['inline_spans']} "
         f"inline code spans, {s['table_cmd_rows']} command-table rows, {s['cmd_manifest_argvs']} manifest args lists, "
         f"{s['cmd_sh_c_strings']} `sh -c` strings, {s['portal_commands']} CLI "
-        f"Playground command lines"
+        f"Playground command lines, {s['v7_sections_without_option_table']} "
+        f"reference sections with options but no option table (V7 reports "
+        f"each of their options)"
         + (" (⚠️ CLI Playground NOT scored: node not on PATH)"
            if s["portal_unavailable"] else ""),
         f"NOT scored: {s['cmd_no_parser']} commands under a subcommand with no "
@@ -2145,6 +2218,10 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"(V4 judged only on what resolved; V6 not judged), {s['commands_without_exit_table']} "
         f"commands with a parser and a reference section but no exit-code table, "
         f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
+        f"{s['v7_suppressed_options']} `help=SUPPRESS` options V7 does not require "
+        f"a row for, {s['v7_sections_without_parser']} sections of a command with "
+        f"no argparse parser (guard/parser/batch-pr — V7 cannot list their "
+        f"options), "
         f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
         f"(portal JS/JSX, shell scripts) outside this scan set",
         f"NOT scored per action: {s['table_flags_by_union']} command-table flag "
