@@ -266,9 +266,12 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 			// unsyncIndexEntry still only undoes the sync while HEAD does
 			// not hold the written blob (it cannot tell either: then it
 			// undoes it), and the caller treats the write as not committed.
+			// Either way the index can be wrong — a staged revert of a
+			// published commit, or a staged unjudged write — so the operator
+			// has to look: logged as an error, naming the commit.
 			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
-			slog.Warn("gitops: HEAD unreadable after a failed HEAD update; whether the write was published is unknown",
-				"tenant", tenantID, "commit", commit, "error", herr)
+			slog.Error("gitops: HEAD unreadable after a failed HEAD update; whether the write was published is unknown — check HEAD and the index",
+				"tenant", tenantID, "commit", commit, "path", idxPath, "error", herr)
 			return false, fmt.Errorf("advance HEAD: %w", err)
 		}
 	}
