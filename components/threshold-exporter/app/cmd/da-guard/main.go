@@ -307,8 +307,10 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		// #2123: a resolve failure that is one file failing the decode (a
-		// `_defaults.yaml` in the chain, or a tenant file the walker accepted
-		// but the merge rejects) is the author's to fix — exit 3, not 2.
+		// `_defaults.yaml` in the chain) is the author's to fix — exit 3,
+		// not 2. A tenant file no longer gets here: since #3063 the walker
+		// refuses every tenant file the merge's decode would (a ParseFailed
+		// file, also exit 3).
 		var de *config.DecodeError
 		if errors.As(err, &de) {
 			// ScopeEffective returns the files the walk could not read

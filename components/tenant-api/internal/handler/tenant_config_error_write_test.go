@@ -46,14 +46,20 @@ const rejExistingAlert = `    _custom_alerts:
         window: 5m
 `
 
-// rejFiles maps a case name to db-a.yaml content and the config_error GET
-// reports for it ("" = healthy control).
+// rejFiles maps a case name to db-a.yaml content, the config_error GET
+// reports for it ("" = healthy control), and whether GET withholds its
+// source_hash from a caller who may write db-a only (#3050: the file declares
+// a tenant that caller may not read, or its tenants cannot be listed).
 var rejFiles = []struct {
 	name, body, reason string
+	hashWithheld       bool
 }{
-	{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "invalid_config"},
-	{"malformed_yaml", "tenants:\n  db-a: [unclosed\n", "malformed_yaml"},
-	{"healthy", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, ""},
+	{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "invalid_config", true},
+	{"malformed_yaml", "tenants:\n  db-a: [unclosed\n", "malformed_yaml", true},
+	// #3063: an explicit tag its text does not satisfy, in the tenant's own
+	// block. The file declares db-a alone, so its hash is shown.
+	{"mismatched_explicit_tag", "tenants:\n  db-a:\n    mysql_connections: !!int zz\n" + rejExistingAlert, "invalid_config", false},
+	{"healthy", "tenants:\n  db-a:\n    mysql_connections: \"70\"\n" + rejExistingAlert, "", false},
 }
 
 func rejDir(t *testing.T, body string) string {
@@ -101,16 +107,19 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 			if got.ConfigError != c.reason {
 				t.Fatalf("GET config_error = %q, want %q", got.ConfigError, c.reason)
 			}
-			// #3050: neither broken file is shown to this caller — one
-			// declares a tenant the caller may not read, the other's tenants
-			// cannot be listed — so GET gave no source_hash. A client that
-			// has the hash anyway (it is in git) still gets this refusal.
+			// #3050: the non-UTF-8 and malformed files are not shown to this
+			// caller — one declares a tenant the caller may not read, the
+			// other's tenants cannot be listed — so GET gave no source_hash.
+			// A client that has the hash anyway (it is in git) still gets
+			// this refusal.
 			baseHash := got.SourceHash
-			if c.reason != "" {
+			if c.hashWithheld {
 				if baseHash != "" {
 					t.Fatalf("GET source_hash = %q, want it withheld (#3050)", baseHash)
 				}
 				baseHash = cfg.ComputeSourceHash([]byte(c.body))
+			} else if want := cfg.ComputeSourceHash([]byte(c.body)); baseHash != want {
+				t.Fatalf("GET source_hash = %q, want %q", baseHash, want)
 			}
 			list := append(got.CustomAlerts, map[string]any{
 				"recipe": "threshold", "name": "new_y", "metric": "m2", "threshold": "2", "window": "5m",
@@ -386,6 +395,10 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 		{"duplicate_tenants_key", "tenants:\n  " + id + ":\n    mysql_connections: \"70\"\ntenants:\n  " + id + ":\n    mysql_connections: \"71\"\n", "invalid_config", false},
 		{"tenants_list", "tenants:\n  - " + id + "\n", "invalid_config", false},
 		{"non_utf8_sibling", "tenants:\n  !!binary dP8=:\n    mysql_connections: \"10\"\n  " + id + ":\n    mysql_connections: \"70\"\n", "invalid_config", true},
+		// #3063: an explicit tag its own text does not satisfy. The generic
+		// decode the end-of-life guard reads the current file with refuses
+		// it, so it is replaceable only with write on all tenants.
+		{"mismatched_explicit_tag", "tenants:\n  " + id + ":\n    mysql_connections: !!int zz\n", "invalid_config", false},
 	}
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
 	for _, c := range files {

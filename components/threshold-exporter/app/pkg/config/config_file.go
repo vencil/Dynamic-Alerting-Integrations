@@ -54,9 +54,17 @@ import (
 // which entries write `_metadata` as a string (StringMetadataEntries, #2859).
 //
 // ⚠️ A TENANT FILE ASKS ParseTenantFile, NOT THIS. This accepts a tenant id
-// that is not valid UTF-8; that is right for a `_`-prefixed platform file
-// (see ParseTenantFile) and wrong for a file that DECLARES tenants.
+// that is not valid UTF-8, and a document only the typed decode accepts
+// (#3063). A `_`-prefixed platform file keeps both (see ParseTenantFile);
+// a file that DECLARES tenants must not.
 func ParseConfigFile(data []byte) (ThresholdConfig, error) {
+	return parseConfigFile(data, false)
+}
+
+// parseConfigFile is ParseConfigFile; generic additionally requires the
+// generic decode of the same parsed node to succeed (ParseTenantFile, #3063),
+// before the post-decode steps run.
+func parseConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	// Through a yaml.Node rather than straight into cfg: yaml.Unmarshal builds
 	// that node anyway, so the typed decode costs the same, and the node still
@@ -66,6 +74,14 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	err := yaml.Unmarshal(data, &doc)
 	if err == nil && doc.Kind != 0 {
 		err = doc.Decode(&cfg)
+		if err == nil && generic {
+			// The typed decode's error, when there is one, is the message:
+			// this runs only on a node the typed decode accepted.
+			var raw any
+			if err = doc.Decode(&raw); err != nil {
+				return ThresholdConfig{}, err
+			}
+		}
 	}
 	if err == nil {
 		cfg.stringMetadata = stringMetadataEntries(&doc)
@@ -177,9 +193,39 @@ func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
 
 // ParseTenantFile is ParseConfigFile for a file that declares tenants — a
 // non-`_` conf.d file (the walker's parseTenantDecls) or the single config
-// file of file mode — plus one rejection: a tenant id that is not valid
-// UTF-8 (#2266; YAML can spell one with `!!binary`). The error names every
-// such id, sorted, so the message is the same on every run.
+// file of file mode — plus two rejections: a tenant id that is not valid
+// UTF-8 (#2266; YAML can spell one with `!!binary`), and a document whose
+// generic decode fails (#3063). The non-UTF-8 error names every such id,
+// sorted, so the message is the same on every run.
+//
+// ⛔ WHY THE GENERIC DECODE (#3063). The typed decode is not the strictest
+// reader of a tenant file. ScheduledValue's scalar branch keeps the scalar's
+// text and never resolves its tag, and a top-level key ThresholdConfig has no
+// field for is skipped unread, so `mysql_connections: !!int zzleak42` — an
+// explicit tag the text does not satisfy — decoded fine here while every
+// other reader of the same bytes refused it: the merge plane's
+// decodeTenantFile (merged_hash, /effective, da-guard), customalerts.Extract
+// (tenant-api), and the route generator (int() of the text). The file was
+// then served on /metrics with the threshold at its default and nowhere
+// else. The judgement added here is decodeTenantFile's own — the same
+// yaml.Node decoded into `any` — not a third one (a per-scalar tag check
+// would cover the scalar branch and still miss the skipped top-level key).
+// A tag the text satisfies (`!!int 5`, `!!str 5`, `!!float 1.5`,
+// `!!bool true`) decodes generically and is accepted as before.
+//
+// The whole file is rejected, not the one tenant whose block holds the
+// scalar: decodeTenantFile fails for the whole document, so the merge plane
+// has no tenant of it either, and rejecting the file keeps both planes on
+// the same tenant set.
+//
+// Cost: one more decode of the node yaml.Unmarshal already built — no second
+// parse of the bytes. It is paid where a tenant file is judged: the walker
+// (a file whose bytes changed; every file on a cold scan) and tenant-api's
+// tenantConfigError / loadAllTenants — never on the /metrics scrape.
+//
+// ⚠️ A `_` platform file keeps ParseConfigFile's verdict (WHY NOT IN
+// ParseConfigFile below): rejecting one drops every tenant's defaults, a
+// different decision from this one, which #3063 did not take.
 //
 // ⛔ WHY REJECT THE FILE, NOT THE TENANT. A declared tenant id becomes a
 // Prometheus label value, and client_golang's WithLabelValues panics on
@@ -197,7 +243,7 @@ func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
 // platform file instead dropped every tenant's defaults with it (#2266
 // blind review, F1).
 func ParseTenantFile(data []byte) (ThresholdConfig, error) {
-	cfg, err := ParseConfigFile(data)
+	cfg, err := parseConfigFile(data, true)
 	if err != nil {
 		return cfg, err
 	}
@@ -244,7 +290,12 @@ func keepReservedMappings(cfg *ThresholdConfig, data []byte) {
 		Profiles map[string]map[string]any `yaml:"profiles"`
 	}
 	if yaml.Unmarshal(data, &raw) != nil {
-		return // cannot happen: the typed decode of the same bytes succeeded
+		// Cannot happen for a tenant file: ParseTenantFile's generic decode
+		// of the same node succeeded first (#3063). A file read through
+		// ParseConfigFile alone can get here — a scalar in a body whose
+		// explicit tag its text does not satisfy (the typed decode never
+		// resolves it) — and keeps the typed decode, as before.
+		return
 	}
 	keepReservedBodies(cfg.Tenants, raw.Tenants)
 	keepReservedBodies(cfg.Profiles, raw.Profiles)
