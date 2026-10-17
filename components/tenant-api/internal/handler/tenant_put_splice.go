@@ -27,6 +27,14 @@ package handler
 //     alias outside them still resolves to a node written the same, and each
 //     declared section decodes to what the body's does. Anything else is
 //     refused, fail closed;
+//   - for a caller who may not read every tenant of the file (#3050's
+//     fileShown), that value comparison would be an oracle on the hidden
+//     sections, so a declared section — the body's, or the one it replaces —
+//     holding any anchor or alias is refused outright, whatever the values
+//     (swapsAnchorsOrAliases, in spliceDeclaredSections);
+//   - a tenant the body declares besides {id} that another conf.d file also
+//     declares (#2078's duplicate) is refused under the writer's lock, 409
+//     TENANT_DECLARED_ELSEWHERE (gitops: ensureDeclaredSectionsNotElsewhere);
 //   - a file whose sections cannot be told apart (it does not parse, a merge
 //     key or an alias declares what is in `tenants:`) is #2405's: replaced
 //     whole by the body for a caller with write permission on all tenants,
@@ -221,9 +229,13 @@ func declaredTenantsJudge(r *http.Request, d *Deps, tenantID, body string) (gate
 		if id == tenantID {
 			continue
 		}
+		pre, decoded := onDisk(id)
+		if !decoded && !mayWriteUndecodableMetadata(d, p) {
+			return nil, http.StatusForbidden, msgDeclaresUnwritableTenant
+		}
 		orgs := gateOrgs(d, id)
 		g := declaredGate{id: id,
-			pre:  writeGate{scopePairOf(onDisk, id), orgs},
+			pre:  writeGate{pre, orgs},
 			post: writeGate{scopePairOf(proposed, id), orgs}}
 		if !OrgAllowed(d.RBAC, d.TenantOrg, p, id, rbac.PermWrite, fixedScopeMeta(g.pre.pair)) ||
 			!OrgAllowed(d.RBAC, d.TenantOrg, p, id, rbac.PermWrite, fixedScopeMeta(g.post.pair)) {
@@ -261,7 +273,10 @@ var errDeclaredUnwritableOnBase = errors.New("the body declares a tenant the cal
 // proposes it there.
 func declaredOnBase(d *Deps, p *rbac.VerifiedPrincipal, configDir, tenantID, body string, gates []declaredGate) error {
 	for _, g := range gates {
-		pre, judged := freshDeclaredWriteScope(configDir, tenantID, g.id)
+		pre, judged, decoded := freshDeclaredWriteScope(configDir, tenantID, g.id)
+		if !decoded && !mayWriteUndecodableMetadata(d, p) {
+			return errDeclaredUnwritableOnBase
+		}
 		if judged {
 			if ok, err := freshScopeAllowed(d, p, configDir, g.id, g.pre, pre, true); err != nil || !ok {
 				return orFreshScopeError(err, errDeclaredUnwritableOnBase)
@@ -273,6 +288,17 @@ func declaredOnBase(d *Deps, p *rbac.VerifiedPrincipal, configDir, tenantID, bod
 		}
 	}
 	return nil
+}
+
+// mayWriteUndecodableMetadata: a declared tenant whose `_metadata` in the
+// file does not decode has labels nobody can read, so its write scope on the
+// metadata axis cannot be judged. It is refused (fail closed, alike on the
+// local tree and on the fresh base) unless the caller may write every tenant
+// with no scope at all (rbac.PlatformUnrestricted: no org-scope,
+// environments or domains), whose verdict no label could change — the one
+// caller who can still repair such a section through the API.
+func mayWriteUndecodableMetadata(d *Deps, p *rbac.VerifiedPrincipal) bool {
+	return d.RBAC == nil || d.RBAC.PlatformUnrestricted(p, rbac.PermWrite)
 }
 
 // writeDeclaredUnwritableOnBase answers errDeclaredUnwritableOnBase.
@@ -370,7 +396,8 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	if len(bytes.TrimSpace(base)) == 0 {
 		return body, nil
 	}
-	refuse := spliceRefusal(base, tenantID, shown)
+	isShown := &spliceShown{base: base, shown: shown}
+	refuse := spliceRefusal(tenantID, isShown)
 
 	docs, err := parseAllDocs(base)
 	if err != nil {
@@ -426,6 +453,34 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 		}
 	}
 
+	// #3062: anchors and aliases in what the splice swaps, for a caller the
+	// file is not shown to — a STRUCTURAL rule, not a value comparison.
+	//
+	// An alias binds to the nearest anchor of its name before it, so an
+	// anchor the body brings in, or one it takes away with a section it
+	// replaces, can rebind an alias the body does not declare — to the body's
+	// node, or to an earlier one in a section the caller may not read. Every
+	// value comparison verifySplice could run on such a rebinding (does the
+	// alias still resolve to what it did?) compares the caller's value with
+	// the hidden one: 200 / 409 would tell a caller who may not read the file
+	// whether its guess of a hidden value, or of an anchor's name, is right.
+	// For a caller the file is withheld from (#3050's fileShown), a value
+	// comparison here is an oracle whatever it compares.
+	//
+	// So such a caller's write is refused, with the one withheld 409, as soon
+	// as a declared section — the body's, or the base's it replaces, its key
+	// included — holds any anchor or alias: decided on the body and on the
+	// sections the caller writes alone, never on hidden content. Without
+	// them the splice cannot change the binding of any alias it does not
+	// declare, and verifySplice's verdict does not depend on a hidden value.
+	// A caller who may read every tenant of the file has no hidden value to
+	// learn and keeps the value comparison. fileShown is asked only here and
+	// on a refusal (spliceShown), so a write with no anchor or alias in what
+	// it swaps never asks it.
+	if swapsAnchorsOrAliases(bodyPairs, basePairs, baseIDs, declared) && !isShown.get() {
+		return "", refuse("")
+	}
+
 	// The splice, on the base's own nodes.
 	var content []*yaml.Node
 	used := map[string]bool{}
@@ -473,17 +528,70 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	return buf.String(), nil
 }
 
+// spliceShown is fileShown for one splice's base, asked at most once and
+// only when needed: on a refusal, or when the anchor rule needs it. Each ask
+// walks the caller's read permission over every tenant the file declares
+// (OrgAllowedRead), which in shadow mode counts a would-deny for an
+// unlabeled one — a successful write must not count reads it never made. A
+// nil shown shows nothing.
+type spliceShown struct {
+	base         []byte
+	shown        fileShownFunc
+	asked, value bool
+}
+
+func (s *spliceShown) get() bool {
+	if !s.asked {
+		s.asked = true
+		s.value = s.shown != nil && s.shown(s.base)
+	}
+	return s.value
+}
+
 // spliceRefusal builds a splice's *putSpliceError: its detail as given when
-// shown says base may be described to the caller, msgSpliceDetailWithheld
-// otherwise (a nil shown describes nothing).
-func spliceRefusal(base []byte, tenantID string, shown fileShownFunc) func(detail string) error {
-	described := shown != nil && shown(base)
+// the base may be described to the caller, msgSpliceDetailWithheld
+// otherwise.
+func spliceRefusal(tenantID string, shown *spliceShown) func(detail string) error {
 	return func(detail string) error {
-		if !described {
+		if !shown.get() {
 			detail = msgSpliceDetailWithheld
 		}
 		return &putSpliceError{TenantID: tenantID, Detail: detail}
 	}
+}
+
+// swapsAnchorsOrAliases reports whether a section the splice swaps holds an
+// anchor or an alias anywhere, its key included: one the body declares, or
+// one of the base's that a declared section replaces.
+func swapsAnchorsOrAliases(bodyPairs, basePairs [][2]*yaml.Node, baseIDs []string, declared map[string]bool) bool {
+	for _, p := range bodyPairs {
+		if hasAnchorOrAlias(p[0]) || hasAnchorOrAlias(p[1]) {
+			return true
+		}
+	}
+	for i, p := range basePairs {
+		if declared[baseIDs[i]] && (hasAnchorOrAlias(p[0]) || hasAnchorOrAlias(p[1])) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAnchorOrAlias reports whether n or a node under it is an alias or
+// defines an anchor. An alias is not followed: being one is enough.
+func hasAnchorOrAlias(n *yaml.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Anchor != "" || n.Kind == yaml.AliasNode {
+		return true
+	}
+	for _, c := range n.Content {
+		if hasAnchorOrAlias(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifySplice returns refuse's error unless merged keeps base's written
@@ -500,6 +608,10 @@ func spliceRefusal(base []byte, tenantID string, shown fileShownFunc) func(detai
 // rename anchors inside its own sections (a whole section is its to write),
 // and every effect that has on content it does not declare is an alias
 // outside them resolving differently, which the node comparison refuses.
+// That comparison runs only for a caller the file is shown to: for anyone
+// else a declared section with an anchor or alias never gets here
+// (swapsAnchorsOrAliases), since comparing a rebound alias with what it
+// resolved to would answer whether the caller guessed a hidden value.
 func verifySplice(base, merged []byte, body string, declared map[string]bool, tenantID string, names gitops.TenantNames, refuse func(string) error) error {
 	at := func(path []string) error { return refuse(describePath(path, tenantID, names)) }
 	bDocs, err := parseAllDocs(base)

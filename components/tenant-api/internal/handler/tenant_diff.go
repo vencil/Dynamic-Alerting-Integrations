@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -47,8 +48,9 @@ type DiffResponse struct {
 // @Description Returns unified diff between current file and proposed content.
 // @Description The diff header names current/<id>.yaml and proposed/<id>.yaml.
 // @Description The proposed side is what PUT /api/v1/tenants/{id} would write (#3062): the proposal's declared tenant sections
-// @Description spliced into the current file, so a section the proposal leaves out shows as kept. A proposal PUT refuses as malformed,
-// @Description or a current file whose tenants cannot be told apart (#2405: replaced whole), is shown as the proposal itself.
+// @Description spliced into the current file, so a section the proposal leaves out shows as kept. A proposal PUT refuses as malformed
+// @Description is shown as the proposal itself; so is a current file whose tenants cannot be told apart (#2405: replaced whole),
+// @Description but only to a caller with write permission on all tenants: anyone else gets PUT's 400 for it.
 // @Description A caller who may read the tenant but not write it gets the diff of the masked forms of both sides
 // @Description (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
 // @Description with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
@@ -181,25 +183,45 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 // previewPut is what PUT would write over current (nil when the file does
 // not exist) for proposed (#3062): the proposal's declared tenant sections
 // spliced into the current file, by the very splice PUT runs, so a section
-// the proposal leaves out shows as kept, not deleted. Two outcomes PUT does
-// not write are previewed as the proposal itself, as before: a proposal PUT
-// refuses as malformed (no tenants mapping, a merge key or a key that is
-// not one tenant id there: 400), and a current file the splice cannot read
-// (PUT replaces it whole for a caller with write permission on all tenants
-// and refuses anyone else, #2405). A splice PUT refuses because it would
+// the proposal leaves out shows as kept, not deleted. A proposal PUT
+// refuses as malformed (no tenants mapping, a merge key or a key that is not
+// one tenant id there: 400) is previewed as the proposal itself, as before.
+// A current file the splice cannot read is previewed as the proposal only
+// for a caller PUT lets replace it whole (#2405's bit: write permission on
+// all tenants); anyone else gets PUT's 400 (errPreviewUnparseableBase), not
+// a preview of a write PUT refuses. A splice PUT refuses because it would
 // change what the proposal does not declare is the *putSpliceError PUT
 // answers with (writeDiffError: the same 409).
+//
+// Both callers have already established fileShown on current (or current
+// does not exist): the splice is told so instead of asking it again.
 func previewPut(r *http.Request, d *Deps, tenantID string, current []byte, proposed string) (string, error) {
 	names := tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r))
-	written, err := spliceDeclaredSections(current, proposed, tenantID, names, putFileShown(r, d, tenantID))
-	if errors.Is(err, gitops.ErrSpliceBaseUnparseable) || errors.Is(err, gitops.ErrValidation) {
+	written, err := spliceDeclaredSections(current, proposed, tenantID, names, func([]byte) bool { return true })
+	switch {
+	case errors.Is(err, gitops.ErrSpliceBaseUnparseable):
+		if !mayReplaceUnparseable(r, d) {
+			return "", errPreviewUnparseableBase
+		}
+		return proposed, nil
+	case errors.Is(err, gitops.ErrValidation):
 		return proposed, nil
 	}
 	return written, err
 }
 
+// errPreviewUnparseableBase is the 400 PUT answers a caller without #2405's
+// bit for a current file the splice cannot read — the same error, so the
+// same text.
+var errPreviewUnparseableBase = fmt.Errorf("%w: %s", gitops.ErrValidation, gitops.MsgUnparseableBaseNeedsPlatformWrite)
+
 // writeDiffError answers a preview that could not be computed.
 func writeDiffError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) {
+	// #2405: PUT's 400 for a current file the splice cannot read.
+	if errors.Is(err, errPreviewUnparseableBase) {
+		WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
+		return
+	}
 	// #3062: the PUT this previews would be refused: its declared sections
 	// cannot be written into the file without changing the rest.
 	if writePutSpliceError(rw, r, err) {

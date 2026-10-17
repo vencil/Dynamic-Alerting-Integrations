@@ -42,7 +42,10 @@ type ValidateResponse struct {
 // @Description when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
 // @Description The tenants the body declares besides {id} are judged as PUT judges them (#3062): one the caller may not write, or a
 // @Description tenants mapping with a merge key (<<), a key that does not decode to a string or one id twice, is valid: false with
-// @Description PUT's 403 / 400 text, in both write modes.
+// @Description PUT's 403 / 400 text, in both write modes. The splice PUT runs is NOT checked here (#3062): the current file is not
+// @Description read for it, so a body valid here may still get PUT's 409 (an alias it would change; for a caller who may not read every
+// @Description tenant of the file, any anchor or alias in a declared section; a declared tenant another conf.d file also declares).
+// @Description POST /api/v1/tenants/{id}/diff previews the splice.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json

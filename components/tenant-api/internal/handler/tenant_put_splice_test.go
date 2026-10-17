@@ -87,9 +87,12 @@ func TestPutTenant_TenantsMergeKeyRefused(t *testing.T) {
 }
 
 // (c) anchors and aliases across sections. Out's value is an alias of an
-// anchor in In's section: In's body may keep that anchor and its value
-// (Out's resolved value is unchanged), but not change the value, drop the
-// anchor or define it a second time — each would change Out.
+// anchor in In's section: a caller who may read Out may keep that anchor and
+// its value in In's body (Out's resolved value is unchanged), but not change
+// the value, drop the anchor or define it a second time — each would change
+// Out. A caller who may not read Out is refused all four alike: the section
+// it replaces holds an anchor, and a value comparison would tell it Out's
+// value (TestPutTenant_AnchorRuleIsNotAValueOracle).
 func TestPutTenant_SpliceKeepsAliasesIntoDeclaredSections(t *testing.T) {
 	t.Parallel()
 	const file = "tenants:\n" +
@@ -108,16 +111,25 @@ func TestPutTenant_SpliceKeepsAliasesIntoDeclaredSections(t *testing.T) {
 				"tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: &m \"warning\"\n    _metadata:\n      owner: team\n" +
 					"  " + orgEnfTenantOut + ":\n    _silent_mode: *m\n"},
 		} {
-			t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
+			t.Run(mode.name+"/withheld/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 				w, f, onDisk, branch := foreignPut(t, mode.pr, file, tc.body, false)
+				// The caller may not read Out: refused whatever the body
+				// keeps, and the refusal says nothing about how the file is
+				// written (#3050's rule).
+				foreignRefused(t, w, f, file, onDisk, branch, http.StatusConflict, orgEnfTenantOut, "anchor", "alias", "tenants.")
+				if !strings.Contains(w.Body.String(), configErrorNotRoundTrippable) ||
+					!strings.Contains(w.Body.String(), msgSpliceDetailWithheld) {
+					t.Errorf("refusal is not %s with the withheld detail: %s", configErrorNotRoundTrippable, w.Body.String())
+				}
+			})
+			t.Run(mode.name+"/full_reader/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				w, f, onDisk, branch := foreignPut(t, mode.pr, file, tc.body, true)
 				if tc.want == "" {
-					// The caller may not read Out: the refusal says nothing
-					// about how the file is written (#3050's rule).
-					foreignRefused(t, w, f, file, onDisk, branch, http.StatusConflict, orgEnfTenantOut, "anchor", "alias", "tenants.")
-					if !strings.Contains(w.Body.String(), configErrorNotRoundTrippable) ||
-						!strings.Contains(w.Body.String(), msgSpliceDetailWithheld) {
-						t.Errorf("refusal is not %s with the withheld detail: %s", configErrorNotRoundTrippable, w.Body.String())
+					foreignRefused(t, w, f, file, onDisk, branch, http.StatusConflict)
+					if !strings.Contains(w.Body.String(), configErrorNotRoundTrippable) {
+						t.Errorf("refusal is not %s: %s", configErrorNotRoundTrippable, w.Body.String())
 					}
 					return
 				}
@@ -215,12 +227,13 @@ func TestPutTenant_SpliceRefusalDetailShownToFullReader(t *testing.T) {
 	}
 }
 
-// #3062 review: a body may add, drop or rename anchors inside its own
-// sections — a whole section is its to write. The set of anchors the file
-// defines is not compared (verifySplice): every effect an anchor change has
-// outside the declared sections is an alias there resolving differently,
-// which the node comparison refuses (TestPutTenant_SpliceKeepsAliasesInto-
-// DeclaredSections).
+// #3062 review: a caller who may read every tenant of the file may add, drop
+// or rename anchors inside its own sections — a whole section is its to
+// write. The set of anchors the file defines is not compared (verifySplice):
+// every effect an anchor change has outside the declared sections is an
+// alias there resolving differently, which the node comparison refuses
+// (TestPutTenant_SpliceKeepsAliasesIntoDeclaredSections). A caller who may
+// not read Out is refused all three: the sections swapped hold an anchor.
 func TestPutTenant_SpliceOwnAnchorsAreTheBodys(t *testing.T) {
 	t.Parallel()
 	file := "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: &q \"critical\"\n" + foreignOutSection
@@ -233,7 +246,9 @@ func TestPutTenant_SpliceOwnAnchorsAreTheBodys(t *testing.T) {
 			t.Run(mode.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 				body := "tenants:\n  " + orgEnfTenantIn + ":\n" + tc.section
-				w, _, onDisk, branch := foreignPut(t, mode.pr, file, body, false)
+				wh, fh, diskH, brH := foreignPut(t, mode.pr, file, body, false)
+				foreignRefused(t, wh, fh, file, diskH, brH, http.StatusConflict, orgEnfTenantOut)
+				w, _, onDisk, branch := foreignPut(t, mode.pr, file, body, true)
 				if w.Code != http.StatusOK {
 					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 				}

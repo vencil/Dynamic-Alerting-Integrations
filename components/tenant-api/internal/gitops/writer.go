@@ -1025,6 +1025,9 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		if content, err = spliceBase(ctx, existing, yamlContent, splice); err != nil {
 			return nil, err
 		}
+		if err := w.ensureDeclaredSectionsNotElsewhere(w.scanTree, tenantID, yamlContent, existing, filePath); err != nil {
+			return nil, err
+		}
 	}
 
 	// The body is what is judged: the sections it does not declare are the
@@ -1404,6 +1407,57 @@ func (w *Writer) walkDir(root string, stuck *atomic.Int32, prior *cfg.TreeScan, 
 // file the full decode accepts) cannot drift from what the exporter loads.
 func (w *Writer) ensureNotDeclaredElsewhere(tenantID, target string) error {
 	return w.ensureNotDeclaredElsewhereIn(w.scanTree, tenantID, target)
+}
+
+// ensureDeclaredSectionsNotElsewhere is the #2078 guard for the tenants a
+// spliced PUT body declares besides tenantID (#3062): each one whose section
+// target's current content (base) holds must be declared by no other conf.d
+// file. Such a tenant's write scope is judged on its section in target; a
+// second declaration elsewhere is a copy the exporter refuses the tree over,
+// and which of the two is current nobody can say — so the write is refused,
+// ErrTenantDeclaredElsewhere, as a write of tenantID itself would be.
+//
+// Only tenants base declares are asked: one it does not declare is a section
+// the body adds, which validation refuses whether or not another file holds
+// it — asking would answer, for a tenant the caller may not read, whether
+// another file declares it. A base that does not decode lists nothing, so
+// every tenant the body declares is asked (fail closed). The walk runs at
+// most once, and only when there is a tenant to ask about.
+func (w *Writer) ensureDeclaredSectionsNotElsewhere(walk func() (*cfg.TreeScan, error), tenantID, yamlContent string, base []byte, target string) error {
+	body, err := cfg.ParseConfigFile([]byte(yamlContent))
+	if err != nil {
+		return nil // validation refuses the body
+	}
+	var inBase map[string]map[string]cfg.ScheduledValue
+	if b, berr := cfg.ParseConfigFile(base); berr == nil {
+		inBase = b.Tenants
+	}
+	ids := make([]string, 0, len(body.Tenants))
+	for id := range body.Tenants {
+		if _, ok := inBase[id]; id != tenantID && (ok || inBase == nil) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	var scan *cfg.TreeScan
+	var scanErr error
+	walked := false
+	once := func() (*cfg.TreeScan, error) {
+		if !walked {
+			walked = true
+			scan, scanErr = walk()
+		}
+		return scan, scanErr
+	}
+	for _, id := range ids {
+		if err := w.ensureNotDeclaredElsewhereIn(once, id, target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureNotDeclaredElsewhereIn is ensureNotDeclaredElsewhere judged on the

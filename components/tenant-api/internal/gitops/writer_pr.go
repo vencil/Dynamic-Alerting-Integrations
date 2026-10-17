@@ -426,6 +426,9 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 		if content, err = spliceBase(ctx, existing, yamlContent, splice); err != nil {
 			return "", "", nil, err
 		}
+		if err := w.ensureDeclaredSectionsNotElsewhere(w.stagingScan(st), tenantID, yamlContent, existing, basePath); err != nil {
+			return "", "", nil, err
+		}
 	}
 	errs, notices := validateReplacing(st.configDir, tenantID, basePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	if len(errs) > 0 {
