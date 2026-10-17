@@ -36,7 +36,6 @@ def _empty_result() -> dict:
         "explicit_routing": {},
         "disabled_tenants": set(),
         "dedup_configs": {},
-        "metadata_configs": {},
         "tenant_keys": {},
         "routing_profiles": {},
         "domain_policies": {},
@@ -329,24 +328,15 @@ class TestParseTenantOverrides:
             "db-a", {"_severity_dedup": "enable"}, result)
         assert result["dedup_configs"]["db-a"] == "enable"
 
-    def test_metadata_extracted(self):
+    @pytest.mark.parametrize("metadata", [{"owner": "team-x"}, "bad"])
+    def test_metadata_is_not_read(self, metadata):
+        """#3043: `_metadata` was read into `metadata_configs` and used by
+        nothing the generator renders; it is no longer read (still a key of
+        the tenant, for the key check)."""
         result = _empty_result()
-        _parse_tenant_overrides("db-a", {
-            "_metadata": {"owner": "team-x", "tier": "tier-1"},
-        }, result)
-        assert result["metadata_configs"]["db-a"]["owner"] == "team-x"
-
-    def test_metadata_tenant_placeholder(self):
-        result = _empty_result()
-        _parse_tenant_overrides("db-a", {
-            "_metadata": {"runbook_url": "https://wiki/{{tenant}}"},
-        }, result)
-        assert "db-a" in result["metadata_configs"]["db-a"]["runbook_url"]
-
-    def test_metadata_non_dict_ignored(self):
-        result = _empty_result()
-        _parse_tenant_overrides("db-a", {"_metadata": "bad"}, result)
-        assert "db-a" not in result["metadata_configs"]
+        _parse_tenant_overrides("db-a", {"_metadata": metadata}, result)
+        assert "metadata_configs" not in result
+        assert "_metadata" in result["tenant_keys"]["db-a"]
 
     def test_routing_explicit(self):
         result = _empty_result()

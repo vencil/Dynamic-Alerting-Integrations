@@ -15,8 +15,10 @@ Node shapes in ``files[<rel>]``: a mapping is a JSON object, a sequence is a
 JSON array, and a scalar is ``{"text": <source text>, "tag": <resolved tag>,
 "value": <str | bool | null>}`` — `is_scalar` tells a scalar from a mapping.
 
-Used by `ops/migration_audit` and by `ops/config_diff`'s platform-settings
-comparison (ADR-037 decision 3).
+Used by `ops/migration_audit`, by `ops/config_diff`'s platform-settings
+comparison (ADR-037 decision 3) and, through `_lib_parse_cache.ConfdReader`,
+by the route generator and every tool that reads conf.d through it (ADR-036
+step 4, #2906).
 
 Loader API (ADR-036 step 4, #2906)
 ----------------------------------
@@ -43,7 +45,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -61,6 +65,24 @@ import guard_dispatch  # noqa: E402
 
 SUBCOMMAND = "parse-tree"
 SCHEMA = "da-guard.parse-tree/v1"
+
+#: Set by :func:`run_under_memory_limit` in a process that limited its own
+#: memory (the generator container's judgement, ADR-036 §3).
+_MEMORY_LIMITED = False
+
+
+def run_under_memory_limit() -> None:
+    """Declare that this process runs under a memory limit (RLIMIT_DATA) that
+    every da-guard it starts inherits. From then on each da-guard runs with
+    ``GOTRACEBACK=crash``, so a Go runtime that fails — out of memory, an
+    allocation failure that faults inside the runtime (SIGSEGV), a thread it
+    cannot create — ends by a signal (SIGABRT) instead of exiting 2; and a
+    da-guard ended by a signal is this process's memory limit, raised as
+    ``MemoryError`` naming the signal. Judged by the process status, not by
+    its words. Without this call a da-guard ended by a signal stays a
+    ``ParseTreeError``. The caller sets RLIMIT_CORE to 0: no core file."""
+    global _MEMORY_LIMITED
+    _MEMORY_LIMITED = True
 
 
 class ParseTreeError(Exception):
@@ -86,21 +108,61 @@ def run(root: Path | str, binary: Optional[str], timeout: float) -> dict:
     """`da-guard parse-tree --config-dir <root>`'s document. Raises
     `BinaryMissing` when there is no binary, `ParseTreeError` when it fails or
     its output is not a parse-tree document this reader reads."""
+    return _run([SUBCOMMAND, "--config-dir", str(root)], binary, timeout)
+
+
+def run_file(root: Path | str, rel: str, text: bytes,
+             binary: Optional[str], timeout: float) -> dict:
+    """File mode: `da-guard parse-tree --config-dir <root> --path <rel>
+    --input -` with *text* on stdin — *text* read as the file at *rel*
+    (root-relative, '/'), in the tree as it is once that file is written.
+    Raises as `run` does."""
+    return _run([SUBCOMMAND, "--config-dir", str(root), "--path", rel,
+                 "--input", "-"], binary, timeout, stdin=text)
+
+
+def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:
+    """Make `$DA_GUARD_BINARY` in *environ* (default: this process's) an
+    absolute path, against the current working directory — the meaning a
+    relative path has in the shell that set it. Call it before changing
+    directory, or before starting a process with another `cwd`, so the
+    binary the user named is the one that runs. Unset or blank: unchanged."""
+    env = os.environ if environ is None else environ
+    value = env.get("DA_GUARD_BINARY", "")
+    if value.strip() and not os.path.isabs(value):
+        env["DA_GUARD_BINARY"] = os.path.abspath(value)
+
+
+def _run(args: list[str], binary: Optional[str], timeout: float,
+         stdin: Optional[bytes] = None) -> dict:
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
+    if exe is not None:
+        # Resolved now, against the current directory (a relative
+        # `$DA_GUARD_BINARY`, an explicit path, a relative `$PATH` entry).
+        exe = os.path.abspath(exe)
     if exe is None:
         msg = dispatcher.binary_missing_message(binary).strip()
         for prefix in ("Error: ", "錯誤: "):
             msg = msg.removeprefix(prefix)
         raise BinaryMissing(msg)
-    cmd = [exe, SUBCOMMAND, "--config-dir", str(root)]
+    cmd = [exe, *args]
+    env = {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
     try:
-        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
+                              input=stdin if stdin is not None else b"", env=env)
     except subprocess.TimeoutExpired as e:
         raise ParseTreeError(f"da-guard {SUBCOMMAND} did not finish within {timeout}s") from e
     except OSError as e:
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
+    if _MEMORY_LIMITED and proc.returncode < 0:
+        # Ended by a signal under the memory limit it inherited (the
+        # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):
+        # the caller's memory limit, not a da-guard defect.
+        raise MemoryError(f"da-guard {SUBCOMMAND} was ended by "
+                          f"{_signal_name(-proc.returncode)} under this process's "
+                          f"memory limit (RLIMIT_DATA)")
     if proc.returncode != 0:
         older = ""
         if proc.returncode == 2 and not _accepts(cmd, timeout):
@@ -119,6 +181,13 @@ def run(root: Path | str, binary: Optional[str], timeout: float) -> dict:
         raise ParseTreeError(f"da-guard {SUBCOMMAND} wrote no document this tool can "
                              f"read ({e}); nothing of it is used") from e
     return doc
+
+
+def _signal_name(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal {signum}"
 
 
 def check_shape(doc: dict) -> None:
@@ -172,12 +241,16 @@ def _accepts(cmd: list[str], timeout: float) -> bool:
 
 # ── loader API (ADR-036 step 4, #2906) ──────────────────────────────
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class Timestamp:
     """A `!!timestamp` scalar: only its source text. Not a `str` — yaml.v3 and
     the exporter do not read it as one — and not a `datetime`: what instant it
-    names is no reader's question here."""
+    names is no reader's question here. Its repr is the text as written, so a
+    message reads ``got Timestamp 2001-12-15``."""
     text: str
+
+    def __repr__(self) -> str:
+        return self.text
 
 
 # yaml.v3's spellings of the !!float values parse-tree gives no "value" for
@@ -229,26 +302,30 @@ def _new(node: Any) -> tuple[Any, bool]:
     raise ValueError(f"not a parse-tree node: {node!r:.80}")
 
 
-def to_python(node: Any) -> Any:
+def to_python(node: Any, *, text_sequences: "frozenset[str]" = frozenset()) -> Any:
     """A parse-tree node as Python values: a mapping is a `dict` keyed by the
     JSON keys as written (each key's source text), a sequence a `list`, a
     scalar by its tag (see the module docstring). Any other tag or shape
     raises ValueError — `check_shape` refuses those first; this is the second
     line. Iterative: a document deep enough to decode is deep enough to
-    convert."""
+    convert. *text_sequences*: see `to_python_text_sequences`."""
     out, fill = _new(node)
-    stack = [(node, out)] if fill else []
+    stack = [(node, out, False)] if fill else []
     while stack:
-        src, dst = stack.pop()
+        src, dst, as_text = stack.pop()
         items = src.items() if isinstance(src, dict) else enumerate(src)
         for k, child in items:
-            v, more = _new(child)
+            if as_text and is_scalar(child):
+                v, more = scalar_text(child), False
+            else:
+                v, more = _new(child)
             if isinstance(dst, dict):
                 dst[k] = v
             else:
                 dst.append(v)
             if more:
-                stack.append((child, v))
+                stack.append((child, v, isinstance(dst, dict) and k in text_sequences
+                              and isinstance(child, list)))
     return out
 
 
@@ -266,11 +343,14 @@ class Tree:
     file → reason; `rendered_by`: the document's `rendered_by` (file → key →
     readers), or None when the document has none — the field was added
     beside the v1 fields (parse_tree.go), so a v1 document may lack it, and a
-    reader that needs it must refuse such a document."""
+    reader that needs it must refuse such a document. `defaults_carriers`:
+    directory (root-relative, "." for the root) → the defaults carrier its
+    chain selects there (empty when the document has none)."""
     selected: Mapping[str, tuple[str, ...]]
     unreadable: Mapping[str, tuple[str, str]]
     not_read: Mapping[str, str]
     rendered_by: Optional[Mapping[str, Mapping[str, tuple[str, ...]]]]
+    defaults_carriers: Mapping[str, str]
     _files: Mapping[str, Any]
 
     def node(self, rel: str) -> Any:
@@ -318,11 +398,17 @@ def tree_of(doc: dict) -> Tree:
                                  "{file: {key: [reader]}}; nothing of the document is used")
         rendered_by = MappingProxyType({f: MappingProxyType({k: tuple(rs) for k, rs in keys.items()})
                                         for f, keys in rb.items()})
+    carriers = doc.get("defaults_carriers", {})
+    if not (isinstance(carriers, dict)
+            and all(isinstance(c, str) for c in carriers.values())):
+        raise ParseTreeError(f"da-guard {SUBCOMMAND}: \"defaults_carriers\" is not "
+                             "{directory: file}; nothing of the document is used")
     return Tree(
         selected=MappingProxyType({f: tuple(rs) for f, rs in doc["selected"].items()}),
         unreadable=MappingProxyType(unreadable),
         not_read=MappingProxyType(not_read),
         rendered_by=rendered_by,
+        defaults_carriers=MappingProxyType(dict(carriers)),
         _files=MappingProxyType(dict(doc["files"])),
     )
 
@@ -330,3 +416,19 @@ def tree_of(doc: dict) -> Tree:
 def load(root: Path | str, binary: Optional[str], timeout: float) -> Tree:
     """`run`'s document as a `Tree`. Raises as `run` does, and as `tree_of`."""
     return tree_of(run(root, binary, timeout))
+
+
+def load_file(root: Path | str, rel: str, text: bytes,
+              binary: Optional[str], timeout: float) -> Tree:
+    """`run_file`'s document as a `Tree` (it holds the one file *rel*).
+    Raises as `run_file` does, and as `tree_of`."""
+    return tree_of(run_file(root, rel, text, binary, timeout))
+
+
+def to_python_text_sequences(node: Any, keys: "frozenset[str] | tuple[str, ...]") -> Any:
+    """`to_python`, except that every scalar item of a sequence that is the
+    value of a mapping key in *keys* is that item's source text
+    (`scalar_text`): a domain policy's `tenants: [010]` is ["010"], the text
+    the exporter keys tenant 010 by, never the integer 8. Any other item of
+    such a sequence is converted as `to_python` converts it."""
+    return to_python(node, text_sequences=frozenset(keys))

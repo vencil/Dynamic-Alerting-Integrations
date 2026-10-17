@@ -230,8 +230,6 @@ def load_yaml_file_for_rewrite(path: Optional[str], default: Any = None) -> Any:
 # is constructed, so it sees every mapping in the document — including ones
 # no consumer reads — and it does not depend on which constructor runs next.
 
-_MERGE_TAG = "tag:yaml.org,2002:merge"
-
 
 class DuplicateKeyError(yaml.constructor.ConstructorError):
     """One mapping holds the same key twice (#2123).
@@ -472,6 +470,33 @@ def load_yaml_file_strict(path: Optional[str], default: Any = None) -> Any:
     return default if data is None else data
 
 
+def load_confd_file(config_dir: "str | os.PathLike[str]", path: Optional[str],
+                    default: Any = None, *, mode: Any = None, reader: Any = None) -> Any:
+    """A conf.d file's content as `da-guard parse-tree` reads it (ADR-036
+    step 4, #2906) — the by-path read of the routing tools, which do not
+    parse conf.d with PyYAML. *config_dir* is the conf.d root *path* belongs
+    to (the session's reader of it, `_lib_parse_cache.reader_for`); *mode* a
+    `_lib_parse_cache.ParseMode` (default VALUES); *reader* a
+    `_lib_parse_cache.ConfdReader` of *config_dir* to read through instead
+    (one built with an explicit da-guard binary).
+
+    *default* for a path that is not a file, as `load_yaml_file_strict`. A
+    file parse-tree cannot read raises :class:`YamlFileError` (``cause`` is
+    the `_lib_parse_tree.FileUnreadable`, whose ``kind`` names why), so a
+    caller's "cannot read this file" path reports it with no new branch. An
+    empty file is ``{}``. No usable da-guard raises
+    `_lib_parse_tree.ParseTreeError`, never a default."""
+    if not (path and Path(path).is_file()):
+        return default
+    import _lib_parse_cache  # lazy: it runs da-guard through modules importing this one
+    from _lib_parse_tree import FileUnreadable
+    try:
+        return (reader or _lib_parse_cache.reader_for(config_dir)).read(
+            path, mode if mode is not None else _lib_parse_cache.VALUES)
+    except FileUnreadable as exc:
+        raise YamlFileError(str(path), exc) from exc
+
+
 def strict_load_exporter_keys(stream: Any, *,
                               raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
                               raw_text_scalars: "frozenset[str] | tuple[str, ...]" = ()
@@ -531,108 +556,78 @@ def load_yaml_file_strict_exporter_keys(
     return default if data is None else data
 
 
-# ── #2164: an UNQUOTED scalar in a STRING field that PyYAML reads as non-string
+# ── #2164 → ADR-036 step 4 (#2906): a scalar in a STRING field that yaml.v3
+# reads as something else
 #
-# `channel: yes` is `True` to PyYAML (YAML 1.1) and the string "yes" to the
-# Go readers (yaml.v3) and to Alertmanager (yaml.v2 into a string field), so
-# the same bytes mean three things. Nothing on the READ side changes (#2164
-# owner decision (a)); the author is told to quote instead, the #1017
+# Every reader of conf.d reads it the way yaml.v3 does (`da-guard
+# parse-tree`), so the value a field holds is the one parse-tree's tag says:
+# `channel: 1e3` is the float 1000 and `name: 2024-01-02` a timestamp, while
+# `channel: yes` is the string "yes" (YAML 1.1's boolean words are strings to
+# yaml.v3). The author is told to quote such a value — the #1017
 # "STRING-ONLY, always quote it" rule applied to every string-typed field.
 #
-# ⛔ Two things are deliberately NOT written down here:
+# The judgement reads a file's parse-tree nodes (`{text, tag, value}`
+# scalars, aliases and `<<` merges already expanded). ⛔ Two things are
+# deliberately NOT written down here:
 #
-# * WHICH words are ambiguous. The composer already asked PyYAML's own
-#   resolver — `Composer.compose_scalar_node` stamps every scalar whose tag
-#   was not written explicitly with `self.resolve(ScalarNode, value,
-#   (plain, quoted))` — so `node.tag` IS the resolver's verdict for exactly
-#   the loader that reads the file. A third yes/no/on/off table (the repo
-#   already has two) would be one more thing to drift.
+# * WHICH texts are not strings. That is yaml.v3's verdict, parse-tree's
+#   `tag`; no word list here.
 # * WHICH fields are strings. That is read from the JSON Schema passed in,
 #   so a field that becomes a string (or stops being one) there changes what
 #   this reports with no edit here.
+#
+# parse-tree does not say whether a scalar was quoted, nor where it sits in
+# the file: a finding names the value's path (`/tenants/t1/_routing/…`), and
+# it is made the same for `yes` and `"yes"` — both are the string "yes".
 #
 # A field counts as a string field when, among the schema branches that can
 # describe it, every one that constrains a SCALAR allows only `string` (plus
 # `null`). A mixed field such as `string | number` is left alone: a bare
 # number is a legal value there, and #1017's answer to that ambiguity was to
 # tighten the schema to `type: string`, not to have a lint guess the intent.
-_YAML_STR_TAG = "tag:yaml.org,2002:str"
-_YAML_NULL_TAG = "tag:yaml.org,2002:null"
 _JSON_SCALAR_TYPES = frozenset({"string", "number", "integer", "boolean", "null"})
 _SCHEMA_COMBINATORS = ("allOf", "anyOf", "oneOf")
 
 
+def _is_tree_scalar(node: Any) -> bool:
+    """A parse-tree scalar (`_lib_parse_tree.is_scalar`; repeated here so this
+    module needs no import of that one)."""
+    return isinstance(node, dict) and isinstance(node.get("text"), str) and "tag" in node
+
+
+def _written(path: str, value: str) -> str:
+    """How the suggested line reads: `field: value`, or `- value` for a
+    sequence item (no key to repeat)."""
+    field = path.rsplit("/", 1)[-1]
+    return f"- {value}" if field.isdigit() or not field else f"{field}: {value}"
+
+
 class MisreadScalar:
-    """One unquoted scalar in a string field that PyYAML reads as non-string.
+    """One scalar in a string field that yaml.v3 reads as non-string.
 
-    ``line`` / ``column`` are 1-based. ``path`` is a JSON-pointer-like
-    ``/tenants/t1/_routing/receiver/channel``. ``text`` is the scalar as
-    written; ``resolved`` is the short name of the tag PyYAML's resolver
-    gave it (``bool``, ``int``, ``float``, ``null`` …).
-    """
+    ``path`` is a JSON-pointer-like ``/tenants/t1/_routing/receiver/channel``;
+    ``text`` the scalar's source text; ``resolved`` the short name of its
+    yaml.v3 tag (``int``, ``float``, ``bool``, ``null``, ``timestamp``)."""
 
-    __slots__ = ("line", "column", "path", "text", "resolved", "explicit")
+    __slots__ = ("path", "text", "resolved")
 
-    def __init__(self, line: int, column: int, path: str, text: str,
-                 resolved: str, explicit: str = "") -> None:
-        self.line, self.column = line, column
+    def __init__(self, path: str, text: str, resolved: str) -> None:
         self.path, self.text, self.resolved = path, text, resolved
-        #: the explicit tag as written (`!!bool`, `!foo`, `!<tag:x.com,2000:y>`),
-        #: "" when there is none: quoting alone keeps such a value non-string,
-        #: so the remedy names the tag too (#2509 blind review 5).
-        self.explicit = explicit
 
     def message(self) -> str:
-        field = self.path.rsplit("/", 1)[-1]
-        # A sequence item has no key to repeat in the suggestion.
-        written = (f"- \"{self.text}\"" if field.isdigit() or not field
-                   else f"{field}: \"{self.text}\"")
         if self.resolved == "null":
             # ⛔ No "quote it" here: `"~"` would be a literal tilde, which is
             # almost never what an empty value meant.
             return (f"{self.path}: {self.text or '(empty)'!s} is YAML null — "
                     f"no value — but the schema requires a string for this "
                     f"field: write the value, quoted, or remove the key")
-        if self.explicit:
-            return (f"{self.path}: explicit `{self.explicit} {self.text}` is not "
-                    f"the string the schema requires for this field — remove the "
-                    f"tag and quote it: {written}")
-        return (f"{self.path}: unquoted {self.text!r} is read by PyYAML as "
-                f"YAML {self.resolved}, not as the string the schema requires "
-                f"for this field (the Go readers and Alertmanager can read "
-                f"the same bytes differently) — quote it: {written}")
+        return (f"{self.path}: {self.text!r} is read by yaml.v3 (every reader of "
+                f"conf.d) as YAML {self.resolved}, not as the string the schema "
+                f"requires for this field — quote it, without a tag: "
+                f"{_written(self.path, chr(34) + self.text + chr(34))}")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"MisreadScalar({self.line}:{self.column} {self.path} {self.text!r})"
-
-
-class _ExplicitTagStrictLoader(StrictSafeLoader):
-    """:class:`StrictSafeLoader` whose scalar nodes carry ``go_explicit_tag``:
-    whether the scalar was written with a tag of its own (``!!bool yes``).
-    The composed tag alone cannot tell — PyYAML's resolver stamps a plain
-    ``yes`` ``!!bool`` too — and yaml.v3 treats the two differently (#2509
-    review F4: ``find_go_rejected_bool_tags``)."""
-
-    def compose_scalar_node(self, anchor):  # noqa: D102 — see class
-        tag = self.peek_event().tag
-        node = super().compose_scalar_node(anchor)
-        node.go_explicit_tag = tag not in (None, "!")
-        return node
-
-
-def compose_all_nodes(stream: Any,
-                      loader: Optional[type] = None) -> Iterator["yaml.Node"]:
-    """The composed node tree of each document in *stream* (nothing is
-    constructed). *loader* defaults to :class:`StrictSafeLoader` (the pure
-    parser every strict entry point here uses, so line numbers and resolved
-    tags are the ones the reader of the file sees), with each scalar marked
-    ``go_explicit_tag`` (:class:`_ExplicitTagStrictLoader`)."""
-    ldr = (loader or _ExplicitTagStrictLoader)(stream)
-    try:
-        while ldr.check_node():
-            yield ldr.get_node()
-    finally:
-        ldr.dispose()
+        return f"MisreadScalar({self.path} {self.text!r})"
 
 
 def _schema_pointer(doc: Any, fragment: str) -> Any:
@@ -733,248 +728,122 @@ def schema_scalar_types(cands: list[tuple[dict, str]]) -> Optional[frozenset]:
     return frozenset(types & _JSON_SCALAR_TYPES) if constrained else None
 
 
-_YAML_CORE_TAG_PREFIX = "tag:yaml.org,2002:"
-
-
-def _tag_as_written(tag: str) -> str:
-    """A resolved tag in the shorthand an author writes: `!!bool` for a core
-    tag, `!foo` for a local one, `!<uri>` for any other global tag."""
-    if tag.startswith(_YAML_CORE_TAG_PREFIX):
-        return "!!" + tag[len(_YAML_CORE_TAG_PREFIX):]
-    return tag if tag.startswith("!") else f"!<{tag}>"
-
-
-def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
-                         schemas: Optional[dict[str, Any]] = None,
-                         schema_name: str = "") -> list[MisreadScalar]:
-    """Every plain (unquoted) scalar under *root* that sits in a string-typed
-    field of *schema* and that PyYAML's resolver read as something else.
-
-    *schemas* maps a schema document's basename to its parsed JSON, for
-    cross-document ``$ref``; *schema_name* is *schema*'s own basename in it.
-    See the block comment above for what is (and is not) a string field.
-    """
-    return [hit for _node, hit in
-            _walk_misread_scalars(root, schema, schemas, schema_name)]
-
-
-def misread_scalar_nodes(root: Optional["yaml.Node"], schema: dict,
-                         schemas: Optional[dict[str, Any]] = None,
-                         schema_name: str = "") -> list["yaml.ScalarNode"]:
-    """The NODES :func:`find_misread_scalars` reports, each once — same walk,
-    same verdict (#2695). A caller that must act on the scalar itself (read
-    it as the quoted string it was meant to be) holds the node, not a path:
-    a path is a string, and a key that contains ``/`` makes two paths look
-    nested. An aliased scalar is one node however many places use it."""
-    out: list["yaml.ScalarNode"] = []
-    seen: set[int] = set()
-    for node, _hit in _walk_misread_scalars(root, schema, schemas, schema_name):
-        if id(node) not in seen:
-            seen.add(id(node))
-            out.append(node)
-    return out
-
-
-def _walk_misread_scalars(root: Optional["yaml.Node"], schema: dict,
-                          schemas: Optional[dict[str, Any]],
-                          schema_name: str
-                          ) -> list[tuple["yaml.ScalarNode", MisreadScalar]]:
-    """The one judgement behind :func:`find_misread_scalars` and
-    :func:`misread_scalar_nodes`, sorted by position."""
-    found: list[tuple["yaml.ScalarNode", MisreadScalar]] = []
-    for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
-        if node.style is not None or node.tag == _YAML_STR_TAG:
-            continue
-        types = schema_scalar_types(cands)
-        if types is None or types - {"null"} != {"string"}:
-            continue
-        if node.tag == _YAML_NULL_TAG and "null" in types:
-            continue
-        found.append((node, MisreadScalar(
-            node.start_mark.line + 1, node.start_mark.column + 1,
-            path or "/", node.value, node.tag.rsplit(":", 1)[-1],
-            _tag_as_written(node.tag) if getattr(node, "go_explicit_tag", False) else "")))
-    found.sort(key=lambda pair: (pair[1].line, pair[1].column))
-    return found
-
-
-# ── #2509: an UNQUOTED YAML 1.1 boolean word in a field that takes a boolean
-#
-# `send_resolved: on` / `_routing_enforced: {enabled: yes}` is True to
-# PyYAML (YAML 1.1), so the schema passes it; yaml.v3 alone reads the STRING
-# "on" / "yes". ⛔ The message states only that, and no consequence: each
-# file kind is read by a different Go reader — the generic decode keeps the
-# string, and the route generator (PyYAML) takes the word as a boolean;
-# some readers never read the field at all (#2509 blind
-# review 2: a per-plane claim was wrong for at least one kind every round).
-# Nothing on the READ side changes (#2509 owner decision ②) — the author is
-# told to write true / false. A WARN, never an ERROR.
-#
-# ⛔ As for #2164, no word list here: a word counts when PyYAML's resolver
-# tagged the plain scalar `bool` (exactly the YAML 1.1 words, the schema's
-# `yamlBool` enum — pinned by
-# tests/shared/test_yaml11_bool_word_warning.py) and yaml.v3 does NOT read it
-# as a boolean (only true / True / TRUE / false / False / FALSE). A field
-# takes a boolean when any schema branch that can describe it allows one.
-_YAML_BOOL_TAG = "tag:yaml.org,2002:bool"
-_YAML12_BOOL_TEXTS = frozenset(("true", "True", "TRUE", "false", "False", "FALSE"))
-
-
-class YamlBoolWord:
-    """One unquoted YAML 1.1 boolean word in a boolean field (#2509).
-
-    ``line`` / ``column`` are 1-based; ``path`` as for :class:`MisreadScalar`;
-    ``text`` the word as written."""
-
-    __slots__ = ("line", "column", "path", "text")
-
-    def __init__(self, line: int, column: int, path: str, text: str) -> None:
-        self.line, self.column, self.path, self.text = line, column, path, text
-
-    def message(self) -> str:
-        field = self.path.rsplit("/", 1)[-1]
-        value = "true" if self.text.lower() in ("yes", "on") else "false"
-        written = (f"- {value}" if field.isdigit() or not field else f"{field}: {value}")
-        return (f"{self.path}: unquoted YAML 1.1 boolean word {self.text!r} — write it as "
-                f"true / false ({written}). PyYAML reads it as a boolean; some of the "
-                f"exporter's readers keep it as a string")
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"YamlBoolWord({self.line}:{self.column} {self.path} {self.text!r})"
-
-
-def find_yaml11_bool_words(root: Optional["yaml.Node"], schema: dict,
-                           schemas: Optional[dict[str, Any]] = None,
-                           schema_name: str = "") -> list[YamlBoolWord]:
-    """Every plain scalar under *root* in a field of *schema* that takes a
-    boolean, written as a YAML 1.1 boolean word yaml.v3 reads as a string
-    (`yes` / `no` / `on` / `off`, three spellings each) — #2509. Arguments
-    as for :func:`find_misread_scalars`."""
-    found: list[YamlBoolWord] = []
-    for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
-        if (node.style is not None or node.tag != _YAML_BOOL_TAG
-                or node.value in _YAML12_BOOL_TEXTS or getattr(node, "go_explicit_tag", False)):
-            continue
-        types = schema_scalar_types(cands)
-        if types is None or "boolean" not in types:
-            continue
-        found.append(YamlBoolWord(node.start_mark.line + 1, node.start_mark.column + 1,
-                                  path or "/", node.value))
-    found.sort(key=lambda m: (m.line, m.column))
-    return found
-
-
-class GoRejectedBoolTag:
-    """An explicit ``!!bool`` whose text yaml.v3 does not take (#2509 review
-    F4). ``line`` 1-based; ``path`` as for :class:`MisreadScalar`."""
-
-    __slots__ = ("line", "path", "text")
-
-    def __init__(self, line: int, path: str, text: str) -> None:
-        self.line, self.path, self.text = line, path, text
-
-    # The message's last sentence: where the exporter's verdict on the file is.
-    # #2740: the lint has no da-guard, so it cannot promise a `profiles` row
-    # naming the file (for a `_routing_profiles.yaml` there is none) — it
-    # points at validate-config. validate-config prints the WARN only for a
-    # file da-guard effective's parse_failed names (or with no da-guard
-    # verdict at all), so there the `profiles` row is the pointer.
-    LINT_POINTER = ("Whether the exporter can still read this file is da-guard's "
-                    "verdict, not this lint's: run validate-config with `--config-dir` "
-                    "pointed at this tree")
-    PROFILES_ROW_POINTER = ("Whether the exporter can still read this file is decided by "
-                            "da-guard — see validate-config's `profiles` row for this "
-                            "tree (`--config-dir`)")
-
-    def message(self, pointer: str = LINT_POINTER) -> str:
-        """⛔ A WARN, and no claim about what the exporter does with the file:
-        three Python rebuilds of "which file, which document, which key" each
-        failed blind review (#2509 rounds 1-3). Whether the exporter can read
-        the file is da-guard's verdict (its parse_failed), which
-        `validate_config` already reports with the exporter's reason.
-        *pointer*: the last sentence, `LINT_POINTER` or
-        `PROFILES_ROW_POINTER` (#2740)."""
-        return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
-                f"YAML library) does not accept it (only true / True / TRUE / false / "
-                f"False / FALSE under `!!bool`); remove the tag and write the value this "
-                f"field takes (true / false for a boolean, a quoted string for a string). "
-                f"{pointer}")
-
-
-def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBoolTag]:
-    """Every scalar under *root* written with an explicit ``!!bool`` tag
-    (quoted or not) whose text is not one of yaml.v3's six boolean texts.
-    Field- and position-independent; each hit is a WARN. Needs nodes from
-    :func:`compose_all_nodes` (the ``go_explicit_tag`` mark)."""
-    found: list[GoRejectedBoolTag] = []
-    seen: set[int] = set()
-    stack: list[tuple["yaml.Node", str]] = [(root, "")] if root is not None else []
-    while stack:
-        node, path = stack.pop()
-        if id(node) in seen:
-            continue
-        seen.add(id(node))
-        if isinstance(node, yaml.MappingNode):
-            for key_node, value_node in node.value:
-                label = key_node.value if isinstance(key_node, yaml.ScalarNode) else "?"
-                stack.append((key_node, f"{path}/{label}"))
-                stack.append((value_node, f"{path}/{label}"))
-        elif isinstance(node, yaml.SequenceNode):
-            stack.extend((item, f"{path}/{i}") for i, item in enumerate(node.value))
-        elif (isinstance(node, yaml.ScalarNode) and node.tag == _YAML_BOOL_TAG
-              and getattr(node, "go_explicit_tag", False)
-              and node.value not in _YAML12_BOOL_TEXTS):
-            found.append(GoRejectedBoolTag(node.start_mark.line + 1, path or "/", node.value))
-    found.sort(key=lambda m: m.line)
-    return found
-
-
-def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,
-                               schemas: Optional[dict[str, Any]],
-                               schema_name: str):
-    """Each scalar under *root* (callers filter on style), with the schema
-    branches that can describe its position and its JSON-pointer-like path —
-    the walk `_walk_misread_scalars` (the #2164 judgement behind
-    `find_misread_scalars` / `misread_scalar_nodes`) and
-    `find_yaml11_bool_words` share.
-    Merge keys put the merged keys in the mapping holding them; an alias
-    re-entering the same schema position is walked once."""
+def _tree_scalars_with_schema(root: Any, schema: dict,
+                              schemas: Optional[dict[str, Any]],
+                              schema_name: str) -> Iterator[tuple[dict, list, str]]:
+    """Each parse-tree scalar under *root* (one file's nodes), with the schema
+    branches that can describe its position and its JSON-pointer-like path,
+    in document order (parse-tree's: keys byte-sorted)."""
     if root is None:
         return
     schemas = dict(schemas or {})
     schemas.setdefault(schema_name, schema)
-    seen: set[tuple[int, tuple[int, ...]]] = set()
-    stack: list[tuple["yaml.Node", list[tuple[dict, str]], str]] = [
+    stack: list[tuple[Any, list[tuple[dict, str]], str]] = [
         (root, _schema_expand(schema, schema_name, schemas), "")]
     while stack:
         node, cands, path = stack.pop()
         if not cands:
             continue
-        memo = (id(node), tuple(sorted(id(s) for s, _ in cands)))
-        if memo in seen:  # an alias re-entering the same schema position
-            continue
-        seen.add(memo)
-        if isinstance(node, yaml.MappingNode):
-            for key_node, value_node in reversed(node.value):
-                if key_node.tag == _MERGE_TAG:
-                    # `<<: *base` — its keys land in THIS mapping.
-                    merged = (value_node.value
-                              if isinstance(value_node, yaml.SequenceNode)
-                              else [value_node])
-                    stack.extend((m, cands, path) for m in merged)
-                    continue
-                if not isinstance(key_node, yaml.ScalarNode):
-                    continue
-                stack.append((value_node,
-                              _schema_key_children(cands, key_node.value, schemas),
-                              f"{path}/{key_node.value}"))
-        elif isinstance(node, yaml.SequenceNode):
-            for idx in reversed(range(len(node.value))):
-                stack.append((node.value[idx],
-                              _schema_item_children(cands, idx, schemas),
-                              f"{path}/{idx}"))
-        elif isinstance(node, yaml.ScalarNode):
+        if _is_tree_scalar(node):
             yield node, cands, path
+        elif isinstance(node, dict):
+            for key in reversed(list(node)):
+                stack.append((node[key], _schema_key_children(cands, key, schemas),
+                              f"{path}/{key}"))
+        elif isinstance(node, list):
+            for idx in reversed(range(len(node))):
+                stack.append((node[idx], _schema_item_children(cands, idx, schemas),
+                              f"{path}/{idx}"))
+
+
+def _walk_misread_scalars(root: Any, schema: dict, schemas: Optional[dict[str, Any]],
+                          schema_name: str) -> list[tuple[dict, MisreadScalar]]:
+    found: list[tuple[dict, MisreadScalar]] = []
+    for node, cands, path in _tree_scalars_with_schema(root, schema, schemas, schema_name):
+        if node["tag"] == "!!str":
+            continue
+        types = schema_scalar_types(cands)
+        if types is None or types - {"null"} != {"string"}:
+            continue
+        if node["tag"] == "!!null" and "null" in types:
+            continue
+        found.append((node, MisreadScalar(path or "/", node["text"],
+                                          node["tag"].lstrip("!"))))
+    return found
+
+
+def find_misread_scalars(root: Any, schema: dict,
+                         schemas: Optional[dict[str, Any]] = None,
+                         schema_name: str = "") -> list[MisreadScalar]:
+    """Every scalar of *root* (a file's `da-guard parse-tree` nodes) that sits
+    in a string-typed field of *schema* and that yaml.v3 read as something
+    else (its tag is not `!!str`).
+
+    *schemas* maps a schema document's basename to its parsed JSON, for
+    cross-document ``$ref``; *schema_name* is *schema*'s own basename in it.
+    See the block comment above for what is (and is not) a string field.
+    """
+    return [hit for _node, hit in _walk_misread_scalars(root, schema, schemas, schema_name)]
+
+
+def misread_scalar_nodes(root: Any, schema: dict,
+                         schemas: Optional[dict[str, Any]] = None,
+                         schema_name: str = "") -> list[dict]:
+    """The scalar NODES :func:`find_misread_scalars` reports — same walk, same
+    verdict (#2695): a caller that reads such a value as the quoted string it
+    was meant to be acts on the node, not on a path (a key holding ``/``
+    makes two paths look nested)."""
+    return [node for node, _hit in _walk_misread_scalars(root, schema, schemas, schema_name)]
+
+
+# ── #2509 → #2906: a YAML 1.1 boolean word in a field that takes a boolean
+#
+# `send_resolved: on` / `_routing_enforced: {enabled: yes}` is the STRING
+# "on" / "yes" to yaml.v3, quoted or not, and so to every reader of conf.d:
+# a boolean field refuses it (the schema's `yamlBool` takes booleans only).
+# The WARN says what to write instead. The words are YAML 1.1's (PyYAML's
+# resolver) minus yaml.v3's six — `_lib_validation._YAML_BOOL_LITERALS`.
+_YAML12_BOOL_TEXTS = frozenset(("true", "True", "TRUE", "false", "False", "FALSE"))
+
+
+class YamlBoolWord:
+    """One YAML 1.1 boolean word (a string to yaml.v3) in a boolean field.
+    ``path`` as for :class:`MisreadScalar`; ``text`` the word as written."""
+
+    __slots__ = ("path", "text")
+
+    def __init__(self, path: str, text: str) -> None:
+        self.path, self.text = path, text
+
+    def message(self) -> str:
+        value = "true" if self.text.lower() in ("yes", "on") else "false"
+        return (f"{self.path}: {self.text!r} is the YAML 1.1 boolean word, which "
+                f"yaml.v3 (every reader of conf.d) reads as the string "
+                f"{self.text!r}, quoted or not — this field takes a boolean: "
+                f"write {_written(self.path, value)}")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"YamlBoolWord({self.path} {self.text!r})"
+
+
+def find_yaml11_bool_words(root: Any, schema: dict,
+                           schemas: Optional[dict[str, Any]] = None,
+                           schema_name: str = "") -> list[YamlBoolWord]:
+    """Every `!!str` scalar of *root* (parse-tree nodes) in a field of *schema*
+    that takes a boolean, whose text is a YAML 1.1 boolean word yaml.v3 does
+    not read as a boolean (`yes` / `no` / `on` / `off`, three spellings
+    each) — #2509. Arguments as for :func:`find_misread_scalars`."""
+    from _lib_validation import _YAML_BOOL_LITERALS
+    words = frozenset(_YAML_BOOL_LITERALS) - _YAML12_BOOL_TEXTS
+    found: list[YamlBoolWord] = []
+    for node, cands, path in _tree_scalars_with_schema(root, schema, schemas, schema_name):
+        if node["tag"] != "!!str" or node["text"] not in words:
+            continue
+        types = schema_scalar_types(cands)
+        if types is None or "boolean" not in types:
+            continue
+        found.append(YamlBoolWord(path or "/", node["text"]))
+    return found
 
 
 def exit_on_yaml_file_error(fn: _F) -> _F:

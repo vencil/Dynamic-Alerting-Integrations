@@ -63,7 +63,8 @@ import _lib_tenant_values as tv  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
 )
-from _lib_io import safe_label  # noqa: E402
+from _lib_io import YamlFileError, safe_label  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
 SCHEMA = "da-tools.explain-keys/v1"
@@ -98,6 +99,11 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
         verdict = kv.judge_tree(conf_d, at=at, binary=binary, timeout=timeout)
     except (tv.DaGuardNotFoundError, tv.DaGuardError, tv.ParseFailedError) as e:
         raise ExplainError(f"da-guard: {e}") from e
+    except ParseTreeError as e:
+        # The root `_policies` read (ADR-036 step 4): no usable parse-tree.
+        raise ExplainError(f"da-guard parse-tree: {' '.join(str(e).split())}") from e
+    except YamlFileError as e:
+        raise ExplainError(str(e)) from e
     except ValueError as e:
         problems = getattr(e, "problems", None)  # policy_engine.InvalidPolicyRules
         if problems is None:

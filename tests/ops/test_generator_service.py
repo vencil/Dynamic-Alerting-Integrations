@@ -190,7 +190,7 @@ def test_changing_one_file_parses_only_that_file(world, tmp_path, monkeypatch):
                                   str(tmp_path / "f.json")])
     finally:
         pc.install(None)
-    blob = pc.content_key(body.encode())
+    blob = pc.content_key("zz-extra.yaml", body.encode())
     modes = {m for (b, m) in cache.new if b == blob}
     assert len(modes) >= 2
     assert doc["cache"]["parses"] == len(modes)
@@ -349,17 +349,21 @@ def test_queue_expiry_and_busy(tmp_path, world):
 # ── memory, incomplete ───────────────────────────────────────────────────
 
 def test_memory_limit_rejects_that_write_only(tmp_path, world):
+    """ADR-036 step 4 (#2906): the file is read by `da-guard parse-tree`,
+    which inherits the judgement's RLIMIT_DATA; the Go runtime's out of
+    memory is the judgement's memory limit too. 192 MiB (the default) runs
+    da-guard on the base tree; 64 MiB would not even start the Go runtime."""
     big = "tenants:\n  big:\n    x: [" + ",".join(["0"] * 400000) + "]\n"
     commit = world["commits"]["clean+extra"]
     with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
-                   args=("--memory-limit-bytes", str(64 * 1024 * 1024))) as svc:
+                   args=("--memory-limit-bytes", str(192 * 1024 * 1024))) as svc:
         status, doc = svc.validate(commit, [{"path": "big.yaml",
                                              "content_b64": h.b64(big)}])
-        assert status == 200 and (doc["result"], doc["reason"]) == ("rejected", "memory"), doc
+        assert status == 200 and (doc["result"], doc.get("reason")) == ("rejected", "memory"), doc
         assert svc.validate(commit)[1]["result"] == "pass"
         m = svc.metrics()
         assert m['da_generator_rejections_total{reason="memory"}'] == 1
-        assert m["da_generator_judgement_memory_limit_bytes"] == 64 * 1024 * 1024
+        assert m["da_generator_judgement_memory_limit_bytes"] == 192 * 1024 * 1024
 
 
 _KILL = "os.kill(os.getpid(), __import__('signal').SIGKILL)"
@@ -783,15 +787,17 @@ def _slow_parse(log: Path, delay: float, *, slow: str = "judgement",
     every warming run end at once, having parsed nothing."""
     return (
         "import time, _lib_parse_cache as _pc, _gsvc_child as _gc\n"
-        "_orig_parse = _pc._parse_file\n"
+        # ADR-036 step 4: a miss is read through parse-tree and stored once
+        # converted — the store is where one file's read ends.
+        "_orig_store = _pc.ParseCache.store\n"
         "_SLOW = [False]\n"
-        "def _slow(path, mode):\n"
+        "def _slow(self, key, value):\n"
         "    if _SLOW[0]:\n"
         f"        with open({str(log)!r}, 'a', encoding='utf-8') as fh:\n"
         "            fh.write('p\\n')\n"
         f"        time.sleep({delay})\n"
-        "    return _orig_parse(path, mode)\n"
-        "_pc._parse_file = _slow\n"
+        "    return _orig_store(self, key, value)\n"
+        "_pc.ParseCache.store = _slow\n"
         "_orig_run_child = _gc.run_child\n"
         "def _run_child(job, fd):\n"
         f"    if job.warm and {warm_exits!r}:\n"

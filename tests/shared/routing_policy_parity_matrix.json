@@ -115,7 +115,13 @@
     "reported under one of route_finding_kinds - e.g. invalid_override_entry for an override that is not a mapping, da-guard's",
     "missing_receiver_field; when it replaces a da-guard `error` row it is held to the same floor (in force under --validate --strict).",
     "The gate that kept a da-guard routing kind from being deleted before a column here pinned it (test_no_routing_check_is_go_only,",
-    "over the routing / threshold planes of internal/guard/findingkind) went with those kinds in #2905: da-guard registers none now."
+    "over the routing / threshold planes of internal/guard/findingkind) went with those kinds in #2905: da-guard registers none now.",
+    "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3). Where a line above",
+    "says PyYAML reads an unquoted yes / on / no / 1:30 as a non-string, yaml.v3 reads the string, and the rows carry",
+    "the generator's new verdict (a `yes` match value is a label value; `alertname: no` matches `no`); a file parse-tree",
+    "cannot read (`!!merge`, a null key, `!`, `!!null x`) refuses the tree: tenant_file_unreadable in python_differs for a",
+    "tenant file, domain_policy_unusable (field \"\") for a policy file. Rows whose point was a PyYAML-only shape that",
+    "yaml.v3 refuses or reads alike were respelled (`~:` keys -> `true:`, `on` group_by -> `8`, `enabled: yes` -> true)."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -1043,15 +1049,21 @@
             {
               "ref": "receiver",
               "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
             }
           ],
-          "policy": [],
-          "rejected_routes": [
-            "routes[0]"
+          "policy": [
+            [
+              "finance",
+              "routes[0]",
+              "forbidden_receiver_types"
+            ]
           ],
-          "values_not_string": [
-            "routes[0].match.paging"
-          ],
+          "rejected_routes": [],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
@@ -1453,7 +1465,13 @@
         "t-mk-block.yaml": "tenants:\n  t-mk-block:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
         "t-mk-explicit.yaml": "tenants:\n  t-mk-explicit:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          ""
+        ]
+      ],
       "expect": {
         "t-mk-constraints": {
           "targets": [
@@ -1462,13 +1480,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mk-constraints",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1484,13 +1496,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mk-null-tag",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1506,13 +1512,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mk-node",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1528,13 +1528,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mk-block",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1571,7 +1565,13 @@
         "_domain_policy.yaml": "!!merge q: {domain_policies: null}\n<<: {domain_policies: {fin: {tenants: [t-mo-top], constraints: {forbidden_receiver_types: [slack]}}}}\n",
         "t-mo-top.yaml": "tenants:\n  t-mo-top:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          ""
+        ]
+      ],
       "expect": {
         "t-mo-top": {
           "targets": [
@@ -1580,13 +1580,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "fin",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1612,7 +1606,13 @@
         "t-mo-nested.yaml": "tenants:\n  t-mo-nested:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
         "t-mo-own.yaml": "tenants:\n  t-mo-own:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          ""
+        ]
+      ],
       "expect": {
         "t-mo-earlier": {
           "targets": [
@@ -1637,13 +1637,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mo-later-key",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1659,13 +1653,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mo-nested",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1681,13 +1669,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mo-own-key",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1703,13 +1685,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "mo-key-then-seq",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -1746,7 +1722,13 @@
         "_domain_policy.yaml": "!!merge m: &A {!!merge r: {forbidden_receiver_types: [slack]}}\ndomain_policies:\n  fin:\n    tenants: [t-ma-alias]\n    constraints: *A\n",
         "t-ma-alias.yaml": "tenants:\n  t-ma-alias:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          ""
+        ]
+      ],
       "expect": {
         "t-ma-alias": {
           "targets": [
@@ -1755,13 +1737,7 @@
               "type": "slack"
             }
           ],
-          "policy": [
-            [
-              "fin",
-              "receiver",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
@@ -2520,6 +2496,26 @@
         [
           "domain_policy_unusable",
           "_domain_policy.yaml",
+          "domain_policies.plain-no.constraints.require_critical_escalation"
+        ],
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies.plain-off.constraints.require_critical_escalation"
+        ],
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies.plain-on.constraints.require_critical_escalation"
+        ],
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies.plain-yes.constraints.require_critical_escalation"
+        ],
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
           "domain_policies.quoted-yes.constraints.require_critical_escalation"
         ]
       ],
@@ -2537,10 +2533,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
-          "escalation": {
-            "verdict": "violation",
-            "leaks": []
-          },
+          "escalation": null,
           "refused": null
         },
         "t-on": {
@@ -2556,10 +2549,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
-          "escalation": {
-            "verdict": "violation",
-            "leaks": []
-          },
+          "escalation": null,
           "refused": null
         },
         "t-no": {
@@ -2626,7 +2616,13 @@
         "t-tag-no.yaml": "tenants:\n  t-tag-no:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n",
         "t-tag-forbid.yaml": "tenants:\n  t-tag-forbid:\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n      routes:\n      - match:\n          severity: warning\n        receiver:\n          type: webhook\n          url: https://hook.example.com/alerts\n    cpu_usage_percent: '85'\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          ""
+        ]
+      ],
       "expect": {
         "t-tag-yes": {
           "targets": [
@@ -2641,10 +2637,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
-          "escalation": {
-            "verdict": "violation",
-            "leaks": []
-          },
+          "escalation": null,
           "refused": null
         },
         "t-tag-mixed": {
@@ -2660,10 +2653,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
-          "escalation": {
-            "verdict": "violation",
-            "leaks": []
-          },
+          "escalation": null,
           "refused": null
         },
         "t-tag-long": {
@@ -2679,10 +2669,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
-          "escalation": {
-            "verdict": "violation",
-            "leaks": []
-          },
+          "escalation": null,
           "refused": null
         },
         "t-tag-no": {
@@ -2712,22 +2699,13 @@
               "type": "webhook"
             }
           ],
-          "policy": [
-            [
-              "tag-forbid",
-              "routes[0]",
-              "forbidden_receiver_types"
-            ]
-          ],
+          "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
-          "escalation": {
-            "verdict": "compliant",
-            "leaks": []
-          },
+          "escalation": null,
           "refused": null
         }
       },
@@ -3449,21 +3427,23 @@
             {
               "ref": "receiver",
               "type": "slack"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "pagerduty"
             }
           ],
           "policy": [],
-          "rejected_routes": [
-            "routes[0]"
-          ],
-          "values_not_string": [
-            "routes[0].match.team"
-          ],
+          "rejected_routes": [],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
           "escalation": {
-            "verdict": "violation",
-            "leaks": []
+            "verdict": "compliant",
+            "leaks": [
+              "receiver"
+            ]
           },
           "refused": null
         },
@@ -3472,15 +3452,15 @@
             {
               "ref": "receiver",
               "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
             }
           ],
           "policy": [],
-          "rejected_routes": [
-            "routes[0]"
-          ],
-          "values_not_string": [
-            "routes[0].match.team"
-          ],
+          "rejected_routes": [],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
@@ -3492,15 +3472,15 @@
             {
               "ref": "receiver",
               "type": "pagerduty"
+            },
+            {
+              "ref": "routes[0]",
+              "type": "slack"
             }
           ],
           "policy": [],
-          "rejected_routes": [
-            "routes[0]"
-          ],
-          "values_not_string": [
-            "routes[0].match.team"
-          ],
+          "rejected_routes": [],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
@@ -3612,13 +3592,15 @@
             {
               "ref": "receiver",
               "type": "pagerduty"
+            },
+            {
+              "ref": "overrides[0]",
+              "type": "webhook"
             }
           ],
           "policy": [],
           "rejected_routes": [],
-          "values_not_string": [
-            "overrides[0].alertname"
-          ],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
@@ -3638,9 +3620,7 @@
           ],
           "policy": [],
           "rejected_routes": [],
-          "values_not_string": [
-            "overrides[0].alertname"
-          ],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
@@ -3670,16 +3650,7 @@
       },
       "enforced_group_by_invalid": [],
       "route_findings": [],
-      "route_findings_python_differs": {
-        "reason": "t-o-no's `alertname: no` is the boolean False to PyYAML: the generator's truthiness reads the override as having no matcher (empty_override_matcher, blocking under --validate) besides its strict routing_value_not_string; da-guard counts a non-string, non-null matcher as set, so it reports the routing_value_not_string alone. Both refuse the override.",
-        "rows": [
-          [
-            "t-o-no",
-            "empty_override_matcher",
-            "overrides[0]"
-          ]
-        ]
-      }
+      "route_findings_python_differs": null
     },
     {
       "name": "routing-values-yaml11-routing-defaults",
@@ -3703,9 +3674,7 @@
           ],
           "policy": [],
           "rejected_routes": [],
-          "values_not_string": [
-            "overrides[0].metric_group"
-          ],
+          "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
@@ -3902,7 +3871,6 @@
         "t-gb-batch.yaml": "tenants:\n  t-gb-batch:\n    cpu_usage_percent: '85'\n    _routing_profile: p-gb-ok\n",
         "t-gb-tagged.yaml": "tenants:\n  t-gb-tagged:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by: [alertname, !!str 8, !!int '9']\n",
         "t-gb-wildcard-twice.yaml": "tenants:\n  t-gb-wildcard-twice:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by: [\"...\", \"...\"]\n",
-        "t-gb-nonspecific-tag.yaml": "tenants:\n  t-gb-nonspecific-tag:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by: [alertname, ! 'yes', ! '5']\n",
         "alertname.yaml": "tenants:\n  alertname:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by: [alertname, \"{{tenant}}\"]\n"
       },
       "platform": [],
@@ -3917,12 +3885,7 @@
           "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
-          "group_by_invalid": [
-            [
-              "group_by[1]",
-              "not_string"
-            ]
-          ],
+          "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
           "escalation": null,
@@ -3975,16 +3938,7 @@
           "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
-          "group_by_invalid": [
-            [
-              "group_by[0]",
-              "not_string"
-            ],
-            [
-              "group_by[1]",
-              "not_string"
-            ]
-          ],
+          "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": null,
           "escalation": null,
@@ -4196,6 +4150,40 @@
           "escalation": null,
           "refused": null
         },
+        "alertname": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [
+            [
+              "group_by[1]",
+              "duplicate"
+            ]
+          ],
+          "unknown_profile": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [],
+      "route_findings": [],
+      "route_findings_python_differs": null
+    },
+    {
+      "name": "group-by-nonspecific-tag-unreadable",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-gb-nonspecific-tag.yaml": "tenants:\n  t-gb-nonspecific-tag:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n      group_by: [alertname, ! 'yes', ! '5']\n"
+      },
+      "platform": [],
+      "expect": {
         "t-gb-nonspecific-tag": {
           "targets": [
             {
@@ -4217,28 +4205,14 @@
             ]
           ],
           "unknown_profile": null,
-          "python_differs": null,
-          "escalation": null,
-          "refused": null
-        },
-        "alertname": {
-          "targets": [
-            {
-              "ref": "receiver",
-              "type": "pagerduty"
-            }
-          ],
-          "policy": [],
-          "rejected_routes": [],
-          "values_not_string": [],
-          "group_by_invalid": [
-            [
-              "group_by[1]",
-              "duplicate"
-            ]
-          ],
-          "unknown_profile": null,
-          "python_differs": null,
+          "python_differs": {
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (non_specific_tag), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": "tenant_file_unreadable"
+          },
           "escalation": null,
           "refused": null
         }
@@ -4274,11 +4248,15 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "python_differs": null,
-          "escalation": {
-            "verdict": "violation",
-            "leaks": []
+          "python_differs": {
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (null_key), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": "tenant_file_unreadable"
           },
+          "escalation": null,
           "refused": null
         },
         "t-null-alone": {
@@ -4295,7 +4273,14 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "python_differs": null,
+          "python_differs": {
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (null_key), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": "tenant_file_unreadable"
+          },
           "escalation": null,
           "refused": null
         },
@@ -4313,7 +4298,14 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "python_differs": null,
+          "python_differs": {
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (null_key), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": "tenant_file_unreadable"
+          },
           "escalation": null,
           "refused": null
         },
@@ -4330,8 +4322,15 @@
           ],
           "values_not_string": [],
           "group_by_invalid": [],
-          "unknown_profile": null,
-          "python_differs": null,
+          "unknown_profile": "p-null-key",
+          "python_differs": {
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (null_key), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": "tenant_file_unreadable"
+          },
           "escalation": null,
           "refused": null
         }
@@ -4343,7 +4342,7 @@
     {
       "name": "routing-enforced-group-by-single",
       "files": {
-        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: yes\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on, alertname, '', \"...\"]\n",
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, 8, alertname, '', \"...\"]\n",
         "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
       },
       "platform": [],
@@ -4694,7 +4693,7 @@
       "name": "routing-enforced-group-by-last-enabled-root-file",
       "files": {
         "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
-        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on]\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, 8]\n",
         "_zz.yaml": "_routing_enforced:\n  enabled: false\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [tenant, tenant]\n",
         "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
       },
@@ -4766,7 +4765,7 @@
     {
       "name": "routing-enforced-match-mapping-keeps-earlier-2989",
       "files": {
-        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  match: ['severity=\"critical\"']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on]\n",
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  match: ['severity=\"critical\"']\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, 8]\n",
         "_noc.yaml": "_routing_enforced:\n  enabled: true\n  match: {severity: critical}\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
         "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
       },
@@ -5027,11 +5026,6 @@
           "routing_enforced_match_invalid",
           "_e4.yaml",
           "_routing_enforced.match"
-        ],
-        [
-          "routing_enforced_match_invalid",
-          "_e5.yaml",
-          "_routing_enforced.match"
         ]
       ],
       "expect": {
@@ -5052,7 +5046,13 @@
           "refused": null
         }
       },
-      "enforced_group_by_invalid": [],
+      "enforced_group_by_invalid": [
+        [
+          "_e5.yaml",
+          "_routing_enforced.group_by[1]",
+          "duplicate"
+        ]
+      ],
       "route_findings": [],
       "route_findings_python_differs": null
     },
@@ -5173,7 +5173,7 @@
           "unknown_profile": null,
           "python_differs": null,
           "escalation": null,
-          "refused": "routing_not_mapping"
+          "refused": null
         },
         "t-no": {
           "targets": null,
@@ -5489,23 +5489,12 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": {
-            "reason": "#2700: PyYAML takes any !!merge-tagged key as a merge key, so `!!merge q:` merges its _routing into t1 and the generator's --strict blocks the forbidden slack receiver; the Go readers' yaml.v3 reads `q` as a plain key and see no _routing (da-guard rc 0).",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "slack"
-              }
-            ],
-            "policy": [
-              [
-                "finance",
-                "receiver",
-                "forbidden_receiver_types"
-              ]
-            ],
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (tag_not_allowed), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
             "rejected_routes": [],
             "group_by_invalid": [],
-            "refused": null
+            "refused": "tenant_file_unreadable"
           },
           "escalation": null,
           "refused": null
@@ -5518,23 +5507,12 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": {
-            "reason": "#2700 with a known key: `!!merge _routing:` merges the inner _routing (a slack receiver) into t2 for PyYAML, and the generator's --strict blocks it; yaml.v3 reads a plain `_routing` key holding a mapping with no receiver, so the Go readers render nothing; da-guard names only that inner `_routing` as a key the generator does not read (#2960), not the forbidden receiver.",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "slack"
-              }
-            ],
-            "policy": [
-              [
-                "finance",
-                "receiver",
-                "forbidden_receiver_types"
-              ]
-            ],
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (tag_not_allowed), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
+            "targets": null,
+            "policy": [],
             "rejected_routes": [],
             "group_by_invalid": [],
-            "refused": null
+            "refused": "tenant_file_unreadable"
           },
           "escalation": null,
           "refused": null
@@ -5575,7 +5553,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "python_differs": {
-            "reason": "#2713: the merge source's _routing (`!!bool y`, a value PyYAML cannot build) is overridden by t1's own _routing. PyYAML builds every merged pair first and cannot read the file, so the generator refuses the whole tree (tenant_file_unreadable, rc 1); yaml.v3 skips the overridden value and the Go readers judge t1's own _routing.",
+            "reason": "ADR-036 step 4 (#2906): the generator reads conf.d through da-guard parse-tree (yaml.v3), and parse-tree cannot read a file of this tree (decode_error), so the generator refuses the whole tree (tenant_file_errors, rc 1); the Go readers, reading as PyYAML did, kept this row's other columns",
             "targets": null,
             "policy": [],
             "rejected_routes": [],
@@ -5833,7 +5811,7 @@
       "name": "unread-location-wrapped-non-string-key-2904",
       "files": {
         "_defaults.yaml": "defaults:\n  1: 5\n  cpu_usage_percent: 80\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
-        "team-a/_defaults.yaml": "defaults:\n  ~: 1\n  cpu_usage_percent: 70\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
+        "team-a/_defaults.yaml": "defaults:\n  true: 1\n  cpu_usage_percent: 70\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
         "team-b/_defaults.yaml": "defaults:\n  1: 5\n  cpu_usage_percent: 60\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
         "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://t1.example/hook\n"
       },
@@ -5881,7 +5859,7 @@
       "files": {
         "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
         "_platform.yaml": "profiles:\n  1:\n    cpu_usage_percent: 50\n    _routing_profile: p-x\n  p:\n    2: 3\n    _routing:\n      receiver:\n        type: webhook\n        url: https://x.example/hook\n",
-        "team-a/_defaults.yaml": "~: 1\ncpu_usage_percent: 70\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
+        "team-a/_defaults.yaml": "true: 1\ncpu_usage_percent: 70\n_routing:\n  receiver:\n    type: webhook\n    url: https://x.example/hook\n",
         "t1.yaml": "tenants:\n  t1:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://t1.example/hook\n"
       },
       "platform": [
