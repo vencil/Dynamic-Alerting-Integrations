@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -531,4 +532,25 @@ func TestDiffTenant_PreviewsTheSplice(t *testing.T) {
 			t.Fatalf("status = %d, want PUT's 409 %s; body: %s", w.Code, configErrorNotRoundTrippable, w.Body.String())
 		}
 	})
+}
+
+// TestSplice_BodyAliasToKeyAnchorIsRefused pins the alias half of the body
+// rule (hasAnchorOrAlias): an alias in a declared section may point to an
+// anchor outside every section — on the body's `tenants` key — which the
+// splice does not write, so the alias would bind to the file's anchor of the
+// same name, here in a section the caller may not read. For a caller the
+// file is withheld from, the answer must not depend on that hidden value:
+// the same withheld 409 whether it equals what the body's alias decodes to
+// or not.
+func TestSplice_BodyAliasToKeyAnchorIsRefused(t *testing.T) {
+	t.Parallel()
+	body := "&k tenants:\n  in-t:\n    y: *k\n"
+	for _, hidden := range []string{"tenants", "other"} {
+		base := "tenants:\n  out-t:\n    x: &k " + hidden + "\n  in-t:\n    y: \"1\"\n"
+		_, err := spliceDeclaredSections([]byte(base), body, "in-t", nil, func([]byte) bool { return false })
+		var se *putSpliceError
+		if !errors.As(err, &se) || se.Detail != msgSpliceDetailWithheld {
+			t.Errorf("hidden value %q: err = %v, want the withheld 409", hidden, err)
+		}
+	}
 }

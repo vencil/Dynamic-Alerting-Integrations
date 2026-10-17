@@ -215,8 +215,25 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 func requireOrgWriteAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, want rbac.Permission) (writeGate, bool) {
 	pair := scopePairOf(WriteScopeMeta(d.ConfigDir), tenantID)
 	return writeGate{pair, gateOrgs(d, tenantID)}, requireOrgWriteWithMeta(w, r, d, tenantID, want, fixedScopeMeta(pair),
-		"insufficient permissions for tenant "+tenantID+
-			" (permission and organization-scope checks, ADR-027)")
+		orgWriteDeniedText(tenantID))
+}
+
+// orgWriteDeniedText is requireOrgWriteAt's refusal text.
+func orgWriteDeniedText(tenantID string) string {
+	return "insufficient permissions for tenant " + tenantID +
+		" (permission and organization-scope checks, ADR-027)"
+}
+
+// orgWriteAt is requireOrgWriteAt for PermWrite without the answer: what it
+// judged, and whether the caller may write (#3062's planPut, which decides
+// where a refusal goes). The same predicate as canSeeCredentials.
+func orgWriteAt(r *http.Request, d *Deps, tenantID string) (writeGate, bool) {
+	pair := scopePairOf(WriteScopeMeta(d.ConfigDir), tenantID)
+	gate := writeGate{pair, gateOrgs(d, tenantID)}
+	if d.RBAC == nil {
+		return gate, true // test-only state, see requireOrgWriteWithMeta
+	}
+	return gate, OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermWrite, fixedScopeMeta(pair))
 }
 
 // RequireOrgWriteProposed is the POST-STATE half of the write gate (#1597
@@ -437,7 +454,7 @@ func withReplaceUnparseable(r *http.Request, d *Deps) *http.Request {
 }
 
 // mayReplaceUnparseable is the #2405 bit withReplaceUnparseable sets, for a
-// preview that answers as the write would (previewPut).
+// preview that answers as the write would (planPut).
 func mayReplaceUnparseable(r *http.Request, d *Deps) bool {
 	return d.RBAC != nil && d.RBAC.PlatformUnrestricted(rbac.RequestPrincipal(r), rbac.PermWrite)
 }

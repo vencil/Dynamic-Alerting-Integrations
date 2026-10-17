@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -101,81 +99,31 @@ type PutTenantResponse struct {
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
-		tenantID := chi.URLParam(r, "id")
-		if err := ValidateWritableTenantID(tenantID); err != nil {
-			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-			return
-		}
-		// ADR-027 / LD-6 P4b: org-scope-aware write gate, top of handler —
-		// BEFORE the body is read, so a denied caller triggers no side
-		// effect on either write path (direct commit or PR mode) and learns
-		// nothing from policy-violation details.
-		gatePre, ok := requireOrgWriteAt(rw, r, d, tenantID, rbac.PermWrite)
-		if !ok {
-			return
-		}
-		// #2477: a tenant file that is not a regular file is refused here,
-		// at once (409, config_error not_regular_file), before any write step
-		// touches it. A new tenant (no file yet) and every other resolve
-		// outcome go on to the Writer exactly as before.
-		if existing, err := confd.ResolveTenantFile(d.ConfigDir, tenantID); err == nil {
-			if errors.Is(confd.CheckRegularFile(existing), confd.ErrNotRegularFile) {
-				writeTenantFileNotRegular(rw, r, tenantID)
-				return
+		// Optimistic concurrency (opt-in). Parsed before the body is read so
+		// a malformed precondition costs nothing and can never be mistaken
+		// for "no precondition was asked for" — the whole point of the
+		// header is that the caller wanted the write gated, so anything that
+		// stops the gate from running has to be an error, not a silent
+		// unconditional overwrite.
+		var baseHash string
+		readBody := func(rw http.ResponseWriter, r *http.Request) (string, bool) {
+			var ok bool
+			if baseHash, ok = readBaseHashHeader(rw, r); !ok {
+				return "", false
 			}
+			body, ok := readLimitedBody(rw, r, d)
+			return string(body), ok
 		}
+		// #3062: the refusal sequence PUT shares with /diff and /validate
+		// (tenant_put_plan.go): the gates, the declared tenants, the
+		// placeholder. The rest runs in the Writer, on the file it replaces.
+		plan, ok := planPut(rw, rw, r, d, endpointPut, readBody)
+		if !ok {
+			return
+		}
+		tenantID, body := plan.tenantID, plan.body
+		r = plan.r
 		email := rbac.RequestEmail(r)
-
-		// Optimistic concurrency (opt-in). Parsed before the body is read so a
-		// malformed precondition costs nothing and can never be mistaken for
-		// "no precondition was asked for" — the whole point of the header is
-		// that the caller wanted the write gated, so anything that stops the
-		// gate from running has to be an error, not a silent unconditional
-		// overwrite.
-		baseHash, ok := readBaseHashHeader(rw, r)
-		if !ok {
-			return
-		}
-
-		body, ok := readLimitedBody(rw, r, d)
-		if !ok {
-			return
-		}
-
-		// #1597 follow-up: the gate above authorized against the tenant's
-		// metadata AS IT IS ON DISK. This is a whole-file replace, and
-		// `_metadata` lives inside the file being replaced, so the body can
-		// move the tenant into an environment/domain the caller does not
-		// administer. Authorize the PROPOSED state too — same predicate, same
-		// flag, so shadow mode is unaffected and the gap closes exactly when
-		// the axis is enforced.
-		gatePost, ok := requireOrgWriteProposedAt(rw, r, d, tenantID, rbac.PermWrite, string(body))
-		if !ok {
-			return
-		}
-		// #3062: the body may declare other tenants of a shared file; each
-		// must be one the caller may write, by the same two judgements. The
-		// sections it does not declare are kept by the writer (putSplicer).
-		declared, ok := declaredTenantsWritable(rw, r, d, tenantID, string(body))
-		if !ok {
-			return
-		}
-
-		// #1560: a masked-credential placeholder written back is a 400.
-		// Routing and the domain policy are the route generator's to judge,
-		// on the tree the write produces (#2903, ADR-036 §4).
-		if err := gitops.PlaceholderPreflight(string(body)); err != nil {
-			writePlaceholderError(rw, r, err)
-			return
-		}
-
-		// #2405: replacing a current file that cannot be parsed needs write
-		// permission on all tenants; the Writer checks the bit under its lock,
-		// on the file the write lands on (both modes).
-		r = withReplaceUnparseable(r, d)
-		// #3039: which other tenants the file declares a validation message
-		// may name.
-		r = withTenantNames(r, d)
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
 		if d.prWritePath() {
@@ -193,7 +141,7 @@ func PutTenant(d *Deps) http.HandlerFunc {
 						"tracks the base branch, so it cannot witness a pending PR's change")
 				return
 			}
-			putTenantPRMode(d, rw, r, tenantID, email, string(body), gatePre, gatePost, declared)
+			putTenantPRMode(d, rw, r, plan, email)
 			return
 		}
 
@@ -204,76 +152,15 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		rw = attempt
 		var notices []string
 		var err error
-		splice := putSplicer(tenantID, string(body), gitops.TenantNamesOf(r.Context()), putFileShown(r, d, tenantID))
 		if baseHash != "" {
-			notices, err = d.Writer.WriteSplicedIfUnchanged(r.Context(), tenantID, email, string(body), baseHash, splice)
+			notices, err = d.Writer.WriteSplicedIfUnchanged(r.Context(), tenantID, email, body, baseHash, plan.splicer(d))
 		} else {
-			notices, err = d.Writer.WriteSpliced(r.Context(), tenantID, email, string(body), splice)
+			notices, err = d.Writer.WriteSpliced(r.Context(), tenantID, email, body, plan.splicer(d))
 		}
 		if err != nil {
-			// #2903: the generator container refused it (422 / 429 / 503).
-			if writeGeneratorError(rw, r, d, err) {
-				return
-			}
-			if errors.Is(err, gitops.ErrWriteOverloaded) {
-				WriteOverloaded(rw, r)
-				return
-			}
-			// #1723: the tree was on a PR branch and nothing was written —
-			// retryable, not the 400 fallback below.
-			if errors.Is(err, gitops.ErrTreeNotOnBase) {
-				WriteTreeNotOnBase(rw, r, err)
-				return
-			}
-			// Same 409 + CONFLICT code as the custom-alerts base_hash check:
-			// from the caller's side both mean "the file moved under you,
-			// re-read and retry", and the current hash tells them what to
-			// re-read against.
-			var pre *gitops.PreconditionError
-			if errors.As(err, &pre) {
-				extra := map[string]any{
-					"message": "the tenant configuration was updated by someone else; refresh and retry",
-				}
-				// #3050: the hash GET /tenants/{id} withholds when the file
-				// declares a tenant the caller may not read — judged on the
-				// very bytes it hashes.
-				if pre.Current != "" && tenantFileShown(r, d, tenantID, pre.Current) {
-					extra["current_source_hash"] = pre.Current
-				}
-				WriteErrorEnvelope(rw, r, http.StatusConflict, ErrorResponse{
-					Error: gitops.ErrPrecondition.Error(),
-					Code:  CodeConflict,
-					Extra: extra,
-				})
-				return
-			}
-			if errors.Is(err, gitops.ErrConflict) {
-				WriteJSONError(rw, r, http.StatusConflict, err.Error())
-				return
-			}
-			// #1673: two files claim this tenant. The request is well-formed;
-			// the on-disk state is ambiguous — 409, not the 400 fallback.
-			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
-				WriteJSONError(rw, r, http.StatusConflict, err.Error())
-				return
-			}
-			// #3062: the declared sections cannot be written into the
-			// file without changing what the body does not declare.
-			if writePutSpliceError(rw, r, err) {
-				return
-			}
-			// #2078: the id is declared by another conf.d file → 409
-			// TENANT_DECLARED_ELSEWHERE (fixed message, path only in the log).
-			if writeTenantPlacementError(rw, r, d, err) {
-				return
-			}
-			// #1700: the text is the caller's only when it is about the
-			// request; a file / git failure keeps its path in the log.
-			// #3054: such a failure is the server's, whatever the status.
-			if !writeErrorIsForClient(err) {
+			if writePutDirectError(rw, r, d, tenantID, err) {
 				attempt.fault = true
 			}
-			WriteJSONError(rw, r, http.StatusBadRequest, writeErrorText(r, err))
 			return
 		}
 
@@ -293,7 +180,9 @@ func PutTenant(d *Deps) http.HandlerFunc {
 // PRTracker != nil. Always writes a response. The deferred ReleaseClaim fires on
 // this function's return, which is immediately before the caller returns — same
 // timing as when the defer lived in the handler.
-func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID, email, yamlContent string, gatePre, gatePost writeGate, declared []declaredGate) {
+func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *putPlan, email string) {
+	tenantID, yamlContent := plan.tenantID, plan.body
+	gatePre, gatePost, declared := plan.gatePre, plan.gatePost, plan.declared
 	// Atomically claim the tenant. Returns false if a PR/MR is
 	// already pending OR another request is mid-creation — both map
 	// to 409. The claim (not the async poll cache) is what makes two
@@ -375,8 +264,7 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		}
 		return declaredOnBase(d, p, configDir, tenantID, yamlContent, declared)
 	}
-	result, err := d.Writer.WritePRSpliced(r.Context(), tenantID, email, yamlContent, check,
-		putSplicer(tenantID, yamlContent, gitops.TenantNamesOf(r.Context()), putFileShown(r, d, tenantID)))
+	result, err := d.Writer.WritePRSpliced(r.Context(), tenantID, email, yamlContent, check, plan.splicer(d))
 	if err != nil {
 		// #2857: the write scope refuses it on the fresh base, or the
 		// base's org file cannot be read.

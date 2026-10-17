@@ -987,20 +987,23 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	//
 	// #1673: resolve ONCE here and use that path for the base-hash read, for
 	// validate's baseline and for the commit, so the three cannot disagree.
-	filePath, err := w.tenantFilePath(tenantID)
-	if err != nil {
-		return nil, err
-	}
-
+	//
+	// #3062: resolvePut is the one copy of these steps, shared with the PR
+	// write (on the fresh base) and the previews (PreviewPut, DryRunValidate).
+	//
 	// Optimistic concurrency, under the lock and before validating: a caller
 	// whose base is stale must hear ErrPrecondition (refresh and retry), not a
-	// validation verdict about a file it has not seen.
-	if baseHash != "" {
+	// validation verdict about a file it has not seen — and before the splice,
+	// so a stale base hears it first.
+	precondition := func(filePath string) error {
+		if baseHash == "" {
+			return nil
+		}
 		// confd.ReadRegularFile (cfg.ReadConfFile): a tenant file that is a
 		// FIFO is refused without blocking under the writer lock (#2939).
 		existing, rerr := readTenantFile(filePath)
 		if rerr != nil && !os.IsNotExist(rerr) {
-			return nil, fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
+			return fmt.Errorf("read current tenant file for %s: %w", tenantID, rerr)
 		}
 		// os.IsNotExist leaves existing nil → current stays empty → mismatch.
 		var current string
@@ -1008,35 +1011,18 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 			current = cfg.ComputeSourceHash(existing)
 		}
 		if current != baseHash {
-			return nil, &PreconditionError{TenantID: tenantID, Expected: baseHash, Current: current}
+			return &PreconditionError{TenantID: tenantID, Expected: baseHash, Current: current}
 		}
+		return nil
 	}
-
-	// #3062: what is committed — the body's declared sections spliced into
-	// the file as it is now, under the lock (after the precondition, so a
-	// stale base hears ErrPrecondition first). A read error leaves existing
-	// nil: never a no-op below.
-	existing, rerr := readTenantFile(filePath)
-	content := yamlContent
-	if splice != nil {
-		if rerr != nil && !os.IsNotExist(rerr) {
-			return nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
-		}
-		if content, err = spliceBase(ctx, existing, yamlContent, splice); err != nil {
-			return nil, err
-		}
-		if err := w.ensureDeclaredSectionsNotElsewhere(w.scanTree, tenantID, yamlContent, existing, filePath); err != nil {
-			return nil, err
-		}
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition, splice)
+	if err != nil {
+		return nil, err
 	}
-
-	// The body is what is judged: the sections it does not declare are the
-	// file's own, kept byte for byte by splice's verification, and are not
-	// this write's to refuse.
-	errs, notices := validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
+	filePath, existing, content, notices := res.FilePath, res.Existing, res.Content, res.Notices
 
 	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
 	if w.unchangedFile(filePath, existing, content) {
@@ -1458,21 +1444,6 @@ func (w *Writer) ensureDeclaredSectionsNotElsewhere(walk func() (*cfg.TreeScan, 
 		}
 	}
 	return nil
-}
-
-// PreviewDeclaredSectionsNotElsewhere is ensureDeclaredSectionsNotElsewhere
-// for a preview of a spliced PUT (#3062, POST /diff): the same judgement on
-// the same inputs — the body, and current, the tenant file as the preview
-// read it (nil when it does not exist) — against the file the preview
-// resolves (previewTenantFilePath) on the shared read walk, without a lock,
-// so a body PUT refuses with ErrTenantDeclaredElsewhere is refused by the
-// preview with the same error.
-func (w *Writer) PreviewDeclaredSectionsNotElsewhere(tenantID, yamlContent string, current []byte) error {
-	target, err := w.previewTenantFilePath(tenantID)
-	if err != nil {
-		return err
-	}
-	return w.ensureDeclaredSectionsNotElsewhere(w.scanTreeForRead, tenantID, yamlContent, current, target)
 }
 
 // ensureNotDeclaredElsewhereIn is ensureNotDeclaredElsewhere judged on the

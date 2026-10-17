@@ -61,12 +61,13 @@ func (w *Writer) DryRunValidate(ctx context.Context, tenantID, yamlContent strin
 	if errs := dryRunPreflight(tenantID, yamlContent); len(errs) > 0 {
 		return errs, nil, nil
 	}
-	filePath, err := w.previewTenantFilePath(tenantID)
+	// resolvePut without a splice: the steps write() runs, on the shared
+	// read walk (previewTenantFilePath's).
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTreeForRead, nil, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	errs, notices = validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
-	return errs, notices, nil
+	return errs, res.Notices, nil
 }
 
 // DryRunValidateBodyOnly is the PR-mode dry-run: exactly what WritePR's

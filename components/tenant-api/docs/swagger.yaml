@@ -2436,18 +2436,22 @@ paths:
         Returns unified diff between current file and proposed content.
         The diff header names current/<id>.yaml and proposed/<id>.yaml.
         The proposed side is what PUT /api/v1/tenants/{id} would write (#3062): the proposal's declared tenant sections
-        spliced into the current file, so a section the proposal leaves out shows as kept. A proposal PUT refuses as malformed
-        is shown as the proposal itself; so is a current file whose tenants cannot be told apart (#2405: replaced whole),
-        but only to a caller with write permission on all tenants: anyone else gets PUT's 400 for it.
-        A caller who may read the tenant but not write it gets the diff of the masked forms of both sides
-        (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
-        with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
-        for a proposal over the tenant-document size limit, and 422 MASKED_PREVIEW_UNAVAILABLE when either side is
-        not YAML, holds several documents, or uses an anchor, alias or merge key.
-        Every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant the caller may not read
-        (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty (not YAML; an alias,
-        a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:) and the caller lacks read permission on all
-        tenants: the diff would carry that file's lines, and has_diff would confirm a guess of it.
+        spliced into the current file, so a section the proposal leaves out shows as kept (a current file whose tenants
+        cannot be told apart is replaced whole, #2405, for a caller PUT lets replace it).
+        A proposal PUT would refuse is refused here exactly as PUT refuses it — the same status and body, judged in PUT's
+        order (#3062): the write scope on {id} as the file holds it and as the proposal proposes it, every other tenant
+        the proposal declares (a fixed 403), a masked-credential placeholder, the splice into the current file, a declared
+        tenant another conf.d file also declares, validation. In PR write mode the current file is this server's copy,
+        which may lag the base branch PUT judges on.
+        A caller who may read the tenant but not write it gets, instead of PUT's 403, the diff of the masked forms of
+        both sides (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
+        with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 422
+        MASKED_PREVIEW_UNAVAILABLE when either side is not YAML, holds several documents, or uses an anchor, alias or merge key.
+        For a proposal PUT would accept, every caller gets 422 TENANT_FILE_WITHHELD when the current file declares a tenant
+        the caller may not read (#3050; a conf.d file can declare several), or its tenants cannot be listed with certainty
+        (not YAML; an alias, a merge key, a non-scalar key or a key tagged other than !!str at the top level or in tenants:)
+        and the caller lacks read permission on all tenants: the diff would carry that file's lines, and has_diff would
+        confirm a guess of it.
       parameters:
       - description: Tenant ID
         in: path
@@ -2468,7 +2472,15 @@ paths:
           schema:
             $ref: '#/definitions/internal_handler.DiffResponse'
         "400":
-          description: Bad Request
+          description: 'Bad request: the PUT this previews would be refused with this
+            400 (#3062: the same body)'
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "403":
+          description: 'Forbidden: the PUT this previews would be refused with this
+            403 (#3062: the same body) — the proposal moves {id} outside the caller''s
+            write scope, or declares a tenant besides {id} the caller may not write
+            (a fixed text naming no tenant)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
@@ -2724,12 +2736,13 @@ paths:
         valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
         symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
         when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
-        The tenants the body declares besides {id} are judged as PUT judges them (#3062): one the caller may not write, or a
-        tenants mapping with a merge key (<<), a key that does not decode to a string or one id twice, is valid: false with
-        PUT's 403 / 400 text, in both write modes. The splice PUT runs is NOT checked here (#3062): the current file is not
-        read for it, so a body valid here may still get PUT's 409 (an alias it would change; for a caller who may not read every
-        tenant of the file, any anchor or alias in a declared section; a declared tenant another conf.d file also declares).
-        POST /api/v1/tenants/{id}/diff previews the splice.
+        The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
+        holds it and as the body proposes it, every other tenant the body declares (a fixed text naming no tenant), a
+        masked-credential placeholder, the splice into the current file (#2405's rule for a file whose tenants cannot be
+        told apart; for a caller who may not read every tenant of the file, its anchor rules), a declared tenant another
+        conf.d file also declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
+        listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
+        base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
       parameters:
       - description: Tenant ID
         in: path

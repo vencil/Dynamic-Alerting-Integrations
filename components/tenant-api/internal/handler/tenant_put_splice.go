@@ -12,9 +12,8 @@ package handler
 // those:
 //
 //   - every tenant the body declares must be one the caller may write
-//     (declaredTenantsWritable, in the handler, before anything is written;
-//     in PR mode judged again on the fresh base, declaredOnBase; the same
-//     judgement answers POST /validate);
+//     (declaredTenantsJudge, in planPut, before anything is written; in PR
+//     mode judged again on the fresh base, declaredOnBase);
 //   - the declared sections are spliced, as yaml.v3 nodes, into the file as
 //     the writer reads it under its lock (spliceDeclaredSections, a
 //     gitops.SpliceFunc): an existing section is replaced whole, a new one
@@ -40,7 +39,9 @@ package handler
 //     key or an alias declares what is in `tenants:`) is #2405's: replaced
 //     whole by the body for a caller with write permission on all tenants,
 //     refused for anyone else;
-//   - POST /diff previews the splice (previewPut).
+//   - POST /diff and POST /validate run this same sequence, in PUT's order
+//     (planPut and gitops.PreviewPut, tenant_put_plan.go): refused exactly
+//     when, and as, PUT is.
 //
 // Which tenants a body declares is the set of DECODED keys of its `tenants:`
 // mapping: `db-b`, `"db-b"`, `'db-b'`, `!!str db-b`, an alias to a `db-b`
@@ -247,24 +248,9 @@ func declaredTenantsJudge(r *http.Request, d *Deps, tenantID, body string) (gate
 	return gates, 0, ""
 }
 
-// declaredTenantsWritable is declaredTenantsJudge for PUT: it writes the
-// refusal (403 FORBIDDEN, or 400) and returns false, or returns the gates.
-func declaredTenantsWritable(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID, body string) ([]declaredGate, bool) {
-	gates, status, msg := declaredTenantsJudge(r, d, tenantID, body)
-	switch status {
-	case 0:
-		return gates, true
-	case http.StatusForbidden:
-		WriteJSONErrorWithCode(rw, r, status, CodeForbidden, msg)
-	default:
-		WriteJSONError(rw, r, status, msg)
-	}
-	return nil, false
-}
-
 // errDeclaredUnwritableOnBase: a PR-mode PUT whose body declares a tenant
 // the caller may not write on the fresh base (#2857 for #3062's declared
-// tenants). Answered as declaredTenantsWritable's 403.
+// tenants). Answered as planPut's 403 for it.
 var errDeclaredUnwritableOnBase = errors.New("the body declares a tenant the caller may not write on the latest base branch")
 
 // declaredOnBase judges each declared tenant again on the fresh base
@@ -483,9 +469,14 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	// mapping, or the `tenants:` value — carries an anchor (F1): an alias to
 	// it resolves to a node the splice changes whatever the body says, so
 	// verifySplice's verdict would depend on whether some hidden part of the
-	// file aliases it — one structural bit of hidden content. The anchor
-	// itself is on a node the caller sees (the file's skeleton, not a hidden
-	// section), so refusing on it alone, alias or not, answers the same.
+	// file aliases it. Refusing on the anchor alone, alias or not, removes
+	// that dependence — but not every one: a caller the file is withheld from
+	// does NOT see the root or `tenants:` node either, and the refusal tells
+	// it one fixed structural bit of the file, whether either carries an
+	// anchor. Not a value, and nothing a guess can be checked against
+	// (whatever the body says, the answer is the same); accepted (#3062), and
+	// documented with #2405's bit (whether the file parses) in
+	// docs/api/tenant-api-hardening.md.
 	//
 	// Without any of these the splice cannot change the binding of any alias
 	// it does not declare, nor what one resolves to, and verifySplice's
@@ -608,6 +599,15 @@ func swapsAnchorsOrAliases(bodyPairs, basePairs [][2]*yaml.Node, baseIDs []strin
 
 // hasAnchorOrAlias reports whether n or a node under it is an alias or
 // defines an anchor. An alias is not followed: being one is enough.
+//
+// The alias half is NOT dead logic on the body side, though the body's root
+// may hold only `tenants` and every alias in it resolves within the body: an
+// alias in a section may point to an anchor OUTSIDE every section — on the
+// body's `tenants` key (`&k tenants:` … `*k`). Spliced into the file, that
+// anchor is not written, and the alias binds to an anchor of the same name
+// in the file — possibly in a hidden section — and verifySplice would
+// compare the hidden value with the body's
+// (TestSplice_BodyAliasToKeyAnchorIsRefused).
 func hasAnchorOrAlias(n *yaml.Node) bool {
 	if n == nil {
 		return false

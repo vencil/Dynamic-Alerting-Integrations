@@ -377,18 +377,9 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	// exact duplicate #1673 exists to prevent — and an ambiguity that the fresh
 	// base has already cleaned up would refuse a write that is fine where it
 	// lands (#1718). WritePRBatch resolves on the same tree, per op.
-	basePath, err := w.resolveTenantFilePath(st.configDir, tenantID, w.stagingScan(st))
-	if err != nil {
-		return "", "", nil, err
-	}
-
+	//
 	// Step 3b': the caller's check, on the fresh base (WritePRChecked).
-	if check != nil {
-		if err := check(st.configDir); err != nil {
-			return "", "", nil, err
-		}
-	}
-
+	//
 	// Step 3c: AUTHORITATIVE validate, against the tree the write actually lands
 	// on (#1681 timing half).
 	//
@@ -416,24 +407,20 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	// base it lands on, and collecting them twice would duplicate them.
 	//
 	// #3062: the splice first, on the base's tenant file, as WriteSpliced
-	// orders it (the precondition has no PR-mode form).
-	content = yamlContent
-	if splice != nil {
-		existing, rerr := readTenantFile(basePath)
-		if rerr != nil && !os.IsNotExist(rerr) {
-			return "", "", nil, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, rerr)
-		}
-		if content, err = spliceBase(ctx, existing, yamlContent, splice); err != nil {
-			return "", "", nil, err
-		}
-		if err := w.ensureDeclaredSectionsNotElsewhere(w.stagingScan(st), tenantID, yamlContent, existing, basePath); err != nil {
-			return "", "", nil, err
-		}
+	// orders it (the precondition has no PR-mode form). resolvePut is the one
+	// copy of steps 3b–3c, shared with the direct write and the previews.
+	var afterResolve func(string) error
+	if check != nil {
+		afterResolve = func(string) error { return check(st.configDir) }
 	}
-	errs, notices := validateReplacing(st.configDir, tenantID, basePath, yamlContent, replaceUnparseableAllowed(ctx), TenantNamesOf(ctx))
+	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve, splice)
+	if err != nil {
+		return "", "", nil, err
+	}
 	if len(errs) > 0 {
 		return "", "", nil, fmt.Errorf("%w: %s", ErrValidation, strings.Join(errs, "; "))
 	}
+	basePath, content, notices := res.FilePath, res.Content, res.Notices
 	return filepath.Join(w.configDir, filepath.FromSlash(confRelKey(st.configDir, basePath))), content, notices, nil
 }
 
