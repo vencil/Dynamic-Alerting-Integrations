@@ -11,16 +11,16 @@ import (
 	"time"
 )
 
-// waitForClientCount polls h.ClientCount() until it matches want or the
-// timeout expires. Mirrors the ticker-with-deadline pattern in
-// async/taskmanager_test.go to replace blind time.Sleep — see
-// TRK-219.
 // allowAll / allowAllFor admit every event (#3123): these tests exercise the
 // hub's delivery mechanics, not its per-subscriber filtering.
 func allowAll(Event) bool { return true }
 
 func allowAllFor(*http.Request) Filter { return allowAll }
 
+// waitForClientCount polls h.ClientCount() until it matches want or the
+// timeout expires. Mirrors the ticker-with-deadline pattern in
+// async/taskmanager_test.go to replace blind time.Sleep — see
+// TRK-219.
 func waitForClientCount(t *testing.T, h *Hub, want int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.NewTimer(timeout)
