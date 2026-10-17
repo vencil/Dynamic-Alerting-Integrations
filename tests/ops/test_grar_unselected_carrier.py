@@ -119,3 +119,116 @@ def test_one_carrier_is_no_finding(tmp_path, where):
     res, findings = _gar(d, tmp_path / "f.json", "--validate", "--strict")
     assert res.returncode == EXIT_OK, res.stdout + res.stderr
     assert not _mine(findings), findings
+
+
+# ── which spelling is the carrier: the generator's answer is da-guard's ──
+
+sys.path.insert(0, str(REPO / "scripts" / "tools"))
+sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
+from _grar_parse import load_tenant_tree  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
+
+
+def _guard_parse_tree(binary: str, d: Path) -> dict:
+    res = subprocess.run([binary, "parse-tree", "--config-dir", str(d)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert res.returncode == 0, res.stderr
+    return json.loads(res.stdout)
+
+
+def _guard_unselected(doc: dict) -> list[str]:
+    return sorted(n["file"] for n in doc["not_read"] if n["reason"] == KIND)
+
+
+@pytest.mark.parametrize("where", ["root", "sub"])
+def test_case_variant_selection_is_the_exporters(tmp_path, where, da_guard_binary):
+    """`_Defaults.YAML` beside `_defaults.yml`: the folded `.yaml` is the
+    carrier (as in Go), the `.yml` is the finding."""
+    d = tmp_path / "conf.d"
+    sub = "" if where == "root" else "team/"
+    files = {"_defaults.yaml": _ROOT_RD} if sub else {}
+    files.update({f"{sub}_Defaults.YAML": _ROOT_RD if not sub else _SUB_RD,
+                  f"{sub}_defaults.yml": _BODIES["enforced"],
+                  f"{sub}t-a.yaml": _tenant("t-a")})
+    for rel, text in files.items():
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_text(text, encoding="utf-8")
+    doc = _guard_parse_tree(da_guard_binary, d)
+    assert doc["defaults_carriers"][sub.rstrip("/") or "."] == f"{sub}_Defaults.YAML", doc
+    tree = load_tenant_tree(str(d))
+    assert [f.file for f in tree.unselected_carriers] == _guard_unselected(doc) == [
+        f"{sub}_defaults.yml"]
+    res, findings = _gar(d, tmp_path / "f.json", "--validate")
+    assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
+    assert [f["file"] for f in _mine(findings)] == [f"{sub}_defaults.yml"]
+    assert f"only {sub}_Defaults.YAML is read" in _mine(findings)[0]["message"]
+
+
+def _unusable_yaml_tree(tmp_path: Path, how: str) -> Path:
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yml").write_text(_ROOT_RD, encoding="utf-8")
+    (d / "t-a.yaml").write_text(_tenant("t-a"), encoding="utf-8")
+    if how == "dangling":
+        symlink_or_skip("missing.yaml", d / "_defaults.yaml")
+    else:
+        (d / "_defaults.yaml").write_text("a: [1, 2\n", encoding="utf-8")
+    return d
+
+
+def test_a_dangling_yaml_is_no_candidate(tmp_path, da_guard_binary):
+    """A `_defaults.yaml` that cannot be opened is not a candidate (Go: not
+    a carrier either): the readable `.yml` is selected, so nothing is
+    unselected, and the dangling link is the unreadable-file refusal."""
+    d = _unusable_yaml_tree(tmp_path, "dangling")
+    doc = _guard_parse_tree(da_guard_binary, d)
+    assert doc["defaults_carriers"]["."] == "_defaults.yml", doc
+    tree = load_tenant_tree(str(d))
+    assert tree.unselected_carriers == [] and _guard_unselected(doc) == []
+    assert [f for f, _ in tree.tenant_file_errors] == ["_defaults.yaml"]
+    res, findings = _gar(d, tmp_path / "f.json", "--validate")
+    assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
+    assert not _mine(findings)
+    assert [f["file"] for f in findings if f["kind"] == "tenant_file_unreadable"] == ["_defaults.yaml"]
+
+
+def test_a_broken_yaml_is_still_the_selected_carrier(tmp_path, da_guard_binary):
+    """A `_defaults.yaml` that opens but does not parse IS the carrier — the
+    selection is by name over the files that can be read, in Go as here — so
+    the readable `.yml` beside it is the unselected one. The broken carrier
+    refuses the run (tenant_file_unreadable, rc 1), whose document holds the
+    refusal only; the finding is in the tree all the same."""
+    d = _unusable_yaml_tree(tmp_path, "broken")
+    doc = _guard_parse_tree(da_guard_binary, d)
+    assert doc["defaults_carriers"]["."] == "_defaults.yaml", doc
+    tree = load_tenant_tree(str(d))
+    assert [f.file for f in tree.unselected_carriers] == _guard_unselected(doc) == ["_defaults.yml"]
+    assert [f for f, _ in tree.tenant_file_errors] == ["_defaults.yaml"]
+    res, findings = _gar(d, tmp_path / "f.json", "--validate")
+    assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
+    assert {f["kind"] for f in findings} == {"tenant_file_unreadable", "refusal_summary"}, findings
+
+
+# ── tools that do not print the generator's stream still name it (#2906) ──
+
+_OPS = REPO / "scripts" / "tools" / "ops"
+
+
+@pytest.mark.parametrize("argv", [
+    ["notification_tester.py", "--dry-run"],
+    ["explain_route.py", "--tenant", "t-b"],
+    # The line is printed before the mode splits: no amtool needed, the
+    # trace's own verdict is not what is asserted.
+    ["explain_route.py", "--tenant", "t-b", "--trace"],
+], ids=["notification_tester", "explain_route", "explain_route_trace"])
+def test_reader_warnings_are_printed_once(tmp_path, argv):
+    """`print_reader_warnings`: the line each unselected carrier gets — the
+    reader's own multi-carrier WARN before #2906, so every caller showed it."""
+    d, unselected, _chosen = _tree(tmp_path, "sub", _BODIES["plain"])
+    (d / "_defaults.yml").write_text(_BODIES["plain"], encoding="utf-8")
+    tool, *rest = argv
+    res = subprocess.run([sys.executable, "-s", str(_OPS / tool), *rest, "--config-dir", str(d)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=180)
+    assert "Traceback" not in res.stderr, res.stderr
+    for f in ("_defaults.yml", unselected):
+        assert res.stderr.count(f"WARN: {f} is not read:") == 1, res.stderr

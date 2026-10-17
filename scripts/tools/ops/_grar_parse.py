@@ -1713,6 +1713,10 @@ class TenantTree:
     # value (`_field_type_error` dicts). The generator refuses the whole
     # tree on them in every mode (`_refuse_field_type_errors`).
     field_type_errors: list[FieldTypeError] = field(default_factory=list)
+    # #2906: the defaults carriers no plane reads (`unselected_defaults_carrier`
+    # Findings, also in `schema_warnings`) — kept apart for
+    # `print_reader_warnings`.
+    unselected_carriers: list[Finding] = field(default_factory=list)
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -1975,4 +1979,24 @@ def load_tenant_tree(
         routing_tree_problems=tree_problems,
         duplicate_tenants=dict(parsed.get("duplicate_tenants", {})),
         invalid_tenant_ids=invalid_ids,
-        field_type_errors=field_type_errors)
+        field_type_errors=field_type_errors,
+        unselected_carriers=list(parsed.get("unselected_carriers", [])))
+
+
+def print_reader_warnings(source: "TenantTree | dict") -> None:
+    """Print to stderr the reader findings a tool that does NOT print the
+    generator's warning stream must still show its user (#2906).
+
+    *source* is a ``load_tenant_tree`` result or a ``_parse_config_files``
+    dict. Today: each `unselected_defaults_carrier` line — before #2906 the
+    reader printed `warn_multi_carrier`'s line itself, so every caller of
+    the reader showed it; it is a Finding in the stream now, and a caller
+    that prints neither the stream nor this would hide it. ⛔ Not for
+    generate-routes / validate-config (they print the stream: twice), and
+    not for a caller whose other reader already names it (policy_engine:
+    da-guard's own multi-carrier line).
+    """
+    lines = (source.get("unselected_carriers", []) if isinstance(source, dict)
+             else source.unselected_carriers)
+    for line in lines:
+        print(safe_label(line), file=sys.stderr)

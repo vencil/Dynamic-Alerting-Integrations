@@ -98,6 +98,7 @@ from _grar_parse import (  # noqa: E402, F401
     _parse_tenant_overrides,
     load_tenant_configs,
     load_tenant_tree,
+    print_reader_warnings,  # #2906: for the tools that do not print the stream
 )
 
 # Used here, not re-exported: which #2326 routing-tree findings refuse the

@@ -63,7 +63,7 @@ from _grar_validate import (  # noqa: E402
     routing_defaults_not_mapping_text,
     routing_not_mapping_warning,
 )
-from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
+from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
 from _grar_routes import enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
@@ -1300,6 +1300,9 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     parsed = _parse_config_files(args.config_dir)
+    # #2906: in every mode (--trace too), as the reader's own multi-carrier
+    # WARN was before it became a finding.
+    print_reader_warnings(parsed)
     # #2326: a tree the generator refuses outright (rc 2) is still explained
     # here — this is a diagnostic — but never without saying so first.
     # ⛔ Not under --trace: the trace asks the generator itself
@@ -1323,11 +1326,6 @@ def main(argv: list[str] | None = None) -> int:
         for fname, value in parsed.get("routing_defaults_not_mapping", []):
             print(f"  WARN: {safe_label(routing_defaults_not_mapping_text(fname, value))}",
                   file=sys.stderr)
-        # #2906: a defaults carrier no plane reads — the generator's own line
-        # (blocking under --validate), which replaced the stderr
-        # multi-carrier WARN its reader used to print for this tool too.
-        for line in parsed.get("unselected_carriers", []):
-            print(safe_label(line), file=sys.stderr)
         # #2341 R8: a tenant id generate-routes renders nothing for (it is
         # not in all_tenants, so it is not explained below either) — and,
         # ADR-035 D3, refuses the whole tree for, in every mode.
