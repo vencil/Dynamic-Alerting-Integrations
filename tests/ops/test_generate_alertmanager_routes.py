@@ -1879,28 +1879,16 @@ class TestParseConfigFiles:
         assert "container_cpu" in parsed["defaults_keys"]
         assert "container_memory" in parsed["defaults_keys"]
 
-    def test_metadata_extraction(self, config_dir):
-        """_metadata 正確擷取並展開 {{tenant}}。"""
+    def test_metadata_is_not_read(self, config_dir):
+        """#3043：產生器不再讀 `_metadata`（讀了也沒有任何輸出用到）。"""
         write_yaml(config_dir, "db-a.yaml",
                    make_tenant_yaml("db-a", metadata={
                        "runbook_url": "https://wiki.example.com/{{tenant}}",
                        "owner": "dba-team",
                    }))
         parsed = _parse_config_files(config_dir)
-        assert "db-a" in parsed["metadata_configs"]
-        assert "db-a" in parsed["metadata_configs"]["db-a"]["runbook_url"]
-
-    def test_metadata_without_placeholder(self, config_dir):
-        """_metadata 無 {{tenant}} 佔位符時原值保留。"""
-        write_yaml(config_dir, "db-a.yaml",
-                   make_tenant_yaml("db-a", metadata={
-                       "owner": "dba-team",
-                       "tier": "production",
-                   }))
-        parsed = _parse_config_files(config_dir)
-        meta = parsed["metadata_configs"]["db-a"]
-        assert meta["owner"] == "dba-team"
-        assert meta["tier"] == "production"
+        assert "metadata_configs" not in parsed
+        assert "db-a" in parsed["all_tenants"]
 
     def test_metadata_with_keys_and_routing(self, config_dir):
         """_metadata 與 keys、routing 共存時全部正確解析。"""
@@ -1913,7 +1901,6 @@ class TestParseConfigFiles:
         assert "db-a" in parsed["all_tenants"]
         assert "mysql_connections" in parsed["tenant_keys"].get("db-a", {})
         assert "db-a" in parsed["explicit_routing"]
-        assert parsed["metadata_configs"]["db-a"]["owner"] == "dba-team"
 
     def test_empty_file_skipped(self, config_dir):
         """空 YAML 檔案被安全跳過。"""

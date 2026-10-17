@@ -96,14 +96,21 @@ except ImportError:
 # (the `*_exporter_keys` variants compose the two loaders in `_lib_io`).
 try:
     from _lib_io import (
-        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
+        load_confd_file, load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
         strict_load_exporter_keys, strict_safe_load,
     )
 except ImportError:
     from scripts.tools._lib_io import (  # type: ignore[no-redef]
-        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
+        load_confd_file, load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
         strict_load_exporter_keys, strict_safe_load,
     )
+# ADR-036 step 4 (#2906): a conf.d file (`_defaults.yaml`'s `_policies`) is
+# read from `da-guard parse-tree`, as the route generator this tool asks for
+# `_routing` reads it — one reading per run. A standalone `--policy` file is
+# not conf.d and keeps its PyYAML read.
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # #2115 0-B: the values a rule reads come from Go (served-values / effective).
 from _lib_tenant_values import (  # noqa: E402
@@ -134,6 +141,12 @@ VALID_SEVERITIES = frozenset({"error", "warning"})
 # #2114: keys whose list items are tenant ids — read as source text, the way
 # `load_tenant_configs` reads the tenant keys they are compared with.
 POLICY_TENANT_LISTS = frozenset({"exclude_tenants"})
+
+#: The parse-tree conversion of a conf.d file holding `_policies`: every
+#: value by its yaml.v3 tag, `exclude_tenants` items as their source text.
+POLICY_READ = _lib_parse_cache.ParseMode(
+    "parse-tree:to_python(text_sequences=('exclude_tenants',))",
+    lambda node: _lib_parse_tree.to_python_text_sequences(node, POLICY_TENANT_LISTS))
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +211,8 @@ class PolicyResult:
 # ---------------------------------------------------------------------------
 # Policy loading
 # ---------------------------------------------------------------------------
-def load_policies(source: str) -> list[PolicyRule]:
+def load_policies(source: str, config_dir: Optional[str] = None, *,
+                  reader: Any = None) -> list[PolicyRule]:
     """從 YAML 檔案或 _defaults.yaml 載入策略規則。
 
     Args:
@@ -217,6 +231,11 @@ def load_policies(source: str) -> list[PolicyRule]:
     讀法比對，否則 ``exclude_tenants: [010]`` 會被 PyYAML 讀成 ``8``、
     對不上租戶 ``"010"``。
     """
+    if config_dir is not None:
+        # A conf.d file (ADR-036 step 4): parse-tree's reading of it.
+        return rules_from_policy_data(
+            load_confd_file(config_dir, source, mode=POLICY_READ, reader=reader),
+            source=str(source))
     return rules_from_policy_data(load_yaml_file_strict_exporter_keys(
         source, raw_text_sequences=POLICY_TENANT_LISTS), source=str(source))
 
@@ -589,6 +608,9 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
         raise ServedValuesError(
             "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
             f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
+    if routing:
+        # Raises ParseTreeError here, not as the generator's exit below.
+        _lib_parse_cache.reader_for(config_dir).require()
     routed = _resolved_routing(config_dir) if routing else {}
 
     views: dict[str, dict[str, Any]] = {}
@@ -1215,6 +1237,12 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
         for line in exc.lines:
             print(safe_label(line), file=sys.stderr)
         reason = "routing_tree_refused"
+    elif isinstance(exc, ParseTreeError):
+        # ADR-036 step 4: no usable `da-guard parse-tree` — nothing of the
+        # conf.d was read.
+        print(f"ERROR: cannot read the conf.d through `da-guard parse-tree`: "
+              f"{safe_label(' '.join(str(exc).split()))}", file=sys.stderr)
+        reason = "da_guard_failed"
     else:
         print_load_error(exc)
         reason = ("yaml_file_unreadable" if isinstance(exc, ParseFailedError)
@@ -1234,7 +1262,14 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """CLI 進入點。"""
+    """CLI 進入點。One parse-tree reading of the conf.d per run (ADR-036
+    step 4): `_defaults.yaml` here and the route generator's read below
+    share it."""
+    with _lib_parse_cache.session():
+        return _main(argv)
+
+
+def _main(argv: Optional[list[str]] = None) -> int:
     try_utf8_stdout()
     lang = detect_cli_lang()
     parser = build_parser(lang)
@@ -1307,9 +1342,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     # would contradict the report.
     defaults_path = str(resolve_defaults_file(
         Path(args.config_dir), skipped_note=POLICIES_SKIPPED_NOTE))
+    # The carrier read is the one parse-tree selects (#2906 review), not
+    # `resolve_defaults_file`'s own selection (kept for its note).
+    try:
+        chosen = _lib_parse_cache.reader_for(args.config_dir).carrier(args.config_dir)
+    except ParseTreeError as exc:
+        return _load_error_exit(exc, args, 0)
+    if chosen is not None:
+        defaults_path = str(chosen)
     if Path(defaults_path).is_file():
         try:
-            rules.extend(load_policies(defaults_path))
+            rules.extend(load_policies(defaults_path, args.config_dir))
+        except ParseTreeError as exc:
+            return _load_error_exit(exc, args, 0)
         except YamlFileError as exc:
             return _unreadable_yaml_exit(exc, args, lang)
         except InvalidPolicyRules as exc:
@@ -1451,7 +1496,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # generator) reads them — #2115 0-B; see the module docstring.
     try:
         inputs = load_policy_inputs(args.config_dir, routing=rules_read_routing(rules))
-    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, RoutingTreeRefused) as exc:
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, RoutingTreeRefused,
+            ParseTreeError) as exc:
         return _load_error_exit(exc, args, len(rules))
     tenant_configs = inputs.views
     if not tenant_configs:

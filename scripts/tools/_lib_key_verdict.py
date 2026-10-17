@@ -156,9 +156,10 @@ def _named_by_policy(tenant: str, key: str, heads: list[PolicyHead],
                for h in heads)
 
 
-def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
+def _tree_rules(conf_d: str | os.PathLike[str], binary: str | None = None) -> list[Any]:
     """The `_policies` of the root `_defaults.yaml`, as Policy-as-Code loads
-    them; [] when there is none."""
+    them; [] when there is none. *binary*: the da-guard to read it with (None:
+    `$DA_GUARD_BINARY`, then `$PATH`)."""
     ops = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ops")
     if ops not in sys.path:
         sys.path.insert(0, ops)
@@ -168,8 +169,17 @@ def _tree_rules(conf_d: str | os.PathLike[str]) -> list[Any]:
     # from da-guard's reading of the whole tree, and the root-only
     # `_policies` gap is Policy-as-Code's to report (validate-config's
     # `policy_dsl` row, policy-engine itself).
-    path = _lib_confd.resolve_defaults_file(Path(conf_d), observed=False)
-    return pe.load_policies(str(path)) if path.is_file() else []
+    # ADR-036 step 4 (#2906): read as the rest of the tree is — through
+    # `da-guard parse-tree` (the run's reader of `conf_d`, or one with the
+    # caller's binary), not PyYAML; and the carrier is the one parse-tree
+    # says the root's chain selects (#2906 review), not a Python selection.
+    import _lib_parse_cache
+    reader = (_lib_parse_cache.ConfdReader(conf_d, binary=binary) if binary
+              else _lib_parse_cache.reader_for(conf_d))
+    path = reader.carrier(conf_d)
+    if path is None or not path.is_file():
+        return []
+    return pe.load_policies(str(path), config_dir=str(conf_d), reader=reader)
 
 
 def note_root_only_policies(conf_d: str | os.PathLike[str]) -> None:
@@ -194,7 +204,7 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
     tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
                                disable_effects=disable_effects)
     effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout)).tenants
-    all_rules = list(_tree_rules(conf_d)) + list(rules or [])
+    all_rules = list(_tree_rules(conf_d, binary)) + list(rules or [])
     return judge(tree.tenants, effective, policy_targets(all_rules), aliases=tree.aliases,
                  undecidable=not root_platform_files(conf_d), disable_effects=disable_effects)
 

@@ -528,8 +528,14 @@ def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, s
     assert "Traceback" not in res.stderr, res.stderr
     assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
     out = res.stdout + res.stderr
-    assert "ERROR (field type): _domain_policy.yaml: domain_policy 'fin': constraint " \
-        "'forbidden_receiver_types' lists" in out, out
+    if entry.startswith("!!"):
+        # ADR-036 step 4 (#2906): a `!!set` / `!!omap` tag is outside
+        # parse-tree's whitelist — the whole policy file cannot be read.
+        assert ("ERROR (field type): domain policy file could not be used" in out
+                and "(tag_not_allowed)" in out), out
+    else:
+        assert "ERROR (field type): _domain_policy.yaml: domain_policy 'fin': constraint " \
+            "'forbidden_receiver_types' lists" in out, out
     assert "is forbidden" not in out, out
 
 

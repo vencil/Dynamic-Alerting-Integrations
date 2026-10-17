@@ -350,6 +350,9 @@ NOT_A_CELL: dict[str, str] = {
     "ops/backtest_threshold.py":
         "needs a git repo with HEAD~1; its `.hidden.yaml` neighbour is "
         "pinned by test_confd_case_parity_across_tools's backtest tests",
+    "_lib_parse_cache.py":
+        "lists only through `_lib_confd.iter_config_files` (library cell): "
+        "a directory's carriers, for the cache-mode `not_read` verdict",
     "ops/_grar_parse.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/validate_config.py":

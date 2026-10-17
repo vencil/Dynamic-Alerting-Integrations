@@ -620,13 +620,15 @@ def test_missing_da_guard_message_keeps_its_lines(tmp_path) -> None:
 
 def test_today_selection_is_the_generators(tmp_path, monkeypatch) -> None:
     """Differential: the files `_grar_parse._parse_config_files` actually
-    opens with its loader, against `read_tree_today`. If the generator's
-    file selection moves, this turns red. Known, listed difference:
+    reads (through `_lib_parse_cache.ConfdReader.read` since ADR-036 step 4),
+    against `read_tree_today`. If the generator's file selection moves, this
+    turns red. Known, listed difference:
 
     * `dir.yaml` — a directory with a config name: no loader opens it; both
       book it as refused (the generator via `files_skipped`).
     """
     import _grar_parse
+    import _lib_parse_cache
     root = _write(tmp_path / "conf.d", {
         "t.yaml": b"tenants: {t1: {cpu: 1}}\n", "Upper.YAML": b"tenants: {t2: {cpu: 1}}\n",
         "_defaults.yaml": b"defaults: {cpu: 1}\n", "_DEFAULTS.yml": b"defaults: {cpu: 2}\n",
@@ -638,14 +640,16 @@ def test_today_selection_is_the_generators(tmp_path, monkeypatch) -> None:
     })
     (root / "dir.yaml").mkdir()
     opened: list[str] = []
-    real = _grar_parse.strict_load_exporter_keys
+    real = _lib_parse_cache.ConfdReader.read
 
-    def spy(stream, *a, **k):
-        opened.append(Path(stream.name).relative_to(root).as_posix())
-        return real(stream, *a, **k)
+    def spy(self, path, *a, **k):  # every conf.d read of the generator
+        opened.append(Path(path).relative_to(root).as_posix())
+        return real(self, path, *a, **k)
 
-    monkeypatch.setattr(_grar_parse, "strict_load_exporter_keys", spy)
+    monkeypatch.setattr(_lib_parse_cache.ConfdReader, "read", spy)
     res = _grar_parse._parse_config_files(str(root))
+    # tenant_declarations / declared_tenant_ids read the tenant files again
+    opened = sorted(set(opened))
     read, refused = ma.read_tree_today(root)
     expected_refused_unopened = {"dir.yaml"}
     assert set(opened) == (set(read) | set(refused)) - expected_refused_unopened

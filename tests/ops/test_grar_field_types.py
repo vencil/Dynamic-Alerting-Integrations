@@ -1,7 +1,8 @@
 """#2906：產生器的布林與列舉欄位只依型別與值判斷，型別不對或值不認得時整棵樹拒收。
 
-ADR-036 步驟 4 讓產生器改讀 yaml.v3 之後，未加引號的 `yes`／`no`／`on`／`off` 會從布林
-變成字串。為了不讓這個切換靜默改變語意，這支 PR 先在今天的 PyYAML 產生器上把規則定死：
+ADR-036 步驟 4 讓產生器改讀 yaml.v3（`da-guard parse-tree`）之後，未加引號的
+`yes`／`no`／`on`／`off` 從布林變成字串。規則只依型別與值，所以這個切換不會靜默改變
+語意，只會讓那些寫法被拒收：
 
 * 布林欄位只收布林（與 null＝未設定）：`_routing_enforced.enabled`、domain policy 的
   `constraints.require_critical_escalation`、receiver 的 `send_resolved`、email
@@ -13,7 +14,9 @@ ADR-036 步驟 4 讓產生器改讀 yaml.v3 之後，未加引號的 `yes`／`no
 * 拒收＝所有模式（render、`--dry-run`、`--output-configmap`、`--apply`、`--validate`、
   `--strict`）rc 1、不寫出、不套用，走 `tree_refusal` 那一條路；validate-config 的
   schema 列 FAIL。
-* 今天 PyYAML 讀成布林的未加引號寫法（`enabled: yes`）仍是布林，照收。
+* 未加引號的 `enabled: yes`、`send_resolved: off`、`_severity_dedup: no` 是字串，
+  同樣拒收（步驟 4 之前 PyYAML 讀成布林、照收）；`_severity_dedup: off` 是 exporter
+  也認得的詞，照收。
 
 租戶 id 都是 fixture 名稱（CLAUDE.md #9）。
 """
@@ -111,24 +114,24 @@ def _override_send_resolved(value: str) -> dict[str, str]:
 FIELDS = {
     "routing_enforced.enabled": (
         _enforced, "routing_enforced_enabled_invalid", "_routing_enforced.enabled",
-        ["true", "false", "yes", "off"], ['"true"', "'yes'", "n", "1", "~"]),
+        ["true", "false"], ['"true"', "'yes'", "yes", "off", "n", "1", "~"]),
     "require_critical_escalation": (
         _policy, "domain_policy_unusable", "constraints.require_critical_escalation",
-        ["true", "false", "~", "yes"], ['"true"', "'no'", "1", "[pagerduty]"]),
+        ["true", "false", "~"], ['"true"', "'no'", "yes", "1", "[pagerduty]"]),
     "_severity_dedup": (
         _dedup, "severity_dedup_invalid", "_severity_dedup",
-        ["enable", "disable", '"Disabled"', "' off '", "false", "no", "~"],
-        ['"no"', '"yes"', "''", "1", "maybe", "[disable]"]),
+        ["enable", "disable", '"Disabled"', "' off '", "off", "false", "~"],
+        ['"no"', '"yes"', "no", "yes", "''", "1", "maybe", "[disable]"]),
     "send_resolved": (
         _send_resolved, "invalid_receiver_field", "receiver.send_resolved",
-        ["true", "false", "yes", "~"], ['"yes"', '"true"', "'Off'", "maybe", "1"]),
+        ["true", "false", "~"], ['"yes"', '"true"', "yes", "'Off'", "maybe", "1"]),
     "require_tls": (
         _require_tls, "invalid_receiver_field", "receiver.require_tls",
-        ["true", "no"], ['"true"', "'no'"]),
+        ["true", "false"], ['"true"', "'no'", "no"]),
     "proxy_from_environment": (
         _proxy_from_env, "invalid_receiver_field",
         "receiver.http_config.proxy_from_environment",
-        ["true", "on"], ['"yes"', "'true'"]),
+        ["true"], ['"yes"', "'true'", "on"]),
     "routing_defaults.send_resolved": (
         _defaults_send_resolved, "invalid_receiver_field",
         "_routing_defaults.receiver.send_resolved", ["false"], ['"false"']),
@@ -298,18 +301,20 @@ def test_severity_dedup_mode(value, mode):
 
 
 @pytest.mark.parametrize("value,dedup", [("disable", "disable"), ("off", "disable"),
-                                         ("no", "disable"), ("enable", "enable")])
-def test_unquoted_dedup_words_keep_todays_meaning(tmp_path, value, dedup):
-    """`off` / `no` unquoted are the boolean False to PyYAML: still disable."""
+                                         ("false", "disable"), ("enable", "enable")])
+def test_unquoted_dedup_words_keep_their_meaning(tmp_path, value, dedup):
+    """`off` unquoted is the string "off" to yaml.v3 — a word the exporter
+    reads as disable — and `false` the boolean: both disable."""
     tree = load_tenant_tree(str(_write(tmp_path, _dedup(value))))
     assert tree.field_type_errors == []
     assert tree.dedup_configs["t-a"] == dedup
 
 
-def test_quoted_bool_word_is_no_longer_written_as_a_boolean(tmp_path):
+def test_bool_word_is_no_longer_written_as_a_boolean(tmp_path):
     """Before #2906 `send_resolved: "yes"` was rendered as `send_resolved:
-    true`; an unquoted `yes` (a boolean to PyYAML) still is."""
+    true`; since ADR-036 step 4 an unquoted `yes` is the string "yes" too,
+    and the tree is refused."""
     d = _write(tmp_path, _send_resolved("yes"))
     p = _gar(d, "--dry-run")
-    assert p.returncode == 0, p.stderr
-    assert "send_resolved: true" in p.stdout, p.stdout
+    assert p.returncode == 1, p.stderr
+    assert "send_resolved: true" not in p.stdout, p.stdout

@@ -434,8 +434,8 @@ class ParseFailedError(YamlFileError):
     da-guard's stderr, every non-empty line as written, for a caller to show
     below that line; `unreadable` the unreadable files ([] when none);
     `parse_failed` every file da-guard named as not decoding, root-relative
-    slash paths as it wrote them ([] when none) — `path` is only the first
-    (#2740: validate-config's `yaml_quoting` row reads the whole list)."""
+    slash paths as it wrote them ([] when none) — `path` is only the first,
+    the list is the whole answer."""
 
     def __init__(self, path: str, cause: Exception, stderr_lines: list[str],
                  unreadable: list[UnreadableFile] | None = None,

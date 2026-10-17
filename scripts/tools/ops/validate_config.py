@@ -17,11 +17,11 @@ Checks:
                     named `x.yaml` is invisible to it while the routing
                     reader does see it, so that one shape is a stderr WARN
                     and a PASS row here. Tracked separately.)
-  1b. Quoting      — An unquoted value in a field the JSON Schema types as a
-                    string, that PyYAML reads as a boolean / number / null
-                    (`channel: yes` → True, while the Go readers and
-                    Alertmanager read "yes"). The resolver's verdict and the
-                    schema's types decide; no word list (#2164)
+  1b. Quoting      — A value in a field the JSON Schema types as a string,
+                    that yaml.v3 (every reader of conf.d, #2906) reads as a
+                    boolean / number / timestamp / null (`channel: 1e3` →
+                    1000.0; `channel: yes` is the string "yes"). parse-tree's
+                    tag and the schema's types decide; no word list (#2164)
   1c. JSON Schema  — conf.d against tenant-config / platform-defaults /
                     routing-profiles JSON Schema, by calling
                     `lint/check_confd_schema.py`'s verdict; a misread scalar
@@ -133,9 +133,7 @@ from _lib_confd import (  # noqa: E402
     iter_config_files,
     observe_flat_reads,
     printable_name,
-    readable_carriers,
     resolve_defaults_file,
-    select_defaults_carrier,
     unusable_config_paths,
     unusable_reason,
 )
@@ -191,16 +189,18 @@ from _lib_python import (  # noqa: E402
     load_yaml_file, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
     DOCS_SITE_BASE,
 )
-# #2123: conf.d files are read strictly — a key written twice in one mapping
-# is a YAML error (the exporter's yaml.v3 rejects the file), not last-wins.
-from _lib_io import (  # noqa: E402
-    load_yaml_file_strict, strict_safe_load,
-)
 # #1577 / #2114: tenant declarations are scanned by
 # `_lib_confd.tenant_declarations` since #2315. `check_profiles` reads
 # `_profiles.yaml` through the exporter-key loader (#2297: a profile name is
 # its source text); the tenants' `_profile` refs come from da-guard (#2115).
-from _lib_io import YamlFileError, load_yaml_file_strict_exporter_keys  # noqa: E402  (#2297)
+from _lib_io import YamlFileError  # noqa: E402  (#2297)
+# ADR-036 step 4 (#2906): every row's conf.d read is `da-guard parse-tree`'s,
+# one document per run (`_lib_parse_cache.session` in `main`), as the route
+# generator these rows ask reads it — never a PyYAML reading beside it.
+from _lib_io import load_confd_file  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 # #2115 0-B: the tenants as threshold-exporter reads them (`check_profiles`,
 # and the error row `check_policy_dsl` shares with it).
 from _lib_tenant_values import (  # noqa: E402
@@ -511,55 +511,32 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     errors = []
     unusable = []
     file_count = 0
+    # ADR-036 step 4 (#2906): "loads" is `da-guard parse-tree`'s verdict —
+    # the reading every routing row reads, so this row and theirs cannot
+    # disagree about a file. A file it cannot read is named with its kind
+    # (syntax_error, duplicate_key, invalid_utf8, top_level_not_mapping, …).
+    # A file no reader reads (an unselected `_defaults` spelling, `not_read`)
+    # has no content to judge; the schema row names it.
+    tree = _lib_parse_cache.reader_for(config_dir).tree()
+    root = Path(config_dir)
     for fpath_p in iter_config_files(config_dir):
-        fpath = str(fpath_p)
         file_count += 1
         # Relative path, not bare filename: now that the scan is recursive,
         # two levels can hold the same `_defaults.yaml`.
         try:
-            label = fpath_p.relative_to(Path(config_dir)).as_posix()
+            label = fpath_p.relative_to(root).as_posix()
         except ValueError:
             label = fpath_p.name
-        try:
-            with open(fpath, encoding="utf-8") as f:
-                # Strict (#2123): a duplicate key raises a YAMLError naming
-                # the line, and takes the syntax-error branch below.
-                loaded = strict_safe_load(f)
-        except yaml.YAMLError as e:
-            errors.append(f"{label}: {e}")
+        if label in tree.unreadable:
+            kind, message = tree.unreadable[label]
+            errors.append(f"{label}: could not be read ({kind}): {' '.join(message.split())}"
+                          + (" — every consumer reaches for keys on it and finds none, so "
+                             "nothing in this file is loaded"
+                             if kind == "top_level_not_mapping" else ""))
             unusable.append(label)
-            continue
-        except UnicodeDecodeError as e:
-            errors.append(
-                f"{label}: not valid UTF-8 ({e.reason} at byte {e.start}) — "
-                f"re-save this file as UTF-8")
-            unusable.append(label)
-            continue
-        except Exception as e:  # noqa: BLE001 — see below
-            # ⛔ Deliberately open-ended, and this loop is the ONLY place in
-            # the tool where that is the right shape: it is reading one
-            # named file, so whatever comes back it can say *which* file.
-            # Listing the exception types instead is a bet that keeps
-            # losing — `yaml.safe_load` raises `RecursionError` (not a
-            # YAMLError) on deeply nested input — measured at roughly half the recursion
-            # limit — 495 flow-style, 493 block-style on this host —
-            # and it tracks `sys.getrecursionlimit()` rather than being
-            # a constant —
-            # and before this it escaped to the catch-all in `_run_check`,
-            # which exits 2 and prints "please report this" for a file the
-            # customer wrote and this message could not name.
-            errors.append(f"{label}: could not be read — "
-                          f"{e.__class__.__name__}: {' '.join(str(e).split())}")
-            unusable.append(label)
-            continue
-        if loaded is not None and not isinstance(loaded, dict):
-            errors.append(
-                # Not "so its tenants never load": this same message is
-                # emitted for `_domain_policy.yaml` and
-                # `_routing_profiles.yaml`, which hold no tenants at all.
-                f"{label}: top level must be a mapping, got "
-                f"{type(loaded).__name__} — every consumer reaches for keys "
-                f"on it and finds none, so nothing in this file is loaded")
+        elif label not in tree.selected and label not in tree.not_read:
+            errors.append(f"{label}: da-guard parse-tree does not list this file — this "
+                          f"tool's walk and the exporter's disagree about it")
             unusable.append(label)
 
     # #1469: entries NAMED like a config file that `iter_config_files`
@@ -624,8 +601,15 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
     read, so nobody reports it.
     """
     from _lib_confd import is_defaults_document_name
+    # #2906 review: parse-tree's verdict on which files are read — a file it
+    # lists as `not_read` (the `_defaults` spelling a directory does not
+    # select) is read by no reader, so no row reads it either; the `schema`
+    # row names it (`unselected_defaults_carrier`).
+    reader = _lib_parse_cache.reader_for(config_dir)
     out: list[tuple[Path, str, str]] = []
     for fpath in iter_config_files(config_dir):
+        if reader.not_read(fpath) is not None:
+            continue
         name = fpath.name
         if is_defaults_document_name(name):
             schema_name = _PLATFORM_SCHEMA
@@ -644,38 +628,29 @@ def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
 
 
 def check_yaml_quoting(config_dir: str) -> dict[str, object]:
-    """An UNQUOTED scalar in a string-typed field that PyYAML reads as
-    something else — `channel: yes` is True here, "yes" to the Go readers
-    and to Alertmanager (#2164). Tenant files are held to
-    tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
+    """A value in a string-typed field that yaml.v3 — every reader of conf.d
+    (ADR-036 step 4, #2906) — reads as something else: `channel: 1e3` is the
+    float 1000, `name: 2024-01-02` a timestamp (#2164). Tenant files are held
+    to tenant-config.schema.json, `_defaults*` to platform-defaults.schema.json
     and `_routing_profiles.y(a)ml` to routing-profiles.schema.json (#2245;
     the same selection `check_confd_schema` makes); other `_*` files have
-    no schema and are not read. Which words are ambiguous is PyYAML's own
-    resolver's verdict and which fields are strings is the schema's — see
-    `_lib_io.find_misread_scalars`; nothing is listed here.
+    no schema and are not read. Which values are not strings is yaml.v3's
+    verdict (parse-tree's tag) and which fields are strings is the schema's —
+    see `_lib_io.find_misread_scalars`; nothing is listed here. `channel: yes`
+    is the string "yes" to yaml.v3 and is no finding.
 
     A file that cannot be read is skipped: `yaml_syntax` already names it.
 
-    #2509: an unquoted YAML 1.1 boolean word (`yes` / `no` / `on` / `off`)
-    in a field that takes a boolean is listed too, as WARN (the row is WARN
-    when that is all it found): PyYAML reads a boolean, some of the
-    exporter's readers the string — `_lib_io.find_yaml11_bool_words`. An
-    explicit `!!bool yes` (yaml.v3 does not accept it) is the same WARN;
-    whether the exporter can still read that file is not this row's
-    verdict but da-guard's — a file its load drops FAILs the rows that read
-    the tree through it, with the exporter's reason (`da-guard effective`'s
-    stderr carries it since #2115). #2740: so the WARN is kept only for a file
-    `da-guard effective`'s parse_failed names, the run `profiles` reads
-    (`_effective_tree`); a file it does not name — a `_routing_profiles.yaml`,
-    which the exporter does not load and whose Go reader takes `!!bool yes`
-    — gets none. No Python list of the files the exporter reads (#2509).
-    With no da-guard verdict (none found, too old, failed) every hit is
-    kept, as before #2740 — `_explicit_bool_verdict`. A root `_defaults*` file's
+    #2509: a YAML 1.1 boolean word (`yes` / `no` / `on` / `off`), quoted or
+    not, in a field that takes a boolean is listed too, as WARN (the row is
+    WARN when that is all it found): it is a string to yaml.v3, which the
+    field refuses — `_lib_io.find_yaml11_bool_words`. An explicit
+    `!!bool yes` makes the whole file unreadable to parse-tree
+    (`decode_error`), which `yaml_syntax` reports. A root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
     nested one is not (the exporter does not read it).
     """
-    from _lib_io import (compose_all_nodes, find_go_rejected_bool_tags,
-                         find_misread_scalars, find_yaml11_bool_words)
+    from _lib_io import find_misread_scalars, find_yaml11_bool_words
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
         path = _find_schema(name)
@@ -686,37 +661,26 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
                  f"— the quoting check cannot run"], caller_error=True)
         with open(path, encoding="utf-8") as fh:
             schemas[name] = json.load(fh)
+    reader = _lib_parse_cache.reader_for(config_dir)
     errors: list[str] = []
-    # A str, or (label, hit) for an explicit `!!bool` hit: those wait for
-    # da-guard's verdict, asked only when there is one (#2740).
-    warnings: list[object] = []
+    warnings: list[str] = []
     checked = 0
     for fpath, label, schema_name in _quoting_scope(config_dir):
         try:
-            text = fpath.read_text(encoding="utf-8")
-            roots = list(compose_all_nodes(io.StringIO(text)))
-        except (OSError, UnicodeDecodeError, yaml.YAMLError, RecursionError):
+            root = reader.node(fpath)
+        except FileUnreadable:
             continue
         checked += 1
-        for root in roots:
-            # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
-            # is held to the tenant schema too (same rule as check_confd_schema).
-            names = [schema_name]
-            if schema_name == _PLATFORM_SCHEMA and "/" not in label:
-                names.append(_TENANT_SCHEMA)
-            for name_ in names:
-                for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
-                    errors.append(f"{label}:{hit.line}: {hit.message()}")
-                for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
-                    warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
-        # Same order as check_confd_schema: after the per-document findings.
-        warnings.extend((label, tag) for root in roots for tag in find_go_rejected_bool_tags(root))
-    if any(isinstance(w, tuple) for w in warnings):
-        parse_failed = _explicit_bool_verdict(config_dir)
-        warnings = [w if isinstance(w, str)
-                    else f"WARN: {w[0]}:{w[1].line}: {w[1].message(w[1].PROFILES_ROW_POINTER)}"
-                    for w in warnings
-                    if isinstance(w, str) or parse_failed is None or w[0] in parse_failed]
+        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
+        # is held to the tenant schema too (same rule as check_confd_schema).
+        names = [schema_name]
+        if schema_name == _PLATFORM_SCHEMA and "/" not in label:
+            names.append(_TENANT_SCHEMA)
+        for name_ in names:
+            for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
+                errors.append(f"{label}: {hit.message()}")
+            for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
+                warnings.append(f"WARN: {label}: {word.message()}")
     # #2509 blind review 5: each line carries its own remedy; the row's hint
     # only points back at them (a per-kind hint contradicted the lines).
     if errors:
@@ -725,8 +689,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
         return _make_result("yaml_quoting", WARN, warnings)
     return _make_result(
         "yaml_quoting", PASS,
-        [f"{checked} files checked: no unquoted value in a string field "
-         f"is read as a non-string"])
+        [f"{checked} files checked: no value in a string field "
+         f"is read by yaml.v3 as a non-string"])
 
 
 # ============================================================
@@ -739,23 +703,6 @@ JSON_SCHEMA_NOT_CHECKED_HINT = (
     "conf.d against its JSON Schemas — without them, a value of the "
     "wrong shape (e.g. `group_by: alertname` where a list is required) is "
     "not detected here.")
-
-
-def _explicit_bool_verdict(config_dir: str) -> set[str] | None:
-    """The files `da-guard effective` names in parse_failed (root-relative,
-    as `_quoting_scope` labels them) — the set an explicit-`!!bool` WARN is
-    kept for (#2740) — or None when there is no verdict: da-guard missing,
-    older than this tool, or failing another way. Then the caller keeps
-    every WARN with its neutral wording; the `profiles` row, reading the
-    same run, says why there was no verdict. A run that loads cleanly is
-    the empty set."""
-    try:
-        _effective_tree(config_dir)
-    except ParseFailedError as exc:
-        return set(exc.parse_failed)
-    except (DaGuardNotFoundError, DaGuardError):
-        return None
-    return set()
 
 
 def check_json_schema(config_dir: str) -> dict[str, object]:
@@ -806,10 +753,12 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     profiles = schemas[_PROFILES_SCHEMA]
     try:
         ccs.checked_schema_registry(tenant, platform, profiles)
+        not_read: list[str] = []
         checked, violations, skipped = ccs.validate_dir(
             config_dir, tenant, jsonschema, platform, profiles,
             quoting_reported_for=frozenset(
-                label for _p, label, _s in _quoting_scope(config_dir)))
+                label for _p, label, _s in _quoting_scope(config_dir)),
+            not_read=not_read)
     except ccs.UnresolvableSchemaRef as exc:
         return _make_result("json_schema", FAIL, [str(exc)],
                             caller_error=True)
@@ -827,6 +776,9 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
         return _make_result("json_schema", FAIL, errors)
     note = (f"; {len(skipped)} other `_` file(s) have their own shape and "
             f"are not read here" if skipped else "")
+    # #2906 review: a file no reader reads (parse-tree's `not_read`) is not
+    # checked; said here, the `schema` row names why.
+    note += (f"; not checked, no reader reads: {', '.join(not_read)}" if not_read else "")
     return _make_result(
         "json_schema", PASS,
         [f"{checked} document(s) valid against tenant-config / "
@@ -1184,6 +1136,8 @@ _DA_GUARD_SOURCES = (
     "$PATH: it uses $DA_GUARD_BINARY, or builds .build/da-guard when that is "
     "unset. Then re-run.")
 _PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
+# ADR-036 step 4 (#2906): every row reads conf.d through `da-guard parse-tree`.
+_PARSE_TREE_HINT = _DA_GUARD_SOURCES + " No row was run: every row reads the conf.d through it."
 # Shared by every row that reads through da-guard: a da-guard named as older
 # than this tool (its output lacks a field this tool reads, e.g. effective's
 # `skipped`, or it does not accept the subcommand and flags — the released
@@ -1201,6 +1155,25 @@ _DA_GUARD_BROKEN_HINT = (
     "$DA_GUARD_BINARY at a working da-guard (executable, built from this repo: "
     "`make da-guard-build`) or use the da-tools image, then re-run. The config "
     "tree was not checked; do not edit it for this.")
+
+
+def _parse_tree_failure_row(check: str, exc: Exception,
+                            no_da_guard_hint: str) -> dict[str, object]:
+    """The FAIL row of a check whose conf.d read through `da-guard
+    parse-tree` (ADR-036 step 4, #2906) failed: no da-guard (`BinaryMissing`),
+    one older than this tool, or one that cannot be run or answers as no
+    da-guard does. Always a caller error — the tree was not read."""
+    from _lib_parse_tree import BinaryMissing
+    text = " ".join(str(exc).split())
+    if isinstance(exc, BinaryMissing):
+        hint = no_da_guard_hint
+    elif "older than this tool" in text:
+        hint = _DA_GUARD_TOO_OLD_HINT
+    else:
+        hint = _DA_GUARD_BROKEN_HINT
+    return _make_result(check, FAIL,
+                        ["the conf.d cannot be read through `da-guard parse-tree` (ADR-036):",
+                         text], caller_error=True, hint=hint)
 
 
 def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
@@ -1382,7 +1355,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     profiles_path = str(cfg / "_profiles.yaml")
     # #2297: profile names are the keys' source text, as the exporter keys
     # them — `010:` is "010", the name a tenant's `_profile: 010` reads as.
-    profiles_raw = load_yaml_file_strict_exporter_keys(profiles_path, default={})
+    profiles_raw = load_confd_file(config_dir, profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
@@ -1516,6 +1489,15 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # the nested carriers whose `_policies` this lookup skips are named.
     defaults_path = str(resolve_defaults_file(
         Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
+    # The carrier read is the one parse-tree selects (#2906 review), not
+    # `resolve_defaults_file`'s own selection: that one names the file to
+    # create when there is none, and prints the skipped-carriers note.
+    try:
+        chosen = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
+    except ParseTreeError as exc:
+        return _parse_tree_failure_row("policy_dsl", exc, _POLICY_DSL_NO_DA_GUARD_HINT)
+    if chosen is not None:
+        defaults_path = str(chosen)
     # #2725: a carrier that is there but cannot be opened (a dangling
     # symlink) is not "no carrier" — that line told the operator to create one.
     if os.path.isfile(defaults_path):
@@ -1523,7 +1505,9 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         # #2961: the customer's tree — a tree finding (FAIL, rc 1), as the
         # comment at the --policy-dsl read below says.
         try:
-            rules.extend(pe.load_policies(defaults_path))
+            rules.extend(pe.load_policies(defaults_path, config_dir))
+        except ParseTreeError as exc:
+            return _parse_tree_failure_row("policy_dsl", exc, _POLICY_DSL_NO_DA_GUARD_HINT)
         except pe.InvalidPolicyRules as exc:
             return _make_result("policy_dsl", FAIL,
                                 [f"{os.path.basename(defaults_path)}: {p}" for p in exc.problems],
@@ -1855,7 +1839,7 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object,
     """One FAIL line for a `_routing*` key under the root `defaults:`.
 
     *dropped_raw* is the value's source text when the exporter's decoder
-    (``deprecate_rule.exporter_verdicts``) rejects it, None when it decodes.
+    (``_root_defaults_verdicts``) rejects it, None when it decodes.
     """
     if key == "_routing":
         move = ("move its contents to a top-level `_routing_defaults:` block "
@@ -1900,7 +1884,7 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     """One FAIL line for a value the exporter drops or treats as unwritten
     (#1414, #2518).
 
-    *key* and *raw* are one item of ``deprecate_rule.exporter_verdicts`` (key
+    *key* and *raw* are one item of ``_root_defaults_verdicts`` (key
     None = the whole document); *null* is whether its kind is
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
@@ -2124,29 +2108,26 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
     """Every level's `_defaults.yaml`: top-level keys a `defaults:` mapping
     leaves out of the defaults merge (#2386).
 
-    One carrier per directory, selected as every plane selects it
-    (``select_defaults_carrier`` over the readable carriers); a file that
-    does not load as a mapping is left to ``yaml_syntax`` /
+    One carrier per directory, the one parse-tree says the chain selects:
+    a carrier it lists in ``not_read`` is not read, and the row says so
+    (never ``select_defaults_carrier`` here — a second implementation of the
+    rule; reading a file parse-tree does not select is rc 2, #2906 review).
+    A file that does not load as a mapping is left to ``yaml_syntax`` /
     ``root_defaults``. Measured on a subtree: top-level
     ``_severity_dedup: disable`` was served as ``disable`` with no wrapper
     or with ``defaults:`` and no value, and as ``enable`` once
     ``defaults: {}`` was added.
     """
     root = Path(config_dir)
-    by_dir: dict[Path, list[Path]] = {}
-    for p in iter_config_files(root):
-        if is_defaults_name(p.name):
-            by_dir.setdefault(p.parent, []).append(p)
+    carriers, skipped = _lib_parse_cache.reader_for(config_dir).split_not_read(
+        p for p in iter_config_files(root) if is_defaults_name(p.name))
     details: list[str] = []
     checked = 0
     subtree_reserved = False
-    for d in sorted(by_dir):
-        readable, _unreadable = readable_carriers(by_dir[d])
-        carrier = select_defaults_carrier(readable)
-        if carrier is None:
-            continue
+    for carrier in sorted(carriers, key=lambda p: (p.parent, p.name)):
+        d = carrier.parent
         try:
-            raw = load_yaml_file_strict(str(carrier), default={})
+            raw = load_confd_file(config_dir, str(carrier), default={})
         except YamlFileError:
             continue  # yaml_syntax names a file that does not load
         if not isinstance(raw, dict):
@@ -2167,7 +2148,16 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
                             if subtree_reserved else None)
     return _make_result("defaults_wrapper", PASS, [
         f"{checked} defaults file(s): no top-level key left out by a "
-        f"`defaults:` mapping"])
+        f"`defaults:` mapping{_not_read_note(root, skipped)}"])
+
+
+def _not_read_note(root: Path, skipped: "list[tuple[Path, str]]") -> str:
+    """A row's note on the files it did not read because parse-tree lists
+    them in ``not_read`` (``ConfdReader.split_not_read``); '' for none."""
+    if not skipped:
+        return ""
+    return "; not checked, no reader reads: " + ", ".join(
+        f"{p.relative_to(root).as_posix()} ({why})" for p, why in skipped)
 
 
 def _schedule_null_lines(rel: str, where: str, body: object) -> list[str]:
@@ -2207,32 +2197,25 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
     other than an unselected carrier — its ``tenants:`` entries and
     ``profiles:``. A ``_`` file below the root that is not the selected
     carrier is read by no plane. A file that does not load is left to
-    ``yaml_syntax``.
+    ``yaml_syntax``. Which carrier is unselected is parse-tree's
+    ``not_read`` (named in the row), not a Python re-selection (#2906
+    review: reading one parse-tree does not select is rc 2).
     """
     root = Path(config_dir)
-    by_dir: dict[Path, list[Path]] = {}
-    files = list(iter_config_files(root))
-    for p in files:
-        if is_defaults_name(p.name):
-            by_dir.setdefault(p.parent, []).append(p)
-    selected = set()
-    for d, carriers in by_dir.items():
-        readable, _unreadable = readable_carriers(carriers)
-        chosen = select_defaults_carrier(readable)
-        if chosen is not None:
-            selected.add(chosen)
+    files, skipped = _lib_parse_cache.reader_for(config_dir).split_not_read(
+        iter_config_files(root))
     details: list[str] = []
     checked = 0
     for p in sorted(files):
         reserved = is_reserved_name(p.name)
         at_root = p.parent == root
-        carrier = p in selected
-        if reserved and is_defaults_name(p.name) and not carrier:
-            continue  # an unselected carrier: no plane reads it (#1674)
+        # Not in `not_read`: the directory's selected carrier (one parse-tree
+        # cannot read raises below and is left to `yaml_syntax`).
+        carrier = is_defaults_name(p.name)
         if reserved and not at_root and not carrier:
             continue  # a nested `_` file: read by no plane
         try:
-            raw = load_yaml_file_strict_exporter_keys(str(p), default={})
+            raw = load_confd_file(config_dir, str(p), default={})
         except YamlFileError:
             continue
         if not isinstance(raw, dict):
@@ -2257,7 +2240,7 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
         return _make_result("schedule_null", FAIL, details)
     return _make_result("schedule_null", PASS, [
         f"{checked} file(s): no null inside a threshold schedule with "
-        f"override windows"])
+        f"override windows{_not_read_note(root, skipped)}"])
 
 
 _VALUES_NOT_SERVED_TREE_UNREADABLE_HINT = (
@@ -2447,6 +2430,41 @@ def check_custom_alert_sources(config_dir: str, entries_mod=None) -> dict[str, o
         "the compiler builds"])
 
 
+def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
+    """How the exporter decodes the root carrier's `defaults:` into
+    `map[string]float64`, read off the file's parse-tree nodes (yaml.v3's
+    tags, aliases and `<<` merges expanded): `[(key, source text, kind), …]`
+    with *dr*'s kinds (``deprecate_rule``), key None for the whole block.
+
+    yaml.v3 decodes a scalar into a float64 when its tag is `!!int` or
+    `!!float`; `!!null` leaves the key unwritten (#2518,
+    ``NULL_NOT_DECLARED``); any other scalar (`"70"`, `disable`, `yes`, a
+    timestamp, `!!bool`), a mapping or a list fails the decode and the
+    exporter drops the whole block (``UNPARSEABLE``). A file parse-tree
+    cannot read (a repeated key, several documents …) never gets here: its
+    read fails first. The truth table is
+    ``tests/golden/fixtures/defaults-carrier-oracle.json``, which the Go test
+    ``TestDefaultsCarrierOracle`` judges against the exporter."""
+    block = root.get("defaults")
+    if block is None or (_lib_parse_tree.is_scalar(block) and block["tag"] == "!!null"):
+        return []                              # absent, or `defaults:` with no value
+    if _lib_parse_tree.is_scalar(block) or not isinstance(block, dict):
+        return [(None, "defaults is not a mapping", dr.UNPARSEABLE)]
+    out: list[tuple[str | None, str, str]] = []
+    for key, node in block.items():
+        if not _lib_parse_tree.is_scalar(node):
+            out.append((key, "<mapping>" if isinstance(node, dict) else "<list>",
+                        dr.UNPARSEABLE))
+        elif node["tag"] == "!!null":
+            out.append((key, node["text"], dr.NULL_NOT_DECLARED))
+        elif node["tag"] == "!!str":
+            # Shown as the string it is: `"70"` (quoted or not in the file).
+            out.append((key, json.dumps(node["text"], ensure_ascii=False), dr.UNPARSEABLE))
+        elif node["tag"] not in ("!!int", "!!float"):
+            out.append((key, node["text"], dr.UNPARSEABLE))
+    return out
+
+
 _CUSTOM_ALERT_CAP_HINT = (
     "A tenant's own `_custom_alerts` (its tenant file, or its entry under a root "
     "platform file's `tenants:`) may serve at most {cap} custom-alert rows: each "
@@ -2514,11 +2532,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       threshold, while the load is reported as successful; a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
-      not judged here. Both FAIL. The verdict is
-      ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
-      table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
-      by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
-      Every kind in its ``BLOCKING_KINDS`` is a FAIL here too.
+      not judged here. Both FAIL. The verdict is ``_root_defaults_verdicts``
+      over the file's ``da-guard parse-tree`` nodes (ADR-036 step 4, #2906:
+      yaml.v3's own tags), checked against the truth table
+      ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
+      ``TestDefaultsCarrierOracle`` judges. Every kind in
+      ``deprecate_rule.BLOCKING_KINDS`` is a FAIL here too.
     * #2291 — no ``_routing*`` key, whatever its value (below). A
       ``_routing*`` key gets that rule's line only, never a second one from
       the value rule.
@@ -2537,8 +2556,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       A ``defaults:`` mapping beside ignored top-level keys is the
       ``defaults_wrapper`` row's finding, at every level.
 
-    ⚠️ A file PyYAML cannot read at all still fails through
-    ``load_yaml_file_strict`` and ``_run_check``'s input-error row, as before;
+    ⚠️ A file parse-tree cannot read at all fails through
+    ``load_confd_file`` and ``_run_check``'s input-error row;
     a top level that is not a mapping stays ``yaml_syntax``'s finding. The
     value rule speaks about files that load.
 
@@ -2570,30 +2589,27 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     ⚠️ The root carrier is found without ``resolve_defaults_file``: that
     helper records nested ``_defaults.yaml`` files as skipped by a flat read,
     which would turn this row WARN on every ADR-017 tree for files it is
-    deliberately not about. Selection is ``select_defaults_carrier`` over the
-    readable carriers, the rule every plane shares (#1674). The candidates
-    come from the shared recursive enumerator filtered to the root level, not
-    from a second, flat listing of the directory.
+    deliberately not about. The carrier is the one parse-tree says the root's
+    chain selects (``ConfdReader.carrier``, its ``defaults_carriers``), the
+    rule every plane shares (#1674) — not ``select_defaults_carrier``, a
+    second implementation of it that could hand the read a file parse-tree
+    does not select (rc 2, #2906 review).
     """
-    root = Path(config_dir)
-    entries = [p for p in iter_config_files(root)
-               if len(p.relative_to(root).parts) == 1
-               and is_defaults_name(p.name)]
-    readable, _unreadable = readable_carriers(entries)
-    carrier = select_defaults_carrier(readable)
+    carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
     if carrier is None:
         return _make_result("root_defaults", PASS,
                             ["no root _defaults.yaml — nothing to check"])
     rel = carrier.name
-    raw = load_yaml_file_strict(str(carrier), default={})
+    raw = load_confd_file(config_dir, str(carrier), default={})
     if not isinstance(raw, dict):
         return _make_result("root_defaults", PASS,
                             [f"{rel}: no `defaults:` mapping — nothing to check"])
-    # #1414: the one yaml.v3 mirror, imported in-process like
-    # `generate_alertmanager_routes` above — a sibling tool shipped beside
-    # this one in both layouts, not a second copy of the decode rules.
+    # #1414 → ADR-036 step 4 (#2906): yaml.v3's own reading of the file
+    # (parse-tree's tags), the same read as `raw` above — not a PyYAML
+    # mirror of yaml.v3's decode. The verdict kinds stay deprecate_rule's.
     import deprecate_rule as dr
-    verdicts = dr.exporter_verdicts(carrier.read_bytes())
+    verdicts = _root_defaults_verdicts(
+        _lib_parse_cache.reader_for(config_dir).node(carrier), dr)
     dropped = {k: r for k, r, kind in verdicts
                if k is not None and kind in dr.BLOCKING_KINDS}
     details = [_root_defaults_value_detail(rel, k, r,
@@ -2685,10 +2701,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/getting-started/for-platform-engineers.md",
     ),
     "yaml_quoting": (
-        "Fix each value listed above as its own line says. A plain yes / no / on / "
-        "off / true / 123 in a field the schema types as a string is read "
-        "as a boolean or number by PyYAML but as text by the exporter and "
-        "Alertmanager, so the tools disagree about your config.",
+        "Fix each value listed above as its own line says. A plain true / 123 / "
+        "1e3 / 2024-01-02 in a field the schema types as a string is read as "
+        "a boolean, number or timestamp by yaml.v3 — by every reader of "
+        "conf.d — so quote it; yes / no / on / off are strings to yaml.v3 and "
+        "a field that takes a boolean refuses them: write true / false.",
         "docs/cli-reference.md#validate-config",
     ),
     # #2695: placed before `schema` — that row is the generator's key check.
@@ -3284,7 +3301,13 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
 # Main
 # ============================================================
 def main() -> None:
-    """CLI entry point: One-stop configuration validation."""
+    """CLI entry point: One-stop configuration validation. Every row reads
+    one `da-guard parse-tree` document of the tree (ADR-036 step 4)."""
+    with _lib_parse_cache.session():
+        _main()
+
+
+def _main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_h('description'))
@@ -3322,6 +3345,17 @@ def main() -> None:
                 "config_dir", FAIL,
                 [f"config-dir not found: {args.config_dir}"],
                 caller_error=True)], as_json=True)
+        sys.exit(EXIT_CALLER_ERROR)
+
+    # ADR-036 step 4 (#2906): no usable `da-guard parse-tree` — no row can
+    # read the tree, so no row runs (a caller error, as for a missing dir).
+    try:
+        _lib_parse_cache.reader_for(args.config_dir).require()
+    except ParseTreeError as exc:
+        row = _parse_tree_failure_row("config_dir", exc, _PARSE_TREE_HINT)
+        print(f"ERROR: {safe_label(' '.join(row['details']))}", file=sys.stderr)
+        if args.json:
+            print_report([row], as_json=True)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Ensure tools dir is in sys.path for imports

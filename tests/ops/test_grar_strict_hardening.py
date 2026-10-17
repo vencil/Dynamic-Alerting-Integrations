@@ -253,7 +253,7 @@ class TestStrictFailOpenClosures:
             for strict in (True, False):
                 errs = load_tenant_tree(d, strict_policies=strict).field_type_errors
                 assert [e.kind for e in errs] == ["domain_policy_unusable"], errs
-                assert "failed to parse" in errs[0].message, errs
+                assert "could not be read (syntax_error)" in errs[0].message, errs
 
     def test_misplaced_domain_policies_strict_fails_loud(self):
         with tempfile.TemporaryDirectory() as d:
@@ -571,7 +571,7 @@ class TestStrictBypassScenariosCLI:
         ({"group_by": "tenant,alertname"}, {"enforce_group_by": ["tenant"]},
          None, "group_by must be a list"),
         ({}, None, "domain_policies:\n  fin: [unclosed\n",
-         "failed to parse"),
+         "could not be read (syntax_error)"),
     ], ids=["zero-group-wait", "multiunit-repeat", "negative-repeat",
             "garbage-constraint", "group-by-not-list", "broken-policy-yaml"])
     def test_bypass_blocked_in_strict_open_in_lenient(
@@ -974,9 +974,13 @@ class TestTheSharedReaderNamesWhatItCannotRead:
     """
 
     def test_a_third_kind_of_unreadable_file_is_recorded_not_raised(self):
+        """ADR-036 step 4 (#2906): the file is read by yaml.v3 (parse-tree),
+        whose limit is 10,000 levels — 700 is read; past the limit it is
+        parse-tree's `syntax_error`, recorded like any other."""
         with tempfile.TemporaryDirectory() as d:
+            # Flow style (24 kB; a block mapping that deep is ~144 MB).
             write_yaml(d, "_domain_policy.yaml",
-                       "".join("  " * i + "k%d:\n" % i for i in range(700)))
+                       "domain_policies:\n  fin: " + "[" * 12000 + "]" * 12000 + "\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
             _, _, warnings, _, _ = load_tenant_configs(d,
                                                        strict_policies=True)

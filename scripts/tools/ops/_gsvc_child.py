@@ -18,8 +18,9 @@ forked, and never returns. In order:
    order.
 4. Run the generator in this process — ``generate_alertmanager_routes.main``
    with ``--validate --strict --findings-json`` — with the service's parse
-   cache installed (``_lib_parse_cache``), so unchanged files are not parsed
-   again.
+   cache installed (``_lib_parse_cache``), so an unchanged file is not read
+   through ``da-guard parse-tree`` again (ADR-036 step 4: the generator reads
+   conf.d from parse-tree; da-guard is on the image's $PATH).
 5. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
    base tree's files as soon as the tree is read, each new parse-cache entry the moment its
    parse finishes, and the result last — so a process the deadline kills
@@ -55,6 +56,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import generate_alertmanager_routes as gar  # noqa: E402
 import _grar_parse  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
     STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
 )
@@ -333,9 +335,10 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         return {"outcome": "git_read"}
     # #2901 E2: the base tree's files, as soon as they are known — the
     # long-running process pins them even if this process is killed. By the
-    # cache's own key (SHA-256 of the content), not the git blob id.
+    # cache's own key (SHA-256 of the path below conf.d and the content,
+    # ADR-036 step 4), not the git blob id.
     stream.send(frame(b"B", json.dumps(sorted(
-        {_lib_parse_cache.content_key(c) for mode, _o, _p, c in tree
+        {_lib_parse_cache.content_key(p, c) for mode, _o, p, c in tree
          if mode != "160000"})).encode("utf-8")))
     try:
         files = apply_writes(tree_dir, job.request, irregular)
@@ -423,6 +426,11 @@ def run_child(job: ChildJob, result_fd: int) -> None:
     try:
         os.setsid()
         resource.setrlimit(resource.RLIMIT_DATA, (job.memory_limit, job.memory_limit))
+        # Every da-guard this judgement starts inherits that limit; one ended
+        # by a signal is this judgement's memory (#2906), and it leaves no
+        # core file behind.
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        _lib_parse_tree.run_under_memory_limit()
         # ⛔ Close every inherited descriptor but stdio and the result pipe:
         # a fork copies the service's open client connections and its
         # listening socket, and a judgement (or warming run) holding a

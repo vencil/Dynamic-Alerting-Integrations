@@ -10,6 +10,10 @@ the tenant's own) until it moves to the exporter's reading too (#3042 B2), and
 neither a `_defaults.yaml` top-level `_custom_alerts` nor the union: a tenant
 gets one list, its own, its root platform file's `tenants:` entry, or its
 profile's.
+
+ADR-036 step 4 (#2906): the walk reads each conf.d file through `da-guard
+parse-tree` (`_lib_parse_cache.ConfdReader`), never PyYAML, and which
+defaults carrier it reads is that reader's `not_read` verdict.
 """
 from __future__ import annotations
 
@@ -26,13 +30,9 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     is_dir_symlink,
     defaults_files_in,
     list_config_tree,
-    readable_carriers,
-    select_defaults_carrier,
     unusable_reason,
     warn_dir_symlink_once,
-    warn_multi_carrier,
 )
-from _lib_io import strict_load_exporter_keys, strict_safe_load  # noqa: E402  (#2123; #2216)
 
 
 
@@ -40,19 +40,8 @@ class CustomAlertConfigError(ValueError):
     """A declaration tree is invalid (rejected at compile time)."""
 
 
-def _load_yaml(path: Path) -> dict:
-    """Strict (#2123): a key written twice in one mapping raises a YAMLError —
-    the exporter's yaml.v3 rejects that file, so compiling PyYAML's last value
-    would emit alerts for a config that is never served. Callers quarantine it
-    exactly like a syntax error."""
-    return strict_safe_load(path.read_text(encoding="utf-8")) or {}
-
-
-def _load_tenant_yaml(path: Path) -> dict:
-    """`_load_yaml` for a file carrying a `tenants:` block: the tenant ids
-    are the keys' source text, as the exporter reads them (#2216) — `010:` is
-    tenant "010", not 8. Strict like `_load_yaml`."""
-    return strict_load_exporter_keys(path.read_text(encoding="utf-8")) or {}
+#: Carriers `_dir_defaults_alerts` has named as not read in this process.
+_NOT_READ_WARNED: set = set()
 
 
 def _is_dir(p: Path) -> bool:
@@ -85,10 +74,17 @@ def _file_skip(origin: str, exc: Exception) -> dict:
     return _file_record(origin, f"{type(exc).__name__}: {exc}")
 
 
-def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path, List[dict]]:
+def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
+                         reader) -> Dict[Path, List[dict]]:
     """Map each directory → its _defaults.yaml top-level `_custom_alerts` list. A
     _defaults.yaml that fails to load is quarantined into `file_errors` (#1008 Part B),
-    not raised."""
+    not raised.
+
+    *reader* (`_lib_parse_cache.ConfdReader` of *config_dir*) reads each
+    carrier, and its `not_read` decides which carrier is read: one it names
+    a reason for is not read (and is named on stderr), every other one is —
+    a selection of this module's own could hand `read` a file parse-tree
+    does not select (#2906 review)."""
     out: Dict[Path, List[dict]] = {}
     for root, dirs, files in os.walk(config_dir):
         # #2086: prune `.`-prefixed directories the way the exporter's walker
@@ -110,29 +106,33 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         # spelling is now a misconfiguration every plane names and none
         # reads, so a `_custom_alerts` list in it is ignored here too.
         #
-        # ⛔ Candidates are the carriers the exporter's walker KEEPS: one whose
-        # read fails (a dangling symlink, a permission error) is dropped there
-        # before anything selects, so it is dropped here too — and still
-        # reported in `file_errors`, as before selection existed. Selecting
-        # among raw names let a dangling `_defaults.yaml` beat a readable
-        # `_defaults.yml` and yield no alerts (blind review of #1674).
-        readable, unreadable = readable_carriers(defaults_files_in(root, files))
-        for bad, exc in unreadable:
-            file_errors.append(_file_skip(bad.relative_to(config_dir).as_posix(), exc))
-        chosen = select_defaults_carrier(readable)
-        if chosen is None:
-            continue
-        # The losing spelling is named here too, in the exporter's and
-        # describe_tenant's words, rather than dropped in silence.
-        warn_multi_carrier(Path(root), readable)
-        try:
-            data = _load_yaml(chosen)
-        except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
-            file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
-            continue
-        alerts = data.get("_custom_alerts") or []
-        if alerts:
-            out.setdefault(Path(root).resolve(), []).extend(alerts)
+        # ⛔ Which carrier that is, is parse-tree's `not_read` (#2906): a
+        # carrier whose read fails (a dangling symlink, a permission error)
+        # is not in it — its read raises below and it lands in `file_errors`,
+        # and a readable `_defaults.yml` beside it is still read (blind
+        # review of #1674).
+        chosen_list = []
+        for p in defaults_files_in(root, files):
+            why = reader.not_read(p)
+            if why is None:
+                chosen_list.append(p)
+            elif os.path.abspath(p) not in _NOT_READ_WARNED:
+                # Once per file per process, as `warn_multi_carrier`.
+                _NOT_READ_WARNED.add(os.path.abspath(p))
+                print(f"WARN: {p.relative_to(config_dir).as_posix()} is ignored on every "
+                      f"plane (#1674): da-guard parse-tree does not read it ({why}), "
+                      f"so its _custom_alerts are not inherited", file=sys.stderr)
+        # More than one only when parse-tree cannot read the others: their
+        # read raises and quarantines them.
+        for chosen in chosen_list:
+            try:
+                data = reader.read(chosen)
+            except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+                file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
+                continue
+            alerts = (data.get("_custom_alerts") if isinstance(data, dict) else None) or []
+            if alerts:
+                out.setdefault(Path(root).resolve(), []).extend(alerts)
     return out
 
 
@@ -155,7 +155,8 @@ def _inherited_for(leaf_dir: Path, config_dir: Path,
     return inherited
 
 
-def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool]], List[dict]]:
+def collect_instances(config_dir: Path, reader=None,
+                      ) -> Tuple[List[Tuple[str, dict, str, bool]], List[dict]]:
     """Return (triples, file_errors): (tenant, instance, origin, is_own) tuples for every
     effective decl, PLUS skip records for conf.d files that failed to load.
 
@@ -163,14 +164,23 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
     is_own distinguishes a tenant's OWN declaration from an INHERITED platform/domain
     policy (the latter is vectorized + does NOT count toward the per-tenant cap). Inherited
     instances are attributed to each tenant they land on (that is what scope / effective-
-    count mean). A file that yaml.safe_load can't parse (malformed / control chars / bad
-    encoding) is QUARANTINED into file_errors and skipped (#1008 Part B), never raised —
-    this load is outside the per-recipe fail-soft loop, so without it one bad file would
-    crash the whole compile.
+    count mean). A file `da-guard parse-tree` can't read (malformed / control chars / bad
+    encoding / a key written twice) is QUARANTINED into file_errors and skipped (#1008
+    Part B), never raised — this load is outside the per-recipe fail-soft loop, so
+    without it one bad file would crash the whole walk.
+
+    *reader* is the `_lib_parse_cache.ConfdReader` of *config_dir* (the
+    session's when None): every file is read through it (ADR-036 step 4,
+    #2906). No usable da-guard raises `ParseTreeError` before any file is
+    read — it is not a per-file quarantine.
     """
+    import _lib_parse_cache  # lazy: the recipe-preview image imports this module for the error type only
     config_dir = Path(config_dir)
+    if reader is None:
+        reader = _lib_parse_cache.reader_for(config_dir)
+    reader.require()
     file_errors: List[dict] = []
-    dir_alerts = _dir_defaults_alerts(config_dir, file_errors)
+    dir_alerts = _dir_defaults_alerts(config_dir, file_errors, reader)
     triples: List[Tuple[str, dict, str, bool]] = []
 
     # ⚠️ Same third axis as `operator_generate`, and here it is louder:
@@ -263,11 +273,13 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
         if is_defaults_name(path.name):
             continue
         try:
-            data = _load_tenant_yaml(path)
+            # Tenant ids are the keys' source text, as the exporter reads
+            # them (#2216): `010:` is tenant "010", not 8.
+            data = reader.read(path)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
             file_errors.append(_file_skip(path.relative_to(config_dir).as_posix(), exc))
             continue
-        tenants = data.get("tenants") or {}
+        tenants = (data.get("tenants") if isinstance(data, dict) else None) or {}
         if not isinstance(tenants, dict):
             continue
         inherited = _inherited_for(path.parent, config_dir, dir_alerts)
