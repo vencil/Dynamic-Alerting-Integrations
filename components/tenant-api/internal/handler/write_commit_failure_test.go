@@ -266,15 +266,16 @@ func TestTenantWrites_CancelledContextIsNotInternalError(t *testing.T) {
 	}
 }
 
-// msgWriteCancelled must not promise that nothing was written: the context can
-// end after git moved the ref and before the process reported it, so the
+// msgWriteCancelled must not promise that nothing was written: a git command
+// that hit its own deadline (TENANT_API_GIT_TIMEOUT) wraps
+// context.DeadlineExceeded too and may already have moved the ref, so the
 // commit may have landed (#1535 review). It tells the caller to refresh first.
 func TestMsgWriteCancelled_DoesNotClaimNothingWritten(t *testing.T) {
 	t.Parallel()
 	lower := strings.ToLower(msgWriteCancelled)
 	for _, claim := range []string{"nothing was written", "nothing written", "not written", "before it was committed"} {
 		if strings.Contains(lower, claim) {
-			t.Errorf("msgWriteCancelled = %q claims %q, which a cancelled git process cannot guarantee", msgWriteCancelled, claim)
+			t.Errorf("msgWriteCancelled = %q claims %q, which a git command timed out after moving the ref would make false", msgWriteCancelled, claim)
 		}
 	}
 	if !strings.Contains(lower, "refresh") {
@@ -348,10 +349,10 @@ func TestBatch_CommittedWinsOverCancelled(t *testing.T) {
 
 // #1535 round 2: an async batch's Task.Error says nothing was written only
 // when that is what its error means. Cancelled or timed out, it is
-// msgWriteCancelled alone (as the sync 503 and the per-op results) — the
-// context can end after git moved the ref. Any other failure keeps the
-// "nothing was written" prefix (end to end on a conflict:
-// TestBatchConflict_SyncAndAsyncSayNothingWasWritten).
+// msgWriteCancelled alone (as the sync 503 and the per-op results) — a git
+// command that hit its own deadline may already have moved the ref. Any
+// other failure keeps the "nothing was written" prefix (end to end on a
+// conflict: TestBatchConflict_SyncAndAsyncSayNothingWasWritten).
 func TestBatchTaskError_CancelledDoesNotClaimNothingWritten(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded,

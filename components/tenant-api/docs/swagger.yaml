@@ -2007,8 +2007,9 @@ paths:
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
             Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
             its deadline before a synchronous batch finished: unlike the cases above
-            it may already be committed (the git process can be stopped after it moved
-            the ref), so refresh to see whether it was before retrying'
+            it may already be committed (a git command that hits its own deadline
+            may already have moved the ref), so refresh to see whether it was before
+            retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2297,8 +2298,8 @@ paths:
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
             Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
             its deadline before the write finished: unlike the cases above it may
-            already be committed (the git process can be stopped after it moved the
-            ref), so refresh to see whether it was before retrying'
+            already be committed (a git command that hits its own deadline may already
+            have moved the ref), so refresh to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2473,8 +2474,8 @@ paths:
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
             Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
             its deadline before the write finished: unlike the cases above it may
-            already be committed (the git process can be stopped after it moved the
-            ref), so refresh to see whether it was before retrying'
+            already be committed (a git command that hits its own deadline may already
+            have moved the ref), so refresh to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's custom-alert recipes
@@ -2938,8 +2939,8 @@ paths:
             for tenant-api''s own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR
             (#1535) when the request was cancelled or reached its deadline before
             a synchronous batch finished: unlike the cases above it may already be
-            committed (the git process can be stopped after it moved the ref), so
-            refresh to see whether it was before retrying'
+            committed (a git command that hits its own deadline may already have moved
+            the ref), so refresh to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations
