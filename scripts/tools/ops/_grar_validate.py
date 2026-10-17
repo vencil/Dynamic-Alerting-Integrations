@@ -2057,7 +2057,8 @@ def domain_policy_problems(policy: object) -> list[tuple[str | None, str]]:
                                f"{value_type_text(tenants)} — define 'tenants' "
                                f"as a YAML list of tenant ids"))
     else:
-        bad = [t for t in tenants if not isinstance(t, str)]
+        # The schema's `minLength: 1`: an empty id names no tenant either.
+        bad = [t for t in tenants if not isinstance(t, str) or not t]
         if bad:
             out.append(("tenants", f"'tenants' lists "
                                    f"{', '.join(value_type_text(t) for t in bad)}"

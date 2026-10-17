@@ -82,6 +82,9 @@ CASES = {
     "tenants-entry-mapping": (_fin("    tenants: [t-a, {x: 1}]\n"
                                    "    constraints: {max_repeat_interval: 1h}\n"),
                               "tenants", "fin", "'tenants' lists a mapping"),
+    "tenants-entry-empty": (_fin("    tenants: [t-a, '']\n"
+                                 "    constraints: {max_repeat_interval: 1h}\n"),
+                            "tenants", "fin", "'tenants' lists "),
     "constraints-list": (_fin("    tenants: [t-a]\n    constraints: [max_repeat_interval]\n"),
                          "constraints", "fin", "'constraints' must be a mapping, got a list"),
     "forbidden-not-list": (_cons("forbidden_receiver_types: webhook"),
