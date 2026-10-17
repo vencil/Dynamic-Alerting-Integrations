@@ -52,7 +52,7 @@ func TestWriterRejectsReservedTenantID(t *testing.T) {
 			if err := os.WriteFile(ctrl, []byte(original), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 
 			err := tc.call(w)
 			if !errors.Is(err, ErrReservedTenantID) {

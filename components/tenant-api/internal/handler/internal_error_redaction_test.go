@@ -26,6 +26,7 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -303,7 +304,7 @@ func TestPutGroup_UnparseableGroupsFileIsConfigDecodeError(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{"_groups.yaml": "grops:\n  g-a:\n    label: a\n"})
 	initGitRepo(t, configDir)
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{State: mustDirState(configDir), Writer: gitops.NewWriter(configDir, configDir), Groups: groups.NewDirManager(configDir), RBAC: rbacMgr}
+	d := &Deps{State: mustDirState(configDir), Writer: gitopstest.NewWriter(configDir, configDir), Groups: groups.NewDirManager(configDir), RBAC: rbacMgr}
 	body, _ := json.Marshal(PutGroupRequest{Label: "gx", Members: []string{"t-owned"}})
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(body))
 	req.Header.Set("X-Forwarded-Email", "op@example.com")

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -106,7 +106,7 @@ func TestGetTenantEffective_WriterAnswersAsAColdWalk(t *testing.T) {
 			}
 			ageConfDir(t, dir)
 			cold := GetTenantEffective(&Deps{ConfigDir: dir})
-			warm := GetTenantEffective(&Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, "")})
+			warm := GetTenantEffective(&Deps{ConfigDir: dir, Writer: gitopstest.NewWriter(dir, "")})
 			codes := map[int]bool{}
 			for _, id := range []string{"t1", "t2", "t3", "t4", "t5", "t6", "t-absent"} {
 				wantCode, wantBody := effectiveGET(cold, id)
@@ -155,7 +155,7 @@ func TestGetTenantEffective_SeesThePutBeforeIt(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "t1.yaml"), "tenants:\n  t1:\n    mysql_connections: \"61\"\n")
 	initGitRepo(t, dir)
 	ageConfDir(t, dir)
-	d := &Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, dir), WriteMode: WriteModeDirect}
+	d := &Deps{ConfigDir: dir, Writer: gitopstest.NewWriter(dir, dir), WriteMode: WriteModeDirect}
 	get, put := GetTenantEffective(d), PutTenant(d)
 	value := func() string {
 		t.Helper()

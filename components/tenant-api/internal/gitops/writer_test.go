@@ -233,7 +233,7 @@ func TestWrite_RejectsFullConfigBody(t *testing.T) {
 	dir := pilotDefaultsDir(t)
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	full := "defaults:\n  container_cpu: 80\ntenants:\n  db-a:\n    container_cpu: \"70\"\n"
 	if _, err := w.Write(context.Background(), "db-a", "op@example.com", full); err == nil {
 		t.Fatal("Write must reject a body with a non-tenants root key, but returned nil")
@@ -252,7 +252,7 @@ func TestWrite_RejectsFullConfigBody(t *testing.T) {
 func TestWrite_RejectsBadVersionThreshold(t *testing.T) {
 	t.Parallel()
 	dir := pilotDefaultsDir(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	// version="V2" violates the ^[a-z0-9]... charset → validate() warns →
 	// Write must block before touching disk. Body is tenant-only.
@@ -282,7 +282,7 @@ func TestWrite_TenantOnlyMetricBody_Commits(t *testing.T) {
 	dir := pilotDefaultsDir(t)
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	body := "tenants:\n  db-a:\n    container_cpu: \"70\"\n"
 	if _, err := w.Write(context.Background(), "db-a", "op@example.com", body); err != nil {
 		t.Fatalf("tenant-only metric body must commit, got: %v", err)
@@ -298,12 +298,12 @@ func TestWrite_TenantOnlyMetricBody_Commits(t *testing.T) {
 
 func TestNewWriter(t *testing.T) {
 	t.Parallel()
-	w := NewWriter("/conf.d", "")
+	w := newTestWriter("/conf.d", "")
 	if w.gitDir != "/conf.d" {
 		t.Errorf("gitDir should default to configDir, got %q", w.gitDir)
 	}
 
-	w2 := NewWriter("/conf.d", "/repo")
+	w2 := newTestWriter("/conf.d", "/repo")
 	if w2.gitDir != "/repo" {
 		t.Errorf("gitDir should be /repo, got %q", w2.gitDir)
 	}
@@ -312,7 +312,7 @@ func TestNewWriter(t *testing.T) {
 func TestDiffNewFile(t *testing.T) {
 	t.Parallel()
 	// Diff against a non-existent file should show all lines as additions
-	w := NewWriter(t.TempDir(), "")
+	w := newTestWriter(t.TempDir(), "")
 	diff, err := w.Diff("new-tenant", "line1\nline2\n")
 	if err != nil {
 		t.Fatalf("Diff returned error: %v", err)

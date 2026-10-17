@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -184,7 +184,7 @@ func newNonRegularFixture(t *testing.T, makeEntry func(t *testing.T, dir, tenant
     permissions: [read, write, admin]
 `)
 	d := &Deps{
-		Writer:    gitops.NewWriter(dir, dir),
+		Writer:    gitopstest.NewWriter(dir, dir),
 		WriteMode: WriteModeDirect,
 		ConfigDir: dir,
 		RBAC:      mgr,

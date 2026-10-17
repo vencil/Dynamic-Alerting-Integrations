@@ -55,7 +55,7 @@ func baseFiles() map[string]string {
 // and nothing of ops 1-2 is in the serving tree, the index or the branch.
 func TestWriteBatchR2_PanicMidBatchLeavesServingTreeAtBase(t *testing.T) {
 	dir := seedTreeRepo(t, baseFiles())
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	func() {
 		defer func() {
@@ -84,7 +84,7 @@ func TestWriteBatchR2_PanicMidBatchLeavesServingTreeAtBase(t *testing.T) {
 func TestWriteBatchR2_ReadersSeeBaseDuringBatch(t *testing.T) {
 	for _, refuse := range []bool{true, false} {
 		dir := seedTreeRepo(t, baseFiles())
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		head := gitRevParse(t, dir, "HEAD")
 		var seen []string
 		probe := func([]byte) (string, error) {
@@ -128,7 +128,7 @@ func TestWriteBatchR2_ReadersSeeBaseDuringBatch(t *testing.T) {
 // F5: a cancelled context between ops means the whole batch is not written.
 func TestWriteBatchR2_CancelMidBatchWritesNothing(t *testing.T) {
 	dir := seedTreeRepo(t, baseFiles())
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -161,7 +161,7 @@ func TestWriteBatchR2_CancelMidBatchWritesNothing(t *testing.T) {
 // serving tree; a *BatchCommittedError means it IS.
 func TestWriteBatchR2_ReportMatchesRepositoryOnExternalCommit(t *testing.T) {
 	dir := seedTreeRepo(t, baseFiles())
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("s-a", silentBody("s-a", "critical")),
 		{TenantID: "s-b", Merge: func([]byte) (string, error) {
@@ -194,7 +194,7 @@ func TestWriteBatchR2_ReportMatchesRepositoryOnExternalCommit(t *testing.T) {
 // branch indeed holds it.
 func TestWriteBatchR2_FailureAfterPublishIsReportedCommitted(t *testing.T) {
 	dir := seedTreeRepo(t, baseFiles())
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.beforeBatchSync = func() error { return errors.New("injected after the ref moved") }
 	outcomes, err := w.WriteBatch(context.Background(), []BatchOp{setOp("s-a", silentBody("s-a", "critical"))}, "op@example.com")
 	var committed *BatchCommittedError
@@ -216,7 +216,7 @@ func TestWriteBatchR2_FailureAfterPublishIsReportedCommitted(t *testing.T) {
 // git, or only a directory) is removed, and git forgets it.
 func TestPruneBatchWorktrees_RemovesLeftovers(t *testing.T) {
 	dir := seedTreeRepo(t, baseFiles())
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	parent, err := w.batchWorktreesDir()
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestWriteBatchR2_UntrackedServingFileIsJudged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "team", "local.yaml"), []byte(silentBody("u-t", "warning")), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	_, err := w.WriteBatch(context.Background(), []BatchOp{setOp("u-t", silentBody("u-t", "critical"))}, "op@example.com")
 	if !errors.Is(err, ErrTenantDeclaredElsewhere) {
@@ -277,7 +277,7 @@ func TestWriteBatchR2_UntrackedServingFileIsJudged(t *testing.T) {
 func TestWriteBatchR2_InterruptedPublishIsRecovered(t *testing.T) {
 	for _, via := range []string{"startup", "next write"} {
 		dir := seedTreeRepo(t, baseFiles())
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		w.beforeBatchSync = func() error { return errors.New("killed after the ref update") }
 		_, err := w.WriteBatch(context.Background(), []BatchOp{
 			setOp("s-a", silentBody("s-a", "critical")),
@@ -291,7 +291,7 @@ func TestWriteBatchR2_InterruptedPublishIsRecovered(t *testing.T) {
 		if got, _ := os.ReadFile(filepath.Join(dir, "s-a.yaml")); string(got) != silentBody("s-a", "warning") {
 			t.Fatalf("%s: interrupted worktree s-a.yaml = %q, want the previous commit's", via, got)
 		}
-		w2 := NewWriter(dir, dir) // a restarted process
+		w2 := newTestWriter(dir, dir) // a restarted process
 		switch via {
 		case "startup":
 			if err := w2.RecoverBatchPublish(); err != nil {
@@ -323,7 +323,7 @@ func TestWriteBatchR2_InterruptedPublishIsRecovered(t *testing.T) {
 func TestRecoverBatchPublish_PathGoneFromHead(t *testing.T) {
 	for _, via := range []string{"startup", "next write"} {
 		dir := seedTreeRepo(t, baseFiles())
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		w.beforeBatchSync = func() error { return errors.New("killed after the ref update") }
 		if _, err := w.WriteBatch(context.Background(), []BatchOp{
 			setOp("s-a", silentBody("s-a", "critical")),
@@ -334,7 +334,7 @@ func TestRecoverBatchPublish_PathGoneFromHead(t *testing.T) {
 		// External commit deleting s-new.yaml on the branch (index only; the
 		// serving worktree still has no s-new.yaml, s-a.yaml is stale).
 		externalCommitWithout(t, dir, "s-new.yaml")
-		w2 := NewWriter(dir, dir)
+		w2 := newTestWriter(dir, dir)
 		var err error
 		if via == "startup" {
 			err = w2.RecoverBatchPublish()
@@ -366,7 +366,7 @@ func TestSyncServingPaths_EmptySetLeavesIndexAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitRun(t, dir, "add", "s-a.yaml") // an operator's staged change
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	if err := w.syncServingPaths("HEAD", nil); err != nil {
 		t.Fatalf("syncServingPaths(nil): %v", err)
 	}
@@ -408,7 +408,7 @@ func TestWriteBatch_RelativeSymlinkOutsideConfDir(t *testing.T) {
 			return strings.Replace(string(existing), "warning", "critical", 1), nil
 		}
 	}
-	w := NewWriter(conf, repo)
+	w := newTestWriter(conf, repo)
 	// The single write only reads (its merge result is discarded by a no-op).
 	if _, err := w.WriteMerged(context.Background(), "ln-t", "op@example.com", func(existing []byte) (string, error) {
 		single = append([]byte(nil), existing...)
@@ -459,7 +459,7 @@ func fileExists(p string) bool {
 // object is gone) is an error: the marker stays and no file is touched.
 func TestRecoverBatchPublish_BrokenTreeDeletesNothing(t *testing.T) {
 	dir := seedTreeRepo(t, baseFiles())
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.beforeBatchSync = func() error { return errors.New("killed after the ref update") }
 	if _, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("s-a", silentBody("s-a", "critical")),
@@ -471,7 +471,7 @@ func TestRecoverBatchPublish_BrokenTreeDeletesNothing(t *testing.T) {
 	if err := os.Remove(obj); err != nil {
 		t.Skipf("tree object is not loose: %v", err)
 	}
-	w2 := NewWriter(dir, dir)
+	w2 := newTestWriter(dir, dir)
 	marker, _ := w2.publishMarkerPath()
 	if err := w2.RecoverBatchPublish(); err == nil {
 		t.Error("RecoverBatchPublish on a broken tree returned nil, want an error")
@@ -495,7 +495,7 @@ func TestRecoverBatchPublish_AncestryCheckFailureKeepsMarker(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "s-a.yaml"), []byte("operator edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	missing := strings.Repeat("ab", 20) // well-formed, absent from the object store
 	if err := w.writePublishMarker(missing, []string{"s-a.yaml"}); err != nil {
 		t.Fatal(err)

@@ -67,7 +67,7 @@ func TestIsGitLockContention(t *testing.T) {
 // failure stays a plain error (→ 500). The deadline path is covered separately
 // (TestGitExecTimeout*).
 func TestGitErr_LockContentionMapsToOverloaded(t *testing.T) {
-	w := NewWriter(t.TempDir(), "")
+	w := newTestWriter(t.TempDir(), "")
 	// A fresh (non-deadline) context — gitErr must take the non-timeout branch.
 	ctx := context.Background()
 	sentinel := errors.New("exit status 128")

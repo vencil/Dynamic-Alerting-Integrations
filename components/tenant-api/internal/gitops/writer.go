@@ -460,7 +460,8 @@ type Writer struct {
 	fetchTimeout   time.Duration // in-lock base fetch deadline (TRK-318); 0 → defaultGitFetchTimeout
 
 	// validator is the generator's verdict every content-changing write asks
-	// for before it commits (#2903, write_validator.go); nil asks nothing.
+	// for before it commits (#2903, write_validator.go). Required (#1535):
+	// nil refuses every content-changing write with ErrNoValidator.
 	validator WriteValidator
 
 	// #2078 conf.d walk bound (see scanTree): 0 → defaultTreeScanTimeout.
@@ -786,8 +787,14 @@ func loaderReads(confAbs, abs string) (string, bool) {
 // a deadline kill included — it reports the error WITHOUT touching any lock:
 // see gitReadErr.
 func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
+	return w.gitOutputEnv(dir, nil, args...)
+}
+
+// gitOutputEnv is gitOutput with env added to the command's environment —
+// a temporary index's GIT_INDEX_FILE (gitCommitOnto).
+func (w *Writer) gitOutputEnv(dir string, env []string, args ...string) ([]byte, error) {
 	fullArgs := append([]string{"--no-optional-locks", "-C", dir}, args...)
-	cmd, ctx, cancel := w.gitCmd(fullArgs...)
+	cmd, ctx, cancel := w.gitIndexCmd(env, fullArgs...)
 	defer cancel()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -807,11 +814,12 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 //  3. Resolve the tenant's file, under the lock (#1673 / #2078)
 //  4. WriteIfUnchanged only: base-hash precondition on that file
 //  5. validate, under the lock — the authoritative verdict and the
-//     notices returned (#1681)
-//  6. Record HEAD before write
+//     notices returned (#1681); then the generator's verdict on HEAD
+//     (validateTenantFile, #2903 — required, #1535)
+//  6. Check HEAD is still the judged base
 //  7. Write the file resolved in step 3
-//  8. git add + git commit --author="<authorEmail>", then check the commit's
-//     parent against step 6 (conflict detection)
+//  8. Commit that path alone onto the judged base from a temporary index
+//     and advance HEAD by compare-and-swap (gitCommitOnto, #1535)
 //  9. onWrite callback (e.g. SSE broadcast)
 //
 // notices carries the advisory deprecation channel (#1231 1b): non-blocking
@@ -1475,12 +1483,10 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	// No-op short-circuit (unchangedFile, the rule Write shares): when the
 	// merge changed nothing — an idempotent patch, or a client retry after a
-	// write whose response was lost — there is nothing to commit, and
-	// gitCommit would stage nothing and NOT advance HEAD; commitFileChange's
-	// parent-based conflict check would then misfire (HEAD~1 != unmoved
-	// HEAD) with a spurious, permanently-unrecoverable ErrConflict. Treat an
-	// unchanged merge as success (#1097 self-review). `existing == nil` (a new
-	// tenant) never matches, so it still commits the new file.
+	// write whose response was lost — there is nothing to commit, and the
+	// generator need not be asked about HEAD's own tree. Treat an unchanged
+	// merge as success (#1097 self-review). `existing == nil` (a new tenant)
+	// never matches, so it still commits the new file.
 	if w.unchangedFile(filePath, existing, content) {
 		return notices, nil
 	}
@@ -1674,26 +1680,26 @@ func (w *Writer) writeTenant(path string, content []byte, perm os.FileMode) erro
 // store, outside git (#2856). Caller MUST hold w.mu before calling.
 //
 // `commitTag` identifies what's being committed in log lines, the
-// commit message subject (via gitCommit), and the onWrite callback
-// argument. For tenant writes it's the tenant ID; for special files
-// it's the entity type ("groups" / "views").
-//
-// Returns ErrConflict if the recorded HEAD before the write differs
-// from our commit's parent (someone else pushed between our read and
-// our write). Non-git environments skip conflict detection but still
-// return commit errors verbatim.
+// commit message subject, and the onWrite callback argument: the tenant ID.
 //
 // Callers take the lock with lockTreeOnBase (#1723), which is where the
 // branch check that matters runs — before the caller's first read.
 //
 // judgedBase (#2903) is the commit the generator judged this write on
-// (validateTenantFile; "" when no validator is installed). The write
-// commits only onto it: when HEAD is no longer judgedBase — a commit made
-// from outside this process while the generator judged — it returns
-// ErrConflict before writing anything. The staged blob must also be
-// exactly content (gitCommitPaths' validated check); when git attributes
-// rewrote it, the file is put back as it was and the write refused.
+// (validateTenantFile) — required (#1535: a Writer without a validator
+// refuses before it gets here, and there is no unjudged commit path). The
+// write commits only onto it: when HEAD is no longer judgedBase — a commit
+// made from outside this process while the generator judged — it returns
+// ErrConflict, before writing anything when that is visible already, else
+// from gitCommitOnto's compare-and-swap. The staged blob must also be
+// exactly content (checkStagedAsValidated); when git attributes rewrote
+// it, the write is refused. Whatever stops a write after its file was
+// written, the serving file is put back as HEAD has it (restoreFromHEAD);
+// the real index is gitCommitOnto's to keep (see there).
 func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, content []byte, judgedBase string, trailer ...string) error {
+	if judgedBase == "" {
+		return fmt.Errorf("%w: no judged base for %s", ErrNoValidator, commitTag)
+	}
 	// #1723 backstop only. Every current caller already ran this check in
 	// lockTreeOnBase, so here it is one symbolic-ref that finds base. It
 	// stays so a future caller that takes plain lockTree still cannot commit
@@ -1704,11 +1710,9 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	}
 	headBefore, err := w.currentHEAD()
 	if err != nil {
-		// Proceed without conflict detection in non-git environments.
-		slog.Warn("gitops: could not read HEAD before write",
-			"commit_tag", commitTag, "error", err)
+		return fmt.Errorf("read HEAD before write: %w", err)
 	}
-	if judgedBase != "" && headBefore != judgedBase {
+	if headBefore != judgedBase {
 		// The verdict is on judgedBase; committing onto anything else would
 		// publish a tree nobody judged. Nothing is written yet. (The check
 		// that decides is gitCommitOnto's compare-and-swap; this one only
@@ -1722,52 +1726,28 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 		return fmt.Errorf("write file: %w", err)
 	}
 
-	var committed bool
-	if judgedBase != "" {
-		committed, err = w.gitCommitOnto(filePath, commitTag, authorEmail, content, judgedBase, trailer...)
-	} else {
-		committed, err = w.gitCommit(filePath, commitTag, authorEmail, nil, trailer...)
-	}
+	committed, err := w.gitCommitOnto(filePath, commitTag, authorEmail, content, judgedBase, trailer...)
 	if err != nil {
 		// A judged write that did not commit leaves nothing behind (ADR-036
 		// §4: only a pass is written) — whatever stopped it: the refusals
 		// below, or git failing (index.lock, a timeout, update-ref).
-		if judgedBase != "" {
-			if rerr := w.restoreFromHEAD(filePath); rerr != nil {
-				slog.Error("gitops: could not put back a write that did not commit",
-					"commit_tag", commitTag, "error", rerr)
-			}
-			if w.stagedRefusal(err) || errors.Is(err, ErrConflict) {
-				return err
-			}
+		if rerr := w.restoreFromHEAD(filePath); rerr != nil {
+			slog.Error("gitops: could not put back a write that did not commit",
+				"commit_tag", commitTag, "error", rerr)
+		}
+		if w.stagedRefusal(err) || errors.Is(err, ErrConflict) {
+			return err
 		}
 		slog.Warn("gitops: commit failed", "commit_tag", commitTag, "error", err)
 		return fmt.Errorf("git commit: %w", err)
 	}
 
-	// Nothing was staged — the file on disk already matched HEAD, so the
-	// caller's desired state is what the repository holds and no commit was
-	// created. The parent check below only makes sense when we DID commit:
-	// with HEAD unmoved, HEAD~1 is our own predecessor rather than the commit
-	// we branched from, so it never equals headBefore and would report a
-	// permanent, unrecoverable ErrConflict for what is really an idempotent
-	// re-write (the same misfire WriteMerged's no-op short-circuit documents
-	// and sidesteps — this closes it for every direct-commit caller).
+	// Nothing differed from judgedBase — the file already held what the
+	// repository holds, so the caller's desired state is committed and no
+	// commit was created: an idempotent re-write, a success.
 	if !committed {
 		slog.Info("gitops: no changes to commit", "commit_tag", commitTag)
 		return nil
-	}
-
-	// The compare-and-swap already bound a judged write to its base.
-	if headBefore != "" && judgedBase == "" {
-		parent, err := w.commitParent()
-		if err == nil && parent != headBefore {
-			slog.Warn("gitops: external commit detected",
-				"commit_tag", commitTag,
-				"expected_parent", headBefore[:8],
-				"actual_parent", parent[:8])
-			return ErrConflict
-		}
 	}
 
 	slog.Info("gitops: committed", "commit_tag", commitTag, "author", authorEmail)
@@ -1796,49 +1776,27 @@ func (w *Writer) currentHEAD() (string, error) {
 	return w.revParse("HEAD")
 }
 
-// commitParent returns the parent commit hash of HEAD (i.e. HEAD~1).
-func (w *Writer) commitParent() (string, error) {
-	return w.revParse("HEAD~1")
-}
-
-// gitCommit stages filePath and creates a commit with the operator's email as author.
+// gitCommitPaths stages every path in paths and creates ONE commit with msg
+// in dir, the operator as author — the commit of a worktree whose index
+// holds nothing but what tenant-api put there: a batch's staging worktree
+// (#2900: a batch's files land in a single commit), or the serving tree on
+// a PR-mode feature branch just cut from a clean base (WritePRChecked).
+// committed is false when nothing was staged (HEAD is unmoved). A direct
+// write on the serving branch does NOT come here: it commits through
+// gitCommitOnto, which never commits the serving repository's own index.
 //
-// committed reports whether a commit was actually created: staging a file whose
-// content already equals HEAD's leaves nothing to commit, which is a success
-// (the desired state is already in the repository) but leaves HEAD where it
-// was. Callers that reason about HEAD movement must branch on this rather than
-// assume a nil error means a new commit exists.
-//
-// Committer identity is sourced from the GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL
-// environment variables (set in the K8s Deployment). This keeps the audit trail clean:
+// Committer identity is sourced from the GIT_COMMITTER_NAME /
+// GIT_COMMITTER_EMAIL environment variables (set in the K8s Deployment):
 //   - author  = the human operator (from X-Forwarded-Email via oauth2-proxy)
 //   - committer = the service account (da-portal@dynamic-alerting.local)
-//
-// validated is the bytes the generator judged for filePath (nil: none were
-// judged); see gitCommitPaths.
-func (w *Writer) gitCommit(filePath, tenantID, authorEmail string, validated []byte, trailer ...string) (committed bool, err error) {
-	msg := tenantCommitMessage(tenantID, trailer...)
-	var check map[string][]byte
-	if validated != nil {
-		check = map[string][]byte{filePath: validated}
-	}
-	return w.gitCommitPaths(w.gitDir, []string{filePath}, msg, authorEmail, check)
-}
-
-// gitCommitPaths stages every path in paths and creates ONE commit with msg,
-// the operator as author (#2900: a batch's files land in a single commit).
-// committed is as for gitCommit: false when nothing was staged.
-//
-// dir is the worktree the commit is made in: w.gitDir, or a batch staging
-// worktree (#2900).
 //
 // validated (#2903) is the bytes the generator judged, by path as in paths:
 // after staging, every such path's index blob must be exactly those bytes —
 // a .gitattributes rule can rewrite a file as it is staged — or the paths
 // are unstaged and the write refused (checkStagedAsValidated); nothing is
-// committed. nil checks nothing.
+// committed. It is required (#1535).
 func (w *Writer) gitCommitPaths(dir string, paths []string, msg, authorEmail string, validated map[string][]byte) (committed bool, err error) {
-	changed, err := w.stagePaths(dir, paths, validated)
+	changed, err := w.stagePaths(dir, nil, paths, validated, "")
 	if err != nil || !changed {
 		return false, err
 	}

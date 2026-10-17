@@ -49,7 +49,7 @@ func TestFetchTimeoutFromEnv(t *testing.T) {
 func TestFetchTimeoutIndependentFromGitTimeout(t *testing.T) {
 	t.Setenv("TENANT_API_GIT_TIMEOUT", "90s")
 	t.Setenv("TA_GIT_FETCH_TIMEOUT", "")
-	w := NewWriter(t.TempDir(), "")
+	w := newTestWriter(t.TempDir(), "")
 	if w.gitTimeout != 90*time.Second {
 		t.Errorf("gitTimeout = %v, want 90s", w.gitTimeout)
 	}
@@ -120,7 +120,7 @@ func TestWritePR_AnchorsOnFreshOriginBase(t *testing.T) {
 	gitRun(t, authorDir, "push", "origin", "main")
 
 	// Tenant B opens a PR from the (stale) local base.
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	res, err := w.WritePR(context.Background(), "db-b", "bob@example.com", "tenants:\n  db-b:\n    _silent_mode: \"critical\"\n")
 	if err != nil {
 		t.Fatalf("WritePR: %v", err)
@@ -173,7 +173,7 @@ func TestWritePR_FetchTimeout_ReturnsForgeDegraded(t *testing.T) {
 	gitRun(t, dir, "remote", "add", "origin", remoteDir)
 	gitRun(t, dir, "push", "origin", "main")
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.gitBinary = dispatchGitStub(t)
 	w.fetchTimeout = 200 * time.Millisecond
 	w.gitWaitDelay = 500 * time.Millisecond
@@ -210,7 +210,7 @@ func TestWritePR_FetchTimeout_ReturnsForgeDegraded(t *testing.T) {
 // from the local base exactly as before TRK-318.
 func TestWritePR_NoOriginSkipsFetch(t *testing.T) {
 	dir := initRepoOnMain(t)
-	w := NewWriter(dir, dir) // no remote added
+	w := newTestWriter(dir, dir) // no remote added
 
 	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML); err != nil {
 		t.Fatalf("WritePR without an origin remote should skip the fetch and succeed, got: %v", err)
