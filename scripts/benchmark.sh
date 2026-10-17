@@ -394,6 +394,16 @@ if [[ "${ROUTING_BENCH}" == true ]]; then
 
   CONF_DIR="${SCRIPT_DIR}/../components/threshold-exporter/config/conf.d"
   TOOLS_DIR="${SCRIPT_DIR}/tools"
+  # #2906: the route generator reads conf.d through da-guard parse-tree and
+  # exits 2 without one. Build it from this checkout unless $DA_GUARD_BINARY
+  # is set, as demo-showcase.sh does; a failed build stops here by name.
+  if [[ -z "${DA_GUARD_BINARY:-}" ]]; then
+    if ! make -C "${SCRIPT_DIR}/.." --no-print-directory da-guard-build; then
+      err "could not build da-guard (see above) — set DA_GUARD_BINARY to one, or install Go"
+      exit 2
+    fi
+    export DA_GUARD_BINARY="${SCRIPT_DIR}/../.build/da-guard"
+  fi
   RB_TMPDIR=$(mktemp -d)
   trap "rm -rf ${RB_TMPDIR}; cleanup" EXIT
 
@@ -461,8 +471,16 @@ print(f'Generated ${N_TENANTS} tenant configs → ${RB_TENANT_DIR}/')
       RB_INHIBITS=0
       for round in $(seq 1 5); do
         RB_START=$(date +%s%N)
-        RB_OUTPUT=$(python3 "${TOOLS_DIR}/generate_alertmanager_routes.py" --config-dir "${RB_TENANT_DIR}" --dry-run 2>/dev/null)
+        RB_GEN_RC=0
+        RB_OUTPUT=$(python3 "${TOOLS_DIR}/generate_alertmanager_routes.py" --config-dir "${RB_TENANT_DIR}" --dry-run 2>"${RB_TMPDIR}/gen.err") || RB_GEN_RC=$?
         RB_END=$(date +%s%N)
+        # A failed run times nothing: report it instead of a duration and
+        # zero routes that read like a measurement.
+        if [[ "${RB_GEN_RC}" -ne 0 ]]; then
+          err "route generator exited ${RB_GEN_RC} at N=${N_TENANTS}:"
+          cat "${RB_TMPDIR}/gen.err" >&2
+          exit 1
+        fi
         RB_ELAPSED_MS=$(python3 -c "print(f'{(${RB_END} - ${RB_START}) / 1e6:.1f}')" 2>/dev/null || echo "0")
         RB_TIMES="${RB_TIMES} ${RB_ELAPSED_MS}"
 
