@@ -347,9 +347,6 @@ NOT_A_CELL: dict[str, str] = {
     "lint/check_threshold_unit_sanity.py":
         "walks fixed repo-relative dirs, takes no conf.d argument; hidden "
         "axis pinned by test_hidden_carriers_are_not_linted (#1630)",
-    "ops/backtest_threshold.py":
-        "needs a git repo with HEAD~1; its `.hidden.yaml` neighbour is "
-        "pinned by test_confd_case_parity_across_tools's backtest tests",
     "_lib_parse_cache.py":
         "lists only through `_lib_confd.iter_config_files` (library cell): "
         "a directory's carriers, for the cache-mode `not_read` verdict",

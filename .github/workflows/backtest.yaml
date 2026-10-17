@@ -3,6 +3,21 @@ on:
   pull_request:
     paths:
       - 'components/threshold-exporter/config/conf.d/**'
+      # #3111: the tool, the modules that decide what it compares, and this
+      # workflow, so a change to how the backtest runs is run here too (as
+      # config-diff-advisory.yml lists its own). ⚠️ Not everything the result
+      # depends on is in the list — the da-guard Go sources and the other
+      # shared `_lib_*` modules are not — so a change there alone does not run
+      # this; the next conf.d PR does. A PR that changes none of conf.d/ still
+      # gets a comment: without a reachable Prometheus (no PROMETHEUS_URL
+      # secret) it says "Prometheus is unavailable" — that check comes before
+      # the "no threshold changes found." one — and with one, the latter.
+      - 'scripts/tools/ops/backtest_threshold.py'
+      - 'scripts/tools/ops/_observed_map_lib.py'
+      - 'scripts/tools/ops/metric_observed_map.yaml'
+      - 'scripts/tools/_lib_tenant_values.py'
+      - 'scripts/tools/_lib_validation.py'
+      - '.github/workflows/backtest.yaml'
 
 permissions:
   contents: read
@@ -15,7 +30,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2   # need HEAD~1 for git diff
+          persist-credentials: false
+
+      # #3111: the tool no longer checks a base out itself; the PR base is
+      # checked out here, into its own path, and compared as a second tree.
+      - name: Check out the PR base
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .backtest-base
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -24,16 +48,59 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml -c requirements/ci-constraints.txt
 
+      # #2119: --config-dir / --baseline have the exporter read both trees
+      # (`da-guard served-values`). Without da-guard the run ends rc 2
+      # `served_values_unavailable` before the Prometheus check, so the
+      # comment would say that instead of the backtest. Built from the PR
+      # checkout, so both trees are read by the same binary.
+      - name: Set up Go (da-guard)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-guard
+        run: |
+          make da-guard-build
+          echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
+
+      # #3111: a PR that adds the first conf.d/ has no base tree to compare
+      # with; say so in the comment instead of ending rc 2
+      # `served_values_unavailable`.
+      - name: Check the PR base has a conf.d/
+        id: base
+        run: |
+          # At least one *.yaml / *.yml file (any case, as the exporter matches
+          # it; a symlink to a file counts, a directory or a dangling symlink
+          # does not) under it, hidden files and directories skipped as the
+          # exporter skips them: an empty conf.d/ (or one holding only a
+          # README) is a tree the exporter refuses ("no .yaml files found").
+          # -H: conf.d/ itself may be a symlink to a directory.
+          confd=.backtest-base/components/threshold-exporter/config/conf.d
+          if [ -d "$confd" ] && [ -n "$(find -H "$confd" -mindepth 1 -name '.*' -prune -o \
+              \( -iname '*.yaml' -o -iname '*.yml' \) \( -type f -o -xtype f \) \
+              -print -quit)" ]; then
+            echo "has_confd=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the PR base has no conf.d/ config file to compare against; backtest skipped"
+            printf '%s\n' '## Threshold Backtest Results' '' \
+              '> **Backtest not run:** the PR base has no `conf.d/` config file to compare against.' \
+              > /tmp/backtest-comment.md
+          fi
+
       - name: Run backtest
         id: backtest
+        if: steps.base.outputs.has_confd == 'true'
         env:
           PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
-        # backtest_threshold.py 的 --git-diff 用客戶 repo 契約 `git diff -- conf.d/`
-        # （conf.d 在客戶 repo root）；本 repo 以 cwd 錨定到實際 conf.d 位置。
+        # PR 的 conf.d/ 對 PR base 的 conf.d/（上一步另外 checkout 到
+        # .backtest-base）；客戶 repo 的 conf.d 在 repo root 時兩個路徑照改。
         working-directory: components/threshold-exporter/config
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/tools/ops/backtest_threshold.py" \
-            --git-diff \
+            --config-dir conf.d \
+            --baseline "$GITHUB_WORKSPACE/.backtest-base/components/threshold-exporter/config/conf.d" \
             --prometheus "${PROMETHEUS_URL:-http://localhost:9090}" \
             --skip-if-unavailable \
             --markdown-output /tmp/backtest-comment.md \
