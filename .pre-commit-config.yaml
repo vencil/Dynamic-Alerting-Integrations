@@ -1323,11 +1323,15 @@ repos:
 
       - id: custom-alerts-compile-check
         name: "#741 S3b: rule-pack-custom-alerts.yaml must match the live conf.d _custom_alerts source"
-        entry: python3 -X utf8 scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
+        # ADR-036 step 4 (#2906): the compiler reads conf.d through `da-guard
+        # parse-tree`; the wrapper uses $DA_GUARD_BINARY when set, else builds
+        # .build/da-guard (as for routing-profiles-check). Without da-guard
+        # the compile exits 2.
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml)$
+        files: ^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/dx/custom_alerts/|scripts/tools/_lib_parse_(tree|cache)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/)
 
       - id: retire-drift-check
         name: "#869: forbid removing a K8s exporter target while conf.d _metadata.db_type remains (false-positive guard)"

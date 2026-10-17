@@ -210,9 +210,13 @@ def _safe_log(value) -> str:
 
 
 def build_pack(config_dir: Path,
-               max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT) -> dict:
-    """Build the rule-pack dict (groups) from a conf.d tree."""
-    shapes, per_tenant, skipped = _loader.build_shapes(config_dir, max_custom_recipes=max_custom_recipes)
+               max_custom_recipes: int = _loader.MAX_CUSTOM_RECIPES_DEFAULT,
+               read=None) -> dict:
+    """Build the rule-pack dict (groups) from a conf.d tree. `read` is
+    `build_shapes`': None reads each file through `da-guard parse-tree`
+    (ADR-036 step 4, #2906)."""
+    shapes, per_tenant, skipped = _loader.build_shapes(
+        config_dir, max_custom_recipes=max_custom_recipes, read=read)
 
     recording: List[dict] = []
     alerts: List[dict] = []
@@ -541,6 +545,22 @@ def _nothing_compiled_diagnosis(config_dir: Path, quarantined: int) -> str:
 @exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
+    # ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`,
+    # one document for the whole run (the compile and the lifecycle notices
+    # read one snapshot). Imported here: the recipe-preview image bundles
+    # this module without the parse-tree reader (it never runs `main`).
+    import _lib_parse_cache  # noqa: PLC0415
+    from _lib_parse_tree import ParseTreeError  # noqa: PLC0415
+    with _lib_parse_cache.session():
+        try:
+            return _main()
+        except ParseTreeError as e:
+            print(f"ERROR: the conf.d files are read through da-guard parse-tree, and that "
+                  f"read failed: {safe_label(str(e))}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
+
+
+def _main() -> int:
     parser = argparse.ArgumentParser(description="Compile custom-alert recipes → rule pack")
     parser.add_argument("--check", action="store_true",
                         help="verify committed pack matches source (semantic); exit 1 on drift")

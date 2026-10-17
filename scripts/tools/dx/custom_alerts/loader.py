@@ -35,7 +35,6 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     warn_multi_carrier,
 )
 from _lib_constants import MAX_CUSTOM_RECIPES  # noqa: E402  (#3042)
-from _lib_io import strict_load_exporter_keys, strict_safe_load  # noqa: E402  (#2123; #2216)
 
 from . import shape as _shape
 
@@ -57,19 +56,32 @@ class CustomAlertConfigError(ValueError):
 MAX_CUSTOM_RECIPES_DEFAULT = MAX_CUSTOM_RECIPES
 
 
-def _load_yaml(path: Path) -> dict:
-    """Strict (#2123): a key written twice in one mapping raises a YAMLError —
-    the exporter's yaml.v3 rejects that file, so compiling PyYAML's last value
-    would emit alerts for a config that is never served. Callers quarantine it
-    exactly like a syntax error."""
-    return strict_safe_load(path.read_text(encoding="utf-8")) or {}
+def _confd_read(config_dir: Path) -> "Callable[[Path], dict]":
+    """The default read of one conf.d file (ADR-036 step 4, #2906): its
+    content as `da-guard parse-tree` gives it (yaml.v3, the exporter's
+    parser; `_lib_parse_cache.reader_for`, so one run inside a
+    `_lib_parse_cache.session()` reads one snapshot of the tree). Never
+    PyYAML. A file parse-tree cannot read raises
+    `_lib_parse_tree.FileUnreadable` (quarantined by the callers below);
+    no da-guard, a failing one, or a file parse-tree does not select raises
+    the other `ParseTreeError`s, which stop the walk (`_reader_failure`).
+
+    Imported here, not at module load: the recipe-preview image ships this
+    package without the parse-tree reader and hands `read` in itself."""
+    import _lib_parse_cache  # noqa: PLC0415 — see the docstring
+    return _lib_parse_cache.reader_for(config_dir).read
 
 
-def _load_tenant_yaml(path: Path) -> dict:
-    """`_load_yaml` for a file carrying a `tenants:` block: the tenant ids
-    are the keys' source text, as the exporter reads them (#2216) — `010:` is
-    tenant "010", not 8. Strict like `_load_yaml`."""
-    return strict_load_exporter_keys(path.read_text(encoding="utf-8")) or {}
+def _reader_failure(exc: Exception) -> bool:
+    """Whether `exc` is the reader failing rather than one file being
+    unreadable: a `_lib_parse_tree.ParseTreeError` other than
+    `FileUnreadable` (no binary, a failing binary, a file the exporter's
+    walk does not select). Such a failure is not a file to quarantine — the
+    answer for every file is unknown — so it propagates. Looked up in
+    `sys.modules`: a run that never imported the reader cannot raise it."""
+    pt = sys.modules.get("_lib_parse_tree")
+    return (pt is not None and isinstance(exc, pt.ParseTreeError)
+            and not isinstance(exc, pt.FileUnreadable))
 
 
 def _is_dir(p: Path) -> bool:
@@ -109,7 +121,7 @@ def _file_skip(origin: str, exc: Exception) -> dict:
 
 
 def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
-                         read: "Optional[Callable[[Path], dict]]" = None) -> Dict[Path, List[dict]]:
+                         read: "Callable[[Path], dict]") -> Dict[Path, List[dict]]:
     """Map each directory → its _defaults.yaml top-level `_custom_alerts` list. A
     _defaults.yaml that fails to load is quarantined into `file_errors` (#1008 Part B),
     not raised."""
@@ -150,8 +162,10 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict],
         # describe_tenant's words, rather than dropped in silence.
         warn_multi_carrier(Path(root), readable)
         try:
-            data = (read or _load_yaml)(chosen)
+            data = read(chosen)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+            if _reader_failure(exc):
+                raise
             file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
             continue
         alerts = data.get("_custom_alerts") or []
@@ -193,8 +207,14 @@ def collect_instances(config_dir: Path,
     encoding) is QUARANTINED into file_errors and skipped (#1008 Part B), never raised —
     this load is outside the per-recipe fail-soft loop, so without it one bad file would
     crash the whole compile.
+
+    `read` reads one conf.d file as a mapping; by default `da-guard parse-tree`
+    (`_confd_read`, ADR-036 step 4 #2906 — never PyYAML). A reader failure
+    that is not one file's (`_reader_failure`) propagates.
     """
     config_dir = Path(config_dir)
+    if read is None:
+        read = _confd_read(config_dir)
     file_errors: List[dict] = []
     dir_alerts = _dir_defaults_alerts(config_dir, file_errors, read)
     triples: List[Tuple[str, dict, str, bool]] = []
@@ -289,8 +309,10 @@ def collect_instances(config_dir: Path,
         if is_defaults_name(path.name):
             continue
         try:
-            data = (read or _load_tenant_yaml)(path)
+            data = read(path)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
+            if _reader_failure(exc):
+                raise
             file_errors.append(_file_skip(path.relative_to(config_dir).as_posix(), exc))
             continue
         tenants = data.get("tenants") or {}
@@ -328,7 +350,8 @@ def _summarize_tenants(tenants) -> str:
     return f"{len(names)} tenant(s) ({shown})"
 
 
-def collect_lifecycle_notices(config_dir: Path) -> List[str]:
+def collect_lifecycle_notices(config_dir: Path,
+                              read: "Optional[Callable[[Path], dict]]" = None) -> List[str]:
     """Human-readable notices for non-active recipes in use (ADR-024 #6).
 
     One notice per (status, recipe) that a deprecated/eol recipe is declared by
@@ -340,7 +363,7 @@ def collect_lifecycle_notices(config_dir: Path) -> List[str]:
     platform retired the recipe.
     """
     by_status: Dict[Tuple[str, str], set] = defaultdict(set)   # (status, recipe) → tenants
-    triples, _file_errors = collect_instances(config_dir)   # unloadable files → build_shapes reports them
+    triples, _file_errors = collect_instances(config_dir, read)   # unloadable files → build_shapes reports them
     for tenant, inst, _origin, _is_own in triples:
         if not isinstance(inst, dict):
             continue   # malformed entry (e.g. a scalar _custom_alerts) — quarantined by
@@ -390,10 +413,10 @@ def build_shapes(config_dir: Path,
     union. per_tenant_count is the EFFECTIVE count (own + inherited) of the recipes that
     COMPILED.
 
-    `read`, given, reads one conf.d file as a mapping in place of this
-    module's PyYAML read (`_load_yaml` / `_load_tenant_yaml`): validate-config
-    hands its `da-guard parse-tree` reader in (ADR-036 step 4, #2906), so one
-    run reads conf.d one way. A file it raises on is quarantined the same way.
+    `read`, given, reads one conf.d file as a mapping in place of the default
+    `da-guard parse-tree` read (`collect_instances`): validate-config hands
+    its run's reader in, recipe-preview the document it wrote. A file it
+    raises on is quarantined the same way.
 
     `accepted`, given, receives one dict per recipe instance that COMPILED —
     `tenant`, `name`, `recipe_id`, `severities`, `origin`, `own` and

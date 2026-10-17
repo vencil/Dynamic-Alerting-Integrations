@@ -75,6 +75,15 @@ _NS_PER_MIN = 60_000_000_000
 _MAX_WINDOW_MIN = 1440  # 24h
 
 
+def compile_preview(confd: Path, doc: dict) -> dict:
+    """`compile_custom_alerts.build_pack` over the one-tenant tree this
+    module wrote at `confd` from `doc`. The compiler is handed `doc` as the
+    file's content (`read`), not left to read the file back: the image
+    ships no da-guard, and the compiler's own conf.d read is `da-guard
+    parse-tree` (ADR-036 step 4, #2906). The file is written all the same —
+    it is what the compiler's walk lists."""
+    return cc.build_pack(confd, read=lambda _path: doc)
+
 def _window_minutes(window):
     """Prometheus duration (compound + sub-second ok) → whole minutes (ceil; min 1).
     INTEGER arithmetic throughout. None on a malformed / non-positive / absurdly
@@ -323,15 +332,15 @@ def preview_recipe(recipe, tenant, scenario):
     try:
         confd = work / "conf.d"
         confd.mkdir()
+        doc = {"tenants": {tenant: {"_custom_alerts": [recipe]}}}
         (confd / f"{tenant}.yaml").write_text(
-            yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
-                           sort_keys=False, allow_unicode=True),
+            yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
             encoding="utf-8", newline="\n",
         )
 
         # ── compile (errors → state:error, never mislabeled firing) ──
         try:
-            pack = cc.build_pack(confd)
+            pack = compile_preview(confd, doc)
         except Exception as exc:  # RecipeError / CustomAlertConfigError / loader errors
             return _err(f"recipe failed to compile: {exc}", alertname=f"Custom_{slug}")
 

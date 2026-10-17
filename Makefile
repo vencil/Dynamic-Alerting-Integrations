@@ -850,7 +850,7 @@ generate-fixtures: ## 產生合成 Tenant Fixture 供基準測試用 (使用: ma
 
 .PHONY: describe-tenant
 describe-tenant: ## 展開 Tenant 有效配置（含 _defaults.yaml 繼承）(使用: make describe-tenant ARGS="<tenant-id> --conf-d conf.d/ --show-sources")
-	@python3 ./scripts/tools/dx/describe_tenant.py $(ARGS)
+	@bash scripts/ops/with_da_guard.sh python3 ./scripts/tools/dx/describe_tenant.py $(ARGS)
 
 .PHONY: migrate-conf-d
 migrate-conf-d: ## 遷移 flat conf.d/ 至分層結構 (使用: make migrate-conf-d ARGS="--conf-d conf.d/ --dry-run")
@@ -906,11 +906,11 @@ rulepack-pint: ## pint 規則靜態檢查（alerts/template label-flow gate；CI
 
 .PHONY: custom-alerts-compile
 custom-alerts-compile: ## 從 LIVE conf.d 的 _custom_alerts 編譯部署 pack（ADR-024 能力 B，#741 S3b；source 必須是 exporter 服務的同一 conf.d，否則 recipe_id 對不上 emit）
-	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
+	@bash scripts/ops/with_da_guard.sh python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --out $(CURDIR)/rule-packs/rule-pack-custom-alerts.yaml
 
 .PHONY: custom-alerts-compile-check
 custom-alerts-compile-check: ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate）
-	@python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
+	@bash scripts/ops/with_da_guard.sh python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
 .PHONY: recipe-status-json
 recipe-status-json: ## 從 shape.py RECIPE_STATUS 生成 recipe-status.json（ADR-024 §8 A1；committed artifact，Go go:embed 消費；非 build-time 生成 → 無 build-order flaky）

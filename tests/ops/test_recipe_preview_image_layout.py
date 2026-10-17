@@ -116,9 +116,11 @@ def test_app_imports_in_the_image_layout(tmp_path):
     run_env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
                    PREVIEW_CORE_DIR=str(here(env["PREVIEW_CORE_DIR"])))
     # Import app.py as the container does, then compile one recipe with the
-    # bundled compiler: `preview_recipe` wraps build_pack in `except Exception`
-    # and would turn a module missing at REQUEST time into a 200 `error`
-    # answer, which an import-only check cannot see (#2873 review).
+    # bundled compiler the way `preview_recipe` does (`compile_preview`: the
+    # document handed in, no da-guard in the image, #2906): `preview_recipe`
+    # wraps the compile in `except Exception` and would turn a module missing
+    # at REQUEST time into a 200 `error` answer, which an import-only check
+    # cannot see (#2873 review).
     confd = tmp_path / "conf.d"
     confd.mkdir()
     (confd / "a.yaml").write_text(
@@ -128,8 +130,9 @@ def test_app_imports_in_the_image_layout(tmp_path):
     probe = ("import importlib.util as u, sys, pathlib; "
              "s = u.spec_from_file_location('app', 'app.py'); "
              "m = u.module_from_spec(s); s.loader.exec_module(m); "
-             "pack = sys.modules['compile_custom_alerts'].build_pack("
-             "pathlib.Path(sys.argv[1])); "
+             "import yaml; p = pathlib.Path(sys.argv[1]); "
+             "doc = yaml.safe_load((p / 'a.yaml').read_text(encoding='utf-8')); "
+             "pack = sys.modules['_recipe_preview'].compile_preview(p, doc); "
              "assert pack['groups'], pack; print('ok')")
     r = subprocess.run([sys.executable, "-I", "-c", probe, str(confd)],
                        cwd=str(here(workdir)), capture_output=True,

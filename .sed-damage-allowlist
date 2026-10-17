@@ -198,3 +198,8 @@ changelog.d/2280-tenant-api-routing-policy.md
 # whole file parse-tree's `null_key` unreadable, so the per-path cases
 # collapsed into "the file is refused". Rewritten, not truncated.
 tests/ops/test_grar_match_null_key.py
+
+# #2906 step D: describe_tenant.py drops its Python imitation of the exporter
+# (PyYAML loaders, Go renderers, deep_merge, overlay/profile expansion) and
+# reads `da-guard effective` instead — 2495 → ~720 LOC, a real shrink.
+scripts/tools/dx/describe_tenant.py

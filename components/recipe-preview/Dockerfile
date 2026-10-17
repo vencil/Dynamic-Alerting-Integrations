@@ -88,8 +88,11 @@ COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
 # any of them fails app.py at import — and `docker build` still succeeds.
 # _lib_parse_cache is NOT imported at load (#2906): `_lib_confd` and `_lib_io`
 # import it only inside the conf.d readers that run da-guard
-# (declared_tenant_ids / tenant_declarations / load_confd_file), which the
-# compiler does not call — it reads conf.d with its own read.
+# (declared_tenant_ids / tenant_declarations / load_confd_file), and the
+# compiler only inside its default conf.d read (`custom_alerts.loader
+# ._confd_read`, `da-guard parse-tree`) — which recipe-preview never runs:
+# it hands the compiler the document it wrote (`_recipe_preview
+# .compile_preview`), so the image needs no da-guard.
 # tests/ops/test_recipe_preview_image_layout.py imports app.py in this layout.
 COPY scripts/tools/_lib_io.py                   ./core/_lib_io.py
 COPY scripts/tools/_lib_confd.py                ./core/_lib_confd.py

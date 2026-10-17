@@ -124,7 +124,8 @@ def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
     """Blind review of #1674: selecting on the RESOLVED name made
     `_defaults.yaml -> sub/platform-base.yaml` select nothing and crash with
     AttributeError (rc 1); before #1674 it was rc 0 with this chain. Go's
-    walker never follows the link, so the entry name is what it classifies."""
+    walker never follows the link, so the entry name is what it classifies
+    — and, since #2906 shows Go's chain as is, what it reports."""
     sub = tmp_path / "sub"
     sub.mkdir()
     (sub / "platform-base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
@@ -133,7 +134,7 @@ def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
     r = _describe(tmp_path, "t-link")
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert out["defaults_chain"] == ["sub/platform-base.yaml"]
+    assert out["defaults_chain"] == ["_defaults.yaml"]
     assert out["effective_config"] == {"cpu_pct": 50}
 
 

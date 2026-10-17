@@ -281,7 +281,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 - **代價**：
   - 根目錄 `_routing_defaults`、`state_filters` 這類頂層鍵的變更，在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
-  - `_custom_alerts` 在 `describe_tenant.py` 顯示的最終設定與 Go 實作之間不一致（決策 2）；`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 取 Go 的值，不受影響（`--what-if` 的兩個 `merged_hash` 是本工具自算，可能與 exporter 不同）。
+  - `_custom_alerts` 在 `describe_tenant.py` 顯示的最終設定與 Go 實作之間不一致（決策 2）；`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 取 Go 的值，不受影響（`--what-if` 的兩個 `merged_hash` 也是 da-guard 的，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
   - 沒有 `defaults:` 的子目錄檔整份併入，它的頂層鍵（例如 `state_filters`）因此也進最終設定：改它會讓該子樹每個租戶的 `merged_hash` 都動。`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 就是這個形狀（頂層只有 `_custom_alerts`）。
 
 ## 考量過的替代方案

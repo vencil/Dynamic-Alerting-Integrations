@@ -276,7 +276,7 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 - **Costs**:
   - Changes to top-level keys such as the root's `_routing_defaults` and `state_filters` are invisible in the effective config (Decision 8).
   - A comment-only edit of a tenant file is recorded as applied (Decision 7).
-  - `_custom_alerts` differs between the effective config `describe_tenant.py` shows and the Go implementation (Decision 2); the `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is Go's value and is not affected (the two `merged_hash` values of `--what-if` are computed by the tool itself and may differ from the exporter's).
+  - `_custom_alerts` differs between the effective config `describe_tenant.py` shows and the Go implementation (Decision 2); the `merged_hash` of `describe_tenant.py --show-sources` / `--all` and `tenant-verify` is Go's value and is not affected (the two `merged_hash` values of `--what-if` are da-guard's too, [#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)).
   - A subdirectory file without `defaults:` is merged whole, so its top-level keys (such as `state_filters`) also enter the effective config: changing one moves the `merged_hash` of every tenant in that subtree. `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` has this shape (its only top-level key is `_custom_alerts`).
 
 ## Alternatives Considered

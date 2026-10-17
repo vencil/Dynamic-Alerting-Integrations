@@ -10,8 +10,9 @@ t2 只寫 cpu "60"，繼承 plat_cpu。`moved` 是同一棵樹、t1.yaml 原封�
 - a → moved：blast_radius `affected_tenants: 0`；
 - 必響對照：plat_cpu 門檻 90 → 95，t1、t2 都報 `_custom_alerts` 變更（Go 的 merged_hash
   兩個都不動——這正是 recipe 變更要另外比的原因）；
-- da-guard 不可用：describe 照常輸出、merged_hash 為 null 並附原因，tenant-verify rc 1，
-  blast_radius 退回逐欄比對、純搬檔仍是 0。
+- da-guard 不可用：describe 結束碼 2、不輸出（#2906：它的每個值都是 da-guard 的），
+  tenant-verify rc 1；輸入沒有 merged_hash 時（舊版 describe 寫的、或樹裡有 exporter
+  丟掉的檔），blast_radius 退回逐欄比對、純搬檔仍是 0。
 
 在舊碼（main e6ffa663）上：hash 那支紅（describe 自算 t1 cfd03c07… ≠ Go dab72c53…）、
 搬檔那支 affected 1、必響那支在「Go 的 merged_hash 不動」前提紅（舊碼印的是會動的自算
@@ -90,14 +91,13 @@ def test_describe_merged_hash_is_da_guards(tmp_path, da_guard_env):
 
 
 def test_tree_without_custom_alerts_is_unchanged(tmp_path, da_guard_env):
-    """對照組 ctl：沒有 `_custom_alerts` 時，Go 的值與 describe 自己的 canonical hash 相同。"""
-    sys.path.insert(0, str(DESCRIBE.parent))
-    import describe_tenant as dt
+    """對照組 ctl：沒有 `_custom_alerts` 時，describe 的 effective_config 與 merged_hash 就是 Go 的。"""
     conf_d = _tree(tmp_path / "ctl", plat=None, t1_at=None)
     _describe_all(conf_d, tmp_path / "ctl.json")
     got = json.loads((tmp_path / "ctl.json").read_text(encoding="utf-8"))
-    own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("t2"))
-    assert got["t2"]["merged_hash"] == tv.load_effective(conf_d)["t2"].merged_hash == own
+    go = tv.load_effective(conf_d)["t2"]
+    assert got["t2"]["merged_hash"] == go.merged_hash
+    assert got["t2"]["effective_config"] == go.effective_config
 
 
 def test_pure_file_move_is_not_a_blast_radius(tmp_path, da_guard_env):
@@ -142,25 +142,32 @@ def test_a_value_change_rings_through_merged_hash(tmp_path, da_guard_env):
 
 
 def test_without_da_guard(tmp_path, monkeypatch):
-    """da-guard 不可用：describe 照常輸出，merged_hash 為 null 並附原因（不輸出 Python 自算值）；
-    tenant-verify 回 1（不是 rollback checklist 讀成 mismatch 的 2）；blast_radius 說明它在
-    逐欄比對，純搬檔仍是 0。"""
-    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    """da-guard 不可用：describe 結束碼 2、stdout 不輸出（不給 Python 自算的值）；
+    tenant-verify 回 1（不是 rollback checklist 讀成 mismatch 的 2）。"""
     a = _tree(tmp_path / "a")
-    moved = _tree(tmp_path / "moved", t1_at="sub/moved.yaml")
-    p = _describe_all(a, tmp_path / "a.json")
-    assert "WARN: merged_hash is not reported" in p.stderr, p.stderr
-    got = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
-    for t in ("t1", "t2"):
-        assert got[t]["merged_hash"] is None, got[t]
-        assert "no da-guard" in got[t]["merged_hash_error"], got[t]
-        assert got[t]["effective_config"]["cpu"]
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    p = subprocess.run([sys.executable, str(DESCRIBE), "--all", "--conf-d", str(a)],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    assert p.stdout == ""
     assert "da-guard binary not found" in p.stderr, p.stderr
     v = subprocess.run([sys.executable, str(VERIFY), "t1", "--conf-d", str(a), "--json"],
                        capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert v.returncode == 1, (v.returncode, v.stdout, v.stderr)
-    assert json.loads(v.stdout)["error"] == "merged_hash_unavailable"
-    _describe_all(moved, tmp_path / "moved.json")
+    assert "da-guard binary not found" in v.stderr, v.stderr
+
+
+def test_input_without_merged_hash_compares_fields(tmp_path, da_guard_env):
+    """輸入沒有 merged_hash（舊版 describe 寫的，或樹裡有 exporter 丟掉的檔）：
+    blast_radius 說明它在逐欄比對，純搬檔仍是 0。"""
+    a = _tree(tmp_path / "a")
+    moved = _tree(tmp_path / "moved", t1_at="sub/moved.yaml")
+    for tree, name in ((a, "a.json"), (moved, "moved.json")):
+        _describe_all(tree, tmp_path / name)
+        doc = json.loads((tmp_path / name).read_text(encoding="utf-8"))
+        for info in doc.values():
+            info["merged_hash"] = None
+        (tmp_path / name).write_text(json.dumps(doc), encoding="utf-8")
     report, err = _blast(tmp_path / "a.json", tmp_path / "moved.json")
     assert report["summary"]["affected_tenants"] == 0, report
     assert "have no merged_hash in the input" in err, err
