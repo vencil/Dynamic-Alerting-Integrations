@@ -69,13 +69,16 @@ jobs:
       - name: Check the PR base has a conf.d/
         id: base
         run: |
-          # At least one *.yaml / *.yml (any case, as the exporter matches it)
-          # under it, hidden files and directories skipped as the exporter
-          # skips them: an empty conf.d/ (or one holding only a README) is a
-          # tree the exporter refuses ("no .yaml files found").
+          # At least one *.yaml / *.yml file (any case, as the exporter matches
+          # it; a symlink to a file counts, a directory or a dangling symlink
+          # does not) under it, hidden files and directories skipped as the
+          # exporter skips them: an empty conf.d/ (or one holding only a
+          # README) is a tree the exporter refuses ("no .yaml files found").
+          # -H: conf.d/ itself may be a symlink to a directory.
           confd=.backtest-base/components/threshold-exporter/config/conf.d
-          if [ -d "$confd" ] && [ -n "$(find "$confd" -mindepth 1 -name '.*' -prune -o \
-              \( -iname '*.yaml' -o -iname '*.yml' \) -print -quit)" ]; then
+          if [ -d "$confd" ] && [ -n "$(find -H "$confd" -mindepth 1 -name '.*' -prune -o \
+              \( -iname '*.yaml' -o -iname '*.yml' \) \( -type f -o -xtype f \) \
+              -print -quit)" ]; then
             echo "has_confd=true" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::the PR base has no conf.d/ config file to compare against; backtest skipped"

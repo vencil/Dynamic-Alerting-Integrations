@@ -2120,6 +2120,15 @@ class TestRecipeNoteFromTheWholeTree:
             {**same, "db-a.yaml": self._t("db-a", "    mysql_connections: 50\n")})
         assert notes == []
 
+    def test_a_tenant_added_or_removed_without_recipes_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """A tenant on one side only is compared with "no recipes"."""
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {"gone.yaml": self._t("gone", "    mysql_connections: 70\n")},
+            {"new.yaml": self._t("new", "    mysql_connections: 70\n")})
+        assert notes == [], out.err
+
     def test_a_recipe_in_the_platform_file_is_named(self, monkeypatch, cli_argv, capsys,
                                                     tmp_path):
         """The exporter reads `tenants.<id>._custom_alerts` from `_platform.yaml`."""
@@ -2207,6 +2216,59 @@ class TestRecipeNoteFromTheWholeTree:
         assert notes == [], out.err
         assert "rejected" in out.err, out.err
 
+    _R1 = ("    _custom_alerts:\n      - recipe: threshold\n        name: r1\n        metric: m1\n"
+           "        op: '>'\n        window: 5m\n        threshold: '1:warning'\n")
+    _R2 = ("      - recipe: threshold\n        name: r2\n        metric: m2\n"
+           "        op: '>'\n        window: 5m\n        threshold: '{v}:warning'\n")
+
+    def _capped(self, monkeypatch, cli_argv, capsys, tmp_path, before, after):
+        # A limit of 1 metric per tenant: r1 is served, any later recipe is cut.
+        capped = {"_defaults.yaml": _CRIT_DEFAULTS + "max_metrics_per_tenant: 1\n"}
+        head = "    mysql_connections: '70'\n"
+        return self._note(monkeypatch, cli_argv, capsys, tmp_path,
+                          {**capped, "db-a.yaml": self._t("db-a", head + before)},
+                          {**capped, "db-a.yaml": self._t("db-a", head + after)})
+
+    def test_a_recipe_added_past_the_metric_limit_is_named(self, monkeypatch, cli_argv, capsys,
+                                                         tmp_path):
+        """bbf0421d: the served rows are what the limit leaves, so r2 added
+        past it changed nothing compared; `custom_alert_rows` counts it."""
+        _rc, notes, out = self._capped(monkeypatch, cli_argv, capsys, tmp_path,
+                                       self._R1, self._R1 + self._R2.format(v=2))
+        assert len(notes) == 1 and notes[0].endswith("(_custom_alerts): db-a"), out.err
+
+    def test_a_value_changed_in_a_recipe_past_the_limit_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """Documented limit: served-values counts the cut rows but does not
+        show them."""
+        _rc, notes, out = self._capped(monkeypatch, cli_argv, capsys, tmp_path,
+                                       self._R1 + self._R2.format(v=2),
+                                       self._R1 + self._R2.format(v=3))
+        assert (_rc, notes) == (0, []), out.err
+
+    def test_a_recipe_at_the_top_of_the_root_defaults_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """Documented limit: the compiler reads a `_defaults.yaml`'s top-level
+        `_custom_alerts` (root or sub-directory); the exporter serves no row
+        for it."""
+        tenant = {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")}
+        top = "_custom_alerts:\n" + self._R1.replace("    _custom_alerts:\n", "").replace(
+            "\n    ", "\n")[4:]
+        _rc, notes, out = self._note(monkeypatch, cli_argv, capsys, tmp_path, tenant,
+                                     {**tenant, "_defaults.yaml": _CRIT_DEFAULTS + top})
+        assert (_rc, notes) == (0, []), out.err
+
+    @pytest.mark.parametrize("empty", ["[]", "", "null"])
+    def test_an_empty_list_is_no_recipe(self, monkeypatch, cli_argv, capsys, tmp_path, empty):
+        """bbf0421d: removing `_custom_alerts: []` named the tenant, though
+        neither side serves or compiles a recipe."""
+        head = "    mysql_connections: 70\n"
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {"db-a.yaml": self._t("db-a", head + f"    _custom_alerts: {empty}\n")},
+            {"db-a.yaml": self._t("db-a", head)})
+        assert (_rc, notes) == (0, []), out.err
+
     def test_each_tree_is_read_by_da_guard_once(self, monkeypatch, cli_argv, capsys, tmp_path):
         """0bd6f362 ran da-guard on each tree twice (recipes, then values)."""
         calls = []
@@ -2271,7 +2333,10 @@ class TestBacktestWorkflow:
                        ".github/workflows/backtest.yaml"):
             assert needed in paths, (needed, paths)
 
-    @pytest.mark.parametrize("files, has_confd", [
+    # A layout of the base's conf.d/: a file `name`, a directory `name/`, a
+    # symlink `name -> target` (target relative to conf.d/, possibly missing);
+    # `@link` first makes conf.d/ itself a symlink to a sibling directory.
+    _LAYOUTS = [
         (None, False),
         ([], False),
         # 0bd6f362: a conf.d/ holding no config file passed the check, and the
@@ -2283,32 +2348,81 @@ class TestBacktestWorkflow:
         (["_defaults.yaml"], True),
         (["team/db-a.yml"], True),
         (["DB-A.YAML"], True),
-    ], ids=["no-dir", "empty", "readme-only", "hidden-only", "hidden-dir", "not-yaml",
-            "yaml", "nested-yml", "upper-case"])
-    def test_a_base_without_confd_skips_with_a_comment(self, tmp_path, files, has_confd):
-        """73c1e2da: a PR adding the first conf.d/ ended rc 2
-        `served_values_unavailable`."""
+        # bbf0421d: a directory or a dangling symlink named like a config file
+        # passed the check; a conf.d/ that is a symlink was skipped.
+        (["x.yaml/"], False),
+        (["x.yaml -> missing.yaml"], False),
+        (["real.txt", "x.yaml -> real.txt"], True),
+        (["@link", "_defaults.yaml"], True),
+    ]
+    _LAYOUT_IDS = ["no-dir", "empty", "readme-only", "hidden-only", "hidden-dir", "not-yaml",
+                   "yaml", "nested-yml", "upper-case", "dir-named-yaml", "dangling-link",
+                   "link-to-file", "confd-is-link"]
+
+    @staticmethod
+    def _lay_out(tmp_path, entries):
+        confd = tmp_path / ".backtest-base/components/threshold-exporter/config/conf.d"
+        if entries is None:
+            return confd
+        entries = list(entries)
+        where = confd
+        if entries[:1] == ["@link"]:
+            entries = entries[1:]
+            where = confd.parent / "real-confd"
+            where.mkdir(parents=True)
+            symlink_or_skip("real-confd", str(confd))
+        else:
+            confd.mkdir(parents=True)
+        for entry in entries:
+            name, _, target = entry.partition(" -> ")
+            path = where / name.rstrip("/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if target:
+                symlink_or_skip(target, str(path))
+            elif name.endswith("/"):
+                path.mkdir()
+            else:
+                path.write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        return confd
+
+    def _check(self, tmp_path):
         bash = shutil.which("bash")
         if bash is None:
             pytest.skip("needs bash")
         steps = _workflow()["jobs"]["backtest"]["steps"]
         check = next(st for st in steps if st.get("id") == "base")
-        run = next(st for st in steps if st.get("id") == "backtest")
-        assert run["if"] == "steps.base.outputs.has_confd == 'true'"
-        confd = tmp_path / ".backtest-base/components/threshold-exporter/config/conf.d"
-        if files is not None:
-            confd.mkdir(parents=True)
-            for name in files:
-                (confd / name).parent.mkdir(parents=True, exist_ok=True)
-                (confd / name).write_text("x: 1\n", encoding="utf-8")
         out, comment = tmp_path / "gh-output", tmp_path / "comment.md"
         script = check["run"].replace("/tmp/backtest-comment.md", str(comment))
         subprocess.run([bash, "-e", "-c", script], cwd=str(tmp_path), timeout=60, check=True,
                        env={**os.environ, "GITHUB_OUTPUT": str(out)})
-        got = out.read_text(encoding="utf-8") if out.exists() else ""
+        return (out.read_text(encoding="utf-8") if out.exists() else ""), comment
+
+    @pytest.mark.parametrize("entries, has_confd", _LAYOUTS, ids=_LAYOUT_IDS)
+    def test_a_base_without_confd_skips_with_a_comment(self, tmp_path, entries, has_confd):
+        """73c1e2da: a PR adding the first conf.d/ ended rc 2
+        `served_values_unavailable`."""
+        steps = _workflow()["jobs"]["backtest"]["steps"]
+        run = next(st for st in steps if st.get("id") == "backtest")
+        assert run["if"] == "steps.base.outputs.has_confd == 'true'"
+        self._lay_out(tmp_path, entries)
+        got, comment = self._check(tmp_path)
         if has_confd:
             assert got == "has_confd=true\n" and not comment.exists()
         else:
             assert got == ""
             assert "the PR base has no `conf.d/` config file" in comment.read_text(
                 encoding="utf-8")
+
+    @pytest.mark.usefixtures("da_guard_env")
+    @pytest.mark.parametrize("entries, has_confd", _LAYOUTS[1:], ids=_LAYOUT_IDS[1:])
+    def test_the_check_agrees_with_the_exporter(self, tmp_path, entries, has_confd):
+        """The check stands in for "the exporter reads this tree": a layout it
+        passes is one `da-guard served-values` reads, and one it skips is one
+        da-guard refuses."""
+        confd = self._lay_out(tmp_path, entries)
+        res = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
+                              str(confd)], capture_output=True, text=True, encoding="utf-8",
+                             timeout=120)
+        assert (res.returncode == 0) is has_confd, res.stderr
+        got, _ = self._check(tmp_path)
+        assert (got == "has_confd=true\n") is has_confd

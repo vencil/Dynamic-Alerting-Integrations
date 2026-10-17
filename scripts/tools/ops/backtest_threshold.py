@@ -479,14 +479,24 @@ def extract_changes_from_dirs(config_dir, baseline_dir, trees=None):
 # report instead. Recipe would-fire preview: #657.
 # ---------------------------------------------------------------------------
 
+# How served-values writes an empty `_custom_alerts` it refuses whole: a
+# null (`""`) or an empty list (`"[]"`). Neither serves nor compiles a recipe.
+_EMPTY_REFUSED_RECIPES = frozenset({"", "[]", "null", "~"})
+
+
 def _recipe_view(tenant_values):
     """What the exporter makes of one tenant's custom-alert recipes, as
     served-values reports it: the rows it serves (`values["_custom_alerts"]`;
     a recipe's shape, window, `for:`, name, mode, severity and value are all
-    in them) and the list it refuses whole (`unserved["_custom_alerts"]`, as
-    written)."""
+    in them), how many rows the recipes ask for before `max_metrics_per_tenant`
+    cuts them (`custom_alert_rows`; the served rows are what is left after
+    the cut), and the list it refuses whole (`unserved["_custom_alerts"]`, as
+    written; an empty one is no list)."""
+    refused = (tenant_values.unserved or {}).get("_custom_alerts")
+    if isinstance(refused, str) and refused.strip() in _EMPTY_REFUSED_RECIPES:
+        refused = None
     return json.dumps([tenant_values.values.get("_custom_alerts") or [],
-                       (tenant_values.unserved or {}).get("_custom_alerts")], sort_keys=True)
+                       tenant_values.custom_alert_rows or 0, refused], sort_keys=True)
 
 
 def changed_recipe_tenants(trees):
@@ -501,14 +511,17 @@ def changed_recipe_tenants(trees):
     recipe of a list refused next to recipes it serves (an unknown recipe, a
     duplicate) leaves the served rows as they were and the list is not in
     `unserved`; served-values' JSON carries no per-recipe refusal (the
-    exporter logs it), and its stderr is not parsed. Top-level
-    `_custom_alerts` of a sub-directory `_defaults.yaml` (read by the
-    custom-alert compiler, not served) is not seen either. config-diff and
-    the compiler judge those."""
+    exporter logs it), and its stderr is not parsed. A top-level
+    `_custom_alerts` of a `_defaults.yaml` (root or sub-directory; read by
+    the custom-alert compiler, inherited by every tenant below it, not
+    served) is not seen either. Nor is a changed value inside a recipe that
+    `max_metrics_per_tenant` cuts: served-values counts the cut rows
+    (`custom_alert_rows`) but does not show them. config-diff and the
+    compiler judge those."""
     (_f, old_tree), (_g, new_tree) = trees
     old = {t: _recipe_view(tv) for t, tv in old_tree.tenants.items()}
     new = {t: _recipe_view(tv) for t, tv in new_tree.tenants.items()}
-    empty = json.dumps([[], None], sort_keys=True)
+    empty = json.dumps([[], 0, None], sort_keys=True)
     return sorted(t for t in set(old) | set(new) if old.get(t, empty) != new.get(t, empty))
 
 
