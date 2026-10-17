@@ -47,7 +47,7 @@ from _lib_io import (  # noqa: E402
     _output_write_names_target,
     output_write,
 )
-from _platform_fs import DIR_WRITE_ERROR, has_posix_modes  # noqa: E402
+from _platform_fs import DIR_WRITE_ERROR, has_posix_modes, symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -505,3 +505,90 @@ def test_decorator_does_not_claim_a_plain_oserror(tmp_path: Path):
     assert "Traceback" in proc.stderr
     assert "ERROR: unexpected internal error (FileNotFoundError):" in proc.stderr
     assert "ERROR: cannot " not in proc.stderr
+
+
+# ── #3105: the secure writers chmod regular files only ───────────────────
+
+def _device_clone(tmp_path: Path) -> Path:
+    """A character device equal to /dev/null (1, 3) inside tmp_path, so a
+    writer that chmods it changes the clone, never the host's /dev/null."""
+    import stat as _stat
+    dev = tmp_path / "null-clone"
+    try:
+        os.mknod(dev, _stat.S_IFCHR | 0o666, os.makedev(1, 3))
+    except (PermissionError, AttributeError, OSError) as exc:
+        pytest.skip(f"cannot create a device node here: {exc}")
+    os.chmod(dev, 0o666)
+    try:  # a nodev mount lets root create the node but not open it
+        with open(dev, "w", encoding="utf-8"):
+            pass
+    except PermissionError as exc:
+        pytest.skip(f"device nodes cannot be opened here: {exc}")
+    return dev
+
+
+@pytest.mark.parametrize("writer", ["text", "json"])
+def test_a_device_target_is_written_and_its_mode_left_alone(tmp_path: Path, writer):
+    """`-o /dev/null`: the content goes to the device and its mode stays as
+    it was — as root the old chmod turned /dev/null into crw------- (#3105)."""
+    dev = _device_clone(tmp_path)
+    if writer == "text":
+        _lib_io.write_text_secure(str(dev), "x\n", flag="-o/--output")
+    else:
+        _lib_io.write_json_secure(str(dev), {"a": 1}, flag="-o/--output")
+    assert (os.stat(dev).st_mode & 0o777) == 0o666
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="as root the chmod of /dev/null would succeed (see the clone test)")
+@pytest.mark.parametrize("writer", ["text", "json"])
+def test_dev_null_is_writable_without_owning_it(writer):
+    """Not root: the chmod of /dev/null used to fail with EPERM after the
+    write, so `-o /dev/null` ended rc 2 (#3105)."""
+    if writer == "text":
+        _lib_io.write_text_secure("/dev/null", "x\n", flag="-o/--output")
+    else:
+        _lib_io.write_json_secure("/dev/null", {"a": 1}, flag="-o/--output")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+@pytest.mark.parametrize("writer", ["text", "json"])
+def test_a_fifo_target_keeps_its_mode(tmp_path: Path, writer):
+    """A FIFO the caller owns: the writer must not chmod it (#3105). Runs as
+    any user, so CI (not root) catches "chmod whenever it is allowed" too."""
+    import threading
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    os.chmod(fifo, 0o666)
+    got = []
+    reader = threading.Thread(target=lambda: got.append(fifo.read_bytes()), daemon=True)
+    reader.start()
+    if writer == "text":
+        _lib_io.write_text_secure(str(fifo), "x\n", flag="-o/--output")
+    else:
+        _lib_io.write_json_secure(str(fifo), {"a": 1}, flag="-o/--output")
+    reader.join(timeout=10)
+    assert not reader.is_alive() and got and got[0]
+    assert (os.stat(fifo).st_mode & 0o777) == 0o666
+
+
+@pytest.mark.skipif(not has_posix_modes(), reason="POSIX modes only")
+def test_a_symlink_to_a_regular_file_still_makes_it_private(tmp_path: Path):
+    """CONTROL: the regular-file check follows the link (stat, not lstat)."""
+    target = tmp_path / "real.json"
+    target.write_text("old", encoding="utf-8")
+    os.chmod(target, 0o644)
+    link = tmp_path / "link.json"
+    symlink_or_skip(target, link)
+    _lib_io.write_json_secure(str(link), {"a": 1})
+    assert (os.stat(target).st_mode & 0o777) == 0o600
+
+
+@pytest.mark.skipif(not has_posix_modes(), reason="POSIX modes only")
+def test_a_regular_file_is_still_made_private(tmp_path: Path):
+    """CONTROL: the 0600 the writers promise for a regular file is kept."""
+    target = tmp_path / "out.json"
+    target.write_text("old", encoding="utf-8")
+    os.chmod(target, 0o644)
+    _lib_io.write_json_secure(str(target), {"a": 1})
+    assert (os.stat(target).st_mode & 0o777) == 0o600
