@@ -61,7 +61,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope,
+)
 from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 
 # ---------------------------------------------------------------------------
@@ -1237,6 +1239,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys of the caller_error documents below
+        arm_crash_envelope(tenants_evaluated=0, rules_evaluated=0, error_count=0,
+                           warning_count=0, passed=False, violations=[])
 
     # A non-existent --config-dir is a caller error, not a vacuous pass:
     # without this guard a typo'd path silently yields no rules AND no tenant

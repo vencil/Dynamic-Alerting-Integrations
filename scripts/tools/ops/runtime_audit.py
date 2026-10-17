@@ -102,6 +102,8 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
     EXIT_CALLER_ERROR,
+    arm_crash_envelope,
+    disarm_crash_envelope,
 )
 
 # Finding categories.
@@ -465,12 +467,15 @@ def main():
     parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
 
     args = parser.parse_args()
+    if args.json:  # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     auditor = RuntimeAuditor(args)
     auditor.run()
 
     if args.json:
         auditor.print_json_report()
+        disarm_crash_envelope()  # the document is out; the rc is still to come
     else:
         auditor.print_human_report()
 

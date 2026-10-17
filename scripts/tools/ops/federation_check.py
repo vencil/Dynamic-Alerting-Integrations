@@ -33,7 +33,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import format_json_report, http_get_json, probe_health, query_prometheus_instant, add_prometheus_arg  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
 # Alias for backward-compat within this module
 query_prometheus = query_prometheus_instant
@@ -331,6 +332,8 @@ def main():
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")
     args = parser.parse_args()
+    if args.json:  # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope(tool="federation-check")
 
     if args.target == "edge":
         checks = check_edge(args.prometheus)

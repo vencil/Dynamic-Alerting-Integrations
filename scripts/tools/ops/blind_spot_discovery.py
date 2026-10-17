@@ -38,7 +38,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_served_tree,
     print_load_warnings,
 )
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
 
 
 def query_prometheus_targets(prom_url):
@@ -270,6 +270,8 @@ def main():
     """Entry point."""
     parser = build_parser()
     args = parser.parse_args()
+    if args.json_output:
+        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     # `... or "http://localhost:9090"` (not os.environ.get's default): a
     # PROMETHEUS_URL that is SET BUT EMPTY (e.g. a ConfigMap key resolving to

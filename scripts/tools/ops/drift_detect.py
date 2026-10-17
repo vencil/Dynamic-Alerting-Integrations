@@ -38,7 +38,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+)
 from _lib_confd import has_yaml_extension, is_hidden_name, warn_nested  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -603,6 +605,9 @@ def main():
     """CLI entry point for drift detection."""
     parser = build_parser()
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     dirs = [d.strip() for d in args.dirs.split(",") if d.strip()]
     ignore_prefixes = tuple(
@@ -663,6 +668,7 @@ def main():
     # Output (same for both modes)
     if args.json:
         print(format_json_report(summary))
+        disarm_crash_envelope()  # the document is out; a late crash must not add a second
     elif args.markdown:
         print(format_markdown_report(summary))
     else:

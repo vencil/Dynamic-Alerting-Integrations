@@ -77,7 +77,7 @@ from _grar_merge import (  # noqa: E402
 )
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1276,6 +1276,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     # #2264: --label only feeds the trace; outside it the flag would be
     # silently ignored, so refuse it (argparse caller error → rc 2).

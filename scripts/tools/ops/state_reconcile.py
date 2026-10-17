@@ -58,7 +58,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
     exit_on_output_write_error,
@@ -486,6 +486,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Emit machine-readable JSON report instead of human-readable text.",
     )
     args = ap.parse_args(argv)
+    if args.json:
+        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     state_dir = Path(args.state_dir)
     manifest_path = Path(args.manifest_path)

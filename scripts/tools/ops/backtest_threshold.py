@@ -64,7 +64,10 @@ from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 # strict reads raise YamlFileError for it, the path bad syntax already takes.
 from _lib_io import strict_safe_load  # noqa: E402
 from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
+    arm_crash_envelope, disarm_crash_envelope,
+)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 # #2119: `--config-dir` / `--baseline` are read by the exporter, not here.
 from _lib_tenant_values import (  # noqa: E402
@@ -1861,6 +1864,7 @@ def _end_not_run(args, status, reason, rc, recipe_tenants=()):
     report = empty_report(args.lookback, status, reason)
     if args.json:
         print(format_json_report(report))
+        disarm_crash_envelope()  # #3094: the document is out; the writes below must not add one
     _write_outputs(args, report, not_run_markdown(report), recipe_tenants)
     sys.exit(rc)
 
@@ -1924,6 +1928,10 @@ def main():
         help="Write Markdown report to file (for PR comments)",
     )
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope(build=lambda: empty_report(
+            args.lookback, "caller_error", "internal_error"))
 
     # #3059: argument errors first — before the Prometheus check, so
     # `--skip-if-unavailable` cannot turn them into a green skip — and with
@@ -2123,6 +2131,7 @@ def main():
     # Output
     if args.json:
         print(format_json_report(report))
+        disarm_crash_envelope()  # #3094: the document is out; the writes below must not add one
     else:
         print_text_report(report)
 

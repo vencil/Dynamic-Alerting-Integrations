@@ -44,7 +44,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
@@ -604,6 +605,8 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", default=True,
                         help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
+    if args.json:  # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     if args.show_inheritance:
         if not args.config_dir:
