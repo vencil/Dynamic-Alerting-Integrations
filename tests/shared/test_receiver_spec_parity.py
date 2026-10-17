@@ -33,8 +33,9 @@ and smarthost formats, written once as schema definitions and read by Python
 at run time); email `to` given as a list needs non-empty string items.
 
 Optional values (#2295) are refused only where Alertmanager refuses them: a
-property referencing `definitions.yamlBool` must be a boolean, null or a YAML 1.1
-boolean word (the enum is read from the schema at run time), and http_config
+property referencing `definitions.yamlBool` must be a boolean or null for the
+generator (#2906: a YAML 1.1 boolean word given as a STRING is refused there,
+while the schema's enum still takes it — those rows carry `python_differs`), and http_config
 follows Alertmanager's HTTPClientConfig / ProxyConfig rules — at most one auth
 method (`HTTP_CONFIG_AUTH_FIELDS`), string-only tokens and proxy_url. Whether a
 proxy_url parses as a URL is left to amtool (the generator's --validate gate),
@@ -252,11 +253,27 @@ def test_no_row_carries_a_go_verdict():
     assert not bad, f"go_differs has no reader since #2905: {bad}"
 
 
-def test_pipeline_writes_yaml_bool_words_as_booleans():
-    """#2295: a boolean word given as a string reaches Alertmanager as a boolean."""
+@pytest.mark.parametrize("receiver", [
+    {"send_resolved": "Off"},
+    {"send_resolved": "true"},
+    {"http_config": {"proxy_from_environment": "yes"}},
+])
+def test_pipeline_refuses_yaml_bool_words_given_as_strings(receiver):
+    """#2906 (was #2295's rewrite): a boolean word given as a STRING is not
+    turned into the boolean it spells — the receiver is refused
+    (invalid_receiver_field), the generator judges by type (ADR-036 §2)."""
+    cfg, warnings = build_receiver_config(
+        {"type": "webhook", "url": "https://h.example/a", **receiver}, "t1")
+    assert cfg is None
+    assert [w.kind for w in warnings] == ["invalid_receiver_field"], warnings
+
+
+def test_pipeline_passes_booleans_through_unchanged():
+    """A real boolean (an unquoted word PyYAML builds as one included) is
+    written as given."""
     cfg, _ = build_receiver_config(
-        {"type": "webhook", "url": "https://h.example/a", "send_resolved": "Off",
-         "http_config": {"proxy_from_environment": "yes"}}, "t1")
+        {"type": "webhook", "url": "https://h.example/a", "send_resolved": False,
+         "http_config": {"proxy_from_environment": True}}, "t1")
     entry = cfg["webhook_configs"][0]
     assert entry["send_resolved"] is False
     assert entry["http_config"]["proxy_from_environment"] is True
@@ -400,7 +417,11 @@ def test_http_config_keys_python_handles_are_schema_properties():
     from _lib_constants import HTTP_CONFIG_AUTH_FIELDS
 
     validated = _keys_read_from("_lib_validation", "_http_config_problem", "value")
-    emitted = _keys_read_from("_grar_merge", "build_receiver_config", "http_config")
+    # #2906: build_receiver_config no longer rewrites http_config (it used to
+    # turn a quoted proxy_from_environment word into a boolean); the key the
+    # Python side reads by name besides _http_config_problem is the boolean
+    # check that refuses the whole tree.
+    emitted = _keys_read_from("_lib_validation", "receiver_bool_problems", "http_config")
     # The extractor must see the reads it is there to see, or an empty set
     # would pass the subset check below vacuously.
     assert {"proxy_url", "no_proxy", "proxy_from_environment", "proxy_connect_header"} <= validated
@@ -450,11 +471,12 @@ def test_http_config_schema_refuses_an_unknown_key():
 
 def test_yaml_true_is_the_true_half_of_yaml_bool():
     """definitions.yamlTrue (the proxy rules' "proxy_from_environment: true")
-    is exactly the yamlBool values _yaml_bool_true reads as true."""
-    from _lib_validation import _yaml_bool_true, yaml_bool_literals
+    is exactly the yamlBool values that mean true: the boolean True and the
+    true words of the yamlBool enum. (#2906: the generator refuses the words
+    as strings; the schema still takes them, so its two halves must agree.)"""
+    from _lib_validation import yaml_bool_literals
 
     with open(_SCHEMA, encoding="utf-8") as f:
         enum = json.load(f)["definitions"]["yamlTrue"]["enum"]
-    candidates = [True, False, None, *yaml_bool_literals()]
-    want = [v for v in candidates if _yaml_bool_true(v)]
+    want = [True, *(w for w, v in yaml_bool_literals().items() if v)]
     assert sorted(enum, key=repr) == sorted(want, key=repr)

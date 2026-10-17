@@ -44,8 +44,9 @@ What this half measures, per tree written to a tmp dir:
   `_escalation` asserts on any line from a domain not listed here);
 * `platform` — the generator's blocking `_routing_defaults.routes` WARN, its
   blocking non-mapping `_routing_defaults` WARN (#2341), its
-  strict non-boolean `require_critical_escalation` line (#2325,
-  `domain_policy_unusable`, kind and field only: the line names no file), its
+  non-boolean `require_critical_escalation` line (#2325; since #2906 it
+  refuses the whole tree in every mode — `domain_policy_unusable`, kind and
+  field only), its
   strict "domain policy file could not be used" line (#2659: the whole file
   dropped — field `domain_policies` when that block is not a mapping, `""`
   when the file does not load, as da-guard names them) and
@@ -141,9 +142,9 @@ _POLICY_LINE = re.compile(
 # The blocking WARN _grar_parse records when it drops `_routing_defaults.routes`.
 _DEFAULTS_ROUTES = re.compile(
     r"WARN: _routing_defaults in (?P<file>\S+): 'routes' is not supported here")
-# #2325: the strict line for a `require_critical_escalation` that is not a
-# boolean (as PyYAML reads it). It names no file, so its platform row is
-# compared on kind and field only.
+# #2325 / #2906: the line for a `require_critical_escalation` that is not a
+# boolean (as PyYAML reads it) — a field-type refusal in every mode. Its
+# platform row is compared on kind and field only.
 _ESC_NOT_BOOL = re.compile(
     r"domain_policy '(?P<domain>[^']*)': constraint 'require_critical_escalation' must be a boolean")
 # #2659: the strict line for a policy file the generator dropped whole.

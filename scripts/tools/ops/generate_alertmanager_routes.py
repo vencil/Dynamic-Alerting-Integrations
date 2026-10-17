@@ -103,6 +103,8 @@ from _grar_parse import (  # noqa: E402, F401
 # Used here, not re-exported: which #2326 routing-tree findings refuse the
 # tree (`tree_refusal`, the same filter as `TenantTree.routing_tree_errors`).
 from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
+# #2906: the field-type refusal's itemised lines (`field_type_errors_refusal`).
+from _grar_parse import field_type_findings  # noqa: E402
 
 # ── Re-exports from _grar_routes ───────────────────────────────────
 from _grar_routes import (  # noqa: E402, F401
@@ -692,17 +694,60 @@ def invalid_tenant_ids_refusal(invalid_ids: list[str]) -> list[str]:
               for t in invalid_ids)]
 
 
+def _refuse_field_type_errors(tree: TenantTree,
+                              sink: list | None = None) -> None:
+    """#2906: a boolean / enum field of the wrong type or with a value the
+    generator does not know — refused in EVERY mode.
+
+    Render, --dry-run, --apply, --output-configmap, --validate, with or
+    without --strict: rc 1 and nothing written or applied. The fields are
+    judged by type and value alone (ADR-036 §2), never by what a string
+    spells: `_routing_enforced.enabled: "true"` used to be a `WARN …
+    skipping` line and a config with no NOC route at rc 0; a quoted
+    `require_critical_escalation: "true"` switched the constraint off unless
+    --strict; `_severity_dedup: "no"` turned dedup ON; `send_resolved:
+    "yes"` was written out as `true`. Once the generator reads yaml.v3
+    (ADR-036 step 4) an unquoted `yes` / `no` / `on` / `off` is such a
+    string as well, so each of those would change meaning in silence.
+    EXIT_VIOLATION, like the invalid tenant id refusal: a verdict on the
+    config, not on the invocation.
+    """
+    refusal = field_type_errors_refusal(tree.field_type_errors)
+    if not refusal:
+        return
+    _sink_extend(sink, refusal)
+    for msg in refusal:
+        print(msg, file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
+def field_type_errors_refusal(errors: list) -> list[str]:
+    """The stderr lines of the #2906 refusal; [] = not refused.
+
+    The judgment `_refuse_field_type_errors` acts on, as data (see
+    `unreadable_tenant_files_refusal`).
+    """
+    if not errors:
+        return []
+    return [_refusal_line(f"FAIL: {len(errors)} field value(s) of the wrong type or "
+                          "not recognised — nothing was generated, written or "
+                          "applied:"),
+            *(f.with_text(safe_label(f)) for f in field_type_findings(errors))]
+
+
 def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
                  duplicates: dict[str, list[str]],
                  routing_tree_problems: list[tuple[str, str, str, str]],
                  invalid_tenant_ids: list[str] | None = None,
+                 field_type_errors: list | None = None,
                  ) -> tuple[int, list[str]]:
     """What `main()` refuses a scanned tree for: ``(rc, stderr lines)``.
 
     ``(EXIT_OK, [])`` = not refused. The order is `main()`'s — unreadable
     tenant file (#1460, rc 1), duplicate tenant (#2315, rc 1), routing-tree
-    error (#2326, rc 2), invalid tenant id (ADR-035 D3, rc 1) — and `main()`
-    exits on the first refusal, so only that one's lines and rc.
+    error (#2326, rc 2), invalid tenant id (ADR-035 D3, rc 1), field type
+    (#2906, rc 1) — and `main()` exits on the first refusal, so only that
+    one's lines and rc.
     *routing_tree_problems* is every routing-tree finding; only the blocking
     kinds refuse, the same filter as `TenantTree.routing_tree_errors`.
     """
@@ -714,7 +759,8 @@ def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
             (EXIT_VIOLATION, duplicate_tenants_refusal(duplicates)),
             (EXIT_CALLER_ERROR, routing_tree_errors_refusal(blocking)),
             (EXIT_VIOLATION, invalid_tenant_ids_refusal(
-                sorted(set(invalid_tenant_ids or []), key=str)))):
+                sorted(set(invalid_tenant_ids or []), key=str))),
+            (EXIT_VIOLATION, field_type_errors_refusal(field_type_errors or []))):
         if lines:
             return rc, lines
     return EXIT_OK, []
@@ -1258,6 +1304,7 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
     _refuse_duplicate_tenants(tree, findings)
     _refuse_routing_tree_errors(tree, findings)
     _refuse_invalid_tenant_ids(tree, findings)
+    _refuse_field_type_errors(tree, findings)
     findings.extend(schema_warnings)
 
     has_routing = bool(routing_configs)

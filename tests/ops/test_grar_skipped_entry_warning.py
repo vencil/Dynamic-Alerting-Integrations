@@ -94,17 +94,25 @@ CASES = [
     ("merge:optional-field",
      _tenant("      receiver:\n        type: webhook\n"
              "        url: https://hooks.example.com/a\n"
-             "        send_resolved: maybe\n"),
+             "        http_config:\n"
+             "          basic_auth: {username: u}\n"
+             "          bearer_token: t\n"),
      None, "receiver type 'webhook'"),
     # _grar_parse
     ("parse:root-defaults-routes",
      {"_defaults.yaml": "_routing_defaults:\n  routes: []\n",
       **_with_receiver("")},
      None, "'routes' is not supported here"),
-    ("parse:enforced-enabled-not-bool",
-     {"_defaults.yaml": "_routing_enforced:\n  enabled: 'n'\n",
+    # #2906: a non-boolean `enabled` is no longer a dropped entry — it
+    # refuses the whole tree (tests/ops/test_grar_field_types.py). The
+    # `_routing_enforced` producer left is a `match` that is not a list.
+    ("parse:enforced-match-not-list",
+     {"_defaults.yaml": "_routing_enforced:\n  enabled: true\n"
+                        "  match: {severity: critical}\n"
+                        "  receiver:\n    type: webhook\n"
+                        "    url: https://noc.example.com/a\n",
       **_with_receiver("")},
-     None, "'enabled' must be a YAML boolean"),
+     None, "'match' must be a list"),
     ("parse:routing-defaults-not-mapping",
      {"_defaults.yaml": "_routing_defaults: [1]\n", **_with_receiver("")},
      None, "must be a mapping, got list"),
