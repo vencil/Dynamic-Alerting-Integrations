@@ -51,7 +51,8 @@ from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pai
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
 import _lib_parse_tree  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
 
@@ -1592,6 +1593,9 @@ def main():
     platform files, or the like.
     """
     args = build_parser().parse_args()
+    if args.json_output or args.format == "json":
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope(schema=JSON_SCHEMA)
     try:
         return _run(args)
     except Exception as exc:  # noqa: BLE001 — deliberate; see docstring

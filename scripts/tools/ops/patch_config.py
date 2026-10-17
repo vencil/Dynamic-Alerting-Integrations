@@ -53,7 +53,8 @@ import os
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope)
 from _lib_python import format_json_report, positive_seconds  # noqa: E402
 from _lib_io import (  # noqa: E402
     find_duplicate_key,         # #2123 shared check
@@ -1575,6 +1576,8 @@ def _main():
         elif as_json:
             _refuse(True, "bad_arguments", "arguments rejected (usage above)")
         raise
+    if args.json:  # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope(build=lambda: json.loads(_envelope("caller_error", "internal_error")))
 
     mode, report, write = None, new_report(), _Write()
     status, exc = None, None

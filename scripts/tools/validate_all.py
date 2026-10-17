@@ -59,7 +59,9 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 # lint/ only, so this file sat outside it; since #1642 the top level of
 # scripts/tools/ is enumerated too and this file IS under that contract
 # (--help → 0, unknown flag → 2).
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -1198,6 +1200,10 @@ def main():
     # --baseline and --compare imply --json
     if args.baseline or args.compare:
         args.json = True
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope. Armed
+        # after the implication above, so --baseline / --compare are covered.
+        arm_crash_envelope()
 
     # --list: show available checks
     if args.list:
@@ -1451,13 +1457,16 @@ def main():
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
             print(json_mod.dumps(out, indent=2, ensure_ascii=False))
+            disarm_crash_envelope()  # #3094: the tail below must not add a second document
             print(f"\n📊 Baseline saved to {BASELINE_FILE.name}",
                   file=sys.stderr)
         elif args.compare:
             print(json_mod.dumps(out, indent=2, ensure_ascii=False))
+            disarm_crash_envelope()  # #3094: the tail below must not add a second document
             _compare_baseline(out)
         else:
             print(json_mod.dumps(out, indent=2, ensure_ascii=False))
+            disarm_crash_envelope()  # #3094: the tail below must not add a second document
     else:
         print()
         print("=" * 60)

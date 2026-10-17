@@ -49,7 +49,9 @@ from _lib_python import (  # noqa: E402
     http_get_json,
     write_text_or_die,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+)
 
 _LANG = detect_cli_lang()
 
@@ -330,6 +332,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # one payload key _empty_mapping (below) carries
+        arm_crash_envelope(instance_tenant_mapping={})
 
     # ── Discover label values ──────────────────────────────────────
     label_values: dict[str, set[str]] = {}

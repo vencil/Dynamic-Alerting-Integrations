@@ -31,7 +31,9 @@ from _lib_python import (  # noqa: E402
     http_get_json,
     parse_duration_seconds,
 )
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -479,6 +481,9 @@ def main():
     """CLI entry point: 告警關聯分析引擎。"""
     parser = build_parser()
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     window_secs = parse_duration_seconds(args.window)
     if window_secs is None or window_secs <= 0:
@@ -508,6 +513,7 @@ def main():
     # Output
     if args.json:
         print(format_json_report(report))
+        disarm_crash_envelope()  # the --ci scan below must not add a second document
     elif args.markdown:
         print(format_markdown_report(report))
     else:

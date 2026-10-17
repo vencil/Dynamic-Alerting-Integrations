@@ -50,7 +50,10 @@ from _lib_python import (  # noqa: E402
     add_prometheus_arg, format_json_report, positive_int, positive_seconds,
     write_json_or_die,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
+    arm_crash_envelope, disarm_crash_envelope,
+)
 from _lib_confd import (  # noqa: E402
     config_stem,
     has_yaml_extension,
@@ -410,6 +413,20 @@ def main():
         help="Output JSON only (no text report)",
     )
     args = parser.parse_args()
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # dry-run document's keys below (nothing checked, no tenant counted)
+        arm_crash_envelope(build=lambda: {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "prometheus_url": args.prometheus,
+            "total_tenants": 0,
+            "healthy_count": None,
+            "unchecked_count": None,
+            "issue_count": None,
+            "health_score": None,
+            "tenants": {},
+            "recommendations": [],
+        })
 
     # Discover or parse tenants
     if args.tenants:
@@ -491,6 +508,8 @@ def main():
     # Output
     if args.json:
         print(format_json_report(report))
+        # #3094: the document is out; a later -o write crash must not add a second
+        disarm_crash_envelope()
     else:
         print_text_report(report)
 

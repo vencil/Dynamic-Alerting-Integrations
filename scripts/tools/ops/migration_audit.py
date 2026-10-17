@@ -81,7 +81,9 @@ from _lib_confd import (  # noqa: E402
     select_defaults_carrier,
     unusable_reason,
 )
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
+)
 from _lib_io import safe_label, strict_load_exporter_keys  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 import _lib_parse_tree  # noqa: E402
@@ -771,6 +773,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.json:
+        # #3094: a crash in --json mode still prints one envelope, shaped
+        # like the caller_error document below
+        arm_crash_envelope(build=lambda: {**empty_report(), "config_dir": args.config_dir})
     try:
         report = audit(Path(args.config_dir), args.da_guard_binary, args.timeout)
         out = (json.dumps(report, ensure_ascii=False, default=str) if args.json
@@ -788,6 +794,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(json.dumps(err, ensure_ascii=False))
         return EXIT_CALLER_ERROR
     print(out)
+    disarm_crash_envelope()  # the document is out; a late crash must not add a second
     return EXIT_VIOLATION if has_differences(report) else EXIT_OK
 
 

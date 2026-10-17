@@ -67,7 +67,9 @@ from _lib_python import (  # noqa: E402
     RECEIVER_TYPES,
     METRIC_PREFIX_DB_MAP,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    disarm_crash_envelope)
 from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
@@ -1285,6 +1287,8 @@ def main():
                         help="JSON output for CI pipeline integration")
 
     args = parser.parse_args()
+    if args.json:  # #3094: a crash in --json mode still prints one envelope
+        arm_crash_envelope()
 
     if not any([args.alertmanager_config, args.rule_files, args.scrape_config]):
         parser.print_help()
@@ -1394,6 +1398,7 @@ def main():
 
     if args.json:
         print(json.dumps(report, indent=2, default=str))
+        disarm_crash_envelope()  # the document is out; the rc is still to come
     elif args.dry_run:
         print("\n--- DRY RUN SUMMARY ---")
         for phase, info in report["phases"].items():

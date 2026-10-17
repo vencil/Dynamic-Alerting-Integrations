@@ -163,6 +163,17 @@ def _force_utf8_subprocess_io():
             os.environ["PYTHONIOENCODING"] = old
 
 
+@pytest.fixture(autouse=True)
+def _disarm_crash_envelope():
+    """A tool's ``main([... "--json"])`` called in-process arms the
+    process-wide crash envelope (#3094); it must not outlive that test.
+    Idempotent reset, not save-then-restore (see test-map.md)."""
+    yield
+    ec = sys.modules.get("_lib_exitcodes")
+    if ec is not None:
+        ec.disarm_crash_envelope()
+
+
 # ── Session-scoped constant fixtures ──────────────────────────────────
 
 @pytest.fixture(scope="session")

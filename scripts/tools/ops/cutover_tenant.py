@@ -48,7 +48,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+)
 from _lib_python import format_json_report, add_prometheus_arg  # noqa: E402
 
 
@@ -344,6 +346,17 @@ def main():
     try_utf8_stdout()
     parser = build_parser()
     args = parser.parse_args()
+    if args.json_output:
+        # #3094: a crash in --json mode still prints one envelope, with the
+        # keys of apply_cutover's report as its caller-error return has them
+        arm_crash_envelope(build=lambda: {
+            "success": False,
+            "steps_completed": [],
+            "failed_step": None,
+            "message": "",
+            "caller_error": True,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
 
     report = apply_cutover(
         readiness_json=args.readiness_json,
@@ -356,6 +369,7 @@ def main():
 
     if args.json_output:
         print(format_json_report(report))
+        disarm_crash_envelope()  # #3094: the document is out; the stderr summary must not add one
 
     if report["success"]:
         print("\n✅ Cutover completed successfully.", file=sys.stderr)

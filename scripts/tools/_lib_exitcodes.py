@@ -68,6 +68,18 @@ Overrides:
   ``--json`` contract can emit its ``internal_error`` envelope from
   ``on_crash(exc)`` before the process ends ("rc 2 always has an
   envelope", #3059).
+* ``arm_crash_envelope(build, **fields)`` (#3094) — the way a ``--json``
+  tool keeps that promise without a decorator: called right after the
+  arguments are parsed (only when ``--json`` was given), it makes the crash
+  path print one JSON document to stdout — the tool's own zeroed report from
+  ``build()`` (dev-rules §13) plus ``{"status": "caller_error", "reason":
+  "internal_error", "error": <the ERROR line>}``. Every crash path uses it
+  (this hook, ``@main`` without ``on_crash``, and ``da-tools``' last line of
+  defence). It fires at most once; a tool that can still run code after
+  printing its own document calls ``disarm_crash_envelope()`` there, so a
+  late crash does not add a second document. A crash before the arguments
+  are parsed has no envelope — the tool does not know yet that ``--json``
+  was asked for.
 
 ``da-tools`` (components/da-tools/app/entrypoint.py) is the last line of
 defence for tools that never import this module: it catches what
@@ -199,23 +211,90 @@ def report_crash(exc: BaseException) -> None:
     print(crash_message(exc), file=sys.stderr, flush=True)
 
 
+_DocBuilder = Callable[[], dict[str, Any]]
+_crash_envelope_armed: Optional[tuple[Optional[_DocBuilder], dict[str, Any]]] = None
+
+
+def crash_envelope(exc: BaseException, base: Optional[dict[str, Any]] = None,
+                   **fields: Any) -> dict[str, Any]:
+    """The ``--json`` document a crash prints (#3094).
+
+    ``status``/``reason`` follow the ``caller_error`` envelopes the tools
+    already print for their named exit-2 paths; ``error`` is the same
+    ``crash_message`` line stderr carries. *base* is the tool's own zeroed
+    report and *fields* its extra keys (dev-rules §13: an early exit keeps
+    the tool's schema keys, zeroed); neither can replace the three above.
+    """
+    return {**(base or {}), **fields, "status": "caller_error",
+            "reason": "internal_error", "error": crash_message(exc)}
+
+
+def arm_crash_envelope(build: Optional[_DocBuilder] = None, **fields: Any) -> None:
+    """Make an unexpected crash in this process print ``crash_envelope``.
+
+    Call it right after parsing the arguments, and only when ``--json`` was
+    given. *build* returns the tool's zeroed report; it runs at crash time,
+    so a timestamp in it is the crash's. Calling it again replaces both.
+    """
+    global _crash_envelope_armed
+    _crash_envelope_armed = (build, dict(fields))
+
+
+def disarm_crash_envelope() -> None:
+    """Undo ``arm_crash_envelope``: a tool whose own document is already on
+    stdout calls this, so a later crash does not print a second one."""
+    global _crash_envelope_armed
+    _crash_envelope_armed = None
+
+
+def _print_crash_envelope(exc: BaseException) -> None:
+    global _crash_envelope_armed
+    armed, _crash_envelope_armed = _crash_envelope_armed, None
+    if armed is None:
+        return
+    build, fields = armed
+    base = None
+    if build is not None:
+        try:
+            base = build()
+        except Exception:  # noqa: BLE001 — the three keys still print
+            base = None
+    import json  # deferred: only a crash in --json mode needs it
+    import os
+    data = (json.dumps(crash_envelope(exc, base, **fields), ensure_ascii=False,
+                       indent=2, default=str) + "\n").encode(
+        getattr(sys.stdout, "encoding", None) or "utf-8", "replace")
+    # Straight to the fd, never through the stdout buffer: on a closed pipe a
+    # write left in the buffer fails again at interpreter exit and turns the
+    # exit code into 120. A stdout that cannot even flush gets no envelope.
+    try:
+        sys.stdout.flush()
+        fd = sys.stdout.fileno()
+        while data:
+            data = data[os.write(fd, data):]
+    except (OSError, ValueError):  # closed pipe / closed or fd-less stdout
+        pass
+
+
 def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
                   on_crash: Optional[Callable[[BaseException], Any]] = None
                   ) -> NoReturn:
     """Report *exc* as an unexpected crash and exit.
 
     Exits with *code*, else the process crash code (``set_crash_exit_code``).
-    *on_crash* runs after the report; if it raises, that is reported too and
-    the exit code is unchanged. Uses ``sys.exit`` so atexit handlers run.
+    *on_crash* runs after the report; without one, the envelope armed by
+    ``arm_crash_envelope`` (if any) is printed instead. If that raises, it is
+    reported too and the exit code is unchanged. Uses ``sys.exit`` so atexit
+    handlers run.
     """
     report_crash(exc)
-    if on_crash is not None:
-        try:
-            on_crash(exc)
-        except Exception as hook_exc:  # noqa: BLE001
-            print("ERROR: on_crash handler failed:", file=sys.stderr)
-            traceback.print_exception(type(hook_exc), hook_exc,
-                                      hook_exc.__traceback__, file=sys.stderr)
+    try:
+        (on_crash or _print_crash_envelope)(exc)
+    except Exception as hook_exc:  # noqa: BLE001
+        what = "on_crash handler" if on_crash else "crash envelope"
+        print(f"ERROR: {what} failed:", file=sys.stderr)
+        traceback.print_exception(type(hook_exc), hook_exc,
+                                  hook_exc.__traceback__, file=sys.stderr)
     sys.exit(_crash_exit_code if code is None else code)
 
 
