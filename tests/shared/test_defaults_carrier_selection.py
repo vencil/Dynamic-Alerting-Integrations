@@ -109,10 +109,13 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     out = json.loads(r.stdout)
     assert out["defaults_chain"] == ["_defaults.yaml"]
     assert out["effective_config"] == {"cpu_pct": 50, "disk_pct": 4}
-    assert "defaults carriers" in r.stderr and "_defaults.yml is ignored" in r.stderr, r.stderr
-    # Once per directory per run: describe_tenant's scanner AND the
-    # custom-alerts loader it calls both see this directory (blind review).
-    assert r.stderr.count("defaults carriers") == 1, r.stderr
+    # Since #2906 describe_tenant has no carrier selection of its own: the
+    # warning is the custom-alerts loader's, from parse-tree's `not_read`
+    # verdict on the carrier it does not read (#3147).
+    warn = "_defaults.yml is ignored on every plane (#1674)"
+    assert warn in r.stderr, r.stderr
+    # Once per file per run (blind review).
+    assert r.stderr.count(warn) == 1, r.stderr
 
 
 def _symlink_or_skip(link: Path, target: Path) -> None:
