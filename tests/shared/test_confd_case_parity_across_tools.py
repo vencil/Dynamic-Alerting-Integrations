@@ -1918,12 +1918,22 @@ def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
 # ⛔ Blind review measured this: the fix touched SIX filename sites in
 # `backtest_threshold.py`, the commit counted "of 4", and reverting three
 # of them left the whole suite green. The one that was not counted was
-# also the one still broken. The four tests above cover exactly one of
-# those sites (`extract_changes_from_dirs`); these cover the rest.
+# also the one still broken. #3111 removed the diff parser and the HEAD~1
+# lookup; these cover `--git-diff` and the listings that remain.
 
 def _git_conf_d_repo(root: pathlib.Path, carrier: str,
                      before: str, after: str) -> pathlib.Path:
-    """A git repo whose `conf.d/<carrier>` changes between HEAD~1 and HEAD."""
+    """A git repo whose `conf.d/<carrier>` changes between HEAD~1 and HEAD.
+
+    ⛔ Three neighbours carrying the SAME edit (under their own tenant ids:
+    since #3111 the tenant is the `tenants:` key the exporter reads, and two
+    files declaring one tenant is a tree it refuses), one per axis this path
+    must not confuse with the tenant carrier:
+      `db-c.yml`       the spelling axis (#1603): a second real carrier.
+      `.hidden.yaml`   the hidden axis — the exporter's scanner skips
+                       `.`-prefixed entries.
+      `neighbour.txt`  the UPPER bound: an extension the exporter never loads.
+    """
     root.mkdir(parents=True, exist_ok=True)
     (root / "conf.d").mkdir()
     run = lambda *a: subprocess.run(  # noqa: E731
@@ -1931,37 +1941,26 @@ def _git_conf_d_repo(root: pathlib.Path, carrier: str,
     run("git", "init", "-q")
     run("git", "config", "user.email", "t@example.invalid")
     run("git", "config", "user.name", "t")
-    # ⛔ Two neighbours carrying the SAME edit, one per axis this path must
-    # not confuse with the tenant carrier:
-    #   `db-c.yml`       the spelling axis (#1603). ⚠️ THIS IS NO LONGER A
-    #                    "must not be seen" neighbour: #1603 widened these
-    #                    sites to `CONFIG_SUFFIXES`, so it is a second real
-    #                    carrier and the assertions below name it. It is
-    #                    kept rather than swapped out because it proves the
-    #                    two spellings behave identically under BOTH case
-    #                    arms, which is this file's own subject.
-    #   `.hidden.yaml`   the hidden axis — the exporter's scanner skips
-    #                    `.`-prefixed entries, and this chain SPLIT this
-    #                    path against itself by aligning the diff parser
-    #                    without aligning the listing beside it. With the
-    #                    split present, `changed_conf_files` below returns
-    #                    two entries and the assertions go red.
-    #   `neighbour.txt`  the UPPER bound: an extension the exporter never
-    #                    loads. Added with #1603 so "widened" cannot mean
-    #                    "accepts anything" — without it the upper-bound
-    #                    assertion in the HEAD~1 lookup test would pass for
-    #                    want of any non-carrier at all.
-    for name, body in ((carrier, before), ("db-c.yml", before),
-                       ("neighbour.txt", before), (".hidden.yaml", before)):
-        (root / "conf.d" / name).write_text(body, encoding="utf-8")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "before")
-    for name, body in ((carrier, after), ("db-c.yml", after),
-                       ("neighbour.txt", after), (".hidden.yaml", after)):
-        (root / "conf.d" / name).write_text(body, encoding="utf-8")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "after")
+    files = ((carrier, "acme"), ("db-c.yml", "c"), ("neighbour.txt", "n"),
+             (".hidden.yaml", "ghost"))
+    (root / "conf.d" / "_defaults.yaml").write_text(
+        "defaults:\n  cpu_usage: 90\n  mem_usage: 90\n", encoding="utf-8")
+    for body, message in ((before, "before"), (after, "after")):
+        for name, tenant in files:
+            (root / "conf.d" / name).write_text(body.replace("acme", tenant), encoding="utf-8")
+        run("git", "add", "-A")
+        run("git", "commit", "-qm", message)
     return root
+
+
+def _git_diff_changes(mod) -> list[dict]:
+    """The changes `--git-diff` compares (#3111): HEAD~1's conf.d/ written out,
+    then both trees read by the exporter."""
+    import tempfile  # noqa: PLC0415
+    with tempfile.TemporaryDirectory() as tmp:
+        old = mod.materialize_head1_confd(tmp)
+        assert old is not None, "git could not answer in this fixture"
+        return mod.extract_changes_from_dirs(mod._confd_tree("conf.d"), mod._confd_tree(old))
 
 
 _BEFORE = "tenants:\n  acme:\n    cpu_usage: 80\n    mem_usage: 70\n"
@@ -1969,72 +1968,43 @@ _AFTER_REMOVED = "tenants:\n  acme:\n    mem_usage: 70\n"
 
 
 def test_git_diff_path_reports_a_removal_under_either_casing(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
+        tmp_path: pathlib.Path, monkeypatch, da_guard_env) -> None:
     """⛔ The REMOVAL direction — a threshold being taken away, i.e. an
-    alert being disabled — through the `--git-diff` mode CI actually runs.
+    alert falling back to its default — through the `--git-diff` mode CI
+    actually runs, under a lower- and an upper-cased carrier.
 
-    Three sites at once: `changed_conf_files`, the diff parser's tenant
-    extraction, and the HEAD~1 lookup that classifies a removal. The last
-    one re-SPELLED the carrier from the tenant id (`{tenant}.yaml`), and
-    because `config_stem` preserves case on purpose, an upper-cased
-    carrier made `git show` fail and the removal was dropped. Measured:
-    the operator saw "No threshold changes found." for a removal that was
-    really there — on `05d3136` AND on the first version of the fix.
+    Before #3111 three sites decided this (`changed_conf_files`, the diff
+    parser's tenant extraction, and a HEAD~1 lookup that re-SPELLED the
+    carrier from the tenant id, so an upper-cased carrier's removal was
+    dropped). Since #3111 the changes come from the two trees, read by the
+    exporter; `changed_conf_files` still feeds the recipe notice and is
+    asserted on its own.
     """
     mod = _import_tool("ops", "backtest_threshold")
-    kept = {}
+    got = {}
     for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
         repo = _git_conf_d_repo(tmp_path / arm, carrier,
                                 _BEFORE, _AFTER_REMOVED)
         monkeypatch.chdir(repo)
         files = mod.changed_conf_files()
         parsed = mod.load_conf_files(files)
-        raw = mod.extract_changes_from_git_diff()
-        kept[arm] = (files, sorted(parsed),
-                     [(c["tenant"], c["metric"]) for c in
-                      mod.keep_flat_threshold_changes(raw, parsed)],
-                     sorted({c["tenant"] for c in raw}))
-    # ⚠️ `db-c.yml` is a CARRIER since #1603, so both arms report it too.
-    # Before that this asserted a single-item list, i.e. it pinned the
-    # spelling blindness as the expected answer.
-    assert kept["lower"][2] == [("db-a", "cpu_usage"), ("db-c", "cpu_usage")], (
-        f"the lower arm did not report exactly the two CARRIERS this fixture "
-        f"plants (`db-a.yaml` and `db-c.yml`).\n"
-        f"⚠️ If you ADDED a carrier to `_git_conf_d_repo`, the tool is fine "
-        f"and this expectation is what needs updating — every assertion in "
-        f"this test pins the exact set, deliberately, because 'at least "
-        f"these' cannot catch a reader that stops filtering. Do NOT remove "
-        f"your new neighbour to get green.\n"
-        f"got {kept['lower']}")
-    # ⛔ Assert the three sites SEPARATELY. Asserting only the final
-    # `kept` list left `changed_conf_files` uncovered: a removal is
-    # classified against HEAD~1, not against `parsed`, so reverting that
-    # site to a case-sensitive test made the file list empty and the end
-    # result was still right. Measured — it was a surviving mutant.
-    for arm, carrier, tid in (("lower", "db-a.yaml", "db-a"),
-                              ("UPPER", "DB-A.YAML", "DB-A")):
-        assert kept[arm][0] == [f"conf.d/{carrier}", "conf.d/db-c.yml"], (
+        changes = _git_diff_changes(mod)
+        got[arm] = (files, sorted(parsed),
+                    sorted((c["tenant"], c["metric"], c["old_value"], c["new_value"])
+                           for c in changes))
+    for arm, carrier, stem in (("lower", "db-a.yaml", "db-a"),
+                               ("UPPER", "DB-A.YAML", "DB-A")):
+        assert got[arm][0] == [f"conf.d/{carrier}", "conf.d/db-c.yml"], (
             f"[{arm}] `changed_conf_files` did not see the carriers git "
-            f"itself reported as changed; got {kept[arm][0]}")
-        assert kept[arm][1] == sorted([tid, "db-c"]), (
-            f"[{arm}] the changed files did not parse into their tenants; "
-            f"got {kept[arm][1]}")
-        # ⛔ The PARSER's own output, separately. Asserting only the final
-        # `kept` list left `changed_conf_files` uncovered (measured — it
-        # was a surviving mutant), so the axis is pinned where it is
-        # decided. ⚠️ Both spellings since #1603: this assertion used to
-        # read `== [tid]` with a message saying "this site accepts `.yaml`
-        # only", which was the defect stated as the contract.
-        assert kept[arm][3] == sorted([tid, "db-c"]), (
-            f"[{arm}] the git-diff parser attributed changes to "
-            f"{kept[arm][3]}; the `.yml` neighbour carries the same edit "
-            f"and this site takes both spellings (#1603)")
-    assert len(kept["UPPER"][2]) == len(kept["lower"][2]), (
-        f"the removal survived under `db-a.yaml` and was dropped under "
-        f"`DB-A.YAML`.\nlower: {kept['lower']}\nUPPER: {kept['UPPER']}")
-    assert sorted(kept["UPPER"][2]) == sorted(
-            [("DB-A", "cpu_usage"), ("db-c", "cpu_usage")]), (
-        f"tenant id must keep the carrier's case; got {kept['UPPER'][2]}")
+            f"itself reported as changed; got {got[arm][0]}")
+        assert got[arm][1] == sorted([stem, "db-c"]), (
+            f"[{arm}] the changed files did not parse; got {got[arm][1]}")
+        # ⛔ The exact set: the hidden and `.txt` neighbours carry the same
+        # edit and must not appear; `db-c.yml` is a carrier (#1603).
+        assert got[arm][2] == [("acme", "cpu_usage", "80", "90"),
+                               ("c", "cpu_usage", "80", "90")], (
+            f"[{arm}] the removal did not reach the comparison as exactly the "
+            f"two carriers' rows; got {got[arm][2]}")
 
 
 def test_config_dir_recipe_scan_sees_either_casing(
@@ -2184,72 +2154,36 @@ def test_backtest_names_an_unreadable_config_dir_once_per_run(
         f"the same run; the contract is once.\n{err.getvalue()!r}")
 
 
-def test_head1_carrier_lookup_accepts_both_spellings(
+def test_head1_tree_keeps_every_name_as_git_records_it(
         tmp_path: pathlib.Path, monkeypatch) -> None:
-    """The spelling axis (#1603) at the HEAD~1 carrier lookup, through REAL git.
+    """The spelling, case and hidden axes at HEAD~1, through REAL git (#3111).
 
-    ⛔ THIS TEST USED TO ASSERT THE OPPOSITE. It was named
-    `..._keeps_the_yaml_only_spelling` and required `_carrier_at_head1` to
-    answer `None` for a `.yml` carrier, on the reasoning that widening it
-    "would let a `.yml` carrier answer for a tenant this tool otherwise
-    cannot see". That premise stopped holding the moment the sites UPSTREAM
-    of it were widened: the tenant id reaching this function is now itself
-    parsed off a `.yml`, so a narrower set here resolves to None for a
-    tenant the very same run just reported a change for — the removal is
-    then dropped and the operator sees "No threshold changes found."
-
-    Kept in this file rather than folded into
-    `tests/ops/test_backtest_threshold.py` because the evidence type is
-    different: that suite fakes `subprocess.run`, this one drives a real
-    `git ls-tree` over a real repo.
+    `--git-diff` writes HEAD~1's conf.d/ out as git records it and leaves
+    every naming rule to the exporter that reads it, so no name is
+    re-spelled, case-folded or filtered here — the HEAD~1 lookup this
+    replaces resolved a tenant id back to a carrier, and each of those three
+    was a way for it to answer for the wrong file or for none.
     """
     mod = _import_tool("ops", "backtest_threshold")
-    repo = _git_conf_d_repo(tmp_path / "yml-only", "db-a.yml",
-                            _BEFORE, _AFTER_REMOVED)
+    import tempfile  # noqa: PLC0415
+    repo = _git_conf_d_repo(tmp_path / "names", "DB-A.YAML", _BEFORE, _AFTER_REMOVED)
     monkeypatch.chdir(repo)
-    assert mod._carrier_at_head1("db-a") == "./conf.d/db-a.yml", (
-        "a `.yml` carrier did not answer for its tenant; the exporter is "
-        "serving it and every upstream site in this tool now reads it "
-        "(#1603)")
-    # UPPER BOUND — widened to `CONFIG_SUFFIXES`, not to "any file".
-    assert mod._carrier_at_head1("neighbour") is None, (
-        "a non-config extension answered for a tenant")
-    # ...and the control: the same lookup DOES find the spelling it accepts,
-    # so the assertion above is not passing for want of any carrier at all.
-    repo2 = _git_conf_d_repo(tmp_path / "yaml", "DB-A.YAML",
-                             _BEFORE, _AFTER_REMOVED)
-    monkeypatch.chdir(repo2)
-    assert mod._carrier_at_head1("DB-A") == "./conf.d/DB-A.YAML", (
-        "fixture is vacuous — the accepted spelling was not found either")
-    # ⛔ And the comparison is EXACT, not case-folded. `config_stem` keeps
-    # the carrier's case on purpose, so a folded compare here would hand
-    # back a DIFFERENT tenant's file — the write-plane rename this whole
-    # line of work exists to prevent, arriving through the back door.
-    # Blind review measured the folded version passing the suite.
-    assert mod._carrier_at_head1("db-a") is None, (
-        "`db-a` resolved to a carrier whose stem is `DB-A`; the stem "
-        "comparison must be exact, not case-folded")
+    with tempfile.TemporaryDirectory() as tmp:
+        old = pathlib.Path(mod.materialize_head1_confd(tmp))
+        assert sorted(p.name for p in old.iterdir()) == sorted(
+            [".hidden.yaml", "DB-A.YAML", "_defaults.yaml", "db-c.yml", "neighbour.txt"])
+        assert (old / "DB-A.YAML").read_text(encoding="utf-8") == _BEFORE
 
 
 def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
+        tmp_path: pathlib.Path, monkeypatch, da_guard_env) -> None:
     """⛔ One process, one file, one answer.
 
-    This chain aligned `extract_changes_from_git_diff` on the hidden axis
-    and left the two listings beside it alone, so the tool contradicted
-    ITSELF inside a single run — `changed_conf_files` and
-    `load_conf_files` both reported `.hidden`, while the parser had
-    stopped producing changes for it. Measured against `05d3136`, which
-    was consistent the other way (it kept the carrier everywhere):
-
-        05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
-        the split KEPT = [('real','cpu_usage')]
-                  changed_conf_files = ['conf.d/.hidden.yaml',
-                                        'conf.d/real.yaml']
-
-    Producing that split inside the change whose whole subject is "one
-    tree, one answer" is the sharpest way to get this wrong, and blind
-    review had already caught the identical split one code path over.
+    A hidden carrier is one the exporter's scanner skips. The changes
+    (`--git-diff` reads the trees through the exporter since #3111) and the
+    two listings beside them (`changed_conf_files`, `load_conf_files`, which
+    feed the recipe notice) must all leave it out — an earlier round of
+    this chain had the tool contradict itself inside one run.
     """
     mod = _import_tool("ops", "backtest_threshold")
     repo = tmp_path / "hidden"
@@ -2259,6 +2193,8 @@ def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
     run("git", "init", "-q")
     run("git", "config", "user.email", "t@example.invalid")
     run("git", "config", "user.name", "t")
+    (repo / "conf.d" / "_defaults.yaml").write_text("defaults:\n  cpu_usage: 90\n",
+                                                    encoding="utf-8")
     for value in (80, 95):
         (repo / "conf.d" / ".hidden.yaml").write_text(
             f"tenants:\n  ghost:\n    cpu_usage: {value}\n", encoding="utf-8")
@@ -2270,21 +2206,17 @@ def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
 
     files = mod.changed_conf_files()
     parsed = mod.load_conf_files(files)
-    kept = mod.keep_flat_threshold_changes(
-        mod.extract_changes_from_git_diff(), parsed)
-    tenants = sorted({c["tenant"] for c in kept})
+    tenants = sorted({c["tenant"] for c in _git_diff_changes(mod)})
 
     assert tenants == ["real"], (
         f"fixture is vacuous or the visible tenant vanished; got {tenants}")
     assert files == ["conf.d/real.yaml"], (
-        f"the listing still names a hidden carrier the parser will not "
-        f"produce changes for: {files}")
+        f"the listing still names a hidden carrier the exporter skips: {files}")
     assert sorted(parsed) == ["real"], (
         f"the loader still keys a hidden carrier: {sorted(parsed)}")
-    # ⛔ And `load_conf_files` INDEPENDENTLY. Asserting it only through the
-    # list `changed_conf_files` hands it cannot see the loader's own rule:
-    # once the listing filters hidden carriers out, reverting the loader
-    # changes nothing and the mutant survives. Measured — it did.
+    # ⛔ And `load_conf_files` INDEPENDENTLY: once the listing filters hidden
+    # carriers out, reverting the loader changes nothing and the mutant
+    # survives. Measured — it did.
     direct = mod.load_conf_files([
         str(repo / "conf.d" / ".hidden.yaml"),
         str(repo / "conf.d" / "real.yaml"),

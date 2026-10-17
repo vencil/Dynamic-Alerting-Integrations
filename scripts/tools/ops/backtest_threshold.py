@@ -11,7 +11,8 @@ the alert compares it (`>` / `<`), as metric_observed_map.yaml records it
 backtested.
 
 Usage:
-  # From git diff (CI mode)
+  # HEAD~1's conf.d/ against the working tree's (CI mode; both trees are
+  # read by the exporter, `da-guard served-values`, as --config-dir reads them)
   python3 backtest_threshold.py --git-diff --prometheus http://localhost:9090
 
   # From config directory
@@ -33,6 +34,7 @@ Usage:
 需求:
   - Prometheus Query API reachable (or --skip-if-unavailable)
   - git available (for --git-diff mode)
+  - da-guard (DA_GUARD_BINARY, or on PATH) for --git-diff and --config-dir
 """
 import argparse
 import errno
@@ -42,6 +44,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -60,9 +63,6 @@ from _lib_python import YamlFileError  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
-# #2231: a conf.d file holding a key twice is one the exporter drops whole;
-# strict reads raise YamlFileError for it, the path bad syntax already takes.
-from _lib_io import strict_safe_load  # noqa: E402
 from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
@@ -70,7 +70,8 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import GO_SPACE, THRESHOLD_SEVERITIES, split_threshold_severity  # noqa: E402  (#3071)
-# #2119: `--config-dir` / `--baseline` are read by the exporter, not here.
+# #2119 / #3111: both trees (`--config-dir` / `--baseline`, and `--git-diff`'s
+# HEAD~1 and working-tree conf.d/) are read by the exporter, not here.
 from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
@@ -82,15 +83,13 @@ from _lib_tenant_values import (  # noqa: E402
     print_load_error,
 )
 # #3017 / #3002: what each alert compares (series + direction) is read from the
-# observed-map, never guessed; `--git-diff` / `--tenant` keys are as written, so
-# a retired spelling goes through the alias table first.
+# observed-map, never guessed; a `--tenant` key is as written, so a retired
+# spelling goes through the alias table first.
 import _observed_map_lib as observed_map_lib  # noqa: E402
 from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    config_stem,
     has_yaml_extension,
     is_hidden_name,
-    is_reserved_name,
     warn_nested,
 )
 
@@ -238,7 +237,7 @@ def _fsdecode(raw):
     return raw.decode(sys.getfilesystemencoding(), "surrogateescape")
 
 
-def _git_bytes(args, quotepath_off=False):
+def _git_bytes(args, quotepath_off=False, stdin=None, timeout=15):
     r"""Run git and return raw stdout BYTES, or None if the call failed.
 
     ⛔ #1634. Every path-carrying git call in this file used `text=True`, and
@@ -264,7 +263,8 @@ def _git_bytes(args, quotepath_off=False):
     if quotepath_off:
         cmd += ["-c", "core.quotepath=false"]
     try:
-        result = subprocess.run(cmd + list(args), capture_output=True, timeout=15)
+        result = subprocess.run(cmd + list(args), input=stdin, capture_output=True,
+                                timeout=timeout)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return None
     if result.returncode != 0:
@@ -309,32 +309,16 @@ def reset_dropped_carrier_warnings_for_test() -> None:
 def tenant_is_queryable(tenant):
     r"""Whether `tenant` survives the trip into a PromQL query string.
 
-    ⛔ #1634, and this one is load-bearing for the fix above rather than
-    optional. A conf.d carrier name is not required to be valid UTF-8, and
-    every path in this file now decodes with `surrogateescape` so the name
-    round-trips back into git -- which is exactly what makes such a carrier
-    REACHABLE for the first time. A PromQL label value cannot make the same
-    trip: it goes through `urllib.parse.urlencode`, which encodes strict
-    UTF-8 and raises `UnicodeEncodeError` on a lone surrogate.
-
-    Measured, one fixture, carrier `legacy-\xff.yaml`:
-
-      --git-diff    on 05be065b : silent "No threshold changes found."
-                    with only the sites above fixed : UnicodeEncodeError
-      --config-dir  on 05be065b : UnicodeEncodeError  (pre-existing, its
-                    tenant ids come straight from `os.listdir`)
-
-    ⚠️ The crash is raised AFTER the Prometheus reachability check, so
-    `--skip-if-unavailable` does not contain it, and rc=1 is indistinguishable
-    from `EXIT_VIOLATION`.
-
-    ⛔ Filtering at ONE point, for all three change sources, is deliberate.
-    Guarding only the `--git-diff` path would leave the two enumerators
-    answering differently about the same carrier -- which is the #1911 shape
-    this whole chain exists to remove, and which this chain has already
-    produced three times by fixing one path of a pair. The `--config-dir`
-    half therefore changes behaviour too: crash becomes a named skip. That is
-    a deliberate, named change, not a drive-by.
+    #1634: a PromQL label value goes through `urllib.parse.urlencode`, which
+    encodes strict UTF-8 and raises `UnicodeEncodeError` on a lone
+    surrogate — AFTER the Prometheus reachability check, so
+    `--skip-if-unavailable` would not contain it, and rc=1 would read as
+    `EXIT_VIOLATION`. The `--git-diff` diff parser took tenant ids from file
+    names decoded with `surrogateescape`, which is how one reached here.
+    Since #2119 / #3111 every tree is read by the exporter and a tenant id
+    is a `tenants:` key from its JSON, and `--tenant` is validated, so no
+    source produces one today; the check stays the one gate in front of
+    the query, for all three sources (`main`).
     """
     try:
         tenant.encode("utf-8")
@@ -343,131 +327,96 @@ def tenant_is_queryable(tenant):
     return True
 
 
-def extract_changes_from_git_diff():
-    """Parse git diff of conf.d/ to find threshold changes.
+def _tree_entries(raw):
+    """`[(mode, type, oid, path)]` from `git ls-tree -r -z` output (bytes)."""
+    out = []
+    for record in raw.split(b"\0"):
+        if not record:
+            continue
+        meta, _, path = record.partition(b"\t")
+        mode, kind, oid = meta.split(b" ")
+        out.append((mode, kind, oid.decode("ascii"), path))
+    return out
 
-    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...],
-    or ``None`` when git itself could not answer (not on PATH, not inside a
-    work tree, no ``HEAD~1``, timeout).
 
-    ⛔ #1556 item 4 (D-06): ``None`` from ``_git_bytes`` used to be folded into
-    ``[]`` here, so "git is unusable" and "the diff is empty" were the same
-    value and ``main()`` printed "No threshold changes found." + rc 0 for
-    both. The da-tools image installs no git and its WORKDIR is not a repo,
-    so `--git-diff` there ALWAYS looked like "your PR changed nothing".
-    ``b""`` (git ran, diff empty) still parses to ``[]``; only ``None`` is
-    passed through.
-    """
-    # ⚠️ `quotepath_off`, NOT `-z`: `-z` changes nothing in a unified diff's
-    # `+++` header. Parsing then stays on bytes all the way down -- see
-    # `_git_bytes` for why those two are inseparable.
-    raw = _git_bytes(["diff", "HEAD~1", "--unified=0", "--", "conf.d/"],
-                     quotepath_off=True)
+def _blobs(oids):
+    """`{oid: bytes}` for every blob in `oids` (one `git cat-file --batch`),
+    or None when git did not answer for all of them."""
+    if not oids:
+        return {}
+    raw = _git_bytes(["cat-file", "--batch"], stdin=b"".join(o.encode("ascii") + b"\n" for o in oids),
+                     timeout=120)
     if raw is None:
         return None
+    out, at = {}, 0
+    for oid in oids:
+        header_end = raw.find(b"\n", at)
+        if header_end < 0:
+            return None
+        header = raw[at:header_end].split(b" ")
+        if len(header) != 3 or header[1] != b"blob":
+            return None  # `<oid> missing`: an object this clone does not have
+        size = int(header[2])
+        out[oid] = raw[header_end + 1:header_end + 1 + size]
+        at = header_end + 1 + size + 1
+    return out
 
-    changes = []
-    current_file = None
 
-    for line in raw.splitlines():
-        # Track current file
-        if line.startswith(b'+++ "'):
-            # ⛔ #1634 decision A1: with quoting off, git still quotes a path
-            # holding a newline, a double quote or a backslash. Un-escaping
-            # those is a parser of its own, and for a NEWLINE it cannot work
-            # here at all -- the `+++` header is split across two lines, so a
-            # line-oriented scan has already lost it. Left unfixed ON PURPOSE
-            # and named in the ticket; what changes is that it is now audible.
-            _warn_dropped_carrier(_fsdecode(line[4:]),
-                                  "git quoted it: the name holds a newline, a "
-                                  "quote or a backslash")
-            current_file = None
+def materialize_head1_confd(dest):
+    """Write the `conf.d/` tree of HEAD~1 (the one beside the cwd, as
+    `git diff HEAD~1 -- conf.d/` would read it) under `dest`, as `git
+    checkout` would: every file with its content, a symlink as a symlink to
+    the target it records, a submodule not at all.
+
+    Returns the written directory; `""` when HEAD~1 has no `conf.d/` there
+    (the PR adds it); None when git cannot answer — not on PATH, not inside
+    a git work tree, no HEAD~1 (a shallow clone of depth 1 has none), an
+    object the clone does not have, a timeout.
+
+    #3111: `--git-diff` used to parse `git diff` text, which needed its own
+    rules for git's path quoting, a tab-padded header, the tenant taken from
+    the file name, and a Python copy of the exporter's value grammar. The
+    tree is now read by the exporter instead (`extract_changes_from_dirs`),
+    so a file's name is only a path: no name is dropped, and the tenant is
+    the `tenants:` key it always was for the exporter.
+    """
+    if _git_bytes(["rev-parse", "--verify", "--quiet", "HEAD~1^{commit}"]) is None:
+        return None
+    # `<rev>:./<path>` is cwd-relative (`<rev>:<path>` is repo-root-relative).
+    kind = _git_bytes(["cat-file", "-t", "HEAD~1:./conf.d"])
+    if kind is None or kind.strip() != b"tree":
+        return ""
+    # ⚠️ `--full-tree`: without it `ls-tree` lists only what lies under the
+    # cwd's own path INSIDE the given tree, i.e. nothing when run from a
+    # subdirectory of the repo (this repo's CI runs from one).
+    raw = _git_bytes(["ls-tree", "-r", "-z", "--full-tree", "HEAD~1:./conf.d"], timeout=120)
+    if raw is None:
+        return None
+    entries = [e for e in _tree_entries(raw) if e[1] == b"blob"]
+    blobs = _blobs(sorted({oid for _m, _k, oid, _p in entries}))
+    if blobs is None:
+        return None
+    root = os.path.join(os.fsencode(dest), b"conf.d")
+    os.makedirs(root)
+    # Regular files first, symlinks last: a link is never followed by a write.
+    for mode, _kind, oid, path in sorted(entries, key=lambda e: e[0] == b"120000"):
+        parts = path.split(b"/")
+        if any(part in (b"", b".", b"..") for part in parts):
+            continue  # git does not record such a path; never written outside `root`
+        target = os.path.join(root, *parts)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        if mode == b"120000":
+            try:
+                os.symlink(blobs[oid], target)
+            except OSError as exc:
+                print(f"WARNING: HEAD~1 conf.d/{safe_label(_fsdecode(path))}: symlink not "
+                      f"recreated ({exc.strerror or exc}); it is not in the HEAD~1 tree "
+                      "compared", file=sys.stderr)
             continue
-        if line.startswith(b"+++ b/"):
-            fname = _fsdecode(line[6:])
-            if fname.endswith("\t"):
-                # ⛔ Also #1634 and also NOT fixed: a diff header pads a path
-                # containing a space with a trailing TAB, which this slice
-                # takes to be part of the name. Stripping it would start
-                # admitting space-named carriers -- a behaviour change on a
-                # different axis, so it is named rather than smuggled in.
-                _warn_dropped_carrier(fname.rstrip("\t"),
-                                      "the diff header padded a space in the "
-                                      "name with a tab")
-                current_file = None
-                continue
-            # Extract tenant from filename (conf.d/db-a.yaml → db-a)
-            basename = Path(fname).name
-            # #1588 site 1 of 6 in this file (the first version counted 4 and the
-            # two it missed were `_flat_keys_at_head1` — which was still
-            # broken — and `load_conf_files`, which needed no change). The
-            # extension set is now the shared default (#1603): omitting the
-            # argument takes `CONFIG_SUFFIXES`, which is the exporter's own
-            # set, so a `conf.d/db-b.yml` the exporter is serving stops being
-            # invisible to this diff parser. Hand-slicing
-            # the stem is what `config_stem` exists to stop: `str.lower()`
-            # can shrink byte length, so an offset taken from the folded
-            # copy cuts the original in the wrong place.
-            # ⚠️ `config_stem` also declines `.`-prefixed names, so a diff
-            # touching `conf.d/.foo.yaml` no longer yields a tenant called
-            # `.foo`. The exporter's scanner skips hidden entries, so that
-            # agrees with the oracle — but it is a second-order change and
-            # is recorded here rather than left for someone to discover.
-            if has_yaml_extension(basename) \
-                    and not is_reserved_name(basename):
-                # `config_stem` answers "" for a hidden name and the
-                # `if not current_file` below already treats that as
-                # "no tenant", so an `or None` here would be a third
-                # spelling of the same decision. Mutation confirms the
-                # two forms are equivalent.
-                current_file = config_stem(basename)
-            else:
-                current_file = None
-            continue
-
-        if not current_file:
-            continue
-
-        # Parse YAML key: value changes
-        # Lines starting with - (removed) or + (added) in diff
-        # ⚠️ BYTES patterns, because the whole scan is on bytes now (#1634).
-        # `\w` in bytes mode matches ASCII only -- which is what a metric key
-        # already is, so the class does not narrow in practice (measured: the
-        # same three hunk lines match, key=b'cpu_usage' val=b'80').
-        old_match = re.match(rb"^-\s+(\w+):\s+(.+)$", line)
-        new_match = re.match(rb"^\+\s+(\w+):\s+(.+)$", line)
-
-        if old_match:
-            metric = _fsdecode(old_match.group(1))
-            old_val = _fsdecode(old_match.group(2)).strip().strip("'\"")
-            # Look for corresponding + line
-            changes.append({
-                "tenant": current_file,
-                "metric": metric,
-                "old_value": old_val,
-                "new_value": None,  # will be filled by + line
-            })
-        elif new_match:
-            metric = _fsdecode(new_match.group(1))
-            new_val = _fsdecode(new_match.group(2)).strip().strip("'\"")
-            # Try to match with previous - entry
-            matched = False
-            for c in reversed(changes):
-                if c["tenant"] == current_file and c["metric"] == metric and c["new_value"] is None:
-                    c["new_value"] = new_val
-                    matched = True
-                    break
-            if not matched:
-                changes.append({
-                    "tenant": current_file,
-                    "metric": metric,
-                    "old_value": None,
-                    "new_value": new_val,
-                })
-
-    # Filter out entries where nothing actually changed
-    return [c for c in changes if c["old_value"] != c["new_value"]
-            and not c["metric"].startswith("_")]
+        with open(target, "wb") as f:
+            f.write(blobs[oid])
+        os.chmod(target, 0o600)  # a private copy, read back by this user's da-guard only
+    return os.fsdecode(root)
 
 
 # Roots already named as unlistable, so the warning is said once per run.
@@ -563,44 +512,11 @@ def _minute(hhmm):
     return int(hours) * 60 + int(minutes)
 
 
-def _served_day(tenant_values, key, side):
-    """`[(start_minute, end_minute, (rendered value, severity), series)]` for
-    one key's whole UTC day as /metrics serves it (`schedules`; `series` the
-    segment's /metrics series, #2750); a key or tenant /metrics never serves
-    is one segment of None. The severity is part of what is compared
-    (#3060): it decides which alert, if any, compares the row. A segment in
-    which /metrics cannot be gathered at all is refused: a diff across it
-    would be a guess."""
-    if tenant_values is None or key not in (tenant_values.schedules or {}):
-        return [(0, _DAY_MINUTES, None, None)]
-    out = []
-    for seg in tenant_values.schedules[key].segments:
-        if seg.error is not None:
-            raise ServedValuesError(
-                f"da-guard served-values: {side} /metrics cannot be gathered "
-                f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
-        served = None if seg.value is None else (_render_served(seg.value), seg.severity)
-        out.append((_minute(seg.start), _minute(seg.end), served, seg.series))
-    return out
-
-
 def _value_in(day, minute):
-    for start, end, value, _series in day:
+    for start, end, value, _key in day:
         if start <= minute < end:
             return value
     return None
-
-
-def _series_in(days, spans):
-    """Every /metrics series (`Series`, #2750) the key is served as on
-    either side in any of `spans`, in day order, each once."""
-    out = []
-    for day in days:
-        for start, end in spans:
-            for s, e, _v, series in day:
-                if s < end and start < e:
-                    out.extend(x for x in series or () if x not in out)
-    return out
 
 
 def _hhmm(minute):
@@ -622,47 +538,86 @@ def _differing_runs(old_day, new_day):
     return [r for r in runs if r[2] != r[3]]
 
 
-def _change_pair(old, new):
-    """What groups the differing runs of one key into changes (#3060): the
-    served values and, per side, whether a threshold rule selects its
-    severity — so a severity boundary between two compared severities does
-    not split a value change in two. With equal values the severities
-    themselves are what changed, and they are part of the pair."""
-    (old_v, old_s), (new_v, new_s) = (side or (None, None) for side in (old, new))
-    pair = (old_v, new_v, old_s in _COMPARED_SEVERITIES, new_s in _COMPARED_SEVERITIES)
-    return pair + ((old_s, new_s) if old_v == new_v else ())
+def _series_identity(series):
+    """What makes two /metrics rows the same row: the family name and the
+    full label set (#3111). The threshold key that serves it is not part of
+    it — `90:critical` on a base key and `90` on its `_critical` key are one
+    row, and an alert cannot tell them apart."""
+    return series.name, tuple(sorted(series.labels.items()))
 
 
-def _joined(spans):
-    """`spans` (day order) with the ones that touch joined: a severity
-    boundary inside one change's part of the day is not a new part of it.
-    Not joined across midnight, as `_differing_runs`."""
-    out = []
-    for start, end in spans:
-        if out and out[-1][1] == start:
-            out[-1] = (out[-1][0], end)
-        else:
-            out.append((start, end))
+def _served_rows(tenant_values, side):
+    """`{identity: (series, [(start_minute, end_minute, value, key)])}`: every
+    /metrics row (`Series`, #2750) one tree serves for a tenant over the UTC
+    day (`schedules`), with the rendered value and the threshold key serving
+    it in each part of the day. A legacy twin (the same row again under a
+    retired identity) is not a row of its own. A part of the day in which
+    /metrics cannot be gathered at all is refused: a diff across it would be
+    a guess."""
+    out = {}
+    if tenant_values is None:
+        return out
+    for key, schedule in sorted((tenant_values.schedules or {}).items()):
+        for seg in schedule.segments:
+            if seg.error is not None:
+                raise ServedValuesError(
+                    f"da-guard served-values: {side} /metrics cannot be gathered "
+                    f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
+            if seg.value is None:
+                continue
+            for series in seg.series:
+                if series.legacy_twin:
+                    continue
+                out.setdefault(_series_identity(series), (series, []))[1].append(
+                    (_minute(seg.start), _minute(seg.end), _render_served(seg.value), key))
     return out
 
 
-def _severity_list(severities):
-    """One side's severities as `old_severity` / `new_severity` carry them:
-    the one, or several "/"-joined with an empty one spelled `""`."""
-    if len(severities) == 1:
-        return severities[0]
-    return "/".join(s or '""' for s in severities)
+def _row_day(parts):
+    """One row's whole UTC day from its served parts: `[(start, end, value,
+    key)]` in day order, a part it is not served in as `(…, None, None)`."""
+    day, at = [], 0
+    for start, end, value, key in sorted(parts):
+        if start > at:
+            day.append((at, start, None, None))
+        day.append((start, end, value, key))
+        at = end
+    if at < _DAY_MINUTES:
+        day.append((at, _DAY_MINUTES, None, None))
+    return day
 
 
-def _severities_in(day, spans):
-    """The severities a side is served with in `spans`, in day order, each
-    once ("" included; a part of the day with no row adds none)."""
-    out = []
-    for start, end in spans:
-        for s, e, served, _series in day:
-            if served is not None and s < end and start < e and served[1] not in out:
-                out.append(served[1])
-    return out
+def _keys_in(days, spans):
+    """The threshold keys serving a row on either side in any of `spans`, sorted."""
+    return sorted({key for day in days for start, end in spans
+                   for s, e, _v, key in day if key is not None and s < end and start < e})
+
+
+def _alert_key(series):
+    """The threshold key whose alert compares a row (#3017): a critical row
+    is compared by the `<metric_key>_critical` alert, any other by
+    `metric_key`'s (whether one exists is `alert_comparison`'s question)."""
+    if series.labels.get("severity") == "critical":
+        return series.metric_key + "_critical"
+    return series.metric_key
+
+
+def _confd_tree(path):
+    """`path` when it is a conf.d/ tree that holds a config file
+    (`has_yaml_extension`, the exporter's suffixes) anywhere under it, else
+    None: a tree that serves nothing, which `--git-diff` compares as having
+    no tenants (no conf.d/ at HEAD~1 because the PR adds it, none left in
+    the working tree, or one holding only a README). da-guard refuses such
+    a tree outright ("no .yaml files found"), so it is not handed one. A
+    tree that cannot be walked is handed over all the same: da-guard names
+    why it cannot be read."""
+    if not path or not os.path.isdir(path):
+        return None
+    unwalkable = []
+    for _dir, _subdirs, files in os.walk(path, onerror=unwalkable.append):
+        if any(has_yaml_extension(name) for name in files):
+            return path
+    return path if unwalkable else None
 
 
 def _print_tree_warnings(trees):
@@ -691,63 +646,62 @@ def _row_identity(series):
     return series.metric_key, series.labels.get("severity")
 
 
-def _dimensioned_rows(days):
-    """`{(metric_key, severity): {key, ...}}`: the dimensioned keys a tenant
-    serves on either side at any time of the day (legacy twins aside)."""
+def _dimensioned_rows(sides):
+    """`{(metric_key, severity): {key, ...}}`: the keys serving a dimensioned
+    row of the tenant, on either side at any time of the day."""
     out = {}
-    for key, pair in days.items():
-        for day in pair:
-            for _s, _e, _v, series in day:
-                for s in series or ():
-                    if (s.dimensions or s.dimensions_regex) and not s.legacy_twin:
-                        out.setdefault(_row_identity(s), set()).add(key)
+    for rows in sides:
+        for series, parts in rows.values():
+            if series.dimensions or series.dimensions_regex:
+                out.setdefault(_row_identity(series), set()).update(k for *_x, k in parts)
     return out
 
 
-def extract_changes_from_dirs(config_dir, baseline_dir):
+def _load_side(conf_d, flag, at):
+    """`(flag, ServedTree)`, or `(flag, None)` for a side with no tree at all
+    (`--git-diff`: no `conf.d/` at HEAD~1, or none left in the work tree)."""
+    return flag, (None if conf_d is None else load_served_tree(conf_d, at=at, schedules=True))
+
+
+def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--config-dir")):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
-    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...],
-    plus `window` (a list of `"HH:MM-HH:MM"`, UTC) on a change that holds
-    in part of the day only.
+    Returns list of dicts: [{tenant, metric, old_value, new_value, keys,
+    series}, ...], plus `window` (a list of `"HH:MM-HH:MM"`, UTC) on a
+    change that holds in part of the day only. A tree given as None is one
+    that serves nothing (`--git-diff` with no `conf.d/` on one side); `flags`
+    names the two trees in warnings, baseline first.
 
     #2119: both trees are read by the exporter (`da-guard served-values`),
     never by re-reading YAML here, so a change written in `_platform.yaml`,
     a `_defaults.yaml`, a profile or a sub-directory is a change, and a
-    `tenants:` wrapper is a tenant, not a metric called `tenants`. Rows are
-    per tenant and threshold key (the exporter's canonical spelling) whose
-    served value or severity differs.
+    `tenants:` wrapper is a tenant, not a metric called `tenants`.
 
-    * #3060: the severity decides which alert compares a row — a
-      `severity="warning"` row the `metric_key` alert, a critical one the
-      `<metric_key>_critical` alert, any other none — and the value alone
-      decides when it fires. A side whose severity no rule selects is
-      `old_compared` / `new_compared` False: `backtest_change` reads it as
-      no threshold. Since #3071 the exporter serves no such row (`70:high`
-      is an unreadable value, served as the platform default); only an
-      older da-guard named by `DA_GUARD_BINARY` serves one. When
-      the severities differ, `old_severity` / `new_severity` name them
-      ("/"-joined when a side has several in the change's parts of the day);
-      the same value under another compared severity (`70` -> `70:critical`)
-      is a change of its own, which fires on the same points.
+    #3111: rows are per tenant and /metrics row (its family name and full
+    label set, `_series_identity`) — what the alerts see — not per threshold
+    key. The same row written under another key (`90:critical` on the base
+    key, or `disable` plus `90` on its `_critical` key) is no change; moving
+    a value to another severity (`70` -> `70:critical`) is two rows, one that
+    stops being served and one that starts, because each is compared by
+    another alert (#3060). A legacy twin is not a row of its own.
 
-    * `series`: every /metrics series (`Series`, #2750) the key is served
-      as on either side in any part of the day the pair holds in, as
-      served-values reports it — never empty, since at least one side
-      serves a value there and a served segment always carries its series.
-      `alert_comparison` reads, from each one that is not a legacy twin,
-      which alert compares it (`<metric_key>_critical` for a critical row,
-      else `metric_key`; #3017).
-    * `dimensioned_siblings` (only when non-empty): the dimensioned keys
-      the tenant serves, on either side at any time of the day, as rows of
-      the same metric key and severity as one of this change's rows. The
-      alert's threshold is `max by(tenant)` over all of those rows, so the
-      changed value alone is not what the alert compares (#3017).
-    * A key /metrics serves on one side only (switched off, dropped, or the
-      tenant added / removed) has None on the other side — the shape
-      `backtest_change` already reads as "enabled" / "disabled".
+    * `metric`: the threshold key whose alert compares the row (`_alert_key`:
+      `<metric_key>_critical` for a critical row, else `metric_key`); for a
+      dimensioned row the key that serves it (the first, when several do).
+      `keys`: every threshold key serving the row on either side in the
+      parts of the day the change holds in, in canonical spelling.
+    * `series`: `[the row's Series]` (#2750); `alert_comparison` reads which
+      alert compares it from that.
+    * `dimensioned_siblings` (only when non-empty): the keys serving a
+      dimensioned row of the tenant, on either side at any time of the day,
+      of the same metric key and severity as this row. The alert's
+      threshold is `max by(tenant)` over all of those rows, so the changed
+      value alone is not what the alert compares (#3017).
+    * A row served on one side only (switched off, dropped, moved to another
+      severity, or the tenant added / removed) has None on the other side —
+      the shape `backtest_change` reads as "enabled" / "disabled".
     * Values are compared over the whole UTC day (`schedules`, both trees
-      read at the same instant). One row per (old, new) pair a key takes:
+      read at the same instant). One change per (old, new) pair a row takes:
       `window` lists every part of the day the pair holds in, and is absent
       when it holds all day. A pair is backtested once, over the whole
       lookback (the Prometheus query is not restricted to its windows), so
@@ -759,46 +713,39 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     caller exits 2 rather than reporting a partial diff.
     """
     at = now_at()
-    trees = []
-    for flag, conf_d in (("--baseline", baseline_dir), ("--config-dir", config_dir)):
-        trees.append((flag, load_served_tree(conf_d, at=at, schedules=True)))
-    _print_tree_warnings(trees)
-    old_tree, new_tree = trees[0][1].tenants, trees[1][1].tenants
+    trees = [_load_side(conf_d, flag, at)
+             for conf_d, flag in ((baseline_dir, flags[0]), (config_dir, flags[1]))]
+    _print_tree_warnings([(flag, tree) for flag, tree in trees if tree is not None])
+    old_tree, new_tree = ({} if tree is None else tree.tenants for _flag, tree in trees)
 
     changes = []
     for tenant in sorted(set(old_tree) | set(new_tree)):
-        old_tv, new_tv = old_tree.get(tenant), new_tree.get(tenant)
-        keys = set()
-        for tv_ in (old_tv, new_tv):
-            if tv_ is not None:
-                keys |= set(tv_.schedules or {})
-        days = {key: (_served_day(old_tv, key, "baseline"), _served_day(new_tv, key, "current"))
-                for key in sorted(keys)}
-        dimensioned = _dimensioned_rows(days)
-        for key, (old_day, new_day) in days.items():
+        sides = (_served_rows(old_tree.get(tenant), "baseline"),
+                 _served_rows(new_tree.get(tenant), "current"))
+        dimensioned = _dimensioned_rows(sides)
+        tenant_changes = []
+        for identity in set(sides[0]) | set(sides[1]):
+            series = (sides[1].get(identity) or sides[0][identity])[0]
+            days = tuple(_row_day(side[identity][1] if identity in side else [])
+                         for side in sides)
             pairs = {}
-            for start, end, old, new in _differing_runs(old_day, new_day):
-                pairs.setdefault(_change_pair(old, new), []).append((start, end))
-            for (old_v, new_v, old_c, new_c, *_), spans in pairs.items():
-                spans = _joined(spans)
-                change = {"tenant": tenant, "metric": key,
-                          "old_value": old_v, "new_value": new_v}
-                for side, compared in (("old", old_c), ("new", new_c)):
-                    if not compared and change[f"{side}_value"] is not None:
-                        change[f"{side}_compared"] = False
-                old_s, new_s = (_severities_in(day, spans) for day in (old_day, new_day))
-                if old_s and new_s and old_s != new_s:
-                    change["old_severity"], change["new_severity"] = (
-                        _severity_list(old_s), _severity_list(new_s))
+            for start, end, old, new in _differing_runs(*days):
+                pairs.setdefault((old, new), []).append((start, end))
+            dimensioned_row = bool(series.dimensions or series.dimensions_regex)
+            for (old_v, new_v), spans in pairs.items():
+                keys = _keys_in(days, spans)
+                change = {"tenant": tenant,
+                          "metric": keys[0] if dimensioned_row else _alert_key(series),
+                          "old_value": old_v, "new_value": new_v, "keys": keys}
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
-                change["series"] = _series_in((old_day, new_day), spans)
-                siblings = sorted({k for s in change["series"]
-                                   if not (s.legacy_twin or s.dimensions or s.dimensions_regex)
-                                   for k in dimensioned.get(_row_identity(s), ())})
-                if siblings:
-                    change["dimensioned_siblings"] = siblings
-                changes.append(change)
+                change["series"] = [series]
+                if not dimensioned_row:
+                    siblings = sorted(dimensioned.get(_row_identity(series), ()))
+                    if siblings:
+                        change["dimensioned_siblings"] = siblings
+                tenant_changes.append(((change["metric"], identity), change))
+        changes.extend(c for _order, c in sorted(tenant_changes, key=lambda oc: oc[0]))
 
     return changes
 
@@ -826,67 +773,19 @@ def changed_conf_files():
     conf.d sits at the repo root (customer convention) or under a subtree
     (this repo). (#657)
     """
-    # ⚠️ `-z` here rather than `quotepath_off` (#1634): for `--name-only` the
-    # NUL-delimited form is git's own contract for "never quote anything", and
-    # unlike the unified-diff header it also carries a name holding a NEWLINE
-    # intact. `-z` is not a substitute for `quotepath_off` in the other
-    # direction -- see `extract_changes_from_git_diff`, where it does nothing.
+    # ⚠️ `-z` (#1634): for `--name-only` the NUL-delimited form is git's own
+    # contract for "never quote anything", and it carries a name holding a
+    # NEWLINE intact.
     raw = _git_bytes(["diff", "-z", "--name-only", "HEAD~1", "--", "conf.d/"])
     if raw is None:
         return []
-    # #1588 site 3 of 6. Same rule, third hand-written copy in one file.
-    #
-    # ⛔ `is_hidden_name` as well, and this is a fix for a split THIS CHAIN
-    # INTRODUCED. Aligning `extract_changes_from_git_diff` on the
-    # hidden axis (its `config_stem(basename) or None`) without aligning
-    # this listing left the tool contradicting itself inside one run:
-    # measured on a tree holding `.hidden.yaml` and `real.yaml`, both
-    # changed —
-    #
-    #   05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
-    #   the split KEPT = [('real','cpu_usage')]
-    #             while this function still answered
-    #             ['conf.d/.hidden.yaml', 'conf.d/real.yaml']
-    #
-    # — i.e. "that carrier exists" and "its change does not", from the same
-    # process, about the same file. That is the #1911 shape produced inside
-    # the change that exists to remove it, and blind review had already
-    # caught the identical split one code path over (`--config-dir`); this
-    # is the sibling path that fix did not reach.
-    #
-    # ⚠️ `is_hidden_name`, NOT `config_stem`: the latter also declines
-    # reserved names, and swapping to it silently dropped `_defaults.yaml`
-    # from this list — a SECOND axis moving inside a hidden-axis fix.
-    # `test_changed_conf_files_reduces_repo_root_to_cwd_relative` caught it.
-    # ⚠️ No `.strip()` any more: with `-z` the delimiter is exact, and a name
-    # is allowed to begin or end with a space. Stripping was load-bearing only
-    # while the records were newline-delimited.
-    #
-    # ⛔ A KNOWN, NAMED DISAGREEMENT WITH `extract_changes_from_git_diff`.
-    # This listing sees carriers that the diff parser above drops (it drops a
-    # quoted or tab-padded header and says so). So the tool can answer "that
-    # carrier changed" here while answering "it has no threshold change"
-    # there — the #1911 shape, in one process, about one file.
-    #
-    # Measured on both trees, one carrier per arm:
-    #
-    #   has space.yaml   base ['conf.d/has space.yaml'] / diff [] )  identical
-    #                    here ['conf.d/has space.yaml'] / diff [] )  to base
-    #   has"quote.yaml   base []                        / diff []
-    #                    here ['conf.d/has"quote.yaml'] / diff []  <- widened
-    #
-    # So the disagreement is PRE-EXISTING (the space row shows it byte for
-    # byte on base) and `-z` widens it by one row. Closing it would mean
-    # hand-writing git's quoting rules a second time, here in the listing, to
-    # predict what the diff parser will refuse — a second copy of a rule,
-    # which is the family's own charge. Deliberately left open and named.
-    #
-    # ⛔ And deliberately NOT pinned by a test: any assertion of the current
-    # split would go red the day someone legitimately closes it, i.e. a guard
-    # that says the opposite of what it means (#1448). The consequence is
-    # bounded — the extra carriers only widen `find_custom_alert_tenants`
-    # coverage; they cannot become a change, because the parser that builds
-    # changes is the half that drops them.
+    # #1588 site 3 of 6. `is_hidden_name`, NOT `config_stem`: the latter also
+    # declines reserved names, and swapping to it silently dropped
+    # `_defaults.yaml` from this list — `test_changed_conf_files_reduces_repo_
+    # root_to_cwd_relative` caught it. No `.strip()`: with `-z` the delimiter
+    # is exact, and a name is allowed to begin or end with a space.
+    # ⚠️ This listing only feeds the recipe notice (#657); the threshold
+    # changes come from the two trees (#3111), which see every name.
     names = [_fsdecode(b) for b in raw.split(b"\0") if b]
     return [f"conf.d/{Path(n).name}" for n in names
             if has_yaml_extension(n)
@@ -946,169 +845,6 @@ def find_custom_alert_tenants(parsed):
             if isinstance(tconf, dict) and tconf.get("_custom_alerts"):
                 found.append(tid)
     return sorted(set(found))
-
-
-def _carrier_at_head1(tenant):
-    """The HEAD~1 `conf.d/` path whose stem IS `tenant`, or None.
-
-    ⚠️ Both spellings, matching every other site in this file (#1603): the
-    tenant id reaching this function was itself parsed off a carrier this
-    tool accepted, so a narrower set here would resolve to None for a
-    tenant the very same run had just reported a change for.
-
-    The comparison is `config_stem(name) == tenant` — the SAME predicate
-    that produced the tenant id in the first place, so the two cannot
-    disagree the way a re-spelled filename did.
-    """
-    # ⚠️ `-r` (#1634): without it `ls-tree` lists only the TOP level, so a
-    # nested carrier shows up as a bare tree name with no extension and is
-    # dropped by the extension test -- while `git diff -- conf.d/` upstream IS
-    # recursive. That asymmetry meant a tenant parsed from a nested carrier
-    # could never be resolved here, and the ADD direction accepted it anyway
-    # (`parsed.get(tenant) is None` keeps it): one carrier, two answers.
-    # `-z` for the same reason as in `changed_conf_files`.
-    raw = _git_bytes(["ls-tree", "-r", "-z", "--name-only", "HEAD~1", "./conf.d/"])
-    if raw is None:
-        return None
-    for entry in (_fsdecode(b) for b in raw.split(b"\0") if b):
-        name = Path(entry).name
-        if has_yaml_extension(name) and config_stem(name) == tenant:
-            # ⚠️ The FULL relative path, not `./conf.d/` + basename: with `-r`
-            # the entry can be nested, and rebuilding from the basename hands
-            # `git show` a path that is not in the tree. The `./` prefix is
-            # required, not decoration -- measured: `git show HEAD~1:./conf.d/x`
-            # rc=0 while `HEAD~1:conf.d/x` rc=128, because `ls-tree` answers
-            # CWD-relative while `git diff --name-only` answers
-            # repo-root-relative. The two are not interchangeable.
-            return f"./{entry}"
-    return None
-
-
-def _flat_keys_at_head1(tenant):
-    """Top-level scalar threshold keys for `tenant` as of HEAD~1.
-
-    Used to classify a REMOVED key, which is gone from the working tree so the
-    current-file scan can't see it. `git show HEAD~1:./conf.d/<tenant>.yaml` —
-    the leading `./` forces a cwd-relative path (git's `<rev>:<path>` is
-    repo-root by default). Returns an empty set if the old file is unavailable
-    (then the removal is conservatively dropped, the prior behaviour). (#657)
-    """
-    try:
-        # ⛔ #1634 decision B2 -- bytes, and the `try` shape is kept ON PURPOSE
-        # rather than moved onto `_git_bytes`: this call's stdout is file
-        # CONTENT, not a path, so folding "rc != 0" and "git missing" into one
-        # None would send the latter through the resolver for no reason.
-        # What forces bytes here is the fix ABOVE, not this line: until now a
-        # carrier whose NAME held invalid UTF-8 was dropped upstream and never
-        # reached this call; with the sites above fixed it arrives for the
-        # first time, and `text=True` raises `UnicodeDecodeError` on a body
-        # holding one bad byte (measured -- and that exception is not in the
-        # `except` below). Shipping the upstream fix without this one would
-        # mean shipping a crash that only my own fix made reachable.
-        # ⚠️ `yaml.safe_load` on bytes rejects an invalid-UTF-8 body with
-        # `ReaderError`, a `YAMLError` subclass, so it lands in the existing
-        # handler and the key set comes back empty -- same as for a body that
-        # will not parse. Crash becomes the pre-existing silent skip; making
-        # THAT audible is a different axis and is not smuggled in here.
-        result = subprocess.run(
-            ["git", "show", f"HEAD~1:./conf.d/{tenant}.yaml"],
-            capture_output=True, timeout=15,
-        )
-        if result.returncode != 0:
-            # ⛔ #1588 site 5 of 6, and the one the first version MISSED —
-            # it counted "of 4" and this was not among them. Re-spelling
-            # the carrier from the tenant id is the family's own defect in
-            # miniature: `config_stem` preserves the carrier's case (it
-            # must — folding it renames the tenant on the write plane), so
-            # a `DB-A.YAML` carrier gives tenant `DB-A`, and this line then
-            # asked git for `conf.d/DB-A.yaml`, which does not exist.
-            # Measured end to end on two git repos with byte-identical
-            # bodies, HEAD~1 holding a threshold that HEAD removes:
-            #
-            #   lower              raw=1 change   KEPT=1  (reported)
-            #   UPPER, this file    raw=1 change   KEPT=0  (dropped here)
-            #   UPPER, on 05d3136   raw=0 change   KEPT=0  (dropped earlier,
-            #                                              by sites 1 and 3)
-            #
-            # ⚠️ Those three rows are the CORRECTED table. The first version
-            # of this comment printed `05d3136` as `raw=1 KEPT=0`, which is
-            # this file's own intermediate state, not the base — blind review
-            # re-ran it and got `raw=0`. The operator-visible symptom really
-            # is identical on both ("No threshold changes found." for a
-            # removal that happened), which is what matters, but a number
-            # labelled "measured" has to be the number that was measured.
-            #
-            # The name is resolved by ASKING GIT WHAT IS THERE rather than
-            # by spelling it again. Kept as a fallback so the guessed path
-            # stays the fast path and nothing changes when it is right.
-            resolved = _carrier_at_head1(tenant)
-            if resolved is None:
-                return set()
-            # `resolved` now carries the FULL cwd-relative path with its `./`
-            # prefix (see `_carrier_at_head1`), so this spec stays correct for
-            # a nested carrier as well. Bytes for the same reason as above.
-            result = subprocess.run(
-                ["git", "show", f"HEAD~1:{resolved}"],
-                capture_output=True, timeout=15,
-            )
-            if result.returncode != 0:
-                return set()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return set()
-    import yaml
-    try:
-        # Strict (#2231): a HEAD~1 file holding a key twice was one the
-        # exporter dropped whole — treated like bad syntax (no removal kept).
-        data = strict_safe_load(result.stdout) or {}
-    except yaml.YAMLError:
-        return set()
-    tenants = data.get("tenants") if isinstance(data, dict) else None
-    keys = set()
-    for tconf in (tenants.values() if isinstance(tenants, dict) else []):
-        if isinstance(tconf, dict):
-            keys |= {k for k, v in tconf.items()
-                     if not str(k).startswith("_") and not isinstance(v, (dict, list))}
-    return keys
-
-
-def keep_flat_threshold_changes(changes, parsed):
-    """Drop changes whose key isn't a real flat threshold.
-
-    The line-based git-diff parser captures any `key: value` line regardless
-    of nesting, so it mis-captures `_custom_alerts` recipe inner fields
-    (recipe / name / op / window / threshold / metric / mode) as flat changes.
-    A real flat threshold is a SCALAR directly under `tenants.<id>`.
-
-    Adds / modifies are classified against the CURRENT file. A REMOVAL (the key
-    is gone from the working tree, so the current-file scan would always say
-    "not flat") is classified against HEAD~1 instead — so a real flat-threshold
-    removal (a disable transition the backtest reports) is kept, while a removed
-    recipe inner-field is dropped. (#657)
-    """
-    kept = []
-    head1 = {}
-    for c in changes:
-        if c["new_value"] is None:  # removal — the key is gone from the tree
-            if c["tenant"] not in head1:
-                head1[c["tenant"]] = _flat_keys_at_head1(c["tenant"])
-            if c["metric"] in head1[c["tenant"]]:
-                kept.append(c)
-            continue
-        file_data = parsed.get(c["tenant"])
-        if file_data is None:
-            kept.append(c)
-            continue
-        tenants = file_data.get("tenants")
-        tconfs = list(tenants.values()) if isinstance(tenants, dict) else []
-        is_flat = any(
-            isinstance(tc, dict)
-            and c["metric"] in tc
-            and not isinstance(tc[c["metric"]], (dict, list))
-            for tc in tconfs
-        )
-        if is_flat:
-            kept.append(c)
-    return kept
 
 
 def custom_alert_notice(tenants):
@@ -1203,11 +939,30 @@ def parse_threshold_value(key, raw):
     return value, severity
 
 
+def _no_alert(key):
+    """Whether no shipped alert compares threshold key `key` (#3111 (e)): the
+    observed-map has no entry for it and it is not KNOWN_DEFERRED."""
+    return observed_map_lib.lookup(_observed_map(), key)[0] is observed_map_lib.LookupKind.NO_ALERT
+
+
+def _written_key(change):
+    """A change's key as `--tenant` gives it, in canonical spelling, without
+    a dimension part."""
+    return canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
+
+
+def _written_alert(key, parsed):
+    """The threshold key whose alert compares one side of a change written as
+    `--tenant` gives it, read as `parsed` (`parse_threshold_value`): `N:critical`
+    on a base key is a critical row, compared by the `<key>_critical` alert."""
+    return key + "_critical" if parsed[1] == "critical" and not key.endswith("_critical") else key
+
+
 def _written_severities(change):
-    """`[old severity, new severity]` of a change written as `--git-diff` /
-    `--tenant` give it, as the exporter reads the values (None for a side
-    without one, or one this backtest cannot read)."""
-    key = canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
+    """`[old severity, new severity]` of a change written as `--tenant` gives
+    it, as the exporter reads the values (None for a side without one, or
+    one this backtest cannot read)."""
+    key = _written_key(change)
     out = []
     for raw in (change["old_value"], change["new_value"]):
         try:
@@ -1220,7 +975,7 @@ def _written_severities(change):
 
 def _written_alert_keys(change):
     """`(keys, None)`: the threshold keys whose alerts compare a change
-    written as `--git-diff` / `--tenant` give it — or `(None, reason)`.
+    written as `--tenant` gives it — or `(None, reason)`.
 
     The key as written: a retired spelling goes through the alias table
     (the exporter's own), and `N:critical` on a base key is a critical row,
@@ -1229,9 +984,14 @@ def _written_alert_keys(change):
     both. A value that is not read as written is a reason — since #3071 that
     includes a severity no threshold rule selects (`70:high`, `70:`), which
     makes the exporter's whole value unreadable (`parse_threshold_value`
-    raises), so the `uncompared` branch below is never taken for it."""
-    key = canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
-    keys, uncompared = [], []
+    raises).
+
+    #3111 (e): a side whose alert key no shipped alert compares (`_no_alert`:
+    mongodb's `70:critical`, its pack has no `_critical` alert) is no
+    threshold, as a switched-off side is, and `backtest_change` reads it so;
+    with no side compared by any alert the change is not backtested."""
+    key = _written_key(change)
+    keys, no_alert = [], []
     for raw in (change["old_value"], change["new_value"]):
         try:
             parsed = parse_threshold_value(key, raw)
@@ -1239,14 +999,16 @@ def _written_alert_keys(change):
             return None, f"value {str(raw)!r}: this backtest cannot read it the way the exporter does"
         if parsed is None:
             continue
-        if parsed[1] not in _COMPARED_SEVERITIES:
-            uncompared.append(parsed[1])
-            continue
-        alert = key + "_critical" if parsed[1] == "critical" and not key.endswith("_critical") else key
-        if alert not in keys:
+        alert = _written_alert(key, parsed)
+        if _no_alert(alert):
+            no_alert.append(alert)
+        elif alert not in keys:
             keys.append(alert)
     if not keys:
-        return None, f"severity {(uncompared or ['warning'])[0]!r} is selected by no threshold rule"
+        if not no_alert:
+            return None, "no threshold on either side"
+        reason = observed_map_lib.lookup_reason(observed_map_lib.LookupKind.NO_ALERT, no_alert[0])
+        return None, reason if no_alert[0] == key else f"{no_alert[0]}: {reason}"
     return keys, None
 
 
@@ -1254,21 +1016,20 @@ def _alert_keys(change):
     """`(keys, None)`: the threshold keys whose alerts compare this change,
     in canonical spelling, each once — or `(None, reason)`.
 
-    A change read from two trees names them by its /metrics series (#2750):
+    A change read from two trees names its /metrics row (#2750, #3111):
     a critical row is compared by the `<metric_key>_critical` alert (a window
-    overridden to `N:critical` too), a warning row by `metric_key`'s; a row
-    of any other severity (the rules select `severity="warning"` /
-    `"critical"` only) by none: #3060, such a row is skipped
-    (`backtest_change` reads its side as no threshold), and with no row any
-    rule selects the change is not backtested. Since #3071 the exporter
-    serves no such row; one comes only from an older da-guard named by
-    `DA_GUARD_BINARY`, which served `60:high` as written. A legacy twin is
-    the same row under a retired name and is never read.
+    overridden to `N:critical` too), a warning row by `metric_key`'s
+    (`_alert_key`); a row of any other severity (the rules select
+    `severity="warning"` / `"critical"` only) by none, and is not
+    backtested. Since #3071 the exporter serves no such row; one comes only
+    from an older da-guard named by `DA_GUARD_BINARY`, which served `60:high`
+    as written. A legacy twin is the same row under a retired name and is
+    never read.
     ⛔ A non-critical row whose `metric_key` itself ends in `_critical` is a
     `<base>_critical` key served on its own (its base is not declared in the
     root `defaults:`): its metric label is `<x>_critical`, which no threshold
-    rule selects, so no alert compares it. A change from `--git-diff` /
-    `--tenant` is `_written_alert_keys`."""
+    rule selects, so no alert compares it. A change from `--tenant` is
+    `_written_alert_keys`."""
     if "series" not in change:
         return _written_alert_keys(change)
     out, uncompared = [], []
@@ -1279,11 +1040,10 @@ def _alert_keys(change):
         if severity not in _COMPARED_SEVERITIES:
             uncompared.append(severity)
             continue
-        critical = severity == "critical"
-        if not critical and s.metric_key.endswith("_critical"):
+        if severity != "critical" and s.metric_key.endswith("_critical"):
             return None, (f"served as a non-critical row of {s.metric_key} (its base is not "
                           "declared in the root defaults:), which no alert compares")
-        key = s.metric_key + "_critical" if critical else s.metric_key
+        key = _alert_key(s)
         if key not in out:
             out.append(key)
     if not out and uncompared:
@@ -1297,20 +1057,23 @@ def alert_comparison(change):
     observed-map (#3017 / #3002) — or `(None, None, reason)`.
 
     ⛔ Nothing is guessed. A key the map has no entry for (no shipped alert
-    compares it, or KNOWN_DEFERRED), or whose entry a backtest cannot replay
-    (`usable_for_backtest`: needs review, composite, unresolved direction,
-    not per-tenant), has a reason and is not backtested; so is a change
-    whose rows are compared by alerts that disagree on the series or the
-    direction (one replay cannot stand for both). A reason about a key other
-    than the change's own (a critical row's `_critical` alert) names it."""
+    compares it, or KNOWN_DEFERRED: `observed_map_lib.lookup`'s kind), or
+    whose entry a backtest cannot replay (`usable_for_backtest`: needs
+    review, composite, unresolved direction, not per-tenant), has a reason
+    and is not backtested; so is a change whose rows are compared by alerts
+    that disagree on the series or the direction (one replay cannot stand
+    for both). A reason about a key other than the change's own (a critical
+    row's `_critical` alert) names it."""
     observed = _observed_map()
     keys, reason = _alert_keys(change)
     if reason is not None:
         return None, None, reason
     found = []
     for key in keys:
-        entry, reason = observed_map_lib.lookup(observed, key)
-        if entry is not None:
+        kind, entry = observed_map_lib.lookup(observed, key)
+        if entry is None:
+            series, direction, reason = None, None, observed_map_lib.lookup_reason(kind, key)
+        else:
             series, direction, reason = observed_map_lib.usable_for_backtest(entry)
         if reason is not None:
             return None, None, (reason if key == change["metric"] else f"{key}: {reason}")
@@ -1385,21 +1148,23 @@ def _not_backtested(change, reason):
 _QUERY_ERROR_MAX = 300
 
 
-def _side_compared(change, side, parsed):
-    """Whether a threshold rule selects this side's severity (#3060). A
-    change read from two trees says so (`<side>_compared`); one written as
-    `--git-diff` / `--tenant` give it carries the severity in its value."""
-    if "series" in change:
-        return change.get(f"{side}_compared", True)
-    return parsed is None or parsed[1] in _COMPARED_SEVERITIES
+def _side_compared(change, parsed):
+    """Whether an alert compares one side of a change (#3060, #3111 (e)). A
+    change read from two trees is one /metrics row, and `alert_comparison`
+    has already found the alert comparing it; a side of a change written as
+    `--tenant` gives it is compared unless no shipped alert compares the key
+    of its severity (`_no_alert`)."""
+    if "series" in change or parsed is None:
+        return True
+    return not _no_alert(_written_alert(_written_key(change), parsed))
 
 
 def severity_change(change):
-    """`(old, new)`: the severities of a change whose two sides differ in
-    it, or None (#3060). A side without a threshold has none to compare."""
+    """`(old, new)`: the severities of a change written as `--tenant` gives it
+    whose two sides differ in it, or None (#3060). A side without a threshold
+    has none to compare; a change read from two trees is one /metrics row,
+    whose severity is one of its labels (#3111)."""
     if "series" in change:
-        if "old_severity" in change:
-            return change["old_severity"], change["new_severity"]
         return None
     old_s, new_s = _written_severities(change)
     return (old_s, new_s) if old_s is not None and new_s is not None and old_s != new_s else None
@@ -1491,11 +1256,10 @@ def backtest_change(prom_url, change, lookback_seconds):
     # #3017: the numbers as the exporter reads them (`70:critical` is 70 on
     # the critical row); `not_backtestable` already refused a value it cannot
     # read. None is a switched-off side: the disable / enable transitions.
-    key = canonical_key(metric, DEPRECATED_KEY_ALIASES).partition("{")[0]
+    key = _written_key(change)
     old_t, new_t = (parse_threshold_value(key, v) for v in (old_value, new_value))
-    # #3060: a side whose severity no threshold rule selects is no threshold.
-    old_t, new_t = (t and t[0] if _side_compared(change, side, t) else None
-                    for side, t in (("old", old_t), ("new", new_t)))
+    # #3111 (e): a side no shipped alert compares is no threshold.
+    old_t, new_t = (t and t[0] if _side_compared(change, t) else None for t in (old_t, new_t))
     old_disabled, new_disabled = old_t is None, new_t is None
 
     if new_disabled and not old_disabled:
@@ -1655,6 +1419,15 @@ def _shown_value(change, side, none):
     return f"{value} ({safe_label(severity) or '\"\"'})"
 
 
+def _served_by(change, shown):
+    """` (served by: a, b)` when the keys serving a row (#3111) are not just
+    the one its `metric` names; else ""."""
+    keys = change.get("keys")
+    if not keys or keys == [change["metric"]]:
+        return ""
+    return " (served by: " + ", ".join(shown(k) for k in keys) + ")"
+
+
 def print_text_report(report):
     """Print human-readable backtest report."""
     print()
@@ -1684,7 +1457,7 @@ def print_text_report(report):
         window = f" ({', '.join(change['window'])} UTC)" if change.get("window") else ""
         print(f"  {marker} [{risk:6s}] {safe_label(change['tenant'])}/"
               f"{safe_label(change['metric'])}: "
-              f"{old_v} -> {new_v}{window}")
+              f"{old_v} -> {new_v}{window}{_served_by(change, safe_label)}")
         print(f"           {safe_label(change['message'])}")
         if change.get("query"):  # #3002 B: the PromQL this verdict rests on
             print(f"           query: {safe_label(change['query'])}")
@@ -1724,7 +1497,8 @@ def generate_markdown(report):
         # may hold `|` (a PromQL parse error quoting the query) — escaped so
         # it stays one cell.
         message = c["message"].replace("|", "\\|")
-        lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window} | "
+        served_by = _served_by(c, lambda k: "`" + safe_label(k).replace("|", "\\|") + "`")
+        lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window}{served_by} | "
                      f"{old_v} | {new_v} | {message} | {query} |")
 
     lines.append("")
@@ -1889,7 +1663,7 @@ def main():
     source = parser.add_mutually_exclusive_group()
     source.add_argument(
         "--git-diff", action="store_true",
-        help="Extract changes from git diff HEAD~1 -- conf.d/",
+        help="Compare HEAD~1's conf.d/ with the working tree's (both read by da-guard)",
     )
     source.add_argument(
         "--config-dir",
@@ -2040,23 +1814,36 @@ def main():
     # `--skip-if-unavailable` is about Prometheus, not git, and must not turn
     # "git is unusable" into a green skip. It also runs before the "no
     # changes" exit below, which is the silent path this replaces.
-    git_changes = None
+    # #3111: HEAD~1's conf.d/ is written out as a tree and compared with the
+    # working tree's by the exporter, exactly as `--config-dir` compares two
+    # trees — so the served-values errors below are this mode's too.
+    dir_changes = None
     if args.git_diff:
-        git_changes = extract_changes_from_git_diff()
-        if git_changes is None:
-            print("--git-diff: `git diff HEAD~1 -- conf.d/` could not run "
-                  "(git not on PATH, not inside a git work tree, or no parent "
-                  "commit); run from a checkout with git installed.\n"
-                  "  ⛔ Do not switch to --config-dir to clear this — that "
-                  "compares two trees, not your PR.", file=sys.stderr)
-            _end_not_run(args, "caller_error", "git_diff_unavailable", EXIT_CALLER_ERROR,
-                         recipe_tenants)
+        with tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp:
+            old_confd = materialize_head1_confd(tmp)
+            if old_confd is None:
+                print("--git-diff: git could not run to read HEAD~1's conf.d/ (git not on PATH, "
+                      "not inside a git work tree, or no parent commit — a shallow clone "
+                      "needs fetch-depth: 2); run from a checkout with git installed.\n"
+                      "  ⛔ Do not switch to --config-dir to clear this — that "
+                      "compares two trees, not your PR.", file=sys.stderr)
+                _end_not_run(args, "caller_error", "git_diff_unavailable", EXIT_CALLER_ERROR,
+                             recipe_tenants)
+            old_confd, cur_confd = _confd_tree(old_confd), _confd_tree("conf.d")
+            if old_confd is None and cur_confd is None:
+                print("WARNING: --git-diff: there is no conf.d/ in this directory at HEAD~1 "
+                      "nor in the working tree; run from the directory that holds conf.d/",
+                      file=sys.stderr)
+            try:
+                dir_changes = extract_changes_from_dirs(
+                    cur_confd, old_confd, flags=("HEAD~1", "working tree"))
+            except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
+                _exit_served_values_error(exc, args, recipe_tenants)
 
     # #2119: the two trees are read by da-guard, and this runs BEFORE the
     # Prometheus check for the reason the git check above does:
     # `--skip-if-unavailable` is about Prometheus, and must not turn "a tree
     # the exporter refuses" into a green skip.
-    dir_changes = None
     if args.config_dir:
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
@@ -2089,9 +1876,7 @@ def main():
                          recipe_tenants)
 
     # Extract changes
-    if args.git_diff:
-        changes = keep_flat_threshold_changes(git_changes, parsed_conf)
-    elif args.config_dir:
+    if args.git_diff or args.config_dir:
         changes = dir_changes
     else:  # `--tenant`: the no-source case already exited above
         changes = [{
@@ -2128,6 +1913,8 @@ def main():
         result = backtest_change(args.prometheus, change, lookback_seconds)
         if change.get("window"):  # #2119: the part of the day the values hold in
             result["window"] = change["window"]
+        if "keys" in change:  # #3111: the keys serving the /metrics row
+            result["keys"] = change["keys"]
         severities = severity_change(change)
         if severities:  # #3060: `70 -> 70` alone does not say what changed
             result["old_severity"], result["new_severity"] = severities

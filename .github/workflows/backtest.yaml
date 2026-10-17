@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2   # need HEAD~1 for git diff
+          fetch-depth: 2   # need HEAD~1: --git-diff reads its conf.d/ tree
 
       - uses: actions/setup-python@v6
         with:
@@ -24,12 +24,31 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml -c requirements/ci-constraints.txt
 
+      # #3111: --git-diff writes HEAD~1's conf.d/ out as a tree and has the
+      # exporter read both trees (`da-guard served-values`), as --config-dir
+      # does. Without da-guard the run ends rc 2 `served_values_unavailable`
+      # before the Prometheus check, so the comment would say that instead
+      # of the backtest. Built from this checkout, so both trees are read by
+      # the same binary.
+      - name: Set up Go (da-guard)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-guard
+        run: |
+          make da-guard-build
+          echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
+
       - name: Run backtest
         id: backtest
         env:
           PROMETHEUS_URL: ${{ secrets.PROMETHEUS_URL }}
-        # backtest_threshold.py 的 --git-diff 用客戶 repo 契約 `git diff -- conf.d/`
-        # （conf.d 在客戶 repo root）；本 repo 以 cwd 錨定到實際 conf.d 位置。
+        # backtest_threshold.py 的 --git-diff 比 cwd 旁的 conf.d/：HEAD~1 那棵與
+        # 工作樹那棵（客戶 repo 的 conf.d 在 repo root）；本 repo 以 cwd 錨定到
+        # 實際 conf.d 位置。
         working-directory: components/threshold-exporter/config
         run: |
           python3 "$GITHUB_WORKSPACE/scripts/tools/ops/backtest_threshold.py" \

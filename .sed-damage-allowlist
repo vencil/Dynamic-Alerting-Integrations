@@ -192,3 +192,8 @@ docs/api/threshold-exporter-openapi.yaml
 # holds (tenant-api no longer judges policy); only its config-watcher
 # sentence is left. Checked by generate_changelog.py --fragments.
 changelog.d/2280-tenant-api-routing-policy.md
+
+# #3111: --git-diff no longer parses diff text, so the tests pinning the
+# parser's name-quoting cases were replaced by end-to-end tree tests;
+# the file shrank on purpose (12 tests, all collected and green).
+tests/shared/test_confd_path_encoding_across_git_calls.py

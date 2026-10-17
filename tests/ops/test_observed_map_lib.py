@@ -340,13 +340,22 @@ class TestLoadFailsClosed:
 class TestLookupAndPolicies:
     """#3017：同一份事實、兩種政策——recommend 與 backtest 各自決定能不能用。"""
 
-    def test_lookup_entry_and_reasons(self):
+    def test_lookup_kinds(self):
+        """#3111 (e)：回傳種類，不是要呼叫端比對字串的 reason。"""
         m = L.load_observed_map()
-        assert L.lookup(m, "mysql_connections") == (m["mysql_connections"], None)
-        entry, why = L.lookup(m, "container_cpu")
-        assert entry is None and "KNOWN_DEFERRED" in why
-        entry, why = L.lookup(m, "mongodb_connections_current_critical")
-        assert entry is None and why.startswith("no shipped alert compares")
+        assert L.lookup(m, "mysql_connections") == (L.LookupKind.COMPARED, m["mysql_connections"])
+        assert L.lookup(m, "container_cpu") == (L.LookupKind.KNOWN_DEFERRED, None)
+        assert L.lookup(m, "mongodb_connections_current_critical") == (L.LookupKind.NO_ALERT, None)
+
+    def test_lookup_reasons(self):
+        assert L.lookup_reason(L.LookupKind.COMPARED, "k") is None
+        assert "KNOWN_DEFERRED" in L.lookup_reason(L.LookupKind.KNOWN_DEFERRED, "container_cpu")
+        assert L.lookup_reason(L.LookupKind.NO_ALERT, "k").startswith("no shipped alert compares")
+
+    def test_known_deferred_wins_over_an_entry(self):
+        """KNOWN_DEFERRED 的 key 不應有條目（閘門守）；萬一有，仍以 KNOWN_DEFERRED 論。"""
+        assert L.lookup({"container_cpu": {"direction": ">"}}, "container_cpu") == (
+            L.LookupKind.KNOWN_DEFERRED, None)
 
     def test_backtest_policy_on_committed_lower_bound_keys(self):
         """#3017 的 4 個下界 key 全都能回測，且方向是 below。"""
