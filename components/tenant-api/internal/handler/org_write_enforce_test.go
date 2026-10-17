@@ -44,7 +44,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -140,6 +142,22 @@ func (f *orgEnfFixture) deps() *Deps {
 		Views:     views.NewDirManager(f.configDir),
 		WriteMode: WriteModeDirect,
 	}
+}
+
+// shareOut puts orgEnfTenantOut in the member caller's organization: in the
+// loaded mapping and in the committed `_tenant_orgs.yaml`, which a PR-mode
+// write reads again on the base its branch is cut from (#2857).
+func (f *orgEnfFixture) shareOut(t *testing.T) {
+	t.Helper()
+	f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
+		orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+	if err := os.WriteFile(filepath.Join(f.configDir, "_tenant_orgs.yaml"), []byte("tenant_orgs:\n"+
+		"  "+orgEnfTenantIn+": ["+orgEnfMemberOrg+"]\n"+
+		"  "+orgEnfTenantOut+": ["+orgEnfMemberOrg+"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, f.configDir, "add", "_tenant_orgs.yaml")
+	runGit(t, f.configDir, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "share out")
 }
 
 // orgEnfIdentity stamps the org-scoped caller identity onto a request.
@@ -840,7 +858,8 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 		withheldCode int
 		// undeclarableCode: while the other tenant cannot be written, a body
 		// declaring it is refused before validation (#3062: a PUT may only
-		// declare tenants the caller may write). 0: answered as code.
+		// declare tenants the caller may write; the dry-run answers what PUT
+		// would, as valid: false with PUT's text). 0: answered as code.
 		undeclarableCode int
 	}{
 		{"batch PATCH", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
@@ -872,7 +891,7 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 			w := httptest.NewRecorder()
 			wrapWithRBACMiddleware(ValidateTenant(f.deps()), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(w, orgEnfIdentity(req, orgEnfMemberOrg))
 			return w
-		}, http.StatusOK, true, 0, 0},
+		}, http.StatusOK, true, 0, http.StatusOK},
 		{"GET", func(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 			req := newRequestWithChiParam("GET", "/api/v1/tenants/"+orgEnfTenantIn, "id", orgEnfTenantIn, nil)
 			w := httptest.NewRecorder()
@@ -1019,8 +1038,7 @@ func TestValidationMessagesNameOnlyReadableTenants_PRMode(t *testing.T) {
 
 			// Must fire: once the caller may read the other tenant, the
 			// answer names it in full.
-			f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
-				orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+			f.shareOut(t)
 			w = c.call(t, f)
 			body = w.Body.String()
 			if w.Code != c.code || strings.Contains(body, "another place in the file") {

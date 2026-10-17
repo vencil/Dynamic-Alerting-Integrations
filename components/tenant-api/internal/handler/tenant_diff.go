@@ -11,6 +11,7 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/credmask"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // DiffRequest is the body for POST /api/v1/tenants/{id}/diff.
@@ -45,6 +46,9 @@ type DiffResponse struct {
 // @Summary     Preview config diff
 // @Description Returns unified diff between current file and proposed content.
 // @Description The diff header names current/<id>.yaml and proposed/<id>.yaml.
+// @Description The proposed side is what PUT /api/v1/tenants/{id} would write (#3062): the proposal's declared tenant sections
+// @Description spliced into the current file, so a section the proposal leaves out shows as kept. A proposal PUT refuses as malformed,
+// @Description or a current file whose tenants cannot be told apart (#2405: replaced whole), is shown as the proposal itself.
 // @Description A caller who may read the tenant but not write it gets the diff of the masked forms of both sides
 // @Description (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
 // @Description with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
@@ -61,7 +65,7 @@ type DiffResponse struct {
 // @Param       body  body     DiffRequest true "Proposed YAML"
 // @Success     200   {object} DiffResponse
 // @Failure     400   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
+// @Failure     409   {object} ErrorResponse "Conflict: the PUT this previews would be refused — code TENANT_CONFIG_NOT_LOADABLE, config_error not_round_trippable, when the proposal's declared sections cannot be written into the file without changing content it does not declare (#3062; as PUT's 409), ambiguous tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced"
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE (the 500 the PUT this previews would get)"
@@ -106,7 +110,12 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 				writePreviewWithheld(rw, r)
 				return
 			}
-			diff, err := d.Writer.DiffTexts(tenantID, string(current), exists, proposed)
+			written, err := previewPut(r, d, tenantID, current, proposed)
+			if err != nil {
+				writeDiffError(rw, r, d, err)
+				return
+			}
+			diff, err := d.Writer.DiffTexts(tenantID, string(current), exists, written)
 			if err != nil {
 				writeDiffError(rw, r, d, err)
 				return
@@ -145,7 +154,12 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 				return
 			}
 		}
-		maskedProposed, err := credmask.MaskYAML([]byte(proposed))
+		written, err := previewPut(r, d, tenantID, current, proposed)
+		if err != nil {
+			writeDiffError(rw, r, d, err)
+			return
+		}
+		maskedProposed, err := credmask.MaskYAML([]byte(written))
 		if err != nil {
 			writeMaskedPreviewUnavailable(rw, r, "the proposal")
 			return
@@ -164,8 +178,33 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 	}
 }
 
+// previewPut is what PUT would write over current (nil when the file does
+// not exist) for proposed (#3062): the proposal's declared tenant sections
+// spliced into the current file, by the very splice PUT runs, so a section
+// the proposal leaves out shows as kept, not deleted. Two outcomes PUT does
+// not write are previewed as the proposal itself, as before: a proposal PUT
+// refuses as malformed (no tenants mapping, a merge key or a key that is
+// not one tenant id there: 400), and a current file the splice cannot read
+// (PUT replaces it whole for a caller with write permission on all tenants
+// and refuses anyone else, #2405). A splice PUT refuses because it would
+// change what the proposal does not declare is the *putSpliceError PUT
+// answers with (writeDiffError: the same 409).
+func previewPut(r *http.Request, d *Deps, tenantID string, current []byte, proposed string) (string, error) {
+	names := tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r))
+	written, err := spliceDeclaredSections(current, proposed, tenantID, names, putFileShown(r, d, tenantID))
+	if errors.Is(err, gitops.ErrSpliceBaseUnparseable) || errors.Is(err, gitops.ErrValidation) {
+		return proposed, nil
+	}
+	return written, err
+}
+
 // writeDiffError answers a preview that could not be computed.
 func writeDiffError(rw http.ResponseWriter, r *http.Request, d *Deps, err error) {
+	// #3062: the PUT this previews would be refused: its declared sections
+	// cannot be written into the file without changing the rest.
+	if writePutSpliceError(rw, r, err) {
+		return
+	}
 	// #1673: two files claim this tenant, so there is no single
 	// "current file" to diff against. Server state, not a bad request.
 	if errors.Is(err, confd.ErrAmbiguousTenantFile) {

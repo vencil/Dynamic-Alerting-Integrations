@@ -334,9 +334,12 @@ func TestDiffTenant_WithheldWhenFileDeclaresUnreadableTenant(t *testing.T) {
 			makeOutReadable(f)
 			w := wServe(f, DiffTenant(f.deps()), rbac.PermRead, "POST", short, nil)
 			var resp DiffResponse
+			// #3062: the preview is the splice PUT writes, so the short
+			// proposal changes In and keeps Out (no deleted Out line).
 			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK ||
-				!resp.HasDiff || !strings.Contains(resp.Diff, "-  "+orgEnfTenantOut+":") || resp.Masked != (role == "reader") {
-				t.Errorf("readable: %d %s (%v), want the diff as today", w.Code, w.Body.String(), err)
+				!resp.HasDiff || !strings.Contains(resp.Diff, "+    _silent_mode: \"warning\"") ||
+				strings.Contains(resp.Diff, "-  "+orgEnfTenantOut+":") || resp.Masked != (role == "reader") {
+				t.Errorf("readable: %d %s (%v), want the diff of the splice", w.Code, w.Body.String(), err)
 			}
 		})
 	}

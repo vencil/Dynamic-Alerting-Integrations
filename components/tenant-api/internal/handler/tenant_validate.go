@@ -40,6 +40,9 @@ type ValidateResponse struct {
 // @Description valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
 // @Description symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
 // @Description when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
+// @Description The tenants the body declares besides {id} are judged as PUT judges them (#3062): one the caller may not write, or a
+// @Description tenants mapping with a merge key (<<), a key that does not decode to a string or one id twice, is valid: false with
+// @Description PUT's 403 / 400 text, in both write modes.
 // @Tags        tenants
 // @Accept      application/yaml
 // @Produce     json
@@ -59,6 +62,14 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 
 		body, ok := readLimitedBody(w, r, d)
 		if !ok {
+			return
+		}
+
+		// #3062: the tenants the body declares besides {id}, judged as PUT
+		// judges them (declaredTenantsJudge); PUT's refusal text is the
+		// verdict, as the other refusals below are.
+		if _, status, msg := declaredTenantsJudge(r, d, tenantID, string(body)); status != 0 {
+			writeJSON(w, http.StatusOK, ValidateResponse{Valid: false, Warnings: []string{msg}})
 			return
 		}
 

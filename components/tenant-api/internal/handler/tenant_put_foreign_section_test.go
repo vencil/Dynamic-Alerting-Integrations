@@ -35,7 +35,6 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/rbac"
-	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 const (
@@ -102,8 +101,7 @@ func foreignPut(t *testing.T, pr bool, file, body string, outWritable bool) (w *
 	t.Helper()
 	f = newOrgEnfFixture(t, map[string]string{orgEnfTenantIn + ".yaml": file})
 	if outWritable {
-		f.tenantOrg.Override(&tenantorg.Config{TenantOrgs: map[string][]string{
-			orgEnfTenantIn: {orgEnfMemberOrg}, orgEnfTenantOut: {orgEnfMemberOrg}}})
+		f.shareOut(t)
 	}
 	d := f.deps()
 	if pr {

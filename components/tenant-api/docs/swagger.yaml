@@ -2144,11 +2144,14 @@ paths:
             a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
             with a letter or digit (ADR-035; the route generator refuses a tree that
             declares any other id; nothing written). Also 400 when the current tenant
-            file cannot be parsed and the caller lacks write permission on all tenants
-            (#2405; nothing written; a file that cannot be parsed is replaced by the
-            body whole). Also 400 when the body''s tenants mapping has a merge key
-            (<<), a key that does not decode to a string, or declares one tenant twice
-            (#3062; nothing written)'
+            file cannot be spliced into and the caller lacks write permission on all
+            tenants (#2405; nothing written; such a file is replaced by the body whole):
+            it does not parse, or (#3062) its root is not a mapping or has a merge
+            key (<<), its tenants is an alias or not a mapping, or its tenants mapping
+            has a merge key, a key that does not decode to a string or one id twice.
+            Also 400 when the body''s tenants mapping has a merge key (<<), a key
+            that does not decode to a string, or declares one tenant twice (#3062;
+            nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
@@ -2156,18 +2159,20 @@ paths:
             a tenant other than {id} the caller may not write (#3062): a fixed text
             that names no tenant; nothing written. In PR write-back mode the write
             scope is judged again on the latest base branch, which this server''s
-            local copy may lag: a refusal there is the same 403 with tenant_id, and
-            no PR/MR or branch is left'
+            local copy may lag: a refusal there is the same 403 with tenant_id (for
+            another declared tenant, the same fixed text naming none), and no PR/MR
+            or branch is left'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: 'Conflict: code TENANT_CONFIG_NOT_LOADABLE, config_error not_round_trippable,
             when the declared sections cannot be written into the file without changing
-            content the body does not declare — an alias elsewhere in the file to
-            an anchor in a declared section whose value or definition changes, anchors
-            added, removed or reordered, a merge key (<<) in the file''s tenants mapping
-            or at its root (#3062; the first difference is named only inside a section
-            the caller may read; nothing written). Or base hash mismatch (current_source_hash
+            content the body does not declare — an alias elsewhere in the file (a
+            value or a key) to an anchor in a declared section whose value or definition
+            changes (#3062; nothing written). The place of the first difference is
+            given only to a caller who may read every tenant the file declares (as
+            GET''s raw_yaml, #3050), and named only inside a section the caller may
+            read; anyone else gets a fixed text. Or base hash mismatch (current_source_hash
             only when GET /tenants/{id} would show the caller that file''s source_hash,
             #3050), pending PR, ambiguous tenant file, the tenant is already declared
             by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written),
@@ -2421,6 +2426,9 @@ paths:
       description: |-
         Returns unified diff between current file and proposed content.
         The diff header names current/<id>.yaml and proposed/<id>.yaml.
+        The proposed side is what PUT /api/v1/tenants/{id} would write (#3062): the proposal's declared tenant sections
+        spliced into the current file, so a section the proposal leaves out shows as kept. A proposal PUT refuses as malformed,
+        or a current file whose tenants cannot be told apart (#2405: replaced whole), is shown as the proposal itself.
         A caller who may read the tenant but not write it gets the diff of the masked forms of both sides
         (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
         with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
@@ -2454,16 +2462,19 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
-          description: 'Conflict: the PUT this previews would be refused — ambiguous
-            tenant file, TENANT_DECLARED_ELSEWHERE, or code TENANT_TREE_UNREADABLE
-            when conf.d holds an unresolvable symlink (dangling, looping, or with
-            a non-directory in its path) other than the file this write replaces (#2939,
-            ADR-036 §4: the tree after the write is judged; repair it in git; nothing
-            written; unreadable_count always, the entries'' names and reasons in the
-            text and in unreadable only for a caller with write permission on all
-            tenants). The tenant''s own file being unreadable in any other way (a
-            failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
-            or not_regular_file) for every caller: it is never replaced'
+          description: 'Conflict: the PUT this previews would be refused — code TENANT_CONFIG_NOT_LOADABLE,
+            config_error not_round_trippable, when the proposal''s declared sections
+            cannot be written into the file without changing content it does not declare
+            (#3062; as PUT''s 409), ambiguous tenant file, TENANT_DECLARED_ELSEWHERE,
+            or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink
+            (dangling, looping, or with a non-directory in its path) other than the
+            file this write replaces (#2939, ADR-036 §4: the tree after the write
+            is judged; repair it in git; nothing written; unreadable_count always,
+            the entries'' names and reasons in the text and in unreadable only for
+            a caller with write permission on all tenants). The tenant''s own file
+            being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
+            (config_error unreadable or not_regular_file) for every caller: it is
+            never replaced'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2703,6 +2714,9 @@ paths:
         valid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a
         symlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);
         when the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.
+        The tenants the body declares besides {id} are judged as PUT judges them (#3062): one the caller may not write, or a
+        tenants mapping with a merge key (<<), a key that does not decode to a string or one id twice, is valid: false with
+        PUT's 403 / 400 text, in both write modes.
       parameters:
       - description: Tenant ID
         in: path

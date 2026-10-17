@@ -100,10 +100,12 @@ const MsgUnparseableBaseNeedsPlatformWrite = "the current tenant file cannot be 
 type SpliceFunc func(base []byte) (string, error)
 
 // ErrSpliceBaseUnparseable is a SpliceFunc's answer for a current file whose
-// declared tenants cannot be read (it does not parse, its `tenants:` is not
-// a mapping, a key does not decode to a tenant id, an id is declared twice):
-// nothing in it can be kept apart from the rest, so only a caller with write
-// permission on all tenants may replace it whole (#2405).
+// tenant sections cannot be told apart — it does not parse, or (#3062) its
+// root is not a mapping or has a merge key, its `tenants` is an alias or not
+// a mapping, its `tenants:` has a merge key, a key that does not decode to a
+// tenant id or an id declared twice: nothing in it can be kept apart from
+// the rest, so only a caller with write permission on all tenants may
+// replace it whole (#2405), whichever of these shapes it has.
 var ErrSpliceBaseUnparseable = errors.New("the current tenant file cannot be parsed")
 
 // replaceUnparseableKey is the context key WithReplaceUnparseable sets.

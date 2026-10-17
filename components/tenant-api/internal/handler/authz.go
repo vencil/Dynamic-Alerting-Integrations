@@ -75,7 +75,17 @@ type platformMetadataSource struct {
 // environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
 // declares tenantID (or that the caller proposes to write for it).
 func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
-	var metadata cfg.MetadataResolver // no configDir: the document's own `_metadata` alone
+	// No configDir: the document's own `_metadata` alone (declaredIn).
+	// A `_metadata` that does not decode reads as the empty pair, as an
+	// unusable file does.
+	e, dm, _ := s.declaredIn(data, tenantID)
+	return e, dm
+}
+
+// declaredIn is environmentDomainOf that also reports whether data declares
+// tenantID.
+func (s *platformMetadataSource) declaredIn(data []byte, tenantID string) (environment, domain string, ok bool) {
+	var metadata cfg.MetadataResolver
 	if s.configDir != "" {
 		s.once.Do(func() {
 			root, _ := platformMetadataOrNone(s.configDir, "write")
@@ -83,10 +93,8 @@ func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID strin
 		})
 		metadata = s.metadata
 	}
-	// A `_metadata` that does not decode reads as the empty pair, as an
-	// unusable file does.
-	meta, _, _ := metadata.ResolveFile(tenantID, data)
-	return meta.Environment, meta.Domain
+	meta, ok, _ := metadata.ResolveFile(tenantID, data)
+	return meta.Environment, meta.Domain, ok
 }
 
 // WriteScopeMeta builds the write-plane resolver: one targeted read of the
@@ -111,6 +119,36 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 			return "", ""
 		}
 		return src.environmentDomainOf(data, tenantID)
+	}
+}
+
+// declaredScopeMeta is WriteScopeMeta for the tenants a PUT body declares
+// besides {id} (#3062). Their sections live in the file {id} lives in — the
+// file the PUT splices into — which ResolveTenantFile, matching file names,
+// does not find for them: WriteScopeMeta would read such a tenant as
+// unlabeled, which an enforced metadata axis denies whatever its real
+// labels. So a tenant fileOwner's file declares is read from that file; any
+// other (a section the body would add, which the writer refuses anyway) as
+// WriteScopeMeta reads it. A file that cannot be read fails soft the same
+// way.
+func declaredScopeMeta(configDir, fileOwner string) ScopeMetaFunc {
+	own := WriteScopeMeta(configDir)
+	src := &platformMetadataSource{configDir: configDir}
+	var data []byte
+	if configDir != "" {
+		if path, err := confd.ResolveTenantFile(configDir, fileOwner); err == nil {
+			if b, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path)); problem == confd.ProblemNone {
+				data = b
+			}
+		}
+	}
+	return func(tenantID string) (string, string) {
+		if data != nil {
+			if e, dm, ok := src.declaredIn(data, tenantID); ok {
+				return e, dm
+			}
+		}
+		return own(tenantID)
 	}
 }
 
@@ -283,6 +321,39 @@ func freshWriteScope(configDir, tenantID string) (pair scopePair, judged bool) {
 	root, _ := platformMetadataOrNone(configDir, "write")
 	meta, ok, decoded := root.MetadataResolver().ResolveFile(tenantID, data)
 	if !ok || !decoded {
+		return scopePair{}, false
+	}
+	return scopePair{meta.Environment, meta.Domain}, true
+}
+
+// freshDeclaredWriteScope is freshWriteScope for a tenant a PUT body
+// declares besides {id} (#3062), read where declaredScopeMeta reads it: from
+// fileOwner's file on the base when that file declares it, else as
+// freshWriteScope reads it. fileOwner's file existing on the base but not
+// readable for its metadata (ambiguous, not a regular file, not a tenant
+// file that parses, a `_metadata` that does not decode) is judged false, as
+// freshWriteScope judges the tenant's own file.
+func freshDeclaredWriteScope(configDir, fileOwner, tenantID string) (pair scopePair, judged bool) {
+	path, err := confd.ResolveTenantFile(configDir, fileOwner)
+	switch {
+	case errors.Is(err, confd.ErrTenantFileNotFound):
+		return freshWriteScope(configDir, tenantID)
+	case err != nil:
+		return scopePair{}, false
+	}
+	data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
+	if problem != confd.ProblemNone {
+		return scopePair{}, false
+	}
+	if _, err := cfg.ParseConfigFile(data); err != nil {
+		return scopePair{}, false
+	}
+	root, _ := platformMetadataOrNone(configDir, "write")
+	meta, ok, decoded := root.MetadataResolver().ResolveFile(tenantID, data)
+	switch {
+	case !ok:
+		return freshWriteScope(configDir, tenantID)
+	case !decoded:
 		return scopePair{}, false
 	}
 	return scopePair{meta.Environment, meta.Domain}, true

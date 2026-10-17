@@ -12,7 +12,9 @@ package handler
 // those:
 //
 //   - every tenant the body declares must be one the caller may write
-//     (declaredTenantsWritable, in the handler, before anything is written);
+//     (declaredTenantsWritable, in the handler, before anything is written;
+//     in PR mode judged again on the fresh base, declaredOnBase; the same
+//     judgement answers POST /validate);
 //   - the declared sections are spliced, as yaml.v3 nodes, into the file as
 //     the writer reads it under its lock (spliceDeclaredSections, a
 //     gitops.SpliceFunc): an existing section is replaced whole, a new one
@@ -21,22 +23,26 @@ package handler
 //   - everything the body does not declare — other tenants' sections, root
 //     keys other than `tenants`, comments, later documents — is kept, and
 //     verifySplice checks that it is: the written file, parsed back, holds
-//     node for node the same YAML outside the declared sections, defines
-//     the same anchors in the same order, every alias outside them still
-//     resolves to a node written the same, and each declared section
-//     decodes to what the body's does. Anything else is refused, fail
-//     closed.
+//     node for node the same YAML outside the declared sections, every
+//     alias outside them still resolves to a node written the same, and each
+//     declared section decodes to what the body's does. Anything else is
+//     refused, fail closed;
+//   - a file whose sections cannot be told apart (it does not parse, a merge
+//     key or an alias declares what is in `tenants:`) is #2405's: replaced
+//     whole by the body for a caller with write permission on all tenants,
+//     refused for anyone else;
+//   - POST /diff previews the splice (previewPut).
 //
 // Which tenants a body declares is the set of DECODED keys of its `tenants:`
 // mapping: `db-b`, `"db-b"`, `'db-b'`, `!!str db-b`, an alias to a `db-b`
-// scalar and `!!binary ZGItYg==` are one id. A merge key (`<<`) there, in the
-// body or in the file, is refused: what it declares depends on what it
-// merges, so it cannot be spliced.
+// scalar and `!!binary ZGItYg==` are one id. A merge key (`<<`) there is
+// refused in the body (400): what it declares depends on what it merges.
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"reflect"
 	"strings"
@@ -180,44 +186,110 @@ func bodyTenantsRefusal(err error) string {
 	return msgBodyTenantsKey
 }
 
-// declaredTenantsWritable reports whether the caller may write every tenant
-// the body declares besides tenantID (the handler's own gates judged that
-// one) — the same two judgements: the tenant's metadata on disk
-// (requireOrgWriteAt) and as the body proposes it (requireOrgWriteProposedAt).
-// It writes the refusal: 400 for a tenants block that declares no set of
-// ids, 403 with a fixed text — no tenant named, nothing said about whether it
-// exists — for a tenant the caller may not write.
-func declaredTenantsWritable(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID, body string) bool {
+// declaredGate is what the local gates judged one tenant a PUT body declares
+// besides {id} on, for a PR-mode write to judge it again on the fresh base
+// (putTenantPRMode's check), as {id}'s gatePre / gatePost are.
+type declaredGate struct {
+	id        string
+	pre, post writeGate
+}
+
+// declaredTenantsJudge is the verdict on every tenant the body declares
+// besides tenantID (the handler's own gates judged that one): the same two
+// judgements as for {id} — the tenant's metadata as the file holds it now
+// (declaredScopeMeta: the file {id} lives in, which holds the section) and
+// as the body proposes it (proposedScopeMeta). status is 0 when the body
+// may be written, 400 for a tenants block that declares no set of ids, 403
+// for a tenant the caller may not write; msg is then the client text —
+// fixed, naming no tenant and saying nothing about whether it exists. gates
+// are the judged pairs, for the PR-mode re-judgement.
+func declaredTenantsJudge(r *http.Request, d *Deps, tenantID, body string) (gates []declaredGate, status int, msg string) {
 	_, ids, _, found, err := bodyTenants(body)
 	if !found {
-		return true // the writer refuses the body; nothing is declared
+		return nil, 0, "" // the writer refuses the body; nothing is declared
 	}
 	if err != nil {
-		WriteJSONError(rw, r, http.StatusBadRequest, bodyTenantsRefusal(err))
-		return false
+		return nil, http.StatusBadRequest, bodyTenantsRefusal(err)
 	}
 	if d.RBAC == nil {
-		return true // test-only state, see requireOrgWriteWithMeta
+		return nil, 0, "" // test-only state, see requireOrgWriteWithMeta
 	}
 	p := rbac.RequestPrincipal(r)
-	onDisk := WriteScopeMeta(d.ConfigDir)
+	onDisk := declaredScopeMeta(d.ConfigDir, tenantID)
 	proposed := proposedScopeMeta(d.ConfigDir, body)
 	for _, id := range ids {
 		if id == tenantID {
 			continue
 		}
-		if !OrgAllowed(d.RBAC, d.TenantOrg, p, id, rbac.PermWrite, onDisk) ||
-			!OrgAllowed(d.RBAC, d.TenantOrg, p, id, rbac.PermWrite, proposed) {
-			WriteJSONErrorWithCode(rw, r, http.StatusForbidden, CodeForbidden, msgDeclaresUnwritableTenant)
-			return false
+		orgs := gateOrgs(d, id)
+		g := declaredGate{id: id,
+			pre:  writeGate{scopePairOf(onDisk, id), orgs},
+			post: writeGate{scopePairOf(proposed, id), orgs}}
+		if !OrgAllowed(d.RBAC, d.TenantOrg, p, id, rbac.PermWrite, fixedScopeMeta(g.pre.pair)) ||
+			!OrgAllowed(d.RBAC, d.TenantOrg, p, id, rbac.PermWrite, fixedScopeMeta(g.post.pair)) {
+			return nil, http.StatusForbidden, msgDeclaresUnwritableTenant
+		}
+		gates = append(gates, g)
+	}
+	return gates, 0, ""
+}
+
+// declaredTenantsWritable is declaredTenantsJudge for PUT: it writes the
+// refusal (403 FORBIDDEN, or 400) and returns false, or returns the gates.
+func declaredTenantsWritable(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID, body string) ([]declaredGate, bool) {
+	gates, status, msg := declaredTenantsJudge(r, d, tenantID, body)
+	switch status {
+	case 0:
+		return gates, true
+	case http.StatusForbidden:
+		WriteJSONErrorWithCode(rw, r, status, CodeForbidden, msg)
+	default:
+		WriteJSONError(rw, r, status, msg)
+	}
+	return nil, false
+}
+
+// errDeclaredUnwritableOnBase: a PR-mode PUT whose body declares a tenant
+// the caller may not write on the fresh base (#2857 for #3062's declared
+// tenants). Answered as declaredTenantsWritable's 403.
+var errDeclaredUnwritableOnBase = errors.New("the body declares a tenant the caller may not write on the latest base branch")
+
+// declaredOnBase judges each declared tenant again on the fresh base
+// configDir, as putTenantPRMode's check judges {id}: its metadata there
+// before the write (freshDeclaredWriteScope; skipped when that file cannot
+// be read for it, the post-state then counting the org axis) and as the body
+// proposes it there.
+func declaredOnBase(d *Deps, p *rbac.VerifiedPrincipal, configDir, tenantID, body string, gates []declaredGate) error {
+	for _, g := range gates {
+		pre, judged := freshDeclaredWriteScope(configDir, tenantID, g.id)
+		if judged {
+			if ok, err := freshScopeAllowed(d, p, configDir, g.id, g.pre, pre, true); err != nil || !ok {
+				return orFreshScopeError(err, errDeclaredUnwritableOnBase)
+			}
+		}
+		post := scopePairOf(proposedScopeMeta(configDir, body), g.id)
+		if ok, err := freshScopeAllowed(d, p, configDir, g.id, g.post, post, !judged); err != nil || !ok {
+			return orFreshScopeError(err, errDeclaredUnwritableOnBase)
 		}
 	}
+	return nil
+}
+
+// writeDeclaredUnwritableOnBase answers errDeclaredUnwritableOnBase.
+func writeDeclaredUnwritableOnBase(rw http.ResponseWriter, r *http.Request, err error) bool {
+	if !errors.Is(err, errDeclaredUnwritableOnBase) {
+		return false
+	}
+	WriteJSONErrorWithCode(rw, r, http.StatusForbidden, CodeForbidden, msgDeclaresUnwritableTenant)
 	return true
 }
 
 // putSpliceError refuses a PUT whose declared sections cannot be written into
 // the current file without changing content the body does not declare.
-// Detail names a place only as describePath does.
+// Detail says where only to a caller the file is shown to (fileShown, #3050:
+// one who may read every tenant it declares), and then names a place in a
+// tenant section only as describePath does; any other caller gets
+// msgSpliceDetailWithheld, which says nothing about how the file is written.
 type putSpliceError struct {
 	TenantID string
 	Detail   string
@@ -229,6 +301,11 @@ func (e *putSpliceError) Error() string {
 		"%s); nothing was written. A PUT replaces only the tenant sections its body declares",
 		e.TenantID, configErrorNotRoundTrippable, e.Detail)
 }
+
+// msgSpliceDetailWithheld is putSpliceError's Detail for a caller the
+// current file is not shown to (#3050): which anchors, aliases or blocks it
+// holds is its content.
+const msgSpliceDetailWithheld = "withheld: the file declares a tenant you may not read"
 
 // writePutSpliceError answers a putSpliceError like a refused partial write
 // (writeTenantFileNotLoadable): 409 TENANT_CONFIG_NOT_LOADABLE.
@@ -245,18 +322,38 @@ func writePutSpliceError(rw http.ResponseWriter, r *http.Request, err error) boo
 	return true
 }
 
+// fileShownFunc is fileShown for one request and tenant, on the bytes given:
+// whether a refusal may describe how those bytes are written.
+type fileShownFunc func(data []byte) bool
+
+// putFileShown is the fileShownFunc of r's caller for tenantID.
+func putFileShown(r *http.Request, d *Deps, tenantID string) fileShownFunc {
+	return func(data []byte) bool { return fileShown(r, d, data, tenantID) }
+}
+
 // putSplicer is the gitops.SpliceFunc a PUT hands the writer.
-func putSplicer(tenantID, body string, names gitops.TenantNames) gitops.SpliceFunc {
+func putSplicer(tenantID, body string, names gitops.TenantNames, shown fileShownFunc) gitops.SpliceFunc {
 	return func(base []byte) (string, error) {
-		return spliceDeclaredSections(base, body, tenantID, names)
+		return spliceDeclaredSections(base, body, tenantID, names, shown)
 	}
 }
 
 // spliceDeclaredSections writes body's declared tenant sections into base
 // (see the file comment). An empty base, or one holding nothing but sections
-// the body declares, is replaced by the body as it is. A base whose tenants
-// cannot be read is gitops.ErrSpliceBaseUnparseable.
-func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.TenantNames) (string, error) {
+// the body declares, is replaced by the body as it is.
+//
+// A base it cannot splice into is gitops.ErrSpliceBaseUnparseable, one
+// answer for every such shape (#2405: replaced whole by the body only for a
+// caller with write permission on all tenants): it does not parse, its
+// first document's root is not a mapping or has a key that does not decode,
+// `tenants` is written twice, is an alias or neither a mapping nor null, or
+// the root or `tenants:` has a merge key (`<<`) or a key that is not one
+// tenant id. Through a merge key or an alias a section is declared by
+// another node, so no section of such a file can be replaced on its own.
+//
+// shown decides, on base, whether a refusal may say where the difference is
+// (putSpliceError).
+func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.TenantNames, shown fileShownFunc) (string, error) {
 	_, bodyIDs, bodyPairs, found, err := bodyTenants(body)
 	if !found {
 		return "", fmt.Errorf("%w: YAML must contain a tenants mapping with tenants.%s", gitops.ErrValidation, tenantID)
@@ -273,7 +370,7 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	if len(bytes.TrimSpace(base)) == 0 {
 		return body, nil
 	}
-	refuse := func(detail string) error { return &putSpliceError{TenantID: tenantID, Detail: detail} }
+	refuse := spliceRefusal(base, tenantID, shown)
 
 	docs, err := parseAllDocs(base)
 	if err != nil {
@@ -294,10 +391,7 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 		return "", gitops.ErrSpliceBaseUnparseable
 	}
 	idx, err := rootTenantsIndex(root)
-	if errors.Is(err, errTenantsMergeKey) {
-		return "", refuse("a merge key (<<) at the root of the file")
-	}
-	if err != nil {
+	if err != nil { // a merge key, a key that does not decode, `tenants` twice
 		return "", gitops.ErrSpliceBaseUnparseable
 	}
 	var tenants *yaml.Node
@@ -306,14 +400,9 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	if idx >= 0 {
 		tenants = root.Content[2*idx+1]
 		switch {
-		case tenants.Kind == yaml.AliasNode:
-			return "", refuse("the file's tenants block is an alias")
 		case tenants.Kind == yaml.MappingNode:
 			baseIDs, basePairs, err = tenantsPairs(tenants)
-			if errors.Is(err, errTenantsMergeKey) {
-				return "", refuse("a merge key (<<) in the file's tenants block")
-			}
-			if err != nil {
+			if err != nil { // a merge key, a key that is not one tenant id
 				return "", gitops.ErrSpliceBaseUnparseable
 			}
 		case tenants.Kind == yaml.ScalarNode && tenants.ShortTag() == "!!null":
@@ -378,21 +467,40 @@ func spliceDeclaredSections(base []byte, body, tenantID string, names gitops.Ten
 	if err := enc.Close(); err != nil {
 		return "", refuse("the file could not be written back")
 	}
-	if err := verifySplice(base, buf.Bytes(), body, declared, tenantID, names); err != nil {
+	if err := verifySplice(base, buf.Bytes(), body, declared, tenantID, names, refuse); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
 }
 
-// verifySplice returns a *putSpliceError unless merged keeps base's written
+// spliceRefusal builds a splice's *putSpliceError: its detail as given when
+// shown says base may be described to the caller, msgSpliceDetailWithheld
+// otherwise (a nil shown describes nothing).
+func spliceRefusal(base []byte, tenantID string, shown fileShownFunc) func(detail string) error {
+	described := shown != nil && shown(base)
+	return func(detail string) error {
+		if !described {
+			detail = msgSpliceDetailWithheld
+		}
+		return &putSpliceError{TenantID: tenantID, Detail: detail}
+	}
+}
+
+// verifySplice returns refuse's error unless merged keeps base's written
 // YAML everywhere outside the tenants.<declared> sections — the partial-write
 // invariant (verifyPartialWrite), the replaced unit being a whole declared
 // section — and each declared section of merged decodes to what body's does.
-// Not relaxed for the splice: the anchors are compared over the whole file,
-// and an alias outside the declared sections must resolve, in merged, to a
-// node written as its target in base is.
-func verifySplice(base, merged []byte, body string, declared map[string]bool, tenantID string, names gitops.TenantNames) error {
-	refuse := func(detail string) error { return &putSpliceError{TenantID: tenantID, Detail: detail} }
+//
+// Both files are compared as PARSED BACK, so what a reader of merged gets is
+// what is compared: an alias outside the declared sections must resolve, in
+// merged, to a node written as its target in base is, wherever that target
+// now is (an anchor the body drops, redefines or changes the value of is
+// caught there, or merged does not parse). Unlike verifyPartialWrite, the
+// set of anchors the file defines is NOT compared: a body may add, drop or
+// rename anchors inside its own sections (a whole section is its to write),
+// and every effect that has on content it does not declare is an alias
+// outside them resolving differently, which the node comparison refuses.
+func verifySplice(base, merged []byte, body string, declared map[string]bool, tenantID string, names gitops.TenantNames, refuse func(string) error) error {
 	at := func(path []string) error { return refuse(describePath(path, tenantID, names)) }
 	bDocs, err := parseAllDocs(base)
 	if err != nil {
@@ -404,9 +512,6 @@ func verifySplice(base, merged []byte, body string, declared map[string]bool, te
 	}
 	if len(bDocs) != len(mDocs) || len(bDocs) == 0 {
 		return refuse(fmt.Sprintf("the number of YAML documents (%d, would be %d)", len(bDocs), len(mDocs)))
-	}
-	if !reflect.DeepEqual(anchorsOf(bDocs), anchorsOf(mDocs)) {
-		return refuse("the anchors the file defines (the write would remove, add or reorder one)")
 	}
 	c := &nodeCompare{tenantID: tenantID, seen: map[[2]*yaml.Node]bool{}}
 	for i := 1; i < len(bDocs); i++ {
@@ -515,9 +620,62 @@ func verifySplice(base, merged []byte, body string, declared map[string]bool, te
 			return at(path)
 		}
 		var want, have any
-		if bodyPairs[i][1].Decode(&want) != nil || m.Decode(&have) != nil || !reflect.DeepEqual(want, have) {
+		if bodyPairs[i][1].Decode(&want) != nil || m.Decode(&have) != nil || !decodedEqual(want, have) {
 			return at(path)
 		}
 	}
 	return nil
+}
+
+// decodedEqual is reflect.DeepEqual for two yaml.v3 decodes, except that a
+// NaN (`.nan`) equals a NaN: the same section decoded twice is equal. A map
+// key that is NaN cannot be looked up, so such a map is unequal (refused,
+// fail closed).
+func decodedEqual(a, b any) bool {
+	return valuesEqual(reflect.ValueOf(a), reflect.ValueOf(b))
+}
+
+func valuesEqual(a, b reflect.Value) bool {
+	if !a.IsValid() || !b.IsValid() {
+		return a.IsValid() == b.IsValid()
+	}
+	if a.Type() != b.Type() {
+		return false
+	}
+	switch a.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if a.IsNil() || b.IsNil() {
+			return a.IsNil() == b.IsNil()
+		}
+		return valuesEqual(a.Elem(), b.Elem())
+	case reflect.Float32, reflect.Float64:
+		x, y := a.Float(), b.Float()
+		return x == y || (math.IsNaN(x) && math.IsNaN(y))
+	case reflect.Slice, reflect.Array:
+		if a.Kind() == reflect.Slice && a.IsNil() != b.IsNil() {
+			return false
+		}
+		if a.Len() != b.Len() {
+			return false
+		}
+		for i := 0; i < a.Len(); i++ {
+			if !valuesEqual(a.Index(i), b.Index(i)) {
+				return false
+			}
+		}
+		return true
+	case reflect.Map:
+		if a.IsNil() != b.IsNil() || a.Len() != b.Len() {
+			return false
+		}
+		for _, k := range a.MapKeys() {
+			bv := b.MapIndex(k)
+			if !bv.IsValid() || !valuesEqual(a.MapIndex(k), bv) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(a.Interface(), b.Interface())
+	}
 }
