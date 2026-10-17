@@ -2485,6 +2485,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     * #2291 — no ``_routing*`` key, whatever its value (below). A
       ``_routing*`` key gets that rule's line only, never a second one from
       the value rule.
+    * #3045 — any other ``_`` key under ``defaults:`` whose value decodes
+      is a WARN: no ``_`` key is a threshold (the exporter makes no row of
+      one) and no other reader reads one there, so it is dead config — a
+      root ``_metadata: 1`` used to fail served-values and now says nothing
+      anywhere else. A value that does not decode keeps the value rule's
+      FAIL line only.
     * #2386 — a root carrier with no ``defaults:`` mapping (the key absent,
       or present with no value) whose top level holds a key the merge takes
       (``_keys_acting_when_merged``: a threshold, or a reserved key such as
@@ -2572,6 +2578,14 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                 if isinstance(k, str) and k.startswith("_routing")]
     if details:
         return _make_result("root_defaults", FAIL, details)
+    dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "
+            "(threshold-exporter makes no row of one, #3045) and no other reader reads "
+            "`_` keys under `defaults:`; delete it, or drop the `_` to make it a threshold"
+            for k in block
+            if isinstance(k, str) and k.startswith("_") and not k.startswith("_routing")
+            and k not in dropped]
+    if dead:
+        return _make_result("root_defaults", WARN, dead)
     return _make_result("root_defaults", PASS, [
         f"{rel}: {len(block)} key(s) under `defaults:`, every value a number "
         f"threshold-exporter decodes, no `_routing*` key"])

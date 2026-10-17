@@ -818,10 +818,9 @@ func optionalOverridesCanDeclare(key string) bool {
 //     delivers the key (`_state_<f>` as a schedule at one level, a scalar
 //     below). Reported by subtreeReservedKeys instead (#2388).
 //  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
-//     row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`, and a
-//     `_` key the registry does not list, #3045), whether declared or not:
-//     `_silent_bogus` or `_myth2` declared at the root still serves nothing
-//     (measured), so the advice cannot help. Also reported by
+//     row: every `_` key (#3045), whether declared or not — `_silent_bogus`,
+//     `_myth2` or `_namespaces` declared at the root still serves nothing, so
+//     the advice cannot help. Also reported by
 //     subtreeReservedKeys (#2388).
 //  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
 //     resolver's own disable test, on the default and every window). It is

@@ -2834,6 +2834,40 @@ class TestRootDefaultsValues:
         assert "[FAIL] root_defaults" in out, out
 
 
+class TestRootDefaultsUnderscoreKeys:
+    """#3045: no `_` key under the root `defaults:` is a threshold, and no
+    other reader reads one there — a number written under one is dead config.
+    `_metadata: 1` there used to fail served-values (a reserved key owning
+    threshold rows) and now has no other signal."""
+
+    @staticmethod
+    def _tree(tmp_path, body):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("defaults:\n  container_cpu: 80\n" + body, encoding="utf-8")
+        (d / "tenant-x.yaml").write_text("tenants:\n  tenant-x:\n    container_cpu: \"70\"\n",
+                                         encoding="utf-8")
+        return d
+
+    @pytest.mark.parametrize("key", ["_metadata", "_namespaces", "_myth", "_state_maintenance"])
+    def test_a_number_under_an_underscore_key_warns(self, tmp_path, key):
+        r = vc.check_root_defaults(str(self._tree(tmp_path, f"  {key}: 1\n")))
+        assert r["status"] == vc.WARN, r
+        assert r["details"] == [f"_defaults.yaml: `defaults.{key}` is read by nothing — no `_` key "
+                                "is a threshold (threshold-exporter makes no row of one, #3045) and "
+                                "no other reader reads `_` keys under `defaults:`; delete it, or drop "
+                                "the `_` to make it a threshold"]
+
+    def test_a_value_that_does_not_decode_keeps_its_fail_line_only(self, tmp_path):
+        r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata: owner\n")))
+        assert r["status"] == vc.FAIL, r
+        assert not any("read by nothing" in d for d in r["details"]), r
+
+    def test_control_no_underscore_key_passes(self, tmp_path):
+        r = vc.check_root_defaults(str(self._tree(tmp_path, "")))
+        assert r["status"] == vc.PASS, r
+
+
 class TestRootDefaultsWrapper:
     """Check 10 (#2386): a root `_defaults.yaml` with no `defaults:` mapping
     whose top level holds a threshold FAILs.
