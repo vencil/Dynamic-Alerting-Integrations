@@ -980,14 +980,21 @@ func batchTaskFunc(d *Deps, ops []BatchOperation, email string, p *rbac.Verified
 }
 
 // batchTaskError is the Task.Error of an async batch run: nil when it was
-// written cleanly. A batch that IS committed never says nothing was written
-// (#2900 F3).
+// written cleanly. Whether it says nothing was written is decided by what
+// run.Err is, not added on top of every failure: a batch that IS committed
+// never says it (#2900 F3), and neither does one its context cancelled or
+// timed out (#1535) — that is msgWriteCancelled, as the sync 503 and the
+// per-op results say, because the context can end after git moved the ref.
+// Order matters: a run the writer saw committed is the committed text even
+// when its cause is the context's.
 func batchTaskError(run directBatchRun) error {
 	switch {
 	case run.Rejected:
 		return errBatchRejectedTask
 	case run.Committed != "":
 		return errors.New(msgBatchCommittedIncomplete + " (commit " + run.Committed + ")")
+	case isWriteCancelled(run.Err):
+		return errors.New(msgWriteCancelled)
 	case run.Err != nil:
 		// The fixed per-op text, not err: err may carry server paths.
 		return errors.New("batch failed, nothing was written: " + run.Results[0].Message)

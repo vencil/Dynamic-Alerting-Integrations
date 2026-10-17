@@ -29,8 +29,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/async"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
+	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -281,10 +283,8 @@ func TestMsgWriteCancelled_DoesNotClaimNothingWritten(t *testing.T) {
 }
 
 // The batch answers a cancelled or timed-out run with msgWriteCancelled, sync
-// (503) and per op alike — but a batch the writer saw committed is never that
-// answer, even when the cause it carries is the context's: it is the 409 that
-// says it WAS committed.
-func TestBatch_CancelledAnswersAndCommittedWins(t *testing.T) {
+// (503) and per op alike, wrapped or not.
+func TestBatch_CancelledAnswers(t *testing.T) {
 	t.Parallel()
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded,
 		fmt.Errorf("git update-ref: %w", context.DeadlineExceeded)} {
@@ -301,16 +301,103 @@ func TestBatch_CancelledAnswersAndCommittedWins(t *testing.T) {
 			t.Errorf("%v: op result message = %q, want %q", err, res.Message, msgWriteCancelled)
 		}
 	}
+}
 
-	committed := &gitops.BatchCommittedError{Commit: "abc123", Cause: context.DeadlineExceeded}
-	w := httptest.NewRecorder()
-	writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, committed)
-	var got ErrorResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
+// A batch the writer saw committed is never the cancelled answer. Two
+// separate guarantees, one subtest each:
+//   - ordering: writeBatchFailure (sync) and batchTaskError (async) match the
+//     committed case before the cancelled one, so an error that IS both — a
+//     *gitops.BatchCommittedError joined with a context error — gets the 409 /
+//     task text saying it WAS committed. Moving the cancelled case first turns
+//     this subtest red.
+//   - contract: gitops.BatchCommittedError unwraps to ErrConflict only, not to
+//     its Cause, so a committed batch whose cause is the context's is not
+//     isWriteCancelled at all. This subtest does not exercise the ordering:
+//     such an error could never reach the cancelled case whatever the order.
+func TestBatch_CommittedWinsOverCancelled(t *testing.T) {
+	t.Parallel()
+	t.Run("ordering: an error both committed and cancelled answers committed", func(t *testing.T) {
+		t.Parallel()
+		both := errors.Join(&gitops.BatchCommittedError{Commit: "abc123", Cause: errors.New("sync failed")}, context.DeadlineExceeded)
+		var committed *gitops.BatchCommittedError
+		if !errors.As(both, &committed) || !isWriteCancelled(both) {
+			t.Fatalf("precondition: %v must match both the committed and the cancelled case", both)
+		}
+		w := httptest.NewRecorder()
+		writeBatchFailure(w, httptest.NewRequest("POST", "/api/v1/tenants/batch", nil), &Deps{}, both)
+		var got ErrorResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != http.StatusConflict || got.Error != msgBatchCommittedIncomplete {
+			t.Errorf("sync answer = %d %q, want 409 %q", w.Code, got.Error, msgBatchCommittedIncomplete)
+		}
+		run := directBatchRun{Results: []BatchResult{{TenantID: "t-a", Status: "ok"}}, Err: both, Committed: "abc123"}
+		if te := batchTaskError(run); te == nil || !strings.Contains(te.Error(), msgBatchCommittedIncomplete) || strings.Contains(te.Error(), msgWriteCancelled) {
+			t.Errorf("task error = %v, want the committed text (abc123)", te)
+		}
+	})
+	t.Run("contract: BatchCommittedError does not unwrap to its cause", func(t *testing.T) {
+		t.Parallel()
+		committed := &gitops.BatchCommittedError{Commit: "abc123", Cause: context.DeadlineExceeded}
+		if isWriteCancelled(committed) {
+			t.Errorf("isWriteCancelled(%v) = true: BatchCommittedError must not unwrap to its Cause", committed)
+		}
+	})
+}
+
+// #1535 round 2: an async batch's Task.Error says nothing was written only
+// when that is what its error means. Cancelled or timed out, it is
+// msgWriteCancelled alone (as the sync 503 and the per-op results) — the
+// context can end after git moved the ref. Any other failure keeps the
+// "nothing was written" prefix (end to end on a conflict:
+// TestBatchConflict_SyncAndAsyncSayNothingWasWritten).
+func TestBatchTaskError_CancelledDoesNotClaimNothingWritten(t *testing.T) {
+	t.Parallel()
+	for _, err := range []error{context.Canceled, context.DeadlineExceeded,
+		fmt.Errorf("git update-ref: %w", context.DeadlineExceeded)} {
+		res := batchErrorResult("t-a", err, true)
+		te := batchTaskError(directBatchRun{Results: []BatchResult{res}, Err: err})
+		if te == nil || te.Error() != msgWriteCancelled || strings.Contains(te.Error(), "nothing was written") {
+			t.Errorf("%v: task error = %v, want exactly %q", err, te, msgWriteCancelled)
+		}
 	}
-	if w.Code != http.StatusConflict || got.Error != msgBatchCommittedIncomplete {
-		t.Errorf("committed batch with a deadline cause = %d %q, want 409 %q", w.Code, got.Error, msgBatchCommittedIncomplete)
+	other := errors.New("git commit: exit status 1")
+	res := batchErrorResult("t-a", other, true)
+	if te := batchTaskError(directBatchRun{Results: []BatchResult{res}, Err: other}); te == nil || !strings.Contains(te.Error(), "nothing was written") {
+		t.Errorf("non-cancelled failure: task error = %v, want it to keep \"nothing was written\"", te)
+	}
+}
+
+// End to end: an async batch whose own deadline (WriteTimeout) is already
+// over when it runs fails with msgWriteCancelled, not "nothing was written".
+func TestAsyncBatch_TimedOutTaskSaysWriteCancelled(t *testing.T) {
+	t.Parallel()
+	const tenantYAML = "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
+	dir := seedGitTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 80\n", "t-a.yaml": tenantYAML})
+	tasks := async.NewManager(1)
+	defer func() { _ = tasks.Close() }()
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t), WriteMode: WriteModeDirect,
+		Tasks: tasks, WriteTimeoutDur: time.Nanosecond}
+	req := httptest.NewRequest("POST", "/api/v1/tenants/batch?async=true",
+		bytes.NewBufferString(`{"operations":[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.Header.Set("X-Forwarded-Groups", "admins")
+	w := httptest.NewRecorder()
+	d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+	var acc struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &acc); err != nil || acc.TaskID == "" {
+		t.Fatalf("no task id: %d %s", w.Code, w.Body.String())
+	}
+	task := pollUntilTerminal(t, tasks, acc.TaskID, 20*time.Second)
+	if task.Status != async.TaskFailed || task.Error != msgWriteCancelled || strings.Contains(task.Error, "nothing was written") {
+		t.Errorf("task = status %q error %q, want failed with exactly %q", task.Status, task.Error, msgWriteCancelled)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "t-a.yaml")); string(got) != tenantYAML {
+		t.Errorf("the timed-out batch changed the tenant file:\n%s", got)
 	}
 }
 
