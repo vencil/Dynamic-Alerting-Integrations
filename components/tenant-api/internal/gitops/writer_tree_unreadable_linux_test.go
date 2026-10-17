@@ -70,7 +70,9 @@ var unreadableShapes = []struct {
 // once, as a STORE FAULT (D3c: none of these is content git holds), naming
 // exactly the entry, and nothing is written. The PR modes judge
 // the base git holds, where none of these untracked shapes exists; their
-// verdict is pinned with a committed shape (writer_tree_unreadable_test.go).
+// verdict is pinned with a committed shape (writer_tree_unreadable_test.go),
+// and that they accept an untracked one by
+// TestTreeUnreadable_PRModesJudgeTheGitBaseNotTheServingTree (#2972).
 func TestTreeUnreadable_ShapesRefuseEveryDirectPath(t *testing.T) {
 	for _, shape := range unreadableShapes {
 		for _, mode := range directTreeModes {
@@ -188,9 +190,11 @@ func TestTreeUnreadable_UnreadableTargetIsRefusedForEveryCaller(t *testing.T) {
 
 // D3c-2: a store fault and a dangling link elsewhere at once — the store
 // fault wins (the server must be repaired first), naming both entries; in a
-// batch it fails the batch whole rather than per op.
+// batch it fails the batch whole rather than per op. The PR modes are not
+// here: they judge the base as git holds it (#2972), where neither of these
+// untracked entries exists.
 func TestTreeUnreadable_StoreFaultWinsOverDanglingLink(t *testing.T) {
-	for _, mode := range append(append([]string{}, directTreeModes...), "WritePR") {
+	for _, mode := range directTreeModes {
 		t.Run(mode, func(t *testing.T) {
 			dir := seedTreeRepo(t, map[string]string{"mx-t.yaml": tenantBody("mx-t")})
 			if err := os.Symlink("missing-target.yaml", filepath.Join(dir, "gone.yaml")); err != nil {
@@ -329,5 +333,53 @@ func TestWriter_StoreUnreadableUnknownUntilAWalkSucceeds(t *testing.T) {
 	later := w.StoreUnreadable()
 	if !later.OK || later.Counts[cfg.UnreadableSpecialFile] != 2 || !later.LastSuccess.Equal(first.LastSuccess) {
 		t.Errorf("after a failed walk = %+v, want the last counts and the timestamp unchanged (%v)", later, first.LastSuccess)
+	}
+}
+
+// #2972: in PR mode a write and a batch judge the SAME tree — the fresh base
+// as git holds it, which is what the service serves once the PR merges. An
+// entry the serving working tree holds and git does not (an uncommitted
+// FIFO, or one .gitignore hides) is on neither tree, so WritePR and
+// WritePRBatch both accept, and both push a branch carrying the body.
+func TestTreeUnreadable_PRModesJudgeTheGitBaseNotTheServingTree(t *testing.T) {
+	for _, shape := range []struct {
+		name  string
+		files map[string]string
+	}{
+		{"untracked", nil},
+		{"gitignored", map[string]string{".gitignore": "stuck.yaml\n"}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			got := map[string]error{}
+			for _, mode := range []string{"WritePR", "WritePRBatch"} {
+				// prb-t is new, so the write changes the tree.
+				files := map[string]string{"prb-o.yaml": tenantBody("prb-o")}
+				for k, v := range shape.files {
+					files[k] = v
+				}
+				dir := seedTreeRepo(t, files)
+				mkfifoReleased(t, filepath.Join(dir, "stuck.yaml"))
+				if st := gitOut(t, dir, "ls-files", "--", "stuck.yaml"); st != "" {
+					t.Fatalf("fixture: stuck.yaml is tracked: %q", st)
+				}
+				done := make(chan error, 1)
+				go func() { done <- treeVerdictVia(t, mode, NewWriter(dir, dir), "prb-t") }()
+				select {
+				case got[mode] = <-done:
+				case <-time.After(30 * time.Second):
+					t.Fatalf("%s: blocked", mode)
+				}
+				if got[mode] == nil && gitOut(t, dir, "ls-remote", "origin", "refs/heads/tenant-api/*") == "" {
+					t.Errorf("%s: accepted, but no branch reached origin", mode)
+				}
+				if fi, err := os.Lstat(filepath.Join(dir, "stuck.yaml")); err != nil || fi.Mode()&os.ModeNamedPipe == 0 {
+					t.Errorf("%s: the serving tree's FIFO was touched (err=%v)", mode, err)
+				}
+			}
+			if got["WritePR"] != nil || got["WritePRBatch"] != nil {
+				t.Fatalf("WritePR err = %v, WritePRBatch err = %v; want both nil (the git base is readable)",
+					got["WritePR"], got["WritePRBatch"])
+			}
+		})
 	}
 }
