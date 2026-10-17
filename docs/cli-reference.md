@@ -121,7 +121,7 @@ da-tools <command> --help
 | `cutover` | Shadow Monitoring 一鍵切換 | `--tenant <name>` |
 | `blind-spot` | 掃描 cluster targets 與 tenant config 交叉比對盲區 | `--config-dir <dir>` |
 | `maintenance-scheduler` | 評估排程式維護窗口，自動建立 Alertmanager silence | `--config-dir <dir>` |
-| `backtest` | PR threshold 變更歷史回測 | `--git-diff` 或 `--config-dir` + `--baseline` |
+| `backtest` | PR threshold 變更歷史回測 | `--config-dir` + `--baseline` 或 `--tenant` |
 | `shadow-verify` | Shadow Monitoring 就緒度與收斂性驗證（preflight / runtime / convergence） | `<phase>` |
 | `byo-check` | BYO Prometheus & Alertmanager 整合驗證 | `<target>` |
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |
@@ -685,38 +685,55 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 **語法**
 
 ```bash
-da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
+da-tools backtest [--config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
 ```
 
 **必需參數**
 
 選擇一種模式：
 
-1. **Git Diff 模式**：`--git-diff`
-   （在 Git repo 內執行，比對 `HEAD~1` 與工作樹的 `conf.d/`）
-   由 git 自己把 `HEAD~1` checkout 到暫存目錄（以暫存 index 跑 `git read-tree --reset -u HEAD~1`，`--work-tree` 指向暫存目錄；partial clone 缺的 blob 一次批次抓回；不動 repo 的 index、工作樹與 `.git/worktrees`；LFS 不下載），取其中 cwd 旁的 `conf.d/`，與工作樹的 `conf.d/` 一起交給 exporter 讀，比法與目錄比對模式相同（見下一項；[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）。不解析 `git diff` 的文字，所以任何檔名（含換行、引號、反斜線、空白、非 UTF-8）、子目錄、改名、刪除、新增都照 exporter 的讀法處理，租戶取自 `tenants:`，不取自檔名；換行轉換（`core.autocrlf`、`eol=crlf`）、symlink 的寫法、`export-subst`（checkout 不套用）都與一般 checkout 相同；`conf.d/` 本身是 symlink、或其中的檔是指到 `conf.d/` 外的相對 symlink，都照 checkout 的樣子解析。暫存目錄在結束時移除，收到 SIGTERM／SIGINT 也一樣。`HEAD~1` 沒有 `conf.d/`（這個 PR 才新增），或其中沒有 exporter 會讀的 config 檔（例如只有 README、只有隱藏檔）時，那一邊視同沒有任何租戶；工作樹那一邊也一樣。`HEAD~1` 的 `conf.d/` 本身、其中或其上層有 submodule、不是 checkout 內的目錄、exporter 會讀的檔經 symlink 解析後落在 checkout 之外（絕對路徑、一連串逃出 repo 的 link；指向外面的目錄 link exporter 不跟，不算），或 exporter 會讀的檔在 `HEAD~1` 是 Git LFS pointer（本工具不抓 LFS 內容）時，結束碼 2（`git_diff_unavailable`），訊息以 `HEAD~1:<路徑>` 指名，開頭說明是 git 跑不起來還是拒讀；git 失敗時附上 git 自己的訊息（例如磁碟滿、filter 失敗），只有沒有 `HEAD~1` 時才提示 shallow clone 要 `fetch-depth: 2`；exporter 讀不了 `HEAD~1` 的檔時同樣以 `HEAD~1:<路徑>` 指名，不出現暫存路徑。
-   ⚠️ 需要 `git` 在 PATH 上、需要 da-guard（同目錄比對模式），且工作目錄是含 `conf.d/` 的目錄（工具以 cwd 為基準讀 `HEAD~1:./conf.d`；客戶佈局下就是 repo 根）。CI 的 shallow clone 要 `fetch-depth: 2` 才有 `HEAD~1`。容器內要把含 `conf.d/` 的目錄掛進來並用 `-w` 切到掛載點（例如 `-v $(pwd):/workspace -w /workspace`）。`ghcr.io/vencil/da-tools` 映像**沒有內建 git**，在該映像內跑這個模式時 git 跑不起來——請在裝有 git 的環境執行
-
-2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
+1. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
    兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐條 `/metrics` series（名稱加完整 label set）比實際送出的值，不以門檻 key 為單位（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 series 或租戶（關掉、新增、移除、改到另一個 severity）那一邊記為無值。值比對整個 UTC 日：每條 series 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。severity 是 series 的一個 label，決定由哪支告警比較這一列（[#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)）：同一個值改到另一個 severity（`70` → `70:critical`）是兩列——warning 那條不再送出（`70` → 無值，該告警被靜默），critical 那條開始送出（無值 → `70`，新啟用）。同一條 series 改由另一個 key 送出（例如 `90:critical` 改寫成 `disable` 加 `<base>_critical: "90"`）不是變更。每一列的 `metric` 是比較它的告警的 key（critical row 為 `<metric_key>_critical`；帶維度的 row 再接上維度，例如 `mysql_connections_critical{db="a"}`，`--tenant` 也一樣），`keys` 列出兩邊在該列成立的時段內送出它的門檻 key；`keys` 不只是 `metric` 本身時，文字與 Markdown 報告在該列後註明 `(served by: ...)`。severity 後綴只能是 `warning` 或 `critical`，不分大小寫（`70:Critical` 即 critical）；其他後綴（`70:high`、空的 `70:`）讓整個值讀不懂，exporter 改送平台預設值、severity 為 warning（[#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)），所以 `70` → `70:high` 是「70 → 預設值」的一列值變更，兩邊都是讀不懂的值（`70:high` → `60:high`）則沒有變更；`--tenant` 只看寫法看不出預設值，這種值不回測（`value '...': this backtest cannot read it the way the exporter does`）。每一列由哪支告警比較，取自該列的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（規則只選 `severity="warning"`／`"critical"`；#3071 之後的 exporter 不送這種 row，`DA_GUARD_BINARY` 指向更舊的 da-guard 時才可能出現，例如把 `60:high` 照寫送成 `severity="high"`）沒有告警比較，不回測（`severity '...' is selected by no threshold rule`）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不算一條 series，舊名底下的資料不算這個門檻的資料。告警 key 在 observed-map 沒有條目、也不是 KNOWN_DEFERRED 的 row（例如 mongodb 沒有 `_critical` 告警，它的 critical row）沒有出廠告警比較，照列、不回測。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。
 
-3. **單一變更模式**：`--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
+2. **單一變更模式**：`--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
    （不讀任何配置檔，直接回測手給的一筆變更）
-   `--tenant` 須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個，否則結束碼 2；租戶 id 須是合法的 DNS-1123 label。值的讀法見下方「回測查什麼」。同時給了 `--git-diff` 或 `--config-dir` 時以它們為準，這幾個旗標只做參數檢查。
+   `--tenant` 須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個，否則結束碼 2；租戶 id 須是合法的 DNS-1123 label。值的讀法見下方「回測查什麼」。同時給了 `--config-dir` 時以它為準，這幾個旗標只做參數檢查。
 
 **回測查什麼**（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017)、[#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002)）
 
 - 每筆變更只查一次 Prometheus：該 key 的告警拿來和門檻比較的那條 recording rule（[`metric_observed_map.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/metric_observed_map.yaml) 的 `observed_series`），加上 `{tenant="<租戶>"}`。越界照告警的比較方向計數：`>` 的告警數高於門檻的點，`<` 的告警（下界，例如 `db2_bufferpool_hit_ratio`、`kafka_broker_count`）數低於門檻的點。先前一律以 `>` 計數，並依序猜 `<key>`、`tenant:<key>:max`、`<key>{namespace=...}` 三種名稱——將近一半的 key，告警比的不是其中任何一條。
 - `--tenant` 給的是寫法上的 key 與值：退役拼法先經別名表換成正名（例如 `mysql_cpu` → `mysql_threads_running`）。給含 `{` 的 key 時不回測（`dimensioned key`）。值照 exporter 的讀法：最後一個 `:` 前是數字、後是 severity（`70:critical`；沒寫是 warning），`<base>_critical` key 的整個值就是數字。這一筆編輯照目錄比對的同一條規則換成 `/metrics` 的列（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）：每一邊是它那個 severity 的 row（critical 由 `<key>_critical` 的告警比），所以 `70` → `95:critical` 是兩列（warning 那列 `70` → 無值、critical 那列無值 → `95`），`70` → `70` 沒有變更；每列的 `metric` 是告警 key、值只留數字，`keys` 是給的 key。沒有出廠告警比較的 row（告警 key 在 observed-map 沒有條目、也不是 KNOWN_DEFERRED，例如 mongodb 沒有 `_critical` 告警）照列、不回測，所以 mongodb 的 `70` → `70:critical` 是 warning 告警被靜默（MEDIUM）加上一列不回測的 critical row。值這裡無法照 exporter 的讀法讀（`7O` 這種 exporter 也讀不懂的值，exporter 會改用預設值或丟掉那一列，從值本身看不出來；另有幾種 exporter 讀得懂、但這裡保守不讀的寫法，例如 `1_000`、`0x1p4`）時照寫法列一列、不回測。
-- 下列變更標為 `not_backtested`（風險 `UNKNOWN`、不影響結束碼、不查 Prometheus），`backtest` 為 `skipped: <理由>`、訊息為 `Not backtested: <理由>`：observed-map 沒有該 key（沒有出廠告警比較它；`container_cpu` 等 KNOWN_DEFERRED key 的告警比的是 observed-map 不收錄的 version-aware recording rule，理由另寫）；條目無法回放（待人工確認、複合告警沒有單一 series、方向未解析、不是 per-tenant series）；租戶 id 含 PromQL selector 照寫放不進去的字元（`"`、`\`、控制字元，或不是 UTF-8——目錄比對與 `--git-diff` 的租戶是 exporter 的 `tenants:` key，exporter 不以租戶 id 規則擋它；先前會組出不合法的 PromQL，以 `query_error` 結束碼 2）。
+- 下列變更標為 `not_backtested`（風險 `UNKNOWN`、不影響結束碼、不查 Prometheus），`backtest` 為 `skipped: <理由>`、訊息為 `Not backtested: <理由>`：observed-map 沒有該 key（沒有出廠告警比較它；`container_cpu` 等 KNOWN_DEFERRED key 的告警比的是 observed-map 不收錄的 version-aware recording rule，理由另寫）；條目無法回放（待人工確認、複合告警沒有單一 series、方向未解析、不是 per-tenant series）；租戶 id 含 PromQL selector 照寫放不進去的字元（`"`、`\`、控制字元，或不是 UTF-8——目錄比對的租戶是 exporter 的 `tenants:` key，exporter 不以租戶 id 規則擋它；先前會組出不合法的 PromQL，以 `query_error` 結束碼 2）。
 - ⚠️ 已知近似：回放的是告警的比較運算元，不是告警本身——`for:`、維護期過濾、複合 AND 告警的其他條件都不模擬，所以計出的是「比較成立的點數」，不等於告警實際觸發的次數。`--tenant` 只看給它的那一個 key：看不到同一條 series 是否另由別的 key 送出、租戶有沒有同 metric 的帶維度 row（門檻的 `max by(tenant)` 不模擬），也看不到 `<base>` 有沒有在根目錄 `defaults:` 宣告。
+
+**`--git-diff` 已移除（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）**
+
+`--git-diff` 曾在工具內自行取出 `HEAD~1` 的 `conf.d/` 再比對；改成由呼叫端自己 checkout PR 的 base，再以目錄比對模式比兩棵樹。仍帶 `--git-diff` 的呼叫以結束碼 2 結束（`--json` 的 envelope `reason` 為 `git_diff_removed`），訊息寫明改用的指令。
+
+```bash
+# 舊（已移除）
+python3 scripts/tools/ops/backtest_threshold.py --git-diff --prometheus <url>
+
+# 本機：把上一個 commit checkout 到另一個路徑，再比兩棵 conf.d/
+git worktree add /tmp/backtest-base HEAD~1
+python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
+  --baseline /tmp/backtest-base/<repo-path>/conf.d --prometheus <url>
+git worktree remove /tmp/backtest-base
+
+# CI（GitHub Actions）：PR base 另外 checkout 到一個路徑
+#   - uses: actions/checkout@v6
+#     with: { ref: ${{ github.event.pull_request.base.sha }}, path: .backtest-base }
+python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
+  --baseline "$GITHUB_WORKSPACE/.backtest-base/<repo-path>/conf.d" --prometheus <url>
+```
+
+`<repo-path>` 是從 repo 根到 `conf.d/` 所在目錄的路徑（客戶佈局下 `conf.d/` 在 repo 根，就是 `.`）。base 那棵樹要有 exporter 會讀的 config 檔（至少一份 `_defaults.yaml`），否則 da-guard 拒讀、結束碼 2（`served_values_unavailable`）；PR 第一次新增 `conf.d/` 時沒有可比的 base。
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--git-diff` | Git Diff 模式：比對 `HEAD~1` 與工作樹的 `conf.d/`，兩棵都由 exporter 讀（需要 git 與 da-guard，見上方「必需參數」） | false |
 | `--config-dir <DIR>` | 目錄比對模式：變更後的配置目錄（須搭配 `--baseline`） | （無） |
 | `--baseline <DIR>` | 目錄比對模式：變更前的配置目錄（須搭配 `--config-dir`） | （無） |
 | `--tenant <ID>` | 單一變更模式：租戶 id（須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個） | （無） |
@@ -740,18 +757,11 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <
 
 Prometheus 連得上、但查詢本身失敗（HTTP 400／503、逾時、回 `error` 狀態），該變更標為 `query_error`（風險 `UNKNOWN`），訊息為 `Prometheus query failed: <錯誤說明>`（HTTP 錯誤時是狀態行，例如 `HTTP Error 400: Bad Request`，不含 Prometheus 回應 body 裡的 `error`）（控制字元換成 `?`、過長截斷），其他變更照跑（[#3059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3059)；先前被報成 `no_data`、結束碼 0）。報告多一個計數 `query_error`；文字報告印 `Query error: N`，Markdown 註明幾筆沒量成。有任何一筆 `query_error` 時，`--json` 頂層帶 `status: "partial"`、`reason: "query_error"`（全部量成時不帶 `status`，與先前相同），結束碼為 2。
 
-`-o/--output` 與 `--markdown-output` 每一條結束路徑都會寫（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)），例外如下：在檢查輸出路徑之前就結束的參數錯誤（`--lookback` 不可用、`--tenant` 缺參數或不合法、沒有變更來源），以及輸出路徑本身寫不進去；另外，未捕捉的例外（rc 2，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）與通過檢查之後才發生的寫入失敗也不保證寫出。結束碼為 2 時不要讀輸出檔：其中可能是上一次執行留下的內容。`-o` 與 `--markdown-output` 指向同一個檔時，後寫的 Markdown 會蓋掉 JSON。`-o` 寫的是這次 `--json` 會印的同一份 JSON，也就是完整報告，或是 `skipped`／`no_changes`／`caller_error` envelope。沒有回測時，`--markdown-output` 寫一段簡短說明，標題與完整報告相同，內文為 `Backtest not run: <原因>`，原因是 Prometheus 不可用、沒有門檻變更，或 ``caller error `<reason>` ``；有 custom-alert recipe 租戶時，照舊在後面接上 recipe 區塊。先前只有完整報告那條路徑會寫 `-o`；`--skip-if-unavailable` 與沒有變更這兩條，只在有 recipe 租戶時才寫 markdown。CI 以檔案是否非空決定要不要更新 PR 留言，所以留言會停在上一次的結果。
+`-o/--output` 與 `--markdown-output` 每一條結束路徑都會寫（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)），例外如下：在檢查輸出路徑之前就結束的參數錯誤（`--lookback` 不可用、`--tenant` 缺參數或不合法、沒有變更來源、給了已移除的 `--git-diff`），以及輸出路徑本身寫不進去；另外，未捕捉的例外（rc 2，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）與通過檢查之後才發生的寫入失敗也不保證寫出。結束碼為 2 時不要讀輸出檔：其中可能是上一次執行留下的內容。`-o` 與 `--markdown-output` 指向同一個檔時，後寫的 Markdown 會蓋掉 JSON。`-o` 寫的是這次 `--json` 會印的同一份 JSON，也就是完整報告，或是 `skipped`／`no_changes`／`caller_error` envelope。沒有回測時，`--markdown-output` 寫一段簡短說明，標題與完整報告相同，內文為 `Backtest not run: <原因>`，原因是 Prometheus 不可用、沒有門檻變更，或 ``caller error `<reason>` ``；有 custom-alert recipe 租戶時，照舊在後面接上 recipe 區塊。先前只有完整報告那條路徑會寫 `-o`；`--skip-if-unavailable` 與沒有變更這兩條，只在有 recipe 租戶時才寫 markdown。CI 以檔案是否非空決定要不要更新 PR 留言，所以留言會停在上一次的結果。
 
 **範例**
 
 ```bash
-# Git Diff 模式——映像沒有 git，請在主機 checkout 上直接跑腳本
-#（與本 repo 的 .github/workflows/backtest.yaml 同一組呼叫），
-# 在含 conf.d/ 的目錄執行；需要 da-guard（DA_GUARD_BINARY 或 PATH）
-python3 scripts/tools/ops/backtest_threshold.py --git-diff \
-  --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \
-  --lookback 7d --skip-if-unavailable
-
 # 目錄比對模式
 da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7d
 ```
@@ -761,8 +771,8 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱），且沒有任何一筆 `query_error`；Prometheus 連不上、git 跑不了、有變更查詢失敗都不是 1，見下列 |
-| `2` | 呼叫端錯誤（`--git-diff` 執行中收到 SIGTERM／SIGINT 時以 shell 的訊號狀態結束，143／130，與 #3111 之前相同，暫存的 `HEAD~1` checkout 會先移除；以下為 2 的情況）：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1——shallow clone 要 `fetch-depth: 2`）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）——參數檢查之後、讀 git／conf.d／observed-map 與查 Prometheus 之前先檢查（父目錄不存在、不是目錄或不可寫，或路徑本身是目錄、是不可寫的檔），帶 `--skip-if-unavailable`、沒有門檻變更時也一樣（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)；先前這兩種情況回 0 且不寫檔），`--json` 的 envelope `reason` 為 `output_unwritable`；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對與 `--git-diff` 模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹（含 `HEAD~1` 那棵）有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119、[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）；observed-map（`metric_observed_map.yaml`）缺檔、讀不了、沒有 key 或有型別不對的條目（帶 `--skip-if-unavailable` 也一樣；`--json` 的 envelope `reason` 為 `observed_map_unavailable`，#3017）；`--tenant` 缺 `--metric` 或缺新舊值、沒有指定變更來源（帶 `--skip-if-unavailable` 也一樣，#3059）；`--tenant` 不是合法的租戶 id（ADR-035 的 DNS-1123 label：小寫英數與 `-`，1–63 字元，首尾須為英數；帶 `--skip-if-unavailable` 也一樣，[#3066](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3066)——先前 `a"b` 會組出不合法的 PromQL、回 0）；任何一筆變更 `query_error`——優先於 HIGH 的 1，帶 `--skip-if-unavailable` 也一樣，因為 Prometheus 連得上（#3059）。`--json` 下這三種參數錯與 Prometheus 連不上都輸出 `caller_error` envelope，`reason` 依序為 `tenant_args_missing`、`no_change_source`、`invalid_tenant_id`、`prometheus_unavailable`；`query_error` 輸出完整報告（`status: "partial"`） |
+| `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱），且沒有任何一筆 `query_error`；Prometheus 連不上、有變更查詢失敗都不是 1，見下列 |
+| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；給了已移除的 `--git-diff`（訊息寫明改用的指令，`--json` 的 `reason` 為 `git_diff_removed`，[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）——參數檢查之後、讀 conf.d／observed-map 與查 Prometheus 之前先檢查（父目錄不存在、不是目錄或不可寫，或路徑本身是目錄、是不可寫的檔），帶 `--skip-if-unavailable`、沒有門檻變更時也一樣（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)；先前這兩種情況回 0 且不寫檔），`--json` 的 envelope `reason` 為 `output_unwritable`；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔或沒有任何 config 檔（帶 `--skip-if-unavailable` 也一樣，#2119）；observed-map（`metric_observed_map.yaml`）缺檔、讀不了、沒有 key 或有型別不對的條目（帶 `--skip-if-unavailable` 也一樣；`--json` 的 envelope `reason` 為 `observed_map_unavailable`，#3017）；`--tenant` 缺 `--metric` 或缺新舊值、沒有指定變更來源（帶 `--skip-if-unavailable` 也一樣，#3059）；`--tenant` 不是合法的租戶 id（ADR-035 的 DNS-1123 label：小寫英數與 `-`，1–63 字元，首尾須為英數；帶 `--skip-if-unavailable` 也一樣，[#3066](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3066)——先前 `a"b` 會組出不合法的 PromQL、回 0）；任何一筆變更 `query_error`——優先於 HIGH 的 1，帶 `--skip-if-unavailable` 也一樣，因為 Prometheus 連得上（#3059）。`--json` 下這三種參數錯與 Prometheus 連不上都輸出 `caller_error` envelope，`reason` 依序為 `tenant_args_missing`、`no_change_source`、`invalid_tenant_id`、`prometheus_unavailable`；`query_error` 輸出完整報告（`status: "partial"`） |
 
 ---
 

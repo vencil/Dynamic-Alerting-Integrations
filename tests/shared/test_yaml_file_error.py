@@ -326,24 +326,6 @@ def fx(tmp_path_factory) -> dict[str, Path]:
         (files / f"{name}.bad.yaml").write_bytes(_dirty(doc))
     out["files"] = files
 
-    # --git-diff needs a repo whose HEAD~1..HEAD touches conf.d/ (ticket recipe)
-    def repo(name: str, doc: bytes) -> Path:
-        r = root / name
-        (r / "conf.d").mkdir(parents=True)
-        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
-                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
-
-        def g(*a: str) -> None:
-            subprocess.run(["git", "-C", str(r), *a], check=True,
-                           capture_output=True, timeout=_TIMEOUT, env=env)
-        g("init", "-q")
-        (r / "conf.d" / "alpha.yaml").write_bytes(doc + b"    mem_usage: 70\n")
-        g("add", "-A"); g("commit", "-qm", "before")
-        (r / "conf.d" / "alpha.yaml").write_bytes(doc)
-        g("add", "-A"); g("commit", "-qm", "after")
-        return r
-    out["repo_ok"] = repo("repo_ok", CLEAN_DOC)
-    out["repo_bad"] = repo("repo_bad", XFF_DOC)
     return out
 
 
@@ -395,10 +377,6 @@ _ROWS = [
      lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
     # envelope tools: their own load-site handlers, not the decorator
-    ("backtest --git-diff", OPS / "backtest_threshold.py",
-     lambda f: ["--git-diff", "--prometheus", _PROM, "--skip-if-unavailable"], "repo_bad",
-     "conf.d/alpha.yaml",
-     lambda f: ["--git-diff", "--prometheus", _PROM, "--skip-if-unavailable"], EXIT_OK),
     ("backtest --config-dir", OPS / "backtest_threshold.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
                 "--prometheus", _PROM, "--skip-if-unavailable"], None, "alpha.yaml",
@@ -489,16 +467,17 @@ def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, nam
 
 
 @pytest.mark.parametrize("label, script, argv, cwd, reason", [
-    ("backtest --git-diff", OPS / "backtest_threshold.py",
-     lambda f: ["--git-diff", "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
-     "repo_bad", "conf_file_unreadable"),
+    ("backtest --config-dir", OPS / "backtest_threshold.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
+                "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
+     None, "conf_file_unreadable"),
     ("policy_engine tenant", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--policy",
                 str(f["files"] / "policy.yaml"), "--json"], None, "yaml_file_unreadable"),
     ("policy_engine _defaults", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad_defaults"]), "--json"], None,
      "yaml_file_unreadable"),
-], ids=["backtest --git-diff", "policy_engine tenant", "policy_engine _defaults"])
+], ids=["backtest --config-dir", "policy_engine tenant", "policy_engine _defaults"])
 def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cwd, reason):
     """These two tools promise --json one document on EVERY terminal path
     (their existing ``caller_error`` envelope); measured before: 0 bytes."""

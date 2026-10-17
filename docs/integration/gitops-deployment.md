@@ -59,7 +59,7 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 | Custom rule deny-list | `lint_custom_rules.py --ci` | 禁用函式 / 破壞 tenant 隔離 |
 | 版號一致性 | `bump_docs.py --check` | 跨文件版號不一致 |
 | **配置變更 blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment 顯示受影響 tenant/metric |
-| **閾值歷史回測** | `backtest --git-diff --prometheus <url>` | 風險等級報告貼 PR comment |
+| **閾值歷史回測** | `backtest --config-dir <PR 的 conf.d> --baseline <base 的 conf.d> --prometheus <url>` | 風險等級報告貼 PR comment |
 
 所有檢查通過 + CODEOWNERS 指定的 reviewer approve → 允許 merge。
 

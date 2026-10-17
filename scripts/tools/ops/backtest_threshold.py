@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """backtest_threshold.py — Backtest threshold changes against historical Prometheus data.
 
-Given a set of threshold changes (from git diff or manual input), queries
-Prometheus range data to simulate how alert firing counts would change under
-old vs new thresholds. Produces a risk assessment report suitable for PR review.
+Given a set of threshold changes (two conf.d trees, or one change given on
+the command line), queries Prometheus range data to simulate how alert firing
+counts would change under old vs new thresholds. Produces a risk assessment
+report suitable for PR review.
 
 Each change is replayed against the one series its alert compares, the way
 the alert compares it (`>` / `<`), as metric_observed_map.yaml records it
@@ -11,43 +12,34 @@ the alert compares it (`>` / `<`), as metric_observed_map.yaml records it
 backtested.
 
 Usage:
-  # HEAD~1's conf.d/ against the working tree's (CI mode; both trees are
-  # read by the exporter, `da-guard served-values`, as --config-dir reads them)
-  python3 backtest_threshold.py --git-diff --prometheus http://localhost:9090
-
-  # From config directory
-  python3 backtest_threshold.py --config-dir conf.d/ --baseline conf.d.bak/ \
+  # A PR's conf.d against its base's (both trees read by the exporter,
+  # `da-guard served-values`). The base is a checkout the caller makes, e.g.
+  #   git worktree add /tmp/base HEAD~1
+  python3 backtest_threshold.py --config-dir conf.d/ --baseline /tmp/base/conf.d/ \
     --prometheus http://localhost:9090
 
   # Manual single metric
   python3 backtest_threshold.py --tenant db-a --metric mysql_connections \
     --old-value 70 --new-value 50 --prometheus http://localhost:9090
 
-  # Skip if Prometheus unavailable (CI-friendly)
-  python3 backtest_threshold.py --git-diff --prometheus http://localhost:9090 \
-    --skip-if-unavailable
-
-  # JSON + Markdown output for PR comment
-  python3 backtest_threshold.py --git-diff --prometheus http://localhost:9090 \
+  # Skip if Prometheus unavailable (CI-friendly); JSON + Markdown for a PR comment
+  python3 backtest_threshold.py --config-dir conf.d/ --baseline /tmp/base/conf.d/ \
+    --prometheus http://localhost:9090 --skip-if-unavailable \
     --json --markdown-output /tmp/backtest-comment.md
+
+`--git-diff` was removed (#3111): it exits 2 naming the commands above.
 
 需求:
   - Prometheus Query API reachable (or --skip-if-unavailable)
-  - git available (for --git-diff mode)
-  - da-guard (DA_GUARD_BINARY, or on PATH) for --git-diff and --config-dir
+  - da-guard (DA_GUARD_BINARY, or on PATH) for --config-dir / --baseline
 """
 import argparse
-import contextlib
 import errno
-import io
 import math
 import os
 import re
-import signal
 import stat
-import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -73,8 +65,8 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import GO_SPACE, THRESHOLD_SEVERITIES, split_threshold_severity  # noqa: E402  (#3071)
-# #2119 / #3111: both trees (`--config-dir` / `--baseline`, and `--git-diff`'s
-# HEAD~1 and working-tree conf.d/) are read by the exporter, not here.
+# #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
+# not here.
 from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
@@ -91,10 +83,8 @@ from _lib_tenant_values import (  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    has_yaml_extension,
     list_config_tree,
     is_hidden_name,
-    warn_nested,
 )
 
 # ---------------------------------------------------------------------------
@@ -220,57 +210,6 @@ def count_threshold_breaches(values, threshold, direction="above"):
     return count
 
 
-def _fsdecode(raw):
-    r"""Decode a path git handed us the way `os.listdir` decodes one.
-
-    `surrogateescape` is not decoration. A conf.d entry name is not required
-    to be valid UTF-8, and `os.listdir` answers `'legacy-\udcff.yaml'` for one
-    that is not (measured). Decoding git's answer the same way is what lets a
-    name that came from the TREE compare equal to a name that came from the
-    DIRECTORY -- and it round-trips back into git's argv, because `subprocess`
-    encodes argv with `os.fsencode` (measured: `git show` on the surrogate
-    form of that name returns rc=0, for all three of an ASCII, a non-ASCII
-    and an invalid-UTF-8 carrier).
-    """
-    return raw.decode(sys.getfilesystemencoding(), "surrogateescape")
-
-
-def _git_bytes(args, quotepath_off=False, stdin=None, timeout=15, env=None):
-    r"""Run git and return raw stdout BYTES, or None if the call failed.
-
-    ⛔ #1634. Every path-carrying git call in this file used `text=True`, and
-    the fix has TWO halves that do not substitute for each other. Both
-    directions measured on one fixture:
-
-      * bytes alone does not undo quoting. `core.quotepath` defaults to TRUE,
-        so `git diff --name-only` answers `b'"conf.d/legacy-\377.yaml"'` --
-        the octal escape is in the bytes too, and the extension test fails on
-        the trailing quote exactly as it did on the str.
-      * turning quoting off alone does not survive `text=True`: git then emits
-        the real bytes and strict UTF-8 decoding raises `UnicodeDecodeError`
-        from INSIDE `subprocess.run`, which is not in this file's
-        `except (TimeoutExpired, FileNotFoundError)`. That is #1634's dead
-        end B in a different spelling -- a case that WORKED becomes a crash.
-
-    ⚠️ `-z` and `quotepath_off` are not interchangeable either: `-z` suppresses
-    quoting for `--name-only` and `ls-tree`, and has NO effect on the `+++`
-    header of a unified diff (measured -- with and without `-z` that header is
-    byte-identical). Each caller below says which one it needs and why.
-    """
-    cmd = ["git"]
-    if quotepath_off:
-        cmd += ["-c", "core.quotepath=false"]
-    try:
-        result = subprocess.run(cmd + list(args), input=stdin, capture_output=True,
-                                timeout=timeout,
-                                env=None if env is None else {**os.environ, **env})
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout
-
-
 def tenant_is_queryable(tenant):
     r"""Whether `tenant` can go into the query's tenant selector as written.
 
@@ -288,242 +227,6 @@ def tenant_is_queryable(tenant):
     except UnicodeEncodeError:
         return False
     return not any(ch in '"\\' or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in tenant)
-
-
-def _git_with_stderr(args, env, timeout):
-    """`(ok, stderr text)` of a git call whose failure must be reported in
-    git's own words (#3111 round 4: ENOSPC, an invalid path, a failing
-    required filter are not "a missing object")."""
-    try:
-        result = subprocess.run(["git"] + list(args), capture_output=True, timeout=timeout,
-                                env={**os.environ, **env})
-    except FileNotFoundError:
-        return False, "git is not on PATH"
-    except subprocess.TimeoutExpired:
-        return False, f"timed out after {timeout}s"
-    text = result.stderr.decode("utf-8", "replace").strip()
-    return result.returncode == 0, "; ".join(text.splitlines()[-3:]) or f"exit {result.returncode}"
-
-
-def _tree_entries(raw):
-    """`[(mode, type, oid, path)]` from `git ls-tree -z` output (bytes)."""
-    out = []
-    for record in raw.split(b"\0"):
-        if not record:
-            continue
-        meta, _, path = record.partition(b"\t")
-        mode, kind, oid = meta.split(b" ")
-        out.append((mode, kind, oid.decode("ascii"), path))
-    return out
-
-
-class Head1Unavailable(Exception):
-    """`--git-diff` cannot compare HEAD~1's conf.d/ (`main` exits 2,
-    `git_diff_unavailable`). `refused` is False when git itself could not
-    answer, True when HEAD~1 was checked out and its conf.d/ is one this
-    backtest will not read (a submodule, not a directory, a file whose path
-    leaves the checkout)."""
-
-    def __init__(self, message, refused=False):
-        super().__init__(message)
-        self.refused = refused
-
-
-def _inside(path, root):
-    """Whether `path`, every link in it resolved (`os.path.realpath`), lies
-    under `root` (itself resolved)."""
-    root = os.path.realpath(os.fsdecode(root))
-    return os.path.commonpath([root, os.path.realpath(os.fsdecode(path))]) == root
-
-
-def materialize_head1_confd(dest):
-    """Check HEAD~1 out under `dest/tree` with git itself and return its
-    `conf.d/` beside the cwd — the one `git diff HEAD~1 -- conf.d/` would
-    read — as a path, or `""` when HEAD~1 has none there (the PR adds it).
-
-    #3111: git does the checkout, so this tool re-derives none of its
-    semantics (end-of-line conversion, filters, how a link is written): one
-    `git read-tree --reset -u HEAD~1` with an index of our own
-    (`GIT_INDEX_FILE` in `dest`, never the repository's), `--work-tree`
-    `dest/tree` and an absolute `--git-dir`, with LFS smudging skipped (no
-    network is asked). The repository, its index and `.git/worktrees` are
-    not touched. A relative link out of conf.d/, or a conf.d/ that is itself
-    a link, resolves as in any checkout.
-
-    Raises Head1Unavailable for what git cannot answer — git not on PATH,
-    not inside a git work tree (a bare repository), no HEAD~1 (a shallow
-    clone of depth 1 has none), and any checkout failure in git's own words
-    (a missing object, a full disk, a failing filter) — and, `refused`, for
-    what this checks itself, each decided on git's objects or on the
-    checkout: a submodule at, in or above conf.d/ (a checkout may or may not
-    populate it); a conf.d/ that is not a directory inside the checkout; a
-    file the exporter would read (`list_config_tree`; a directory link it
-    does not follow is not one) that resolves outside the checkout (an
-    absolute link, a chain of links leaving it); and such a file left as a
-    Git LFS pointer (`_lfs_pointer`).
-    """
-    inside = _git_bytes(["rev-parse", "--is-inside-work-tree"])
-    if inside is None:
-        raise Head1Unavailable("git could not run (not on PATH, not inside a git work tree, "
-                               "or a timeout)")
-    if inside.strip() != b"true":
-        raise Head1Unavailable("this directory is not inside a git work tree (a bare "
-                               "repository?)")
-    if _git_bytes(["rev-parse", "--verify", "--quiet", "HEAD~1^{commit}"]) is None:
-        raise Head1Unavailable("there is no parent commit HEAD~1 (a shallow clone needs "
-                               "fetch-depth: 2)")
-    prefix = _git_bytes(["rev-parse", "--show-prefix"])
-    top = _git_bytes(["rev-parse", "--show-toplevel"])
-    git_dir = _git_bytes(["rev-parse", "--absolute-git-dir"])
-    if prefix is None or top is None or git_dir is None:
-        raise Head1Unavailable("git could not name this directory's path in the repository")
-    git_dir = git_dir.rstrip(b"\n")
-    confd = prefix.rstrip(b"\n") + b"conf.d"
-    # A gitlink ABOVE conf.d/ hides it the same way one at it does (#3111
-    # round 4): the checkout leaves an empty directory there.
-    parts = confd.split(b"/")
-    ancestors = [b"/".join(parts[:i]) for i in range(1, len(parts))]
-    if ancestors:
-        above = _git_bytes(["ls-tree", "-z", "--full-tree", "HEAD~1", "--", *ancestors])
-        if above is None:
-            raise Head1Unavailable("git could not list HEAD~1's tree (a timeout?)")
-        for _mode, kind, _oid, path in _tree_entries(above):
-            if kind == b"commit":
-                raise Head1Unavailable(
-                    f"HEAD~1:{safe_label(_fsdecode(path))} is a submodule above conf.d/, which "
-                    "a checkout may or may not populate; this backtest does not guess",
-                    refused=True)
-    confd_name = safe_label(os.fsdecode(confd))
-    listed = _git_bytes(["ls-tree", "-r", "-t", "-z", "--full-tree", "HEAD~1", "--",
-                         confd, confd + b"/"], timeout=120)
-    if listed is None:
-        raise Head1Unavailable("git could not list HEAD~1's conf.d/ (a timeout?)")
-    for _mode, kind, _oid, path in _tree_entries(listed):
-        if kind == b"commit":
-            raise Head1Unavailable(
-                f"HEAD~1:{safe_label(_fsdecode(path))} is a submodule, which a checkout may "
-                "or may not populate; this backtest does not guess", refused=True)
-    root = os.path.join(dest, "tree")
-    os.makedirs(root)
-    # One unpack-trees pass (`read-tree --reset -u`): in a partial clone it
-    # fetches the missing blobs in ONE batch, where `checkout-index -a`
-    # fetched them one at a time (#3111 round 4, measured). An absolute
-    # `--git-dir` so a relative `GIT_DIR` from the caller cannot point
-    # elsewhere; our own index; LFS left unsmudged (no network), which
-    # `_lfs_pointer` then refuses rather than compare.
-    env = {"GIT_INDEX_FILE": os.path.join(dest, "index"), "GIT_LFS_SKIP_SMUDGE": "1"}
-    ok, why = _git_with_stderr([f"--git-dir={os.fsdecode(git_dir)}", f"--work-tree={root}",
-                                "read-tree", "--reset", "-u", "HEAD~1"], env, timeout=600)
-    if not ok:
-        raise Head1Unavailable(f"`git read-tree -u HEAD~1` said: {_head1_relabel(dest)(why)}")
-    path = os.path.join(os.fsencode(root), confd)
-    if not os.path.lexists(path):
-        return ""
-    if not os.path.isdir(path) or not _inside(path, root):
-        raise Head1Unavailable(f"HEAD~1:{confd_name} is not a directory inside the checkout",
-                               refused=True)
-    listing = list_config_tree(os.fsdecode(path))
-    # A directory link is not followed by the exporter (it warns and skips
-    # it), so where it points is nothing this backtest reads (#3111 round 4).
-    for entry in listing.files + [e for e in listing.unusable
-                                  if not (os.path.islink(e) and os.path.isdir(e))]:
-        if not _inside(entry, root):
-            shown = os.path.relpath(os.fsdecode(entry), root)
-            raise Head1Unavailable(
-                f"HEAD~1:{safe_label(shown)} resolves outside the checked-out tree (an "
-                "absolute link, or links leaving the repository)", refused=True)
-    for entry in listing.files:
-        if _lfs_pointer(entry):
-            raise Head1Unavailable(
-                f"HEAD~1:{safe_label(os.path.relpath(os.fsdecode(entry), root))} is a Git LFS "
-                "pointer; this backtest does not fetch LFS content", refused=True)
-    return os.fsdecode(path)
-
-
-_LFS_POINTER = b"version https://git-lfs.github.com/spec/v1"
-
-
-def _lfs_pointer(path):
-    """Whether the checked-out file `path` is a Git LFS pointer (the checkout
-    skips smudging): its content is not what the exporter reads from a
-    smudged working tree, so comparing it would blame the wrong side."""
-    try:
-        with open(path, "rb") as f:
-            return f.read(len(_LFS_POINTER)) == _LFS_POINTER
-    except OSError:
-        return False
-
-
-# Roots already named as unlistable, so the warning is said once per run.
-_WARNED_UNLISTABLE: set = set()
-
-
-def reset_unlistable_warnings_for_test() -> None:
-    """Clear the once-per-run dedup so a test can drive the branch twice."""
-    _WARNED_UNLISTABLE.clear()
-
-
-def _confd_entries(root: Path) -> list:
-    """List `root` once — naming it, never raising, never silently empty.
-
-    ⛔ Written because the #1588 fix below broke this and blind review
-    measured it. Swapping `glob("*.yaml")` for `iterdir()` looks like a
-    pure case fix, but the two disagree on an UNREADABLE directory:
-    `glob` swallows the scandir failure and yields nothing, `iterdir()`
-    raises straight through this module's callers. Measured on a
-    `chmod 000` conf.d as a non-root uid, same fixture both sides:
-
-        05d3136 (glob)     rc=2, "ERROR: Prometheus not reachable ..."
-        the fix (iterdir)  rc=1, PermissionError traceback out of main()
-
-    ⚠️ `is_dir()` does NOT guard this: it returns True for a directory
-    that cannot be read (and raises on its own when the PARENT is not
-    traversable), so the guard it replaced covered only the missing case.
-
-    `_lib_confd.unusable_config_paths` already settled what the right
-    answer is, in the same words: raising kills callers that iterate
-    outside a `try`, and returning `[]` is "a green light for a directory
-    nothing ever read" — so name the root instead. This is that answer at
-    the one call site that cannot use that function (it needs the ENTRIES,
-    not the unusable ones).
-    """
-    # ⛔ The #1911 guard lives HERE, not at the two call sites, and
-    # `test_confd_enumeration_contract` is what moved it: a flat scan and
-    # the warning that a hierarchical conf.d is not empty must be in the
-    # same scope, or a refactor can carry the scan away from its guard.
-    # This function is now the only place this tool lists a conf.d, so
-    # both sites are covered by construction rather than by remembering.
-    warn_nested(root, tool="backtest_threshold")
-    try:
-        return sorted(root.iterdir())
-    except (FileNotFoundError, NotADirectoryError):
-        # Both were empty results under `glob`, and a missing --config-dir
-        # is already reported by the caller's own emptiness. Unchanged.
-        return []
-    except OSError as exc:
-        # ⛔ The caught errno, NOT `_lib_confd.unusable_reason`. That
-        # function answers "why is `p` unusable as a config FILE", and the
-        # conf.d root is not one — asked about the root it re-probes with
-        # `os.walk` and can answer "is a directory, not a config file",
-        # which is both a non-sequitur (of course it is a directory) and a
-        # SECOND probe that may disagree with the failure actually caught
-        # here (a FUSE mount going away, a transient EIO). Reporting what
-        # was caught cannot drift from what happened.
-        # ⛔ Once per RUN, not once per scan. `--config-dir` called this
-        # helper twice (`main` for the recipe scan, `extract_changes_from_dirs`
-        # for the comparison, until #2119 moved the comparison to da-guard)
-        # and the first version printed the same line twice — measured. This file's own
-        # `test_each_reader_names_an_unusable_entry_exactly_once` states the
-        # rule for every other reader: "A repeated warning trains the
-        # operator to skim past it, which costs the signal the report exists
-        # to give." `warn_nested` already dedupes; this now does too.
-        key = os.path.abspath(str(root))
-        if key not in _WARNED_UNLISTABLE:
-            _WARNED_UNLISTABLE.add(key)
-            print(f"WARNING: {safe_label(str(root))}: could not be listed — "
-                  f"{type(exc).__name__}: {exc.strerror or exc} — the config "
-                  f"files inside it were NOT scanned", file=sys.stderr)
-        return []
 
 
 def _render_served(value):
@@ -637,67 +340,7 @@ def _alert_key(series):
     return series.metric_key
 
 
-def _confd_tree(path):
-    """`path` when it is a conf.d/ tree in which the exporter finds a config
-    file (`list_config_tree`, the shared mirror of its walker: the suffixes,
-    hidden files and directories skipped), else None: a tree that serves
-    nothing, which `--git-diff` compares as having no tenants (no conf.d/ at
-    HEAD~1 because the PR adds it, none left in the working tree, or one
-    holding only a README or hidden files). da-guard refuses such a tree
-    outright ("no .yaml files found"), so it is not handed one. A tree with
-    an entry that cannot be read is handed over all the same: da-guard
-    names why."""
-    if not path or not os.path.isdir(path):
-        return None
-    listing = list_config_tree(path)
-    return path if listing.files or listing.unusable else None
-
-
-def _head1_relabel(tmp):
-    """A function naming paths under `--git-diff`'s temporary directory
-    `tmp` as git does: the checked-out tree's `tmp/tree/<path>` as
-    `HEAD~1:<path>`, anything else under `tmp` as `HEAD~1:<name>` — never a
-    temporary path nobody has (#3111)."""
-    roots = []
-    for base in (tmp, os.path.realpath(tmp)):
-        roots += [os.path.join(base, "tree", ""), os.path.join(base, "")]
-    roots = sorted(set(roots), key=len, reverse=True)
-
-    def relabel(text):
-        for r in roots:
-            text = text.replace(r, "HEAD~1:")
-        for r in roots:  # the directory itself, without a trailing separator
-            text = text.replace(r.rstrip(os.sep), "HEAD~1:")
-        return text
-    return relabel
-
-
-@contextlib.contextmanager
-def _removed_on_signal():
-    """While `--git-diff`'s temporary directory exists, SIGTERM unwinds the
-    stack (SystemExit 143, the shell's status for it) as SIGINT already does
-    (KeyboardInterrupt), so `TemporaryDirectory` removes it — a 60 MB
-    checkout of HEAD~1 is not left behind (#3111). Entered BEFORE the
-    directory is made and left after it is removed. Nothing is installed
-    off the main thread, or when the previous handler is not one Python
-    can restore (`None`)."""
-    def stop(signum, _frame):
-        raise SystemExit(128 + signum)
-    try:
-        previous = signal.getsignal(signal.SIGTERM)
-        if previous is None:
-            raise ValueError("a handler not installed from Python")
-        signal.signal(signal.SIGTERM, stop)
-    except ValueError:  # not the main thread, or nothing to restore
-        yield
-        return
-    try:
-        yield
-    finally:
-        signal.signal(signal.SIGTERM, previous)
-
-
-def _print_tree_warnings(trees, relabel=lambda text: text):
+def _print_tree_warnings(trees):
     """`print_load_warnings` for the two trees, each line named once: a line
     both trees carry is printed once and says so, any other names its tree
     by its flag. Every line escaped (`safe_label`); da-guard's own stderr
@@ -712,9 +355,9 @@ def _print_tree_warnings(trees, relabel=lambda text: text):
         for line, flags in lines.items():
             where = "both trees" if len(set(flags)) > 1 else flags[0]
             if kind == "stderr":
-                print(f"{DA_GUARD_PREFIX}[{where}] {safe_label(relabel(line))}", file=sys.stderr)
+                print(f"{DA_GUARD_PREFIX}[{where}] {safe_label(line)}", file=sys.stderr)
             else:
-                print(f"WARN: [{where}] {safe_label(relabel(line))}", file=sys.stderr)
+                print(f"WARN: [{where}] {safe_label(line)}", file=sys.stderr)
 
 
 def _row_identity(series):
@@ -734,22 +377,12 @@ def _dimensioned_rows(sides):
     return out
 
 
-def _load_side(conf_d, flag, at):
-    """`(flag, ServedTree)`, or `(flag, None)` for a side with no tree at all
-    (`--git-diff`: no `conf.d/` at HEAD~1, or none left in the work tree)."""
-    return flag, (None if conf_d is None else load_served_tree(conf_d, at=at, schedules=True))
-
-
-def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--config-dir"),
-                              relabel=lambda text: text):
+def extract_changes_from_dirs(config_dir, baseline_dir):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
     Returns list of dicts: [{tenant, metric, old_value, new_value, keys,
     series}, ...], plus `window` (a list of `"HH:MM-HH:MM"`, UTC) on a
-    change that holds in part of the day only. A tree given as None is one
-    that serves nothing (`--git-diff` with no `conf.d/` on one side); `flags`
-    names the two trees in warnings, baseline first, and `relabel` rewrites
-    a path in them (`--git-diff`: the HEAD~1 tree's temporary path).
+    change that holds in part of the day only.
 
     #2119: both trees are read by the exporter (`da-guard served-values`),
     never by re-reading YAML here, so a change written in `_platform.yaml`,
@@ -792,10 +425,10 @@ def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--
     caller exits 2 rather than reporting a partial diff.
     """
     at = now_at()
-    trees = [_load_side(conf_d, flag, at)
-             for conf_d, flag in ((baseline_dir, flags[0]), (config_dir, flags[1]))]
-    _print_tree_warnings([(flag, tree) for flag, tree in trees if tree is not None], relabel)
-    old_tree, new_tree = ({} if tree is None else tree.tenants for _flag, tree in trees)
+    trees = [(flag, load_served_tree(conf_d, at=at, schedules=True))
+             for flag, conf_d in (("--baseline", baseline_dir), ("--config-dir", config_dir))]
+    _print_tree_warnings(trees)
+    old_tree, new_tree = (tree.tenants for _flag, tree in trees)
 
     changes = []
     for tenant in sorted(set(old_tree) | set(new_tree)):
@@ -837,67 +470,27 @@ def extract_changes_from_dirs(config_dir, baseline_dir, flags=("--baseline", "--
 # `metric: value` thresholds. Custom-alert recipes (ADR-024 `_custom_alerts`)
 # are evaluated by a different authoritative engine (the compiler + promtool).
 # Without these guards a recipe-only change passes silently (the flat tool
-# finds nothing) and the line-based git-diff parser can even mis-capture a
-# recipe's inner fields as bogus flat changes. We surface recipes loudly and
-# keep them out of the flat report instead. Recipe would-fire preview: #657.
+# finds nothing). We surface recipes loudly and keep them out of the flat
+# report instead. Recipe would-fire preview: #657.
 # ---------------------------------------------------------------------------
-
-def changed_conf_files():
-    """Tenant conf.d files changed in HEAD~1..HEAD, as `conf.d/<name>` paths.
-
-    `git diff --name-only` emits REPO-ROOT-relative paths even when run from a
-    subdirectory — and CI runs this tool from components/.../config, so the raw
-    output (`components/.../conf.d/db-a.yaml`) is NOT loadable relative to cwd.
-    Reduce each to `conf.d/<basename>`, the cwd-relative form the rest of the
-    tool uses (matching the `git diff -- conf.d/` contract). Works whether
-    conf.d sits at the repo root (customer convention) or under a subtree
-    (this repo). (#657)
-    """
-    # ⚠️ `-z` (#1634): for `--name-only` the NUL-delimited form is git's own
-    # contract for "never quote anything", and it carries a name holding a
-    # NEWLINE intact.
-    raw = _git_bytes(["diff", "-z", "--name-only", "HEAD~1", "--", "conf.d/"])
-    if raw is None:
-        return []
-    # #1588 site 3 of 6. `is_hidden_name`, NOT `config_stem`: the latter also
-    # declines reserved names, and swapping to it silently dropped
-    # `_defaults.yaml` from this list — `test_changed_conf_files_reduces_repo_
-    # root_to_cwd_relative` caught it. No `.strip()`: with `-z` the delimiter
-    # is exact, and a name is allowed to begin or end with a space.
-    # ⚠️ This listing only feeds the recipe notice (#657); the threshold
-    # changes come from the two trees (#3111), which see every name.
-    names = [_fsdecode(b) for b in raw.split(b"\0") if b]
-    return [f"conf.d/{Path(n).name}" for n in names
-            if has_yaml_extension(n)
-            and not is_hidden_name(Path(n).name)]
-
 
 def load_conf_files(paths):
     """Parse tenant conf.d files into {tenant: parsed_dict}.
 
-    Skips platform files (`_`-prefixed) and anything that isn't a YAML
-    mapping; missing files are skipped silently (e.g. a path deleted in the
-    working tree).
+    Skips platform files (`_`-prefixed), hidden ones and anything that
+    isn't a YAML mapping; a path that is not a file is skipped silently.
     """
     parsed = {}
     for p in paths:
         path = Path(p)
-        # ⛔ `is_hidden_name` added, and ONLY that. `startswith("_")`
-        # answered the reserved axis but nothing answered the hidden one,
-        # so this function kept saying `.hidden` exists while the diff
-        # parser beside it had stopped producing changes for that carrier —
-        # one process, one file, two answers.
-        # ⚠️ Deliberately NOT `config_stem` here: that predicate also
-        # declines reserved names, and swapping to it silently dropped
-        # `_defaults.yaml` from `changed_conf_files` — a SECOND axis moving
-        # inside a hidden-axis fix. `test_changed_conf_files_reduces_repo_
-        # root_to_cwd_relative` caught it; the narrow predicate is the fix.
+        # The hidden axis as well as the reserved one: the exporter's
+        # scanner skips `.`-prefixed entries, so a hidden file declares no
+        # tenant this report should name.
         if (path.name.startswith("_") or is_hidden_name(path.name)
                 or not path.is_file()):
             continue
-        # The caller's own spelling, not `str(path)`: on Windows that turns
-        # the `conf.d/x.yaml` git reported into `conf.d\x.yaml`, and an
-        # unreadable file is then named in a form nobody typed (#2558).
+        # The caller's own spelling, not `str(path)` (#2558): an unreadable
+        # file is named in the form the caller gave.
         # #2216: tenant ids are the keys' source text, as the exporter reads
         # them — `find_custom_alert_tenants` reports `010:` as "010", not 8.
         data = load_yaml_file_strict_exporter_keys(os.fspath(p), default={})
@@ -1195,13 +788,13 @@ def not_backtestable(change):
     #2750: a change read from two trees (`extract_changes_from_dirs`)
     carries the /metrics series served-values reports for it, and is judged
     by those fields alone: dimensioned when a series has `dimensions` or
-    `dimensions_regex`. A change from `--git-diff` or `--tenant` names a key
+    `dimensions_regex`. A change from `--tenant` names a key
     as written, with no series; there the key's `{` is what marks it
     dimensioned.
 
     #3017: a served change with `dimensioned_siblings` (the alert's
     threshold is the max over them too) is not backtested. A change from
-    `--git-diff` / `--tenant` cannot know its siblings — a known
+    `--tenant` cannot know its siblings — a known
     approximation, like `for:`.
 
     #3017 / #3002: then `alert_comparison`'s reason — a key whose alert the
@@ -1608,25 +1201,20 @@ def _exit_unreadable_conf(exc, args):
     as a ``UnicodeDecodeError`` traceback — rc 1, and 0 bytes of stdout under
     ``--json``. Not the shared ``exit_on_yaml_file_error`` wrapper, because
     this tool owes ``--json`` its ``caller_error`` envelope on every terminal
-    path (same shape as the ``git_diff_unavailable`` exit above).
+    path.
     """
     print(f"ERROR: cannot read {safe_label(exc)}", file=sys.stderr)  # #1538
     _end_not_run(args, "caller_error", "conf_file_unreadable", EXIT_CALLER_ERROR)
 
 
-def _exit_served_values_error(exc, args, recipe_tenants=(), relabel=None):
+def _exit_served_values_error(exc, args, recipe_tenants=()):
     """#2119: da-guard missing, stale or failing, or a file of either tree
     the exporter cannot decode or read → rc 2, named (`print_load_error`, the
     lines `exit_on_served_values_error` prints), never a partial diff. Not
     that decorator, because this tool owes ``--json`` its ``caller_error``
     envelope on every terminal path.
     """
-    if relabel is None:
-        print_load_error(exc)
-    else:  # `--git-diff`: a path in the HEAD~1 tree is named as `HEAD~1:<path>`
-        lines = io.StringIO()
-        print_load_error(exc, lines)
-        print(relabel(lines.getvalue()), end="", file=sys.stderr)
+    print_load_error(exc)
     _end_not_run(args, "caller_error", "served_values_unavailable", EXIT_CALLER_ERROR,
                  recipe_tenants)
 
@@ -1748,6 +1336,16 @@ def _end_not_run(args, status, reason, rc, recipe_tenants=()):
     sys.exit(rc)
 
 
+# #3111: what an old `--git-diff` invocation is told. The tool no longer
+# checks HEAD~1 out itself — every way it tried re-derived part of git's
+# checkout and got some of it wrong — so the caller makes the base checkout.
+GIT_DIFF_REMOVED = (
+    "ERROR: --git-diff was removed (#3111): check the base out yourself and compare "
+    "the two trees, e.g. `git worktree add /tmp/base HEAD~1` then `--config-dir conf.d "
+    "--baseline /tmp/base/<path from the repo root>/conf.d` (in CI, check the PR base "
+    "out into a separate path)")
+
+
 @observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main():
     """CLI entry point: Backtest threshold changes against historical Prometheus data."""
@@ -1758,10 +1356,11 @@ def main():
 
     # Change source (mutually exclusive)
     source = parser.add_mutually_exclusive_group()
-    source.add_argument(
-        "--git-diff", action="store_true",
-        help="Compare HEAD~1's conf.d/ with the working tree's (both read by da-guard)",
-    )
+    # #3111: removed. Still PARSED (hidden from --help, as init_project's
+    # retired GitOps flags are) only so that an old invocation gets the
+    # refusal naming its replacement instead of argparse's bare
+    # "unrecognized arguments".
+    source.add_argument("--git-diff", action="store_true", help=argparse.SUPPRESS)
     source.add_argument(
         "--config-dir",
         help="Current config directory (requires --baseline)",
@@ -1815,6 +1414,12 @@ def main():
     # #3059: argument errors first — before the Prometheus check, so
     # `--skip-if-unavailable` cannot turn them into a green skip — and with
     # the `--json` envelope (argparse's own usage errors still print none).
+    if args.git_diff:
+        print(GIT_DIFF_REMOVED, file=sys.stderr)
+        if args.json:
+            print(format_json_report(empty_report(
+                args.lookback, "caller_error", "git_diff_removed")))
+        sys.exit(EXIT_CALLER_ERROR)
     if args.tenant:
         if not args.metric or (args.old_value is None and args.new_value is None):
             print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
@@ -1832,14 +1437,14 @@ def main():
                 print(format_json_report(empty_report(
                     args.lookback, "caller_error", "invalid_tenant_id")))
             sys.exit(EXIT_CALLER_ERROR)
-    elif not (args.git_diff or args.config_dir):
-        print("ERROR: Specify --git-diff, --config-dir, or --tenant", file=sys.stderr)
+    elif not args.config_dir:
+        print("ERROR: Specify --config-dir (with --baseline) or --tenant", file=sys.stderr)
         if args.json:
             print(format_json_report(empty_report(
                 args.lookback, "caller_error", "no_change_source")))
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #3089 (b): after the argument checks, before any git, served-values,
+    # #3089 (b): after the argument checks, before any served-values,
     # observed-map or Prometheus work — every path below writes the outputs.
     _preflight_outputs(args)
 
@@ -1848,103 +1453,26 @@ def main():
     # silently just because the flat backtest has nothing to do or Prometheus
     # is unreachable. Recipes use the compiler+promtool eval home, not this
     # flat-threshold tool. (#657)
-    if args.git_diff:
+    if args.config_dir:
+        # #3111: the whole tree, as the exporter walks it (`list_config_tree`:
+        # sub-directories included, hidden entries and other extensions
+        # left out), so a recipe tenant declared in a nested file is named
+        # too (#3155). One file at a time: two nested files may share a stem.
         try:
-            parsed_conf = load_conf_files(changed_conf_files())
+            parsed = [load_conf_files([str(p)])
+                      for p in list_config_tree(args.config_dir).files]
         except YamlFileError as exc:
             _exit_unreadable_conf(exc, args)
-    elif args.config_dir:
-        # #1588 site 4 of 6. Same listing helper as the scan above — the
-        # unreadable-directory case reached main() FIRST, before the
-        # Prometheus availability check, so `--skip-if-unavailable` could
-        # not contain it and the `--json` contract lost its one document.
-        #
-        # ⛔ `config_stem(...)` truthiness, not just the extension, and that
-        # is not tidiness. Blind review measured this tool answering the
-        # HIDDEN axis two different ways after the first fix: the scan above
-        # skipped `.hidden.yaml` (its `config_stem` is "") while this site
-        # still loaded it, so ONE TOOL disagreed with itself about which
-        # carriers exist. `05d3136` was at least consistent (both said
-        # `.hidden`). Producing that split inside the change that exists to
-        # remove exactly that split is the sharpest way to get this wrong;
-        # both sites now defer to the same predicate, which is also what the
-        # exporter's scanner does.
-        # ⛔ No filter here any more. `load_conf_files` applies the reserved
-        # and hidden rules itself (it must — the `--git-diff` path feeds it
-        # too), so a copy of them at this call site was a SECOND place the
-        # answer could drift. Mutation measured that copy as equivalent,
-        # which is exactly what a redundant predicate looks like right up
-        # until someone edits one of the two.
-        # ⚠️ The extension rule is NOT redundant and stays here. Removing it
-        # was tried and measured: `load_conf_files` checks reserved, hidden
-        # and `is_file` but NOT the extension (it is also fed
-        # `conf.d/<basename>` strings by the `--git-diff` path, where the
-        # extension was already decided upstream), so a `notes.txt` goes
-        # straight through and the operator-facing recipe notice grows a
-        # tenant that does not exist. RE-MEASURED after #1603 widened this
-        # line to `CONFIG_SUFFIXES`, one tree holding acme.yaml +
-        # ghost_txt.txt + ghost_yml.yml:
-        #   with this rule     NOTE: 2 tenant(s) ... acme, ghost_yml
-        #   without this rule  NOTE: 3 tenant(s) ... acme, ghost_txt, ghost_yml
-        # ⚠️ The original note here was taken while this line passed
-        # `(".yaml",)` and counted the `.yml` row as a second ghost. It is
-        # not one any more — `ghost_yml` is a carrier the exporter serves,
-        # so it is in BOTH arms. The rule is still load bearing, for the
-        # `.txt` row.
-        # `_confd_entries` lists, this line decides the extension,
-        # `load_conf_files` decides reserved/hidden. One rule, one place.
-        try:
-            parsed_conf = load_conf_files(
-                [str(p) for p in _confd_entries(Path(args.config_dir))
-                 if has_yaml_extension(p.name)]
-            )
-        except YamlFileError as exc:
-            _exit_unreadable_conf(exc, args)
+        recipe_tenants = sorted({t for one in parsed for t in find_custom_alert_tenants(one)})
     else:
-        parsed_conf = {}
-    recipe_tenants = find_custom_alert_tenants(parsed_conf)
+        recipe_tenants = []
     if recipe_tenants:
         print(custom_alert_notice(recipe_tenants), file=sys.stderr)
 
-    # #1556 item 4 / D-06: `--git-diff` was supplied, so git must be able to
-    # answer. This runs BEFORE the Prometheus check on purpose:
-    # `--skip-if-unavailable` is about Prometheus, not git, and must not turn
-    # "git is unusable" into a green skip. It also runs before the "no
-    # changes" exit below, which is the silent path this replaces.
-    # #3111: HEAD~1's conf.d/ is written out as a tree and compared with the
-    # working tree's by the exporter, exactly as `--config-dir` compares two
-    # trees — so the served-values errors below are this mode's too.
     dir_changes = None
-    if args.git_diff:
-        with _removed_on_signal(), \
-                tempfile.TemporaryDirectory(prefix="backtest-head1-") as tmp:
-            relabel = _head1_relabel(tmp)
-            try:
-                old_confd = materialize_head1_confd(tmp)
-            except (Head1Unavailable, OSError) as exc:
-                refused = getattr(exc, "refused", False)
-                lead = ("HEAD~1's conf.d/ is not one this backtest reads" if refused
-                        else "git could not run to check HEAD~1 out")
-                print(f"--git-diff: {lead}: {safe_label(relabel(str(exc)))}.", file=sys.stderr)
-                print("  ⛔ Do not switch to --config-dir to clear this — that "
-                      "compares two trees, not your PR.", file=sys.stderr)
-                _end_not_run(args, "caller_error", "git_diff_unavailable", EXIT_CALLER_ERROR,
-                             recipe_tenants)
-            old_confd, cur_confd = _confd_tree(old_confd), _confd_tree("conf.d")
-            if old_confd is None and cur_confd is None:
-                print("WARNING: --git-diff: there is no conf.d/ in this directory at HEAD~1 "
-                      "nor in the working tree; run from the directory that holds conf.d/",
-                      file=sys.stderr)
-            try:
-                dir_changes = extract_changes_from_dirs(
-                    cur_confd, old_confd, flags=("HEAD~1", "working tree"), relabel=relabel)
-            except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
-                _exit_served_values_error(exc, args, recipe_tenants, relabel)
-
     # #2119: the two trees are read by da-guard, and this runs BEFORE the
-    # Prometheus check for the reason the git check above does:
-    # `--skip-if-unavailable` is about Prometheus, and must not turn "a tree
-    # the exporter refuses" into a green skip.
+    # Prometheus check: `--skip-if-unavailable` is about Prometheus, and must
+    # not turn "a tree the exporter refuses" into a green skip.
     if args.config_dir:
         if not args.baseline:
             print("ERROR: --config-dir requires --baseline", file=sys.stderr)
@@ -1977,7 +1505,7 @@ def main():
                          recipe_tenants)
 
     # Extract changes
-    if args.git_diff or args.config_dir:
+    if args.config_dir:
         changes = dir_changes
     else:  # `--tenant`: the no-source case already exited above
         changes = written_changes(args.tenant, args.metric, args.old_value, args.new_value)
