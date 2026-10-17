@@ -77,7 +77,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_validation import i18n_text  # noqa: E402
+from _lib_validation import i18n_text, split_threshold_severity  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions
@@ -160,6 +160,9 @@ def _as_number(raw) -> float | None:
     conf.d thresholds are strings, may carry the inline `"70:critical"` severity
     suffix, and may be the sentinel `"disable"`. Anything non-numeric (dates in
     an `expires:` block, `type: scheduled`, label lists) is not a threshold.
+    The suffix is read by the exporter's grammar (`split_threshold_severity`,
+    #3071): a value whose severity it refuses (`70:high`, `70:`) is not the
+    number written — the exporter serves the default — so it is None here.
     """
     if isinstance(raw, bool):
         return None
@@ -167,8 +170,8 @@ def _as_number(raw) -> float | None:
         return float(raw)
     if not isinstance(raw, str):
         return None
-    text = raw.split(":", 1)[0].strip()
     try:
+        text, _severity = split_threshold_severity(raw)
         return float(text)
     except ValueError:
         return None

@@ -67,6 +67,7 @@ modules:
       tenant_id_rule: "ADR-035 schema reader (definitions.tenantId pattern + description, cached, fail-closed); pinned against the schema and the Go copy's case table by tests/shared/test_tenant_id_rule.py"
       duration_rule: "#2490 schema reader (definitions.duration pattern + minLength + description, cached, fail-closed); pinned against Go model.ParseDuration by tests/shared/test_am_duration_parity.py"
       am_duration_seconds: "#2490 Alertmanager duration parser; its law is Go model.ParseDuration, so it is table-pinned row by row against tests/shared/am_duration_matrix.json (written by Go) in tests/shared/test_am_duration_parity.py rather than re-derived by a generator"
+      split_threshold_severity: "#3071 threshold value:severity grammar; its law is Go's splitThresholdSeverity, so it is table-pinned row by row against tests/shared/threshold_value_matrix.json (written by Go) in tests/shared/test_threshold_value_parity.py rather than re-derived by a generator"
       positive_seconds: "#2942 argparse type: accepts a value iff float() parses it to a finite number above 0; boundary table in tests/shared/test_lib_python.py::TestPositiveSeconds"
       non_negative_seconds: "#2966 argparse type: accepts a value iff float() parses it to a finite number from 0 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestNonNegativeSeconds"
       positive_int: "#2966 argparse type: accepts a value iff int() parses it to a number >= 1; boundary and message table in tests/shared/test_lib_python.py::TestPositiveInt"

@@ -169,6 +169,39 @@ def is_disabled(value: Any) -> bool:
     return value.strip().lower() in _DISABLED_VALUES
 
 
+# The severities a threshold value's `:severity` suffix may name: Go's
+# config.ThresholdSeverities (#3071), the ones the rule packs' threshold
+# recording rules select. tests/shared/threshold_value_matrix.json pins it.
+THRESHOLD_SEVERITIES = ("warning", "critical")
+
+# What Go's strings.TrimSpace trims (unicode.IsSpace). Python's str.strip also
+# trims U+001C..U+001F, which Go keeps.
+GO_SPACE = ("\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
+            "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
+
+
+def split_threshold_severity(raw: Any) -> tuple[str, str]:
+    """`(value, severity)` of a threshold value written `value[:severity]`,
+    as the exporter's splitThresholdSeverity reads it (#3071): split at the
+    LAST `:`, trim both halves as Go does, lower-case an ASCII severity; no
+    `:` is `warning`. A severity outside THRESHOLD_SEVERITIES (`70:high`, the
+    empty `70:`) raises ValueError: the exporter cannot read the value
+    either. The value half is returned as written (trimmed); whether it is a
+    number is the caller's question. The Python readers of the grammar
+    (backtest_threshold, check_threshold_unit_sanity) call this one;
+    custom_alerts/shape.py keeps its own stdlib-only copy. All are held to
+    Go by tests/shared/test_threshold_value_parity.py."""
+    text = str(raw).strip(GO_SPACE)
+    value, sep, suffix = text.rpartition(":")
+    if not sep:
+        return text, "warning"
+    suffix = suffix.strip(GO_SPACE)
+    severity = suffix.lower() if suffix.isascii() else suffix
+    if severity not in THRESHOLD_SEVERITIES:
+        raise ValueError(f"threshold severity {suffix!r} must be warning or critical")
+    return value.strip(GO_SPACE), severity
+
+
 def is_valid_tenant_id(tenant: Any) -> bool:
     """Whether *tenant* is a valid tenant id (ADR-035; #2341 R8).
 

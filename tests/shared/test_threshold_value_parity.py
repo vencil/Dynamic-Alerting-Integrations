@@ -6,8 +6,11 @@ The matrix's verdict columns and ``severities`` are written by Go
 from ``splitThresholdSeverity`` and ``ThresholdSeverities``, the one grammar
 the threshold rows and custom alerts share). Held to the same columns here:
 
+* ``_lib_validation.split_threshold_severity`` — the shared Python reader;
 * ``backtest_threshold.parse_threshold_value`` — how the backtest reads a
   value written for a base key (a value the exporter cannot read raises);
+* ``check_threshold_unit_sanity._as_number`` — the number the unit-sanity
+  lint judges (None for a value the exporter cannot read);
 * ``custom_alerts/shape.py`` ``parse_threshold`` — the custom-alert compiler;
 * the severity sets those two compare against;
 * tenant-config.schema.json ``thresholdScalar``'s ``pattern``, which checks
@@ -27,8 +30,12 @@ import pytest
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "ops"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "dx"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "lint"))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools"))
 
+import _lib_validation  # noqa: E402
 import backtest_threshold as bt  # noqa: E402
+import check_threshold_unit_sanity as unit_sanity  # noqa: E402
 from custom_alerts import shape  # noqa: E402
 
 _MATRIX = os.path.join(_REPO_ROOT, "tests", "shared", "threshold_value_matrix.json")
@@ -64,6 +71,27 @@ def test_matrix_is_written_by_go():
 def test_severity_sets_are_gos():
     assert tuple(_matrix()["severities"]) == bt._COMPARED_SEVERITIES
     assert tuple(_matrix()["severities"]) == shape.THRESHOLD_SEVERITIES
+    assert tuple(_matrix()["severities"]) == _lib_validation.THRESHOLD_SEVERITIES
+
+
+@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
+def test_shared_reader_splits_as_the_exporter_does(row):
+    if not row["ok"]:
+        with pytest.raises(ValueError):
+            _lib_validation.split_threshold_severity(row["value"])
+        return
+    assert _lib_validation.split_threshold_severity(row["value"]) == (
+        row["value_part"], row["severity"]), row
+
+
+@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
+def test_unit_sanity_lint_judges_the_number_the_exporter_serves(row):
+    got = unit_sanity._as_number(row["value"])
+    if not (row["ok"] and row["float_ok"]):
+        assert got is None, row
+        return
+    want = float(row["value_part"])
+    assert got == want or (math.isnan(got) and math.isnan(want)), row
 
 
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))

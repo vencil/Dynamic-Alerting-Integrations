@@ -69,6 +69,7 @@ from _lib_exitcodes import (  # noqa: E402
     arm_crash_envelope, disarm_crash_envelope,
 )
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
+from _lib_validation import GO_SPACE, THRESHOLD_SEVERITIES, split_threshold_severity  # noqa: E402  (#3071)
 # #2119: `--config-dir` / `--baseline` are read by the exporter, not here.
 from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
@@ -1157,12 +1158,7 @@ def _observed_map():
 # `tenant:alert_threshold:<key>`, `severity="critical"` for `<key>_critical`),
 # which are the only ones the exporter serves (#3071): Go's
 # `config.ThresholdSeverities`, carried by tests/shared/threshold_value_matrix.json.
-_COMPARED_SEVERITIES = ("warning", "critical")
-
-# What Go's `strings.TrimSpace` trims (`unicode.IsSpace`). Python's `str.strip`
-# also trims U+001C..U+001F, which Go keeps.
-_GO_SPACE = ("\t\n\v\f\r \x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005"
-             "\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000")
+_COMPARED_SEVERITIES = THRESHOLD_SEVERITIES
 
 
 def parse_threshold_value(key, raw):
@@ -1177,7 +1173,7 @@ def parse_threshold_value(key, raw):
     number and severity, each trimmed, an ASCII severity lower-cased
     (`"70:Critical"` is critical; no `:` is `warning`), and a severity other
     than `_COMPARED_SEVERITIES` (`70:high`, the empty `70:`) makes the value
-    unreadable. Trimming is Go's (`_GO_SPACE`). The number is read with Python's `float`
+    unreadable (`_lib_validation.split_threshold_severity`). The number is read with Python's `float`
     only where it agrees with Go's `ParseFloat` (measured, go1.x):
 
     * refused, Go refuses too: a non-ASCII digit; a signed NaN (`+nan`);
@@ -1191,19 +1187,11 @@ def parse_threshold_value(key, raw):
     dropped, which this tool cannot see from the value alone."""
     if raw is None or is_disabled(str(raw)):
         return None
-    text = str(raw).strip(_GO_SPACE)
     if key.endswith("_critical"):
-        number, severity = text, "critical"
+        number, severity = str(raw).strip(GO_SPACE), "critical"
     else:
-        number, sep, suffix = text.rpartition(":")
-        if not sep:
-            number, severity = suffix, "warning"
-        else:
-            suffix = suffix.strip(_GO_SPACE)
-            severity = suffix.lower() if suffix.isascii() else suffix
-            if severity not in _COMPARED_SEVERITIES:
-                raise ValueError(raw)  # #3071: the exporter cannot read it either
-    number = number.strip(_GO_SPACE)
+        # #3071: raises for a severity the exporter cannot read either.
+        number, severity = split_threshold_severity(raw)
     if not number.isascii() or "_" in number:
         raise ValueError(raw)
     value = float(number)
