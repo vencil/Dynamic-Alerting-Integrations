@@ -20,6 +20,15 @@ const t = window.__t || ((zh, en) => en);
  *   - Reef 7: a strict isSubmitting lock kills the double-submit false-409.
  *   - Reef 8: a dirty-state guard intercepts backdrop / ESC / X close.
  *   - Reef 9: a Just-In-Time fresh GET on open — never the grid's stale hash.
+ *
+ * #3064: tenant-api edits only an API-managed tenant (its file holds that
+ * tenant alone). GET marks any other tenant `managed_by: "git"` and gives no
+ * custom_alerts / source_hash, and every write answers 409
+ * TENANT_GIT_MANAGED — so the editor is not opened for it, and a save that
+ * meets the 409 says "change it in git" instead of "refresh and retry".
+ * A GET that withholds the file (raw_yaml_withheld) or gives no source_hash
+ * (a caller without write permission) has nothing an edit could be based on:
+ * the editor is not opened either (a save would only be refused).
  * ─────────────────────────────────────────────────────────────────── */
 
 function defaultFetchTenant(tenantId) {
@@ -53,7 +62,7 @@ function CustomAlertsModal(props) {
   } = props || {};
 
   const { copy } = useCopyToClipboard();
-  const [phase, setPhase] = useState('loading'); // loading | list | form | error | unloadable
+  const [phase, setPhase] = useState('loading'); // loading | list | form | error | unloadable | gitManaged | readOnly
   const [recipes, setRecipes] = useState([]);
   const [baseHash, setBaseHash] = useState('');
   const [originalJSON, setOriginalJSON] = useState('[]');
@@ -68,6 +77,10 @@ function CustomAlertsModal(props) {
   // refresh re-reads the same unloadable file and the retry 409s again.
   const [configError, setConfigError] = useState('');
   const [notLoadable, setNotLoadable] = useState(null);
+  // #3064: the reason code from GET's git_managed_reason, or a save answered
+  // 409 TENANT_GIT_MANAGED ({ error, reason }).
+  const [gitReason, setGitReason] = useState('');
+  const [gitManagedSave, setGitManagedSave] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState('');
   const [collision, setCollision] = useState('');
@@ -86,12 +99,26 @@ function CustomAlertsModal(props) {
     fetchTenant(tenantId)
       .then((d) => {
         if (!liveRef.current) return;
+        // #3064: a git-managed tenant is edited in git; GET gives no
+        // custom_alerts or source_hash for it, so there is nothing to edit.
+        if (d && d.managed_by === 'git') {
+          setGitReason(String(d.git_managed_reason || ''));
+          setPhase('gitManaged');
+          return;
+        }
         // #2406: GET answers an unloadable file WITHOUT custom_alerts (absent,
         // not empty). Reading that as [] would offer an empty editor whose
         // save the backend refuses — so don't open the editor at all.
         if (d && d.config_error) {
           setConfigError(String(d.config_error));
           setPhase('unloadable');
+          return;
+        }
+        // #3064: withheld (the file cannot be masked with certainty) or no
+        // source_hash (the caller may not write the tenant): an empty or
+        // masked list with no base_hash — a save could only be refused.
+        if (d && (d.raw_yaml_withheld === true || !d.source_hash)) {
+          setPhase('readOnly');
           return;
         }
         const list = Array.isArray(d.custom_alerts) ? d.custom_alerts : [];
@@ -159,6 +186,7 @@ function CustomAlertsModal(props) {
     setViolations([]);
     setConflict(null);
     setNotLoadable(null);
+    setGitManagedSave(null);
     setWarnings([]);
     saveCustomAlerts(tenantId, { custom_alerts: recipes, base_hash: baseHash })
       .then((res) => {
@@ -171,6 +199,13 @@ function CustomAlertsModal(props) {
           // #1231: surface the API's non-blocking advisories verbatim
           // (pass-through — the message text is owned by the backend).
           setWarnings(Array.isArray(res.data && res.data.warnings) ? res.data.warnings : []);
+          return;
+        }
+        if (res.status === 409 && res.data && res.data.code === 'TENANT_GIT_MANAGED') {
+          // #3064: the file became git-managed (e.g. shared with another
+          // tenant) — not a concurrent edit: a retry cannot succeed. Keep
+          // the user's work, like Reef 6.
+          setGitManagedSave({ error: res.data.error || '', reason: res.data.git_managed_reason || '' });
           return;
         }
         if (res.status === 409 && res.data && res.data.code === 'TENANT_CONFIG_NOT_LOADABLE') {
@@ -254,6 +289,42 @@ function CustomAlertsModal(props) {
                 {t('threshold-exporter 會整份略過這個檔案，所以這裡讀不到它的自訂告警，也不開放編輯（寫入會被後端拒絕）。請先修復租戶設定檔本身。',
                   'threshold-exporter skips this file whole, so its custom alerts cannot be read here and editing is disabled (the backend refuses the write). Repair the tenant file itself first.')}
               </p>
+            </div>
+          )}
+
+          {phase === 'gitManaged' && (
+            <div className="p-3 rounded-md border-l-2 border-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)]" data-testid="git-managed">
+              <p className="text-sm font-semibold">
+                {t('此租戶由 git 管理', 'This tenant is managed in git')}
+                {gitReason && <>{' '}(<span className="font-mono">{gitReason}</span>)</>}
+              </p>
+              <p className="text-sm mt-1">
+                {t('它的設定檔不只屬於這個租戶（例如與其他租戶共用），tenant-api 不提供原文，也不接受從這裡寫入。請直接在 git 修改設定檔。',
+                  'Its config file is not this tenant\'s alone (it may be shared with other tenants), so tenant-api neither shows nor writes it. Edit the config file in git.')}
+              </p>
+            </div>
+          )}
+
+          {phase === 'readOnly' && (
+            <div className="p-3 rounded-md border-l-2 border-[color:var(--da-color-warning)] bg-[color:var(--da-color-warning-soft)]" data-testid="read-only">
+              <p className="text-sm">
+                {t('你沒有這個租戶的寫入權限，或它的設定檔無法安全地顯示，所以不開放編輯。',
+                  'You lack write permission on this tenant, or its config file cannot be shown safely, so editing is disabled.')}
+              </p>
+            </div>
+          )}
+
+          {gitManagedSave && (
+            <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="git-managed-save">
+              <p className="text-sm font-semibold">
+                {t('寫入被拒：此租戶由 git 管理，重整重試不會成功。你的編輯已保留，請到 git 修改。',
+                  'Write refused: this tenant is managed in git, so refreshing and retrying will not help. Your edits are kept; make the change in git.')}
+              </p>
+              <p className="text-xs mt-1">{gitManagedSave.error || gitManagedSave.reason}</p>
+              <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
+                onClick={() => copy(JSON.stringify(recipes, null, 2))}>
+                {t('複製目前 recipe 備份', 'Copy current recipes')}
+              </button>
             </div>
           )}
 
