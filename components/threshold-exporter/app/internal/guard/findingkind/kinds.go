@@ -92,6 +92,10 @@ var (
 	// series, or a row of its shape and severity.
 	FindingCustomAlertDuplicateSeries = register("custom_alert_duplicate_series",
 		"judges `_custom_alerts` entries that put the same series on /metrics")
+	// FindingCustomAlertOverCap (error; #3042): a tenant's own `_custom_alerts`
+	// asks the exporter to serve more rows than the per-tenant cap.
+	FindingCustomAlertOverCap = register("custom_alert_over_cap",
+		"judges a tenant's own `_custom_alerts` against the per-tenant cap")
 	// FindingMetricsNotGatherable (error; #2031): the exporter's /metrics cannot
 	// be gathered for the tree.
 	FindingMetricsNotGatherable = register("metrics_not_gatherable",

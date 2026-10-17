@@ -341,6 +341,53 @@ func TestValidateTenantCustomAlerts(t *testing.T) {
 	}
 }
 
+// #3042: the per-tenant cap is judged on CustomAlertRowCount in CI (da-guard
+// custom_alert_over_cap, validate-config custom_alert_cap) and on
+// ValidateTenantCustomAlerts' own count at tenant-api's write. Both count one
+// per user_threshold row; they part only on a duplicate, which the exporter
+// drops (so CustomAlertRowCount does not count it) and the write check
+// counts and refuses.
+func TestCustomAlertRowCount_CountsAsTheWriteCheck(t *testing.T) {
+	thr := func(name, metric, threshold string) string {
+		return fmt.Sprintf("      - {recipe: threshold, name: %s, metric: %s, op: \">\", window: 5m, threshold: %q}\n",
+			name, metric, threshold)
+	}
+	slo := func(name, metric string) string {
+		return fmt.Sprintf("      - {recipe: slo_burn_rate, name: %s, metric: %s, denominator_metric: %s_total, objective: \"99.9\"}\n",
+			name, metric, metric)
+	}
+	// writeCount is the count the write check holds against the cap: the
+	// smallest cap it does not report exceeded.
+	writeCount := func(overrides map[string]ScheduledValue) int {
+		for c := 0; c < 100; c++ {
+			if !strings.Contains(strings.Join(ValidateTenantCustomAlerts("t1", overrides, c), ";"), "exceeds the per-tenant cap") {
+				return c
+			}
+		}
+		t.Fatal("no cap under 100 holds")
+		return -1
+	}
+	for name, tc := range map[string]struct {
+		list         string
+		rows, writes int
+	}{
+		"one row per threshold recipe":   {thr("a", "m1", "1:warning") + thr("b", "m2", "1:critical") + thr("c", "m3", "1:warning"), 3, 3},
+		"two rows per slo_burn_rate":     {slo("s1", "e1") + slo("s2", "e2") + thr("a", "m1", "1:warning"), 5, 5},
+		"a switched-off recipe, none":    {thr("a", "m1", "1:warning") + thr("off", "m2", "disable"), 1, 1},
+		"a duplicate the exporter drops": {thr("a", "m1", "1:warning") + thr("b", "m1", "2:warning"), 1, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			overrides := customAlertsConfig(t, "t1", tc.list).Tenants["t1"]
+			if got := CustomAlertRowCount("t1", overrides); got != tc.rows {
+				t.Errorf("CustomAlertRowCount = %d, want %d", got, tc.rows)
+			}
+			if got := writeCount(overrides); got != tc.writes {
+				t.Errorf("the write check counts %d, want %d", got, tc.writes)
+			}
+		})
+	}
+}
+
 // findFixture walks up from cwd to locate a shared fixture under tests/dx/fixtures/.
 func findFixture(t *testing.T, name string) string {
 	t.Helper()

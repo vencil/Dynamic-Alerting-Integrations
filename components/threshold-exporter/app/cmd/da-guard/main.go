@@ -307,8 +307,10 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		// #2123: a resolve failure that is one file failing the decode (a
-		// `_defaults.yaml` in the chain, or a tenant file the walker accepted
-		// but the merge rejects) is the author's to fix — exit 3, not 2.
+		// `_defaults.yaml` in the chain) is the author's to fix — exit 3,
+		// not 2. A tenant file no longer gets here: since #3063 the walker
+		// refuses every tenant file the merge's decode would (a ParseFailed
+		// file, also exit 3).
 		var de *config.DecodeError
 		if errors.As(err, &de) {
 			// ScopeEffective returns the files the walk could not read
@@ -555,6 +557,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ValuesNotServed: notServed,
 		// #2031: the exporter's own build drops these entries.
 		CustomAlertDuplicates: customAlertDuplicates(scoped),
+		CustomAlertsOverCap:   customAlertsOverCap(scoped),
 		// #2031: the whole tree, whatever the scope — one series two keys
 		// share fails the scrape for every tenant.
 		MetricsNotGatherable: gatherVerdict(scoped.Config, time.Now(), writtenNamer(scoped.WrittenKeys)),
@@ -612,6 +615,42 @@ func customAlertDuplicates(scoped *config.ScopedTenants) map[string][]config.Cus
 		}
 	}
 	return out
+}
+
+// customAlertsOverCap is guard.CheckInput.CustomAlertsOverCap: for each
+// in-scope tenant whose OWN `_custom_alerts` asks the exporter to serve more rows
+// than config.MaxCustomRecipesDefault, the rows it serves (#3042). A list a
+// profile fills in (ProfileOverlay) is a shape the profile's tenants share
+// and is not counted. nil when none.
+func customAlertsOverCap(scoped *config.ScopedTenants) map[string]int {
+	if scoped.Config == nil {
+		return nil
+	}
+	var out map[string]int
+	for _, ec := range scoped.Tenants {
+		if fromProfile(ec, "_custom_alerts") {
+			continue
+		}
+		if n := config.CustomAlertRowCount(ec.TenantID, scoped.Config.Tenants[ec.TenantID]); n > config.MaxCustomRecipesDefault {
+			if out == nil {
+				out = map[string]int{}
+			}
+			out[ec.TenantID] = n
+		}
+	}
+	return out
+}
+
+// fromProfile reports whether the tenant's profile is what supplied key.
+func fromProfile(ec *config.EffectiveConfig, key string) bool {
+	for _, p := range ec.ProfileOverlay {
+		for _, k := range p.Keys {
+			if k == key {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // splitNonEmpty splits "a, b , ,c" into ["a","b","c"] — empty

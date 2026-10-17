@@ -26,7 +26,7 @@ parent: architecture-and-design.md
 |------|---------|-----------------|------|
 | **Custom Value** | `metric_key: 42` | ✓ 輸出自訂閾值 | 租戶覆蓋預設值 |
 | **Omitted (Default)** | 未在 YAML 中指定 | ✓ 輸出平台預設值 | 使用 `_defaults.yaml` 的 `defaults:` 值 |
-| **Disable** | `metric_key: "disable"` | ✗ 不輸出 | 完全禁用該指標 |
+| **Disable** | `metric_key: "disable"` | ✗ 不輸出這一列 | 只關掉這個 key 的這一列：同族的 `<key>_critical` 與維度鍵 `<key>{…}` 不受影響，從其他層繼承來的照樣送出（`validate-config` 以 `disable_partial` 指名來源檔）。只要 critical 那一級時寫 `metric_key: "90:critical"`（[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)） |
 
 > ⚠️ **適用條件**：上表只對「在 `_defaults.yaml` 的 `defaults:` 有值」的 key 成立。列在 `optional_overrides:` 的**宣告 key**（平台只認得 key 名、不主張值）沒有預設可繼承——**省略＝沒有值＝不輸出 series**，不是「用預設」；那一格實際只有「填值」與「不填（靜默）」兩態。
 
@@ -173,7 +173,7 @@ Phase 4: Incremental Merge
   └─ 否則 → 全量 merge 所有 partial configs
 ```
 
-**壞掉的租戶檔**（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）：CHANGED 的檔若解析失敗（語法錯、租戶 body 型別錯）或讀不到，視同它不再宣告任何租戶——該檔宣告的租戶從這一版移除（除非另一個可解析的檔也宣告它），結果與全量載入、階層式 reload、重啟一致。不保留「最後正確值」；之前的版本會保留，且壞檔之後被刪除時租戶仍繼續服務（[#2022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2022)）。訊號：解析失敗時，每次掃描都會印 `WARN: skip unparseable file "<路徑>": <錯誤>` 並累加 `da_config_parse_failure_total{file_basename}`，`GET /api/v1/config/identity` 的 `parse_failed` 列出該檔；讀不到時則印 `WARN: cannot read <路徑>: <錯誤>`、`da_config_unreadable_files{reason="read_error"}` 非 0，該檔不進 `parse_failed`。
+**壞掉的租戶檔**（[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）：CHANGED 的檔若解析失敗（語法錯、租戶 body 型別錯、泛型解碼失敗，如顯式 tag 與內容不符的純量 `!!int abc`、未知頂層 key 內的重複 key，[#3063](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3063) 起；`_` 開頭的平台檔不套用，見 [#3131](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3131)）或讀不到，視同它不再宣告任何租戶——該檔宣告的租戶從這一版移除（除非另一個可解析的檔也宣告它），結果與全量載入、階層式 reload、重啟一致。不保留「最後正確值」；之前的版本會保留，且壞檔之後被刪除時租戶仍繼續服務（[#2022](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2022)）。訊號：解析失敗時，每次掃描都會印 `WARN: skip unparseable file "<路徑>": <錯誤>` 並累加 `da_config_parse_failure_total{file_basename}`，`GET /api/v1/config/identity` 的 `parse_failed` 列出該檔；讀不到時則印 `WARN: cannot read <路徑>: <錯誤>`、`da_config_unreadable_files{reason="read_error"}` 非 0，該檔不進 `parse_failed`。
 
 **Atomic Swap**：`RWMutex` 保護 config / hash / cache 的原子更新。讀端（Prometheus scrape）用 `RLock()`，reload 用 `Lock()`，確保 scrape 期間不會讀到半更新的狀態。
 

@@ -188,6 +188,13 @@ type servedTenantValues struct {
 	// not, and what the reserved-key registry declares for a `_` key. Facts
 	// only: no verdict on keys another reader owns. Always present.
 	Keys map[string]servedKey `json:"keys"`
+	// CustomAlertRows: the custom-alert rows the tenant's `_custom_alerts`
+	// asks /metrics to serve, counted before the per-tenant metric limit
+	// (max_metrics_per_tenant) truncates them (config.CustomAlertRowCount)
+	// — what the per-tenant cap on custom alerts is judged on (#3042). The
+	// `_custom_alerts` entry of Values is what survives the truncation.
+	// Always present (0 when none).
+	CustomAlertRows int `json:"custom_alert_rows"`
 }
 
 // servedKey is one entry of servedTenantValues.Keys.
@@ -640,6 +647,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 
 			StateFilters: map[string]servedStateFilter{},
 			TimeBoxes:    map[string][]servedTimeBox{},
+
+			CustomAlertRows: config.CustomAlertRowCount(tenant, overrides),
 		}
 		for _, b := range timeBoxes[tenant] {
 			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)

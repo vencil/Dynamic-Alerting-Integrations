@@ -1933,7 +1933,7 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
 #: file (#2386); the list lives in _lib_constants (shared with the policy
 #: readers since #2115 0-B).
-from _lib_constants import TOP_LEVEL_READ_ELSEWHERE  # noqa: E402
+from _lib_constants import MAX_CUSTOM_RECIPES, TOP_LEVEL_READ_ELSEWHERE  # noqa: E402
 
 #: Keys the defaults-chain merge drops at every level, so they act in no
 #: shape (#2386): Go's ``config.MergeDroppedKeys``, pinned by
@@ -2329,7 +2329,9 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         who = ", ".join(f.tenants[:WARN_LIMIT]) + (
             f" (+{len(f.tenants) - WARN_LIMIT} more)" if len(f.tenants) > WARN_LIMIT else "")
         why = f" ({f.reason})" if f.reason else ""
-        fam = f"; still served: {', '.join(f.served_family)}" if f.served_family else ""
+        fam = ("; still served: " + ", ".join(
+            f"{k} (from {src or '?'})" for k, src in zip(f.served_family, f.served_from))
+            if f.served_family else "")
         details.append(f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — tenant(s) {who}")
     if verdict.undecidable:
         n = sum(v.verdict == key_verdict.UNDECIDABLE for vs in verdict.keys.values() for v in vs)
@@ -2468,6 +2470,61 @@ def check_custom_alert_sources(config_dir: str, loader=None) -> dict[str, object
     return _make_result("custom_alert_sources", PASS, [
         f"{len(compiled)} compiled custom alert(s), counted per tenant and severity, each with "
         "a served threshold; every served one has a rule"])
+
+
+_CUSTOM_ALERT_CAP_HINT = (
+    "A tenant's own `_custom_alerts` (its tenant file, or its entry under a root "
+    "platform file's `tenants:`) may serve at most {cap} custom-alert rows: each "
+    "recipe of its own shape is a rule of its own. Remove recipes, or move ones "
+    "several tenants share into a profile — a profile's recipes are one shape for "
+    "all its tenants and are not counted (#3042). tenant-api refuses such a write "
+    "with the same count.")
+
+
+def check_custom_alert_cap(config_dir: str) -> dict[str, object]:
+    """#3042 decision 1: the per-tenant cap on custom alerts, judged where CI
+    runs it (tenant-api's write check is the other place).
+
+    Counted is what the tenant's list asks the exporter to serve, before the
+    per-tenant metric limit (`max_metrics_per_tenant`) truncates it — da-guard
+    served-values' `custom_alert_rows`, the count da-guard's
+    custom_alert_over_cap judges (pkg/config.CustomAlertRowCount): one per
+    `user_threshold` row — a switched-off recipe serves none, an
+    slo_burn_rate two, an entry dropped as a duplicate none. tenant-api's
+    write check (pkg/config.ValidateTenantCustomAlerts) refuses a duplicate
+    outright. Only a list the tenant owns counts: one whose source
+    (da-guard effective's `key_sources`) is the tenant file or a root
+    platform file's `tenants:`; a profile's is a shape its tenants share.
+    Over the cap is a FAIL. da-guard unavailable or failing is a WARN saying
+    nothing was counted, never a FAIL.
+    """
+    try:
+        sources = _effective_tree(config_dir).tenants
+        served = load_served_tree(config_dir).tenants
+    except Exception as exc:  # noqa: BLE001 — any failure is "not counted", never a refusal
+        return _make_result("custom_alert_cap", WARN, [
+            "not counted: the custom alerts the exporter serves were not read "
+            f"({type(exc).__name__}: {' '.join(str(exc).split())})"])
+    over = []
+    counted = 0
+    for t in sorted(served):
+        src = sources[t].key_sources.get("_custom_alerts") if t in sources else None
+        if src is None or src.layer not in ("tenant", "platform"):
+            continue
+        n = served[t].custom_alert_rows
+        if n is None:
+            return _make_result("custom_alert_cap", WARN, [
+                "not counted: da-guard served-values has no `custom_alert_rows` — this da-guard "
+                "is older than this tool: upgrade or rebuild it"])
+        counted += 1
+        if n > MAX_CUSTOM_RECIPES:
+            over.append(f"{src.file}: tenant {t} asks the exporter to serve {n} custom-alert rows from its own "
+                        f"`_custom_alerts`, over the per-tenant cap of {MAX_CUSTOM_RECIPES}")
+    if over:
+        return _make_result("custom_alert_cap", FAIL, over)
+    return _make_result("custom_alert_cap", PASS, [
+        f"{counted} tenant(s) writing their own `_custom_alerts`, each within the cap of "
+        f"{MAX_CUSTOM_RECIPES} rows"])
 
 
 def check_root_defaults(config_dir: str) -> dict[str, object]:
@@ -2752,6 +2809,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "switches nothing off usually sits on a misspelt key. "
         "`da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
         "key, who reads it and why not. Reported only, not yet blocking (#3016).",
+        "docs/cli-reference.md#validate-config",
+    ),
+    # #3042: each line names the tenant, its file, the rows it serves and the cap.
+    "custom_alert_cap": (
+        _CUSTOM_ALERT_CAP_HINT.format(cap=MAX_CUSTOM_RECIPES),
         "docs/cli-reference.md#validate-config",
     ),
     # #3042: each line names the file, the alert, its recipe_id and the tenants.
@@ -3389,7 +3451,11 @@ def main() -> None:
     results.append(_run_check("unread_keys", check_unread_keys,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 15. Custom alerts the compiler and the exporter disagree on (#3042) —
+    # 15. The per-tenant cap on a tenant's own custom alerts (#3042) — a FAIL.
+    results.append(_run_check("custom_alert_cap", check_custom_alert_cap,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 16. Custom alerts the compiler and the exporter disagree on (#3042) —
     # report only; run where the compiler is installed (the repo, not the
     # da-tools image, which ships none): an absent row is "not compared".
     custom_alert_compiler = _custom_alert_compiler()

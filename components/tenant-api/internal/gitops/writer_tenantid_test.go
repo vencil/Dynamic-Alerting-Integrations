@@ -49,7 +49,7 @@ func TestWriterRejectsInvalidTenantID(t *testing.T) {
 			return err
 		}},
 		{"DryRunValidate", func(w *Writer, id string) error {
-			_, _, err := w.DryRunValidate(ctx, id, body(id))
+			_, _, err := previewDryRun(ctx, w, id, body(id))
 			return err
 		}},
 		{"DryRunValidateBodyOnly", func(_ *Writer, id string) error {
