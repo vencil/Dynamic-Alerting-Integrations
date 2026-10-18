@@ -12,7 +12,9 @@
    頂層不是 mapping）出現在輸出或錯誤裡，不是悄悄略過。
 4. **沒有 da-guard ⇒ exit 2**：parse-tree 那一條路拿不到 binary 時是呼叫端
    錯誤，不是「沒有發現」。只換掉 parse-tree 的 binary 解析，served-values /
-   effective 照常，所以量到的是 parse-tree 那條路的對應。
+   effective 照常，所以量到的是 parse-tree 那條路的對應。backtest 沒有
+   parse-tree 那條路（#3111 起兩棵樹都經 served-values），它那一列另外把
+   `DA_GUARD_BINARY` 整個換掉，量 served-values 拿不到 binary 的結束碼。
 
 ⛔ 第 2 項的 patch 範圍是「整個 PyYAML 的解析」，比「conf.d 的解析」寬：凡是
 工具本來就會讀非 conf.d YAML 的（metric dictionary、rule pack、chart values、
