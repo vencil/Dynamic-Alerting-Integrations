@@ -851,6 +851,39 @@ func TestDirty_SymlinkLoopIsBounded(t *testing.T) {
 	}
 }
 
+// An untracked tenant file that .gitignore hides: status reports it only
+// with --ignored ("!!"). Read as the current content it would make a
+// same-body PUT a no-op success with HEAD holding no such file (and the
+// commit's `git add` could not stage it): it is dirty like any untracked
+// file. With the file absent nothing is reported and the write creates it.
+func TestDirty_GitignoredTenantFile(t *testing.T) {
+	t.Parallel()
+	dir := winRepo(t)
+	const tn = "tn-win-ign"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(tn+".yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "add", ".gitignore")
+	gitT(t, dir, "commit", "-q", "-m", "ignore")
+	w := newTestWriter(dir, dir)
+	path := filepath.Join(dir, tn+".yaml")
+	if err := w.checkTenantFileClean(path); err != nil {
+		t.Fatalf("absent ignored path: err = %v, want clean", err)
+	}
+	body := winBody(tn, "60", "")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	head := gitRevParse(t, dir, "HEAD")
+	_, err := w.Write(context.Background(), tn, "alice@example.com", body)
+	if !errors.Is(err, ErrTenantFileDirty) || gitRevParse(t, dir, "HEAD") != head {
+		t.Fatalf("same-body PUT over an ignored file: err = %v; want ErrTenantFileDirty with HEAD unmoved", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != body {
+		t.Fatalf("ignored file changed: %q", got)
+	}
+}
+
 // --- publishBatch: update-ref fails and HEAD is then unreadable ----------
 
 // refAndHeadFailingGit: the batch's `update-ref` exits 1 (after running it

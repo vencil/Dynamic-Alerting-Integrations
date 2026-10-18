@@ -3441,10 +3441,11 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a\ngit-managed tenant (#3064; warnings carries its text), so a client can\ntell \"change this tenant in git\" from a body to fix. Absent otherwise.",
+                    "description": "Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a\ngit-managed tenant (#3064), or TENANT_FILE_DIRTY when it is PUT's\nrefusal of a tenant file that differs from HEAD in this server's\nrepository (#1535, direct mode); warnings carries the text. A client\ncan tell \"change this tenant in git\" / \"commit or discard the change\nin the repository\" from a body to fix. Absent otherwise.",
                     "type": "string",
                     "enum": [
-                        "TENANT_GIT_MANAGED"
+                        "TENANT_GIT_MANAGED",
+                        "TENANT_FILE_DIRTY"
                     ]
                 },
                 "notices": {

@@ -30,7 +30,7 @@ import (
 
 // ErrTenantFileDirty refuses a direct tenant write whose tenant file in the
 // serving worktree (or the index) is not what the commit the write lands on
-// holds: modified, staged, deleted, untracked, marked skip-worktree or
+// holds: modified, staged, deleted, untracked (gitignored included), marked skip-worktree or
 // assume-unchanged, or — for a tenant file reached through symlinks — a
 // link on the way or the in-repository target changed. Nothing is written;
 // whoever made the change outside tenant-api commits or discards it first.
@@ -49,15 +49,19 @@ const maxSymlinkHops = 40
 // window it does not cover.
 //
 // THE COMMAND: `git status --porcelain=v1 -z --untracked-files=all
-// --ignored=no -- <paths>`. One call answers every case the write cares
-// about: HEAD against the index (a staged change, "M "/"A "/"D "), the index
-// against the worktree (a modification, a deletion, a symlink retargeted or
-// replaced by a file, " M"/" D"/" T"), and an untracked file where the
-// write would create one ("??"). Content is compared after the clean
-// filter, so a CRLF checkout of an LF blob under `eol=crlf` is clean. (A
-// `git diff <base>` plus a separate untracked listing would be two calls
-// for the same answer.) Ignored files are not reported: an ignored path
-// cannot be staged by the commit anyway.
+// --ignored=matching -- <paths>`. One call answers every case the write
+// cares about: HEAD against the index (a staged change, "M "/"A "/"D "),
+// the index against the worktree (a modification, a deletion, a symlink
+// retargeted or replaced by a file, " M"/" D"/" T"), an untracked file
+// where the write would create one ("??"), and an untracked file
+// .gitignore hides ("!!" — reported only for a file that exists). Content
+// is compared after the clean filter, so a CRLF checkout of an LF blob
+// under `eol=crlf` is clean. (A `git diff <base>` plus a separate
+// untracked listing would be two calls for the same answer.) An ignored
+// file is dirty like any untracked one: the write would read it as the
+// current content — a same-body PUT answering "nothing to change" while
+// HEAD has no such file — and the commit's `git add` (no -f) cannot stage
+// it anyway.
 //
 // WHAT STATUS DOES NOT SEE: an index entry marked skip-worktree or
 // assume-unchanged (`git update-index --skip-worktree`) is never compared
@@ -79,7 +83,7 @@ func (w *Writer) checkTenantFileClean(filePath string) error {
 	if len(paths) == 0 {
 		return nil // nothing in this repository to compare (cleanCheckPaths)
 	}
-	args := []string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=no", "--"}
+	args := []string{"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--"}
 	for _, p := range paths {
 		args = append(args, literalPathspec(p))
 	}

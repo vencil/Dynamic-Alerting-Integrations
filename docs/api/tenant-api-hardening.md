@@ -297,12 +297,12 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 **行為變更（breaking）**：直寫模式的寫入——`PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts`、`POST /tenants/batch`、`POST /groups/{id}/batch`——讀的是 tenant-api 那份工作樹裡的租戶檔（`base_hash` 比對、合併的基底、「沒有變更」的判斷），commit 卻落在 HEAD 上。兩者不同時，這些判斷都是對一份沒有任何 commit 持有的內容下的。所以寫入在拿到寫入鎖、取樣 HEAD 之後、讀檔之前，先請 git 比對這個租戶檔與 HEAD，不一致就回 409 `TENANT_FILE_DIRTY`，什麼都不寫。
 
-- **算不一致的情況**：工作樹有未 commit 的修改、已 `git add` 但未 commit、被刪除、API 要新建的檔名已有未追蹤的檔、index 標了 `skip-worktree` 或 `assume-unchanged`（git 不比對這種檔，無從證明一致）；租戶檔經 symlink 抵達時，沿路每個 repo 內的連結與最後抵達的檔都要一致。`.gitattributes` 的正規化由 git 自己處理：`eol=crlf` 下 checkout 出的 CRLF 檔算一致。
+- **算不一致的情況**：工作樹有未 commit 的修改、已 `git add` 但未 commit、被刪除、API 要新建的檔名已有未追蹤的檔（含被 `.gitignore` 忽略的）、index 標了 `skip-worktree` 或 `assume-unchanged`（git 不比對這種檔，無從證明一致）；租戶檔經 symlink 抵達時，沿路每個 repo 內的連結與最後抵達的檔都要一致。`.gitattributes` 的正規化由 git 自己處理：`eol=crlf` 下 checkout 出的 CRLF 檔算一致。
 - **不判的情況**：symlink 指向這個 repo 以外的檔——repo 外、巢狀 repo 或 submodule 的工作樹內、`.git` 目錄內——git 無從比對，照舊信任工作樹。PR 模式不判：它切的是最新 base 的乾淨 checkout。
 - **回應**：`PUT` 類回 409 `TENANT_FILE_DIRTY`，訊息固定、不含路徑；`/diff` 回同一個 409、`/validate` 回 `valid: false` 並帶 `code: "TENANT_FILE_DIRTY"`（git 無法判定時預覽不擋）；批次整批 422、該筆 `code: TENANT_FILE_DIRTY`。重整重試不會成功。
 - **以前的回應**：外部的未 commit 修改被當成基底——可能被合併進去並掛在 API 使用者名下 commit，或在內容恰好相同時回成功卻沒有 commit。
 - **保證的範圍**：只擋進寫入鎖時已經存在的不一致。檢查到讀檔之間另一個程序再改檔不在保證內；那段時間落地的外部 commit 會讓 HEAD 移動，由 compare-and-swap 擋成 409 `CONFLICT`。
-- **怎麼修**：在 tenant-api 掛載的 repo 裡跑 `git status -- <租戶檔>`（skip-worktree／assume-unchanged 用 `git ls-files -v -- <租戶檔>` 看，標記為 `S` 或小寫），把那份修改 commit 或丟棄，再重試寫入。丟棄的方式依狀態而定：已追蹤檔的修改或刪除用 `git restore --staged --worktree -- <租戶檔>`；未追蹤的同名檔（`??`）直接刪除該檔；新 `git add` 但 HEAD 沒有的檔（`A `）先 `git rm --cached -- <租戶檔>`，再刪除該檔或另行 commit；標記用 `git update-index --no-skip-worktree`／`--no-assume-unchanged` 解除。
+- **怎麼修**：在 tenant-api 掛載的 repo 裡跑 `git status -- <租戶檔>`（skip-worktree／assume-unchanged 用 `git ls-files -v -- <租戶檔>` 看，標記為 `S` 或小寫），把那份修改 commit 或丟棄，再重試寫入。丟棄的方式依狀態而定：已追蹤檔的修改或刪除用 `git restore --staged --worktree -- <租戶檔>`；未追蹤的同名檔（狀態 `??`）、被 `.gitignore` 忽略的同名檔（`git status --ignored -- <租戶檔>` 顯示 `!!`）直接刪除該檔；新 `git add` 但 HEAD 沒有的檔（狀態 `A`）要保留就直接 commit，要捨棄就先 `git rm --cached -- <租戶檔>` 再刪除工作樹的檔（只移出 index 不刪檔，檔會變成未追蹤，重試仍是 409）；標記用 `git update-index --no-skip-worktree`／`--no-assume-unchanged` 解除。
 
 ---
 

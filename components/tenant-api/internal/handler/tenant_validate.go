@@ -23,9 +23,12 @@ type ValidateResponse struct {
 	Warnings []string `json:"warnings,omitempty"`
 	Notices  []string `json:"notices,omitempty"`
 	// Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a
-	// git-managed tenant (#3064; warnings carries its text), so a client can
-	// tell "change this tenant in git" from a body to fix. Absent otherwise.
-	Code string `json:"code,omitempty" enums:"TENANT_GIT_MANAGED"`
+	// git-managed tenant (#3064), or TENANT_FILE_DIRTY when it is PUT's
+	// refusal of a tenant file that differs from HEAD in this server's
+	// repository (#1535, direct mode); warnings carries the text. A client
+	// can tell "change this tenant in git" / "commit or discard the change
+	// in the repository" from a body to fix. Absent otherwise.
+	Code string `json:"code,omitempty" enums:"TENANT_GIT_MANAGED,TENANT_FILE_DIRTY"`
 }
 
 // ValidateTenant handles POST /api/v1/tenants/{id}/validate

@@ -234,7 +234,7 @@ da-tools validate-config --config-dir ./conf.d/
 
 **原因**：tenant-api 掛載的 repo 裡，這個租戶檔與 HEAD 不一致——有人在 tenant-api 之外改了沒 commit、`git add` 了沒 commit、刪了、放了未追蹤的同名檔，或在 index 標了 `skip-worktree`／`assume-unchanged`；經 symlink 抵達的租戶檔，沿路的連結或 repo 內的目標被改也算。
 
-**處置**：在該 repo 跑 `git status -- <租戶檔>`（標記用 `git ls-files -v -- <租戶檔>` 看），把修改 commit 或丟棄後重試：已追蹤檔用 `git restore --staged --worktree -- <租戶檔>`，未追蹤的同名檔直接刪除，新 add 的檔先 `git rm --cached -- <租戶檔>` 再刪除或 commit。細節見 [Tenant API 硬化 §3.10](api/tenant-api-hardening.md#310-租戶檔與-head-不一致時直寫拒收1535)。
+**處置**：在該 repo 跑 `git status -- <租戶檔>`（標記用 `git ls-files -v -- <租戶檔>` 看），把修改 commit 或丟棄後重試：已追蹤檔用 `git restore --staged --worktree -- <租戶檔>`，未追蹤或被 `.gitignore` 忽略的同名檔直接刪除；新 add 的檔要保留就直接 commit，要捨棄就 `git rm --cached -- <租戶檔>` 後刪除工作樹的檔。細節見 [Tenant API 硬化 §3.10](api/tenant-api-hardening.md#310-租戶檔與-head-不一致時直寫拒收1535)。
 
 ## tenant-api 寫入被產生器容器拒收（`GENERATOR_FINDINGS`／`VALIDATOR_UNAVAILABLE`）
 
