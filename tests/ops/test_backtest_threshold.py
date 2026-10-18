@@ -13,6 +13,7 @@
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,7 @@ from unittest.mock import patch
 
 import pytest
 
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 import backtest_threshold as bt  # noqa: E402
 
@@ -52,60 +53,60 @@ class TestParseLookback:
         assert "<number><d|h|m>" in str(exc.value)
 
 
-class TestGitDiffPrecondition:
-    """#1556 item 4 (D-06): `--git-diff` 供了但 git 不可用 → exit 2，不是「沒變更」。
+class TestGitDiffRemoved:
+    """#3111: `--git-diff` was removed. An old invocation gets rc 2 and one
+    ERROR line naming the replacement — before anything is read, and through
+    `--skip-if-unavailable` too — not argparse's "unrecognized arguments"."""
 
-    da-tools 映像檔沒裝 git、WORKDIR 也不是 repo，所以 `--git-diff` 在那裡永遠
-    像「你的 PR 沒改東西」。這裡把 `_git_bytes` 換成 None 來重現；control
-    列用 b""（git 正常、diff 空）證明原本的 "No threshold changes found." 路徑
-    還在。
-    """
-
-    def _argv(self, cli_argv, *extra):
-        cli_argv("backtest_threshold", "--git-diff",
-                 "--prometheus", "http://prom:9090", *extra)
-
-    def test_git_unusable_exits_caller_error(self, monkeypatch, capsys, cli_argv):
-        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: None)
-        # Prometheus 可達與否都不該影響：這裡故意讓它「不可達」並帶
-        # --skip-if-unavailable，證明 git 前置檢查不被那個旗標跳過。
-        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
-        self._argv(cli_argv, "--skip-if-unavailable")
+    @pytest.mark.parametrize("extra", [(), ("--skip-if-unavailable",)])
+    def test_rc2_naming_the_replacement(self, monkeypatch, capsys, cli_argv, extra):
+        for name in ("_observed_map", "prometheus_available", "query_range",
+                     "extract_changes_from_dirs", "load_trees"):
+            monkeypatch.setattr(bt, name, _boom)
+        cli_argv("backtest_threshold", "--git-diff", "--prometheus", "http://prom:9090", *extra)
         with pytest.raises(SystemExit) as exc_info:
             bt.main()
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
-        assert "--git-diff" in captured.err
-        assert "could not run" in captured.err
-        assert "Do not switch to --config-dir" in captured.err
+        lines = [ln for ln in captured.err.splitlines() if ln.startswith("ERROR:")]
+        assert lines == [bt.GIT_DIFF_REMOVED]
+        assert "git worktree add" in lines[0] and "--baseline" in lines[0]
         assert captured.out == ""
 
-    def test_git_unusable_json_envelope(self, monkeypatch, capsys, cli_argv):
-        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: None)
-        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        self._argv(cli_argv, "--json")
+    def test_json_envelope(self, monkeypatch, capsys, cli_argv):
+        cli_argv("backtest_threshold", "--git-diff", "--prometheus", "http://prom:9090", "--json")
+        with pytest.raises(SystemExit) as exc_info:
+            bt.main()
+        assert exc_info.value.code == 2
+        doc = json.loads(capsys.readouterr().out)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "git_diff_removed")
+        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+
+    @pytest.mark.parametrize("argv", [
+        ("--git-diff", "--config-dir", "a", "--baseline", "b"),
+        ("--config-dir", "a", "--git-diff"),
+        ("--git-diff", "--tenant", "t", "--metric", "m", "--new-value", "1"),
+        ("--git-diff=x",),
+        ("--git-diff", "--json", "--config-dir", "a"),
+    ], ids=["with-config-dir", "after-config-dir", "with-tenant", "with-a-value", "json"])
+    def test_it_answers_first_in_every_combination(self, capsys, cli_argv, argv):
+        """73c1e2da: argparse's "not allowed with" (or "ignored explicit argument")
+        answered first, so the replacement was never named."""
+        cli_argv("backtest_threshold", *argv, "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc_info:
             bt.main()
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
-        doc = json.loads(captured.out)           # 全文 parse ⇒ stdout 恰一份 JSON
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == "git_diff_unavailable"
-        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
-        assert "could not run" in captured.err
+        assert bt.GIT_DIFF_REMOVED in captured.err.splitlines()
+        assert "not allowed with" not in captured.err
+        if "--json" in argv:
+            assert json.loads(captured.out)["reason"] == "git_diff_removed"
 
-    def test_empty_diff_is_still_no_changes(self, monkeypatch, capsys, cli_argv):
-        """control：git 正常、diff 空（b""）→ 原本的 "No threshold changes found." exit 0。"""
-        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: b"")
-        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        self._argv(cli_argv, "--json")
-        with pytest.raises(SystemExit) as exc_info:
+    def test_hidden_from_help(self, capsys, cli_argv):
+        cli_argv("backtest_threshold", "--help")
+        with pytest.raises(SystemExit):
             bt.main()
-        assert exc_info.value.code == 0
-        captured = capsys.readouterr()
-        assert "No threshold changes found." in captured.err
-        doc = json.loads(captured.out)
-        assert doc["status"] == "no_changes"
+        assert "--git-diff" not in capsys.readouterr().out
 
 
 class TestLookbackCli:
@@ -209,7 +210,7 @@ class TestExtractChangesFromDirs:
         # #2750：每筆帶 served-values 給的 /metrics series（矩陣測試逐格比對）。
         assert [s.metric_key for s in changes[0].pop("series")] == ["mysql_connections"]
         assert changes == [{"tenant": "db-a", "metric": "mysql_connections",
-                            "old_value": "70", "new_value": "50"}]
+                            "old_value": "70", "new_value": "50", "keys": ["mysql_connections"]}]
 
     def test_skip_underscore_keys(self, tmp_path):
         """_ 前綴的 key 不是門檻，改了不算門檻變更。"""
@@ -227,7 +228,8 @@ class TestExtractChangesFromDirs:
         base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, **tenant})
         changes = bt.extract_changes_from_dirs(str(cur), str(base))
         assert [{k: v for k, v in c.items() if k != "series"} for c in changes] == [
-            {"tenant": "db-a", "metric": "mysql_connections", "old_value": "80", "new_value": "90"}]
+            {"tenant": "db-a", "metric": "mysql_connections", "old_value": "80", "new_value": "90",
+             "keys": ["mysql_connections"]}]
 
     def test_no_changes(self, tmp_path):
         """相同配置不應有變更。"""
@@ -572,87 +574,6 @@ class TestPrintTextReport:
         assert "metric not found" not in out
 
 
-# ── extract_changes_from_git_diff（mock subprocess）───────────────
-
-
-class TestExtractChangesFromGitDiff:
-    """extract_changes_from_git_diff() git diff 解析。"""
-
-    def test_normal_diff(self, monkeypatch):
-        """正常 diff 解析出閾值變更。"""
-        # ⚠️ BYTES since #1634: every path-carrying git call in the tool runs
-        # without `text=True`, because a conf.d name is not required to be
-        # valid UTF-8 and strict decoding raised inside `subprocess.run`,
-        # outside the tool's own `except`. A fake that still answers `str`
-        # describes an interface the tool no longer has.
-        diff_output = (
-            b"+++ b/conf.d/db-a.yaml\n"
-            b"-  mysql_connections: 70\n"
-            b"+  mysql_connections: 50\n"
-        )
-        def mock_run(*args, **kwargs):
-            m = type("R", (), {"returncode": 0, "stdout": diff_output})()
-            return m
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        changes = bt.extract_changes_from_git_diff()
-        assert len(changes) == 1
-        assert changes[0]["tenant"] == "db-a"
-        assert changes[0]["old_value"] == "70"
-        assert changes[0]["new_value"] == "50"
-
-    def test_underscore_keys_filtered(self, monkeypatch):
-        """_ 前綴 key 被過濾。"""
-        diff_output = (
-            b"+++ b/conf.d/db-a.yaml\n"
-            b"-  _silent_mode: normal\n"
-            b"+  _silent_mode: warning\n"
-        )
-        def mock_run(*args, **kwargs):
-            return type("R", (), {"returncode": 0, "stdout": diff_output})()
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        changes = bt.extract_changes_from_git_diff()
-        assert len(changes) == 0
-
-    def test_git_failure_returns_none(self, monkeypatch):
-        """git 命令失敗回傳 None（#1556 item 4：不再與「空 diff」同值）。
-
-        ⛔ 原名 `test_git_failure_returns_empty`、斷言 `== []`——把「git 跑不了」
-        和「PR 沒改東西」釘成同一個值，正是 main() 靜默 rc 0 的根源。
-        """
-        def mock_run(*args, **kwargs):
-            return type("R", (), {"returncode": 1, "stdout": ""})()
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        assert bt.extract_changes_from_git_diff() is None
-
-    def test_git_timeout_returns_none(self, monkeypatch):
-        """git 命令逾時回傳 None。"""
-        def mock_run(*args, **kwargs):
-            raise subprocess.TimeoutExpired(cmd="git", timeout=15)
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        assert bt.extract_changes_from_git_diff() is None
-
-    def test_git_bytes_none_vs_empty(self, monkeypatch):
-        """直接分辨兩個值：_git_bytes → None ⇒ None；→ b"" ⇒ []（git 正常、diff 空）。"""
-        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: None)
-        assert bt.extract_changes_from_git_diff() is None
-        monkeypatch.setattr(bt, "_git_bytes", lambda *a, **k: b"")
-        assert bt.extract_changes_from_git_diff() == []
-
-    def test_new_key_only(self, monkeypatch):
-        """只有新增 key（無對應 old）。"""
-        diff_output = (
-            b"+++ b/conf.d/db-a.yaml\n"
-            b"+  mysql_connections: 50\n"
-        )
-        def mock_run(*args, **kwargs):
-            return type("R", (), {"returncode": 0, "stdout": diff_output})()
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        changes = bt.extract_changes_from_git_diff()
-        assert len(changes) == 1
-        assert changes[0]["old_value"] is None
-        assert changes[0]["new_value"] == "50"
-
-
 # ── prometheus_available ──────────────────────────────────────────
 
 
@@ -769,22 +690,10 @@ class TestRiskThresholds:
 # ── 自訂告警 recipe 感知（#657 fail-loud）─────────────────────────
 
 
-def _fake_git_show(monkeypatch, stdout):
-    """`git show` answers *stdout*; every other process (da-guard parse-tree,
-    #2906) runs for real."""
-    real = subprocess.run
-
-    def run(cmd, *a, **k):
-        if cmd and cmd[0] == "git":
-            return type("R", (), {"returncode": 0, "stdout": stdout})()
-        return real(cmd, *a, **k)
-    monkeypatch.setattr(subprocess, "run", run)
-
-
 class TestCustomAlertDetection:
-    """find_custom_alert_tenants / keep_flat_threshold_changes — 把 flat 工具
-    對 _custom_alerts 的隱性無-recipe-path 補成顯性 fail-loud。conf.d 用
-    `tenants: {<id>: {<metric>: <value>, _custom_alerts: [...]}}` 包裹格式。"""
+    """custom_alert_notice / custom_alert_markdown — 把 flat 工具對
+    _custom_alerts 的隱性無-recipe-path 補成顯性 fail-loud（#657）。哪些租戶的
+    recipe 變了見 TestRecipeNoteFromTheWholeTree。"""
 
     def _write(self, d, name, text):
         with open(os.path.join(d, name), "w", encoding="utf-8") as f:
@@ -799,130 +708,6 @@ class TestCustomAlertDetection:
         "        window: 5m\n"
         "        threshold: '150:warning'\n"
     )
-
-    def test_detects_recipe_tenant(self):
-        """tenants.<id>._custom_alerts 非空 → 該租戶 id 被偵測，純 flat 租戶不誤報。"""
-        with tempfile.TemporaryDirectory() as d:
-            self._write(d, "db-b.yaml",
-                        "tenants:\n  db-b:\n    mysql_connections: '100'\n" + self._RECIPE_BLOCK)
-            self._write(d, "db-a.yaml",
-                        "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-            parsed = bt.load_conf_files([
-                os.path.join(d, "db-b.yaml"),
-                os.path.join(d, "db-a.yaml"),
-            ])
-            assert bt.find_custom_alert_tenants(parsed) == ["db-b"]
-
-    def test_empty_custom_alerts_not_flagged(self):
-        """空 _custom_alerts（[]）不算 recipe 租戶。"""
-        with tempfile.TemporaryDirectory() as d:
-            self._write(d, "db-b.yaml",
-                        "tenants:\n  db-b:\n    mysql_connections: '100'\n    _custom_alerts: []\n")
-            parsed = bt.load_conf_files([os.path.join(d, "db-b.yaml")])
-            assert bt.find_custom_alert_tenants(parsed) == []
-
-    def test_multi_tenant_file_uses_key_not_filename(self):
-        """一個檔含多租戶 → 只有帶 recipe 的那個 id 被列出（id 來自 key，非檔名）。"""
-        with tempfile.TemporaryDirectory() as d:
-            self._write(d, "shop.yaml",
-                        "tenants:\n"
-                        "  shop-a:\n    mysql_connections: '80'\n"
-                        "  shop-b:\n    mysql_connections: '90'\n" + self._RECIPE_BLOCK)
-            parsed = bt.load_conf_files([os.path.join(d, "shop.yaml")])
-            assert bt.find_custom_alert_tenants(parsed) == ["shop-b"]
-
-    def test_skips_underscore_platform_files(self):
-        """_ 前綴平台檔（如 _defaults.yaml）不被當成租戶。"""
-        with tempfile.TemporaryDirectory() as d:
-            self._write(d, "_defaults.yaml", "defaults:\n  mysql_connections: '50'\n")
-            parsed = bt.load_conf_files([os.path.join(d, "_defaults.yaml")])
-            assert parsed == {}
-            assert bt.find_custom_alert_tenants(parsed) == []
-
-    def test_keep_flat_drops_recipe_inner_fields(self):
-        """git-diff line parser 誤抽的 recipe 內層欄位（recipe/name/op/threshold/metric）
-        被濾掉，只留真正在 tenants.<id> 下的純量閾值。"""
-        parsed = {"db-b": {"tenants": {"db-b": {
-            "mysql_connections": "100",
-            "_custom_alerts": [{"recipe": "threshold", "name": "q",
-                                "metric": "x", "op": ">", "threshold": "150:warning"}],
-        }}}}
-        changes = [
-            {"tenant": "db-b", "metric": "mysql_connections", "old_value": "70", "new_value": "100"},
-            {"tenant": "db-b", "metric": "threshold", "old_value": "150:warning", "new_value": "200:warning"},
-            {"tenant": "db-b", "metric": "metric", "old_value": "x", "new_value": "y"},
-            {"tenant": "db-b", "metric": "op", "old_value": ">", "new_value": "<"},
-        ]
-        kept = bt.keep_flat_threshold_changes(changes, parsed)
-        assert [c["metric"] for c in kept] == ["mysql_connections"]
-
-    def test_keep_flat_removal_of_real_threshold_kept(self, monkeypatch):
-        """純量閾值被移除（HEAD~1 有該 top-level key）→ 保留（disable transition，#657）。"""
-        monkeypatch.setattr(bt, "_flat_keys_at_head1",
-                            lambda t: {"mysql_connections", "mysql_threads_running"})
-        changes = [{"tenant": "db-b", "metric": "mysql_connections",
-                    "old_value": "70", "new_value": None}]
-        assert bt.keep_flat_threshold_changes(changes, {}) == changes
-
-    def test_keep_flat_removal_of_recipe_field_dropped(self, monkeypatch):
-        """recipe 內層欄位被移除（HEAD~1 top-level 沒有它）→ 丟棄。"""
-        monkeypatch.setattr(bt, "_flat_keys_at_head1", lambda t: {"mysql_connections"})
-        changes = [{"tenant": "db-b", "metric": "threshold",
-                    "old_value": "150:warning", "new_value": None}]
-        assert bt.keep_flat_threshold_changes(changes, {}) == []
-
-    def test_keep_flat_removal_head1_unavailable_dropped(self, monkeypatch):
-        """HEAD~1 不可得（空集合）→ 移除型保守丟棄，不臆測。"""
-        monkeypatch.setattr(bt, "_flat_keys_at_head1", lambda t: set())
-        changes = [{"tenant": "gone", "metric": "mysql_connections",
-                    "old_value": "70", "new_value": None}]
-        assert bt.keep_flat_threshold_changes(changes, {}) == []
-
-    def test_changed_conf_files_reduces_repo_root_to_cwd_relative(self, monkeypatch):
-        """git diff 的 repo-root 路徑被縮成 conf.d/<basename>（CI 在子目錄跑也載得到）。"""
-        # ⚠️ NUL-delimited BYTES since #1634: this call now passes `-z`, which
-        # is git's own contract for "never quote anything" and is what carries
-        # a non-ASCII (or newline-bearing) name through intact. A newline-
-        # delimited `str` fake describes the pre-#1634 interface.
-        out = (b"components/threshold-exporter/config/conf.d/db-b.yaml\0"
-               b"components/threshold-exporter/config/conf.d/_defaults.yaml\0")
-        monkeypatch.setattr(subprocess, "run",
-                            lambda *a, **k: type("R", (), {"returncode": 0, "stdout": out})())
-        assert bt.changed_conf_files() == ["conf.d/db-b.yaml", "conf.d/_defaults.yaml"]
-
-    def test_flat_keys_at_head1_parses_tenants_wrapper(self, monkeypatch):
-        """從 HEAD~1 的 tenants-wrapper 抽 top-level 純量閾值 key（排除 _ 與 recipe 區塊）。"""
-        # ⚠️ BYTES since #1634. This one was GREEN with a `str` fake even after
-        # the tool switched, because `yaml.safe_load` accepts both — i.e. the
-        # fake described an interface the tool no longer had and nothing said
-        # so. Pinned to bytes so the fake cannot drift away from the call again.
-        yaml_text = (b"tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_threads_running: '60'\n"
-                     b"    _silent_mode: warning\n    _custom_alerts:\n      - recipe: threshold\n")
-        _fake_git_show(monkeypatch, yaml_text)
-        assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_threads_running"}
-
-    def test_flat_keys_at_head1_duplicate_key_is_like_bad_syntax(self, monkeypatch):
-        """#2231：HEAD~1 的檔有重複鍵時，exporter 整份丟掉，比照語法錯回空集合。"""
-        yaml_text = (b"tenants:\n  db-b:\n    mysql_connections: '5'\n"
-                     b"    mysql_connections: '6'\n    mysql_threads_running: '1'\n")
-        _fake_git_show(monkeypatch, yaml_text)
-        assert bt._flat_keys_at_head1("db-b") == set()
-
-    def test_flat_keys_at_head1_reads_the_yaml_v3_way(self, monkeypatch):
-        """ADR-036 step 4 (#2906): the HEAD~1 text is read by `da-guard
-        parse-tree` (file mode), not PyYAML: an unquoted `yes` key is the
-        key "yes" (PyYAML: the boolean True, which `str(k)` turned into
-        "True"), and a value of the shape a threshold has stays one."""
-        yaml_text = (b"tenants:\n  db-b:\n    yes: '1'\n    on: '2'\n"
-                     b"    mysql_connections: 0o17\n")
-        _fake_git_show(monkeypatch, yaml_text)
-        assert bt._flat_keys_at_head1("db-b") == {"yes", "on", "mysql_connections"}
-
-    def test_flat_keys_at_head1_names_a_file_parse_tree_cannot_read(self, monkeypatch, capsys):
-        _fake_git_show(monkeypatch, b"tenants: [\n")
-        assert bt._flat_keys_at_head1("db-b") == set()
-        err = capsys.readouterr().err
-        assert "HEAD~1:./conf.d/db-b.yaml" in err and "syntax_error" in err, err
 
     def test_notice_empty_when_no_recipes(self):
         """無 recipe 租戶 → notice 為空字串。"""
@@ -985,18 +770,6 @@ class TestPrometheusEnvFallback:
         assert url == "http://cli:9099"
 
 
-def _bytes_git(monkeypatch, stdout: bytes, returncode: int = 0):
-    """Replace `subprocess.run` with a fake answering BYTES.
-
-    Matches the existing fakes in this file: every path-carrying git call in
-    the tool runs without `text=True` (#1634), so a `str` fake would describe
-    an interface the tool no longer has.
-    """
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: type("R", (), {"returncode": returncode, "stdout": stdout})())
-
-
 class TestConfdSpellingParityWithTheExporter:
     """#1603 — every conf.d reader in this file accepts BOTH spellings.
 
@@ -1025,7 +798,7 @@ class TestConfdSpellingParityWithTheExporter:
     this class; do not read a green run here as covering them.
     """
 
-    # ── site 1 of 5: extract_changes_from_dirs ────────────────────────
+    # ── site 1 of 2: extract_changes_from_dirs ────────────────────────
     # #2119: the trees are read by da-guard, so the spelling rule is the
     # exporter's own; these rows pin that it reaches this tool's answer.
     def test_dir_comparison_sees_a_yml_carrier(self, tmp_path, da_guard_env):
@@ -1061,77 +834,26 @@ class TestConfdSpellingParityWithTheExporter:
         tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
         assert tenants == {"db-a"}
 
-    # ── site 2 of 5: extract_changes_from_git_diff ────────────────────
-    def test_git_diff_parser_sees_a_yml_carrier(self, monkeypatch):
-        """LOWER + CONTROL, and UPPER in the same diff."""
-        _bytes_git(monkeypatch, (
-            b"+++ b/conf.d/db-a.yaml\n"
-            b"-  mysql_connections: 70\n"
-            b"+  mysql_connections: 50\n"
-            b"+++ b/conf.d/db-b.yml\n"
-            b"-  mysql_connections: 70\n"
-            b"+  mysql_connections: 50\n"
-            b"+++ b/conf.d/db-c.json\n"
-            b"-  mysql_connections: 70\n"
-            b"+  mysql_connections: 50\n"
-        ))
-        tenants = {c["tenant"] for c in bt.extract_changes_from_git_diff()}
-        assert tenants == {"db-a", "db-b"}
-
-    # ── site 3 of 5: changed_conf_files ───────────────────────────────
-    def test_changed_conf_files_keeps_yml_and_drops_other_extensions(self, monkeypatch):
-        """LOWER + UPPER + CONTROL on one NUL-delimited listing."""
-        _bytes_git(monkeypatch, (
-            b"components/threshold-exporter/config/conf.d/db-a.yaml\0"
-            b"components/threshold-exporter/config/conf.d/db-b.yml\0"
-            b"components/threshold-exporter/config/conf.d/notes.txt\0"
-        ))
-        assert bt.changed_conf_files() == ["conf.d/db-a.yaml", "conf.d/db-b.yml"]
-
-    # ── site 4 of 5: _carrier_at_head1 ────────────────────────────────
-    def test_carrier_at_head1_resolves_a_yml_carrier(self, monkeypatch):
-        """LOWER: the tenant id came off a `.yml`, so resolution must too."""
-        _bytes_git(monkeypatch, b"conf.d/db-a.yaml\0conf.d/db-b.yml\0")
-        assert bt._carrier_at_head1("db-b") == "./conf.d/db-b.yml"
-        # CONTROL — the spelling this function always resolved.
-        assert bt._carrier_at_head1("db-a") == "./conf.d/db-a.yaml"
-
-    def test_carrier_at_head1_ignores_non_config_extensions(self, monkeypatch):
-        """UPPER: a `.json` stem must not answer for a tenant."""
-        _bytes_git(monkeypatch, b"conf.d/db-c.json\0")
-        assert bt._carrier_at_head1("db-c") is None
-
-    # ── site 5 of 5: the recipe notice in main() ──────────────────────
+    # ── site 2 of 2: the recipe notice in main() ──────────────────────
     def test_recipe_notice_counts_a_tenant_declared_in_a_yml_carrier(
-        self, monkeypatch, tmp_path, capsys, cli_argv
+        self, monkeypatch, tmp_path, capsys, cli_argv, da_guard_env
     ):
-        """LOWER + UPPER through `main()`'s selection (parse-tree's since #2906).
-
-        The operator-facing NOTE is built from `find_custom_alert_tenants`,
-        which reads whatever this filter admits — so a recipe-only tenant
-        living in a `.yml` used to be absent from a notice whose whole job
-        is "there are recipe tenants this flat backtest does not cover".
-        """
+        """LOWER + UPPER through `main()`'s recipe NOTE, which since #3111 is
+        the tenants whose recipes changed as da-guard serves the two trees:
+        a recipe tenant in a `.yml` carrier is a real tenant (#1603); one in a
+        `.txt` file is none the exporter loads."""
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        recipe = ("tenants:\n  {t}:\n    _custom_alerts:\n"
-                  "      - recipe: threshold\n")
-        (conf_d / "acme.yaml").write_text(recipe.format(t="acme"), encoding="utf-8")
-        (conf_d / "beta.yml").write_text(recipe.format(t="beta"), encoding="utf-8")
-        # UPPER — same body, an extension the exporter never loads.
-        (conf_d / "ghost.txt").write_text(recipe.format(t="ghost"), encoding="utf-8")
-
-        cli_argv("backtest_threshold",
-                 "--config-dir", str(conf_d), "--baseline", str(conf_d),
+        files = {name: _tenant_file(t, "    mysql_connections: 70\n")
+                 for name, t in (("acme.yaml", "acme"), ("beta.yml", "beta"),
+                                 ("ghost.txt", "ghost"))}
+        cur, base = _dirs(tmp_path, {**_D, **files},
+                          {**_D, **{n: b + _RECIPE.format(v=150) for n, b in files.items()}})
+        cli_argv("backtest_threshold", "--config-dir", cur, "--baseline", base,
                  "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit):
             bt.main()
-
-        err = capsys.readouterr().err
-        assert "acme" in err, "CONTROL: the .yaml recipe tenant was always named"
-        assert "beta" in err, "#1603: the .yml recipe tenant is a real tenant"
-        assert "ghost" not in err
+        note = [ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("NOTE:")]
+        assert len(note) == 1 and note[0].endswith("(_custom_alerts): acme, beta"), note
 
 
 # ── 回放 alert 實際比較的那條 series（#3017 / #3002）──────────────
@@ -1193,7 +915,7 @@ class TestAlertComparison:
         ("mysql_connections", 'tenant:mysql_threads_connected:max{tenant="t-x"}'),
         # 比的是使用率 ratio，不是連線數。
         ("pg_connections", 'tenant:pg_connection_usage:ratio{tenant="t-x"}'),
-        # 退役拼法（`--git-diff` 讀到的是檔裡寫的）先過 alias 表。
+        # 退役拼法（`--tenant` 給的是寫法）先過 alias 表。
         ("mysql_cpu", 'tenant:mysql_threads_running:avg1m{tenant="t-x"}'),
         ("mysql_cpu_critical", 'tenant:mysql_threads_running:avg1m{tenant="t-x"}'),
     ])
@@ -1394,8 +1116,8 @@ class TestObservedMapMissing:
 
 
 class TestWrittenValues:
-    """`--git-diff`／`--tenant` 給的是檔裡寫的值。exporter 對 `70:critical` 的
-    讀法（`pkg/config/resolve.go`：切第一個 `:`，前段是數字、後段是 severity）
+    """`--tenant` 給的是寫法上的值。exporter 對 `70:critical` 的
+    讀法（`pkg/config/resolve.go`：切最後一個 `:`，前段是數字、後段是 severity）
     在這裡照抄；以前 `float("95:critical")` 失敗被當成 0 個越界點，判出假的
     HIGH（rc 1）或假的 LOW。"""
 
@@ -1458,18 +1180,19 @@ class TestWrittenValues:
         with pytest.raises(ValueError):
             bt.parse_threshold_value(key, raw)
 
-    def test_severity_change_compares_the_values_on_both_alerts(
-            self, monkeypatch, capsys, cli_argv):
-        """#3060 R1：severity 只決定由哪支 alert 比，觸發點只看值。70 → 95:critical
-        由 warning 與 critical 兩支 alert 比；兩支比同一條 series、同一個方向，所以
-        照值回測（先前一律不回測；更早的 #3061 審查重現是只拿 warning alert 比）。"""
+    def test_a_severity_change_is_two_rows(self, monkeypatch, capsys, cli_argv):
+        """#3111：70 → 95:critical 是兩條 /metrics row（同目錄比對）：warning 告警
+        失去門檻（3 點不再響、MEDIUM），critical 告警開始比 95（1/4 點、HIGH，rc 1）。
+        #3060 R1 把它當成一列照值回測（3 → 1 點）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                        "mysql_connections", "70", "95:critical")
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
-        assert rows[0]["status"] == "analyzed"
-        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 1)
-        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "critical")
-        assert rc == (1 if rows[0]["risk"] == "HIGH" else 0)
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}'] * 2
+        assert [(r["metric"], r["old_value"], r["new_value"], r["risk"]) for r in rows] == [
+            ("mysql_connections", "70", None, "MEDIUM"),
+            ("mysql_connections_critical", None, "95", "HIGH")]
+        assert all("old_severity" not in r for r in rows)
+        assert rows[1]["keys"] == ["mysql_connections"]
+        assert rc == 1
 
     def test_a_severity_no_rule_selects_is_unreadable(self, monkeypatch, capsys, cli_argv):
         """#3071：`70:high` 的 severity 沒有規則會選，exporter 把整個值當成讀不懂、改送
@@ -1500,8 +1223,9 @@ class TestWrittenValues:
         _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                       "mongodb_connections_current", "70:critical", "80:critical")
         assert asked == []
-        assert rows[0]["backtest"].startswith(
-            "skipped: mongodb_connections_current_critical: no shipped alert compares")
+        assert [(r["metric"], r["old_value"], r["new_value"]) for r in rows] == [
+            ("mongodb_connections_current_critical", "70", "80")]
+        assert rows[0]["backtest"].startswith("skipped: no shipped alert compares")
 
     @pytest.mark.parametrize("old,new,why", [
         ("70", "7O", "value '7O': this backtest cannot read it the way the exporter does"),
@@ -1513,25 +1237,23 @@ class TestWrittenValues:
         assert (rc, asked) == (0, [])
         assert rows[0]["backtest"].startswith("skipped: " + why)
 
-    def test_git_diff_reads_the_critical_suffix(self, monkeypatch, capsys, cli_argv):
-        """`--git-diff` 這條路一樣：diff 裡的 `"95:critical"` 不是 0 個越界點。"""
-        diff = (b"+++ b/conf.d/t-x.yaml\n"
-                b"-    mysql_connections: '70:critical'\n"
-                b"+    mysql_connections: '95:critical'\n"
-                b"-    pg_connections: '70'\n"
-                b"+    pg_connections: '95:critical'\n")
-        monkeypatch.setattr(bt, "_git_bytes",
-                            lambda args, quotepath_off=False: diff if "--unified=0" in args else b"")
-        rc, rows, asked = self._main(monkeypatch, capsys, cli_argv, ["--git-diff"])
-        got = {r["metric"]: r for r in rows}
-        assert (got["mysql_connections"]["old_breach_count"],
-                got["mysql_connections"]["new_breach_count"]) == (3, 1)
-        # #3060 R1: '70' -> '95:critical' is compared by pg's warning and
-        # critical alerts; whatever they say, it is no longer "severity changes".
-        assert "severity changes" not in got["pg_connections"].get("backtest", "")
-        assert (got["pg_connections"]["old_severity"],
-                got["pg_connections"]["new_severity"]) == ("warning", "critical")
-        assert asked[0] == 'tenant:mysql_threads_connected:max{tenant="t-x"}'
+    def test_two_trees_read_the_critical_suffix(self, monkeypatch, capsys, cli_argv, tmp_path,
+                                                da_guard_env):
+        """`"95:critical"` 不是 0 個越界點；兩棵樹由 exporter 讀，每條 /metrics row
+        一列：`70` → `95:critical` 是 warning 那條沒了、critical 那條出現。"""
+        defaults = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  pg_connections: 80\n"}
+        before = "tenants:\n  t-x:\n    mysql_connections: '70:critical'\n    pg_connections: '70'\n"
+        after = "tenants:\n  t-x:\n    mysql_connections: '95:critical'\n    pg_connections: '95:critical'\n"
+        cur, base = _dirs(tmp_path, {**defaults, "t-x.yaml": before}, {**defaults, "t-x.yaml": after})
+        rc, rows, asked = self._main(monkeypatch, capsys, cli_argv,
+                                     ["--config-dir", cur, "--baseline", base])
+        got = {(r["metric"], r["old_value"], r["new_value"]): r for r in rows}
+        crit = got[("mysql_connections_critical", "70", "95")]
+        assert (crit["old_breach_count"], crit["new_breach_count"]) == (3, 1)
+        assert crit["query"] == 'tenant:mysql_threads_connected:max{tenant="t-x"}'
+        assert ("pg_connections", "70", None) in got
+        assert ("pg_connections_critical", None, "95") in got
+        assert all("old_severity" not in r for r in rows)
 
 
 class TestMalformedObservedMap:
@@ -1634,14 +1356,13 @@ def fake_prom():
         p.close()
 
 
-def _diff_for(*tenants):
-    """一段 `--git-diff`：每個租戶的 mysql_connections 100 → 50。"""
-    out = b""
-    for t in tenants:
-        out += (f"+++ b/conf.d/{t}.yaml\n"
-                "-    mysql_connections: '100'\n"
-                "+    mysql_connections: '50'\n").encode()
-    return out
+def _dirs_for(tmp_path, *tenants):
+    """Two conf.d trees: each tenant's mysql_connections 100 → 50."""
+    def tree(value):
+        return {"_defaults.yaml": _DEFAULTS,
+                **{f"{t}.yaml": f"tenants:\n  {t}:\n    mysql_connections: '{value}'\n"
+                   for t in tenants}}
+    return _dirs(tmp_path, tree(100), tree(50))
 
 
 def _run_main(cli_argv, capsys, *argv):
@@ -1673,15 +1394,18 @@ class TestQueryError:
         assert "not measured" in out.err
 
     def _git(self, monkeypatch, *tenants):
-        diff = _diff_for(*tenants)
-        monkeypatch.setattr(bt, "_git_bytes",
-                            lambda args, quotepath_off=False: diff if "--unified=0" in args else b"")
+        cur, base = _dirs_for(self._tmp, *tenants)
+        self._src = ("--config-dir", cur, "--baseline", base)
+
+    @pytest.fixture(autouse=True)
+    def _tmp_and_da_guard(self, tmp_path, da_guard_env):
+        self._tmp = tmp_path
 
     def test_other_changes_still_run_and_query_error_beats_high(
             self, fake_prom, monkeypatch, cli_argv, capsys):
         p = fake_prom(errors={"t-bad": 400})
         self._git(monkeypatch, "t-ok", "t-bad")
-        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        rc, out = _run_main(cli_argv, capsys, *self._src, "--prometheus", p.url, "--json")
         doc = json.loads(out.out)
         got = {r["tenant"]: r for r in doc["changes"]}
         assert got["t-ok"]["status"] == "analyzed" and got["t-ok"]["risk"] == "HIGH"
@@ -1694,7 +1418,7 @@ class TestQueryError:
         """control：沒有 query_error 時 HIGH 照舊 rc 1，頂層不帶 status。"""
         p = fake_prom()
         self._git(monkeypatch, "t-ok")
-        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url, "--json")
+        rc, out = _run_main(cli_argv, capsys, *self._src, "--prometheus", p.url, "--json")
         doc = json.loads(out.out)
         assert rc == 1 and "status" not in doc and doc["query_error"] == 0
 
@@ -1702,7 +1426,7 @@ class TestQueryError:
             self, fake_prom, monkeypatch, cli_argv, capsys):
         p = fake_prom(errors={"t-bad": 503})
         self._git(monkeypatch, "t-bad")
-        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url,
+        rc, out = _run_main(cli_argv, capsys, *self._src, "--prometheus", p.url,
                             "--skip-if-unavailable", "--json")
         assert rc == 2
         assert json.loads(out.out)["status"] == "partial"
@@ -1712,7 +1436,7 @@ class TestQueryError:
         p = fake_prom(errors={"t-bad": 400})
         self._git(monkeypatch, "t-ok", "t-bad")
         md = tmp_path / "out.md"
-        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", p.url,
+        rc, out = _run_main(cli_argv, capsys, *self._src, "--prometheus", p.url,
                             "--markdown-output", str(md))
         assert rc == 2
         assert "Query error: 1" in out.out
@@ -1830,7 +1554,11 @@ def _path_skip(mp, tmp, prom):
 def _path_skip_with_recipe(mp, tmp, prom):
     mp.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
     d = _recipe_confd(tmp)
-    return ["--config-dir", str(d), "--baseline", str(d),
+    base = tmp / "recipe-base"  # the same tenant before its recipe was added
+    base.mkdir()
+    (base / "ta.yaml").write_text("tenants:\n  ta:\n    mysql_connections: 100\n",
+                                  encoding="utf-8")
+    return ["--config-dir", str(d), "--baseline", str(base),
             "--prometheus", "http://prom:9090", "--skip-if-unavailable"]
 
 
@@ -1852,12 +1580,6 @@ def _path_observed_map(mp, tmp, prom):
     return [*_TENANT, "--prometheus", "http://prom:9090", "--skip-if-unavailable"]
 
 
-def _path_git_diff(mp, tmp, prom):
-    mp.setattr(bt, "_git_bytes", lambda *a, **k: None)
-    mp.setattr(bt, "prometheus_available", _boom)
-    return ["--git-diff", "--prometheus", "http://prom:9090"]
-
-
 def _path_baseline_missing(mp, tmp, prom):
     mp.setattr(bt, "prometheus_available", _boom)
     return ["--config-dir", str(_plain_confd(tmp)), "--prometheus", "http://prom:9090"]
@@ -1866,7 +1588,7 @@ def _path_baseline_missing(mp, tmp, prom):
 def _path_served_values(mp, tmp, prom):
     def missing(*a, **kw):
         raise bt.DaGuardNotFoundError("no da-guard")
-    mp.setattr(bt, "extract_changes_from_dirs", missing)
+    mp.setattr(bt, "load_trees", missing)
     mp.setattr(bt, "prometheus_available", _boom)
     d = _plain_confd(tmp)
     return ["--config-dir", str(d), "--baseline", str(d), "--prometheus", "http://prom:9090"]
@@ -1903,14 +1625,13 @@ _EVERY_PATH = [
      ("caller_error", "prometheus_unavailable"), ("Backtest not run", "prometheus_unavailable")),
     ("observed-map", _path_observed_map, 2, ("caller_error", "observed_map_unavailable"),
      ("Backtest not run", "observed_map_unavailable")),
-    ("git-diff", _path_git_diff, 2, ("caller_error", "git_diff_unavailable"),
-     ("Backtest not run", "git_diff_unavailable")),
     ("baseline-missing", _path_baseline_missing, 2, ("caller_error", "baseline_missing"),
      ("Backtest not run", "baseline_missing")),
     ("served-values", _path_served_values, 2, ("caller_error", "served_values_unavailable"),
      ("Backtest not run", "served_values_unavailable")),
-    ("conf-unreadable", _path_conf_unreadable, 2, ("caller_error", "conf_file_unreadable"),
-     ("Backtest not run", "conf_file_unreadable")),
+    # #3111: da-guard names an undecodable file on either side.
+    ("conf-unreadable", _path_conf_unreadable, 2, ("caller_error", "served_values_unavailable"),
+     ("Backtest not run", "served_values_unavailable")),
     ("query-error", _path_query_error, 2, ("partial", "query_error"),
      ("Threshold Backtest Results", "not measured")),
     ("high", _path_high, 1, None, ("Threshold Backtest Results", "HIGH")),
@@ -2010,12 +1731,13 @@ class TestOutputPreflight:
     @pytest.mark.parametrize("flag", ["-o", "--markdown-output"])
     def test_report_path_stops_before_any_work(self, flag, monkeypatch, tmp_path, cli_argv,
                                                capsys):
-        """git、observed-map、Prometheus 一個都沒碰就停（每個都換成 `_boom`）。"""
-        for name in ("_git_bytes", "_observed_map", "prometheus_available", "query_range",
-                     "extract_changes_from_dirs", "load_conf_files"):
+        """樹、observed-map、Prometheus 一個都沒碰就停（每個都換成 `_boom`）。"""
+        for name in ("_observed_map", "prometheus_available", "query_range",
+                     "extract_changes_from_dirs", "load_trees"):
             monkeypatch.setattr(bt, name, _boom)
         bad = _unwritable(tmp_path, "missing_parent", "r.out")
-        rc, out = _run_main(cli_argv, capsys, "--git-diff", "--prometheus", "http://prom:9090",
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", str(tmp_path), "--baseline",
+                            str(tmp_path), "--prometheus", "http://prom:9090",
                             "--json", flag, str(bad))
         assert rc == 2
         assert json.loads(out.out)["reason"] == "output_unwritable"
@@ -2074,3 +1796,633 @@ class TestOutputPreflight:
                             "--json", "-o", str(bad))
         assert rc == 2
         assert json.loads(out.out)["reason"] == "tenant_args_missing"
+
+
+# ── 以送出的 series 為單位分列（#3111）──────────────────────────────
+
+
+def _rows(changes):
+    """The fields a reader compares, without the Series objects."""
+    return [{k: v for k, v in c.items() if k != "series"} for c in changes]
+
+
+_CRIT_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mongodb_connections_current: 300\n"
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestServedSeriesGrouping:
+    """#3111：變更以 /metrics 實際送出的 series 為單位，不以 threshold key 為單位。
+    同一條 series 換一個 key 來寫（`90:critical` ↔ `disable` + `_critical: 90`），
+    exporter 送出的東西沒變，就沒有變更。"""
+
+    def _pair(self, tmp_path, old_body, new_body):
+        base = _confd(tmp_path / "base", {"_defaults.yaml": _CRIT_DEFAULTS, "db-a.yaml": old_body})
+        cur = _confd(tmp_path / "cur", {"_defaults.yaml": _CRIT_DEFAULTS, "db-a.yaml": new_body})
+        return bt.extract_changes_from_dirs(str(cur), str(base))
+
+    def test_same_series_written_by_another_key_is_no_change(self, tmp_path):
+        """票上的 sb／sc：兩棵樹都只送一條 critical 90，舊版報兩列、rc 1。"""
+        changes = self._pair(
+            tmp_path,
+            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connections: disable\n'
+            '    mysql_connections_critical: "90"\n')
+        assert _rows(changes) == []
+
+    def test_a_real_change_of_that_series_is_still_one_row(self, tmp_path):
+        """同一條 critical series 90 → 95：一列，metric 是比它的告警 key，keys 列出供值的 key。"""
+        changes = self._pair(
+            tmp_path,
+            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connections: disable\n'
+            '    mysql_connections_critical: "95"\n')
+        assert _rows(changes) == [{
+            "tenant": "db-a", "metric": "mysql_connections_critical",
+            "old_value": "90", "new_value": "95",
+            "keys": ["mysql_connections", "mysql_connections_critical"]}]
+        assert [s.labels["severity"] for s in changes[0]["series"]] == ["critical"]
+
+    def test_split_into_two_levels_reports_only_the_new_warning(self, tmp_path):
+        """票上的「拆成兩級」：critical 90 → 90 沒變，warning None → 70 新啟用。"""
+        changes = self._pair(
+            tmp_path,
+            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connections: "70"\n'
+            '    mysql_connections_critical: "90"\n')
+        assert _rows(changes) == [{
+            "tenant": "db-a", "metric": "mysql_connections",
+            "old_value": None, "new_value": "70", "keys": ["mysql_connections"]}]
+
+    def test_severity_move_is_two_series(self, tmp_path):
+        """`70` → `70:critical`：warning 那條沒了、critical 那條出現，各一列。"""
+        changes = self._pair(
+            tmp_path,
+            'tenants:\n  db-a:\n    mysql_connections: "70"\n',
+            'tenants:\n  db-a:\n    mysql_connections: "70:critical"\n')
+        assert _rows(changes) == [
+            {"tenant": "db-a", "metric": "mysql_connections",
+             "old_value": "70", "new_value": None, "keys": ["mysql_connections"]},
+            {"tenant": "db-a", "metric": "mysql_connections_critical",
+             "old_value": None, "new_value": "70", "keys": ["mysql_connections"]},
+        ]
+
+
+class TestNoAlertSideIsNoThreshold:
+    """#3111 (e)：告警 key 不在 observed-map、也不是 KNOWN_DEFERRED ⇒ 沒有出廠告警
+    比它。mongodb 沒有 `_critical` 告警，所以 `70` → `70:critical` 是 warning 告警
+    失去門檻（靜默 MEDIUM），critical 那一列沒有告警比、不回測——不再整筆 UNKNOWN。"""
+
+    _VALS = [60, 80, 90, 100]
+
+    def _tenant(self, monkeypatch, capsys, cli_argv, metric, old, new):
+        asked = []
+
+        def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+            asked.append(q)
+            return [{"values": [(i, str(v)) for i, v in enumerate(self._VALS)]}]
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", query_range)
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", metric,
+                 "--old-value", old, "--new-value", new,
+                 "--prometheus", "http://prom:9090", "--json")
+        with pytest.raises(SystemExit) as ei:
+            bt.main()
+        return ei.value.code, json.loads(capsys.readouterr().out)["changes"], asked
+
+    def test_moving_to_a_severity_no_alert_compares_is_silenced(
+            self, monkeypatch, capsys, cli_argv):
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mongodb_connections_current", "70", "70:critical")
+        assert asked == ['tenant:mongodb_connections_current:max{tenant="t-x"}']
+        assert [(r["metric"], r["status"], r["risk"]) for r in rows] == [
+            ("mongodb_connections_current", "analyzed", "MEDIUM"),
+            ("mongodb_connections_current_critical", "not_backtested", "UNKNOWN")]
+        assert rows[0]["message"] == "Metric disabled — all alerts silenced"
+        assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 0)
+        assert rc == 0
+
+    def test_the_reverse_is_newly_enabled(self, monkeypatch, capsys, cli_argv):
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mongodb_connections_current", "70:critical", "70")
+        assert asked == ['tenant:mongodb_connections_current:max{tenant="t-x"}']
+        row = rows[0]
+        assert row["status"] == "analyzed" and row["new_breach_count"] == 3
+        assert row["message"].startswith("Metric newly enabled")
+        assert (row["risk"], rc) == ("HIGH", 1)
+
+    def test_known_deferred_side_is_still_not_backtested(self, monkeypatch, capsys, cli_argv):
+        """KNOWN_DEFERRED 不是「沒有告警」：它的告警比的是 map 不收錄的 recording rule。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "container_cpu", "70", "80")
+        assert (rc, asked, rows[0]["status"]) == (0, [], "not_backtested")
+        assert "KNOWN_DEFERRED" in rows[0]["backtest"]
+
+
+def _write_confd(confd, files):
+    """`files`: {relative name (str or bytes): body (str or bytes)}; written as BYTES."""
+    root = os.fsencode(str(confd))
+    os.makedirs(root, exist_ok=True)
+    for name, body in files.items():
+        rel = name if isinstance(name, bytes) else name.encode("utf-8")
+        path = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(body if isinstance(body, bytes) else body.encode("utf-8"))
+
+
+def _dirs(tmp_path, before, after):
+    """(current, baseline): two conf.d trees, `after` and `before`, as strings."""
+    base, cur = tmp_path / "base" / "conf.d", tmp_path / "cur" / "conf.d"
+    _write_confd(base, before)
+    _write_confd(cur, after)
+    return str(cur), str(base)
+
+
+_D = {"_defaults.yaml": _CRIT_DEFAULTS}
+
+
+def _tenant_file(tenant, body):
+    return f"tenants:\n  {tenant}:\n{body}"
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestTenantAndTreesAgree:
+    """#3111：同一個編輯，`--tenant` 與 `--config-dir/--baseline` 報同樣的列（一條規則）。"""
+
+    def _rows(self, out, *fields):
+        return [tuple(r.get(f) for f in fields) for r in json.loads(out.out)["changes"]]
+
+    @pytest.mark.parametrize("key", ["mysql_connections", 'mysql_connections{db="a"}'])
+    @pytest.mark.parametrize("old,new", [("70", "70:critical"), ("70", "95:critical"),
+                                         ("70:critical", "60"), ("70", "60"),
+                                         ("70", "disable"), ("disable", "70:critical")])
+    def test_same_rows(self, tmp_path, cli_argv, capsys, fake_prom, key, old, new):
+        fields = ("metric", "old_value", "new_value", "risk", "message")
+        p = fake_prom(values=(60, 80, 90, 100))
+        _rc, out = _run_main(cli_argv, capsys, "--tenant", "db-a", "--metric", key,
+                             "--old-value", old, "--new-value", new,
+                             "--prometheus", p.url, "--json")
+        tenant = self._rows(out, *fields)
+        cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
+                          {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
+        _rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                             "--prometheus", p.url, "--json")
+        assert tenant == self._rows(out, *fields) and tenant, (tenant, out.out)
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestTwoTreesCompare:
+    """#3111：`--git-diff` 移除後，PR 與其 base 一律以兩棵 conf.d 比（呼叫端自己
+    checkout base）。原本 `--git-diff` 測試對「比對本身」的涵蓋改在這裡：只換寫法、
+    severity 移動、改名、子目錄、刪檔、隱藏檔、沒有 config 檔的樹。"""
+
+    def _run(self, cli_argv, capsys, fake_prom, cur, base):
+        p = fake_prom()
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", p.url, "--json")
+        return rc, json.loads(out.out), out.err
+
+    def _changes(self, doc):
+        return sorted((c["tenant"], c["metric"], c["old_value"], c["new_value"])
+                      for c in doc["changes"])
+
+    def test_spelling_only_change_is_no_change(self, tmp_path, cli_argv, capsys, fake_prom):
+        cur, base = _dirs(
+            tmp_path,
+            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "90:critical"\n')},
+            {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: disable\n"
+                                                     '    mysql_connections_critical: "90"\n')})
+        rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert (rc, doc["status"]) == (0, "no_changes"), doc
+
+    def test_severity_move_is_two_rows(self, tmp_path, cli_argv, capsys, fake_prom):
+        cur, base = _dirs(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "70"\n')},
+            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "70:critical"\n')})
+        rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert self._changes(doc) == [("db-a", "mysql_connections", "70", None),
+                                      ("db-a", "mysql_connections_critical", None, "70")]
+
+    def test_tenant_comes_from_tenants_not_the_file_name(self, tmp_path, cli_argv, capsys,
+                                                         fake_prom):
+        cur, base = _dirs(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 70\n")},
+            {**_D, "renamed.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+        rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert self._changes(doc) == [("db-a", "mysql_connections", "70", "50")]
+
+    def test_rename_alone_is_no_change(self, tmp_path, cli_argv, capsys, fake_prom):
+        body = _tenant_file("db-a", "    mysql_connections: 70\n")
+        cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": body}, {**_D, "sub/moved.yml": body})
+        rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert (rc, doc["status"]) == (0, "no_changes")
+
+    def test_deleted_added_and_nested_carriers(self, tmp_path, cli_argv, capsys, fake_prom):
+        cur, base = _dirs(
+            tmp_path,
+            {**_D, "gone.yaml": _tenant_file("t-gone", "    mysql_connections: 70\n"),
+             "deep/er/t.yaml": _tenant_file("t-deep", "    mysql_connections: 70\n")},
+            {**_D, "deep/er/t.yaml": _tenant_file("t-deep", "    mysql_connections: 60\n"),
+             "new/t.yaml": _tenant_file("t-new", "    mysql_connections: 50\n")})
+        rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
+        changes = self._changes(doc)
+        assert ("t-deep", "mysql_connections", "70", "60") in changes
+        assert ("t-gone", "mysql_connections", "70", None) in changes
+        assert ("t-new", "mysql_connections", None, "50") in changes
+        assert ("t-new", "mongodb_connections_current", None, "300") in changes
+
+    def test_hidden_files_and_directories_are_not_read(self, tmp_path, cli_argv, capsys,
+                                                      fake_prom):
+        """The exporter skips `.`-prefixed files and directories."""
+        hidden = {".old.yaml": _tenant_file("t-h", "    mysql_connections: 1\n"),
+                  ".archive/x.yaml": _tenant_file("t-h2", "    mysql_connections: 1\n")}
+        cur, base = _dirs(
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 70\n")},
+            {**_D, **hidden, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+        rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert self._changes(doc) == [("db-a", "mysql_connections", "70", "50")]
+
+    @pytest.mark.parametrize("side", ["baseline", "current"])
+    def test_a_tree_with_no_config_is_rc2_named(self, tmp_path, cli_argv, capsys, fake_prom,
+                                                side):
+        """A tree holding no config file is one the exporter refuses ("no .yaml
+        files found"): rc 2, named — a PR that adds the first conf.d/ compares
+        against a baseline holding at least a `_defaults.yaml`."""
+        empty = {"README.md": "x\n"}
+        full = {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")}
+        cur, base = _dirs(tmp_path, empty if side == "baseline" else full,
+                          empty if side == "current" else full)
+        rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert (rc, doc["reason"]) == (2, "served_values_unavailable"), (doc, err)
+        assert "no .yaml files found" in err
+
+    @pytest.mark.parametrize("name", [
+        b"has\nnewline.yaml", b'has"quote.yaml', b"has\\backslash.yaml", b"has space.yaml",
+        "İSTANBUL.YAML".encode("utf-8"), b"legacy-\xff.yaml"])
+    def test_any_file_name_is_read(self, tmp_path, cli_argv, capsys, fake_prom, name):
+        """The tenant is the `tenants:` key the exporter reads; a file's name is
+        only a path."""
+        require_file_name(name)
+        cur, base = _dirs(
+            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connections: 80\n")},
+            {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
+        rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
+        assert self._changes(doc) == [("acme", "mysql_connections", "80", "50")], err
+
+
+_RECIPE = ("    _custom_alerts:\n      - recipe: threshold\n        name: q\n"
+           "        metric: mysql_global_status_threads_connected\n        op: '>'\n"
+           "        window: 5m\n        threshold: '{v}:warning'\n")
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestRecipeNoteFromTheWholeTree:
+    """#657 / #3111 / #3155: the recipe NOTE names the tenants whose custom-alert
+    recipes CHANGED between `--baseline` and `--config-dir`, read as the
+    exporter serves them (any file it takes a tenant from, `_platform.yaml`
+    and sub-directories included) — not every recipe tenant of the tree."""
+
+    def _note(self, monkeypatch, cli_argv, capsys, tmp_path, before, after, *extra):
+        cur, base = _dirs(tmp_path, {**_D, **before}, {**_D, **after})
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", "http://prom:9090", "--skip-if-unavailable", *extra)
+        notes = [ln for ln in out.err.splitlines() if ln.startswith("NOTE:")]
+        return rc, notes, out
+
+    def _t(self, tenant, body):
+        return _tenant_file(tenant, body)
+
+    def test_only_changed_recipe_tenants_are_named(self, monkeypatch, cli_argv, capsys,
+                                                   tmp_path):
+        same = self._t("db-b", _RECIPE.format(v=150))
+        before = {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n"),
+                  "db-b.yaml": same,
+                  "chg.yaml": self._t("chg", _RECIPE.format(v=150)),
+                  "gone.yaml": self._t("gone", _RECIPE.format(v=150)),
+                  "moved.yaml": self._t("moved", _RECIPE.format(v=150))}
+        after = {"db-a.yaml": self._t("db-a", "    mysql_connections: 50\n"),
+                 "db-b.yaml": same,
+                 "chg.yaml": self._t("chg", _RECIPE.format(v=200)),
+                 "gone.yaml": self._t("gone", "    mysql_connections: 70\n"),
+                 "deep/moved.yaml": self._t("moved", _RECIPE.format(v=150)),
+                 "team/new.yaml": self._t("new", _RECIPE.format(v=150))}
+        _rc, notes, _ = self._note(monkeypatch, cli_argv, capsys, tmp_path, before, after)
+        assert len(notes) == 1 and notes[0].endswith("(_custom_alerts): chg, gone, new"), notes
+
+    def test_an_untouched_recipe_tenant_is_not_named(self, monkeypatch, cli_argv, capsys,
+                                                     tmp_path):
+        """Every conf.d PR's comment used to carry every recipe tenant."""
+        same = {"db-b.yaml": self._t("db-b", _RECIPE.format(v=150))}
+        _rc, notes, _ = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {**same, "db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")},
+            {**same, "db-a.yaml": self._t("db-a", "    mysql_connections: 50\n")})
+        assert notes == []
+
+    def test_a_tenant_added_or_removed_without_recipes_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """A tenant on one side only is compared with "no recipes"."""
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {"gone.yaml": self._t("gone", "    mysql_connections: 70\n")},
+            {"new.yaml": self._t("new", "    mysql_connections: 70\n")})
+        assert notes == [], out.err
+
+    def test_a_recipe_in_the_platform_file_is_named(self, monkeypatch, cli_argv, capsys,
+                                                    tmp_path):
+        """The exporter reads `tenants.<id>._custom_alerts` from `_platform.yaml`."""
+        tp = {"tp.yaml": "tenants:\n  tp: {}\n"}
+        _rc, notes, _ = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path, tp,
+            {**tp, "_platform.yaml": "tenants:\n  tp:\n" + _RECIPE.format(v=150)})
+        assert len(notes) == 1 and notes[0].endswith("(_custom_alerts): tp"), notes
+
+    def test_tenant_ids_are_escaped_in_the_note_and_the_markdown(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """A tenant id is the `tenants:` key, which may hold anything YAML allows."""
+        tid = "a`b[x](http://e)\x1bc\nd"
+        quoted = '"a`b[x](http://e)\\ec\\nd"'
+        md = tmp_path / "r.md"
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path, {"t.yaml": f"tenants:\n  {quoted}: {{}}\n"},
+            {"t.yaml": f"tenants:\n  {quoted}:\n" + _RECIPE.format(v=150)},
+            "--markdown-output", str(md))
+        assert "\x1b" not in out.err and tid not in out.err, out.err
+        assert len(notes) == 1, out.err
+        text = md.read_text(encoding="utf-8")
+        assert "\x1b" not in text and "](http" in text
+        line = next(ln for ln in text.splitlines() if "changed custom-alert recipes" in ln)
+        # A fence longer than the id's backtick run, so the span holds the whole id.
+        assert line.endswith(": ``a`b[x](http://e)?c?d``"), line
+
+    def test_a_pipe_in_a_tenant_id_is_not_escaped_outside_a_table(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """0bd6f362: the recipe line is running text, not a table row, so the
+        table cell's `\\|` was shown as written."""
+        md = tmp_path / "r.md"
+        self._note(monkeypatch, cli_argv, capsys, tmp_path, {"t.yaml": "tenants:\n  a|b: {}\n"},
+                   {"t.yaml": "tenants:\n  a|b:\n" + _RECIPE.format(v=150)},
+                   "--markdown-output", str(md))
+        line = next(ln for ln in md.read_text(encoding="utf-8").splitlines()
+                    if "changed custom-alert recipes" in ln)
+        assert line.endswith(": `a|b`"), line
+
+    _BOGUS = ("    _custom_alerts:\n      - recipe: {r}\n        name: x\n        metric: m\n"
+              "        op: '>'\n        window: 5m\n        threshold: '1:warning'\n")
+
+    @pytest.mark.parametrize("before, after, named", [
+        # c6: a list the exporter refuses whole is added.
+        ("", _BOGUS.format(r="bogus"), True),
+        # c6 reversed: the refused list is removed.
+        (_BOGUS.format(r="bogus"), "", True),
+        # c3: refused on both sides, with different content.
+        (_BOGUS.format(r="bogus1"), _BOGUS.format(r="bogus2"), True),
+        # control: refused on both sides, unchanged.
+        (_BOGUS.format(r="bogus"), _BOGUS.format(r="bogus"), False),
+    ], ids=["refused-added", "refused-removed", "refused-changed", "refused-unchanged"])
+    def test_a_recipe_list_the_exporter_refuses_is_compared(
+            self, monkeypatch, cli_argv, capsys, tmp_path, before, after, named):
+        """0bd6f362: only the served rows were compared, so a recipe change
+        the exporter refuses whole (it serves no row either side) was not
+        named."""
+        base = "    mysql_connections: 70\n"
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {"db-a.yaml": self._t("db-a", base + before)},
+            {"db-a.yaml": self._t("db-a", base + after)})
+        if named:
+            assert len(notes) == 1 and notes[0].endswith("(_custom_alerts): db-a"), out.err
+        else:
+            assert notes == [], out.err
+
+    @pytest.mark.parametrize("extra", [
+        # c7: an unknown recipe beside a valid one.
+        _BOGUS.format(r="bogus").replace("    _custom_alerts:\n", ""),
+        # c20: a duplicate of the valid one.
+        "      - recipe: threshold\n        name: q2\n"
+        "        metric: mysql_global_status_threads_connected\n        op: '>'\n"
+        "        window: 5m\n        threshold: '150:warning'\n",
+    ], ids=["unknown-recipe", "duplicate"])
+    def test_a_row_refused_beside_served_rows_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path, extra):
+        """Documented limit: a row the exporter refuses while it serves the
+        others leaves the served rows and `unserved` as they were; da-guard
+        reports it on stderr only (which is not parsed), so the tenant is not
+        named. Its stderr line still reaches the log."""
+        good = self._t("db-b", _RECIPE.format(v=150))
+        _rc, notes, out = self._note(monkeypatch, cli_argv, capsys, tmp_path,
+                                     {"db-b.yaml": good}, {"db-b.yaml": good + extra})
+        assert notes == [], out.err
+        assert "rejected" in out.err, out.err
+
+    _R1 = ("    _custom_alerts:\n      - recipe: threshold\n        name: r1\n        metric: m1\n"
+           "        op: '>'\n        window: 5m\n        threshold: '1:warning'\n")
+    _R2 = ("      - recipe: threshold\n        name: r2\n        metric: m2\n"
+           "        op: '>'\n        window: 5m\n        threshold: '{v}:warning'\n")
+
+    def _capped(self, monkeypatch, cli_argv, capsys, tmp_path, before, after):
+        # A limit of 1 metric per tenant: r1 is served, any later recipe is cut.
+        capped = {"_defaults.yaml": _CRIT_DEFAULTS + "max_metrics_per_tenant: 1\n"}
+        head = "    mysql_connections: '70'\n"
+        return self._note(monkeypatch, cli_argv, capsys, tmp_path,
+                          {**capped, "db-a.yaml": self._t("db-a", head + before)},
+                          {**capped, "db-a.yaml": self._t("db-a", head + after)})
+
+    def test_a_recipe_added_past_the_metric_limit_is_named(self, monkeypatch, cli_argv, capsys,
+                                                         tmp_path):
+        """bbf0421d: the served rows are what the limit leaves, so r2 added
+        past it changed nothing compared; `custom_alert_rows` counts it."""
+        _rc, notes, out = self._capped(monkeypatch, cli_argv, capsys, tmp_path,
+                                       self._R1, self._R1 + self._R2.format(v=2))
+        assert len(notes) == 1 and notes[0].endswith("(_custom_alerts): db-a"), out.err
+
+    def test_a_value_changed_in_a_recipe_past_the_limit_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """Documented limit: served-values counts the cut rows but does not
+        show them."""
+        _rc, notes, out = self._capped(monkeypatch, cli_argv, capsys, tmp_path,
+                                       self._R1 + self._R2.format(v=2),
+                                       self._R1 + self._R2.format(v=3))
+        assert (_rc, notes) == (0, []), out.err
+
+    def test_a_recipe_at_the_top_of_the_root_defaults_is_not_named(
+            self, monkeypatch, cli_argv, capsys, tmp_path):
+        """Documented limit: the compiler reads a `_defaults.yaml`'s top-level
+        `_custom_alerts` (root or sub-directory); the exporter serves no row
+        for it."""
+        tenant = {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")}
+        top = "_custom_alerts:\n" + self._R1.replace("    _custom_alerts:\n", "").replace(
+            "\n    ", "\n")[4:]
+        _rc, notes, out = self._note(monkeypatch, cli_argv, capsys, tmp_path, tenant,
+                                     {**tenant, "_defaults.yaml": _CRIT_DEFAULTS + top})
+        assert (_rc, notes) == (0, []), out.err
+
+    @pytest.mark.parametrize("empty", ["[]", "", "null"])
+    def test_an_empty_list_is_no_recipe(self, monkeypatch, cli_argv, capsys, tmp_path, empty):
+        """bbf0421d: removing `_custom_alerts: []` named the tenant, though
+        neither side serves or compiles a recipe."""
+        head = "    mysql_connections: 70\n"
+        _rc, notes, out = self._note(
+            monkeypatch, cli_argv, capsys, tmp_path,
+            {"db-a.yaml": self._t("db-a", head + f"    _custom_alerts: {empty}\n")},
+            {"db-a.yaml": self._t("db-a", head)})
+        assert (_rc, notes) == (0, []), out.err
+
+    def test_each_tree_is_read_by_da_guard_once(self, monkeypatch, cli_argv, capsys, tmp_path):
+        """0bd6f362 ran da-guard on each tree twice (recipes, then values)."""
+        calls = []
+        real = bt.load_served_tree
+        monkeypatch.setattr(bt, "load_served_tree",
+                            lambda *a, **kw: calls.append(a) or real(*a, **kw))
+        self._note(monkeypatch, cli_argv, capsys, tmp_path,
+                   {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")},
+                   {"db-a.yaml": self._t("db-a", "    mysql_connections: 50\n")})
+        assert len(calls) == 2, calls
+
+    @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                        reason="as root the permission bits decide nothing")
+    def test_an_unreadable_file_under_config_dir_is_named(self, monkeypatch, cli_argv, capsys,
+                                                          tmp_path):
+        """73c1e2da: a PermissionError traceback, rc 2 `internal_error`."""
+        cur, base = _dirs(tmp_path, {**_D, "t.yaml": self._t("t", "    mysql_connections: 1\n")},
+                          {**_D, "t.yaml": self._t("t", "    mysql_connections: 2\n")})
+        os.chmod(os.path.join(cur, "t.yaml"), 0)
+        try:
+            rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                                "--prometheus", "http://prom:9090", "--json")
+        finally:
+            os.chmod(os.path.join(cur, "t.yaml"), 0o600)
+        assert (rc, json.loads(out.out)["reason"]) == (2, "served_values_unavailable")
+        assert "Traceback" not in out.err and "t.yaml" in out.err
+
+
+
+_WORKFLOW = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "workflows",
+                         "backtest.yaml")
+
+
+def _workflow():
+    import yaml
+    with open(_WORKFLOW, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+class TestBacktestWorkflow:
+    """#3111: the workflow that runs this tool on a PR."""
+
+    def test_the_paths_comment_matches_what_the_tool_says(self):
+        """0bd6f362's comment said a tool-only PR gets "no threshold changes
+        found."; without a reachable Prometheus the skip comes first."""
+        with open(_WORKFLOW, encoding="utf-8") as f:
+            text = f.read()
+        assert "Not everything the result" in text
+        assert bt._NOT_RUN_WHY[("skipped", "prometheus_unavailable")].startswith(
+            "Prometheus is unavailable")
+        assert '"Prometheus is unavailable"' in text
+
+    def test_it_runs_when_the_tool_or_the_workflow_changes(self):
+        """73c1e2da: `paths` listed only conf.d/**, so a PR changing how the
+        backtest runs never ran it."""
+        doc = _workflow()
+        on = doc.get("on", doc.get(True))
+        paths = on["pull_request"]["paths"]
+        for needed in ("components/threshold-exporter/config/conf.d/**",
+                       "scripts/tools/ops/backtest_threshold.py",
+                       "scripts/tools/ops/_observed_map_lib.py",
+                       ".github/workflows/backtest.yaml"):
+            assert needed in paths, (needed, paths)
+
+    # A layout of the base's conf.d/: a file `name`, a directory `name/`, a
+    # symlink `name -> target` (target relative to conf.d/, possibly missing);
+    # `@link` first makes conf.d/ itself a symlink to a sibling directory.
+    _LAYOUTS = [
+        (None, False),
+        ([], False),
+        # 0bd6f362: a conf.d/ holding no config file passed the check, and the
+        # run ended rc 2 `served_values_unavailable` ("no .yaml files found").
+        (["README.md"], False),
+        ([".hidden.yaml"], False),
+        ([".git/x.yaml"], False),
+        (["notes.yamlx"], False),
+        (["_defaults.yaml"], True),
+        (["team/db-a.yml"], True),
+        (["DB-A.YAML"], True),
+        # bbf0421d: a directory or a dangling symlink named like a config file
+        # passed the check; a conf.d/ that is a symlink was skipped.
+        (["x.yaml/"], False),
+        (["x.yaml -> missing.yaml"], False),
+        (["real.txt", "x.yaml -> real.txt"], True),
+        (["@link", "_defaults.yaml"], True),
+    ]
+    _LAYOUT_IDS = ["no-dir", "empty", "readme-only", "hidden-only", "hidden-dir", "not-yaml",
+                   "yaml", "nested-yml", "upper-case", "dir-named-yaml", "dangling-link",
+                   "link-to-file", "confd-is-link"]
+
+    @staticmethod
+    def _lay_out(tmp_path, entries):
+        confd = tmp_path / ".backtest-base/components/threshold-exporter/config/conf.d"
+        if entries is None:
+            return confd
+        entries = list(entries)
+        where = confd
+        if entries[:1] == ["@link"]:
+            entries = entries[1:]
+            where = confd.parent / "real-confd"
+            where.mkdir(parents=True)
+            symlink_or_skip("real-confd", str(confd))
+        else:
+            confd.mkdir(parents=True)
+        for entry in entries:
+            name, _, target = entry.partition(" -> ")
+            path = where / name.rstrip("/")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if target:
+                symlink_or_skip(target, str(path))
+            elif name.endswith("/"):
+                path.mkdir()
+            else:
+                path.write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        return confd
+
+    def _check(self, tmp_path):
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("needs bash")
+        steps = _workflow()["jobs"]["backtest"]["steps"]
+        check = next(st for st in steps if st.get("id") == "base")
+        out, comment = tmp_path / "gh-output", tmp_path / "comment.md"
+        script = check["run"].replace("/tmp/backtest-comment.md", str(comment))
+        subprocess.run([bash, "-e", "-c", script], cwd=str(tmp_path), timeout=60, check=True,
+                       env={**os.environ, "GITHUB_OUTPUT": str(out)})
+        return (out.read_text(encoding="utf-8") if out.exists() else ""), comment
+
+    @pytest.mark.parametrize("entries, has_confd", _LAYOUTS, ids=_LAYOUT_IDS)
+    def test_a_base_without_confd_skips_with_a_comment(self, tmp_path, entries, has_confd):
+        """73c1e2da: a PR adding the first conf.d/ ended rc 2
+        `served_values_unavailable`."""
+        steps = _workflow()["jobs"]["backtest"]["steps"]
+        run = next(st for st in steps if st.get("id") == "backtest")
+        assert run["if"] == "steps.base.outputs.has_confd == 'true'"
+        self._lay_out(tmp_path, entries)
+        got, comment = self._check(tmp_path)
+        if has_confd:
+            assert got == "has_confd=true\n" and not comment.exists()
+        else:
+            assert got == ""
+            assert "the PR base has no `conf.d/` config file" in comment.read_text(
+                encoding="utf-8")
+
+    @pytest.mark.usefixtures("da_guard_env")
+    @pytest.mark.parametrize("entries, has_confd", _LAYOUTS[1:], ids=_LAYOUT_IDS[1:])
+    def test_the_check_agrees_with_the_exporter(self, tmp_path, entries, has_confd):
+        """The check stands in for "the exporter reads this tree": a layout it
+        passes is one `da-guard served-values` reads, and one it skips is one
+        da-guard refuses."""
+        confd = self._lay_out(tmp_path, entries)
+        res = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
+                              str(confd)], capture_output=True, text=True, encoding="utf-8",
+                             timeout=120)
+        assert (res.returncode == 0) is has_confd, res.stderr
+        got, _ = self._check(tmp_path)
+        assert (got == "has_confd=true\n") is has_confd

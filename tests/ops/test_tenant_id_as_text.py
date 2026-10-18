@@ -920,9 +920,14 @@ def _ids_tenant_metadata(d, spell):
 
 
 def _ids_backtest(d, spell):
+    # #3111: the tenants whose recipes changed, from da-guard served-values.
     import backtest_threshold as m
-    _tree(d, {"t.yaml": _CA2216.format(id=spell)})
-    return set(m.find_custom_alert_tenants(m.load_conf_files([str(d / "t.yaml")])))
+    _tree(d / "base", {"t.yaml": f"tenants:\n  {spell}: {{}}\n"})
+    _tree(d / "cur", {"t.yaml": (
+        f"tenants:\n  {spell}:\n    _custom_alerts:\n      - recipe: threshold\n"
+        "        name: q\n        metric: m\n        op: '>'\n        window: 5m\n"
+        "        threshold: '150:warning'\n")})
+    return set(m.changed_recipe_tenants(m.load_trees(str(d / "cur"), str(d / "base"))))
 
 
 def _ids_custom_alerts(d, spell):
@@ -977,7 +982,8 @@ _READERS_2216 = {
 # #2115 0-B/B4: these take the tenants from da-guard served-values (Go's id).
 # check_retire_drift (#2858) takes the db_type from it, looked up by the id
 # its own walk read.
-_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata", "check_retire_drift"})
+_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata", "check_retire_drift",
+                                   "backtest_threshold"})
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))

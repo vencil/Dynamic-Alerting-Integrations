@@ -210,7 +210,7 @@ _NOT_PROBED: dict[str, str] = {
     "lint/check_threshold_reachability.py": _GO_FIXED,
     "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _GO_FIXED,
     "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
-    "ops/backtest_threshold.py": _GO_KEYS, "ops/batch_diagnose.py": _PENDING,
+    "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _PENDING,
     "ops/config_history.py": _PENDING, "ops/da_assembler.py": _GO_WRITER,
     "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
     "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,

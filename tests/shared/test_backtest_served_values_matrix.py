@@ -1,5 +1,6 @@
 """`backtest --config-dir/--baseline` 找到的門檻變更要與 Go 一致（#2119）：兩棵樹各自由
-da-guard served-values（/metrics）讀，逐租戶、逐 key 比 exporter 送出的值。
+da-guard served-values（/metrics）讀，逐租戶、逐條 /metrics series 比 exporter 送出的值
+（#3111：以 series 為單位，不以 threshold key 為單位）。
 
 step 0 的政策：Python 工具不自己解讀 YAML 語意，值一律來自 Go。`extract_changes_from_dirs`
 原本用 PyYAML 重讀兩個目錄、比租戶檔的頂層 key。修正前（main 6447be54）實測：
@@ -12,7 +13,8 @@ step 0 的政策：Python 工具不自己解讀 YAML 語意，值一律來自 Go
   這種檔送任何租戶（#2115 R3），改它 /metrics 不變。
 
 每格比對：`extract_changes_from_dirs` 的答案 == 直接對兩棵樹跑 served-values、在同一個
-`at` 逐租戶逐 threshold key 比值得到的答案（一邊沒送的 key 或租戶記 None）。排程只在一天
+`at` 逐租戶、逐條 series（名稱加完整 label set）比值得到的答案（一邊沒送的 series 或租戶記
+None；舊拼法的 twin 不算一條）。排程只在一天
 其他時段不同的 key 另有幾格釘死數字與 `window`（每一段不同都要列出，不只第一段；同一組
 新舊值只算一個變更，`window` 列出它成立的所有時段）。
 da-guard 拒收的樹、或某時段 /metrics 收不到，都要 exit 2。
@@ -42,6 +44,7 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 AT = "2026-10-08T12:00:00Z"
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slow: 90\n"
+_K = {"keys": ["mysql_connections"]}
 _TX_EMPTY = "tenants:\n  tx: {}\n"
 
 
@@ -106,22 +109,40 @@ def _text(v: float | None) -> str | None:
     return str(int(v)) if float(v).is_integer() else repr(v)
 
 
-def _served_at(conf_d: Path) -> dict[tuple[str, str], str | None]:
-    """{(tenant, threshold key): value} as /metrics serves it at AT."""
-    return {(t, k): _text(v.values[k])
-            for t, v in tv.load_served_values(conf_d, at=AT).items() for k in v.severities}
+def _alert(s: "tv.Series") -> str:
+    """The threshold key whose alert compares a row (#3017): critical → `_critical`."""
+    return s.metric_key + "_critical" if s.labels.get("severity") == "critical" else s.metric_key
+
+
+def _rows_at(conf_d: Path) -> dict[tuple, list]:
+    """{(tenant, (name, labels)): [value, {keys}, series]}: every /metrics row
+    (not a legacy twin) served at AT, with the threshold keys serving it."""
+    out: dict[tuple, list] = {}
+    for t, v in tv.load_served_values(conf_d, at=AT).items():
+        for k, series in v.series.items():
+            for s in series:
+                if not s.legacy_twin:
+                    row = out.setdefault((t, (s.name, tuple(sorted(s.labels.items())))),
+                                         [_text(v.values[k]), set(), s])
+                    row[1].add(k)
+    return out
 
 
 def _oracle(base: Path, cur: Path) -> list[dict]:
-    old, new = _served_at(base), _served_at(cur)
-    return [{"tenant": t, "metric": k, "old_value": old.get((t, k)), "new_value": new.get((t, k))}
-            for t, k in sorted(set(old) | set(new)) if old.get((t, k)) != new.get((t, k))]
+    old, new = _rows_at(base), _rows_at(cur)
+    out = []
+    for t, ident in set(old) | set(new):
+        o, n = old.get((t, ident), [None, set(), None]), new.get((t, ident), [None, set(), None])
+        if o[0] != n[0]:
+            out.append(((t, _alert(o[2] or n[2]), ident), {
+                "tenant": t, "metric": _alert(o[2] or n[2]), "old_value": o[0],
+                "new_value": n[0], "keys": sorted(o[1] | n[1])}))
+    return [row for _order, row in sorted(out, key=lambda r: r[0])]
 
 
-def _series_at(conf_d: Path) -> dict[tuple[str, str], tuple]:
-    """{(tenant, threshold key): its /metrics series} as served-values reports them at AT (#2750)."""
-    return {(t, k): s for t, v in tv.load_served_values(conf_d, at=AT).items()
-            for k, s in v.series.items()}
+def _series_at(conf_d: Path) -> dict[tuple, "tv.Series"]:
+    """{(tenant, alert key, old?, new?): series} — the row each oracle change is about."""
+    return {(t, _alert(row[2])): row[2] for (t, _i), row in _rows_at(conf_d).items()}
 
 
 def _backtest(monkeypatch: pytest.MonkeyPatch, base: Path, cur: Path) -> list[dict]:
@@ -140,15 +161,15 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
     for name, base, cur in SHAPES:
         got[name] = _oracle(_tree(tmp_path / name / "base", base), _tree(tmp_path / name / "cur", cur))
     assert got["platform-only"] == [{"tenant": "tx", "metric": "mysql_connections",
-                                     "old_value": "50", "new_value": "60"}]
+                                     "old_value": "50", "new_value": "60", **_K}]
     assert got["defaults-layer"] == [{"tenant": "tx", "metric": "mysql_connections",
-                                      "old_value": "80", "new_value": "85"}]
+                                      "old_value": "80", "new_value": "85", **_K}]
     assert got["profile"] == [{"tenant": "tx", "metric": "mysql_slow",
-                               "old_value": "60", "new_value": "40"}]
+                               "old_value": "60", "new_value": "40", "keys": ["mysql_slow"]}]
     assert got["flat-file-not-served"] == [] and got["unchanged"] == []
     assert {(c["tenant"], c["old_value"]) for c in got["tenant-added"]} == {("ty", None)}
     assert got["key-disabled"] == [{"tenant": "tx", "metric": "mysql_connections",
-                                    "old_value": "50", "new_value": None}]
+                                    "old_value": "50", "new_value": None, **_K}]
 
 
 @pytest.mark.parametrize("name,base,cur", SHAPES, ids=[n for n, _, _ in SHAPES])
@@ -157,14 +178,10 @@ def test_backtest_agrees_with_the_exporter(tmp_path: Path, monkeypatch: pytest.M
     b, c = _tree(tmp_path / "base", base), _tree(tmp_path / "cur", cur)
     got = _backtest(monkeypatch, b, c)
     assert _no_series(got) == _oracle(b, c), name
-    # #2750: each change carries the series served-values gives the key, the
-    # baseline's first, each once.
-    old, new = _series_at(b), _series_at(c)
+    # #2750 / #3111: each change carries the one /metrics row it is about.
+    rows = {**_series_at(b), **_series_at(c)}
     for change in got:
-        key = (change["tenant"], change["metric"])
-        want = list(old.get(key, ()))
-        want += [s for s in new.get(key, ()) if s not in want]
-        assert want and change["series"] == want, (name, change)
+        assert change["series"] == [rows[(change["tenant"], change["metric"])]], (name, change)
 
 
 def _two_windows(night: str, evening: str) -> str:
@@ -182,7 +199,7 @@ def test_a_change_outside_the_instant_is_named_with_its_window(
     assert _oracle(b, c) == []  # the instant alone would miss it
     assert _no_series(_backtest(monkeypatch, b, c)) == [{
         "tenant": "tx", "metric": "mysql_connections",
-        "old_value": "1000", "new_value": "2000", "window": ["01:00-09:00"]}]
+        "old_value": "1000", "new_value": "2000", "window": ["01:00-09:00"], **_K}]
 
 
 def test_every_differing_part_of_the_day_is_a_row(
@@ -193,9 +210,9 @@ def test_every_differing_part_of_the_day_is_a_row(
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "1001",
-         "window": ["01:00-02:00"]},
+         "window": ["01:00-02:00"], **_K},
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "5", "new_value": "99999",
-         "window": ["20:00-21:00"]}]
+         "window": ["20:00-21:00"], **_K}]
 
 
 def test_one_pair_in_several_parts_of_the_day_is_one_change(
@@ -206,22 +223,22 @@ def test_one_pair_in_several_parts_of_the_day_is_one_change(
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("2000", "2000")})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "2000",
-         "window": ["01:00-02:00", "20:00-21:00"]}]
+         "window": ["01:00-02:00", "20:00-21:00"], **_K}]
     over_midnight = ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n"
                      "      overrides:\n        - window: \"22:00-02:00\"\n          value: \"{v}\"\n")
     b = _tree(tmp_path / "base2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=1000)})
     c = _tree(tmp_path / "cur2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=5)})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "5",
-         "window": ["00:00-02:00", "22:00-24:00"]}]
+         "window": ["00:00-02:00", "22:00-24:00"], **_K}]
 
 
-def test_a_severity_boundary_does_not_split_a_change(
+def test_a_severity_window_is_a_row_of_its_own(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The current side changes severity at 01:00 and 09:00 but serves 75 all
-    day: one change, all day, no window (the run-merge branch). Both
-    severities are compared, so the boundary does not split it (#3060); the
-    severities it is served with are named."""
+    """The current side serves 75 all day, as critical 01:00-09:00 (#3111):
+    the warning row is 70 -> 75 outside that window and stops being served
+    inside it, and the critical row starts being served inside it — each a
+    change of the row its own alert compares."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
         "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n      overrides:\n"
@@ -229,13 +246,14 @@ def test_a_severity_boundary_does_not_split_a_change(
     t = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"]
     assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
     got = _backtest(monkeypatch, b, c)
+    warning = {"tenant": "tx", "metric": "mysql_connections", **_K}
     assert _no_series(got) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
-         "old_severity": "warning", "new_severity": "warning/critical"}]
-    # #2750: both series the key is served as that day, from the segments —
-    # 01:00-09:00 is served as the critical row.
-    assert got[0]["series"] == [_ident("mysql_connections", "warning"),
-                                _ident("mysql_connections", "critical")]
+        {**warning, "old_value": "70", "new_value": "75", "window": ["00:00-01:00", "09:00-24:00"]},
+        {**warning, "old_value": "70", "new_value": None, "window": ["01:00-09:00"]},
+        {"tenant": "tx", "metric": "mysql_connections_critical", "old_value": None,
+         "new_value": "75", **_K, "window": ["01:00-09:00"]}]
+    assert [ch["series"] for ch in got] == [[_ident("mysql_connections", "warning")]] * 2 + [
+        [_ident("mysql_connections", "critical")]]
 
 
 def _ident(metric_key: str, severity: str, component: str = "mysql",
@@ -259,59 +277,61 @@ def test_a_severity_no_rule_selects_is_served_as_the_default(
     assert [s[:4] for s in segs] == [("00:00", "24:00", 80.0, "warning")]
     got = _backtest(monkeypatch, b, c)
     assert _no_series(got) == [{"tenant": "tx", "metric": "mysql_connections",
-                                "old_value": "70", "new_value": "80"}]
+                                "old_value": "70", "new_value": "80", **_K}]
     assert got[0]["series"] == [_ident("mysql_connections", "warning")]
 
 
-def test_a_severity_only_change_is_listed(
+def test_a_severity_only_change_is_two_rows(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """#3060 R1: the same value under another severity is a change, and a
-    severity a threshold rule selects keeps the threshold (another alert
-    compares it). Since #3071 the exporter serves no other severity
-    (`test_a_severity_no_rule_selects_is_served_as_the_default`)."""
+    """#3111: the same value under another severity is another /metrics row,
+    compared by another alert (#3060): the warning row stops being served,
+    the critical row starts."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:Critical")})
     got = _backtest(monkeypatch, b, c)
-    assert _no_series(got) == [{"tenant": "tx", "metric": "mysql_connections", "old_value": "70",
-                                "new_value": "70", "old_severity": "warning",
-                                "new_severity": "critical"}]
-    assert got[0]["series"] == [_ident("mysql_connections", "warning"),
-                                _ident("mysql_connections", "critical")]
+    assert _no_series(got) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": None, **_K},
+        {"tenant": "tx", "metric": "mysql_connections_critical", "old_value": None,
+         "new_value": "70", **_K}]
+    assert [ch["series"] for ch in got] == [[_ident("mysql_connections", "warning")],
+                                            [_ident("mysql_connections", "critical")]]
 
 
-def test_a_severity_only_part_of_the_day_is_its_own_change(
+def test_a_severity_only_part_of_the_day_is_two_rows(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """70 all day on both sides, critical 01:00-09:00 on the current one: one
-    severity-only change carrying that window, beside no value change."""
+    """70 all day on both sides, critical 01:00-09:00 on the current one: in
+    that window the warning row stops and the critical row starts."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("70:critical")})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "70",
-         "old_severity": "warning", "new_severity": "critical", "window": ["01:00-09:00"]}]
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": None,
+         **_K, "window": ["01:00-09:00"]},
+        {"tenant": "tx", "metric": "mysql_connections_critical", "old_value": None,
+         "new_value": "70", **_K, "window": ["01:00-09:00"]}]
 
 
-def test_opposite_severity_changes_are_two_changes(
+def test_opposite_severity_changes_are_four_rows(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Warning -> critical outside 01:00-09:00 and critical -> warning inside
-    it: two changes, each with its own windows, not one all-day change of
-    "warning/critical" on both sides."""
+    it: each row stops in the parts of the day it moved out of and starts in
+    the ones it moved into."""
     def tree(name: str, default: str, night: str) -> Path:
         return _tree(tmp_path / name, {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
             f"tenants:\n  tx:\n    mysql_connections:\n      default: \"{default}\"\n"
             f"      overrides:\n        - window: \"01:00-09:00\"\n          value: \"{night}\"\n")})
     got = _no_series(_backtest(monkeypatch, tree("base", "70", "70:critical"),
                                tree("cur", "70:critical", "70")))
-    common = {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "70"}
+    day, night = ["00:00-01:00", "09:00-24:00"], ["01:00-09:00"]
+    w = {"tenant": "tx", "metric": "mysql_connections", **_K}
+    c = {"tenant": "tx", "metric": "mysql_connections_critical", **_K}
     assert got == [
-        {**common, "old_severity": "warning", "new_severity": "critical",
-         "window": ["00:00-01:00", "09:00-24:00"]},
-        {**common, "old_severity": "critical", "new_severity": "warning",
-         "window": ["01:00-09:00"]}]
+        {**w, "old_value": "70", "new_value": None, "window": day},
+        {**w, "old_value": None, "new_value": "70", "window": night},
+        {**c, "old_value": None, "new_value": "70", "window": day},
+        {**c, "old_value": "70", "new_value": None, "window": night}]
 
 
 @pytest.mark.parametrize("old,new,status,risk,message,rc", [
-    # The same points fire, under the critical alert: no change in firing.
-    ("70", "70:critical", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
     # #3071: no rule selects "high" (or ""), so the value is unreadable and
     # the default (80) is served: a value change, 70 -> 80, and back. #3060
     # R1 read these as the alert silenced (to-*: MEDIUM, rc 0) and enabled
@@ -320,7 +340,7 @@ def test_opposite_severity_changes_are_two_changes(
     ("70", "70:", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
     ("70:high", "70", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
     ("70", "60:high", "analyzed", "LOW", "0 fewer firing points (+0.0%)", 0),
-], ids=["to-critical", "to-high", "to-empty", "from-high", "value-to-high"])
+], ids=["to-high", "to-empty", "from-high", "value-to-high"])
 def test_a_severity_only_change_is_backtested_by_r1(
         tmp_path: Path, monkeypatch, capsys, cli_argv, old: str, new: str, status: str,
         risk: str, message: str, rc: int) -> None:
@@ -333,50 +353,66 @@ def test_a_severity_only_change_is_backtested_by_r1(
     got_rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["status"], r["risk"], r["message"]) for r in rows] == [(status, risk, message)]
-    if new == "70:critical":
-        assert (rows[0]["old_severity"], rows[0]["new_severity"]) == ("warning", "critical")
-    else:
-        assert "old_severity" not in rows[0] and "new_severity" not in rows[0]
+    assert "old_severity" not in rows[0] and "new_severity" not in rows[0]
     assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
     assert got_rc == rc
 
 
-def test_reports_name_the_severities(tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """`70 -> 70` alone does not say what changed: the text and Markdown
-    reports show each side's severity beside its value."""
+def test_to_critical_is_the_warning_alert_silenced_and_the_critical_one_enabled(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111: `70` -> `70:critical` is backtested as two rows on one series
+    (the stub's 50 then 2000): the warning alert loses its threshold (MEDIUM)
+    and the critical alert starts comparing 70 (1 of 2 points: HIGH, rc 1).
+    #3060 R1 replayed it as one row, the same points firing (LOW, rc 0)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:critical")})
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["risk"], r["message"]) for r in rows] == [
+        ("mysql_connections", "MEDIUM", "Metric disabled — all alerts silenced"),
+        ("mysql_connections_critical", "HIGH", "Metric newly enabled — 1/2 points would fire")]
+    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}'] * 2
+    assert rc == 1
+
+
+def test_reports_name_the_keys_serving_a_row(tmp_path: Path, monkeypatch, capsys,
+                                             cli_argv) -> None:
+    """A row served by keys other than the one its metric names says so in
+    both reports (and `keys` in --json)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("90:critical")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
+        "tenants:\n  tx:\n    mysql_connections: disable\n    mysql_connections_critical: \"95\"\n")})
     md = tmp_path / "r.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert "70 (warning) -> 70 (critical)" in out.out
-    assert "| 70 (warning) | 70 (critical) |" in md.read_text(encoding="utf-8")
+    assert ("tx/mysql_connections_critical: 90 -> 95 "
+            "(served by: mysql_connections, mysql_connections_critical)") in out.out
+    assert ("`mysql_connections_critical` (served by: `mysql_connections`, "
+            "`mysql_connections_critical`) | 90 | 95 |") in md.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("severity,text,cell", [
-    ("a|b", "70 (a|b)", "70 (a\\|b)"),        # a `|` would add a Markdown column
-    ("a\\x1bb", "70 (a?b)", "70 (a?b)"),       # YAML's `\x1b`: not printed raw
+@pytest.mark.parametrize("key,text,cell", [
+    ("a|b", "a|b", "`a\\|b`"),            # a `|` would add a Markdown column
+    ("a\x1bb", "a?b", "`a?b`"),            # YAML's `\x1b`: not printed raw
 ])
-def test_a_severity_from_the_tree_is_escaped(
-        tmp_path: Path, monkeypatch, capsys, cli_argv, severity: str, text: str,
+def test_a_key_from_the_tree_is_escaped(
+        tmp_path: Path, monkeypatch, capsys, cli_argv, key: str, text: str,
         cell: str) -> None:
-    """The severity is read from served-values: escaped (`safe_label`) in both
-    reports, and its `|` escaped in the Markdown table, which keeps its 7
-    columns. Since #3071 the exporter serves no severity but warning and
-    critical, but `DA_GUARD_BINARY` may name an older da-guard, which served
-    the tenant's suffix as written — so the change carries one here."""
+    """The keys are read from served-values: escaped (`safe_label`) in both
+    reports, and a `|` escaped in the Markdown table, which keeps its 7
+    columns."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
-    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:critical")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("75")})
     extract = bt.extract_changes_from_dirs
 
-    def as_an_older_exporter_served(*args, **kwargs):
+    def served_by_another_key(*args, **kwargs):
         changes = extract(*args, **kwargs)
-        for c in changes:
-            c["new_severity"] = severity.encode().decode("unicode_escape")
+        for ch in changes:
+            ch["keys"] = [key.encode().decode("unicode_escape")]
         return changes
-    monkeypatch.setattr(bt, "extract_changes_from_dirs", as_an_older_exporter_served)
+    monkeypatch.setattr(bt, "extract_changes_from_dirs", served_by_another_key)
     md = tmp_path / "r.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert f"70 (warning) -> {text}" in out.out and "\x1b" not in out.out
+    assert f"(served by: {text})" in out.out and "\x1b" not in out.out
     row = next(line for line in md.read_text(encoding="utf-8").splitlines() if cell in line)
     assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
 
@@ -393,7 +429,7 @@ def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
         "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n" + override)})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
-         "window": ["00:00-01:00", "09:00-24:00"]}]
+         "window": ["00:00-01:00", "09:00-24:00"], **_K}]
 
 
 def test_a_schedule_against_a_plain_value_is_one_row_per_pair(
@@ -427,7 +463,7 @@ def test_a_part_of_the_day_metrics_cannot_gather_fails_closed() -> None:
     seg = tv.ScheduleSegment("00:00", "24:00", None, None, "gather failed")
     values = tv.TenantValues("tx", {}, {}, {}, {}, {"k": tv.KeySchedule([seg], None, None)}, {}, {}, {})
     with pytest.raises(tv.ServedValuesError, match="gather failed"):
-        bt._served_day(values, "k", "current")
+        bt._served_rows(values, "current")
 
 
 def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str,
@@ -560,7 +596,7 @@ def test_a_capitalised_severity_is_backtested_on_its_alert(
     assert {s.labels["severity"] for s in _backtest(monkeypatch, b, c)[0]["series"]} == {"critical"}
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
-    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_connections", "analyzed")]
+    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_connections_critical", "analyzed")]
     assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
 
 
@@ -660,7 +696,7 @@ def test_a_window_served_as_critical_is_backtested(
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["window"]) for r in rows] == [
-        ("mysql_connections", "analyzed", ["01:00-09:00"])]
+        ("mysql_connections_critical", "analyzed", ["01:00-09:00"])]
     assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
 
 
@@ -678,9 +714,8 @@ def test_a_window_served_as_critical_with_no_critical_alert_is_not_backtested(
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [(
-        "mongodb_connections_current", "not_backtested",
-        "skipped: mongodb_connections_current_critical: no shipped alert compares this key "
-        "(not in metric_observed_map.yaml)")]
+        "mongodb_connections_current_critical", "not_backtested",
+        "skipped: no shipped alert compares this key (not in metric_observed_map.yaml)")]
     assert asked == []
     b, c = _tree(tmp_path / "base2", files("1000")), _tree(tmp_path / "cur2", files("1500"))
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
@@ -721,7 +756,7 @@ def test_a_change_with_nothing_to_query_is_not_reported_as_no_data(
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60")})
     twin_only = [_ident("mysql_cpu", "warning", metric="cpu", twin=True)]
-    monkeypatch.setattr(bt, "extract_changes_from_dirs", lambda cur, base: [
+    monkeypatch.setattr(bt, "extract_changes_from_dirs", lambda cur, base, **kw: [
         {"tenant": "tx", "metric": "k", "old_value": "50", "new_value": "60", "series": twin_only}])
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
@@ -733,8 +768,9 @@ def test_a_change_with_nothing_to_query_is_not_reported_as_no_data(
 def test_alert_keys_read_the_series_never_the_twin() -> None:
     """A critical row is compared by `<metric_key>_critical`'s alert, any other
     by `metric_key`'s; an alias target's legacy twin is never read (#2750
-    review F1). A key as written (`--tenant` / `--git-diff`) is canonicalized
-    and loses its dimension part (#3017)."""
+    review F1). A key as written (`--tenant`) is canonicalized and loses its
+    dimension part (#3017); one no shipped alert compares is no threshold
+    (#3111 (e))."""
     change = {"tenant": "tx", "metric": "mysql_threads_running_critical", "series": [
         tv.Series("user_threshold", {"severity": "critical"}, "mysql_threads_running", False, {}, {}),
         tv.Series("user_threshold", {"severity": "critical"}, "mysql_cpu", True, {}, {})]}
@@ -742,9 +778,11 @@ def test_alert_keys_read_the_series_never_the_twin() -> None:
 
     def written(metric: str) -> dict:
         return {"tenant": "tx", "metric": metric, "old_value": "1", "new_value": "2"}
-    assert bt._alert_keys(written("k")) == (["k"], None)
+    assert bt._alert_keys(written("mysql_connections")) == (["mysql_connections"], None)
     assert bt._alert_keys(written("mysql_cpu")) == (["mysql_threads_running"], None)
-    assert bt._alert_keys(written('k{db="a"}')) == (["k"], None)
+    assert bt._alert_keys(written('mysql_connections{db="a"}')) == (["mysql_connections"], None)
+    assert bt._alert_keys(written("k")) == (
+        None, "no shipped alert compares this key (not in metric_observed_map.yaml)")
 
 
 def test_a_retired_name_with_data_is_not_backtested_against(
@@ -760,8 +798,7 @@ def test_a_retired_name_with_data_is_not_backtested_against(
     changes = _backtest(monkeypatch, b, c)
     assert [(ch["metric"], ch["series"]) for ch in changes] == [
         ("mysql_threads_running",
-         [_ident("mysql_threads_running", "warning", metric="threads_running"),
-          _ident("mysql_cpu", "warning", metric="cpu", twin=True)])]
+         [_ident("mysql_threads_running", "warning", metric="threads_running")])]
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json",
                               has_data=lambda q: q.startswith("mysql_cpu"))
     rows = json.loads(out.out)["changes"]
@@ -786,6 +823,55 @@ def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
     assert p.returncode == 2, (p.stdout, p.stderr)
     doc = json.loads(p.stdout)
     assert (doc["status"], doc["changes"]) == ("caller_error", [])
-    if side == "baseline":  # read by da-guard only (the recipe scan reads --config-dir)
-        assert doc["reason"] == "served_values_unavailable"
+    # #3111: both trees are read by da-guard only, so every side is this reason.
+    assert doc["reason"] == "served_values_unavailable"
     assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr
+
+
+def test_a_tenant_id_promql_cannot_take_is_listed_not_queried(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111 review: the exporter serves a `tenants:` key such as `a|b"c`; built
+    into `{tenant="..."}` it made invalid PromQL (rc 2 `query_error`) and broke
+    the Markdown row. Now: not backtested, nothing asked, the cell escaped."""
+    weird = 'a|b"`c'
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "x.yaml": f"tenants:\n  'a|b\"`c':\n    mysql_connections: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
+    md = tmp_path / "r.md"
+    rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert (rc, asked) == (0, [])
+    assert "Not backtested: tenant id holds a character" in out.out
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "a\\|b" in line)
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
+    assert weird not in md.read_text(encoding="utf-8")
+
+
+def test_a_metric_cell_from_the_tree_is_escaped(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111 review: a dimensioned key holding `|` broke its Markdown row."""
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "tx.yaml": f"tenants:\n  tx:\n    'mysql_connections{{db=~\"a|b\"}}': \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
+    md = tmp_path / "r.md"
+    _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "db=~" in line)
+    assert "a\\|b" in row
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8  # 7 columns
+
+
+def test_a_query_cell_holding_a_tenant_id_is_escaped(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """#3111 round 2: a tenant id PromQL takes (`a|b`c`) is put in the query, and
+    the Query cell carried it raw — the `|` split the row."""
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "x.yaml": f"tenants:\n  'a|b`c':\n    mysql_connections: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
+    md = tmp_path / "r.md"
+    _, _out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert asked == ['tenant:mysql_threads_connected:max{tenant="a|b`c"}']
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "threads" in line)
+    assert len(re.findall(r"(?<!\\)\|", row)) == 8, row  # 7 columns
+    assert '``tenant:mysql_threads_connected:max{tenant="a\\|b`c"}``' in row, row
