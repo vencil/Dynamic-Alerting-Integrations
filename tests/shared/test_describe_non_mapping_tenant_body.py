@@ -8,8 +8,11 @@ Go（exporter／da-guard）把 `tenants:` 解進 `map[string]map[string]Schedule
    同檔的 `describe ty` rc 0（Go 不服務 ty）。現在整檔跳過、stderr 具名，兩者都是
    「找不到租戶」rc 2——與既有「租戶檔 parse 不了就跳過」同一條路。
 2. `--what-if <副本> --replaces <根平台檔>`，副本 `tenants: {t1: [a]}`：rc 0、
-   body 被 `platform_blocks` 靜默丟掉（t1 的平台值當成被拿掉）。現在 rc 2、點名副本與租戶。
+   body 被 `platform_blocks` 靜默丟掉（t1 的平台值當成被拿掉）。現在 rc 2、點名副本與路徑。
    `--replaces` 自己的租戶檔（#2755）原本只看 `t1` 的 body，現在同檔任一租戶都算。
+
+#2906 起兩種形狀都直接是 da-guard 的判定（describe 讀 `da-guard effective`，`--what-if`
+經 `--overlay`），訊息改為本工具的「WARNING: skipped」與 da-guard 自己的原因行。
 
 oracle 是 Go：每格把同一份內容寫進樹裡、讓 da-guard 讀，拒收與否跟著它走；
 mapping body 是必響的對照組。da-guard 由 conftest 以 `go build` 建出；建不起來就 fail。
@@ -100,8 +103,9 @@ def test_tree_tenant_file_with_a_non_mapping_body(tmp_path, name, body, decodes,
     assert _served_tenants(conf_d) == {"tz"}
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
     assert p.stdout == "", p.stdout
-    assert f"skipped {conf_d / 'tx.yaml'}" in p.stderr, p.stderr
-    assert "tenant 'tx' is a" in p.stderr and "not a mapping" in p.stderr, p.stderr
+    # #2906: named in this tool's words, the reason in da-guard's own line.
+    assert "WARNING: skipped tx.yaml — " in p.stderr, p.stderr
+    assert "da-guard| " in p.stderr and "tx.yaml" in p.stderr.split("da-guard| ", 1)[1], p.stderr
     assert f"Tenant '{tid}' not found" in p.stderr, p.stderr
 
 
@@ -144,8 +148,9 @@ def test_what_if_standing_in_for_a_root_platform_file(tmp_path, name, body, deco
         return
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
     assert p.stdout == "", p.stdout
-    assert f"--what-if file {copy.resolve()} has an unsupported shape" in p.stderr, p.stderr
-    assert "tenant 't1' is a" in p.stderr and "not a mapping" in p.stderr, p.stderr
+    # #2906: Go judges the copy at that path — the exporter would skip it.
+    assert f"--what-if file {copy.resolve()} at --replaces {platform}" in p.stderr, p.stderr
+    assert f"skips file(s) it reads today: {platform}" in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("name,body,decodes", BODIES, ids=[b[0] for b in BODIES])
@@ -168,4 +173,4 @@ def test_what_if_own_tenant_file_with_another_tenants_bad_body(tmp_path, name, b
         assert got["what_if_merged_hash"] == tv.load_effective(substituted)["t1"].merged_hash, got
         return
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
-    assert "tenant 't9' is a" in p.stderr and "not a mapping" in p.stderr, p.stderr
+    assert "skips file(s) it reads today: t1.yaml" in p.stderr, p.stderr

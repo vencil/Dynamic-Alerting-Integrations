@@ -149,7 +149,7 @@ type BatchResponse struct {
 // @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them. Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results."
 // @Failure     429  {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500  {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them"
-// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
+// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before a synchronous batch finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying"
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -862,8 +862,8 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 		msg = "conflict: retry after refresh"
 	case errors.Is(err, gitops.ErrWriteOverloaded):
 		msg = "write plane busy: retry shortly"
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		msg = msgBatchCancelled
+	case isWriteCancelled(err):
+		msg = msgWriteCancelled
 	case errors.Is(err, gitops.ErrTreeNotOnBase):
 		// #1723: fixed text — err names the stranded PR branch, and with
 		// it another tenant's id, which only the server log may see.
@@ -889,7 +889,9 @@ func batchErrorResult(tenantID string, err error, treeVisible bool) BatchResult 
 		// line is keyed by tenant rather than request_id.
 		slog.Error("batch write failed; detail withheld from the client",
 			"tenant", tenantID, "error", err)
-		msg = msgBatchOpFailed
+		// #1535: the server's failure, so its code says so — as the sync
+		// answer's 500 INTERNAL_ERROR does (writeBatchFailure).
+		msg, code = msgBatchOpFailed, CodeInternal
 	}
 	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: code}
 }
@@ -943,8 +945,7 @@ func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 			Code:  CodeConflict,
 			Extra: map[string]any{"committed": false},
 		})
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		WriteJSONError(rw, r, http.StatusServiceUnavailable, msgBatchCancelled)
+	case writeWriteCancelled(rw, r, err):
 	default:
 		WriteJSONError(rw, r, http.StatusInternalServerError, err.Error())
 	}
@@ -954,7 +955,6 @@ func writeBatchFailure(rw http.ResponseWriter, r *http.Request, d *Deps, err err
 // direct-mode batch (#2900 F3): one says nothing was written, the other that
 // everything was — never the same words for the two.
 const (
-	msgBatchCancelled           = "the batch was cancelled before it was committed; nothing was written"
 	msgBatchConflict            = "conflict: the repository changed outside tenant-api while the batch ran; nothing was written — refresh and retry"
 	msgBatchCommittedIncomplete = "the batch WAS committed, but the write did not finish cleanly on the server; " +
 		"refresh before changing anything (do not resend the batch blindly)"
@@ -980,14 +980,22 @@ func batchTaskFunc(d *Deps, ops []BatchOperation, email string, p *rbac.Verified
 }
 
 // batchTaskError is the Task.Error of an async batch run: nil when it was
-// written cleanly. A batch that IS committed never says nothing was written
-// (#2900 F3).
+// written cleanly. Whether it says nothing was written is decided by what
+// run.Err is, not added on top of every failure: a batch that IS committed
+// never says it (#2900 F3), and neither does one its context cancelled or
+// timed out (#1535) — that is msgWriteCancelled, as the sync 503 and the
+// per-op results say, because a git command that hit its own deadline wraps
+// context.DeadlineExceeded too and may already have moved the ref.
+// Order matters: a run the writer saw committed is the committed text even
+// when its cause is the context's.
 func batchTaskError(run directBatchRun) error {
 	switch {
 	case run.Rejected:
 		return errBatchRejectedTask
 	case run.Committed != "":
 		return errors.New(msgBatchCommittedIncomplete + " (commit " + run.Committed + ")")
+	case isWriteCancelled(run.Err):
+		return errors.New(msgWriteCancelled)
 	case run.Err != nil:
 		// The fixed per-op text, not err: err may carry server paths.
 		return errors.New("batch failed, nothing was written: " + run.Results[0].Message)

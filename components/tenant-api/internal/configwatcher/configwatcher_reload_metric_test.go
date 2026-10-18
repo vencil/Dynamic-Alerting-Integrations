@@ -105,10 +105,10 @@ func TestWatchLoop_ReloadFailure_RecordsOutcomeAndKeepsLastGood(t *testing.T) {
 }
 
 // A post-write Reload that fails to parse must ALSO record a failure outcome.
-// Every production caller discards Reload's returned error (`_ = mgr.Reload()`
-// in handler/group.go, handler/view.go, handler/federation/policy.go) and then
-// answers 200 OK, so the observer is the only signal that the manager silently
-// went stale. Without this, groups/views reload failures are invisible.
+// Its one production caller discards the returned error (`_ = mgr.Reload()` in
+// handler/state.go's reloadState) and the handler answers anyway, so the
+// observer is the only signal that the manager went stale until a WatchLoop
+// tick fails again.
 func TestReload_Failure_RecordsOutcomeAndKeepsLastGood(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -190,9 +190,9 @@ func TestReload_Success_RecordsOKNotFailure(t *testing.T) {
 // A file that is already BROKEN at startup fails the initial load() while no
 // observer is installed yet (New runs before SetReloadObserver). Installing the
 // observer must REPLAY that failure so the gauge reflects the stale state
-// immediately — otherwise a no-WatchLoop manager (groups/views) that never gets a
-// post-startup write sits at the assumed-current default forever, exactly the
-// single-shot stale case the gauge is meant to catch (verifier finding #1).
+// immediately — otherwise the gauge sits at the assumed-current default until
+// the next load (a WatchLoop tick later, or forever for a watcher run without
+// one), while the config is already stale (verifier finding #1).
 //
 // Dogfood note: dropping the replay call in SetReloadObserver makes this fail
 // (obs.last returns recorded=false) — the assertion is load-bearing.
@@ -332,5 +332,103 @@ func TestWatchLoop_ReloadFailure_NilObserverNoPanic(t *testing.T) {
 	// Reaching here without a panic is the assertion; last-good still served.
 	if got := w.Get().Items["foo"]; got != "good" {
 		t.Errorf("last-good not preserved: foo = %q, want good", got)
+	}
+}
+
+// recordingObserver keeps every recorded outcome in order.
+type recordingObserver struct {
+	mu  sync.Mutex
+	got []bool
+}
+
+func (r *recordingObserver) RecordReload(_ string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, ok)
+}
+
+func (r *recordingObserver) outcomes() []bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]bool(nil), r.got...)
+}
+
+// A panic in a reload's parse is recovered by loadLocked on every path — the
+// synchronous Reload, a WatchLoop tick's load and a ReloadAsync goroutine —
+// and recorded ONCE, as a failure (not a success and then a correction). The
+// last-good snapshot stays, loadMu is released (a later Reload returns) and
+// ReloadAsync's pending flag is clear again.
+func TestReload_PanicIsRecoveredOnEveryPath(t *testing.T) {
+	paths := map[string]func(w *Watcher[testConfig]){
+		"Reload":         func(w *Watcher[testConfig]) { _ = w.Reload() },
+		"WatchLoop load": func(w *Watcher[testConfig]) { _ = w.load() },
+		"ReloadAsync":    func(w *Watcher[testConfig]) { w.ReloadAsync() },
+	}
+	for name, trigger := range paths {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			payload := []byte("foo: good\n")
+			read := func() ([]byte, bool, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				return payload, true, nil
+			}
+			set := func(b string) {
+				mu.Lock()
+				payload = []byte(b)
+				mu.Unlock()
+			}
+			parse := func(data []byte) (*testConfig, error) {
+				if strings.Contains(string(data), "panic") {
+					panic("synthetic parse panic")
+				}
+				return parseTestConfig(data)
+			}
+			w, err := NewWithReader("test source", "panicky", read, parse, emptyTestConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			good := w.Get()
+			obs := &recordingObserver{}
+			w.SetReloadObserver(obs) // replays the first load: [true]
+
+			set("foo: panic\n")
+			trigger(w)
+
+			deadline := time.Now().Add(2 * time.Second)
+			for len(obs.outcomes()) < 2 {
+				if time.Now().After(deadline) {
+					t.Fatalf("the panicking reload recorded nothing (outcomes %v)", obs.outcomes())
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			time.Sleep(50 * time.Millisecond) // a stray second record would land here
+			if got := obs.outcomes(); len(got) != 2 || got[1] {
+				t.Fatalf("outcomes = %v, want [true false]: one failure, recorded once", got)
+			}
+			if w.Get() != good {
+				t.Fatal("the snapshot changed; want the last-good one kept")
+			}
+			if w.asyncPending.Load() {
+				t.Fatal("asyncPending still set after the reload finished")
+			}
+
+			// loadMu was released: a later Reload runs, and picks up a fixed YAML.
+			set("foo: fixed\n")
+			done := make(chan error, 1)
+			go func() { done <- w.Reload() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatalf("Reload after the panic: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Reload after the panic did not return: loadMu is still held")
+			}
+			if got := w.Get().Items["foo"]; got != "fixed" {
+				t.Fatalf("foo = %q after the fixing Reload, want fixed", got)
+			}
+		})
 	}
 }

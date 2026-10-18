@@ -23,7 +23,7 @@ As the platform grows from dozens to hundreds or even thousands of tenants, oper
 ## Prerequisites
 
 - Completed `conf.d/` hierarchical structure migration (see [multi-domain-conf-layout](multi-domain-conf-layout.en.md)) or at least partial domain hierarchy (mixed mode)
-- Tools installed: `scripts/tools/dx/describe_tenant.py`, `scripts/tools/ops/blast_radius.py`, `scripts/tools/dx/migrate_conf_d.py`; the `merged_hash` `describe_tenant.py` writes is read from da-guard (`$DA_GUARD_BINARY` or `da-guard` on PATH; the da-tools image ships it, and `make da-guard-build` builds it to `.build/da-guard` in this repo). Without da-guard that field is `null`, and `blast_radius.py` compares field by field and says so on stderr
+- Tools installed: `scripts/tools/dx/describe_tenant.py`, `scripts/tools/ops/blast_radius.py`, `scripts/tools/dx/migrate_conf_d.py`; every value `describe_tenant.py` writes (the effective config, the chain, `merged_hash`) is read from `da-guard effective` (`$DA_GUARD_BINARY` or `da-guard` on PATH; the da-tools image ships it, and `make da-guard-build` builds it to `.build/da-guard` in this repo); without da-guard it exits 2 with no output ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)). When the tree holds a file the exporter cannot decode or read, `merged_hash` is `null`, and `blast_radius.py` compares field by field and says so on stderr
 - GitHub Actions `blast-radius.yml` workflow enabled
 
 ## Scenario 1: Assess Blast Radius Before Changing Domain Defaults

@@ -850,7 +850,7 @@ generate-fixtures: ## 產生合成 Tenant Fixture 供基準測試用 (使用: ma
 
 .PHONY: describe-tenant
 describe-tenant: ## 展開 Tenant 有效配置（含 _defaults.yaml 繼承）(使用: make describe-tenant ARGS="<tenant-id> --conf-d conf.d/ --show-sources")
-	@python3 ./scripts/tools/dx/describe_tenant.py $(ARGS)
+	@bash scripts/ops/with_da_guard.sh python3 ./scripts/tools/dx/describe_tenant.py $(ARGS)
 
 .PHONY: migrate-conf-d
 migrate-conf-d: ## 遷移 flat conf.d/ 至分層結構 (使用: make migrate-conf-d ARGS="--conf-d conf.d/ --dry-run")

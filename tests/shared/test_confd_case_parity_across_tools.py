@@ -1497,8 +1497,37 @@ def test_the_reserved_unusable_tree_is_not_vacuous(
     assert not (tree / "_defaults.yaml").is_file()
 
 
+def test_path_metadata_lists_the_tree_once_through_parse_tree(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ Two listings can describe two DIFFERENT trees (see below).
+    `check_path_metadata_consistency` no longer walks the tree in Python
+    (ADR-036 step 4, #2906): its warnings, findings and tail all come from
+    ONE `da-guard parse-tree` document, and it walks nothing itself."""
+    tree = _unusable_tree(tmp_path / "conf.d")
+    sys.path.insert(0, str(TOOLS_DIR / "lint"))
+    import importlib  # noqa: PLC0415
+    import _lib_parse_tree  # noqa: PLC0415
+    mod = importlib.import_module("check_path_metadata_consistency")
+    loads: list[str] = []
+    real_load = _lib_parse_tree.load
+
+    def counting_load(root, *a, **kw):
+        loads.append(str(root))
+        return real_load(root, *a, **kw)
+
+    def no_walk(*a, **kw):
+        raise AssertionError("a Python walk of the tree")
+
+    monkeypatch.setattr(_lib_parse_tree, "load", counting_load)
+    monkeypatch.setattr(pathlib.Path, "rglob", no_walk)
+    monkeypatch.setattr(os, "walk", no_walk)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["x", "--config-dir", str(tree)])
+    assert mod.main() == 0
+    assert len(loads) == 1, loads
+
+
 @pytest.mark.parametrize("module_rel,call", [
-    ("lint/check_path_metadata_consistency.py", "main"),
     ("dx/describe_tenant.py", "scanner"),
 ])
 def test_reader_walks_the_tree_once(module_rel: str, call: str,
@@ -1534,22 +1563,14 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
     monkeypatch.setattr(os, "walk", counting_walk)
     monkeypatch.chdir(tmp_path)
 
-    if call == "main":
-        sys.path.insert(0, str(TOOLS_DIR / "lint"))
-        import importlib  # noqa: PLC0415
-        mod = importlib.import_module("check_path_metadata_consistency")
-        monkeypatch.setattr(sys, "argv",
-                            ["x", "--config-dir", str(tree)])
-        mod.main()
-    else:
-        sys.path.insert(0, str(TOOLS_DIR / "dx"))
-        import importlib  # noqa: PLC0415
-        mod = importlib.import_module("describe_tenant")
-        # ⛔ The compiler resolver is a DIFFERENT module with its own walk;
-        # counting it here would make this test about `custom_alerts.loader`
-        # rather than about this scanner. Disabled so the count is `_scan`'s.
-        monkeypatch.setattr(mod, "_ca_loader", None)
-        mod.ConfDScanner(tree)
+    sys.path.insert(0, str(TOOLS_DIR / "dx"))
+    import importlib  # noqa: PLC0415
+    mod = importlib.import_module("describe_tenant")
+    # ⛔ The compiler resolver is a DIFFERENT module with its own walk;
+    # counting it here would make this test about `custom_alerts.loader`
+    # rather than about this scanner. Disabled so the count is `_scan`'s.
+    monkeypatch.setattr(mod, "_ca_loader", None)
+    mod.ConfDScanner(tree)
 
     whole_tree = [p for p in calls if p == "*"]
     assert len(whole_tree) == 1, (
@@ -1857,68 +1878,6 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
         f"(fired, carrier_actually_written)")
 
 
-def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
-    """⛔ The case fix above swapped `glob("*.yaml")` for `iterdir()`, and
-    the two disagree on a directory that cannot be READ — not one that is
-    missing. `glob` swallows the scandir failure and yields nothing;
-    `iterdir()` raises straight out of `main()`, before the Prometheus
-    availability check, so `--skip-if-unavailable` cannot contain it and
-    the `--json` contract loses its one document. Measured as a non-root
-    uid on a `chmod 000` conf.d: `05d3136` exited 2 with "Prometheus not
-    reachable", the first version of the fix exited 1 with a
-    `PermissionError` traceback.
-
-    ⚠️ `is_dir()` is NOT the guard for this: it answers True for an
-    unreadable directory. The right answer is already settled in
-    `_lib_confd.unusable_config_paths` — raising kills callers that
-    iterate outside a `try`, `[]` is "a green light for a directory
-    nothing ever read", so NAME it.
-
-    ⚠️ Monkeypatched rather than `chmod`-driven, for the reason
-    `test_lib_confd.py` gives for the same scenario: this suite runs as
-    root in the dev container, where the permission bits do not apply.
-    """
-    mod = _import_tool("ops", "backtest_threshold")
-    confd = tmp_path / "conf.d"
-    confd.mkdir()
-    (confd / "db-a.yaml").write_text(_TENANT_BODY, encoding="utf-8")
-
-    real_iterdir = pathlib.Path.iterdir
-
-    def deny(self):
-        if os.fspath(self) == os.fspath(confd):
-            raise PermissionError(13, "Permission denied", str(self))
-        return real_iterdir(self)
-
-    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
-
-    captured: list[str] = []
-    monkeypatch.setattr(
-        mod, "warn_nested", lambda *a, **k: False)  # its own walk, not ours
-    import io  # noqa: PLC0415
-    import contextlib  # noqa: PLC0415
-    err = io.StringIO()
-    # #2119: the comparison no longer lists the tree (da-guard reads it);
-    # the recipe scan in `main` still does, through `_confd_entries`.
-    with contextlib.redirect_stderr(err):
-        changes = mod._confd_entries(confd)
-    captured.append(err.getvalue())
-
-    assert changes == [], (
-        f"an unreadable config dir must not invent entries; got {changes}")
-    assert str(confd) in captured[0], (
-        f"the unreadable directory was skipped SILENTLY — that is the "
-        f"green light this whole line of work exists to remove.\n"
-        f"stderr was: {captured[0]!r}")
-    assert "PermissionError" in captured[0], (
-        f"the warning must name the errno that was actually caught, not a "
-        f"re-probed guess; got {captured[0]!r}")
-    assert "were NOT scanned" in captured[0], (
-        f"the warning must say the report that follows is INCOMPLETE; "
-        f"got {captured[0]!r}")
-
-
 # ── the sites the first counterfactual did not reach ──────────────────
 #
 # ⛔ Blind review measured this: the fix touched SIX filename sites in
@@ -2126,68 +2085,27 @@ def test_config_dir_recipe_scan_sees_either_casing(
                 f"a carrier this site must not read:\n{seen[arm][:400]}")
 
 
-def test_config_dir_scan_still_lists_a_config_named_directory(
+def test_backtest_config_dir_scan_is_parse_tree_selection(
         tmp_path: pathlib.Path) -> None:
-    """⛔ The `is_file()` axis (#1607) must stay OUT of this change.
-
-    ⚠️ SCOPE, stated exactly, because the first version of this docstring
-    overstated it: this pins the LISTING HELPER, not the two call sites.
-    Blind review added `is_file()` at both call sites and the suite stayed
-    green — and then measured that the mutant is behaviourally EQUIVALENT
-    in this tool today, because `load_yaml_file` and `load_conf_files`
-    each apply their own `is_file()` downstream. So there is nothing to
-    observe at the call sites; the guard belongs where the axis is
-    decided, and that is here. `glob("*.yaml")` returned a directory named
-    `notes.yaml/`, so the replacement must too.
-    """
+    """ADR-036 step 4 (#2906): `--config-dir`'s recipe scan no longer lists
+    the directory itself (the `_confd_entries` listing, its unreadable-root
+    warning and its `is_file()` axis are gone with it): the tenant files are
+    the ones `da-guard parse-tree` selects. A nested carrier is one, a
+    config-named DIRECTORY, a hidden file and a `.txt` are not."""
     mod = _import_tool("ops", "backtest_threshold")
     tree = tmp_path / "conf.d"
-    tree.mkdir()
-    (tree / "notes.yaml").mkdir()
-    (tree / "db-a.yaml").write_text(_BEFORE, encoding="utf-8")
-    listed = [p.name for p in mod._confd_entries(tree)]
-    assert "notes.yaml" in listed, (
-        f"a config-named DIRECTORY dropped out of the listing; that is the "
-        f"#1607 axis smuggled into a case fix. Listed: {listed}")
-    assert "db-a.yaml" in listed, f"fixture is vacuous: {listed}"
-
-
-def test_backtest_names_an_unreadable_config_dir_once_per_run(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
-    """⛔ Said once per RUN, not once per scan.
-
-    `--config-dir` lists the tree TWICE (the recipe scan in `main`, the
-    comparison in `extract_changes_from_dirs`), and the first version of
-    the unreadable-directory warning printed on both. Measured through the
-    CLI as a non-root uid against a `chmod 000` conf.d: two identical
-    lines. This file already states the rule for every other reader —
-    "A repeated warning trains the operator to skim past it, which costs
-    the signal the report exists to give."
-    """
-    mod = _import_tool("ops", "backtest_threshold")
-    mod.reset_unlistable_warnings_for_test()
-    confd = tmp_path / "conf.d"
-    confd.mkdir()
-    real_iterdir = pathlib.Path.iterdir
-
-    def deny(self):
-        if os.fspath(self) == os.fspath(confd):
-            raise PermissionError(13, "Permission denied", str(self))
-        return real_iterdir(self)
-
-    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
-    monkeypatch.setattr(mod, "warn_nested", lambda *a, **k: False)
-
-    import contextlib  # noqa: PLC0415
-    import io  # noqa: PLC0415
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        mod._confd_entries(confd)
-        mod._confd_entries(confd)
-    hits = err.getvalue().count("could not be listed")
-    assert hits == 1, (
-        f"the unreadable root was named {hits} time(s) across two scans of "
-        f"the same run; the contract is once.\n{err.getvalue()!r}")
+    (tree / "notes.yaml").mkdir(parents=True)
+    (tree / "team").mkdir()
+    recipe = ("    _custom_alerts:\n      - {recipe: threshold, name: q, metric: m,"
+              " op: '>', window: 5m, threshold: '1:warning'}\n")
+    for rel, tenant in (("team/nested.yaml", "nested"), (".hidden.yaml", "ghost_hidden"),
+                        ("notes.txt", "ghost_txt"), ("db-a.yaml", "db-a")):
+        (tree / rel).write_text(f"tenants:\n  {tenant}:\n{recipe}", encoding="utf-8")
+    import _lib_parse_cache  # noqa: PLC0415
+    files = [str(tree / rel) for rel in
+             _lib_parse_cache.tenant_files(_lib_parse_cache.reader_for(tree).tree())]
+    assert mod.find_custom_alert_tenants(mod.load_conf_files(files, config_dir=str(tree))) == [
+        "db-a", "nested"]
 
 
 def test_head1_carrier_lookup_accepts_both_spellings(

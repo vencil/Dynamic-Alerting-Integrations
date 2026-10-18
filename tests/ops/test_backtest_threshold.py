@@ -769,6 +769,18 @@ class TestRiskThresholds:
 # ── 自訂告警 recipe 感知（#657 fail-loud）─────────────────────────
 
 
+def _fake_git_show(monkeypatch, stdout):
+    """`git show` answers *stdout*; every other process (da-guard parse-tree,
+    #2906) runs for real."""
+    real = subprocess.run
+
+    def run(cmd, *a, **k):
+        if cmd and cmd[0] == "git":
+            return type("R", (), {"returncode": 0, "stdout": stdout})()
+        return real(cmd, *a, **k)
+    monkeypatch.setattr(subprocess, "run", run)
+
+
 class TestCustomAlertDetection:
     """find_custom_alert_tenants / keep_flat_threshold_changes — 把 flat 工具
     對 _custom_alerts 的隱性無-recipe-path 補成顯性 fail-loud。conf.d 用
@@ -886,17 +898,31 @@ class TestCustomAlertDetection:
         # so. Pinned to bytes so the fake cannot drift away from the call again.
         yaml_text = (b"tenants:\n  db-b:\n    mysql_connections: '100'\n    mysql_threads_running: '60'\n"
                      b"    _silent_mode: warning\n    _custom_alerts:\n      - recipe: threshold\n")
-        monkeypatch.setattr(subprocess, "run",
-                            lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
+        _fake_git_show(monkeypatch, yaml_text)
         assert bt._flat_keys_at_head1("db-b") == {"mysql_connections", "mysql_threads_running"}
 
     def test_flat_keys_at_head1_duplicate_key_is_like_bad_syntax(self, monkeypatch):
         """#2231：HEAD~1 的檔有重複鍵時，exporter 整份丟掉，比照語法錯回空集合。"""
         yaml_text = (b"tenants:\n  db-b:\n    mysql_connections: '5'\n"
                      b"    mysql_connections: '6'\n    mysql_threads_running: '1'\n")
-        monkeypatch.setattr(subprocess, "run",
-                            lambda *a, **k: type("R", (), {"returncode": 0, "stdout": yaml_text})())
+        _fake_git_show(monkeypatch, yaml_text)
         assert bt._flat_keys_at_head1("db-b") == set()
+
+    def test_flat_keys_at_head1_reads_the_yaml_v3_way(self, monkeypatch):
+        """ADR-036 step 4 (#2906): the HEAD~1 text is read by `da-guard
+        parse-tree` (file mode), not PyYAML: an unquoted `yes` key is the
+        key "yes" (PyYAML: the boolean True, which `str(k)` turned into
+        "True"), and a value of the shape a threshold has stays one."""
+        yaml_text = (b"tenants:\n  db-b:\n    yes: '1'\n    on: '2'\n"
+                     b"    mysql_connections: 0o17\n")
+        _fake_git_show(monkeypatch, yaml_text)
+        assert bt._flat_keys_at_head1("db-b") == {"yes", "on", "mysql_connections"}
+
+    def test_flat_keys_at_head1_names_a_file_parse_tree_cannot_read(self, monkeypatch, capsys):
+        _fake_git_show(monkeypatch, b"tenants: [\n")
+        assert bt._flat_keys_at_head1("db-b") == set()
+        err = capsys.readouterr().err
+        assert "HEAD~1:./conf.d/db-b.yaml" in err and "syntax_error" in err, err
 
     def test_notice_empty_when_no_recipes(self):
         """無 recipe 租戶 → notice 為空字串。"""
@@ -1079,7 +1105,7 @@ class TestConfdSpellingParityWithTheExporter:
     def test_recipe_notice_counts_a_tenant_declared_in_a_yml_carrier(
         self, monkeypatch, tmp_path, capsys, cli_argv
     ):
-        """LOWER + UPPER through `main()`'s own `_confd_entries` filter.
+        """LOWER + UPPER through `main()`'s selection (parse-tree's since #2906).
 
         The operator-facing NOTE is built from `find_custom_alert_tenants`,
         which reads whatever this filter admits — so a recipe-only tenant

@@ -6,9 +6,10 @@ package handler
 // DELETE is the one group operation whose target is the stored object rather
 // than something the request supplies, so the member-permission gate and the
 // thing being destroyed have to be read from the same bytes. The snapshot is
-// not those bytes: groupMgr has no WatchLoop, and it only refreshes on a
-// successful write's Reload — so once the file moves underneath it (a write
-// that failed after writeFileAtomic, or a concurrent write), it stays wrong.
+// not those bytes: groupMgr refreshes only on a write's Reload and on its
+// WatchLoop tick (none runs in these tests) — so once the record moves
+// underneath it (an out-of-band edit, a concurrent write), it is wrong until
+// then.
 //
 // The middleware here is mounted with PermRead purely to populate the verified
 // principal; production mounts DELETE with PermWrite (cmd/server/routes.go).
@@ -24,7 +25,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -64,7 +65,7 @@ func TestDeleteGroup_AuthorizesStoredMembersNotSnapshot(t *testing.T) {
 	writeAndCommit("groups:\n  g-x:\n    label: gx\n    members:\n      - t-owned\n      - t-foreign\n", "drift")
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{State: mustDirState(configDir), Writer: gitops.NewWriter(configDir, configDir), Groups: gm, RBAC: rbacMgr}
+	d := &Deps{State: mustDirState(configDir), Writer: gitopstest.NewWriter(configDir, configDir), Groups: gm, RBAC: rbacMgr}
 	h := wrapWithRBACMiddleware(DeleteGroup(d), rbacMgr, rbac.PermRead, nil)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(nil))
@@ -112,7 +113,7 @@ func TestDeleteGroup_StoredMembersAllWritableDeletes(t *testing.T) {
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
 	d := &Deps{State: mustDirState(configDir),
-		Writer: gitops.NewWriter(configDir, configDir),
+		Writer: gitopstest.NewWriter(configDir, configDir),
 		Groups: groups.NewDirManager(configDir),
 		RBAC:   rbacMgr,
 	}

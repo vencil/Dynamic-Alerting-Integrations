@@ -67,6 +67,25 @@ _POLICY_VALUE = {
                       '    _metadata:\n      owner: "yes"\n'),
 }
 
+#: An `_instance_mapping.yaml` entry's `tenant:` — a tenant id, read as text
+#: (a boolean `true` is the id "true", not "yes").
+_MAPPING_TENANT = {
+    "_defaults.yaml": _DEFAULTS,
+    "_instance_mapping.yaml": ("instance_tenant_mapping:\n  i1:\n"
+                               "    - tenant: {VALUE}\n      filter: 'schema=\"a\"'\n"),
+}
+#: A root `_defaults.yaml` top-level value — OPA's `input.defaults` carries it.
+_OPA_DEFAULT = {
+    "_defaults.yaml": _DEFAULTS + "flag: {VALUE}\n",
+    "tenant-a.yaml": 'tenants:\n  tenant-a:\n    mysql_connections: "70"\n',
+}
+#: A tenant's `_metadata.environment` under a `prod/` directory: a string that
+#: disagrees with the path is a finding; a boolean is no environment at all.
+_PATH_ENV = {
+    "prod/tenant-a.yaml": ("tenants:\n  tenant-a:\n    _metadata:\n"
+                           "      environment: {VALUE}\n"),
+}
+
 _VARIANTS = {"plain": "yes", "quoted": '"yes"', "bool": "true"}
 
 # tool → (script, argv ({d} = the conf.d, {out} = a scratch dir), tree,
@@ -94,6 +113,15 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
         _PROFILE_REF, (), ""),
     "lint/check_confd_schema.py": (
         "lint/check_confd_schema.py", ["--config-dir", "{d}"], _ENFORCED, (), ""),
+    # ── the read-only tools switched in step E1 (#2906) ──
+    "ops/generate_tenant_mapping_rules.py": (
+        "ops/generate_tenant_mapping_rules.py",
+        ["--config-dir", "{d}", "--metrics", "cpu", "--dry-run"], _MAPPING_TENANT, (), ""),
+    "ops/policy_opa_bridge.py": (
+        "ops/policy_opa_bridge.py", ["--config-dir", "{d}", "--dry-run"], _OPA_DEFAULT, (), ""),
+    "lint/check_path_metadata_consistency.py": (
+        "lint/check_path_metadata_consistency.py", ["--config-dir", "{d}", "--ci"],
+        _PATH_ENV, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -103,6 +131,19 @@ _NAMES = "reads conf.d names / paths / bytes, no value of a file"
 _GO = "reads conf.d values only through da-guard (served-values / effective / parse-tree)"
 _PENDING = ("pending (4c): not on parse-tree yet, or not established here whether it "
             "reads conf.d values at all — no probe written yet")
+#: Step E1 (#2906): tools whose conf.d reads are da-guard's but which take no
+#: conf.d argument (fixed repo-relative trees), or read no value a probe can
+#: tell apart (key names only): `_GO`, and their own tests in
+#: tests/shared/test_readonly_tools_read_parse_tree.py measure the yaml.v3
+#: reading, the closure, the unreadable file and the missing da-guard.
+_GO_FIXED = (_GO + "; fixed repo-relative conf.d trees, no conf.d argument to probe — "
+             "tests/shared/test_readonly_tools_read_parse_tree.py")
+_GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, no value a "
+            "yes/\"yes\"/true probe tells apart — "
+            "tests/shared/test_readonly_tools_read_parse_tree.py")
+_OWNER_2115 = ("--config-dir reads served-values only; the single-file `--tenant-config` "
+               "branch stays on PyYAML by owner ruling #2115 (decision 4: not switched), "
+               "and no run mixes the two")
 _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
@@ -126,31 +167,30 @@ _NOT_PROBED: dict[str, str] = {
                            "(subprocess): its routing half is the generator's probe"),
     "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
                                "to list where they differ (ADR-036 §8)"),
-    "dx/describe_tenant.py": ("pending: moves to da-guard effective / served-values (#2906 "
-                              "ruling 3), not to parse-tree; no probe written yet"),
+    "dx/describe_tenant.py": _GO,
     "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _PENDING,
     "lint/check_account_registry_monotonic.py": _PENDING, "validate_all.py": _PENDING,
     "ops/byo_check.py": _PENDING, "ops/blast_radius.py": _PENDING,
     "ops/generate_rule_pack_split.py": _PENDING, "ops/cutover_tenant.py": _PENDING,
     "ops/maintenance_scheduler.py": _PENDING, "ops/operator_check.py": _PENDING,
     "ops/baseline_discovery.py": _PENDING, "ops/threshold_recommend.py": _PENDING,
-    "ops/blind_spot_discovery.py": _PENDING,
+    "ops/blind_spot_discovery.py": _GO,
     "dx/compile_custom_alerts.py": _GO, "dx/migrate_conf_d.py": _PENDING,
-    "dx/tenant_verify.py": _PENDING, "lint/check_path_metadata_consistency.py": _PENDING,
-    "lint/check_retire_drift.py": _PENDING, "lint/check_scrape_reachability.py": _PENDING,
+    "dx/tenant_verify.py": _GO, 
+    "lint/check_retire_drift.py": _GO_KEYS, "lint/check_scrape_reachability.py": _PENDING,
     "lint/check_threshold_observed_map.py": _PENDING,
-    "lint/check_threshold_reachability.py": _PENDING,
-    "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _PENDING,
-    "ops/analyze_rule_pack_gaps.py": _PENDING, "ops/assemble_config_dir.py": _GO,
-    "ops/backtest_threshold.py": _PENDING, "ops/batch_diagnose.py": _PENDING,
+    "lint/check_threshold_reachability.py": _GO_FIXED,
+    "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _GO_FIXED,
+    "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
+    "ops/backtest_threshold.py": _GO_KEYS, "ops/batch_diagnose.py": _PENDING,
     "ops/config_history.py": _PENDING, "ops/da_assembler.py": _PENDING,
-    "ops/deprecate_rule.py": _PENDING, "ops/diagnose.py": _PENDING,
+    "ops/deprecate_rule.py": _PENDING, "ops/diagnose.py": _GO,
     "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,
-    "ops/generate_tenant_mapping_rules.py": _PENDING, "ops/gitops_check.py": _PENDING,
+    "ops/gitops_check.py": _GO_KEYS,
     "ops/init_project.py": _PENDING, "ops/migrate_rule.py": _PENDING,
     "ops/migrate_to_operator.py": _PENDING, "ops/offboard_tenant.py": _PENDING,
     "ops/onboard_platform.py": _PENDING, "ops/operator_generate.py": _PENDING,
-    "ops/patch_config.py": _PENDING, "ops/policy_opa_bridge.py": _PENDING,
+    "ops/patch_config.py": _PENDING,
     "ops/scaffold_tenant.py": _PENDING, "ops/threshold_govern.py": _PENDING,
 }
 
@@ -178,6 +218,7 @@ def _outcome(tool: str, variant: str) -> tuple:
         os.makedirs(d)
         os.makedirs(out)
         for name, text in tree.items():
+            pathlib.Path(d, name).parent.mkdir(parents=True, exist_ok=True)
             pathlib.Path(d, name).write_text(text.replace("{VALUE}", _VARIANTS[variant]),
                                              encoding="utf-8")
         # The tool runs in `tmp`: a relative $DA_GUARD_BINARY is made absolute

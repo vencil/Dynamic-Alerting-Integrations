@@ -456,7 +456,7 @@ class TestExtensionSpellingAxis:
             # deliberately unpinned everywhere else in this file.
             named = [ln for ln in err.splitlines()
                      if ("db-broken" + ext) in ln
-                     and "is a directory, not a config file" in ln]
+                     and "a directory with a config file name" in ln]
             assert len(named) == 1, (
                 f"the `not checked` report must name `db-broken{ext}` "
                 f"exactly once, with the reason; stderr was {err!r}"

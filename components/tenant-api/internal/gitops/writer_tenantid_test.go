@@ -63,7 +63,7 @@ func TestWriterRejectsInvalidTenantID(t *testing.T) {
 			t.Run(tc.name+"/"+id, func(t *testing.T) {
 				t.Parallel()
 				dir := t.TempDir()
-				w := NewWriter(dir, dir)
+				w := newTestWriter(dir, dir)
 				err := tc.call(w, id)
 				if !errors.Is(err, ErrInvalidTenantID) {
 					t.Fatalf("%s(%q) error = %v, want ErrInvalidTenantID", tc.name, id, err)

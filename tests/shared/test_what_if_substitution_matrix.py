@@ -18,8 +18,9 @@ oracle 是 Go：`da-guard effective` 對「替換後的樹」求出的 merged_ha
 （盲審第 2 輪 D）。`--replaces` 沒帶 `--what-if` 在任何模式（含 `--diff` / `--all`）都是 rc 2（E）；
 `--what-if`（不論帶不帶 `--replaces`）搭 `--all` / `--diff` 也是 rc 2（#2739）。
 
-樹外的檔（`append-external`）與樹內不存在於 listing 的路徑（`insert`）維持原行為，各有一格
-對照組。
+#2906 起樹外的檔（原 `append-external`）與樹內不存在於 listing 的路徑（原 `insert`）不再
+隱含放進 chain、一律 rc 2；新增檔改用 `--at <路徑>`（create），oracle 一樣是 Go 對「多了這個檔
+的樹」的答案。兩邊都經 `da-guard effective --overlay` 求值。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
@@ -38,8 +39,6 @@ from _platform_fs import symlink_or_skip
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
-sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "dx"))
-import describe_tenant as dt  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -140,7 +139,7 @@ def test_in_tree_file_without_replaces_is_refused(tmp_path, rel):
     p = _cli(conf_d, target)
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
     assert p.stdout == "", p.stdout
-    assert "compare the file with itself" in p.stderr, p.stderr
+    # #2906: every bare --what-if is refused; this one names the remedy.
     assert f"--what-if <copy> --replaces {target.resolve()}" in p.stderr, p.stderr
 
 
@@ -191,8 +190,8 @@ def test_hard_link_to_an_in_tree_file_without_replaces_is_refused(tmp_path):
     p = _cli(conf_d, link)
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
     assert p.stdout == "", p.stdout
-    assert "through a hard link" in p.stderr, p.stderr
-    assert f"--replaces {target.resolve()}" in p.stderr, p.stderr
+    # #2906: a bare --what-if is refused whatever it names.
+    assert "--replaces <file>" in p.stderr, p.stderr
 
 
 def test_replaces_through_a_hard_link_to_the_what_if_file_is_refused(tmp_path):
@@ -220,7 +219,11 @@ def test_replaces_must_name_a_listed_file(tmp_path, where):
     p = _cli(conf_d, copy, "--replaces", str(target))
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
     assert p.stdout == "", p.stdout
-    assert f"--replaces {target.resolve()} is not a file of the scanned tree" in p.stderr, p.stderr
+    want = {"outside": "is not inside the scanned tree",
+            "missing": "is not a file of the scanned tree",
+            # Go's refusal (`da-guard effective --overlay`): the walk never reads it.
+            "hidden-in-tree": "not a name the walk reads"}[where]
+    assert want in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("mode", [[], ["--diff", "t2"], ["--all"]],
@@ -305,42 +308,63 @@ def test_own_tenant_file_with_a_non_mapping_body_is_refused(tmp_path, body):
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
     assert p.stdout == "", p.stdout
     assert "Traceback" not in p.stderr, p.stderr
-    assert f"--what-if file {copy.resolve()} has an unsupported shape" in p.stderr, p.stderr
-    assert "tenant 't1'" in p.stderr and "not a mapping" in p.stderr, p.stderr
+    # #2906: Go's verdict on those bytes at that path — the load skips the file.
+    assert f"--what-if file {copy.resolve()} at --replaces sub/t1.yaml" in p.stderr, p.stderr
+    assert "skips file(s) it reads today: sub/t1.yaml" in p.stderr, p.stderr
 
 
-def test_cli_outside_the_tree_still_appends(tmp_path):
-    """對照組：樹外的檔維持 append-external（整份當最高層 defaults）。"""
+@pytest.mark.parametrize("where", ["outside", "hidden-in-tree"])
+def test_the_implicit_forms_are_refused(tmp_path, where):
+    """#2906：樹外的檔（原 `append-external`）與樹內不在 listing 的路徑（原 `insert`）不再隱含
+    放進 chain——rc 2，訊息指出 `--replaces` 與 `--at`。"""
     conf_d = _tree(tmp_path, False)
-    outside = tmp_path / "whatif.yaml"
-    outside.write_text("defaults:\n  pg_connections: 41\n", encoding="utf-8")
-    p = _cli(conf_d, outside)
+    draft = tmp_path / "whatif.yaml" if where == "outside" else conf_d / "sub" / ".draft.yaml"
+    draft.write_text("defaults:\n  pg_connections: 41\n", encoding="utf-8")
+    p = _cli(conf_d, draft)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "--replaces <file>" in p.stderr and "--at <path>" in p.stderr, p.stderr
+
+
+# (name, path the draft is added at, its content, expected reload)
+CREATE_CASES = [
+    ("new-root-platform-file", "_platform.yaml", "tenants:\n  t1:\n    pg_connections: 41\n", True),
+    ("parent-missing", "sub/deeper/_defaults.yaml", "defaults:\n  pg_connections: 41\n", False),
+    ("new-nested-platform-file", "sub/_x.yaml", "tenants:\n  t1:\n    pg_connections: 41\n", False),
+    ("new-tenant-file-for-another-tenant", "sub/t3.yaml", "tenants:\n  t3: {}\n", False),
+]
+
+
+@pytest.mark.parametrize("name,rel,new,reload", CREATE_CASES, ids=[c[0] for c in CREATE_CASES])
+def test_at_matches_go_on_the_tree_with_the_file_added(tmp_path, name, rel, new, reload):
+    """`--at <path>`（create）：Go 對「多了這個檔的樹」的答案。`sub/deeper/` 不存在，
+    所以那一格被 Go 拒收（上層目錄不是 walk 會走的目錄）。"""
+    conf_d = _tree(tmp_path, False)
+    draft = tmp_path / "draft.yaml"
+    draft.write_text(new, encoding="utf-8")
+    go_before = _go_hash(conf_d)
+    p = _cli(conf_d, draft, "--at", str(conf_d / rel))
+    if not (conf_d / rel).parent.is_dir():
+        assert p.returncode == 2, (p.returncode, p.stderr)
+        assert "not a directory the walk descends" in p.stderr, p.stderr
+        return
     assert p.returncode == 0, p.stderr
     out = json.loads(p.stdout)
-    assert (out["substitution_type"], out["would_trigger_reload"]) == ("append-external", True), out
-    assert out["changed_keys"] == {"pg_connections": {"baseline": 40, "what_if": 41}}, out
-
-
-def test_cli_unlisted_path_inside_the_tree_still_inserts(tmp_path):
-    """對照組：樹內但不在 listing 的路徑（隱藏檔，walker 不讀）維持 insert。"""
-    conf_d = _tree(tmp_path, False)
-    hidden = conf_d / "sub" / ".draft.yaml"
-    hidden.write_text("defaults:\n  pg_connections: 42\n", encoding="utf-8")
-    p = _cli(conf_d, hidden)
-    assert p.returncode == 0, p.stderr
-    out = json.loads(p.stdout)
-    assert out["substitution_type"] == "insert", out
+    assert not (conf_d / rel).exists(), "nothing is written to the tree"
+    (conf_d / rel).write_text(new, encoding="utf-8")
+    go_after = _go_hash(conf_d)
+    assert (go_before != go_after) is reload, (name, "前提：Go 的答案")
+    assert out["substitution_type"] == "create" and out["at"] == str((conf_d / rel).resolve()), out
+    assert out["replaces"] is None, out
+    assert out["baseline_merged_hash"] == go_before, out
+    assert out["what_if_merged_hash"] == go_after, out
+    assert out["would_trigger_reload"] is reload, out
 
 
 def test_own_tenant_file_that_no_longer_declares_the_tenant_is_refused(tmp_path):
     conf_d = _tree(tmp_path, False)
-    scanner = dt.ConfDScanner(conf_d)
     target = conf_d / "sub" / "t1.yaml"
     copy = tmp_path / "t1.yaml"
     copy.write_text("tenants:\n  t9: {}\n", encoding="utf-8")
-    with pytest.raises(dt.WhatIfError, match="does not declare 't1'"):
-        dt.what_if_result(scanner, "t1", copy.resolve(), copy,
-                          dt._load_yaml(copy), dt._load_platform_doc(copy),
-                          replaces=target.resolve())
     p = _cli(conf_d, copy, "--replaces", str(target))
-    assert p.returncode == 2 and "does not declare 't1'" in p.stderr, (p.returncode, p.stderr)
+    assert p.returncode == 2 and "resolves no tenant 't1'" in p.stderr, (p.returncode, p.stderr)

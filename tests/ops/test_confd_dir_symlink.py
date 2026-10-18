@@ -45,6 +45,7 @@ COMPILE = REPO / "scripts" / "tools" / "dx" / "compile_custom_alerts.py"
 
 SYMLINK_REASON = ("is a symlink to a directory — threshold-exporter does not "
                   "follow it, so the config files under it are NOT loaded")
+PT_SYMLINK_REASON = "a symlink to a directory the walk does not follow (not_regular_file)"
 TENANT = 'tenants:\n  t-sym:\n    cpu_pct: "70"\n'
 DEFAULTS = "defaults:\n  cpu_pct: 50\n"
 
@@ -219,7 +220,9 @@ def test_describe_tenant_and_path_metadata_name_it_consistently(nested: Path):
     assert (d.stdout + d.stderr).count(f"team-a — {SYMLINK_REASON}") == 1, d.stderr
     m = _run(PATH_META, "--config-dir", nested)
     assert m.returncode == 0
-    assert SYMLINK_REASON in m.stdout + m.stderr
+    # #2906: its listing is `da-guard parse-tree`'s, which names the link
+    # in its own words (the same kind the exporter's walk gives it).
+    assert "team-a:0: warning: not checked — " + PT_SYMLINK_REASON in m.stdout + m.stderr
 
 
 def test_describe_tenant_and_path_metadata_flat_are_unchanged(flat: Path):
@@ -239,7 +242,7 @@ def test_underscore_directory_link_is_named_by_name_filtering_readers(shared: Pa
     assert f"_shared — {SYMLINK_REASON}" in d.stdout + d.stderr, d.stderr
     m = _run(PATH_META, "--config-dir", shared)
     assert m.returncode == 0
-    assert f"_shared:0: warning: not checked — {SYMLINK_REASON}" in m.stdout + m.stderr
+    assert f"_shared:0: warning: not checked — {PT_SYMLINK_REASON}" in m.stdout + m.stderr
 
 
 def test_compile_custom_alerts_allow_empty_is_not_refused(nested: Path, tmp_path: Path):

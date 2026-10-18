@@ -43,7 +43,7 @@ func TestWriteMerged_AsksTheValidator(t *testing.T) {
 	t.Parallel()
 	for _, refuse := range []bool{true, false} {
 		dir := initRepoWithDefaults(t)
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		v := &recordingValidator{}
 		if refuse {
 			v.err = errFakeRefusal
@@ -93,7 +93,7 @@ func TestValidator_PathsRelativeToConfDir(t *testing.T) {
 			t.Skipf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	w := NewWriter(conf, repo)
+	w := newTestWriter(conf, repo)
 	v := &recordingValidator{}
 	w.SetValidator(v)
 	const body = "tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n"

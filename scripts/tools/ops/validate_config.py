@@ -1545,9 +1545,11 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         #
         # The read below is the operator's argv. The `_defaults.yaml` read
         # above is the customer's tree and stays a tree finding on purpose.
+        # ADR-036 step 4 (#2906): yaml.v3, as every other read of this run —
+        # `da-guard parse-tree`'s file mode (`pe.read_policy_file`).
         try:
-            dsl_data = pe.load_yaml_file_strict(policy_dsl_file)
-        except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+            dsl_data = pe.read_policy_file(policy_dsl_file)
+        except (OSError, yaml.YAMLError, ParseTreeError) as exc:
             return _argv_error_row(
                 "policy_dsl",
                 f"--policy-dsl: unusable file: {policy_dsl_file!r}: {exc}",

@@ -168,8 +168,8 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	writeConfigReloadFailureMetrics(w)
 
 	// Companion current-state gauge (0 ⇒ that manager's LAST reload failed and it
-	// is serving stale config right now). Catches a single-shot Reload failure the
-	// counter's rate threshold cannot; alert on == 0.
+	// is serving stale config right now). It does not depend on the retry
+	// cadence the counter's rate threshold does; alert on == 0.
 	writeConfigReloadStateMetrics(w)
 
 	// ADR-036 §5 (#2903): whether the generator container can judge writes

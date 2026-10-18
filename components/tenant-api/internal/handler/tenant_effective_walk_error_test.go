@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 )
 
 // A walk that fails (here: the config dir is gone; a walk past its bound
@@ -20,7 +20,7 @@ func TestGetTenantEffective_WalkFailureIsFixedText(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h := GetTenantEffective(&Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, "")})
+	h := GetTenantEffective(&Deps{ConfigDir: dir, Writer: gitopstest.NewWriter(dir, "")})
 	if err := os.Remove(dir); err != nil {
 		t.Fatal(err)
 	}

@@ -66,7 +66,7 @@ func TestTreeOnBase_OnlyLoaderVisibleChangesCount(t *testing.T) {
 			gitIn(t, repo, "add", "-A")
 			gitIn(t, repo, "commit", "-m", "seed")
 			c.setup(t, repo)
-			err := treeOnBase(NewWriter(repo, repo))
+			err := treeOnBase(newTestWriter(repo, repo))
 			if got := err != nil; got != c.dirty {
 				t.Fatalf("TreeOnBase = %v, want dirty=%v", err, c.dirty)
 			}
@@ -85,11 +85,11 @@ func TestTreeOnBase_UntrackedOutsideConfDirIgnored(t *testing.T) {
 	gitIn(t, repo, "add", "-A")
 	gitIn(t, repo, "commit", "-m", "seed")
 	writeIn(t, repo, "docs/other.yaml", "x: 1\n")
-	if err := treeOnBase(NewWriter(filepath.Join(repo, "conf.d"), repo)); err != nil {
+	if err := treeOnBase(newTestWriter(filepath.Join(repo, "conf.d"), repo)); err != nil {
 		t.Errorf("untracked yaml outside conf.d made the tree dirty: %v", err)
 	}
 	writeIn(t, repo, "conf.d/db-b.yaml", "tenants: {}\n")
-	if err := treeOnBase(NewWriter(filepath.Join(repo, "conf.d"), repo)); err == nil {
+	if err := treeOnBase(newTestWriter(filepath.Join(repo, "conf.d"), repo)); err == nil {
 		t.Error("untracked tenant file inside conf.d was not reported")
 	}
 }
@@ -119,7 +119,7 @@ func TestTreeOnBase_TimeoutTouchesNoLock(t *testing.T) {
 		t.Skip("unix stub")
 	}
 	repo := initRepoOnMain(t)
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 	w.gitBinary = hangingStatusGit(t)
 	w.gitTimeout = 300 * time.Millisecond
 	w.gitWaitDelay = 300 * time.Millisecond
@@ -198,7 +198,7 @@ func TestTreeOnBase_ResolvesPathsLikeTheLoader(t *testing.T) {
 				}
 				confDir = link
 			}
-			err := treeOnBase(NewWriter(confDir, filepath.Join(top, c.layout.gitDir)))
+			err := treeOnBase(newTestWriter(confDir, filepath.Join(top, c.layout.gitDir)))
 			if got := err != nil; got != c.dirty {
 				t.Errorf("TreeOnBase = %v, want dirty=%v", err, c.dirty)
 			}
@@ -226,7 +226,7 @@ func TestTreeOnBase_StatusTakesNoIndexLock(t *testing.T) {
 	}
 	lock := filepath.Join(repo, ".git", "index.lock")
 	done := make(chan error, 1)
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 	go func() { done <- treeOnBase(w) }()
 	seen := false
 	for {
