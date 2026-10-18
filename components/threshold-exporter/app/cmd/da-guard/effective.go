@@ -22,7 +22,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -84,42 +87,97 @@ type effectiveTenant struct {
 	ChainParseFailed []string `json:"chain_parse_failed"`
 }
 
-func parseEffectiveFlags(args []string, errOut io.Writer) (string, error) {
+// effectiveFlags is the parsed command line.
+type effectiveFlags struct {
+	configDir string
+	// overlay is --overlay as given (`<rel-path>=<file>`); "" for none.
+	overlay string
+}
+
+func parseEffectiveFlags(args []string, errOut io.Writer) (effectiveFlags, error) {
 	fs := flag.NewFlagSet(programName+" "+effectiveCmd, flag.ContinueOnError)
 	fs.SetOutput(errOut)
-	var configDir string
-	fs.StringVar(&configDir, "config-dir", "", "Path to the conf.d/ root. Required.")
+	var f effectiveFlags
+	fs.StringVar(&f.configDir, "config-dir", "", "Path to the conf.d/ root. Required.")
+	// A Func, not a StringVar: a second --overlay would silently replace the
+	// first, and the run would answer a different question than asked.
+	overlaySet := false
+	fs.Func("overlay",
+		"`<rel-path>=<file>`: resolve the tree as if <rel-path> (relative to --config-dir) held <file>'s bytes —\n"+
+			"in place of the listed file there (substitute), or as a new regular file where nothing is (create;\n"+
+			"its parent must be a directory the walk descends). Anything else at <rel-path>, a path leaving the\n"+
+			"tree, or a name the walk does not read is refused (exit 2). One per run.",
+		func(v string) error {
+			if overlaySet {
+				return errors.New("given more than once; one --overlay per run")
+			}
+			overlaySet = true
+			f.overlay = v
+			return nil
+		})
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir>\n", programName, effectiveCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--overlay <rel-path>=<file>]\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, every tenant's effective config as tenant-api's /effective resolves it,\n"+
 			"with the profile each tenant is bound to and, per key, the layer and file its value came from.\n\n")
 		fs.PrintDefaults()
-		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the resolver rejects (e.g. a tenant declared twice,\n"+
+		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error (a refused --overlay included), or a tree the resolver rejects (e.g. a tenant declared twice,\n"+
 			"     no .yaml file at all), or any output string that is not valid UTF-8\n"+
 			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
 			"     names them in parse_failed / unreadable\n")
 	}
 	if err := fs.Parse(args); err != nil {
-		return "", err
+		return f, err
 	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(errOut, "%s %s: unexpected argument %q\n", programName, effectiveCmd, fs.Arg(0))
-		return "", errors.New("unexpected argument")
+		return f, errors.New("unexpected argument")
 	}
-	return configDir, nil
+	return f, nil
+}
+
+// readOverlay is --overlay's FileOverlay: the path cleaned as parse-tree's
+// --path is (cleanRelPath), the file read whole. nil for no --overlay.
+func readOverlay(spec string) (*config.FileOverlay, error) {
+	if spec == "" {
+		return nil, nil
+	}
+	rel, file, ok := strings.Cut(spec, "=")
+	if !ok || file == "" {
+		return nil, fmt.Errorf("--overlay %q: want <rel-path>=<file>", spec)
+	}
+	clean, err := cleanRelPath(rel)
+	if err != nil {
+		return nil, fmt.Errorf("--overlay path %q: %v", rel, err)
+	}
+	// Refused, not normalised: `a/../b.yaml` naming b.yaml is a path that
+	// holds `..`, which the flag documents as exit 2.
+	if clean != filepath.ToSlash(rel) {
+		return nil, fmt.Errorf("--overlay path %q: must be a clean path inside --config-dir (no '..' or '.' segment, no repeated '/')", rel)
+	}
+	data, err := os.ReadFile(file) // #nosec G304 -- the caller names the file to read
+	if err != nil {
+		return nil, fmt.Errorf("--overlay file: %v", err)
+	}
+	return &config.FileOverlay{Rel: clean, Data: data}, nil
 }
 
 // runEffective is the subcommand's entry point.
 func runEffective(args []string, stdout, errOut io.Writer) int {
-	configDir, err := parseEffectiveFlags(args, errOut)
+	flags, err := parseEffectiveFlags(args, errOut)
 	if errors.Is(err, flag.ErrHelp) {
 		return exitOK
 	}
 	if err != nil {
 		return exitCallerErr
 	}
+	configDir := flags.configDir
 	if configDir == "" {
 		fmt.Fprintf(errOut, "%s %s: --config-dir is required\n", programName, effectiveCmd)
+		return exitCallerErr
+	}
+	overlay, err := readOverlay(flags.overlay)
+	if err != nil {
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, err)
 		return exitCallerErr
 	}
 
@@ -128,7 +186,7 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	// The load logs on errOut, as served-values' LoadDir does (#2115): a
 	// file in parse_failed is named with the exporter's reason, not only
 	// listed (`cannot unmarshal !!str ...`).
-	tree, err := config.EffectiveTreeLogged(configDir, log.New(errOut, "", 0))
+	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), config.ScanOptions{Overlay: overlay})
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, tree.RootListErr)
