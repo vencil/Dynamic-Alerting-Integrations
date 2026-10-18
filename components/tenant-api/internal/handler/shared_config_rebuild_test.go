@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
@@ -45,7 +45,7 @@ func TestPutGroup_RebuildsFromDiskNotSnapshot(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
 	d := &Deps{State: mustDirState(configDir),
-		Writer: gitops.NewWriter(configDir, configDir),
+		Writer: gitopstest.NewWriter(configDir, configDir),
 		Groups: groups.NewDirManager(configDir),
 		RBAC:   newRBACManager(t, rebuildRBAC),
 	}
@@ -87,7 +87,7 @@ func TestDeleteGroup_RemovesOnlyItsOwnEntry(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
 	d := &Deps{State: mustDirState(configDir),
-		Writer: gitops.NewWriter(configDir, configDir),
+		Writer: gitopstest.NewWriter(configDir, configDir),
 		Groups: groups.NewDirManager(configDir),
 		RBAC:   newRBACManager(t, rebuildRBAC),
 	}
@@ -116,7 +116,7 @@ func TestPutView_RebuildsFromDiskNotSnapshot(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
 	d := &Deps{State: mustDirState(configDir),
-		Writer: gitops.NewWriter(configDir, configDir),
+		Writer: gitopstest.NewWriter(configDir, configDir),
 		Views:  views.NewDirManager(configDir),
 		RBAC:   newRBACManager(t, rebuildRBAC),
 	}

@@ -180,8 +180,8 @@ type stagingTree struct {
 	// worktree — it carries nothing worth keeping.
 	branchUnneeded bool
 	// validated: the bytes the generator judged, by path in order
-	// (validateStaging); commitStaging commits only those bytes. nil when no
-	// validator is installed.
+	// (validateStaging); commitStaging commits only those bytes. Required
+	// for a commit (#1535): nil only while nothing changed.
 	validated map[string][]byte
 }
 

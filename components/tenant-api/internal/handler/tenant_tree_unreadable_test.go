@@ -9,7 +9,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"io"
 	"log"
 	"net/http"
@@ -413,7 +413,7 @@ func TestTreeUnreadable_EACCESLinkElsewhereIsStoreFault(t *testing.T) {
 func TestStoreUnreadableMetrics_AbsentUntilAWalkSucceeds(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "conf.d")
-	w := gitops.NewWriter(dir, dir)
+	w := gitopstest.NewWriter(dir, dir)
 	for i := 0; i < 2; i++ {
 		var out strings.Builder
 		writeStoreUnreadableMetricsFrom(&out, w)

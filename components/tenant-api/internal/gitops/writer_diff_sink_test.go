@@ -32,7 +32,7 @@ func TestDiffTexts_TenantIDReachesNeitherGitNorTheFilesystem(t *testing.T) {
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
-	w := NewWriter(t.TempDir(), "")
+	w := newTestWriter(t.TempDir(), "")
 	w.gitBinary = stub
 
 	got, err := w.DiffTexts(id, current, true, proposed)

@@ -53,19 +53,34 @@ type WriteValidator interface {
 
 // SetValidator installs the validator every content-changing write asks
 // (see the file comment). Set it once at startup, before the server serves.
-// nil — only tests that build a Writer for something else — asks nothing.
+//
+// ⛔ IT IS REQUIRED (#1535). A Writer without one refuses every write that
+// would change content, with ErrNoValidator, before anything is written:
+// there is one commit path, the judged one. (There used to be a second,
+// unjudged one for a nil validator — reached only by tests — that committed
+// the whole index with `git commit` and kept every residue the judged path
+// had been rid of.) Tests install a permissive one (gitopstest.Permissive).
 func (w *Writer) SetValidator(v WriteValidator) { w.validator = v }
+
+// ErrNoValidator is what a content-changing write is refused with when the
+// Writer has no WriteValidator (SetValidator): nothing can judge it, so
+// nothing is written. A wiring defect, never a client's.
+var ErrNoValidator = errors.New("gitops: no write validator installed; refusing to write")
 
 // errValidatorBase reports a write whose base commit could not be read for
 // the validator: without it there is nothing to judge, so nothing is
 // written.
 var errValidatorBase = errors.New("cannot read the commit the write lands on")
 
-// validateProposed asks the validator about files over base; nil when no
-// validator is installed or there is nothing to write. Caller holds w.mu.
+// validateProposed asks the validator about files over base; nil when
+// there is nothing to write, ErrNoValidator when no validator is installed.
+// Caller holds w.mu.
 func (w *Writer) validateProposed(ctx context.Context, base string, files []ProposedFile) error {
-	if w.validator == nil || len(files) == 0 {
+	if len(files) == 0 {
 		return nil
+	}
+	if w.validator == nil {
+		return ErrNoValidator
 	}
 	return w.validator.ValidateWrites(ctx, base, files)
 }
@@ -75,13 +90,12 @@ func (w *Writer) validateProposed(ctx context.Context, base string, files []Prop
 // feature branch's HEAD — its branch point (PR mode, before anything is
 // committed on it). Caller holds w.mu.
 //
-// base is the commit the verdict is on ("" when no validator is installed).
-// The direct-mode caller hands it to commitFileChange, which commits only
+// base is the commit the verdict is on. The direct-mode caller hands it to commitFileChange, which commits only
 // while HEAD is still base: w.mu keeps every in-process write out, but not a
 // commit made from outside the process while the generator judged.
 func (w *Writer) validateTenantFile(ctx context.Context, filePath, tenantID string, content []byte) (base string, err error) {
 	if w.validator == nil {
-		return "", nil
+		return "", ErrNoValidator
 	}
 	base, err = w.currentHEAD()
 	if err != nil {
@@ -100,8 +114,11 @@ func (w *Writer) validateTenantFile(ctx context.Context, filePath, tenantID stri
 // On a pass it records them in st.validated, which commitStaging holds the
 // staged blobs to (checkStagedAsValidated). Caller holds w.mu.
 func (w *Writer) validateStaging(ctx context.Context, st *stagingTree, base string) error {
-	if w.validator == nil || len(st.order) == 0 {
+	if len(st.order) == 0 {
 		return nil
+	}
+	if w.validator == nil {
+		return ErrNoValidator
 	}
 	files := make([]ProposedFile, 0, len(st.order))
 	validated := make(map[string][]byte, len(st.order))
@@ -141,13 +158,15 @@ type NormalizationRefuser interface {
 	RefuseNormalized(paths []string) error
 }
 
-// checkStagedAsValidated compares the blob staged in dir's index for every
-// path in validated (a path as given to `git add` in dir) with the bytes
-// the generator judged, and refuses the write (see ErrContentNormalized)
-// when one differs. nil validated checks nothing. Caller holds w.mu.
-func (w *Writer) checkStagedAsValidated(dir string, validated map[string][]byte) error {
+// checkStagedAsValidated compares the blob staged in dir's index (env:
+// the temporary index's GIT_INDEX_FILE, or nil) for every path in validated
+// (a path as given to `git add` in dir) with the bytes the generator
+// judged, and refuses the write (see ErrContentNormalized) when one
+// differs. Every commit is judged (#1535), so an empty validated is a
+// caller's defect, refused rather than checking nothing. Caller holds w.mu.
+func (w *Writer) checkStagedAsValidated(dir string, env []string, validated map[string][]byte) error {
 	if len(validated) == 0 {
-		return nil
+		return errors.New("gitops: commit without the bytes the generator judged")
 	}
 	var changed []string
 	for p, want := range validated {
@@ -159,7 +178,7 @@ func (w *Writer) checkStagedAsValidated(dir string, validated map[string][]byte)
 			}
 			rel = r
 		}
-		got, err := w.gitOutput(dir, "cat-file", "blob", ":./"+filepath.ToSlash(rel))
+		got, err := w.gitOutputEnv(dir, env, "cat-file", "blob", ":./"+filepath.ToSlash(rel))
 		if err != nil {
 			return fmt.Errorf("read a staged file back: %w", err)
 		}
@@ -192,49 +211,47 @@ type normalizedRefusal struct{ err error }
 func (e *normalizedRefusal) Error() string { return e.err.Error() }
 func (e *normalizedRefusal) Unwrap() error { return e.err }
 
-// restoreFromHEAD puts filePath back as HEAD has it after a write that did
-// not commit (removed when HEAD has no such file): the serving file first,
-// then the index. The serving file is what the exporter and every later
-// read see, so it is restored even when the index cannot be touched — a
-// held index.lock is one reason a commit fails: then the file is written
-// from HEAD's blob, which needs no lock, and the index error is returned
-// for the log. Caller holds w.mu.
+// restoreFromHEAD puts the serving file filePath back as HEAD has it after
+// a write that did not commit (removed when HEAD has no such file). It
+// touches the worktree only: since #1535 a direct write builds its commit
+// in a temporary index and gitCommitOnto puts the real index's entry back
+// itself, so the real index holds what it held before the write — an
+// operator's staged change to this very path included — and resetting it
+// here would destroy that. `git restore --worktree` writes the file as a
+// checkout would (smudge, eol); when it fails (an index.lock, a timeout)
+// the file is written from HEAD's blob directly, which needs no lock — the
+// serving file is what the exporter and every later read see.
+// Caller holds w.mu.
 func (w *Writer) restoreFromHEAD(filePath string) error {
 	out, err := w.gitOutput(w.gitDir, "ls-tree", "--name-only", "HEAD", "--", filePath)
 	if err != nil {
 		return fmt.Errorf("read HEAD's entry: %w", err)
 	}
-	var idxErr error
-	if uerr := w.gitIn(w.gitDir, "reset", "-q", "--", filePath); uerr != nil {
-		idxErr = fmt.Errorf("unstage: %w", uerr)
-	}
 	if len(bytes.TrimSpace(out)) == 0 {
 		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-			return errors.Join(err, idxErr)
+			return err
 		}
-		return idxErr
+		return nil
 	}
-	if idxErr == nil {
-		// checkout runs post-checkout, so it gets no GIT_LITERAL_PATHSPECS
-		// (literalPathspecs): the path is made literal itself.
-		cerr := w.gitIn(w.gitDir, "checkout", "-q", "HEAD", "--", literalPathspec(filePath))
-		if cerr == nil {
-			return nil
-		}
-		idxErr = fmt.Errorf("checkout: %w", cerr)
+	// restore takes no GIT_LITERAL_PATHSPECS (literalPathspecs' list is
+	// closed): the path is made literal itself.
+	rerr := w.gitIn(w.gitDir, "restore", "--source=HEAD", "--worktree", "--", literalPathspec(filePath))
+	if rerr == nil {
+		return nil
 	}
+	rerr = fmt.Errorf("restore: %w", rerr)
 	rel, err := filepath.Rel(w.gitDir, filePath)
 	if err != nil {
-		return errors.Join(err, idxErr)
+		return errors.Join(err, rerr)
 	}
 	blob, err := w.gitOutput(w.gitDir, "cat-file", "blob", "HEAD:./"+filepath.ToSlash(rel))
 	if err != nil {
-		return errors.Join(fmt.Errorf("read HEAD's blob: %w", err), idxErr)
+		return errors.Join(fmt.Errorf("read HEAD's blob: %w", err), rerr)
 	}
 	if err := writeFileAtomic(filePath, blob, 0644); err != nil {
-		return errors.Join(err, idxErr)
+		return errors.Join(err, rerr)
 	}
-	return idxErr
+	return rerr
 }
 
 // unchangedFile is the no-op rule of the single-file writes (Write and

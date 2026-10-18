@@ -403,6 +403,11 @@ func main() {
 	if err := writer.PruneBatchWorktrees(); err != nil {
 		slog.Warn("could not prune leftover batch worktrees", "error", err)
 	}
+	// #1535: a direct write's temporary commit index a killed process left
+	// in the git dir — before serving, outside the writer lock, likewise.
+	if err := writer.PruneCommitIndexes(); err != nil {
+		slog.Warn("could not prune leftover temporary commit indexes", "error", err)
+	}
 	// v2.6.0: Register callback for real-time event broadcasting. #3123: the
 	// event is addressed to its tenant; EventStream delivers it only to
 	// subscribers who may read that tenant.

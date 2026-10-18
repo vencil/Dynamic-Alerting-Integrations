@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -55,7 +56,7 @@ func mustDirState(dir string) statestore.Store {
 
 // newTestWriter creates a gitops.Writer for test use.
 func newTestWriter(configDir string) *gitops.Writer {
-	return gitops.NewWriter(configDir, "")
+	return gitopstest.NewWriter(configDir, "")
 }
 
 // newRBACManager creates an RBAC manager from a YAML string.

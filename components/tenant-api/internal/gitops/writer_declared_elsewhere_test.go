@@ -142,7 +142,7 @@ func TestTenantWrite_RefusesIDDeclaredElsewhere(t *testing.T) {
 		for _, mode := range allWriteModes {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
 				dir := seedTreeRepo(t, tc.files)
-				w := NewWriter(dir, dir)
+				w := newTestWriter(dir, dir)
 				mainHead := gitOut(t, dir, "rev-parse", "main")
 				ownPath := filepath.Join(dir, tc.tenant+".yaml")
 				ownBefore, ownErrBefore := os.ReadFile(ownPath)
@@ -185,7 +185,7 @@ func TestTenantWrite_PlatformFileTenantsBlockIsNotADeclaration(t *testing.T) {
 	for _, mode := range allWriteModes {
 		t.Run(mode, func(t *testing.T) {
 			dir := seedTreeRepo(t, map[string]string{"_extra.yaml": tenantBody("pt")})
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			if err := writeVia(t, mode, w, "pt"); err != nil {
 				t.Fatalf("%s(pt): %v", mode, err)
 			}
@@ -215,7 +215,7 @@ func TestTenantWrite_NewAndExistingTenantsStillWrite(t *testing.T) {
 		for _, mode := range allWriteModes {
 			t.Run(mode, func(t *testing.T) {
 				dir := seedTreeRepo(t, map[string]string{"team/sub-t.yaml": tenantBody("sub-t")})
-				if err := writeVia(t, mode, NewWriter(dir, dir), "fresh-t"); err != nil {
+				if err := writeVia(t, mode, newTestWriter(dir, dir), "fresh-t"); err != nil {
 					t.Fatalf("%s(fresh-t): %v", mode, err)
 				}
 			})
@@ -232,7 +232,7 @@ func TestTenantWrite_NewAndExistingTenantsStillWrite(t *testing.T) {
 					"upd-t.yaml":            tenantBody("upd-t"),
 					"team/neighbour-t.yaml": tenantBody("neighbour-t"),
 				})
-				w := NewWriter(dir, dir)
+				w := newTestWriter(dir, dir)
 				body := "tenants:\n  upd-t:\n    _silent_mode: \"critical\"\n"
 				var err error
 				if mode == "Write" {
@@ -258,7 +258,7 @@ func TestTenantWrite_NewAndExistingTenantsStillWrite(t *testing.T) {
 		for _, mode := range allWriteModes {
 			t.Run(mode, func(t *testing.T) {
 				dir := seedTreeRepo(t, map[string]string{"fill-t.yaml": "tenants: {}\n"})
-				if err := writeVia(t, mode, NewWriter(dir, dir), "fill-t"); err != nil {
+				if err := writeVia(t, mode, newTestWriter(dir, dir), "fill-t"); err != nil {
 					t.Fatalf("%s(fill-t): %v", mode, err)
 				}
 			})
@@ -275,7 +275,7 @@ func TestWritePRBatch_OpSeesEarlierOpsWrites(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": "tenants:\n" +
 		"  mv-x:\n    _silent_mode: \"warning\"\n" +
 		"  mv-y:\n    _silent_mode: \"warning\"\n"})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		{TenantID: "mv-x", Merge: func([]byte) (string, error) { return tenantBody("mv-x"), nil }},
 		{TenantID: "mv-y", Merge: func([]byte) (string, error) { return tenantBody("mv-y"), nil }},
@@ -311,7 +311,7 @@ func TestWritePRBatch_PreflightDefersDeclaredElsewhereToFreshBase(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(dir, "team", "fix-t.yaml")); err != nil {
 		t.Fatalf("fixture: local tree must still declare fix-t elsewhere: %v", err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "fix-t",
 		Merge: func([]byte) (string, error) { return tenantBody("fix-t"), nil }}}, "op@example.com")
 	if err != nil {
@@ -337,7 +337,7 @@ func TestEnsureNotDeclaredElsewhere_ScanFailureFailsClosed(t *testing.T) {
 	// which cannot be opened for a conf.d that does not exist — reported as
 	// the walk failing to run.
 	repo := initRepoOnMain(t)
-	w := NewWriter(filepath.Join(repo, "conf.d-does-not-exist"), repo)
+	w := newTestWriter(filepath.Join(repo, "conf.d-does-not-exist"), repo)
 	if _, err := w.WritePR(context.Background(), "fresh-t", "op@example.com", tenantBody("fresh-t")); !errors.Is(err, ErrTenantTreeScan) {
 		t.Fatalf("WritePR err = %v, want ErrTenantTreeScan", err)
 	}
