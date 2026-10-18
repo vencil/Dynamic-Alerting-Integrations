@@ -39,7 +39,7 @@ func TestGitTimeoutFromEnv(t *testing.T) {
 // timeout path: real "git" binary + the default deadline when the env is unset.
 func TestNewWriterGitDefaults(t *testing.T) {
 	t.Setenv("TENANT_API_GIT_TIMEOUT", "")
-	w := NewWriter(t.TempDir(), "")
+	w := newTestWriter(t.TempDir(), "")
 	if w.gitBinary != "git" {
 		t.Errorf("gitBinary = %q, want \"git\"", w.gitBinary)
 	}
@@ -67,7 +67,7 @@ func TestGitExecTimeout_HungGitReleasesLock(t *testing.T) {
 		t.Fatalf("write stub: %v", err)
 	}
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.gitBinary = stub
 	w.gitTimeout = 200 * time.Millisecond
 	w.gitWaitDelay = 500 * time.Millisecond
@@ -113,7 +113,7 @@ func TestGitExecTimeout_GrandchildHoldsPipe(t *testing.T) {
 		t.Fatalf("write stub: %v", err)
 	}
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.gitBinary = stub
 	w.gitTimeout = 200 * time.Millisecond
 	w.gitWaitDelay = 500 * time.Millisecond
@@ -147,7 +147,7 @@ func TestGitExecSucceedsUnderTimeout(t *testing.T) {
 		t.Fatalf("write stub: %v", err)
 	}
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.gitBinary = stub
 	w.gitTimeout = 5 * time.Second
 

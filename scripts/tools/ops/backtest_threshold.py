@@ -62,8 +62,13 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 # #2231: a conf.d file holding a key twice is one the exporter drops whole;
 # strict reads raise YamlFileError for it, the path bad syntax already takes.
-from _lib_io import strict_safe_load  # noqa: E402
-from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
+# ADR-036 step 4 (#2906): conf.d content is read through `da-guard
+# parse-tree` (the working tree, and a `git show` of HEAD~1 in its file
+# mode) — yaml.v3 is the only parser of conf.d; a file it cannot read raises
+# YamlFileError (the working tree) or is named (HEAD~1).
+from _lib_io import load_confd_file  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
     arm_crash_envelope, disarm_crash_envelope,
@@ -91,7 +96,6 @@ from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
     is_reserved_name,
-    warn_nested,
 )
 
 # ---------------------------------------------------------------------------
@@ -471,77 +475,6 @@ def extract_changes_from_git_diff():
 
 
 # Roots already named as unlistable, so the warning is said once per run.
-_WARNED_UNLISTABLE: set = set()
-
-
-def reset_unlistable_warnings_for_test() -> None:
-    """Clear the once-per-run dedup so a test can drive the branch twice."""
-    _WARNED_UNLISTABLE.clear()
-
-
-def _confd_entries(root: Path) -> list:
-    """List `root` once — naming it, never raising, never silently empty.
-
-    ⛔ Written because the #1588 fix below broke this and blind review
-    measured it. Swapping `glob("*.yaml")` for `iterdir()` looks like a
-    pure case fix, but the two disagree on an UNREADABLE directory:
-    `glob` swallows the scandir failure and yields nothing, `iterdir()`
-    raises straight through this module's callers. Measured on a
-    `chmod 000` conf.d as a non-root uid, same fixture both sides:
-
-        05d3136 (glob)     rc=2, "ERROR: Prometheus not reachable ..."
-        the fix (iterdir)  rc=1, PermissionError traceback out of main()
-
-    ⚠️ `is_dir()` does NOT guard this: it returns True for a directory
-    that cannot be read (and raises on its own when the PARENT is not
-    traversable), so the guard it replaced covered only the missing case.
-
-    `_lib_confd.unusable_config_paths` already settled what the right
-    answer is, in the same words: raising kills callers that iterate
-    outside a `try`, and returning `[]` is "a green light for a directory
-    nothing ever read" — so name the root instead. This is that answer at
-    the one call site that cannot use that function (it needs the ENTRIES,
-    not the unusable ones).
-    """
-    # ⛔ The #1911 guard lives HERE, not at the two call sites, and
-    # `test_confd_enumeration_contract` is what moved it: a flat scan and
-    # the warning that a hierarchical conf.d is not empty must be in the
-    # same scope, or a refactor can carry the scan away from its guard.
-    # This function is now the only place this tool lists a conf.d, so
-    # both sites are covered by construction rather than by remembering.
-    warn_nested(root, tool="backtest_threshold")
-    try:
-        return sorted(root.iterdir())
-    except (FileNotFoundError, NotADirectoryError):
-        # Both were empty results under `glob`, and a missing --config-dir
-        # is already reported by the caller's own emptiness. Unchanged.
-        return []
-    except OSError as exc:
-        # ⛔ The caught errno, NOT `_lib_confd.unusable_reason`. That
-        # function answers "why is `p` unusable as a config FILE", and the
-        # conf.d root is not one — asked about the root it re-probes with
-        # `os.walk` and can answer "is a directory, not a config file",
-        # which is both a non-sequitur (of course it is a directory) and a
-        # SECOND probe that may disagree with the failure actually caught
-        # here (a FUSE mount going away, a transient EIO). Reporting what
-        # was caught cannot drift from what happened.
-        # ⛔ Once per RUN, not once per scan. `--config-dir` called this
-        # helper twice (`main` for the recipe scan, `extract_changes_from_dirs`
-        # for the comparison, until #2119 moved the comparison to da-guard)
-        # and the first version printed the same line twice — measured. This file's own
-        # `test_each_reader_names_an_unusable_entry_exactly_once` states the
-        # rule for every other reader: "A repeated warning trains the
-        # operator to skim past it, which costs the signal the report exists
-        # to give." `warn_nested` already dedupes; this now does too.
-        key = os.path.abspath(str(root))
-        if key not in _WARNED_UNLISTABLE:
-            _WARNED_UNLISTABLE.add(key)
-            print(f"WARNING: {safe_label(str(root))}: could not be listed — "
-                  f"{type(exc).__name__}: {exc.strerror or exc} — the config "
-                  f"files inside it were NOT scanned", file=sys.stderr)
-        return []
-
-
 def _render_served(value):
     """A served threshold as the text this report carries (`None` stays None:
     no /metrics row). Go's text for a non-finite value, an integral value
@@ -893,38 +826,71 @@ def changed_conf_files():
             and not is_hidden_name(Path(n).name)]
 
 
-def load_conf_files(paths):
-    """Parse tenant conf.d files into {tenant: parsed_dict}.
+def load_conf_files(paths, config_dir=None):
+    """Read tenant conf.d files into {file stem: parsed dict}.
 
-    Skips platform files (`_`-prefixed) and anything that isn't a YAML
-    mapping; missing files are skipped silently (e.g. a path deleted in the
-    working tree).
+    ADR-036 step 4 (#2906): through `da-guard parse-tree` — the content as
+    yaml.v3 reads it, and the file's selection as the exporter's: a path no
+    reader reads (a hidden name, a name that is not a config file, an
+    unselected carrier) is skipped, as is a `_`-prefixed platform file and a
+    path that is not a file (e.g. deleted in the working tree).
+
+    *config_dir* given (`--config-dir`): the paths are files of that tree,
+    read from its one tree-mode document. None (`--git-diff`): each path is
+    read alone, in parse-tree's file mode, as the file at its place in its
+    own directory — so a sibling the document could not carry (a name that
+    is not UTF-8) does not stop the read of the files that changed.
+
+    A selected file parse-tree cannot read raises YamlFileError, naming it
+    (rc 2); no usable da-guard raises ParseTreeError (rc 2).
     """
     parsed = {}
     for p in paths:
         path = Path(p)
-        # ⛔ `is_hidden_name` added, and ONLY that. `startswith("_")`
-        # answered the reserved axis but nothing answered the hidden one,
-        # so this function kept saying `.hidden` exists while the diff
-        # parser beside it had stopped producing changes for that carrier —
-        # one process, one file, two answers.
-        # ⚠️ Deliberately NOT `config_stem` here: that predicate also
-        # declines reserved names, and swapping to it silently dropped
-        # `_defaults.yaml` from `changed_conf_files` — a SECOND axis moving
-        # inside a hidden-axis fix. `test_changed_conf_files_reduces_repo_
-        # root_to_cwd_relative` caught it; the narrow predicate is the fix.
-        if (path.name.startswith("_") or is_hidden_name(path.name)
-                or not path.is_file()):
+        if path.name.startswith("_") or not path.is_file():
             continue
         # The caller's own spelling, not `str(path)`: on Windows that turns
         # the `conf.d/x.yaml` git reported into `conf.d\x.yaml`, and an
         # unreadable file is then named in a form nobody typed (#2558).
         # #2216: tenant ids are the keys' source text, as the exporter reads
         # them — `find_custom_alert_tenants` reports `010:` as "010", not 8.
-        data = load_yaml_file_strict_exporter_keys(os.fspath(p), default={})
+        if config_dir is not None:
+            reader = _lib_parse_cache.reader_for(config_dir)
+            if reader.rel(path) not in reader.tree().selected:
+                continue
+            data = load_confd_file(config_dir, os.fspath(p), default={}, reader=reader)
+        else:
+            data = _read_alone(path, os.fspath(p))
+            if data is None:
+                continue
         if isinstance(data, dict):
             parsed[path.stem] = data
     return parsed
+
+
+def _json_safe_name(rel):
+    """*rel* with every byte that is not UTF-8 (a `surrogateescape`
+    surrogate) replaced by U+FFFD: parse-tree's JSON cannot carry such a
+    name, and in file mode the path only places the bytes being read — its
+    prefix and suffix, which judge its readers, are kept. A tenant from such
+    a name is dropped and named later (`tenant_is_queryable`)."""
+    return os.fsencode(rel).decode("utf-8", "replace")
+
+
+def _read_alone(path, shown):
+    """*path* in parse-tree's file mode, as the file at its place in its own
+    directory: its value, or None when no reader reads it there. Raises YamlFileError
+    naming *shown* for a file parse-tree cannot read, ParseTreeError."""
+    import _lib_parse_tree  # noqa: PLC0415
+    rel = _json_safe_name(path.name)
+    tree = _lib_parse_tree.load_file(path.parent, rel, path.read_bytes(), None,
+                                     _lib_parse_cache.DEFAULT_TIMEOUT)
+    if not tree.selected.get(rel):
+        return None
+    try:
+        return _lib_parse_tree.to_python(tree.node(rel))
+    except FileUnreadable as exc:
+        raise YamlFileError(shown, exc) from exc
 
 
 def find_custom_alert_tenants(parsed):
@@ -984,6 +950,18 @@ def _carrier_at_head1(tenant):
     return None
 
 
+def _head1_text_as(rel, data):
+    """*data* (a HEAD~1 file's bytes) read as the file at *rel* of the conf.d
+    in the working directory — parse-tree's file mode; with no `conf.d/`
+    there, in an empty directory (only the content is asked here). Raises
+    FileUnreadable / ParseTreeError."""
+    if Path("conf.d").is_dir():
+        return _lib_parse_cache.read_text_as("conf.d", rel, data)
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="da-backtest-") as empty:
+        return _lib_parse_cache.read_text_as(empty, rel, data)
+
+
 def _flat_keys_at_head1(tenant):
     """Top-level scalar threshold keys for `tenant` as of HEAD~1.
 
@@ -1010,8 +988,9 @@ def _flat_keys_at_head1(tenant):
         # handler and the key set comes back empty -- same as for a body that
         # will not parse. Crash becomes the pre-existing silent skip; making
         # THAT audible is a different axis and is not smuggled in here.
+        spec = f"./conf.d/{tenant}.yaml"
         result = subprocess.run(
-            ["git", "show", f"HEAD~1:./conf.d/{tenant}.yaml"],
+            ["git", "show", f"HEAD~1:{spec}"],
             capture_output=True, timeout=15,
         )
         if result.returncode != 0:
@@ -1047,20 +1026,27 @@ def _flat_keys_at_head1(tenant):
             # `resolved` now carries the FULL cwd-relative path with its `./`
             # prefix (see `_carrier_at_head1`), so this spec stays correct for
             # a nested carrier as well. Bytes for the same reason as above.
+            spec = resolved
             result = subprocess.run(
-                ["git", "show", f"HEAD~1:{resolved}"],
+                ["git", "show", f"HEAD~1:{spec}"],
                 capture_output=True, timeout=15,
             )
             if result.returncode != 0:
                 return set()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return set()
-    import yaml
+    # ADR-036 step 4 (#2906): the HEAD~1 text is read by `da-guard
+    # parse-tree`'s file mode, as the file it was at its path — yaml.v3, as
+    # the exporter read it then. A file it cannot read (bad syntax, a key
+    # written twice — the exporter dropped it whole) keeps no removal, and
+    # is named. No usable da-guard raises ParseTreeError (rc 2 in `main`).
+    rel = _json_safe_name(spec.removeprefix("./conf.d/"))
     try:
-        # Strict (#2231): a HEAD~1 file holding a key twice was one the
-        # exporter dropped whole — treated like bad syntax (no removal kept).
-        data = strict_safe_load(result.stdout) or {}
-    except yaml.YAMLError:
+        data = _head1_text_as(rel, result.stdout)
+    except FileUnreadable as exc:
+        print(f"WARNING: HEAD~1:{safe_label(spec)}: removals not classified "
+              f"— da-guard parse-tree cannot read it ({safe_label(exc.kind)}: "
+              f"{safe_label(exc.message)})", file=sys.stderr)
         return set()
     tenants = data.get("tenants") if isinstance(data, dict) else None
     keys = set()
@@ -1748,6 +1734,16 @@ def _exit_unreadable_conf(exc, args):
     _end_not_run(args, "caller_error", "conf_file_unreadable", EXIT_CALLER_ERROR)
 
 
+def _exit_parse_tree_error(exc, args, recipe_tenants=()):
+    """ADR-036 step 4 (#2906): no `da-guard parse-tree` document (missing,
+    failing or older than this tool, or a tree it refuses whole — e.g. a
+    file name JSON cannot carry) → rc 2, one `ERROR:` line naming why, the
+    `--json` `caller_error` envelope — the conf.d was not read."""
+    print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
+    _end_not_run(args, "caller_error", "parse_tree_failed", EXIT_CALLER_ERROR,
+                 recipe_tenants)
+
+
 def _exit_served_values_error(exc, args, recipe_tenants=()):
     """#2119: da-guard missing, stale or failing, or a file of either tree
     the exporter cannot decode or read → rc 2, named (`print_load_error`, the
@@ -1977,60 +1973,25 @@ def main():
     # silently just because the flat backtest has nothing to do or Prometheus
     # is unreachable. Recipes use the compiler+promtool eval home, not this
     # flat-threshold tool. (#657)
-    if args.git_diff:
-        try:
+    # ADR-036 step 4 (#2906): the tenant files are the ones `da-guard
+    # parse-tree` selects (`--config-dir`: every tenant file of the tree, at
+    # any depth; `--git-diff`: the changed paths parse-tree selects), read by
+    # yaml.v3. A file it cannot read is rc 2, named; no usable da-guard too.
+    try:
+        if args.git_diff:
             parsed_conf = load_conf_files(changed_conf_files())
-        except YamlFileError as exc:
-            _exit_unreadable_conf(exc, args)
-    elif args.config_dir:
-        # #1588 site 4 of 6. Same listing helper as the scan above — the
-        # unreadable-directory case reached main() FIRST, before the
-        # Prometheus availability check, so `--skip-if-unavailable` could
-        # not contain it and the `--json` contract lost its one document.
-        #
-        # ⛔ `config_stem(...)` truthiness, not just the extension, and that
-        # is not tidiness. Blind review measured this tool answering the
-        # HIDDEN axis two different ways after the first fix: the scan above
-        # skipped `.hidden.yaml` (its `config_stem` is "") while this site
-        # still loaded it, so ONE TOOL disagreed with itself about which
-        # carriers exist. `05d3136` was at least consistent (both said
-        # `.hidden`). Producing that split inside the change that exists to
-        # remove exactly that split is the sharpest way to get this wrong;
-        # both sites now defer to the same predicate, which is also what the
-        # exporter's scanner does.
-        # ⛔ No filter here any more. `load_conf_files` applies the reserved
-        # and hidden rules itself (it must — the `--git-diff` path feeds it
-        # too), so a copy of them at this call site was a SECOND place the
-        # answer could drift. Mutation measured that copy as equivalent,
-        # which is exactly what a redundant predicate looks like right up
-        # until someone edits one of the two.
-        # ⚠️ The extension rule is NOT redundant and stays here. Removing it
-        # was tried and measured: `load_conf_files` checks reserved, hidden
-        # and `is_file` but NOT the extension (it is also fed
-        # `conf.d/<basename>` strings by the `--git-diff` path, where the
-        # extension was already decided upstream), so a `notes.txt` goes
-        # straight through and the operator-facing recipe notice grows a
-        # tenant that does not exist. RE-MEASURED after #1603 widened this
-        # line to `CONFIG_SUFFIXES`, one tree holding acme.yaml +
-        # ghost_txt.txt + ghost_yml.yml:
-        #   with this rule     NOTE: 2 tenant(s) ... acme, ghost_yml
-        #   without this rule  NOTE: 3 tenant(s) ... acme, ghost_txt, ghost_yml
-        # ⚠️ The original note here was taken while this line passed
-        # `(".yaml",)` and counted the `.yml` row as a second ghost. It is
-        # not one any more — `ghost_yml` is a carrier the exporter serves,
-        # so it is in BOTH arms. The rule is still load bearing, for the
-        # `.txt` row.
-        # `_confd_entries` lists, this line decides the extension,
-        # `load_conf_files` decides reserved/hidden. One rule, one place.
-        try:
+        elif args.config_dir:
+            tree = _lib_parse_cache.reader_for(args.config_dir).tree()
             parsed_conf = load_conf_files(
-                [str(p) for p in _confd_entries(Path(args.config_dir))
-                 if has_yaml_extension(p.name)]
-            )
-        except YamlFileError as exc:
-            _exit_unreadable_conf(exc, args)
-    else:
-        parsed_conf = {}
+                [os.path.join(args.config_dir, rel)
+                 for rel in _lib_parse_cache.tenant_files(tree)],
+                config_dir=args.config_dir)
+        else:
+            parsed_conf = {}
+    except YamlFileError as exc:
+        _exit_unreadable_conf(exc, args)
+    except ParseTreeError as exc:
+        _exit_parse_tree_error(exc, args)
     recipe_tenants = find_custom_alert_tenants(parsed_conf)
     if recipe_tenants:
         print(custom_alert_notice(recipe_tenants), file=sys.stderr)
@@ -2090,7 +2051,10 @@ def main():
 
     # Extract changes
     if args.git_diff:
-        changes = keep_flat_threshold_changes(git_changes, parsed_conf)
+        try:
+            changes = keep_flat_threshold_changes(git_changes, parsed_conf)
+        except ParseTreeError as exc:
+            _exit_parse_tree_error(exc, args, recipe_tenants)
     elif args.config_dir:
         changes = dir_changes
     else:  # `--tenant`: the no-source case already exited above

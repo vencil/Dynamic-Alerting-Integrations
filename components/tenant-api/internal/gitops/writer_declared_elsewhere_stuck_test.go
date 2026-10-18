@@ -21,7 +21,7 @@ import (
 
 func TestTenantWrite_BlockedTreeScanFailsClosedAndRecovers(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"stuck-t.yaml": tenantBody("stuck-t")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.treeScanTimeout = 200 * time.Millisecond
 	_, _, release := holdFirstWalk(t, w)
 	merge := func([]byte) (string, error) { return tenantBody("stuck-t"), nil }

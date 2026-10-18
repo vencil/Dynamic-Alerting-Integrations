@@ -25,7 +25,6 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
     http_get_json,
-    load_yaml_file,
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
 )

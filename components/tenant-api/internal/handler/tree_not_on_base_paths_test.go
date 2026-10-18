@@ -24,7 +24,7 @@ import (
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
@@ -100,7 +100,7 @@ func TestCustomAlerts_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 		map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults},
 		map[string]string{"db-a.yaml": branchTenant})
 	refs := snapshotRefs(t, dir)
-	deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: gitops.NewWriter(dir, dir), RBAC: newRBACManager(t, caWriteRBAC)}
+	deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: gitopstest.NewWriter(dir, dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
 	// The client read the tenant while the tree was stranded, so its
 	// base_hash is the branch copy's — the cheap pre-lock check passes, and
@@ -136,7 +136,7 @@ func TestStateWrites_IgnoreTheGitTree(t *testing.T) {
 		"PutView": {
 			key: statestore.KeyViews, seed: testViewsYAML,
 			do: func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder {
-				h := PutView(&Deps{State: st, Views: views.NewManager(st), Writer: gitops.NewWriter(dir, dir)})
+				h := PutView(&Deps{State: st, Views: views.NewManager(st), Writer: gitopstest.NewWriter(dir, dir)})
 				req := newRequestWithChiParam("PUT", "/api/v1/views/my-view", "id", "my-view",
 					bytes.NewBufferString(`{"label":"My View","filters":{"tier":"tier-2"}}`))
 				req.Header.Set("Content-Type", "application/json")
@@ -147,7 +147,7 @@ func TestStateWrites_IgnoreTheGitTree(t *testing.T) {
 		"DeleteView": {
 			key: statestore.KeyViews, seed: testViewsYAML,
 			do: func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder {
-				h := DeleteView(&Deps{State: st, Views: views.NewManager(st), Writer: gitops.NewWriter(dir, dir)})
+				h := DeleteView(&Deps{State: st, Views: views.NewManager(st), Writer: gitopstest.NewWriter(dir, dir)})
 				req := newRequestWithChiParam("DELETE", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
 				setRequestIdentity(req, "op@example.com")
 				return executeWithRBAC(t, h, req)
@@ -156,7 +156,7 @@ func TestStateWrites_IgnoreTheGitTree(t *testing.T) {
 		"DeleteGroup": {
 			key: statestore.KeyGroups, seed: testGroupsYAML,
 			do: func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder {
-				h := DeleteGroup(&Deps{State: st, Groups: groups.NewManager(st), Writer: gitops.NewWriter(dir, dir), RBAC: permissiveRBACManager(t)})
+				h := DeleteGroup(&Deps{State: st, Groups: groups.NewManager(st), Writer: gitopstest.NewWriter(dir, dir), RBAC: permissiveRBACManager(t)})
 				req := newRequestWithChiParam("DELETE", "/api/v1/groups/staging-all", "id", "staging-all", nil)
 				setRequestIdentity(req, "op@example.com")
 				return executeWithRBAC(t, h, req)
@@ -235,7 +235,7 @@ func TestPutTenantDirect_StrandedOnPRBranch_BranchReadsDoNotAnswer(t *testing.T)
 			dir := strandedRepoWith(t, map[string]string{"db-a.yaml": baseTenant}, tc.branchFiles)
 			refs := snapshotRefs(t, dir)
 			h := wrapWithRBACMiddleware(
-				PutTenant(&Deps{Writer: gitops.NewWriter(dir, dir), WriteMode: WriteModeDirect}),
+				PutTenant(&Deps{Writer: gitopstest.NewWriter(dir, dir), WriteMode: WriteModeDirect}),
 				permissiveRBACManager(t), rbac.PermWrite, TenantIDFromPath)
 			do := func() *httptest.ResponseRecorder {
 				req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a",

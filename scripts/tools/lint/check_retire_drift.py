@@ -97,8 +97,12 @@ except Exception:  # pragma: no cover - compat shim optional
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_yaml_file_error  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
-from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
-from _lib_yaml_keys import load_all_exporter_keys, load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+from _lib_io import YamlFileError, safe_label  # noqa: E402
+# The namespaces manifest is Kubernetes YAML, not conf.d: PyYAML.
+from _lib_yaml_keys import load_all_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+# ADR-036 step 4 (#2906): conf.d's tenant files and their `tenants:` keys are
+# `da-guard parse-tree`'s, as the db_type is `da-guard served-values`'.
+import _lib_parse_cache  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     exit_on_served_values_error,
     load_served_tree,
@@ -111,63 +115,34 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def _load_yaml(path: Path) -> dict:
-    """Parse a YAML mapping; '' / non-mapping → {} so callers can .get safely.
-
-    #2216: tenant ids are the keys' source text, as the exporter reads them
-    — `010:` is tenant "010", not 8.
-    """
-    data = load_exporter_keys(path.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
-
-
 def conf_d_declared_db_type_tenants(config_dir: Path,
                                      binary: str | None = None) -> Dict[str, str]:
     """tenant → db_type for every judged tenant whose served db_type is non-empty.
 
-    WHICH TENANTS: this lint's own walk — every YAML carrier under config_dir
-    (`.yaml` / `.yml`, any case — `_lib_confd.has_yaml_extension`, the
-    exporter's own rule) except `_`-prefixed files (defaults / profiles /
-    platform files) and the examples/ subtree (dev templates, never shipped);
-    the keys of each file's `tenants:` block.
+    WHICH TENANTS: the keys of the `tenants:` mapping of every tenant file
+    `da-guard parse-tree` selects (ADR-036 step 4, #2906: the exporter's own
+    walk — `.yaml` / `.yml` in any case, `.`-prefixed entries skipped, a
+    `_`-prefixed platform file never a tenant file, #1603 / #2360), read by
+    yaml.v3 (keys as source text, #2216), except the examples/ subtree (dev
+    templates, never shipped). A tenant file parse-tree cannot read raises
+    YamlFileError naming it (exit 2): which tenants it declares is unknown.
 
     WHICH db_type: `_metadata.db_type` as /metrics serves it (`da-guard
     served-values`, #2858) — the value collectTenantExpectedExporter reads,
     with every layer the exporter applies (root platform files' `tenants:`
     entries, the tenant file, the profile filling what neither writes unless
     `optional_overrides` declares `_metadata`). A tenant the exporter serves
-    no metadata for counts as none. Raises what `load_served_tree` raises.
-
-    #1603 (extension-SPELLING axis): this was `rglob("*.yaml")`. Measured on
-    byte-identical bodies before the fix: `alpha.yaml` → {alpha: postgres};
-    `alpha.yml` and `Alpha.YAML` → {} — the same answer as a tree with no
-    tenant, i.e. a `.yml` tenant whose K8s target was removed passed this
-    gate with rc=0 while the exporter kept emitting tenant_expected_exporter
-    for it.
-
-    #2360 (hidden axis): `.`-prefixed entries are skipped like the exporter's
-    walker does — a hidden FILE (`.ghost.yaml`) and anything under a hidden
-    DIRECTORY (`.snap/s.yaml`). Before, both were declared tenants here
-    while the exporter never emitted a series for them. Only path parts
-    BELOW `config_dir` are judged, so a conf.d root that is itself
-    dot-named is still read (the exporter reads the dir it is handed).
+    no metadata for counts as none. Raises what `load_served_tree` raises,
+    and ParseTreeError for no usable parse-tree (exit 2).
     """
-    judged: Set[str] = set()
-    for path in sorted(p for p in config_dir.rglob("*")
-                       if has_yaml_extension(p.name)):
-        rel_parts = path.relative_to(config_dir).parts
-        # Skip hidden files and anything under a hidden directory (#2360).
-        if any(is_hidden_name(part) for part in rel_parts):
-            continue
-        # Skip _-prefixed config files (e.g. _defaults.yaml, _routing_profiles.yaml).
-        if path.name.startswith("_"):
-            continue
-        # Skip the examples/ dev-template subtree (not part of a real deployment).
-        if "examples" in rel_parts:
-            continue
-        tenants = _load_yaml(path).get("tenants")
-        if isinstance(tenants, dict):
-            judged.update(str(t) for t in tenants)
+    reader = _lib_parse_cache.reader_for(config_dir)
+    files = [rel for rel in _lib_parse_cache.tenant_files(reader.tree())
+             # Skip the examples/ dev-template subtree (not part of a real deployment).
+             if "examples" not in rel.split("/")]
+    declared, unreadable = _lib_parse_cache.declared_tenants(reader, files)
+    if unreadable:
+        raise YamlFileError(str(config_dir / unreadable[0].file), unreadable[0])
+    judged: Set[str] = set(declared)
     if not judged:
         return {}
 
@@ -254,6 +229,7 @@ def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path,
 
 @exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
 @exit_on_served_values_error  # da-guard missing or failing → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
 def main() -> int:
     """CLI entry point: RETIRE-ordering conf.d↔K8s drift gate (#869)."""
     try_utf8_stdout()
@@ -289,7 +265,7 @@ def main() -> int:
     try:
         result = evaluate(config_dir, Path(args.helm_dir), Path(args.namespaces_file))
     except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
+        print(f"ERROR: YAML parse failure: {safe_label(str(exc))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if args.json:

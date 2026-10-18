@@ -565,10 +565,11 @@ def test_both_change_sources_answer_an_unusable_name_without_a_traceback(
 
     `--git-diff` takes the tenant id from the carrier's NAME (git), so a name
     that is not valid UTF-8 cannot be a PromQL label value: it is dropped and
-    named. `--config-dir` no longer takes it from the name at all (#2119:
-    da-guard served-values reads both trees, the tenant comes from the
-    file's `tenants:` mapping), so the same carrier's change reaches the
-    report under its tenant `acme`.
+    named. `--config-dir` reads both trees through da-guard (#2119), and its
+    recipe scan reads the tree's tenant files through `da-guard parse-tree`
+    (ADR-036 step 4, #2906), whose JSON document cannot carry a name that is
+    not UTF-8: it refuses the tree whole, so the run is rc 2 and names the
+    file — never the carrier quietly missing from the scan.
     """
     repo = _repo_with_removal(tmp_path / "src_git",
                               [(INVALID_UTF8_CARRIER, b"acme")])
@@ -587,12 +588,9 @@ def test_both_change_sources_answer_an_unusable_name_without_a_traceback(
          "--baseline", str(base), "--prometheus", prom_url],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
-    for label, result in (("--git-diff", from_git), ("--config-dir", from_dirs)):
-        assert result.returncode == 0, f"[{label}] rc={result.returncode} {result.stderr!r}"
+    for label, result, rc in (("--git-diff", from_git, 0), ("--config-dir", from_dirs, 2)):
+        assert result.returncode == rc, f"[{label}] rc={result.returncode} {result.stderr!r}"
         assert "Traceback" not in result.stderr, f"[{label}] {result.stderr!r}"
-    assert "not valid UTF-8" in from_git.stderr, (
-        f"[--git-diff] the carrier was dropped without being named: "
-        f"{from_git.stderr!r}")
-    # The removed override falls back to the default: 80 -> 90 on /metrics.
-    assert "acme/cpu_usage: 80 -> 90" in from_dirs.stdout, (
-        f"[--config-dir] {from_dirs.stdout!r} {from_dirs.stderr!r}")
+        assert "not valid UTF-8" in result.stderr, (
+            f"[{label}] the carrier was not named: {result.stderr!r}")
+    assert "da-guard parse-tree" in from_dirs.stderr, from_dirs.stderr

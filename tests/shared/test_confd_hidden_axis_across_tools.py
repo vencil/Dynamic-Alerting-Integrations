@@ -345,11 +345,9 @@ NOT_A_CELL: dict[str, str] = {
         "`trigger_reload` WRITES a carrier; its hidden axis is pinned by "
         "tests/dx/test_run_chaos_soak.py (#1630)",
     "lint/check_threshold_unit_sanity.py":
-        "walks fixed repo-relative dirs, takes no conf.d argument; hidden "
-        "axis pinned by test_hidden_carriers_are_not_linted (#1630)",
-    "ops/backtest_threshold.py":
-        "needs a git repo with HEAD~1; its `.hidden.yaml` neighbour is "
-        "pinned by test_confd_case_parity_across_tools's backtest tests",
+        "walks only docs/ itself; its fixed conf.d dirs are listed by da-guard "
+        "parse-tree (#2906); hidden axis pinned by "
+        "test_hidden_carriers_are_not_linted (#1630)",
     "_lib_parse_cache.py":
         "lists only through `_lib_confd.iter_config_files` (library cell): "
         "a directory's carriers, for the cache-mode `not_read` verdict",
@@ -479,8 +477,9 @@ def test_the_derivation_did_not_collapse() -> None:
     derived = _own_enumerators()
     assert len(derived) >= 20, sorted(derived)
     # `generate_tenant_metadata` was the third until #2115 0-B/B4, and
-    # `describe_tenant` until #2906: neither lists a directory any more (the
-    # walk is da-guard's), so they left the set — their cells still run.
-    for must in ("dx/custom_alerts/loader.py", "ops/gitops_check.py",
+    # `describe_tenant` until #2906, and `gitops_check` until #2906 E1:
+    # none lists a directory any more (the walk is da-guard's), so they left
+    # the set — their cells still run.
+    for must in ("dx/custom_alerts/loader.py", "dx/migrate_conf_d.py",
                  "ops/offboard_tenant.py"):
         assert must in derived, (must, sorted(derived))

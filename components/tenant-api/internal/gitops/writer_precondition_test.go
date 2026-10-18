@@ -37,7 +37,7 @@ func seedTenant(t *testing.T, w *Writer, dir, tenantID string) (path, hash strin
 func TestWriteIfUnchanged_CurrentBaseWrites(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	path, hash := seedTenant(t, w, dir, "db-a")
 
 	if _, err := w.WriteIfUnchanged(context.Background(), "db-a", "op@example.com",
@@ -56,7 +56,7 @@ func TestWriteIfUnchanged_CurrentBaseWrites(t *testing.T) {
 func TestWriteIfUnchanged_StaleBaseRejectsAndLeavesFileAlone(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	path, stale := seedTenant(t, w, dir, "db-a")
 
 	// Somebody else's write lands first; `stale` now describes nothing.
@@ -101,7 +101,7 @@ func TestWriteIfUnchanged_StaleBaseRejectsAndLeavesFileAlone(t *testing.T) {
 func TestWriteIfUnchanged_EmptyBaseIsRejected(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	path, _ := seedTenant(t, w, dir, "db-a")
 
 	_, err := w.WriteIfUnchanged(context.Background(), "db-a", "op@example.com", preconditionUpdate, "")
@@ -122,7 +122,7 @@ func TestWriteIfUnchanged_EmptyBaseIsRejected(t *testing.T) {
 func TestWriteIfUnchanged_MissingFileReportsEmptyCurrent(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	_, err := w.WriteIfUnchanged(context.Background(), "db-a", "op@example.com",
 		preconditionUpdate, "0123456789abcdef")

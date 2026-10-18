@@ -31,7 +31,7 @@ func TestTenantWrite_FIFOInTreeRefusedWithoutBlockingTheWalk(t *testing.T) {
 			_ = f.Close()
 		}
 	})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.treeScanTimeout = 5 * time.Second
 	done := make(chan error, 1)
 	go func() {

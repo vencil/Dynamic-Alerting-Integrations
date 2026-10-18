@@ -103,7 +103,10 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_confd import resolve_defaults_file  # noqa: E402  (#1674 carrier selection)
+# ADR-036 step 4 (#2906): the root defaults carrier is parse-tree's choice
+# (`defaults_carriers`) and its content parse-tree's yaml.v3 reading.
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility
@@ -129,13 +132,9 @@ from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
     print_load_warnings,
     written_config,
 )
-# #2123: `_defaults.yaml` is read strictly — a key written twice in one
-# mapping raises YamlFileError (rc 2 via exit_on_yaml_file_error, the path a
-# syntax error already takes) instead of sending OPA PyYAML's last value.
-try:
-    from _lib_io import load_yaml_file_strict
-except ImportError:
-    from scripts.tools._lib_io import load_yaml_file_strict  # type: ignore[no-redef]
+# A file parse-tree cannot read raises YamlFileError (rc 2 via
+# exit_on_yaml_file_error, naming it); no usable parse-tree is rc 2 too.
+from _lib_io import load_confd_file  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -195,24 +194,41 @@ def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict
 def load_defaults(config_dir: str) -> dict[str, Any]:
     """Load the root defaults carrier.
 
-    #1674: the carrier the exporter reads (`resolve_defaults_file`: any
-    casing, `.yaml` over `.yml`), not a hard-coded `_defaults.yaml` — a root
-    holding only `_defaults.yml` or `_DEFAULTS.YAML` used to give OPA no
-    defaults at all.
+    #1674: the carrier the exporter reads (any casing, `.yaml` over `.yml`),
+    not a hard-coded `_defaults.yaml`. ADR-036 step 4 (#2906): which file
+    that is, and what it holds, is `da-guard parse-tree`'s answer
+    (`defaults_carriers`, yaml.v3) — an unquoted `yes` is the string "yes"
+    here as it is for the exporter, and a `!!timestamp` is its text (OPA's
+    input is JSON). A file parse-tree cannot read raises YamlFileError; no
+    usable parse-tree raises ParseTreeError (rc 2 in `main`).
     """
+    reader = _lib_parse_cache.reader_for(config_dir)
+    tree = reader.tree()
     # #2115 0-B: the tenants come from the whole tree (`load_tenant_inputs`),
     # so only the nested carriers `input.defaults` leaves out are named.
-    defaults_path = resolve_defaults_file(
-        config_dir, tool="policy_opa_bridge",
-        skipped_note=("`input.defaults` comes from the root defaults carrier only "
-                      "(tenants in subdirectories are in `input.tenants` / "
-                      "`input.served`), so it leaves out these"))
-    if not defaults_path.is_file():
+    _lib_parse_cache.warn_skipped_nested_carriers(
+        tree, tool="policy_opa_bridge",
+        note=("`input.defaults` comes from the root defaults carrier only "
+              "(tenants in subdirectories are in `input.tenants` / "
+              "`input.served`), so it leaves out these"))
+    rel = _lib_parse_cache.root_defaults_carrier(tree)
+    if rel is None:
         return {}
-    data = load_yaml_file_strict(str(defaults_path))
-    if isinstance(data, dict):
-        return data
-    return {}
+    data = load_confd_file(config_dir, os.path.join(config_dir, rel), default={},
+                           reader=reader)
+    return _jsonable(data) if isinstance(data, dict) else {}
+
+
+def _jsonable(value: Any) -> Any:
+    """*value* with every `!!timestamp` (`_lib_parse_tree.Timestamp`) as its
+    source text: OPA's input is JSON."""
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, _lib_parse_tree.Timestamp):
+        return value.text
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +723,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant / _defaults file → rc 2, named
 @exit_on_served_values_error  # #2115: da-guard missing or failing, a dropped file → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point."""
     try_utf8_stdout()

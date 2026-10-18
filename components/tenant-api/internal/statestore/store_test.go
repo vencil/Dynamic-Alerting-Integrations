@@ -204,6 +204,46 @@ func TestConfigMapGivesUpWithErrConflict(t *testing.T) {
 	}
 }
 
+// A run of 409s that ends in another failure is not a conflict: the last
+// Update's outcome is unknown, so it must surface as ErrUnavailable, which
+// tenant-api treats as "may have been written".
+func TestConfigMapConflictThenOtherErrorIsUnavailable(t *testing.T) {
+	s, client := newCM(t, map[string]string{})
+	var updates int
+	client.PrependReactor("update", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		updates++
+		if updates < 3 {
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, testName, errors.New("stale"))
+		}
+		return true, nil, apierrors.NewServiceUnavailable("response lost")
+	})
+	_, err := s.Mutate(context.Background(), KeyViews, Meta{}, func([]byte) ([]byte, error) { return []byte("v"), nil })
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v: a run of conflicts ending in another failure must not be ErrConflict", err)
+	}
+	if !IsUnavailable(err) {
+		t.Fatalf("err = %v, want ErrUnavailable", err)
+	}
+	if updates != 3 {
+		t.Fatalf("updates = %d, want 3", updates)
+	}
+}
+
+// The transform's own error comes back so that errors.Is finds it, and
+// nothing is written — the Store.Mutate error contract.
+func TestMutateReturnsTransformErrorUnwritten(t *testing.T) {
+	backends(t, func(t *testing.T, s Store) {
+		errRefused := errors.New("refused")
+		_, err := s.Mutate(context.Background(), KeyViews, Meta{}, func([]byte) ([]byte, error) { return []byte("v"), errRefused })
+		if !errors.Is(err, errRefused) {
+			t.Fatalf("err = %v, want the transform's error", err)
+		}
+		if _, ok, _ := s.Get(context.Background(), KeyViews); ok {
+			t.Fatal("a refused transform's bytes were written")
+		}
+	})
+}
+
 func TestConfigMapUnavailable(t *testing.T) {
 	s, client := newCM(t, map[string]string{})
 	client.PrependReactor("get", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {

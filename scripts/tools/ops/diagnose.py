@@ -36,8 +36,6 @@ import time
 from pathlib import Path
 from typing import TextIO
 
-import yaml
-
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -57,6 +55,10 @@ from _lib_tenant_values import (  # noqa: E402
     load_served_tree,
 )
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654)
+# ADR-036 step 4 (#2906): `optional_overrides` through `da-guard parse-tree`.
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -269,13 +271,13 @@ def _declared_keys(base: Path, defaults_chain: list[str]) -> list[str]:
     platform recognises but assigns no value to (#1310).
 
     ⛔ The one thing still read from a file here, because `da-guard
-    effective` does not report it. Read as the exporter reads the list
-    (`[]string`): each entry's source text, from the composed node tree —
-    nothing is CONSTRUCTED, so no value is interpreted (a `2024-02-30`
-    elsewhere in the file does not end the run, an unknown tag is ignored).
-    Called only after `da-guard effective` loaded the tree, so the file
-    decodes for the exporter; a file PyYAML cannot compose still is
-    answered with [] and one WARN, never a traceback.
+    effective` does not report it. Read through `da-guard parse-tree`
+    (ADR-036 step 4, #2906) as the exporter reads the list (`[]string`):
+    each non-null entry's source text — nothing is interpreted, so `yes`
+    is the name "yes" and `010` the name "010". Called only after `da-guard
+    effective` loaded the tree, so the file decodes for the exporter; a file
+    parse-tree still cannot read is answered with [] and one WARN naming
+    why. No usable parse-tree raises ParseTreeError (exit 2 in `main`).
 
     WHICH file is the exporter's choice too: the root entry of the tenant's
     `defaults_chain` (/effective), not a carrier this file selects — so no
@@ -283,24 +285,17 @@ def _declared_keys(base: Path, defaults_chain: list[str]) -> list[str]:
     """
     if not defaults_chain or "/" in defaults_chain[0]:
         return []   # no root defaults carrier on this tenant's path
-    path = base / defaults_chain[0]
     try:
-        with open(path, encoding="utf-8") as f:
-            root = yaml.compose(f, Loader=yaml.SafeLoader)
-    except (OSError, ValueError, yaml.YAMLError) as e:
-        print(f"  WARN: {safe_label(path.name)}: optional_overrides not read "
-              f"(declared left empty): {e.__class__.__name__}", file=sys.stderr)
+        root = _lib_parse_cache.reader_for(base).node(defaults_chain[0])
+    except FileUnreadable as e:
+        print(f"  WARN: {safe_label(defaults_chain[0])}: optional_overrides not read "
+              f"(declared left empty): {safe_label(e.kind)}", file=sys.stderr)
         return []
-    if not isinstance(root, yaml.MappingNode):
+    value = root.get("optional_overrides")
+    if not isinstance(value, list):
         return []
-    for key, value in root.value:
-        if isinstance(key, yaml.ScalarNode) and key.value == "optional_overrides":
-            if not isinstance(value, yaml.SequenceNode):
-                return []
-            return [item.value for item in value.value
-                    if isinstance(item, yaml.ScalarNode)
-                    and item.tag != "tag:yaml.org,2002:null"]
-    return []
+    return [_lib_parse_tree.scalar_text(item) for item in value
+            if _lib_parse_tree.is_scalar(item) and item["tag"] != "!!null"]
 
 
 def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, object] | None:
@@ -587,6 +582,7 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
 
 @exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
 @exit_on_served_values_error  # #2526: da-guard missing or failing → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=_h('description'),

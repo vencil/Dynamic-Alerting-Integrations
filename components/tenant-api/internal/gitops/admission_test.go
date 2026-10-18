@@ -41,7 +41,7 @@ func TestWriteQueueDepthFromEnv(t *testing.T) {
 // fast-fail with ErrWriteOverloaded instead of blocking.
 func TestAcquireWrite_ShedsWhenFull(t *testing.T) {
 	t.Parallel()
-	w := NewWriter(t.TempDir(), t.TempDir())
+	w := newTestWriter(t.TempDir(), t.TempDir())
 	w.maxWriteAdmit = 2 // 1 in-flight + 1 queued
 
 	ctx := context.Background()
@@ -79,7 +79,7 @@ func TestAcquireWrite_ShedsWhenFull(t *testing.T) {
 // never gets the token (so its write never runs — no orphan write).
 func TestAcquireWrite_CtxCancelledWhileQueued(t *testing.T) {
 	t.Parallel()
-	w := NewWriter(t.TempDir(), t.TempDir())
+	w := newTestWriter(t.TempDir(), t.TempDir())
 	w.maxWriteAdmit = 5
 
 	// Hold the execution token so the next acquire must queue.
@@ -114,7 +114,7 @@ func TestAcquireWrite_CtxCancelledWhileQueued(t *testing.T) {
 func TestWrite_CancelledCtxDoesNotWrite(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.maxWriteAdmit = 5
 
 	// Occupy the token so the cancelled Write must queue then bail.

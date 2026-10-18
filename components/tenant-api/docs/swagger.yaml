@@ -2004,7 +2004,12 @@ paths:
             when the route generator container cannot judge (reason unreachable, bad_response,
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
-            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written'
+            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
+            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
+            its deadline before a synchronous batch finished: unlike the cases above
+            it may already be committed (a git command that hits its own deadline
+            may already have moved the ref), so refresh to see whether it was before
+            retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2266,14 +2271,16 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
-          description: 'Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api''s
-            own copy of conf.d holds an entry the server cannot read and git cannot
-            hold — a FIFO, socket or device named like a config file, a file whose
-            read fails, a sub-directory that cannot be listed, a failed stat that
-            is not an unresolvable link — other than the written tenant file; it is
-            fixed on the server or its volume (or by resetting the copy from git),
-            not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry
-            names disclosed as for TENANT_TREE_UNREADABLE'
+          description: 'Internal error: code INTERNAL_ERROR, among others when the
+            commit or the file write fails (#1535: a fault of the server, not of the
+            body; the detail is in the server log under request_id); or code TENANT_STORE_FAULT
+            (#2939): tenant-api''s own copy of conf.d holds an entry the server cannot
+            read and git cannot hold — a FIFO, socket or device named like a config
+            file, a file whose read fails, a sub-directory that cannot be listed,
+            a failed stat that is not an unresolvable link — other than the written
+            tenant file; it is fixed on the server or its volume (or by resetting
+            the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE;
+            nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "501":
@@ -2288,7 +2295,11 @@ paths:
             route generator container cannot judge (reason unreachable, bad_response,
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
-            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written'
+            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
+            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
+            its deadline before the write finished: unlike the cases above it may
+            already be committed (a git command that hits its own deadline may already
+            have moved the ref), so refresh to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2436,14 +2447,16 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
-          description: 'Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api''s
-            own copy of conf.d holds an entry the server cannot read and git cannot
-            hold — a FIFO, socket or device named like a config file, a file whose
-            read fails, a sub-directory that cannot be listed, a failed stat that
-            is not an unresolvable link — other than the written tenant file; it is
-            fixed on the server or its volume (or by resetting the copy from git),
-            not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry
-            names disclosed as for TENANT_TREE_UNREADABLE'
+          description: 'Internal error: code INTERNAL_ERROR, among others when the
+            commit or the file write fails (#1535: a fault of the server, not of the
+            body; the detail is in the server log under request_id); or code TENANT_STORE_FAULT
+            (#2939): tenant-api''s own copy of conf.d holds an entry the server cannot
+            read and git cannot hold — a FIFO, socket or device named like a config
+            file, a file whose read fails, a sub-directory that cannot be listed,
+            a failed stat that is not an unresolvable link — other than the written
+            tenant file; it is fixed on the server or its volume (or by resetting
+            the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE;
+            nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "501":
@@ -2458,7 +2471,11 @@ paths:
             route generator container cannot judge (reason unreachable, bad_response,
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
-            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written'
+            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
+            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
+            its deadline before the write finished: unlike the cases above it may
+            already be committed (a git command that hits its own deadline may already
+            have moved the ref), so refresh to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's custom-alert recipes
@@ -2919,7 +2936,11 @@ paths:
             container cannot judge (reason unreachable, bad_response, amtool_missing,
             generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment
             policy file is unusable (reason policy_unusable, or policy_unreadable
-            for tenant-api''s own copy); Retry-After; nothing written'
+            for tenant-api''s own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR
+            (#1535) when the request was cancelled or reached its deadline before
+            a synchronous batch finished: unlike the cases above it may already be
+            committed (a git command that hits its own deadline may already have moved
+            the ref), so refresh to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations
