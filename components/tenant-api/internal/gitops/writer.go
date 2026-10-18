@@ -533,6 +533,13 @@ type Writer struct {
 	// land. Always nil in production.
 	beforeCASAdvance func()
 
+	// beforeBaseSample is a TEST-ONLY seam (#1535 item 6, measurement):
+	// validateTenantFile calls it, when non-nil, right before it samples
+	// HEAD as the judged base — after the single-tenant write read the
+	// tenant file (base_hash precondition, merge base). Always nil in
+	// production.
+	beforeBaseSample func()
+
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
 	onBatchStaging func(*stagingTree)

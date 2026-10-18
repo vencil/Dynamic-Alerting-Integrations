@@ -97,6 +97,9 @@ func (w *Writer) validateTenantFile(ctx context.Context, filePath, tenantID stri
 	if w.validator == nil {
 		return "", ErrNoValidator
 	}
+	if w.beforeBaseSample != nil {
+		w.beforeBaseSample()
+	}
 	base, err = w.currentHEAD()
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errValidatorBase, err)
