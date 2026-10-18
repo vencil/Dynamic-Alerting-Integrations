@@ -1497,8 +1497,37 @@ def test_the_reserved_unusable_tree_is_not_vacuous(
     assert not (tree / "_defaults.yaml").is_file()
 
 
+def test_path_metadata_lists_the_tree_once_through_parse_tree(
+        tmp_path: pathlib.Path, monkeypatch) -> None:
+    """⛔ Two listings can describe two DIFFERENT trees (see below).
+    `check_path_metadata_consistency` no longer walks the tree in Python
+    (ADR-036 step 4, #2906): its warnings, findings and tail all come from
+    ONE `da-guard parse-tree` document, and it walks nothing itself."""
+    tree = _unusable_tree(tmp_path / "conf.d")
+    sys.path.insert(0, str(TOOLS_DIR / "lint"))
+    import importlib  # noqa: PLC0415
+    import _lib_parse_tree  # noqa: PLC0415
+    mod = importlib.import_module("check_path_metadata_consistency")
+    loads: list[str] = []
+    real_load = _lib_parse_tree.load
+
+    def counting_load(root, *a, **kw):
+        loads.append(str(root))
+        return real_load(root, *a, **kw)
+
+    def no_walk(*a, **kw):
+        raise AssertionError("a Python walk of the tree")
+
+    monkeypatch.setattr(_lib_parse_tree, "load", counting_load)
+    monkeypatch.setattr(pathlib.Path, "rglob", no_walk)
+    monkeypatch.setattr(os, "walk", no_walk)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["x", "--config-dir", str(tree)])
+    assert mod.main() == 0
+    assert len(loads) == 1, loads
+
+
 @pytest.mark.parametrize("module_rel,call", [
-    ("lint/check_path_metadata_consistency.py", "main"),
     ("dx/describe_tenant.py", "scanner"),
 ])
 def test_reader_walks_the_tree_once(module_rel: str, call: str,
@@ -1534,22 +1563,14 @@ def test_reader_walks_the_tree_once(module_rel: str, call: str,
     monkeypatch.setattr(os, "walk", counting_walk)
     monkeypatch.chdir(tmp_path)
 
-    if call == "main":
-        sys.path.insert(0, str(TOOLS_DIR / "lint"))
-        import importlib  # noqa: PLC0415
-        mod = importlib.import_module("check_path_metadata_consistency")
-        monkeypatch.setattr(sys, "argv",
-                            ["x", "--config-dir", str(tree)])
-        mod.main()
-    else:
-        sys.path.insert(0, str(TOOLS_DIR / "dx"))
-        import importlib  # noqa: PLC0415
-        mod = importlib.import_module("describe_tenant")
-        # ⛔ The compiler resolver is a DIFFERENT module with its own walk;
-        # counting it here would make this test about `custom_alerts.loader`
-        # rather than about this scanner. Disabled so the count is `_scan`'s.
-        monkeypatch.setattr(mod, "_ca_loader", None)
-        mod.ConfDScanner(tree)
+    sys.path.insert(0, str(TOOLS_DIR / "dx"))
+    import importlib  # noqa: PLC0415
+    mod = importlib.import_module("describe_tenant")
+    # ⛔ The compiler resolver is a DIFFERENT module with its own walk;
+    # counting it here would make this test about `custom_alerts.loader`
+    # rather than about this scanner. Disabled so the count is `_scan`'s.
+    monkeypatch.setattr(mod, "_ca_loader", None)
+    mod.ConfDScanner(tree)
 
     whole_tree = [p for p in calls if p == "*"]
     assert len(whole_tree) == 1, (

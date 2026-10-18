@@ -159,8 +159,6 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
-		_ = d.FederationPolicy.Reload()
-
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status":          "ok",

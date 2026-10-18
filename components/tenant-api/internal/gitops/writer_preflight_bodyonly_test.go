@@ -116,7 +116,7 @@ func TestWritePR_StaleTreeNoLongerOverRejects(t *testing.T) {
 		dir := seedStaleAndFresh(t,
 			map[string]string{"db-a.yaml": withOther},
 			map[string]string{"db-a.yaml": ownOnlyFalse, "other.yaml": "tenants:\n  other:\n    _silent_mode: \"false\"\n"})
-		if _, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body); err != nil {
+		if _, err := newTestWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body); err != nil {
 			t.Fatalf("legitimate write refused on the STALE tree: %v", err)
 		}
 	})
@@ -128,7 +128,7 @@ func TestWritePR_StaleTreeNoLongerOverRejects(t *testing.T) {
 		dir := seedStaleAndFresh(t,
 			map[string]string{"db-a.yaml": ownOnlyFalse},
 			map[string]string{"db-a.yaml": withOther})
-		_, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body)
+		_, err := newTestWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body)
 		if !errors.Is(err, ErrTenantGitManaged) {
 			t.Fatalf("err = %v, want the git-managed refusal judged on the fresh base", err)
 		}
@@ -150,7 +150,7 @@ func TestWritePR_StaleTreeNoLongerOverRejects(t *testing.T) {
 				"_defaults.yaml": "defaults:\n  mysql_connections: 100\n  mysql_threads_running: 30\n",
 			})
 		body := "tenants:\n  db-a:\n    mysql_connections: \"120\"\n    mysql_threads_running: \"45\"\n"
-		if _, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body); err != nil {
+		if _, err := newTestWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body); err != nil {
 			t.Fatalf("write using a key the FRESH defaults declare was refused: %v", err)
 		}
 	})
@@ -170,7 +170,7 @@ func TestWritePRBatch_StaleTreeNoLongerOverRejects(t *testing.T) {
 	dir := seedStaleAndFresh(t,
 		map[string]string{"db-a.yaml": withOther},
 		map[string]string{"db-a.yaml": ownOnlyFalse, "other.yaml": "tenants:\n  other:\n    _silent_mode: \"false\"\n"})
-	if _, err := NewWriter(dir, dir).WritePRBatch(context.Background(),
+	if _, err := newTestWriter(dir, dir).WritePRBatch(context.Background(),
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com"); err != nil {
 		t.Fatalf("legitimate batch write refused on the STALE tree: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestWritePRBatch_StaleTreeNoLongerOverRejects(t *testing.T) {
 	dir = seedStaleAndFresh(t,
 		map[string]string{"db-a.yaml": ownOnlyFalse},
 		map[string]string{"db-a.yaml": withOther})
-	if _, err := NewWriter(dir, dir).WritePRBatch(context.Background(),
+	if _, err := newTestWriter(dir, dir).WritePRBatch(context.Background(),
 		[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com"); !errors.Is(err, ErrTenantGitManaged) {
 		t.Fatalf("err = %v, want the git-managed refusal judged on the fresh base", err)
 	}
@@ -207,7 +207,7 @@ func TestWritePR_AmbiguousSpelling(t *testing.T) {
 		gitRun(t, dir, "add", "-A")
 		gitRun(t, dir, "commit", "-m", "two spellings")
 
-		_, err := NewWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body)
+		_, err := newTestWriter(dir, dir).WritePR(context.Background(), "db-a", "b@example.com", body)
 		if err == nil {
 			t.Fatal("WritePR accepted a tenant claimed by two files — it would pick one arbitrarily")
 		}
@@ -241,7 +241,7 @@ func TestWritePR_AmbiguousSpelling(t *testing.T) {
 		gitRun(t, authorDir, "commit", "-m", "clean up the duplicate spelling")
 		gitRun(t, authorDir, "push", "origin", "main")
 
-		if _, err := NewWriter(dir, dir).WritePR(
+		if _, err := newTestWriter(dir, dir).WritePR(
 			context.Background(), "db-a", "b@example.com", body); err != nil {
 			t.Fatalf("write refused over an ambiguity the FRESH base no longer has: %v", err)
 		}
@@ -261,7 +261,7 @@ func TestWritePRBatch_AmbiguousSpelling(t *testing.T) {
 		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
 	}
 	batch := func(dir string) error {
-		_, err := NewWriter(dir, dir).WritePRBatch(context.Background(),
+		_, err := newTestWriter(dir, dir).WritePRBatch(context.Background(),
 			[]PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
 		return err
 	}
@@ -345,7 +345,7 @@ func TestTreeDependentRefusalStillLeavesNoDanglingBranch(t *testing.T) {
 			gitRun(t, dir, "add", "-A")
 			gitRun(t, dir, "commit", "-m", "seed")
 
-			err := tc.call(NewWriter(dir, dir))
+			err := tc.call(newTestWriter(dir, dir))
 			if err == nil {
 				t.Fatal("a smuggled tenant section was accepted — the #1681 gate is gone")
 			}

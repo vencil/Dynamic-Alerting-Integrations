@@ -1837,9 +1837,10 @@ _WITNESS_NO_SECTION = (
 _WITNESS_PLACEHOLDER = "# nothing declared here yet\n"
 
 
-def _witness(docs: dict[str, str]) -> None:
-    """Drive the REAL witness over synthetic artifact text (reader seam only)."""
-    gate._assert_defaults_artifacts_match_schema(
+def _witness(docs: dict[str, str]) -> int:
+    """Drive the REAL witness over synthetic artifact text (reader seam only);
+    the documents it judged."""
+    return gate._assert_defaults_artifacts_match_schema(
         sorted(docs), read=lambda rel: docs[rel])
 
 
@@ -1847,12 +1848,11 @@ def test_the_schema_witness_is_silent_on_the_real_tree():
     """Anti-vacuity first: it must be handed the real scan, and pass on it.
 
     ⛔ Assert the JUDGED count, not just "did not raise". Silence is what a
-    stubbed reader also produces; the count is what tells the two apart. It is
-    lower than the artifact count on purpose — a comment-only placeholder
-    yields no YAML document at all.
+    stubbed reader also produces; the count is what tells the two apart.
+    Since #2906 the witness reads each artifact through `da-guard
+    parse-tree`: ONE document per file (a comment-only placeholder is the
+    empty mapping, judged; a second document is a file it cannot read).
     """
-    import yaml
-
     tracked = gate._tracked_defaults_artifacts()
     assert len(tracked) >= gate._DEFAULTS_ARTIFACT_FLOOR, tracked
     judged = gate._assert_defaults_artifacts_match_schema(tracked)  # must NOT raise
@@ -1863,10 +1863,9 @@ def test_the_schema_witness_is_silent_on_the_real_tree():
     # it was compared against, and the other control stubs the witness out
     # entirely so it never sees a real return value. This side re-derives the
     # document count from the tree without calling the witness at all.
-    expected = sum(
-        len(list(yaml.safe_load_all(
-            (gate.PROJECT_ROOT / rel).read_text(encoding="utf-8"))))
-        for rel in tracked)
+    # One document per tracked file that exists — counted from the index
+    # listing, not from anything the witness returns or reads.
+    expected = sum(1 for rel in tracked if (gate.PROJECT_ROOT / rel).is_file())
     assert judged == expected, (judged, expected)
     # ⛔ NOTHING ELSE. `assert judged < len(tracked)` stood here, on the
     # reasoning that one artifact is comment-only today — and blind review
@@ -1884,10 +1883,10 @@ def test_the_schema_witness_refuses_an_empty_input():
         gate._assert_defaults_artifacts_match_schema([])
     assert "no defaults artifacts" in str(exc.value), exc.value
 
-    # …and a population that parses to nothing at all is the other half of it
-    with pytest.raises(gate._GateViolation) as exc:
-        _witness({"a/conf.d/_defaults.yaml": "", "b/conf.d/_defaults.yaml": ""})
-    assert "judged ZERO documents" in str(exc.value), exc.value
+    # …and an EMPTY file is not "nothing" since #2906: `da-guard parse-tree`
+    # reads it as the empty mapping, the exporter's reading — two documents
+    # judged, both clean.
+    assert _witness({"a/conf.d/_defaults.yaml": "", "b/conf.d/_defaults.yaml": ""}) == 2
 
 
 def test_the_schema_witness_is_not_reachable_by_either_exemption_table(
@@ -1974,11 +1973,14 @@ def test_the_witness_reads_every_artifact_and_every_document_in_it():
                   "b/conf.d/_defaults.yaml": _WITNESS_RENAMED})
     assert "b/conf.d/_defaults.yaml" in str(exc.value), exc.value
 
-    # offender is in the SECOND YAML document of a single file
+    # offender is in the SECOND YAML document of a single file: since #2906
+    # (`da-guard parse-tree`, the exporter's reading) a second document is a
+    # file that cannot be read at all — named, never half-judged
     with pytest.raises(gate._GateViolation) as exc:
         _witness({"a/conf.d/_defaults.yaml":
                   _WITNESS_OK + "---\ndefalts:\n  cpu: 1\n"})
-    assert "defalts" in str(exc.value), exc.value
+    assert "a/conf.d/_defaults.yaml" in str(exc.value), exc.value
+    assert "multiple_documents" in str(exc.value), exc.value
 
     # ⛔ The two counts are read back as NUMBERS, not matched as a sentence.
     # The first spelling asserted the literal "2 violation(s) across 2 defaults

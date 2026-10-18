@@ -109,10 +109,13 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     out = json.loads(r.stdout)
     assert out["defaults_chain"] == ["_defaults.yaml"]
     assert out["effective_config"] == {"cpu_pct": 50, "disk_pct": 4}
-    assert "defaults carriers" in r.stderr and "_defaults.yml is ignored" in r.stderr, r.stderr
-    # Once per directory per run: describe_tenant's scanner AND the
-    # custom-alerts loader it calls both see this directory (blind review).
-    assert r.stderr.count("defaults carriers") == 1, r.stderr
+    # Since #2906 describe_tenant has no carrier selection of its own: the
+    # warning is the custom-alerts loader's, from parse-tree's `not_read`
+    # verdict on the carrier it does not read (#3147).
+    warn = "_defaults.yml is ignored on every plane (#1674)"
+    assert warn in r.stderr, r.stderr
+    # Once per file per run (blind review).
+    assert r.stderr.count(warn) == 1, r.stderr
 
 
 def _symlink_or_skip(link: Path, target: Path) -> None:
@@ -124,7 +127,8 @@ def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
     """Blind review of #1674: selecting on the RESOLVED name made
     `_defaults.yaml -> sub/platform-base.yaml` select nothing and crash with
     AttributeError (rc 1); before #1674 it was rc 0 with this chain. Go's
-    walker never follows the link, so the entry name is what it classifies."""
+    walker never follows the link, so the entry name is what it classifies
+    — and, since #2906 shows Go's chain as is, what it reports."""
     sub = tmp_path / "sub"
     sub.mkdir()
     (sub / "platform-base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
@@ -133,7 +137,7 @@ def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
     r = _describe(tmp_path, "t-link")
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert out["defaults_chain"] == ["sub/platform-base.yaml"]
+    assert out["defaults_chain"] == ["_defaults.yaml"]
     assert out["effective_config"] == {"cpu_pct": 50}
 
 

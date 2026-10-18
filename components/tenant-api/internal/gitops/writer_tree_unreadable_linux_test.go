@@ -80,7 +80,7 @@ func TestTreeUnreadable_ShapesRefuseEveryDirectPath(t *testing.T) {
 				dir := seedTreeRepo(t, map[string]string{"sh-t.yaml": tenantBody("sh-t")})
 				want := shape.build(t, dir)
 				head := gitRevParse(t, dir, "HEAD")
-				w := NewWriter(dir, dir)
+				w := newTestWriter(dir, dir)
 				done := make(chan error, 1)
 				go func() { done <- treeVerdictVia(t, mode, w, "sh-t") }()
 				select {
@@ -115,7 +115,7 @@ func TestTreeUnreadable_ReadErrorOnTheBaseRefusesPRModes(t *testing.T) {
 			}
 			gitRun(t, dir, "add", "-A")
 			gitRun(t, dir, "commit", "-m", "read_error link")
-			err := treeVerdictVia(t, mode, NewWriter(dir, dir), "prr-t")
+			err := treeVerdictVia(t, mode, newTestWriter(dir, dir), "prr-t")
 			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "eio.yaml", Reason: cfg.UnreadableReadError}}, true)
 		})
 	}
@@ -157,7 +157,7 @@ func TestTreeUnreadable_UnreadableTargetIsRefusedForEveryCaller(t *testing.T) {
 					gitRun(t, dir, "add", "-A")
 					gitRun(t, dir, "commit", "-m", "unreadable tenant file")
 				}
-				w := NewWriter(dir, dir)
+				w := newTestWriter(dir, dir)
 				done := make(chan error, 1)
 				go func() {
 					if mode == "Write+platform" {
@@ -201,7 +201,7 @@ func TestTreeUnreadable_StoreFaultWinsOverDanglingLink(t *testing.T) {
 				t.Fatal(err)
 			}
 			mkfifoReleased(t, filepath.Join(dir, "stuck.yaml"))
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			err := treeVerdictVia(t, mode, w, "mx-t")
 			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{
 				{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError},
@@ -230,7 +230,7 @@ func TestWriter_StoreUnreadableWalksAtScrapeTime(t *testing.T) {
 		t.Skip("no /proc/self/mem that fails to read")
 	}
 	dir := seedTreeRepo(t, map[string]string{"cnt-t.yaml": tenantBody("cnt-t")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	clock := time.Unix(1_000_000, 0)
 	w.storeScan.now = func() time.Time { return clock }
 	w.storeScan.minInterval = 30 * time.Second
@@ -278,7 +278,7 @@ func TestWriteMerged_TargetFIFODoesNotBlock(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"other-t.yaml": tenantBody("other-t")})
 	mkfifoReleased(t, filepath.Join(dir, "fifo-t.yaml"))
 	head := gitRevParse(t, dir, "HEAD")
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
@@ -306,7 +306,7 @@ func TestWriteMerged_TargetFIFODoesNotBlock(t *testing.T) {
 // the gauge has been blind.
 func TestWriter_StoreUnreadableUnknownUntilAWalkSucceeds(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"sk-t.yaml": tenantBody("sk-t")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	clock := time.Unix(2_000_000, 0)
 	w.storeScan.now = func() time.Time { return clock }
 	w.storeScan.minInterval = 30 * time.Second
@@ -363,7 +363,7 @@ func TestTreeUnreadable_PRModesJudgeTheGitBaseNotTheServingTree(t *testing.T) {
 					t.Fatalf("fixture: stuck.yaml is tracked: %q", st)
 				}
 				done := make(chan error, 1)
-				go func() { done <- treeVerdictVia(t, mode, NewWriter(dir, dir), "prb-t") }()
+				go func() { done <- treeVerdictVia(t, mode, newTestWriter(dir, dir), "prb-t") }()
 				select {
 				case got[mode] = <-done:
 				case <-time.After(30 * time.Second):
@@ -395,7 +395,7 @@ func TestWritePR_UntrackedNonRegularTargetIsRefusedAndKept(t *testing.T) {
 	target := filepath.Join(dir, "prk-t.yaml")
 	mkfifoReleased(t, target)
 	done := make(chan error, 1)
-	go func() { done <- writeVia(t, "WritePR", NewWriter(dir, dir), "prk-t") }()
+	go func() { done <- writeVia(t, "WritePR", newTestWriter(dir, dir), "prk-t") }()
 	var err error
 	select {
 	case err = <-done:
@@ -432,7 +432,7 @@ func TestWritePR_UntrackedNonRegularTargetTrackedCheckIsLiteral(t *testing.T) {
 		t.Fatalf("fixture: the glob does not reach the other tracked file (ls-files = %q)", got)
 	}
 	done := make(chan error, 1)
-	go func() { done <- writeVia(t, "WritePR", NewWriter(confDir, repo), "prk-t") }()
+	go func() { done <- writeVia(t, "WritePR", newTestWriter(confDir, repo), "prk-t") }()
 	var err error
 	select {
 	case err = <-done:

@@ -65,7 +65,7 @@ func commitDanglingTenantLink(t *testing.T, repo, tenantID string) {
 func TestWritePR_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	repo := initRepoOnMain(t)
 	commitDanglingTenantLink(t, repo, "db-a")
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 
 	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
@@ -98,7 +98,7 @@ func failTenantWrite(w *Writer) {
 // re-anchor on a clean base.
 func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
 	repo := initRepoOnMain(t)
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 	failTenantWrite(w)
 
 	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
@@ -115,7 +115,7 @@ func TestWritePR_WriteFileFailureRollsBack(t *testing.T) {
 // branch dropped, base clean, error names the tenant.
 func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 	repo := initRepoOnMain(t)
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 	failTenantWrite(w)
 
 	merge := func(existing []byte) (string, error) {
@@ -137,14 +137,14 @@ func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 // itself fails (empty author identity → git's "empty ident name" refusal,
 // which overrides repo-local config via the inline `-c user.name=`).
 //
-// Measured behavior this pins: the rollback IS fully clean here. gitCommit's
+// Measured behavior this pins: the rollback IS fully clean here. gitCommitPaths'
 // `git add` runs before the failure, so the new file is STAGED — and
 // checkoutBaseClean's `reset --hard` removes staged-but-uncommitted files
 // from the working tree along with the index. The residue seam therefore
 // does NOT open on this in-process path.
 //
 // KNOWN SEAM (not exercisable in-process, documented for the record): a
-// process crash BETWEEN os.WriteFile and gitCommit's `git add` leaves the
+// process crash BETWEEN os.WriteFile and gitCommitPaths' `git add` leaves the
 // new file UNTRACKED — checkoutBaseClean has no `git clean`, so the next
 // write's re-anchor keeps it, and GET handlers (which read configDir
 // directly) can serve the residue of a write that never committed. Closing
@@ -152,9 +152,9 @@ func TestWritePRBatch_WriteFileFailureRollsBack(t *testing.T) {
 // production decision, out of scope for this test-only pass.
 func TestWritePR_CommitFailureRollsBack(t *testing.T) {
 	repo := initRepoOnMain(t)
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 
-	// Empty author email → gitCommit's inline `-c user.name=` / `-c
+	// Empty author email → gitCommitPaths' inline `-c user.name=` / `-c
 	// user.email=` resolve to empty idents and the commit fails AFTER the
 	// in-repo write + add succeeded.
 	_, err := w.WritePR(context.Background(), "db-a", "", validTenantYAML)
@@ -175,7 +175,7 @@ func TestWritePR_CommitFailureRollsBack(t *testing.T) {
 // error before any git activity.
 func TestWritePRBatch_EmptyOps(t *testing.T) {
 	dir := initRepoOnMain(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	if _, err := w.WritePRBatch(context.Background(), nil, "op@example.com"); err == nil {
 		t.Fatal("expected an error for an empty batch, got nil")
 	} else if !strings.Contains(err.Error(), "empty batch operations") {
@@ -189,7 +189,7 @@ func TestWritePRBatch_EmptyOps(t *testing.T) {
 // the base untouched, and propagate the failure.
 func TestWritePRBatch_SecondOpMergeFailureRollsBack(t *testing.T) {
 	dir := seedTenantRepo(t) // main: db-a.yaml + _defaults.yaml
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	mainHead := gitOut(t, dir, "rev-parse", "main")
 
 	okMerge := func(existing []byte) (string, error) {
@@ -232,7 +232,7 @@ func TestWritePRBatch_SecondOpMergeFailureRollsBack(t *testing.T) {
 func TestWritePRBatch_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	repo := initRepoOnMain(t)
 	commitDanglingTenantLink(t, repo, "db-a")
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 
 	merge := func(existing []byte) (string, error) {
 		return "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n", nil
@@ -260,7 +260,7 @@ func TestWritePRBatch_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T
 func TestWritePRBatch_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 	dir := seedTenantRepo(t)
 	addBareRemote(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	merge := func(existing []byte) (string, error) {
 		return string(existing) + "    _silent_mode: warning\n", nil
@@ -286,7 +286,7 @@ func TestWritePRBatch_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 // already returns for an all-no-op batch (#1102).
 func TestWritePR_NoOpBodyReturnsNoChanges(t *testing.T) {
 	repo := initRepoOnMain(t)
-	w := NewWriter(repo, repo)
+	w := newTestWriter(repo, repo)
 
 	// The body carries a deprecated key spelling AND is byte-identical to the
 	// base. The two are orthogonal — validate() runs before anything is staged —

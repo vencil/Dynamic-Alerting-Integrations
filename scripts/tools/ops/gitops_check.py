@@ -36,23 +36,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
 )
-# #2123: a key written twice in one mapping is a YAMLError, as the exporter
-# (yaml.v3) treats it — not PyYAML's silent last-wins.
-from _lib_io import strict_safe_load  # noqa: E402
-from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    has_yaml_extension,
-    is_hidden_name,
-    is_reserved_name,
-    resolve_defaults_file,
-    warn_nested,
-)
+# ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Initialization
@@ -237,122 +228,64 @@ def check_local(dir_path: str) -> CheckResult:
             details=details,
         )
 
-    # Check _defaults.yaml exists
-    # #1588: resolved by the shared predicate. Looking for the literal
-    # name made a tree carrying `_DEFAULTS.YAML` report
-    # "Missing _defaults.yaml (required)" while the exporter was
-    # merging that very file into every downstream tenant.
-    defaults_path = str(resolve_defaults_file(base))
-    if not Path(defaults_path).is_file():
+    # ADR-036 step 4 (#2906): which files there are and what each holds is
+    # `da-guard parse-tree`'s answer — the files the exporter selects, read
+    # by yaml.v3 — never a Python walk or a PyYAML parse of the tree. No
+    # usable da-guard raises ParseTreeError (exit 2 in `main`).
+    reader = _lib_parse_cache.reader_for(base)
+    tree = reader.tree()
+
+    # #1588 / #1674: the root carrier the exporter reads, in any casing,
+    # `.yaml` over `.yml` — parse-tree's `defaults_carriers`.
+    defaults_rel = _lib_parse_cache.root_defaults_carrier(tree)
+    if defaults_rel is None:
         return CheckResult(
             check="local",
             status="fail",
-            # #1588 review: name the file this tool actually looked for.
-            # `resolve_defaults_file` falls back to the canonical spelling
-            # when nothing matched, so on a truly empty tree the message is
-            # unchanged — but on a tree carrying `_DEFAULTS.YAML` it now
-            # names that, instead of sending the operator to a file that
-            # does not exist.
             message=_h(
-                f"缺少 {Path(defaults_path).name}（必需）",
-                f"Missing {Path(defaults_path).name} (required)"
+                "缺少 _defaults.yaml（必需）",
+                "Missing _defaults.yaml (required)"
             ),
             details=details,
         )
 
-    # Validate _defaults.yaml
+    # Validate the root defaults carrier
     try:
-        with open(defaults_path, encoding="utf-8") as f:
-            strict_safe_load(f)
-    except yaml.YAMLError as e:
+        reader.node(defaults_rel)
+    except FileUnreadable as e:
         return CheckResult(
             check="local",
             status="fail",
-            # ⛔ The old literal made this message contradict ITSELF: it
-            # said `_defaults.yaml is invalid` while the parser error it
-            # embeds quoted the path of `_DEFAULTS.YAML`. One line, two
-            # different files.
             message=_h(
-                f"{Path(defaults_path).name} 無效: {e}",
-                f"{Path(defaults_path).name} is invalid: {e}"
+                f"{defaults_rel} 無效: {e.kind}: {e.message}",
+                f"{defaults_rel} is invalid: {e.kind}: {e.message}"
             ),
             details=details,
         )
 
-    # Scan tenant files
+    # Every file the exporter reads (tenant files at any depth, and the
+    # platform `_` files): a file it cannot read is named, never skipped.
     tenant_files = []
     parse_errors = []
     total_alerts = 0
-
-    # Flat by construction (`base.iterdir()` below), and a hierarchical
-    # conf.d must not read as an empty one: name the carriers this scan
-    # cannot see. stderr only — the readiness verdict is unchanged (#1761:
-    # this reader sat outside the enumeration gate's population, so the
-    # missing call was never red).
-    warn_nested(base, tool="gitops_check")
-
-    try:
-        for entry in sorted(base.iterdir(), key=lambda p: p.name):
-            filename = entry.name
-            # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). This site used to
-            # pass `suffixes=(".yaml",)` while the defaults resolver above
-            # already accepts both spellings — so ONE invocation returned TWO
-            # answers about the same tree. Measured on a conf.d holding
-            # `_defaults.yml` plus `db-b.yml`, contents byte-identical to the
-            # `.yaml` control:
-            #
-            #     _defaults.yaml + db-a.yaml -> pass, 1 tenant file   <- control
-            #     _defaults.yml  + db-b.yml  -> pass, 0 tenant files  <- before
-            #     _defaults.yml  + db-b.yml  -> pass, 1 tenant file   <- after
-            #
-            # rc=0 and an empty stderr in every row: the readiness report told
-            # the operator their GitOps repo was in order while counting none
-            # of the tenants the exporter is serving out of it
-            # (`config_hierarchy.go:195` suffixes on both spellings). Omitting
-            # the argument takes `CONFIG_SUFFIXES`, which is the exporter's set.
-            # ⛔ #2055: `.`-prefixed names are skipped by the exporter's
-            # walker, so they are not tenant files. Counting them inflated
-            # `tenant_files`, and a broken editor leftover (`.acme.yaml`)
-            # failed readiness over a file the exporter never reads.
-            if (not has_yaml_extension(filename)
-                    or is_reserved_name(filename)
-                    or is_hidden_name(filename)):
-                continue
-
-            file_path = str(entry)
-            if not entry.is_file():
-                continue
-
-            try:
-                with open(file_path, encoding="utf-8") as f:
-                    data = strict_safe_load(f)
-
-                # Count metric keys (tenant YAML is flat key-value,
-                # skip internal keys starting with _)
-                metric_count = 0
-                if isinstance(data, dict):
-                    metric_count = sum(
-                        1 for k in data
-                        if not k.startswith("_")
-                    )
-
-                tenant_files.append({
-                    "name": filename,
-                    "metrics": metric_count,
-                })
-                total_alerts += metric_count
-            except yaml.YAMLError as e:
-                parse_errors.append({"file": filename, "error": str(e)})
-    except OSError as e:
-        return CheckResult(
-            check="local",
-            status="fail",
-            message=_h(
-                f"無法掃描目錄: {e}",
-                f"Cannot scan directory: {e}"
-            ),
-            details=details,
-        )
+    tenant_set = set(_lib_parse_cache.tenant_files(tree))
+    for rel in sorted(tree.selected):
+        if rel == defaults_rel:
+            continue
+        try:
+            data = reader.read(rel)
+        except FileUnreadable as e:
+            parse_errors.append({"file": rel, "error": f"{e.kind}: {e.message}"})
+            continue
+        if rel not in tenant_set:
+            continue
+        # Count metric keys (top-level keys without the `_` prefix)
+        metric_count = sum(1 for k in data if not k.startswith("_"))
+        tenant_files.append({"name": rel, "metrics": metric_count})
+        total_alerts += metric_count
+    not_read = sorted(f"{rel} ({why})" for rel, why in tree.not_read.items())
+    if not_read:
+        details["not_read"] = not_read
 
     # Build result
     details["defaults_file"] = "present"
@@ -564,7 +497,22 @@ def main() -> None:
     if args.action == "repo":
         checks.append(check_repo(args.url, args.branch, args.path))
     elif args.action == "local":
-        checks.append(check_local(args.dir))
+        try:
+            checks.append(check_local(args.dir))
+        except ParseTreeError as exc:
+            # ADR-036 step 4: no usable `da-guard parse-tree` — the tree was
+            # not read, so there is no verdict: a caller error, not a fail.
+            text = " ".join(str(exc).split())
+            print(f"ERROR: cannot read {args.dir} through `da-guard parse-tree`: {text}",
+                  file=sys.stderr)
+            if args.json:
+                print(format_json_report(GitOpsReport(
+                    overall_status="fail", timestamp=timestamp,
+                    checks=[CheckResult(check="local", status="fail", message=text,
+                                        details={"directory": args.dir,
+                                                 "reason": "da_guard_failed"})],
+                ).to_dict()))
+            sys.exit(EXIT_CALLER_ERROR)
     elif args.action == "sidecar":
         checks.append(check_sidecar(args.namespace))
 

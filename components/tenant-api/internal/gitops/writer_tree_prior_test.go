@@ -117,7 +117,7 @@ func TestTreePrior_SecondScanReusesUnchangedFiles(t *testing.T) {
 // bytes. The first write goes through the Writer itself.
 func TestTreePrior_SameStatRewriteAfterWriteIsSeen(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"ss-host.yaml": tenantBody("ss-host")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	host := filepath.Join(dir, "ss-host.yaml")
 	body := "tenants:\n  ss-host:\n    _silent_mode: \"warning\"\n"
 	if _, err := w.Write(context.Background(), "ss-host", "op@example.com", body); err != nil {
@@ -161,7 +161,7 @@ func TestTreePrior_BranchSwitchIsSeen(t *testing.T) {
 	gitRun(t, dir, "commit", "-q", "-am", "swap the second tenant")
 	gitRun(t, dir, "checkout", "-q", "main")
 	ageTree(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	onMain := mustScan(t, w)
 	wantLocated(t, onMain, "sw-kkk", "sw-host.yaml")
@@ -218,7 +218,7 @@ func TestTreePrior_DeclaredElsewhereHoldsOnReusedWalk(t *testing.T) {
 	host := "tenants:\n  de-host:\n    _silent_mode: \"warning\"\n  de-guest:\n    _silent_mode: \"warning\"\n"
 	dir := seedTreeRepo(t, map[string]string{"team/de-host.yaml": host})
 	ageTree(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	for i, mode := range allWriteModes {
 		if err := writeVia(t, mode, w, "de-guest"); !errors.Is(err, ErrTenantDeclaredElsewhere) {
 			t.Errorf("%s: err = %v, want ErrTenantDeclaredElsewhere", mode, err)
@@ -338,7 +338,7 @@ func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
 		"lo-a.yaml":              tenantBody("lo-a"),
 		"team/lo-bystander.yaml": tenantBody("lo-bystander"),
 	})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	var st *stagingTree
 	w.onBatchStaging = func(s *stagingTree) { st = s }
 	// onTreeScan runs as walk n starts, when the staging prior is walk n-1.
@@ -378,7 +378,7 @@ func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
 // second op refused as a duplicate and the whole batch aborted.
 func assertBatchRefusedAsDuplicate(t *testing.T, dir, id string) {
 	t.Helper()
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		batchOp(id, tenantBody(id)),
 		batchOp(id, "tenants:\n  "+id+":\n    _silent_mode: \"critical\"\n"),
@@ -421,7 +421,7 @@ func TestTreePriorBatch_HardlinkOfWrittenFile(t *testing.T) {
 	}
 	gitRun(t, dir, "add", "-A")
 	gitRun(t, dir, "commit", "-q", "-m", "hardlink")
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{batchOp("hl-new", tenantBody("hl-new"))}, "op@example.com")
 	if err != nil {
 		t.Fatalf("WritePRBatch: %v", err)
@@ -440,7 +440,7 @@ func TestTreePriorBatch_HardlinkOfWrittenFile(t *testing.T) {
 func TestTreePriorBatch_KeptCoTenantStillRefused(t *testing.T) {
 	both := "tenants:\n  kc-a:\n    _silent_mode: \"warning\"\n  kc-b:\n    _silent_mode: \"warning\"\n"
 	dir := seedTreeRepo(t, map[string]string{"kc-a.yaml": both})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		batchOp("kc-a", "tenants:\n  kc-a:\n    _silent_mode: \"critical\"\n  kc-b:\n    _silent_mode: \"warning\"\n"),
 		batchOp("kc-b", tenantBody("kc-b")),
@@ -455,7 +455,7 @@ func TestTreePriorBatch_KeptCoTenantStillRefused(t *testing.T) {
 // batch: its own new file is the only declaration.
 func TestTreePriorBatch_NewTenantTwice(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"nt-x.yaml": tenantBody("nt-x")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	second := "tenants:\n  nt-new:\n    _silent_mode: \"critical\"\n"
 	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		batchOp("nt-new", tenantBody("nt-new")),
@@ -479,7 +479,7 @@ func TestTreePriorBatch_DuplicateResolvedMidBatch(t *testing.T) {
 		"dq-q.yaml":      "tenants:\n  dq-q:\n    _silent_mode: \"warning\"\n  dq-t:\n    _silent_mode: \"warning\"\n",
 		"team/dq-t.yaml": tenantBody("dq-t"),
 	})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		batchOp("dq-q", tenantBody("dq-q")),
 		batchOp("dq-t", tenantBody("dq-t")),
@@ -502,7 +502,7 @@ func TestTreePriorBatch_SymlinkTenantFileIsReplacedNotWrittenThrough(t *testing.
 	gitRun(t, dir, "add", "-A")
 	gitRun(t, dir, "commit", "-q", "-m", "link")
 	gitRun(t, dir, "push", "-q", "origin", "main")
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{
 		batchOp("sl-a", tenantBody("sl-a")),
 		batchOp("sl-a", "tenants:\n  sl-a:\n    _silent_mode: \"critical\"\n"),

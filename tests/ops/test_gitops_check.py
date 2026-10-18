@@ -1333,21 +1333,21 @@ class TestErrorRecovery:
 
         assert result.status == "pass"
 
-    def test_local_with_permission_error(self, config_dir):
-        """Local check when directory is not readable."""
-        defaults = {"threshold": 100}
+    def test_local_names_a_file_parse_tree_cannot_read(self, config_dir):
+        """ADR-036 step 4 (#2906): the tree is listed and read by `da-guard
+        parse-tree`, so a file it cannot read — at any depth, here one that
+        is not UTF-8 — is named as a parse error, never skipped."""
         with open(os.path.join(config_dir, "_defaults.yaml"), "w", encoding="utf-8") as f:
-            yaml.dump(defaults, f)
+            f.write("defaults:\n  threshold: 100\n")
+        os.makedirs(os.path.join(config_dir, "team"))
+        with open(os.path.join(config_dir, "team", "bad.yaml"), "wb") as f:
+            f.write(b"tenants:\n  t\xff: {}\n")
 
-        # Mock Path.iterdir to raise OSError. (Earlier versions used
-        # os.listdir; the pathlib refactor switched to Path.iterdir,
-        # which raises identically on permission errors.)
-        with patch("pathlib.Path.iterdir",
-                    side_effect=OSError("Permission denied")):
-            result = gc.check_local(config_dir)
+        result = gc.check_local(config_dir)
 
         assert result.status == "fail"
-        assert "cannot scan" in result.message.lower()
+        assert result.details["parse_errors"] == [
+            {"file": "team/bad.yaml", "error": "invalid_utf8: not valid UTF-8 at byte 12"}]
 
     def test_run_cmd_with_unicode_error(self):
         """_run_cmd handles unicode in error messages."""

@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/testutil"
@@ -74,7 +75,7 @@ func newDirState(t *testing.T, dir string) statestore.Store {
 }
 
 func newTestWriter(configDir string) *gitops.Writer {
-	return gitops.NewWriter(configDir, "")
+	return gitopstest.NewWriter(configDir, "")
 }
 
 func newRBACManager(t *testing.T, yaml string) *rbac.Manager {

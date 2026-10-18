@@ -202,7 +202,7 @@ func TestDeleteGroup_403NamesReadableAndAcknowledgesHidden(t *testing.T) {
 }
 
 // DELETE re-judges visibility in the lock, on the group as stored: the snapshot
-// can be stale (groupMgr has no WatchLoop). Here the snapshot still has the
+// can be stale (it refreshes on a write's Reload or a WatchLoop tick). Here the snapshot still has the
 // member-org tenant, while the file now has only the other-org one — DELETE
 // answers the 404 of a missing group, and writes nothing.
 func TestDeleteGroup_InLockVisibilityUsesTheFileNotTheSnapshot(t *testing.T) {

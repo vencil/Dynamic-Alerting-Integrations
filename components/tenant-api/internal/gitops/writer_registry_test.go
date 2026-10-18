@@ -14,7 +14,7 @@ func TestHistoricalMaxUint(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	const filename = "_account_registry.yaml"
 	ctx := context.Background()
 

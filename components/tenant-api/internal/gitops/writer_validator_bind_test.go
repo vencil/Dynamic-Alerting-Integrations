@@ -79,7 +79,7 @@ func TestDirectWrite_RefusedWhenHEADMovesWhileJudged(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			dir := initRepoWithDefaults(t)
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			v := &externalCommitValidator{t: t, dir: dir}
 			w.SetValidator(v)
 			base := gitRevParse(t, dir, "HEAD")
@@ -144,7 +144,7 @@ func TestWrite_NormalizedByGitAttributesIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, existing := range []bool{false, true} {
 		dir := initRepoEOL(t)
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		file := filepath.Join(dir, bindTenant+".yaml")
 		const lfBody = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"60\"\n"
 		if existing {
@@ -184,7 +184,7 @@ func TestWrite_NormalizedByGitAttributesIsRefused(t *testing.T) {
 func TestWrite_NormalizedFallbackError(t *testing.T) {
 	t.Parallel()
 	dir := initRepoEOL(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.SetValidator(&recordingValidator{})
 	_, err := w.Write(context.Background(), bindTenant, "op@example.com", crlfBody)
 	if !errors.Is(err, ErrContentNormalized) || !strings.Contains(err.Error(), bindTenant+".yaml") {
@@ -195,7 +195,7 @@ func TestWrite_NormalizedFallbackError(t *testing.T) {
 func TestWriteBatch_NormalizedByGitAttributesIsRefused(t *testing.T) {
 	t.Parallel()
 	dir := initRepoEOL(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	v := &refuserValidator{}
 	w.SetValidator(v)
 	head := gitRevParse(t, dir, "HEAD")
@@ -228,7 +228,7 @@ func TestWriteBatch_NormalizedByGitAttributesIsRefused(t *testing.T) {
 func TestWrite_UnchangedByGitAttributesCommits(t *testing.T) {
 	t.Parallel()
 	dir := initRepoEOL(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	v := &refuserValidator{}
 	w.SetValidator(v)
 	head := gitRevParse(t, dir, "HEAD")
@@ -245,7 +245,7 @@ func TestWrite_UnchangedByGitAttributesCommits(t *testing.T) {
 func TestWrite_IdenticalBodyAsksNothing(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
 	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", body); err != nil {
 		t.Fatal(err)
@@ -315,7 +315,7 @@ func TestDirectWrite_CASRefusesACommitBeforeTheAdvance(t *testing.T) {
 	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
 	for _, existing := range []bool{false, true} {
 		dir := initRepoWithDefaults(t)
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		if existing {
 			if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {
 				t.Fatal(err)
@@ -358,7 +358,7 @@ func TestDirectWrite_CASRefusesACommitBeforeTheAdvance(t *testing.T) {
 func TestWrite_UncommittedEditOfTheSameBodyIsCommitted(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	const prior = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"60\"\n"
 	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
 	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {
@@ -398,7 +398,7 @@ func TestWrite_FailedCommitLeavesHEADAndRetryCommits(t *testing.T) {
 	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
 	for _, existing := range []bool{false, true} {
 		dir := initRepoWithDefaults(t)
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		file := filepath.Join(dir, bindTenant+".yaml")
 		if existing {
 			if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {
@@ -452,7 +452,7 @@ func TestWrite_FailedCommitLeavesHEADAndRetryCommits(t *testing.T) {
 func TestWriteMerged_UncommittedEditOfTheSameContentIsCommitted(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	const prior = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"60\"\n"
 	const body = "tenants:\n  " + bindTenant + ":\n    mysql_threads_running: \"70\"\n"
 	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", prior); err != nil {

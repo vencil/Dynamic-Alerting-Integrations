@@ -73,7 +73,7 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
 func TestReadScan_StuckReadWalkDoesNotFailWrites(t *testing.T) {
 	t.Parallel()
 	dir := seedTreeRepo(t, map[string]string{"rs-w.yaml": tenantBody("rs-w")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.treeScanTimeout = 100 * time.Millisecond
 	walks, _, release := holdFirstWalk(t, w)
 
@@ -185,7 +185,7 @@ func TestReadScan_ConcurrentReadsShareOneWalk(t *testing.T) {
 func TestReadScan_WriteDoesNotJoinReadWalk(t *testing.T) {
 	t.Parallel()
 	dir := seedTreeRepo(t, map[string]string{"rs-j.yaml": tenantBody("rs-j")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.treeScanTimeout = time.Minute
 	walks, entered, release := holdFirstWalk(t, w)
 	var joins atomic.Int32

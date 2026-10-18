@@ -49,7 +49,7 @@ func assertBatchLeftNothing(t *testing.T, dir, headBefore string, before map[str
 
 func TestWriteBatch_OneCommitForEveryOp(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"b-a.yaml": silentBody("b-a", "warning")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	var mu sync.Mutex
 	var notified []string
 	w.SetOnWrite(func(id string) { mu.Lock(); notified = append(notified, id); mu.Unlock() })
@@ -107,7 +107,7 @@ func TestWriteBatch_RefusedOpUndoesEveryWrite(t *testing.T) {
 	if err := os.Link(path, link); err != nil {
 		t.Skipf("hard links unsupported here: %v", err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	snap := map[string][]byte{"r-a.yaml": []byte(silentBody("r-a", "warning")), "r-new.yaml": nil}
 
@@ -150,7 +150,7 @@ func TestWriteBatch_CommitFailureUndoesEveryWrite(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	_, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("c-a", silentBody("c-a", "critical")),
@@ -169,7 +169,7 @@ func TestWritePRBatch_CommitFailureLeavesNothing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	pass := func(id, mode string) PRBatchOp {
 		return PRBatchOp{TenantID: id, Merge: func([]byte) (string, error) { return silentBody(id, mode), nil }}
@@ -197,7 +197,7 @@ func TestWriteBatch_OpIsJudgedOnEarlierOpsWrites(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": "tenants:\n" +
 		"  mv-x:\n    _silent_mode: \"warning\"\n" +
 		"  mv-y:\n    _silent_mode: \"warning\"\n"})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head := gitRevParse(t, dir, "HEAD")
 	_, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("mv-x", tenantBody("mv-x")),

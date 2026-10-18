@@ -12,7 +12,10 @@
 // @description    Provides CRUD over per-tenant alert thresholds, RBAC-scoped writes, and async batch operations.
 // @description    Auth is enforced by the oauth2-proxy sidecar and forwarded via X-Forwarded-Email / X-Forwarded-Groups.
 // @license.name   See repository LICENSE
-// @BasePath       /api/v1
+//
+// 刻意不宣告 @BasePath：各 handler 的 @Router 已寫完整路徑（/api/v1/...），
+// OpenAPI 2.0 的 path 相對於 basePath，兩者並存會組出 /api/v1/api/v1/...
+// （#2597；守衛 tests/contract/test_swagger_basepath.py）。
 package main
 
 import (
@@ -403,6 +406,11 @@ func main() {
 	if err := writer.PruneBatchWorktrees(); err != nil {
 		slog.Warn("could not prune leftover batch worktrees", "error", err)
 	}
+	// #1535: a direct write's temporary commit index a killed process left
+	// in the git dir — before serving, outside the writer lock, likewise.
+	if err := writer.PruneCommitIndexes(); err != nil {
+		slog.Warn("could not prune leftover temporary commit indexes", "error", err)
+	}
 	// v2.6.0: Register callback for real-time event broadcasting. #3123: the
 	// event is addressed to its tenant; EventStream delivers it only to
 	// subscribers who may read that tenant.
@@ -629,8 +637,9 @@ func main() {
 	// tenant_api_config_reload_failures_total{component} (rate) AND
 	// tenant_api_config_last_reload_successful{component} (current state). Both
 	// reload paths are silent and both are observed: the periodic WatchLoop only
-	// WARN-logs, and the post-write Reload returns an error that every handler
-	// discards (`_ = mgr.Reload()`) before answering 200 OK. MUST be installed
+	// WARN-logs, and the post-write Reload returns an error that the handlers'
+	// state write discards (`_ = mgr.Reload()`, handler/state.go) before
+	// answering. MUST be installed
 	// BEFORE the WatchLoop goroutines below start AND before the server serves
 	// (handlers reach the observer via Reload) — both hold at this point in startup.
 	reloadObs := handler.NewConfigReloadObserver()

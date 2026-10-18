@@ -12,11 +12,10 @@
     "all). The rows were measured with that same Go call. Go half:",
     "components/threshold-exporter/app/pkg/config/yaml_number_value_parity_test.go",
     "asserts both columns and the merged hash; Python half:",
-    "tests/shared/test_yaml_number_value_parity.py asserts describe_tenant's",
-    "canonical JSON and merged_hash. Neither reads the other's source.",
-    "`py_divergent`: a known describe_tenant divergence (explicit tag whose",
-    "text yaml.v3 and PyYAML's constructor read differently); the Python half",
-    "keeps it as a strict xfail. Scope is int / float only: `yes` / `on`",
+    "tests/shared/test_yaml_number_value_parity.py asserts that describe_tenant",
+    "shows these values and this merged_hash (it reads da-guard effective since",
+    "#2906; the rows its PyYAML reader once could not align are aligned with it).",
+    "Neither reads the other's source. Scope is int / float only: `yes` / `on`",
     "(YAML 1.1 bools) are deliberately absent (#2164)."
   ],
   "rows": [
@@ -119,12 +118,12 @@
     {"source": "! 1e3", "go_json": "{\"_x\":{\"v\":1000},\"mysql_connections\":50}", "go_type": "float64"},
     {"source": "!!float 1e3", "go_json": "{\"_x\":{\"v\":1000},\"mysql_connections\":50}", "go_type": "float64"},
     {"source": "!!int 0o17", "go_json": "{\"_x\":{\"v\":15},\"mysql_connections\":50}", "go_type": "int"},
-    {"source": "!!int 12:30:45", "go_json": null, "py_divergent": "explicit !!int on a sexagesimal text: yaml.v3 refuses the file, PyYAML's constructor reads 45045"},
-    {"source": "!!float 12:30:45", "go_json": null, "py_divergent": "explicit !!float on a sexagesimal text: yaml.v3 refuses the file, PyYAML's constructor reads 45045"},
+    {"source": "!!int 12:30:45", "go_json": null},
+    {"source": "!!float 12:30:45", "go_json": null},
     {"source": "!!int 1e3", "go_json": null},
     {"source": "!!str 0o17", "go_json": "{\"_x\":{\"v\":\"0o17\"},\"mysql_connections\":50}", "go_type": "string"},
     {"source": "!!str 42", "go_json": "{\"_x\":{\"v\":\"42\"},\"mysql_connections\":50}", "go_type": "string"},
-    {"source": "!!float 0x1F", "go_json": "{\"_x\":{\"v\":31},\"mysql_connections\":50}", "go_type": "float64", "py_divergent": "explicit !!float on a hex text: yaml.v3 reads 31, PyYAML's constructor raises and the file is skipped"},
+    {"source": "!!float 0x1F", "go_json": "{\"_x\":{\"v\":31},\"mysql_connections\":50}", "go_type": "float64"},
     {"source": "&a 1e3", "go_json": "{\"_x\":{\"v\":1000},\"mysql_connections\":50}", "go_type": "float64"}
   ]
 }

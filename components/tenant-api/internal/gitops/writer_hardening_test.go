@@ -58,7 +58,7 @@ func initRepoOnMain(t *testing.T) string {
 // BASE — never from the stuck branch — so PRs can't cross-contaminate.
 func TestWritePR_BranchesFromBaseNotStuckBranch(t *testing.T) {
 	dir := initRepoOnMain(t)
-	w := NewWriter(dir, dir) // baseBranch defaults to "main"
+	w := newTestWriter(dir, dir) // baseBranch defaults to "main"
 
 	mainHead := gitOut(t, dir, "rev-parse", "main")
 
@@ -86,7 +86,7 @@ func TestWritePR_BranchesFromBaseNotStuckBranch(t *testing.T) {
 // WritePR aborts (rather than branching from an unknown ref) — the safe failure.
 func TestWritePR_AbortsWhenBaseMissing(t *testing.T) {
 	dir := initRepoOnMain(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.SetBaseBranch("nonexistent-base")
 
 	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML); err == nil {
@@ -103,7 +103,7 @@ func TestWritePR_AbortsWhenBaseMissing(t *testing.T) {
 // write. The ironclad checkoutBaseClean (reset --hard + checkout -f) must recover.
 func TestWritePR_RecoversFromDirtyTree(t *testing.T) {
 	dir := initRepoOnMain(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	cfgPath := filepath.Join(dir, "db-a.yaml")
 	write := func(mode string) {
 		if err := os.WriteFile(cfgPath, []byte("tenants:\n  db-a:\n    _silent_mode: \""+mode+"\"\n"), 0o644); err != nil {
@@ -142,7 +142,7 @@ func TestWritePR_RecoversFromDirtyTree(t *testing.T) {
 // write isn't bricked. Proven by a real commit succeeding afterward.
 func TestClearStaleGitLocks(t *testing.T) {
 	dir := initRepoOnMain(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	gitMeta := filepath.Join(dir, ".git")
 	nestedRefLock := filepath.Join(gitMeta, "refs", "heads", "tenant-api", "db-a", "20260101.lock")
@@ -190,7 +190,7 @@ func TestGitExecTimeout_SelfHealsIndexLock(t *testing.T) {
 		t.Fatalf("create index.lock: %v", err)
 	}
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.gitBinary = stub
 	w.gitTimeout = 200 * time.Millisecond
 	w.gitWaitDelay = 500 * time.Millisecond
@@ -223,7 +223,7 @@ func addBareRemote(t *testing.T, repoDir string) {
 func TestWritePR_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 	dir := initRepoOnMain(t)
 	addBareRemote(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
@@ -244,7 +244,7 @@ func TestWritePR_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 func TestWritePR_KeepsLocalBranchOnPushFailure(t *testing.T) {
 	dir := initRepoOnMain(t)
 	// NO remote configured → push fails.
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {

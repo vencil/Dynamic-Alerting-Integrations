@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	gh "github.com/vencil/tenant-api/internal/github"
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -36,7 +36,7 @@ func baseHashFixture(t *testing.T) (http.Handler, string, string) {
 	t.Helper()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	gw := gitops.NewWriter(configDir, configDir)
+	gw := gitopstest.NewWriter(configDir, configDir)
 	h := wrapWithRBACMiddleware(
 		PutTenant(&Deps{Writer: gw, WriteMode: WriteModeDirect}),
 		newRBACManager(t, `groups:

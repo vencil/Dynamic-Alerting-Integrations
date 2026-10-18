@@ -48,7 +48,7 @@ func initRepoWithDefaults(t *testing.T) string {
 func TestWrite_IdenticalBodyIsIdempotentSuccess(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	ctx := context.Background()
 	const body = "tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n"
 
@@ -74,7 +74,7 @@ func TestWrite_IdenticalBodyIsIdempotentSuccess(t *testing.T) {
 func TestWrite_ExternalCommitStillConflicts(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	ctx := context.Background()
 
 	if _, err := w.Write(ctx, "db-a", "op@example.com",
