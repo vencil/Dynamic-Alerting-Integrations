@@ -68,7 +68,10 @@ func TestApplyPatch_WriteOverloadedMapsToRetryMessage(t *testing.T) {
 	// anything else sheds immediately with ErrWriteOverloaded. (t.Setenv —
 	// no t.Parallel.)
 	t.Setenv("TA_WRITE_QUEUE_DEPTH", "0")
-	configDir := setupConfigDir(t, nil)
+	// A repository: WriteMerged samples HEAD before it reads the tenant file
+	// (#1535 item 6), so in a plain directory it would return before the
+	// merge parks it and this test would wait forever.
+	configDir := seedGitTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 80\n"})
 	gw := newTestWriter(configDir) // reads the env at construction
 
 	// Park a write inside its MergeFunc: once `started` closes, the admission

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -131,10 +132,12 @@ func TestDiffTenant_DeclaredElsewhereIsConflict(t *testing.T) {
 
 // The guard fails closed when the conf.d walk cannot run: 500 INTERNAL_ERROR,
 // fixed message, nothing written. Injected with a configDir that does not
-// exist (the top-level resolver reads that as "no file yet"; the walk cannot).
+// exist (the top-level resolver reads that as "no file yet"; the walk cannot),
+// inside a repository whose HEAD the write samples first (#1535 item 6).
 func TestPutTenant_TreeScanFailureIsInternalError(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "conf.d-missing")
-	d := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), WriteMode: WriteModeDirect}
+	repo := seedGitTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 80\n"})
+	dir := filepath.Join(repo, "conf.d-missing")
+	d := &Deps{ConfigDir: dir, Writer: gitopstest.NewWriter(dir, repo), WriteMode: WriteModeDirect}
 	w := httptest.NewRecorder()
 	PutTenant(d)(w, newRequestWithChiParam("PUT", "/api/v1/tenants/"+elsewhereTenant, "id", elsewhereTenant,
 		bytes.NewBufferString(elsewhereBody())))

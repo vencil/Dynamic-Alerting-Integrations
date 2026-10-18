@@ -9,9 +9,10 @@ package handler
 // itself (a ref that moved although git reported an error); both variants
 // then point HEAD at a missing branch so `rev-parse HEAD` fails.
 //
-// BUG(#1535-6), "moved" variant: the batch IS on the branch, yet the task
-// error says "nothing was written". The assertions pin that current text;
-// a fix turns them red on purpose. Tenant ids are fixture names
+// BUG(#3173), "moved" variant (measured in #1535 item 6, its fix tracked in
+// #3173): the batch IS on the branch, yet the task error says "nothing was
+// written". The assertions pin that current text; the fix turns them red
+// on purpose. Tenant ids are fixture names
 // (CLAUDE.md #9).
 
 import (
@@ -117,7 +118,7 @@ func TestAsyncBatch_RefStateUnknown_TaskErrorText(t *testing.T) {
 				t.Fatalf("task = %q %q; measured: failed, \"batch failed, nothing was written: …\"", task.Status, task.Error)
 			}
 			if moved {
-				// BUG(#1535-6): the branch holds the batch, the task says nothing was written,
+				// BUG(#3173): the branch holds the batch, the task says nothing was written,
 				// and the serving file was never brought up to the branch.
 				if branch == base || !strings.Contains(string(committed), "_silent_mode") {
 					t.Fatalf("the branch did not move (%s): the moved variant did not fire", branch)

@@ -1,20 +1,22 @@
 package gitops
 
-// #1535 item 6 — MEASUREMENT, not a fix. These tests pin what the direct
-// write paths do TODAY when something outside tenant-api changes the
+// #1535 item 6 — the measurements of the issue's item 6, kept as
+// regression tests once the defects they found were fixed. They pin what
+// the direct write paths do when something outside tenant-api changes the
 // serving repository at the points the issue named:
 //
-//   - the window between the single-tenant write reading the tenant file
-//     (the base_hash precondition, the merge base) and sampling HEAD as the
-//     judged base (validateTenantFile) — injected through beforeBaseSample;
+//   - the old window between the single-tenant write reading the tenant
+//     file (the base_hash precondition, the merge base) and sampling HEAD
+//     as the judged base — injected through afterTenantRead; and the gap
+//     the fix leaves, between the sample and the read (afterBaseSample);
 //   - after the judged base is sampled (inside the validator, or at the
 //     batch's staging seam) — the compare-and-swap's side, as a control;
 //   - an uncommitted edit of the tenant file in the serving worktree, which
 //     the no-op rules compare against.
 //
-// A scenario that shows a defect asserts the CURRENT behaviour and is
-// marked BUG(#1535-6): the assertion documents the defect, so a fix turns
-// the test red on purpose and the fix updates it. None is skipped.
+// FIXED(#1535-6) marks a scenario whose measured behaviour was a defect,
+// now asserted fixed. BUG(#3173) marks one still open: it asserts the
+// CURRENT behaviour, so the fix turns it red on purpose. None is skipped.
 //
 // Tenant ids are fixture names (CLAUDE.md #9).
 
@@ -110,89 +112,114 @@ func (v *winHookValidator) ValidateWrites(context.Context, string, []ProposedFil
 // --- the window: read → HEAD sample ------------------------------------
 
 // W1: WriteIfUnchanged's base_hash matched the file it read; an outside
-// commit of that file lands before HEAD is sampled.
+// commit of that file lands after the read, where HEAD used to be sampled.
 //
-// BUG(#1535-6): the precondition passed on bytes that are no longer the
-// base, the judged base is the outside commit, and the write commits onto
-// it — the outside change is overwritten with 200 instead of a 409.
-func TestWindow_WriteIfUnchanged_OutsideCommitBeforeBaseSample(t *testing.T) {
+// FIXED(#1535-6): measured before the fix — success, committed onto the
+// outside commit (the outside change overwritten with 200). The judged base
+// is now sampled before the read, so the outside commit moves HEAD off it:
+// ErrConflict (409), the outside commit kept, nothing written.
+func TestWindow_WriteIfUnchanged_OutsideCommitAfterRead(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
 	w := newTestWriter(dir, dir)
 	orig := winBody(winTenant, "60", "")
 	outside := winBody(winTenant, "60", "75")
 	var extHead string
-	w.beforeBaseSample = winOnce(func() { extHead = winOutsideCommit(t, dir, winTenant, outside) })
+	w.afterTenantRead = winOnce(func() { extHead = winOutsideCommit(t, dir, winTenant, outside) })
 
-	body := winBody(winTenant, "90", "")
-	_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", body, winSourceHash(orig))
-
-	// Current behaviour (the defect): success, committed onto the outside commit.
-	if err != nil {
-		t.Fatalf("WriteIfUnchanged = %v; the measured behaviour was success (BUG #1535-6) — if this is now a 409, the window is closed: update this test", err)
-	}
+	_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""), winSourceHash(orig))
 	if extHead == "" {
 		t.Fatal("the seam did not fire")
 	}
-	if got := gitRevParse(t, dir, "HEAD~1"); got != extHead {
-		t.Fatalf("HEAD~1 = %s, want the outside commit %s", got, extHead)
-	}
-	if got := gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"); got != body {
-		t.Fatalf("HEAD's file = %q, want the API body", got)
-	}
-	if strings.Contains(gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"), "container_cpu") {
-		t.Fatal("outside change survived")
-	}
-	t.Logf("MEASURED W1: err=nil, HEAD~1=outside commit, outside key container_cpu lost from HEAD")
+	wantOutsideKept(t, dir, err, extHead, outside, ErrConflict)
 }
 
-// W2: WriteMerged read its merge base; an outside commit adds a key to the
-// same file before HEAD is sampled.
-//
-// BUG(#1535-6): the merge was computed on the pre-commit bytes and is
-// committed onto the outside commit — the key the outside commit added is
-// dropped with no error (a lost update on the path whose purpose is to
-// preserve keys the patch did not name).
-func TestWindow_WriteMerged_OutsideCommitBeforeBaseSample(t *testing.T) {
+// W1b: the gap the fix leaves — an outside commit between the sample and
+// the read. The read sees the outside bytes: the base_hash no longer
+// matches (ErrPrecondition, 409), nothing written.
+func TestWindow_WriteIfUnchanged_OutsideCommitBeforeRead(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
 	w := newTestWriter(dir, dir)
 	outside := winBody(winTenant, "60", "75")
 	var extHead string
-	w.beforeBaseSample = winOnce(func() { extHead = winOutsideCommit(t, dir, winTenant, outside) })
+	w.afterBaseSample = winOnce(func() { extHead = winOutsideCommit(t, dir, winTenant, outside) })
 
-	var mergeBase string
-	merged := winBody(winTenant, "90", "")
-	_, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", func(existing []byte) (string, error) {
-		mergeBase = string(existing)
-		return strings.Replace(string(existing), "\"60\"", "\"90\"", 1), nil
-	})
-	if err != nil {
-		t.Fatalf("WriteMerged = %v; the measured behaviour was success (BUG #1535-6)", err)
-	}
-	if mergeBase != winBody(winTenant, "60", "") {
-		t.Fatalf("merge base = %q", mergeBase)
-	}
-	if got := gitRevParse(t, dir, "HEAD~1"); got != extHead {
-		t.Fatalf("HEAD~1 = %s, want the outside commit %s", got, extHead)
-	}
-	if got := gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"); got != merged {
-		t.Fatalf("HEAD's file = %q, want %q (outside key dropped)", got, merged)
-	}
-	t.Logf("MEASURED W2: err=nil, HEAD~1=outside commit, HEAD file=%q (outside container_cpu dropped)", merged)
+	_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""), winSourceHash(winBody(winTenant, "60", "")))
+	wantOutsideKept(t, dir, err, extHead, outside, ErrPrecondition)
 }
 
-// W3: an UNCOMMITTED outside edit of the tenant file lands in the window.
-// Not a window-specific defect: the write replaces the serving file, as
-// any write does once its precondition passed; the edit is gone from the
-// worktree and was never in a commit. Pinned as a data point.
-func TestWindow_WriteIfUnchanged_UncommittedEditBeforeBaseSample(t *testing.T) {
+// W2: WriteMerged read its merge base; an outside commit adds a key to the
+// same file after the read.
+//
+// FIXED(#1535-6): measured before the fix — success, the merge (computed
+// on the pre-commit bytes) committed onto the outside commit and the key it
+// added dropped. Now ErrConflict, the outside commit kept, nothing written.
+func TestWindow_WriteMerged_OutsideCommitAfterRead(t *testing.T) {
+	t.Parallel()
+	dir := winRepo(t)
+	w := newTestWriter(dir, dir)
+	outside := winBody(winTenant, "60", "75")
+	var extHead string
+	w.afterTenantRead = winOnce(func() { extHead = winOutsideCommit(t, dir, winTenant, outside) })
+
+	_, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", bump90)
+	if extHead == "" {
+		t.Fatal("the seam did not fire")
+	}
+	wantOutsideKept(t, dir, err, extHead, outside, ErrConflict)
+}
+
+// W2b: an outside commit between the sample and the merge read: the merge
+// is computed on the outside bytes, and the CAS refuses (ErrConflict).
+func TestWindow_WriteMerged_OutsideCommitBeforeRead(t *testing.T) {
+	t.Parallel()
+	dir := winRepo(t)
+	w := newTestWriter(dir, dir)
+	outside := winBody(winTenant, "60", "75")
+	var extHead string
+	w.afterBaseSample = winOnce(func() { extHead = winOutsideCommit(t, dir, winTenant, outside) })
+
+	_, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", bump90)
+	wantOutsideKept(t, dir, err, extHead, outside, ErrConflict)
+}
+
+// bump90 is a merge that sets mysql_threads_running to 90, keeping the rest.
+func bump90(existing []byte) (string, error) {
+	return strings.Replace(string(existing), "\"60\"", "\"90\"", 1), nil
+}
+
+// wantOutsideKept: the write was refused with want, HEAD is the outside
+// commit with its bytes, and the serving file is the outside commit's.
+func wantOutsideKept(t *testing.T, dir string, err error, extHead, outside string, want error) {
+	t.Helper()
+	if !errors.Is(err, want) {
+		t.Fatalf("err = %v, want %v (409, nothing written)", err, want)
+	}
+	if got := gitRevParse(t, dir, "HEAD"); got != extHead {
+		t.Fatalf("HEAD = %s, want the outside commit %s", got, extHead)
+	}
+	if got := gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"); got != outside {
+		t.Fatalf("HEAD's file = %q, want the outside commit's", got)
+	}
+	if got := winServing(t, dir, winTenant); got != outside {
+		t.Fatalf("serving file = %q, want the outside commit's", got)
+	}
+	t.Logf("MEASURED %s: err=%v, HEAD=outside commit, outside bytes kept, nothing written", t.Name(), err)
+}
+
+// W3: an UNCOMMITTED outside edit of the tenant file lands after the read.
+// Not a defect of the window: the write replaces the serving file, as any
+// write does once its precondition passed; the edit is gone from the
+// worktree and was never in a commit. (The worktree is not compared with
+// the judged base's blob — see sampleJudgedBase.) Pinned as a data point.
+func TestWindow_WriteIfUnchanged_UncommittedEditAfterRead(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
 	w := newTestWriter(dir, dir)
 	orig := winBody(winTenant, "60", "")
 	base := gitRevParse(t, dir, "HEAD")
-	w.beforeBaseSample = winOnce(func() { winOutsideEdit(t, dir, winTenant, winBody(winTenant, "60", "75")) })
+	w.afterTenantRead = winOnce(func() { winOutsideEdit(t, dir, winTenant, winBody(winTenant, "60", "75")) })
 
 	body := winBody(winTenant, "90", "")
 	if _, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", body, winSourceHash(orig)); err != nil {
@@ -209,10 +236,9 @@ func TestWindow_WriteIfUnchanged_UncommittedEditBeforeBaseSample(t *testing.T) {
 
 // --- control: after the judged base is sampled ---------------------------
 
-// C1: the same outside commit, landing after HEAD was sampled (while the
-// generator judges): the existing check refuses with ErrConflict and
-// nothing is written. Not a defect.
-func TestWindow_Control_OutsideCommitAfterBaseSample(t *testing.T) {
+// C1: the same outside commit, landing while the generator judges: the
+// check refuses with ErrConflict and nothing is written. Not a defect.
+func TestWindow_Control_OutsideCommitWhileJudged(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
 	w := newTestWriter(dir, dir)
@@ -222,49 +248,40 @@ func TestWindow_Control_OutsideCommitAfterBaseSample(t *testing.T) {
 	w.SetValidator(&winHookValidator{fn: func() { extHead = winOutsideCommit(t, dir, winTenant, outside) }})
 
 	_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""), winSourceHash(orig))
-	if !errors.Is(err, ErrConflict) {
-		t.Fatalf("err = %v, want ErrConflict", err)
-	}
-	if gitRevParse(t, dir, "HEAD") != extHead {
-		t.Fatal("HEAD is not the outside commit")
-	}
-	if got := winServing(t, dir, winTenant); got != outside {
-		t.Fatalf("serving file = %q, want the outside commit's", got)
-	}
-	t.Logf("MEASURED C1: err=ErrConflict, HEAD=outside commit, serving file=outside content")
+	wantOutsideKept(t, dir, err, extHead, outside, ErrConflict)
 }
 
-// C2 (409 judgement): an outside commit of an UNRELATED tenant's file,
-// before vs after the base sample. Before: no 409, the write commits onto
-// it. After: ErrConflict — by design (ADR-036 §4: the verdict is on the
-// judged tree, and the tree changed), not a misjudgement of the client's
-// base: nothing is written, a retry succeeds.
+// C2 (409 judgement): an outside commit of an UNRELATED tenant's file
+// after the judged base was sampled — after the read, or while the
+// generator judges: ErrConflict — by design (ADR-036 §4: the verdict is on
+// the judged tree, and the tree changed), not a misjudgement of the
+// client's base: nothing is written, a retry succeeds. (Before the fix a
+// commit after the read became the judged base and the write went
+// through.)
 func TestWindow_Control_UnrelatedOutsideCommit(t *testing.T) {
 	t.Parallel()
-	t.Run("before base sample", func(t *testing.T) {
-		t.Parallel()
-		dir := winRepo(t)
-		w := newTestWriter(dir, dir)
-		var extHead string
-		w.beforeBaseSample = winOnce(func() { extHead = winOutsideCommit(t, dir, winOther, winBody(winOther, "61", "")) })
-		_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""), winSourceHash(winBody(winTenant, "60", "")))
-		if err != nil || gitRevParse(t, dir, "HEAD~1") != extHead {
-			t.Fatalf("err = %v; want committed onto the unrelated outside commit", err)
-		}
-		t.Logf("MEASURED C2a: err=nil, committed onto the unrelated outside commit")
-	})
-	t.Run("after base sample", func(t *testing.T) {
-		t.Parallel()
-		dir := winRepo(t)
-		w := newTestWriter(dir, dir)
-		var extHead string
-		w.SetValidator(&winHookValidator{fn: func() { extHead = winOutsideCommit(t, dir, winOther, winBody(winOther, "61", "")) }})
-		_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""), winSourceHash(winBody(winTenant, "60", "")))
-		if !errors.Is(err, ErrConflict) || gitRevParse(t, dir, "HEAD") != extHead {
-			t.Fatalf("err = %v; want ErrConflict with HEAD at the outside commit", err)
-		}
-		t.Logf("MEASURED C2b: err=ErrConflict (retryable), HEAD=unrelated outside commit")
-	})
+	for _, where := range []string{"after read", "while judged"} {
+		t.Run(where, func(t *testing.T) {
+			t.Parallel()
+			dir := winRepo(t)
+			w := newTestWriter(dir, dir)
+			var extHead string
+			commit := func() { extHead = winOutsideCommit(t, dir, winOther, winBody(winOther, "61", "")) }
+			if where == "after read" {
+				w.afterTenantRead = winOnce(commit)
+			} else {
+				w.SetValidator(&winHookValidator{fn: commit})
+			}
+			_, err := w.WriteIfUnchanged(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""), winSourceHash(winBody(winTenant, "60", "")))
+			if !errors.Is(err, ErrConflict) || gitRevParse(t, dir, "HEAD") != extHead {
+				t.Fatalf("err = %v; want ErrConflict with HEAD at the outside commit", err)
+			}
+			if got := winServing(t, dir, winTenant); got != winBody(winTenant, "60", "") {
+				t.Fatalf("serving file = %q, want HEAD's", got)
+			}
+			t.Logf("MEASURED C2 %s: err=ErrConflict (retryable), HEAD=unrelated outside commit", where)
+		})
+	}
 }
 
 // --- batch: the staging seam (after headBefore and the mirror) -----------
@@ -311,16 +328,15 @@ func TestWindow_Batch_UncommittedEditAfterStaging(t *testing.T) {
 	t.Logf("MEASURED B2: err=nil, committed on base, uncommitted outside edit overwritten in the worktree")
 }
 
-// --- no-op rules vs an uncommitted outside edit (item 3) ----------------
+// --- no-op rules vs an uncommitted outside edit -------------------------
 
 // N1: the serving file holds an uncommitted outside edit X; a batch op's
 // new content is exactly X.
 //
-// BUG(#1535-6): applyBatchOp's no-op test compares with the serving file
-// (writer_batch.go `existing != nil && string(existing) == content`), not
-// with HEAD: the op is reported NoOp, the batch returns success, and no
-// commit is made — HEAD still holds the old bytes. The single-tenant
-// writes check HEAD as well (unchangedFile, N2/N3) and commit.
+// FIXED(#1535-6): measured before the fix — the op was NoOp, the batch
+// succeeded and nothing was committed (the no-op test compared with the
+// serving file only). Now it is unchangedFile's rule, against the batch's
+// base: X is committed and the op is not a no-op.
 func TestNoOp_Batch_ContentEqualsUncommittedEdit(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
@@ -331,26 +347,38 @@ func TestNoOp_Batch_ContentEqualsUncommittedEdit(t *testing.T) {
 
 	out, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: winTenant,
 		Merge: func([]byte) (string, error) { return x, nil }}}, "alice@example.com")
-	if err != nil {
-		t.Fatalf("batch = %v; measured: success (BUG #1535-6)", err)
+	if err != nil || len(out) != 1 || out[0].NoOp {
+		t.Fatalf("batch = %+v, %v; want success, not a no-op", out, err)
 	}
-	if len(out) != 1 || !out[0].NoOp {
-		t.Fatalf("outcome = %+v; measured: NoOp", out)
+	wantCommitted(t, dir, headOld, x)
+}
+
+// wantCommitted: one commit onto headOld whose tenant file is want, and the
+// serving file is want with nothing left to commit.
+func wantCommitted(t *testing.T, dir, headOld, want string) {
+	t.Helper()
+	if got := gitRevParse(t, dir, "HEAD~1"); got != headOld {
+		t.Fatalf("HEAD~1 = %s, want the old HEAD %s (one commit)", got, headOld)
 	}
-	if gitRevParse(t, dir, "HEAD") != headOld {
-		t.Fatal("HEAD moved: the no-op hole is closed — update this test")
+	if got := gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"); got != want {
+		t.Fatalf("HEAD's file = %q, want %q", got, want)
 	}
-	if got := gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"); got != winBody(winTenant, "60", "") {
-		t.Fatalf("HEAD's file = %q", got)
+	if got := winServing(t, dir, winTenant); got != want {
+		t.Fatalf("serving file = %q, want %q", got, want)
 	}
-	t.Logf("MEASURED N1: err=nil, outcome NoOp=true, HEAD unmoved, HEAD file=old, serving file=X (uncommitted)")
+	if st := gitT(t, dir, "status", "--porcelain", "--", winTenant+".yaml"); strings.TrimSpace(st) != "" {
+		t.Fatalf("git status shows the path: %q", st)
+	}
+	t.Logf("MEASURED %s: committed onto the old HEAD, HEAD file = serving file = the new content", t.Name())
 }
 
 // N1b: the same through ErrMergeNoOp — the serving file has an uncommitted
 // removal of the key an unset-only op would remove; the merge (judging the
 // serving bytes) says "nothing to remove".
 //
-// BUG(#1535-6): success, no commit; HEAD still carries the key.
+// FIXED(#1535-6): measured before the fix — NoOp, no commit, HEAD still
+// carrying the key. Now the serving bytes (the state the op asked for) are
+// committed.
 func TestNoOp_Batch_MergeNoOpOnUncommittedEdit(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
@@ -360,13 +388,27 @@ func TestNoOp_Batch_MergeNoOpOnUncommittedEdit(t *testing.T) {
 	winOutsideEdit(t, dir, winTenant, winBody(winTenant, "60", "")) // uncommitted removal
 
 	out, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: winTenant, Merge: winUnsetCPU}}, "alice@example.com")
-	if err != nil || len(out) != 1 || !out[0].NoOp {
-		t.Fatalf("batch = %+v, %v; measured: success with NoOp (BUG #1535-6)", out, err)
+	if err != nil || len(out) != 1 || out[0].NoOp {
+		t.Fatalf("batch = %+v, %v; want success, not a no-op", out, err)
 	}
-	if gitRevParse(t, dir, "HEAD") != headOld || !strings.Contains(gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"), "container_cpu") {
-		t.Fatal("HEAD changed: update this test")
+	wantCommitted(t, dir, headOld, winBody(winTenant, "60", ""))
+}
+
+// N1c (control): ErrMergeNoOp with the serving file equal to HEAD stays a
+// no-op — nothing committed.
+func TestNoOp_Batch_MergeNoOpMatchingHEAD(t *testing.T) {
+	t.Parallel()
+	dir := winRepo(t)
+	w := newTestWriter(dir, dir)
+	headOld := gitRevParse(t, dir, "HEAD")
+	out, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: winTenant, Merge: winUnsetCPU}}, "alice@example.com")
+	if err != nil || len(out) != 1 || !out[0].NoOp || gitRevParse(t, dir, "HEAD") != headOld {
+		t.Fatalf("batch = %+v, %v; want a no-op with HEAD unmoved", out, err)
 	}
-	t.Logf("MEASURED N1b: err=nil, NoOp=true, HEAD unmoved and still holds container_cpu")
+	if _, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", winUnsetCPU); err != nil || gitRevParse(t, dir, "HEAD") != headOld {
+		t.Fatalf("WriteMerged = %v; want a no-op with HEAD unmoved", err)
+	}
+	t.Logf("MEASURED N1c: batch NoOp=true and WriteMerged nil, HEAD unmoved")
 }
 
 // winUnsetCPU removes container_cpu, or reports ErrMergeNoOp when the file
@@ -423,12 +465,13 @@ func TestNoOp_WriteMerged_ContentEqualsUncommittedEdit(t *testing.T) {
 	t.Logf("MEASURED N3: err=nil, X committed")
 }
 
-// N4: WriteMerged's ErrMergeNoOp short-circuit does NOT ask HEAD — the
-// same uncommitted-removal setup as N1b.
+// N4: WriteMerged's ErrMergeNoOp short-circuit — the same
+// uncommitted-removal setup as N1b.
 //
-// BUG(#1535-6): success, no commit; HEAD still carries the key the caller
-// asked to remove (readMergeValidateIn returns ErrMergeNoOp on the serving
-// bytes; WriteMerged returns before unchangedFile).
+// FIXED(#1535-6): measured before the fix — success with no commit, HEAD
+// still carrying the key the caller asked to remove (the short-circuit
+// returned before unchangedFile). Now mergeNoOpContent asks the judged
+// base: the serving bytes are committed.
 func TestNoOp_WriteMerged_MergeNoOpOnUncommittedEdit(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
@@ -438,12 +481,9 @@ func TestNoOp_WriteMerged_MergeNoOpOnUncommittedEdit(t *testing.T) {
 	winOutsideEdit(t, dir, winTenant, winBody(winTenant, "60", ""))
 
 	if _, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", winUnsetCPU); err != nil {
-		t.Fatalf("WriteMerged = %v; measured: success (BUG #1535-6)", err)
+		t.Fatalf("WriteMerged = %v", err)
 	}
-	if gitRevParse(t, dir, "HEAD") != headOld || !strings.Contains(gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"), "container_cpu") {
-		t.Fatal("HEAD changed: update this test")
-	}
-	t.Logf("MEASURED N4: err=nil, HEAD unmoved and still holds container_cpu")
+	wantCommitted(t, dir, headOld, winBody(winTenant, "60", ""))
 }
 
 // N5: WriteMerged on a file with an uncommitted outside edit, the patch
@@ -501,11 +541,12 @@ func refAndHeadFailingGit(t *testing.T, ranFirst bool) string {
 // it returns a plain error — not ErrConflict, not *BatchCommittedError —
 // and drops the publish marker.
 //
-// BUG(#1535-6) in P2 (ref moved): the batch IS on the branch, yet the
-// error is the "not committed" kind (the handler says "nothing was
-// written", see handler TestAsyncBatch_RefStateUnknown…), and with the
-// marker gone nothing brings the serving file up to the branch: the
-// worktree stays at the old bytes behind a HEAD that has the new ones.
+// BUG(#3173) in P2 (ref moved; measured in #1535 item 6, its fix tracked
+// in #3173): the batch IS on the branch, yet the error is the "not
+// committed" kind (the handler says "nothing was written", see handler
+// TestAsyncBatch_RefStateUnknown…), and with the marker gone nothing
+// brings the serving file up to the branch: the worktree stays at the old
+// bytes behind a HEAD that has the new ones.
 func TestPublishBatch_RefFailsAndHeadUnreadable(t *testing.T) {
 	t.Parallel()
 	for _, ranFirst := range []bool{false, true} {
@@ -539,7 +580,7 @@ func TestPublishBatch_RefFailsAndHeadUnreadable(t *testing.T) {
 			head := gitRevParse(t, dir, "HEAD")
 			serving := winServing(t, dir, winTenant)
 			if ranFirst {
-				// BUG(#1535-6): published, reported as not written, worktree behind.
+				// BUG(#3173): published, reported as not written, worktree behind.
 				if head == base || gitT(t, dir, "show", "HEAD:"+winTenant+".yaml") != body {
 					t.Fatal("the ref did not move")
 				}

@@ -167,6 +167,7 @@ func (w *Writer) confTopRel() (top, rel string, err error) {
 // stagingTree is one batch's worktree.
 type stagingTree struct {
 	root      string // the worktree
+	base      string // openStaging's rev; an op's no-op is judged on it (#1535 item 6)
 	configDir string // root/<conf.d relative to the top level>
 	rel       string
 	prior     *cfg.TreeScan // the staging tree's own walk prior
@@ -223,7 +224,7 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 		_ = os.RemoveAll(root)
 		return nil, fmt.Errorf("add batch worktree: %w", err)
 	}
-	st := &stagingTree{root: root, configDir: filepath.Join(root, rel), rel: rel,
+	st := &stagingTree{root: root, base: rev, configDir: filepath.Join(root, rel), rel: rel,
 		changed: map[string][]string{}, targets: map[string]string{}}
 	if err := w.gitIn(root, "reset", "-q"); err != nil {
 		w.closeStaging(st)
@@ -454,23 +455,39 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 		return BatchOpOutcome{Err: err}, target
 	}
 	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge, names)
+	// #1535 item 6: an op is a no-op only when the file it leaves is what
+	// the batch's base holds (unchangedFile's rule) — or what an earlier op
+	// of this batch wrote, which the batch commits anyway. The staging
+	// tree is a copy of the SERVING tree (direct mode): an uncommitted edit
+	// there equal to the op's result used to be answered NoOp, and the
+	// batch succeeded without committing it.
+	rel, relErr := filepath.Rel(st.root, filePath)
+	_, earlierOp := st.changed[rel]
 	if errors.Is(err, ErrMergeNoOp) {
-		// B2: the merge changes nothing — accepted, nothing written, its
-		// notices kept (#1231 F5).
-		return BatchOpOutcome{NoOp: true, Notices: notices}, target
+		// B2: the merge changes nothing in the file — accepted, nothing
+		// written, its notices kept (#1231 F5); unless base does not hold
+		// the file as it is, which is then written (mergeNoOpContent).
+		if earlierOp || relErr != nil {
+			return BatchOpOutcome{NoOp: true, Notices: notices}, target
+		}
+		var noop bool
+		content, notices, noop, err = w.mergeNoOpContent(st.configDir, st.root, st.base, op.TenantID, filePath, existing, notices, names)
+		if noop {
+			return BatchOpOutcome{NoOp: true, Notices: notices}, target
+		}
 	}
 	if err != nil {
 		return BatchOpOutcome{Err: err}, target
 	}
-	if existing != nil && string(existing) == content {
+	if existing != nil && string(existing) == content &&
+		(earlierOp || w.revHolds(st.root, st.base, filePath, existing)) {
 		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
 		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}, target
 	}
-	rel, err := filepath.Rel(st.root, filePath)
-	if err != nil {
-		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, err)}, target
+	if relErr != nil {
+		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, relErr)}, target
 	}
 	if _, seen := st.changed[rel]; !seen {
 		st.order = append(st.order, rel)

@@ -85,31 +85,52 @@ func (w *Writer) validateProposed(ctx context.Context, base string, files []Prop
 	return w.validator.ValidateWrites(ctx, base, files)
 }
 
-// validateTenantFile is validateProposed for one tenant file under
-// w.configDir, against the serving HEAD (direct mode) or the checked-out
+// sampleJudgedBase reads HEAD as the commit a single-tenant write is judged
+// on and commits onto: the serving HEAD (direct mode) or the checked-out
 // feature branch's HEAD — its branch point (PR mode, before anything is
 // committed on it). Caller holds w.mu.
 //
-// base is the commit the verdict is on. The direct-mode caller hands it to commitFileChange, which commits only
-// while HEAD is still base: w.mu keeps every in-process write out, but not a
-// commit made from outside the process while the generator judged.
-func (w *Writer) validateTenantFile(ctx context.Context, filePath, tenantID string, content []byte) (base string, err error) {
-	if w.validator == nil {
-		return "", ErrNoValidator
-	}
-	if w.beforeBaseSample != nil {
-		w.beforeBaseSample()
-	}
-	base, err = w.currentHEAD()
+// ⛔ THE DIRECT WRITES CALL IT BEFORE THEY READ THE TENANT FILE (#1535 item
+// 6), as WriteBatch samples headBefore before it copies the serving tree.
+// Sampled after the reads, a commit made from outside the process between
+// the read (the base_hash precondition, the merge base) and the sample
+// became the judged base itself: the compare-and-swap then passed and the
+// write overwrote that commit with 200. Sampled first, such a commit moves
+// HEAD off the judged base and commitFileChange refuses with ErrConflict.
+//
+// What this does NOT cover: the reads are of the serving worktree, and the
+// worktree is not compared with the judged base's blob — an uncommitted
+// edit there, or a HEAD advanced without updating the worktree, is read as
+// the current file (a deliberate choice, #1535 item 6). The no-op rules
+// (unchangedFile, the batch's) do compare with the base's blob.
+func (w *Writer) sampleJudgedBase() (string, error) {
+	base, err := w.currentHEAD()
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errValidatorBase, err)
 	}
-	if err := w.validateProposed(ctx, base, []ProposedFile{{
-		Path: confRelKey(w.configDir, filePath), Content: content, Tenants: []string{tenantID},
-	}}); err != nil {
-		return "", err
+	if w.afterBaseSample != nil {
+		w.afterBaseSample()
 	}
 	return base, nil
+}
+
+// validateTenantFile is validateProposed for one tenant file under
+// w.configDir, against base — the commit sampleJudgedBase returned. Caller
+// holds w.mu.
+//
+// The direct-mode caller hands base to commitFileChange, which commits only
+// while HEAD is still base: w.mu keeps every in-process write out, but not a
+// commit made from outside the process since the sample.
+func (w *Writer) validateTenantFile(ctx context.Context, base, filePath, tenantID string, content []byte) error {
+	if w.afterTenantRead != nil {
+		w.afterTenantRead()
+	}
+	if w.validator == nil {
+		return ErrNoValidator
+	}
+	return w.validateProposed(ctx, base, []ProposedFile{{
+		Path: confRelKey(w.configDir, filePath), Content: content, Tenants: []string{tenantID},
+	}})
 }
 
 // validateStaging is validateProposed for every file a batch changed in its
@@ -260,23 +281,25 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 // unchangedFile is the no-op rule of the single-file writes (Write and
 // WriteMerged, #2903): content changes nothing only when it is
 // byte-identical both to the serving file (existing; nil when there is
-// none) and to HEAD's blob of it. The serving file alone can hold bytes
-// HEAD does not — an uncommitted edit from outside, or a write whose file
-// landed and whose commit failed (index.lock) — and answering success for
-// those would report a body that is never committed. When it holds, the
-// write is a success with nothing committed and the generator not asked
-// (the tree it would judge is HEAD's own).
-func (w *Writer) unchangedFile(filePath string, existing []byte, content string) bool {
-	return existing != nil && string(existing) == content && w.headHolds(filePath, existing)
+// none) and to base's blob of it (base: the judged base, HEAD). The
+// serving file alone can hold bytes HEAD does not — an uncommitted edit
+// from outside, or a write whose file landed and whose commit failed
+// (index.lock) — and answering success for those would report a body that
+// is never committed. When it holds, the write is a success with nothing
+// committed and the generator not asked (the tree it would judge is
+// base's own). The batch's no-op rule is the same one (applyBatchOp).
+func (w *Writer) unchangedFile(base, filePath string, existing []byte, content string) bool {
+	return existing != nil && string(existing) == content && w.revHolds(w.gitDir, base, filePath, existing)
 }
 
-// headHolds reports whether HEAD's blob of filePath is exactly content
-// (false when HEAD has no such file or it cannot be read).
-func (w *Writer) headHolds(filePath string, content []byte) bool {
-	rel, err := filepath.Rel(w.gitDir, filePath)
+// revHolds reports whether rev's blob of filePath (a path in the worktree
+// at dir) is exactly content (false when rev has no such file or it cannot
+// be read).
+func (w *Writer) revHolds(dir, rev, filePath string, content []byte) bool {
+	rel, err := filepath.Rel(dir, filePath)
 	if err != nil {
 		return false
 	}
-	blob, err := w.gitOutput(w.gitDir, "cat-file", "blob", "HEAD:./"+filepath.ToSlash(rel))
+	blob, err := w.gitOutput(dir, "cat-file", "blob", rev+":./"+filepath.ToSlash(rel))
 	return err == nil && bytes.Equal(blob, content)
 }

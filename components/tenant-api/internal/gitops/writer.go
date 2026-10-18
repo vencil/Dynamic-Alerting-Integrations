@@ -533,12 +533,15 @@ type Writer struct {
 	// land. Always nil in production.
 	beforeCASAdvance func()
 
-	// beforeBaseSample is a TEST-ONLY seam (#1535 item 6, measurement):
-	// validateTenantFile calls it, when non-nil, right before it samples
-	// HEAD as the judged base — after the single-tenant write read the
-	// tenant file (base_hash precondition, merge base). Always nil in
+	// afterBaseSample and afterTenantRead are TEST-ONLY seams (#1535 item
+	// 6): sampleJudgedBase calls afterBaseSample, when non-nil, right after
+	// it sampled HEAD as the judged base and before the write reads the
+	// tenant file; validateTenantFile calls afterTenantRead, when non-nil,
+	// after the reads (base_hash precondition, merge base) and before the
+	// generator judges — where HEAD used to be sampled. Always nil in
 	// production.
-	beforeBaseSample func()
+	afterBaseSample func()
+	afterTenantRead func()
 
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
@@ -817,12 +820,14 @@ func (w *Writer) gitOutputEnv(dir string, env []string, args ...string) ([]byte,
 // Flow (steps 6–9 live in commitFileChange):
 //  1. Pre-flight: validateBodyOnly — body-shaped defects only, no tree read
 //  2. Admission (single-writer token), then lock the tree and, before any
-//     read of it, leave a stranded PR branch (lockTreeOnBase, #1723)
+//     read of it, leave a stranded PR branch (lockTreeOnBase, #1723); then
+//     sample HEAD as the judged base, before any read of the tenant file
+//     (sampleJudgedBase, #1535 item 6)
 //  3. Resolve the tenant's file, under the lock (#1673 / #2078)
 //  4. WriteIfUnchanged only: base-hash precondition on that file
 //  5. validate, under the lock — the authoritative verdict and the
-//     notices returned (#1681); then the generator's verdict on HEAD
-//     (validateTenantFile, #2903 — required, #1535)
+//     notices returned (#1681); then the generator's verdict on the judged
+//     base (validateTenantFile, #2903 — required, #1535)
 //  6. Check HEAD is still the judged base
 //  7. Write the file resolved in step 3
 //  8. Commit that path alone onto the judged base from a temporary index
@@ -908,6 +913,13 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	}
 	defer w.unlockTree()
 
+	// #1535 item 6: the judged base is sampled BEFORE the tenant file is
+	// read (the precondition, resolvePut) — see sampleJudgedBase.
+	judgedBase, err := w.sampleJudgedBase()
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 3: AUTHORITATIVE resolve + validate, under the lock, against the
 	// tree the commit below lands on. Every in-process write that changes
 	// conf.d holds w.mu, which this goroutine now holds until the commit — so
@@ -953,15 +965,14 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	filePath, existing, content, notices := res.FilePath, res.Existing, res.Content, res.Notices
 
 	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
-	if w.unchangedFile(filePath, existing, content) {
+	if w.unchangedFile(judgedBase, filePath, existing, content) {
 		return notices, nil
 	}
 
-	// #2903 (ADR-036 §4): the generator judges HEAD with this content written
-	// over the file, still under the lock — nothing is written before it
-	// passes.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
-	if err != nil {
+	// #2903 (ADR-036 §4): the generator judges the judged base with this
+	// content written over the file, still under the lock — nothing is
+	// written before it passes.
+	if err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content)); err != nil {
 		return nil, err
 	}
 
@@ -1444,6 +1455,28 @@ func (w *Writer) readMergeValidateIn(configDir, tenantID, filePath string, merge
 	return content, existing, notices, nil
 }
 
+// mergeNoOpContent decides a merge that returned ErrMergeNoOp on existing —
+// the file at filePath as read in the worktree at dir (configDir: its
+// conf.d) — against base, the commit the write lands on (#1535 item 6).
+// The rule is unchangedFile's: nothing is written only when base holds
+// those bytes. Otherwise the worktree holds what base does not (an
+// uncommitted edit from outside, a write whose commit failed), the merge
+// judged that state, and the caller writes existing as the new content:
+// it is validated here as a write's content is, and its notices replace
+// the no-op's. A blank existing stays a no-op whatever base holds: the
+// commit paths write content, they do not delete a file.
+func (w *Writer) mergeNoOpContent(configDir, dir, base, tenantID, filePath string, existing []byte, notices []string, names TenantNames) (content string, out []string, noop bool, err error) {
+	if len(bytes.TrimSpace(existing)) == 0 || w.revHolds(dir, base, filePath, existing) {
+		return "", notices, true, nil
+	}
+	content = string(existing)
+	errs, out := validateReplacing(configDir, tenantID, filePath, content, false, names)
+	if len(errs) > 0 {
+		return "", nil, false, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+	}
+	return content, out, false, nil
+}
+
 // WriteMerged persists a tenant config whose content is computed, UNDER the
 // single-writer lock, from the current on-disk file. This is the race-free
 // read-merge-write the batch patch path needs (#1097): a partial patch must
@@ -1475,15 +1508,31 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	defer w.unlockTree()
 
+	// #1535 item 6: the judged base is sampled BEFORE the merge base is
+	// read — see sampleJudgedBase.
+	judgedBase, err := w.sampleJudgedBase()
+	if err != nil {
+		return nil, err
+	}
+
 	// #1673: one resolution for the whole flow — the file we read below and the
 	// file we commit at the end must be the same one.
 	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
 		return nil, err
 	}
-	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge, TenantNamesOf(ctx))
+	names := TenantNamesOf(ctx)
+	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge, names)
 	if errors.Is(err, ErrMergeNoOp) {
-		return notices, nil // B2: the merge changes nothing — success, nothing written, notices kept
+		// B2: the merge changes nothing in the serving file. A success with
+		// nothing written only when the judged base holds that file too
+		// (#1535 item 6); otherwise the serving bytes are the state the
+		// caller asked for, and they are committed like any write.
+		var noop bool
+		content, notices, noop, err = w.mergeNoOpContent(w.configDir, w.gitDir, judgedBase, tenantID, filePath, existing, notices, names)
+		if noop {
+			return notices, nil
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -1494,12 +1543,11 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	// generator need not be asked about HEAD's own tree. Treat an unchanged
 	// merge as success (#1097 self-review). `existing == nil` (a new tenant)
 	// never matches, so it still commits the new file.
-	if w.unchangedFile(filePath, existing, content) {
+	if w.unchangedFile(judgedBase, filePath, existing, content) {
 		return notices, nil
 	}
 	// #2903: the generator's verdict, under the lock, before the commit.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
-	if err != nil {
+	if err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content)); err != nil {
 		return nil, err
 	}
 	if err := w.commitFileChange(

@@ -251,7 +251,9 @@ func TestWrite_RejectsFullConfigBody(t *testing.T) {
 // still pass). The file must not be written on rejection (no partial commit).
 func TestWrite_RejectsBadVersionThreshold(t *testing.T) {
 	t.Parallel()
-	dir := pilotDefaultsDir(t)
+	// A repository: the write samples HEAD as its judged base before it reads
+	// or validates anything (#1535 item 6), so a plain directory fails there.
+	dir := initRepoWithDefaults(t)
 	w := newTestWriter(dir, dir)
 
 	// version="V2" violates the ^[a-z0-9]... charset → validate() warns →
