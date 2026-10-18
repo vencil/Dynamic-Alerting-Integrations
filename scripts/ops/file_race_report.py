@@ -589,13 +589,19 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
         steps.append("Read the build error in the artifact; no test ran.")
     if frag.get("timed_out"):
         pkgs = ", ".join(f"`{tp.get('package')}`" for tp in timeout_pkgs) or "a package"
-        nature.append(
+        para = (
             f"**Package timeout.** {pkgs} ran past `go test`'s `-timeout` and the test "
-            "binary was killed with `panic: test timed out`. No test reported a failure "
-            "for it — this is a time budget being exceeded, not a failing assertion, and "
-            "NOT evidence of leaked state between repetitions. Do not bisect `-count` "
-            "to look for an isolation bug."
+            "binary was killed with `panic: test timed out`. The timeout itself is a time "
+            "budget being exceeded, not a failing assertion."
         )
+        # Only when nothing else failed: a run can time out in one package while a
+        # test fails in another (or in an earlier repetition), and then the
+        # isolation paragraph below applies — this one must not contradict it.
+        if not frag.get("failed_tests"):
+            para += (" No test reported a failure, so it is NOT evidence of leaked state "
+                     "between repetitions. Do not bisect `-count` to look for an "
+                     "isolation bug.")
+        nature.append(para)
         steps.append(
             f"Find where the time went: in the `race-raw-{module}` artifact, compare "
             "the package's `Elapsed` with the `-timeout` above, and rank that package's "

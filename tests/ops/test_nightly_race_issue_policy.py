@@ -487,6 +487,20 @@ def test_isolation_narrative_appears_only_with_failed_tests() -> None:
     )
 
 
+def test_timeout_with_failed_tests_does_not_contradict_itself() -> None:
+    """One package can hit `-timeout` while a test fails elsewhere. The body
+    then carries both diagnoses, so the timeout one must not deny the other."""
+    frag = {**_timeout_frag(), "failed_tests": ["TestElsewhere"]}
+    body = _body(frag)
+    problems = []
+    if ISOLATION_STEP not in body:
+        problems.append("the failing test lost its isolation triage step")
+    for phrase in ("Do not bisect", "No test reported a failure"):
+        if phrase in body:
+            problems.append(f"the timeout paragraph still says {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
 def test_timed_out_round_trips_and_old_blocks_still_parse() -> None:
     restored = parse_state(render_state(_state(timed_out=1)))
     assert restored is not None and restored["timed_out"] == 1
