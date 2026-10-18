@@ -27,7 +27,7 @@ import (
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/token"
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/platform"
 )
@@ -142,7 +142,7 @@ func TestFederationStateWrites_IgnoreTheGitTree(t *testing.T) {
 				st := newDirState(t, t.TempDir())
 				return &handler.Deps{
 					ConfigDir:        dir,
-					Writer:           gitops.NewWriter(dir, ""),
+					Writer:           gitopstest.NewWriter(dir, ""),
 					State:            st,
 					FederationPolicy: fedpolicy.NewManager(st),
 					RBAC:             newRBACManager(t, platformAdminRBAC),
@@ -158,7 +158,7 @@ func TestFederationStateWrites_IgnoreTheGitTree(t *testing.T) {
 			deps: func(t *testing.T, dir string) *handler.Deps {
 				return &handler.Deps{
 					ConfigDir: dir,
-					Writer:    gitops.NewWriter(dir, ""),
+					Writer:    gitopstest.NewWriter(dir, ""),
 					State:     newDirState(t, t.TempDir()),
 					FederationPolicy: fedpolicy.NewManagerForTest(&fedpolicy.Config{
 						Whitelist: []fedpolicy.WhitelistEntry{{Metric: "mysql_up"}},
@@ -177,7 +177,7 @@ func TestFederationStateWrites_IgnoreTheGitTree(t *testing.T) {
 				st := newDirState(t, t.TempDir())
 				return &handler.Deps{
 					ConfigDir:  dir,
-					Writer:     gitops.NewWriter(dir, ""),
+					Writer:     gitopstest.NewWriter(dir, ""),
 					State:      st,
 					RBAC:       newRBACManager(t, platformAdminRBAC),
 					Federation: newStrandedTokenManager(t),
@@ -195,7 +195,7 @@ func TestFederationStateWrites_IgnoreTheGitTree(t *testing.T) {
 				st := newDirState(t, t.TempDir())
 				return &handler.Deps{
 					ConfigDir:  dir,
-					Writer:     gitops.NewWriter(dir, ""),
+					Writer:     gitopstest.NewWriter(dir, ""),
 					State:      st,
 					RBAC:       newRBACManager(t, platformAdminRBAC),
 					Federation: newStrandedTokenManager(t),

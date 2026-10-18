@@ -47,7 +47,7 @@ func seedTenantRepo(t *testing.T) string {
 // read-merge-write runs under the lock and preserves un-patched keys + comments.
 func TestWriteMerged_PreservesKeys(t *testing.T) {
 	dir := seedTenantRepo(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	merge := func(existing []byte) (string, error) {
 		return string(existing) + "    _silent_mode: warning\n", nil
 	}
@@ -68,7 +68,7 @@ func TestWriteMerged_PreservesKeys(t *testing.T) {
 // TestWriteMerged_IdempotentNoOp_NotConflict guards the #1097 self-review fix:
 // a merge that changes nothing (an idempotent patch / a client retry after a
 // succeeded write) must be a no-op SUCCESS, not a spurious ErrConflict. The
-// pre-fix bug only fired when HEAD~1 existed (gitCommit no-ops → HEAD unmoved →
+// pre-fix bug only fired when HEAD~1 existed (the commit no-ops → HEAD unmoved →
 // commitFileChange's parent check misfired), so the repo needs >=2 commits.
 func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
 	dir := seedTenantRepo(t) // commit #1
@@ -79,7 +79,7 @@ func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
 	gitRun(t, dir, "add", ".")
 	gitRun(t, dir, "commit", "-m", "second") // commit #2 → HEAD~1 exists
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head0 := gitOut(t, dir, "rev-parse", "HEAD")
 	// Idempotent merge: return the file verbatim (byte-identical → nothing staged).
 	noop := func(existing []byte) (string, error) { return string(existing), nil }
@@ -97,7 +97,7 @@ func TestWriteMerged_IdempotentNoOp_NotConflict(t *testing.T) {
 // rather than pushing an empty branch / opening a change-free PR.
 func TestWritePRBatch_AllNoOp_ReturnsErrNoChanges(t *testing.T) {
 	dir := seedTenantRepo(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	noop := func(existing []byte) (string, error) { return string(existing), nil } // identity
 	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "db-a", Merge: noop}}, "op@example.com")
 	if !errors.Is(err, ErrNoChanges) {
@@ -111,7 +111,7 @@ func TestWritePRBatch_AllNoOp_ReturnsErrNoChanges(t *testing.T) {
 
 func TestWritePRBatch_MergesPreservingKeys(t *testing.T) {
 	dir := seedTenantRepo(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	// Exercise the writer plumbing (read current file under lock → merge →
 	// validate → commit on branch). The merge is a passthrough that appends one
 	// key: if WritePRBatch failed to read+pass the current file, `existing` would

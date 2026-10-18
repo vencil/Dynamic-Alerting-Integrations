@@ -131,7 +131,7 @@ func TestWrite_DeprecatedKeyBody_CommitsWithNotices(t *testing.T) {
 	t.Parallel()
 	dir := newNameDefaultsDir(t)
 	initGitRepo(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	body := "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"
 	notices, err := w.Write(context.Background(), "db-a", "op@example.com", body)
@@ -150,7 +150,7 @@ func TestWrite_DeprecatedKeyBody_CommitsWithNotices(t *testing.T) {
 func TestWriteMerged_DeprecatedKeyPatch_ReturnsNotices(t *testing.T) {
 	dir := newNameDefaultsDir(t)
 	initGitRepo(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	body := "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"
 	merge := func([]byte) (string, error) { return body, nil }
@@ -192,7 +192,7 @@ func TestWritePR_DeprecatedKeyBody_ResultCarriesNotices(t *testing.T) {
 	t.Parallel()
 	dir := newNameDefaultsDir(t)
 	initMainBranchRepo(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	res, err := w.WritePR(context.Background(), "db-a", "op@example.com",
 		"tenants:\n  db-a:\n    mysql_cpu: \"70\"\n")
@@ -206,7 +206,7 @@ func TestWritePRBatch_DeprecatedKeyOps_AggregatesNotices(t *testing.T) {
 	t.Parallel()
 	dir := newNameDefaultsDir(t)
 	initMainBranchRepo(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	ops := []PRBatchOp{{
 		TenantID: "db-a",
@@ -237,7 +237,7 @@ func TestWritePRBatch_AllNoOpDeprecatedOps_PreservesNotices(t *testing.T) {
 		t.Fatalf("seed db-a.yaml: %v", err)
 	}
 	initMainBranchRepo(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	// Identity merge: byte-identical to disk → every op is a no-op.
 	ops := []PRBatchOp{{

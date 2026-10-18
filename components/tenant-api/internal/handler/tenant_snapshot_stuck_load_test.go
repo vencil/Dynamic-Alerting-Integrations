@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 )
 
 // S4: a load that never returns (a hung mount) holds the tree lock only
@@ -16,7 +16,7 @@ import (
 func TestTenantSnapshots_BlockedLoadReleasesTheTreeLock(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
-	w := gitops.NewWriter(work, work)
+	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false)
 	const deadline = time.Second
 	cache.loadDeadline = deadline

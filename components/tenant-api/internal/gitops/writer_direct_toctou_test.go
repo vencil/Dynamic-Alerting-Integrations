@@ -108,7 +108,7 @@ const sharedMvX = "tenants:\n" +
 // the body would otherwise overwrite mv-y's section.
 func TestDirectWrite_GitManagedIsJudgedUnderTheLock(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": tenantBody("mv-x")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	release := holdExecToken(t, w)
 
 	done := make(chan error, 1)
@@ -143,7 +143,7 @@ func TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree(t *testing.T) {
 	// tenant's own file and goes through.
 	t.Run("queued while the operator splits the shared file", func(t *testing.T) {
 		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": sharedMvX})
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		release := holdExecToken(t, w)
 		done := make(chan error, 1)
 		body := "tenants:\n  mv-x:\n    _silent_mode: \"critical\"\n"
@@ -174,7 +174,7 @@ func TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree(t *testing.T) {
 	// seen.
 	t.Run("stale base hears ErrPrecondition", func(t *testing.T) {
 		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": tenantBody("mv-x")})
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		ctx := context.Background()
 		staleHash := cfg.ComputeSourceHash([]byte(tenantBody("mv-x")))
 		changed := "tenants:\n  mv-x:\n    _silent_mode: \"disable\"\n"
@@ -197,7 +197,7 @@ func TestDirectWrite_PreflightDoesNotRefuseOnAStaleTree(t *testing.T) {
 	// a file tenant-api does not show.
 	t.Run("git-managed is judged before the base hash", func(t *testing.T) {
 		dir := seedTreeRepo(t, map[string]string{"mv-x.yaml": sharedMvX})
-		w := NewWriter(dir, dir)
+		w := newTestWriter(dir, dir)
 		body := "tenants:\n  mv-x:\n    _silent_mode: \"critical\"\n"
 		for _, hash := range []string{cfg.ComputeSourceHash([]byte(sharedMvX)), "0000000000000000"} {
 			_, err := w.WriteIfUnchanged(context.Background(), "mv-x", "t2@example.com", body, hash)

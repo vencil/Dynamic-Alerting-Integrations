@@ -82,7 +82,7 @@ func assertBaseRestoreError(t *testing.T, err error, branchPrefix string) {
 func TestWritePR_BaseRestoreRetriesOnce(t *testing.T) {
 	dir := initRepoOnMain(t)
 	addBareRemote(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	hook, seen, _ := lockIndexOnAttempts(t, dir, 1)
 	w.beforeBaseRestore = hook
 
@@ -103,7 +103,7 @@ func TestWritePR_BaseRestoreRetriesOnce(t *testing.T) {
 func TestWritePR_BaseRestoreFailsTwiceReturnsError(t *testing.T) {
 	dir := initRepoOnMain(t)
 	addBareRemote(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	hook, seen, unlock := lockIndexOnAttempts(t, dir, 1, 2)
 	w.beforeBaseRestore = hook
 
@@ -147,7 +147,7 @@ func TestWritePR_BaseRestoreFailsTwiceReturnsError(t *testing.T) {
 func TestWritePRBatch_NeverLeavesTheServingTreeOnBase(t *testing.T) {
 	dir := seedTenantRepo(t)
 	addBareRemote(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	hook, seen, unlock := lockIndexOnAttempts(t, dir, 1, 2)
 	defer unlock()
 	w.beforeBaseRestore = hook

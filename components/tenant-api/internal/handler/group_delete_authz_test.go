@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -64,7 +64,7 @@ func TestDeleteGroup_AuthorizesStoredMembersNotSnapshot(t *testing.T) {
 	writeAndCommit("groups:\n  g-x:\n    label: gx\n    members:\n      - t-owned\n      - t-foreign\n", "drift")
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{State: mustDirState(configDir), Writer: gitops.NewWriter(configDir, configDir), Groups: gm, RBAC: rbacMgr}
+	d := &Deps{State: mustDirState(configDir), Writer: gitopstest.NewWriter(configDir, configDir), Groups: gm, RBAC: rbacMgr}
 	h := wrapWithRBACMiddleware(DeleteGroup(d), rbacMgr, rbac.PermRead, nil)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(nil))
@@ -112,7 +112,7 @@ func TestDeleteGroup_StoredMembersAllWritableDeletes(t *testing.T) {
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
 	d := &Deps{State: mustDirState(configDir),
-		Writer: gitops.NewWriter(configDir, configDir),
+		Writer: gitopstest.NewWriter(configDir, configDir),
 		Groups: groups.NewDirManager(configDir),
 		RBAC:   rbacMgr,
 	}

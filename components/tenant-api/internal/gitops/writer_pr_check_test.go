@@ -62,7 +62,7 @@ func TestWritePRChecked_CheckSeesFreshBaseAndRefusalDropsBranch(t *testing.T) {
 	mainBefore := gitOut(t, remote, "rev-parse", "main")
 	refused := errors.New("refused by check")
 	var sawMarker, sawBody bool
-	_, err := NewWriter(dir, dir).WritePRChecked(context.Background(), "db-a", "bob@example.com", validTenantYAML,
+	_, err := newTestWriter(dir, dir).WritePRChecked(context.Background(), "db-a", "bob@example.com", validTenantYAML,
 		func(configDir string) error {
 			_, statErr := os.Stat(filepath.Join(configDir, "_marker.yaml"))
 			sawMarker = statErr == nil
@@ -96,7 +96,7 @@ func TestWritePRChecked_CheckSeesFreshBaseAndRefusalDropsBranch(t *testing.T) {
 func TestWritePRChecked_PassingCheckWrites(t *testing.T) {
 	dir, remote := staleClone(t)
 	calls := 0
-	res, err := NewWriter(dir, dir).WritePRChecked(context.Background(), "db-a", "bob@example.com", validTenantYAML,
+	res, err := newTestWriter(dir, dir).WritePRChecked(context.Background(), "db-a", "bob@example.com", validTenantYAML,
 		func(string) error { calls++; return nil })
 	if err != nil || calls != 1 {
 		t.Fatalf("err = %v, check calls = %d; want nil and 1", err, calls)

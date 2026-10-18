@@ -148,7 +148,7 @@ func TestWritePR_ReValidatesAgainstTheFreshBase(t *testing.T) {
 			gitRun(t, authorDir, "push", "origin", "main")
 
 			// The body still declares `other` — accepted against the stale base.
-			res, err := NewWriter(dir, dir).WritePR(
+			res, err := newTestWriter(dir, dir).WritePR(
 				context.Background(), "db-a", "bob@example.com", body)
 
 			if tc.wantErr {
