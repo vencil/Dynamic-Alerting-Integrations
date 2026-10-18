@@ -634,8 +634,9 @@ func main() {
 	// tenant_api_config_reload_failures_total{component} (rate) AND
 	// tenant_api_config_last_reload_successful{component} (current state). Both
 	// reload paths are silent and both are observed: the periodic WatchLoop only
-	// WARN-logs, and the post-write Reload returns an error that every handler
-	// discards (`_ = mgr.Reload()`) before answering 200 OK. MUST be installed
+	// WARN-logs, and the post-write Reload returns an error that the handlers'
+	// state write discards (`_ = mgr.Reload()`, handler/state.go) before
+	// answering. MUST be installed
 	// BEFORE the WatchLoop goroutines below start AND before the server serves
 	// (handlers reach the observer via Reload) — both hold at this point in startup.
 	reloadObs := handler.NewConfigReloadObserver()

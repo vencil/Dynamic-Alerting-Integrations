@@ -100,9 +100,9 @@ type PutCustomAlertsResponse struct {
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
 // @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_REJECTED (#2903) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
-// @Failure     500   {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
+// @Failure     500   {object} ErrorResponse "Internal error: code INTERNAL_ERROR, among others when the commit or the file write fails (#1535: a fault of the server, not of the body; the detail is in the server log under request_id); or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold — a FIFO, socket or device named like a config file, a file whose read fails, a sub-directory that cannot be listed, a failed stat that is not an unresolvable link — other than the written tenant file; it is fixed on the server or its volume (or by resetting the copy from git), not by a write; wins over TENANT_TREE_UNREADABLE; nothing written; entry names disclosed as for TENANT_TREE_UNREADABLE"
 // @Failure     501   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written"
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before the write finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying"
 // @Router      /api/v1/tenants/{id}/custom-alerts [put]
 func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +363,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 				return
 			}
 			// #1723: the tree was on a PR branch and nothing was written —
-			// retryable, not the 400 fallback below.
+			// retryable, not the fallback below.
 			if errors.Is(err, gitops.ErrTreeNotOnBase) {
 				WriteTreeNotOnBase(w, r, err)
 				return
@@ -403,13 +403,12 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			if writeTenantPlacementError(w, r, d, err) {
 				return
 			}
-			// #1700: as PutTenant's fallback — the error's own text only
-			// when it is about the request. #3054: otherwise the failure is
-			// the server's, whatever the status.
-			if !writeErrorIsForClient(err) {
+			// #1700 / #1535: as PutTenant's fallback — 400 with the error's
+			// own text only when it is about the request, else the server's
+			// 500 (#3054: counted as an error).
+			if writeTenantWriteFailure(w, r, err) {
 				attempt.fault = true
 			}
-			WriteJSONError(w, r, http.StatusBadRequest, writeErrorText(r, err))
 			return
 		}
 
