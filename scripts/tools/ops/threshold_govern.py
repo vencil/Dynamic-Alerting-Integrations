@@ -27,8 +27,10 @@ the tenant-api (single-writer, ADR-023) instead of a Slack nudge nobody acts on.
   - **安全預設 dry-run**：不帶 ``--apply`` 只印出「會開哪些 PR」，**不發任何寫入**。
 
 讀-改-寫的正確性（重要）：本工具 GET 當前完整租戶 YAML → 只 surgical 取代被推薦的
-threshold 值行（保留註解 / 縮排 / 其餘行 byte-identical）→ parse-before/after 驗證
-「只有目標 keys 變動」→ 才 PUT。產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
+threshold 值行（保留註解 / 縮排 / 其餘行 byte-identical）→ 以 ``da-guard parse-tree``
+（ADR-036 §2）讀改前、改後兩份文字，確認「只有目標 keys 變成推薦值」（其餘鍵、結構、每個
+純量的原文／型別／值都不變；改前那份 parse-tree 讀不了、或租戶檔路徑沒有讀取端也拒絕）→
+才 PUT。不通過的租戶記為 ``error``、不送 PUT；沒有可用的 da-guard 結束碼 2。產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
 自 #3064 起 tenant-api 只寫「API 管理」的租戶：租戶檔只宣告它自己，body 整檔逐位元組
 寫入。共用檔等其他形狀的租戶由 git 管理：GET 不給 ``raw_yaml``（本工具記為 error、
 不寫入），PUT 回 409 ``TENANT_GIT_MANAGED``（不是 pending-PR 的 409，不當成 dedup）。
@@ -89,6 +91,7 @@ from _lib_python import (  # noqa: E402
     positive_seconds,
 )
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
+from _lib_parse_cache import exit_on_parse_tree_error  # noqa: E402  (ADR-036 §2, #2906)
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
@@ -545,65 +548,60 @@ def apply_threshold_changes(
 
 
 def verify_only_changed(
-    old_yaml: str, new_yaml: str, tenant: str, expected: dict[str, str]
+    old_yaml: str, new_yaml: str, tenant: str, expected: dict[str, str],
+    *, config_dir: Optional[str] = None, rel: str = "",
 ) -> Optional[str]:
-    """Parse both docs and confirm ONLY ``expected`` keys changed for ``tenant``.
+    """Confirm the edit changes ONLY ``expected`` keys of ``tenant``, as
+    ``da-guard parse-tree`` reads both texts (ADR-036 §2, #2906).
 
-    Returns ``None`` if safe, else a human error string. This is the correctness
-    gate: even if the surgical edit had a bug, a mismatch here aborts the write so
-    a corrupted file is never PUT. ``expected`` maps key → conf.d literal (e.g.
-    ``'"45"'``); the comparison is against the PARSED value (so ``"45"`` → ``45``
-    matches whether quoted or not).
+    Returns ``None`` if safe, else a human error string. This is the
+    correctness gate: even if the surgical edit had a bug, a mismatch here
+    aborts the write so a corrupted file is never PUT. ``expected`` maps key
+    → conf.d literal (``'"45"'``, a double-quoted string).
 
-    yaml is imported lazily (the dry-run path needs none of this).
+    The old text is read by parse-tree as the file at *rel* of *config_dir*
+    (the tenant's own file, ``<tenant>.yaml`` when unknown; a missing
+    *config_dir* is an empty tree); the new text must read back as exactly
+    that content with each expected key set to its string — every other key,
+    the structure, and each scalar's source text, tag and value unchanged.
+    An old text parse-tree cannot read (a duplicate key, a syntax error, …)
+    or a path no reader reads is refused too. No usable da-guard raises
+    ``_lib_parse_tree.ParseTreeError``.
     """
-    import yaml  # lazy: keeps `--dry-run` import-light and host-portable
-    from _lib_io import strict_load_exporter_keys
+    import tempfile
 
-    try:
-        # Strict (#2231): a key written twice — the edited one or any other —
-        # makes a file the exporter drops whole. Last-wins parsing saw two
-        # equal docs and let it be PUT; DuplicateKeyError is a YAMLError, so
-        # it takes the "did not parse" refusal below.
-        # #2216: tenant ids are the keys' source text, as the exporter reads
-        # them — `010:` is tenant "010", not 8, so `tenant` is found.
-        old_doc = strict_load_exporter_keys(old_yaml) or {}
-        new_doc = strict_load_exporter_keys(new_yaml) or {}
-    except yaml.YAMLError as exc:
-        return f"post-edit YAML did not parse: {exc}"
+    import _lib_parse_tree  # lazy: keeps `--dry-run` import-light
+    import _lib_write_check
 
-    # Harden the safety net itself: a bug that dropped the `tenants:` wrapper or
-    # the tenant section would otherwise resolve to {} on both sides and slip
-    # through. Require the tenant to still be present after the edit.
-    new_tenants = new_doc.get("tenants", {}) or {}
-    if tenant not in new_tenants:
-        return f"tenant {tenant!r} vanished from config after edit"
-    old = (old_doc.get("tenants", {}) or {}).get(tenant, {}) or {}
-    new = new_tenants.get(tenant, {}) or {}
-
-    if set(old) != set(new):
-        added = sorted(set(new) - set(old))
-        removed = sorted(set(old) - set(new))
-        return f"key set changed (added={added}, removed={removed})"
-
-    def _norm(v: Any) -> str:
-        return str(v).strip()
-
-    expected_parsed = {}
+    if config_dir is None:
+        with tempfile.TemporaryDirectory(prefix="threshold-govern-") as empty:
+            return verify_only_changed(old_yaml, new_yaml, tenant, expected,
+                                       config_dir=empty, rel=rel)
+    rel = rel or f"{tenant}.yaml"
+    root = config_dir
+    want: dict[str, Any] = {}
     for key, literal in expected.items():
-        # The literal is a quoted scalar; strip the quotes for comparison.
-        expected_parsed[key] = literal.strip().strip('"')
+        text = literal.strip()
+        if not (len(text) >= 2 and text[0] == text[-1] == '"'):
+            return f"{key}: the literal {literal!r} is not a double-quoted string"
+        want[key] = _lib_write_check.scalar(text[1:-1])
+    try:
+        old = _lib_write_check.original(root, rel, old_yaml.encode("utf-8"))
+        tenants = old.get("tenants")
+        block = (tenants.get(tenant) if isinstance(tenants, dict)
+                 and not _lib_parse_tree.is_scalar(tenants) else None)
+        if not isinstance(block, dict) or _lib_parse_tree.is_scalar(block):
+            return f"tenant {tenant!r} has no mapping block in the live config"
+        missing = sorted(set(want) - set(block))
+        if missing:
+            return f"keys not in the live config: {missing}"
 
-    for key in old:
-        if key in expected:
-            if _norm(new[key]) != expected_parsed[key]:
-                return (
-                    f"{key}: expected {expected_parsed[key]!r}, "
-                    f"got {new[key]!r} after edit"
-                )
-        else:
-            if _norm(new[key]) != _norm(old[key]):
-                return f"{key}: changed unexpectedly ({old[key]!r} → {new[key]!r})"
+        def _change(tree: Any) -> None:
+            tree["tenants"][tenant].update(want)
+        _lib_write_check.confirm(root, rel, new_yaml,
+                                 _lib_write_check.with_change(old, _change))
+    except _lib_write_check.WriteRefused as exc:
+        return str(exc)
     return None
 
 
@@ -753,7 +751,21 @@ def open_governance_pr(
             plan.tenant, "error", keys,
             message=f"keys not found in live config: {unapplied}",
         )
-    verify_err = verify_only_changed(raw_yaml, merged, plan.tenant, new_values)
+    import _lib_parse_tree  # lazy, as in verify_only_changed
+    try:
+        verify_err = verify_only_changed(raw_yaml, merged, plan.tenant, new_values,
+                                         config_dir=args.config_dir,
+                                         rel=plan.source_file)
+    except _lib_parse_tree.BinaryMissing:
+        raise  # no da-guard at all: the whole run is rc 2 (main's decorator)
+    except _lib_parse_tree.ParseTreeError as exc:
+        # A da-guard that failed on THIS tenant (a timeout, the memory
+        # limit, an unexpected exit): this tenant's error, the run goes on
+        # and its summary still lists the PRs already opened.
+        return TenantOutcome(
+            plan.tenant, "error", keys,
+            message=f"refused to PUT (verify could not run): {exc}",
+        )
     if verify_err:
         return TenantOutcome(
             plan.tenant, "error", keys,
@@ -1178,6 +1190,7 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
+@exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT parse-tree check has no da-guard → rc 2
 @recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(

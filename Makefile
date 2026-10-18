@@ -594,7 +594,10 @@ assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assem
 	@mkdir -p .build/config-dir
 	@# #2476: --render-cr 以 da-crdecode（Kubernetes client 的 YAML→JSON）解碼 CR
 	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(CURDIR)/.build/da-crdecode ./cmd/da-crdecode
-	@DA_CRDECODE_BINARY=$(CURDIR)/.build/da-crdecode python3 ./scripts/tools/ops/da_assembler.py \
+	@# ADR-036 §2（#2906）：寫入前以 da-guard parse-tree 確認渲染結果
+	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(CURDIR)/.build/da-guard ./cmd/da-guard
+	@DA_CRDECODE_BINARY=$(CURDIR)/.build/da-crdecode DA_GUARD_BINARY=$(CURDIR)/.build/da-guard \
+		python3 ./scripts/tools/ops/da_assembler.py \
 		--render-cr $(CR) --config-dir .build/config-dir
 	@echo "✓ rendered to .build/config-dir/"
 

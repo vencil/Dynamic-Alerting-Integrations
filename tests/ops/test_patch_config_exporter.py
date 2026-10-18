@@ -189,8 +189,10 @@ def test_valid_patch_is_verified_and_served(cluster):
 
 
 @needs_go
-def test_anchor_shared_block_rolls_back_bytes_and_values(cluster):
+def test_anchor_shared_block_is_refused_before_the_write(cluster):
     # #1950 列 9：legacy config.yaml 的 anchor 共用區塊，改 t-a 會連帶改 t-b。
+    # ADR-036 §2（#2906）起寫入前的 parse-tree 確認讀回 t-b 也變了，整份拒寫
+    # （rc 2，一個位元組都不送）；先前要寫入後由 exporter 驗收、再回滾。
     # dimensional key：-config-dir 會剝掉 legacy defaults（列 6），base row 不發。
     old = ('tenants:\n  t-a: &shared\n    mysql_connections{db="x"}: "50"\n'
            '  t-b: *shared\n')
@@ -199,8 +201,8 @@ def test_anchor_shared_block_rolls_back_bytes_and_values(cluster):
     assert any('tenant="t-b"' in s and s.endswith(" 50") for s in before), before
 
     r = c.run("t-a", 'mysql_connections{db="x"}', "60")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert 'tenant="t-b"' in r.stderr and "another tenant" in r.stderr
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "content_differs" in r.stderr and "tenants.t-b" in r.stderr, r.stderr
     assert (c.dir / "config.yaml").read_text(encoding="utf-8") == old
     assert c.user_series() == before
 
