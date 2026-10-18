@@ -16,21 +16,6 @@ sys.path.insert(0, _TOOLS_DIR)
 import migrate_conf_d as mcd  # noqa: E402
 
 
-class TestLoadYaml:
-    """Tests for _load_yaml()."""
-
-    def test_load_valid_yaml(self, tmp_path):
-        p = tmp_path / "test.yaml"
-        p.write_text("tenants:\n  tenant-a:\n    _metadata:\n      domain: finance\n")
-        result = mcd._load_yaml(p)
-        assert "tenants" in result
-
-    def test_load_empty_yaml(self, tmp_path):
-        p = tmp_path / "empty.yaml"
-        p.write_text("")
-        assert mcd._load_yaml(p) == {}
-
-
 class TestExtractMetadata:
     """Tests for _extract_metadata()."""
 

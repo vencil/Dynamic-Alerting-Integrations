@@ -727,13 +727,17 @@ def test_scan_sees_the_known_population():
     a new consumer is fine (it will be judged), a smaller count means the
     scanner went blind."""
     found = {p.name for p in _tool_modules() if _scan(p).sites}
+    # deprecate_rule.py left with ADR-036 §2 (#2906, step E2): its reads are
+    # parse-tree's (`_read_yaml`, `_tree_read`); PyYAML is left only for the
+    # text of a rewrite, and `test_deprecate_rule_names_and_continues` above
+    # still pins its handling of an unreadable file.
     # check_routing_profiles.py left with ADR-036 step 4 (#2906): it reads
     # conf.d through `da-guard parse-tree` (`_lib_io.load_confd_file`); its
     # row above pins the refusal. validate_config.py's own reads moved the
     # same way; the lib load sites it keeps are guarded where they are.
     expected = {
         "analyze_rule_pack_gaps.py", "backtest_threshold.py",
-        "deprecate_rule.py", "generate_tenant_mapping_rules.py",
+        "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
         "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
         "blind_spot_discovery.py",

@@ -86,10 +86,6 @@ LENIENT_BY_DESIGN: dict[str, str] = {
     "lint/check_threshold_unit_sanity.py":
         "its conf.d trees are read by da-guard parse-tree (#2906); the lenient reads "
         "left are docs' fenced YAML and template-data's embedded examples, not a conf.d",
-    "ops/deprecate_rule.py":
-        "its verdict on a repeated key is exporter_verdicts' (compose + the shared "
-        "duplicate_in_mapping): such a tenant file is named and never rewritten — "
-        "tests/ops/test_deprecate_rule_carriers.py",
     "ops/migrate_to_operator.py":
         "parse_configmap_rules reads rule files for CRD generation, not a tenant conf.d",
 }

@@ -974,6 +974,14 @@ _READ = [
     ("tenant-set", "    t2: !!set {cpu}\n"),
 ]
 
+#: The `_REFUSED` rows whose value reaches the render as a JSON STRING: the
+#: text the dump writes is judged by the pre-write parse-tree confirmation
+#: (ADR-036 §2), not by a JSON type check.
+_REFUSED_BY_PARSE_TREE = frozenset(
+    i for i, _b in _REFUSED
+    if i.startswith("defaults-") and i not in (
+        "defaults-true", "defaults-yes", "defaults-list", "defaults-map"))
+
 #: (id, spec body below `_T1`) Kubernetes clients' YAML→JSON conversion
 #: (da-crdecode, #2476) refuses, so such a CR never reaches a cluster: an
 #: explicit `!!int` past 64 bits (go-yaml), `.inf` / `.nan` (no JSON for
@@ -1051,19 +1059,28 @@ class TestRenderCrExporterShapes:
         assert f"spec.{key} must be a mapping" in caplog.text
         assert list(out_dir.iterdir()) == []
 
-    @pytest.mark.parametrize("body", [pytest.param(b, id=i)
-                                      for i, b in _REFUSED])
+    @pytest.mark.parametrize("row, body", [pytest.param(i, b, id=i)
+                                           for i, b in _REFUSED])
     def test_a_value_the_exporter_refuses_is_caller_error(
-            self, body, tmp_path, caplog):
+            self, row, body, tmp_path, caplog):
         """F2：exporter 會因值型別整份拒收的 defaults／stateFilters → rc 2。
 
         `defaults` 是 `map[string]float64`、`state_filters` 是
-        `map[string]StateFilter`（pkg/config/types.go）。會讓本測試轉紅的
-        改動：拿掉 `_default_value_error` 或 `_state_filter_error` 的呼叫。
+        `map[string]StateFilter`（pkg/config/types.go）。JSON 型別就看得出來
+        的（布林、list、mapping、stateFilters 的形狀）由 `_default_value_error`
+        ／`_state_filter_error` 擋；JSON 是字串的 defaults 值，寫出的文字
+        yaml.v3 讀不讀成數字由寫入前的 parse-tree 確認判（ADR-036 §2，#2906），
+        先前那段 yaml.v3 數字解析的 Python 仿製已刪。會讓本測試轉紅的改動：
+        拿掉 `_default_value_error`／`_state_filter_error` 的呼叫，或拿掉
+        `reconcile_one` 寫入前的 `_lib_write_check.confirm`。
         """
         cr_path, out_dir = _write_cr(tmp_path, body)
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "the exporter skips the whole rendered file" in caplog.text
+        if row in _REFUSED_BY_PARSE_TREE:
+            assert "refusing to write (content_differs)" in caplog.text
+            assert "at defaults.cpu: expected a number (!!int or !!float)" in caplog.text
+        else:
+            assert "the exporter skips the whole rendered file" in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("body", [pytest.param(b, id=i)
@@ -1122,29 +1139,6 @@ class TestRenderCrExporterShapes:
                             str(conf)], capture_output=True, text=True,
                            encoding="utf-8", timeout=120)
         assert r.returncode == (3 if refused else 0), r.stdout + r.stderr
-
-    def test_the_integer_parse_stops_at_the_first_overflow(self):
-        """整數累加一超過 2^64 就返回，不掃到字串尾端（這支是確定性的守衛；
-        它綁在 `for c in s` 逐字元迭代的實作形狀上，改成索引或 bytes 迭代時
-        `seen` 會變 0，要一起改這支）。
-
-        先前累加 bignum 到結尾才比較，極長數字是二次方時間（30 萬位端到端
-        約 17.7 s）。2^64 有 20 位，20 個 9 已經溢位，所以只該讀 20 個字元。
-        會讓本測試轉紅的改動：拿掉 `_go_parse_uint` 迴圈內的 cutoff 檢查。
-        """
-        import da_assembler
-
-        class Counting(str):
-            seen = 0
-
-            def __iter__(self):
-                for c in str.__iter__(self):
-                    Counting.seen += 1
-                    yield c
-
-        text = Counting("9" * 1000)
-        assert da_assembler._go_parse_uint(text, 10) is None
-        assert Counting.seen == 20
 
     def test_a_very_long_number_is_refused_promptly(self, tmp_path, caplog):
         """端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收）。

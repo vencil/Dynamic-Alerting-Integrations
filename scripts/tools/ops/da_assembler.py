@@ -21,13 +21,19 @@ Prerequisites:
     named by $DA_CRDECODE_BINARY. Build it with
     `go build ./cmd/da-crdecode` in components/threshold-exporter/app
     (`make assembler-render` does).
+    Every mode also needs da-guard (ADR-036 §2, #2906): on $PATH, or named
+    by $DA_GUARD_BINARY. Before a rendered file is written, its text is
+    read back by `da-guard parse-tree` at the path it is written to; a text
+    that does not read back as the CR's content (e.g. a tenant value the
+    dump writes plain that yaml.v3 reads as a number, a `defaults` value
+    that is not a number) or a path no reader reads is not written —
+    `--render-cr` exits 2, the controller sets the CR's status to Error.
 """
 
 import argparse
 import hashlib
 import json
 import logging
-import math
 import os
 import re
 import shutil
@@ -54,6 +60,7 @@ from _lib_yaml_keys import (  # noqa: E402  (#2216, #2331)
     dump_for_rewrite,
     load_for_rewrite,
 )
+import _lib_write_check  # noqa: E402  (ADR-036 §2, #2906)
 
 try:
     import yaml
@@ -187,6 +194,14 @@ def render_cr_to_yaml(cr: dict) -> str:
     JSON-decoded data, so ``dump_for_rewrite``'s plain-text case
     (``RawPlain``) never applies here.
     """
+    header, doc = _render_doc(cr)
+    return header + dump_for_rewrite(
+        doc, default_flow_style=False, allow_unicode=True, sort_keys=False,
+    )
+
+
+def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
+    """``(header comment, document)`` `render_cr_to_yaml` dumps."""
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
 
@@ -217,9 +232,32 @@ def render_cr_to_yaml(cr: dict) -> str:
         f"# DO NOT EDIT — changes will be overwritten on next reconcile.\n"
     )
 
-    return header + dump_for_rewrite(
-        doc, default_flow_style=False, allow_unicode=True, sort_keys=False,
-    )
+    return header, doc
+
+
+def _expected_nodes(doc: Dict[str, Any]) -> Any:
+    """What `render_cr_to_yaml` means the rendered file to hold, as
+    parse-tree nodes (ADR-036 §2, `_lib_write_check`): every value as the
+    JSON decoded it, except each ``defaults`` value, which the exporter
+    reads as ``float64`` — a number (``!!int`` / ``!!float``) spelled as the
+    dump spells it (an int in decimal, a float as PyYAML's representer, a
+    string as written), or null."""
+    nodes = _lib_write_check.from_python(
+        {k: v for k, v in doc.items() if k != "defaults"})
+    if "defaults" in doc:
+        defaults: Dict[str, Any] = {}
+        for metric, value in doc["defaults"].items():
+            if value is None or isinstance(value, bool):
+                defaults[metric] = _lib_write_check.from_python(value)
+            elif isinstance(value, str):
+                defaults[metric] = _lib_write_check.AnyNumber(value)
+            elif isinstance(value, (int, float)):
+                defaults[metric] = _lib_write_check.AnyNumber(
+                    _lib_write_check.scalar(value)["text"])
+            else:
+                defaults[metric] = _lib_write_check.from_python(value)
+        nodes["defaults"] = defaults
+    return nodes
 
 
 def _content_sha256(content: str) -> str:
@@ -356,6 +394,18 @@ def reconcile_one(
 
     try:
         content = render_cr_to_yaml(cr)
+        # ADR-036 §2: the rendered text, read back by `da-guard parse-tree`
+        # at the path it is written to, must hold exactly what was meant —
+        # else nothing is written (WriteRefused; no da-guard is a
+        # ParseTreeError). The file is generated whole from the CR, so the
+        # file it replaces is not read: it is not the base of a change. A
+        # destination that exists and is not a file (a directory) is the
+        # write's own failure (#1789's one line), not a parse-tree verdict.
+        dest = config_dir / filename
+        if dest.exists() and not dest.is_file():
+            write_rendered(config_dir, filename, content, dry_run=dry_run)
+        _lib_write_check.confirm(config_dir, filename, content,
+                                 _expected_nodes(_render_doc(cr)[1]))
         sha = _content_sha256(content)
         changed = write_rendered(config_dir, filename, content,
                                  dry_run=dry_run)
@@ -624,12 +674,6 @@ def _is_dns1123_label(text: str) -> bool:
     """RFC 1123 label, as Kubernetes checks a namespace name."""
     return (len(text) <= _DNS1123_LABEL_MAX
             and _DNS1123_LABEL_RE.fullmatch(text) is not None)
-
-
-def _plain_tag(text: str) -> str:
-    """The tag YAML gives *text* written unquoted."""
-    return yaml.resolver.Resolver().resolve(
-        yaml.ScalarNode, text, (True, False))
 
 
 def _rendered_cr_name(path: Path) -> str | None:
@@ -1155,141 +1199,18 @@ def _spec_block_shape_error(spec: dict) -> str:
     return ""
 
 
-# ── yaml.v3's plain-scalar → number resolution (#2395) ──────────────
-#
-# The exporter decodes `defaults` with gopkg.in/yaml.v3 (v3.0.1): a plain
-# scalar lands in a float64 only if `resolve()` (resolve.go) types it
-# int / float. What follows is that function's number path, step for step,
-# with the Go strconv calls it makes (internal/strconv/atoi.go, atof.go).
-# `test_the_rows_match_the_exporter` re-measures it against da-guard.
-# ⚠️ Not claimed for a mantissa thousands of digits long: Go's ParseFloat
-# reads those differently from Python's `float()` (`1` + 5000 `0` +
-# `e-1000` is 1e-201 in Go, inf here), so such a value may be refused.
-
-_V3_NAMED_FLOATS = frozenset(
-    p + w for w in (".inf", ".Inf", ".INF") for p in ("", "+", "-")
-) | frozenset((".nan", ".NaN", ".NAN"))
-# resolve.go `yamlStyleFloat`.
-_V3_STYLE_FLOAT = re.compile(
-    r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
-# Go strconv's digit value of an ASCII byte; anything else is not a digit.
-_GO_DIGIT_VALUE = {c: int(c, 36) for c in
-                   "0123456789abcdefghijklmnopqrstuvwxyz"
-                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
-# What Go's ParseFloat accepts from a text starting with `.` (no sign, no
-# 0x prefix, not inf/nan), once `_go_underscore_ok` has passed it.
-_GO_DOT_FLOAT = re.compile(r"\.[0-9]+([eE][-+]?[0-9]+)?")
-
-
-def _go_underscore_ok(s: str) -> bool:
-    """Go ``strconv.underscoreOK``: each ``_`` sits between digits (or
-    between a base prefix and a digit)."""
-    if s[:1] in ("+", "-"):
-        s = s[1:]
-    saw, i, hexa = "^", 0, False
-    if len(s) >= 2 and s[0] == "0" and s[1] in "bBoOxX":
-        saw, i, hexa = "0", 2, s[1] in "xX"
-    for c in s[i:]:
-        if "0" <= c <= "9" or hexa and c in "abcdefABCDEF":
-            saw = "0"
-        elif c == "_":
-            if saw != "0":
-                return False
-            saw = "_"
-        elif saw == "_":
-            return False
-        else:
-            saw = "!"
-    return saw != "_"
-
-
-def _go_parse_uint(s: str, base: int):
-    """Go ``strconv.ParseUint(s, base, 64)`` on a text without ``_``:
-    the value, or None on any error."""
-    if not s:
-        return None
-    if base == 0:
-        base = 10
-        if s[0] == "0":
-            prefix = {"b": 2, "B": 2, "o": 8, "O": 8,
-                      "x": 16, "X": 16}.get(s[1:2])
-            if len(s) >= 3 and prefix:
-                base, s = prefix, s[2:]
-            else:
-                base, s = 8, s[1:]
-    n = 0
-    for c in s:
-        # Go reads BYTES: only ASCII 0-9 / a-z / A-Z are digits. ⛔ No
-        # `c.lower()` on the raw char — `"İ".lower()` is two chars.
-        d = _GO_DIGIT_VALUE.get(c, 99)
-        if d >= base:
-            return None
-        n = n * base + d
-        # Go's cutoff: stop at the first overflow (ErrRange) instead of
-        # carrying a bignum to the end of a very long text.
-        if n >= 1 << 64:
-            return None
-    return n
-
-
-def _go_parse_int(s: str, base: int):
-    """Go ``strconv.ParseInt(s, base, 64)``: the value, or None."""
-    neg = s[:1] == "-"
-    un = _go_parse_uint(s[1:] if s[:1] in ("+", "-") else s, base)
-    if un is None or un > (1 << 63 if neg else (1 << 63) - 1):
-        return None
-    return -un if neg else un
-
-
-def _go_parse_float_ok(s: str) -> bool:
-    """Go ``strconv.ParseFloat(s, 64)`` succeeds, for the two shapes
-    resolve() hands it: a `.`-led text, or one `_V3_STYLE_FLOAT` matched.
-    Overflow (±Inf) is an error; underflow is not. Judged by Python's
-    `float()`, which matches Go except on a mantissa thousands of digits
-    long (see the section comment)."""
-    try:
-        return not math.isinf(float(s.replace("_", "")))
-    except ValueError:
-        return False
-
-
-def _v3_reads_as_number(text: str) -> bool:
-    """yaml.v3 resolves the PLAIN scalar *text* to an int or a float."""
-    if text in _V3_NAMED_FLOATS:
-        return True
-    head = text[:1]
-    if head == ".":
-        # `strconv.ParseFloat(in)` on the text as written, `_` included.
-        return (_go_underscore_ok(text)
-                and bool(_GO_DOT_FLOAT.fullmatch(text.replace("_", "")))
-                and _go_parse_float_ok(text))
-    if not head or head not in "+-0123456789":
-        return False  # hint 'M' (only the named table) or none: a string
-    plain = text.replace("_", "")
-    if (_go_parse_int(plain, 0) is not None
-            or _go_parse_uint(plain, 0) is not None):
-        return True
-    if _V3_STYLE_FLOAT.fullmatch(plain) and _go_parse_float_ok(plain):
-        return True
-    # Fallbacks after the float: an explicit base, where Go's ParseInt
-    # takes a sign after the prefix (`0b-1`).
-    for prefix, base in (("0b", 2), ("0o", 8)):
-        if plain.startswith(prefix):
-            rest = plain[2:]
-            return (_go_parse_int(rest, base) is not None
-                    or _go_parse_uint(rest, base) is not None)
-        if plain.startswith("-" + prefix):
-            return _go_parse_int("-" + plain[3:], base) is not None
-    return False
-
-
 def _default_value_error(value: Any) -> str:
-    """Why *value* is not a ``defaults`` value the exporter decodes, or ``""``.
+    """Why *value* is not a ``defaults`` value the exporter decodes, as far
+    as its JSON type tells, or ``""``.
 
-    The exporter reads ``defaults`` as ``map[string]float64``. Oracle
-    (``da-guard served-values``, rc 3 = file refused): null and numbers are
-    read; a bool, a date, a sequence / mapping, and ANY quoted scalar —
-    ``"80"`` included — make it refuse the whole file.
+    The exporter reads ``defaults`` as ``map[string]float64``: null and
+    numbers are read; a bool, a sequence / mapping make it refuse the whole
+    file. A ``str`` (da-crdecode's JSON, #2476) is not judged here: whether
+    the text the dump writes for it reads as a number is yaml.v3's question,
+    and the pre-write confirmation (``_expected_nodes`` / ``_lib_write_check``,
+    ADR-036 §2) asks parse-tree — a quoted ``"80"`` (dumped ``'80'``, a
+    string) or ``foo`` is refused there, ``1e3`` (dumped plain, a float to
+    yaml.v3) is written.
     """
     if value is None:
         return ""
@@ -1300,24 +1221,16 @@ def _default_value_error(value: Any) -> str:
         # yaml.v3 reads through ParseFloat when it passes 64 bits: refused
         # once it rounds past float64 max (Go-measured: (2^54-1)*2^970 and
         # up, either sign). `float()` rounds the same way and raises there;
-        # it also needs no `str()`, which is capped at 4300 digits.
+        # it also needs no `str()`, which is capped at 4300 digits — the
+        # dump could not write such an int at all.
         try:
             float(value)
         except OverflowError:
             return "must be a number within float64 range"
         return ""
-    if isinstance(value, float):
+    if isinstance(value, (float, str)):
         return ""
-    if not isinstance(value, str):
-        return "must be a number"
-    # A str (da-crdecode's JSON, #2476) is dumped plain only where PyYAML
-    # would not retype it; otherwise it is QUOTED, and yaml.v3 does not
-    # decode a quoted scalar into a number.
-    if _plain_tag(value) != "tag:yaml.org,2002:str":
-        return "must be a number, not a quoted string"
-    if not _v3_reads_as_number(value):
-        return f"must be a number, not {value!r}"
-    return ""
+    return "must be a number"
 
 
 def _state_filter_error(sf: Any) -> str:
