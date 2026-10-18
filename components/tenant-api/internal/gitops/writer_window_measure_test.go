@@ -207,11 +207,11 @@ func wantOutsideKept(t *testing.T, dir string, err error, extHead, outside strin
 	}
 }
 
-// W3: an UNCOMMITTED outside edit of the tenant file lands after the read.
-// Not a defect of the window: the write replaces the serving file, as any
-// write does once its precondition passed; the edit is gone from the
-// worktree and was never in a commit. (The worktree is not compared with
-// the judged base's blob — see sampleJudgedBase.) Pinned as a data point.
+// W3: an UNCOMMITTED outside edit of the tenant file lands after the read
+// — after checkTenantFileClean passed. That window is outside the check's
+// guarantee (tenant_file_clean.go): the write replaces the serving file, as
+// any write does once its precondition passed; the edit is gone from the
+// worktree and was never in a commit. Pinned as the documented limit.
 func TestWindow_WriteIfUnchanged_UncommittedEditAfterRead(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
@@ -687,6 +687,98 @@ func TestDirty_DirectorySymlinkAndLongChain(t *testing.T) {
 			t.Fatalf("modified target: err = %v, want ErrTenantFileDirty", err)
 		}
 	})
+}
+
+// An outside edit hidden from `git status` by an index mark: skip-worktree
+// or assume-unchanged. Status reports nothing for such a path; the check
+// reads the marks (ls-files -v) and refuses — a file git is told not to
+// look at cannot be shown to be what HEAD holds.
+func TestDirty_IndexMarksHidingAnEdit(t *testing.T) {
+	t.Parallel()
+	for _, mark := range []string{"--skip-worktree", "--assume-unchanged"} {
+		t.Run(mark, func(t *testing.T) {
+			t.Parallel()
+			dir := winRepo(t)
+			edit := winBody(winTenant, "77", "")
+			winOutsideEdit(t, dir, winTenant, edit)
+			gitT(t, dir, "update-index", mark, "--", winTenant+".yaml")
+			if st := gitT(t, dir, "status", "--porcelain", "--", winTenant+".yaml"); st != "" {
+				t.Fatalf("setup: status reports %q; the mark should hide the edit", st)
+			}
+			head := gitRevParse(t, dir, "HEAD")
+			_, err := newTestWriter(dir, dir).Write(context.Background(), winTenant, "alice@example.com", winBody(winTenant, "90", ""))
+			wantDirty(t, dir, err, head, edit)
+		})
+	}
+}
+
+// A link in the MIDDLE of the chain retargeted outside tenant-api (not
+// committed): tn -> mid -> ../shared/one, and mid now points at
+// ../shared/two. Every link on the way is checked, not only the file
+// finally reached (which is itself clean here).
+func TestDirty_MiddleLinkRetargeted(t *testing.T) {
+	t.Parallel()
+	repo, conf := symRepo(t)
+	const tn = "tn-mid"
+	one := filepath.Join(repo, "shared", "one.yaml")
+	two := filepath.Join(repo, "shared", "two.yaml")
+	symWrite(t, one, symBody(tn, "warning"))
+	symWrite(t, two, symBody(tn, "critical"))
+	symLink(t, filepath.Join("..", "shared", "one.yaml"), filepath.Join(conf, "mid.yaml"))
+	symLink(t, "mid.yaml", filepath.Join(conf, tn+".yaml"))
+	gitT(t, repo, "add", "-A")
+	gitT(t, repo, "commit", "-q", "-m", "seed")
+	w := newTestWriter(conf, repo)
+	via := filepath.Join(conf, tn+".yaml")
+	if err := w.checkTenantFileClean(via); err != nil {
+		t.Fatalf("clean chain: %v", err)
+	}
+	if err := os.Remove(filepath.Join(conf, "mid.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	symLink(t, filepath.Join("..", "shared", "two.yaml"), filepath.Join(conf, "mid.yaml"))
+	if err := w.checkTenantFileClean(via); !errors.Is(err, ErrTenantFileDirty) {
+		t.Fatalf("middle link retargeted: err = %v, want ErrTenantFileDirty", err)
+	}
+}
+
+// A target inside a NESTED repository (its own .git, below the conf
+// repository): the conf repository's status answers nothing for it, so
+// it is "outside the repository" by cleanCheckPaths' definition and
+// trusted, like a target outside the top level. Pinned: an edit there does
+// not refuse the write. The same holds for a submodule's worktree and for
+// anything under .git.
+func TestDirty_TargetInNestedRepoIsTrusted(t *testing.T) {
+	t.Parallel()
+	repo, conf := symRepo(t)
+	const tn = "tn-nest"
+	nested := filepath.Join(repo, "vendor-conf")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, nested, "init", "-q", "-b", "main")
+	gitT(t, nested, "config", "user.email", "t@t.com")
+	gitT(t, nested, "config", "user.name", "T")
+	target := filepath.Join(nested, tn+".yaml")
+	symWrite(t, target, symBody(tn, "warning"))
+	gitT(t, nested, "add", "-A")
+	gitT(t, nested, "commit", "-q", "-m", "nested seed")
+	symLink(t, filepath.Join("..", "vendor-conf", tn+".yaml"), filepath.Join(conf, tn+".yaml"))
+	gitT(t, repo, "add", "--", "conf.d/"+tn+".yaml")
+	gitT(t, repo, "commit", "-q", "-m", "seed")
+	symWrite(t, target, symBody(tn, "critical")) // edited, not committed in the nested repo
+	w := newTestWriter(conf, repo)
+	if err := w.checkTenantFileClean(filepath.Join(conf, tn+".yaml")); err != nil {
+		t.Fatalf("target in a nested repository: err = %v, want trusted (nil)", err)
+	}
+	// The link itself is still the conf repository's: retargeting it is dirty.
+	if err := os.Remove(filepath.Join(conf, tn+".yaml")); err != nil {
+		t.Fatal(err)
+	}
+	symLink(t, filepath.Join("..", "shared", tn+".yaml"), filepath.Join(conf, tn+".yaml"))
+	if err := w.checkTenantFileClean(filepath.Join(conf, tn+".yaml")); !errors.Is(err, ErrTenantFileDirty) {
+		t.Fatalf("link retargeted: err = %v, want ErrTenantFileDirty", err)
+	}
 }
 
 // --- publishBatch: update-ref fails and HEAD is then unreadable ----------

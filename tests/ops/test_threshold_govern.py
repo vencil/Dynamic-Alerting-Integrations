@@ -346,6 +346,17 @@ def test_open_pr_409_conflict_not_pending_is_error(monkeypatch):
     assert "409" in out.message
 
 
+@pytest.mark.parametrize("code", ["TENANT_FILE_DIRTY", "TENANT_GIT_MANAGED"])
+def test_open_pr_409_file_state_codes_are_errors_not_dedup(monkeypatch, code):
+    # #1535 / #3064: a 409 about the state of the tenant file in tenant-api's
+    # repository is not "a PR is already open" — it must surface as an error
+    # (an operator has to act), never be skipped as already_pending.
+    _patch_http(monkeypatch, put_result=(409, {"code": code, "error": "refused (" + code + ")"}, None))
+    out = tg.open_governance_pr(_plan(), _args())
+    assert out.status == "error"
+    assert code in out.message
+
+
 def test_open_pr_500_maps_to_error(monkeypatch):
     _patch_http(monkeypatch, put_result=(500, {"error": "boom"}, None))
     out = tg.open_governance_pr(_plan(), _args())

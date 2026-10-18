@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -135,13 +136,19 @@ func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (
 	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return res, errs, nil
 	}
-	// #1535 item 6: the write's TENANT_FILE_DIRTY verdict, when git can give
-	// one. A check that cannot run (no repository) is the write's 500 at
-	// its HEAD sample, not a verdict on the body: the preview answers the
-	// rest rather than failing on it.
+	// #1535 item 6: the write's TENANT_FILE_DIRTY verdict, when git gives
+	// one. Anything else that keeps the check from deciding (no repository,
+	// git failing) does not stop the preview: it answers the rest, and the
+	// write itself fails on it (its HEAD sample, or the check, under the
+	// lock). Logged, since the preview then says less than the write will.
 	dirty := func(filePath string) error {
-		if err := w.checkTenantFileClean(filePath); errors.Is(err, ErrTenantFileDirty) {
+		err := w.checkTenantFileClean(filePath)
+		if errors.Is(err, ErrTenantFileDirty) {
 			return err
+		}
+		if err != nil {
+			slog.Warn("tenant preview: could not check the tenant file against HEAD; previewing without it",
+				"tenant", tenantID, "error", err)
 		}
 		return nil
 	}

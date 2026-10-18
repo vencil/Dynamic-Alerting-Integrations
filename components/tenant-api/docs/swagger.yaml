@@ -2238,11 +2238,12 @@ paths:
             unresolvable symlink (dangling, looping, or with a non-directory in its
             path) does not count: the write replaces it; or code TENANT_FILE_DIRTY
             (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
-            differs from the commit the write lands on (modified, staged, deleted
-            or untracked outside tenant-api, or a symlinked tenant file''s target
-            in the repository changed; a target outside the repository is not judged):
-            fixed text, no path; nothing written; commit or discard the change in
-            the repository, then retry'
+            differs from the commit the write lands on (modified, staged, deleted,
+            untracked or marked skip-worktree / assume-unchanged outside tenant-api,
+            or a link or the target on a symlinked tenant file''s way inside the repository
+            changed; a target outside the repository, in a nested repository or a
+            submodule is not judged): fixed text, no path; nothing written; commit
+            or discard the change in the repository, then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2422,11 +2423,12 @@ paths:
             failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
             or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY
             (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
-            differs from the commit the write lands on (modified, staged, deleted
-            or untracked outside tenant-api, or a symlinked tenant file''s target
-            in the repository changed; a target outside the repository is not judged):
-            fixed text, no path; nothing written; commit or discard the change in
-            the repository, then retry'
+            differs from the commit the write lands on (modified, staged, deleted,
+            untracked or marked skip-worktree / assume-unchanged outside tenant-api,
+            or a link or the target on a symlinked tenant file''s way inside the repository
+            changed; a target outside the repository, in a nested repository or a
+            submodule is not judged): fixed text, no path; nothing written; commit
+            or discard the change in the repository, then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2555,11 +2557,12 @@ paths:
             failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
             or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY
             (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
-            differs from the commit the write lands on (modified, staged, deleted
-            or untracked outside tenant-api, or a symlinked tenant file''s target
-            in the repository changed; a target outside the repository is not judged):
-            fixed text, no path; nothing written; commit or discard the change in
-            the repository, then retry'
+            differs from the commit the write lands on (modified, staged, deleted,
+            untracked or marked skip-worktree / assume-unchanged outside tenant-api,
+            or a link or the target on a symlinked tenant file''s way inside the repository
+            changed; a target outside the repository, in a nested repository or a
+            submodule is not judged): fixed text, no path; nothing written; commit
+            or discard the change in the repository, then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":

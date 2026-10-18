@@ -196,9 +196,10 @@ const (
 	// CodeTenantFileDirty marks a 409 refusing a direct-mode tenant write, or
 	// its preview, because the tenant's conf.d file in tenant-api's copy
 	// differs from the commit it would land on (#1535 item 6,
-	// gitops.ErrTenantFileDirty): modified, staged, deleted or untracked
-	// outside tenant-api, or — for a symlinked tenant file — its target in
-	// the repository changed. Every verdict a write takes (base hash, merge,
+	// gitops.ErrTenantFileDirty): modified, staged, deleted, untracked or
+	// marked skip-worktree / assume-unchanged outside tenant-api, or — for a
+	// tenant file reached through symlinks — a link on the way or the target
+	// inside the repository changed. Every verdict a write takes (base hash, merge,
 	// no-op) is on that file, so a write over it would judge or commit
 	// bytes no commit holds. Fixed text, no path. Nothing written; commit or
 	// discard the change in the repository, then retry. Also carried per op

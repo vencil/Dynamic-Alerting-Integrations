@@ -23,6 +23,7 @@ lang: zh
 | 平台自監控告警在 Prometheus 有 firing，卻沒人收到 | Platform / SRE | [平台告警沒有收到通知](#平台告警沒有收到通知) |
 | Operator 環境規則沒載入 | Platform Engineer | [Operator 環境常見問題](#prometheus-operator-環境常見問題) |
 | 經 tenant-api 的寫入都回 409 `TENANT_TREE_UNREADABLE` 或 500 `TENANT_STORE_FAULT` | Platform Engineer | [tenant-api 寫入全部被拒](#tenant-api-寫入全部被拒tenant_tree_unreadabletenant_store_fault) |
+| 經 tenant-api 寫某個租戶回 409 `TENANT_FILE_DIRTY`（批次 422） | Platform Engineer | [tenant-api 寫入回 TENANT_FILE_DIRTY](#tenant-api-寫入回-tenant_file_dirty) |
 | 經 tenant-api 的寫入回 422 `GENERATOR_FINDINGS`、429／422 `GENERATOR_REJECTED` 或 503 `VALIDATOR_UNAVAILABLE`／`POLICY_UNAVAILABLE` | Platform Engineer | [tenant-api 寫入被產生器容器拒收](#tenant-api-寫入被產生器容器拒收generator_findingsvalidator_unavailable) |
 
 ## SHA-256 熱重新加載延遲
@@ -224,6 +225,16 @@ da-tools validate-config --config-dir ./conf.d/
 與 exporter 的 `ConfigFilesUnreadable`（見 [SHA-256 熱重載延遲](#sha-256-熱重新加載延遲)）不同，這裡指的是 tenant-api 掛載的那份 conf.d。
 
 原因與修法見 [Tenant API 硬化 §3.8](api/tenant-api-hardening.md#38-confd-有讀不了的項目時寫入整個拒收2939)。
+
+## tenant-api 寫入回 TENANT_FILE_DIRTY
+
+> 👤 **適用：** Platform Engineer / 呼叫 tenant-api 的工具維護者
+
+**症狀**：直寫模式下寫某個租戶回 409 `TENANT_FILE_DIRTY`（批次 422、該筆 `code: TENANT_FILE_DIRTY`），重整重試仍一樣（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）。
+
+**原因**：tenant-api 掛載的 repo 裡，這個租戶檔與 HEAD 不一致——有人在 tenant-api 之外改了沒 commit、`git add` 了沒 commit、刪了、放了未追蹤的同名檔，或在 index 標了 `skip-worktree`／`assume-unchanged`；經 symlink 抵達的租戶檔，沿路的連結或 repo 內的目標被改也算。
+
+**處置**：在該 repo 跑 `git status -- <租戶檔>`（標記用 `git ls-files -v -- <租戶檔>` 看），把修改 commit 或丟棄後重試。細節見 [Tenant API 硬化 §3.10](api/tenant-api-hardening.md#310-租戶檔與-head-不一致時直寫拒收1535)。
 
 ## tenant-api 寫入被產生器容器拒收（`GENERATOR_FINDINGS`／`VALIDATOR_UNAVAILABLE`）
 

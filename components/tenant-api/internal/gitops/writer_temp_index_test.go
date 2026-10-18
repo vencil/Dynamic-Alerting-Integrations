@@ -218,6 +218,17 @@ func TestDirectWrite_FailureLeavesOutOfBandStagedChange(t *testing.T) {
 // (ErrTenantFileDirty: the index differs from HEAD for its path — a staged
 // change, with the worktree file equal to the staged one): the staged entry
 // and the file stay exactly as the operator left them, HEAD does not move.
+//
+// What this test used to pin — gitCommitOnto syncing the real index entry
+// of a path that carried the operator's staged blob, and putting that blob
+// back when the compare-and-swap then failed — can no longer be reached: a
+// staged path never gets past the check. The sync/unsync of the written
+// path's own entry is still pinned for a clean path:
+// TestDirectWrite_FailureLeavesOutOfBandStagedChange ("ref lock held" and
+// "HEAD moved while judged" fail after beforeCASAdvance; the written path is
+// left unstaged, i.e. its entry back at HEAD's) and
+// TestDirectWrite_SubdirGitDirKeepsTheRealIndexExact (the whole real index
+// byte-identical after a failed CAS).
 func TestDirectWrite_SamePathStagedEntry(t *testing.T) {
 	t.Parallel()
 	staged := oobBody(oobWritten, "88")
