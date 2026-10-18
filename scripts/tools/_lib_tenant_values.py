@@ -240,7 +240,7 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
     sys.path.append(str(_HERE / "ops"))
 
 from _lib_io import YamlFileError, safe_label  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import exit_caller_error  # noqa: E402
 from _lib_constants import (  # noqa: E402
     TOP_LEVEL_READ_ELSEWHERE, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
 )
@@ -1058,23 +1058,25 @@ def exit_on_served_values_error(fn: _F) -> _F:
 
     A missing binary gets this module's own text, not the dispatcher's: that
     one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
-    using this decorator do not have."""
+    using this decorator do not have.
+
+    `--json` (#3115): a tool that armed its envelope gets one on stdout,
+    `reason: served_values_unavailable`, `error` the `ERROR:` line."""
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
         except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
-            print_load_error(exc)
-            sys.exit(EXIT_CALLER_ERROR)
+            exit_caller_error(print_load_error(exc), reason="served_values_unavailable")
     return _wrapped  # type: ignore[return-value]
 
 
 def print_load_error(exc: DaGuardNotFoundError | ParseFailedError | DaGuardError,
-                     stream: TextIO | None = None) -> None:
+                     stream: TextIO | None = None) -> str:
     """The lines `exit_on_served_values_error` prints for `exc`, without the
-    exit — for a tool that owes something more on that path (a `--json`
-    envelope): one `ERROR:` line, then da-guard's stderr, every non-empty
-    line escaped and behind `DA_GUARD_PREFIX`."""
+    exit — for a tool that owes something more on that path: one `ERROR:`
+    line, then da-guard's stderr, every non-empty line escaped and behind
+    `DA_GUARD_PREFIX`. Returns the `ERROR:` line (an envelope's `error`)."""
     stream = sys.stderr if stream is None else stream
     if isinstance(exc, DaGuardNotFoundError):
         head, lines = _missing_binary_message(), []
@@ -1088,6 +1090,7 @@ def print_load_error(exc: DaGuardNotFoundError | ParseFailedError | DaGuardError
     print(error_line, file=stream)
     for line in lines:
         print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=stream)
+    return error_line
 
 
 def _missing_binary_message() -> str:

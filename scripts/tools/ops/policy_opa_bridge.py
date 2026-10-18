@@ -809,9 +809,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         result = convert_opa_violations(opa_violations, len(tenant_configs))
     except OpaEvalError as e:
         # #2724: no evaluation (or an answer that is not violations) is not a
-        # pass. stderr only, stdout empty under --json too — this tool's
-        # caller-error convention (the da-guard and no-OPA-selected exits
-        # above print no envelope either).
+        # pass. One stderr line; under --json, `_lib_exitcodes.run` adds the
+        # `caller_error` envelope this rc 2 owes, as for the da-guard and
+        # no-OPA-selected exits above (#3115 — stdout used to stay empty).
         print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
@@ -828,4 +828,5 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

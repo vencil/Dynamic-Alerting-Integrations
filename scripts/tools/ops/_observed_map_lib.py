@@ -348,7 +348,7 @@ import sys  # noqa: E402
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
 from _lib_compat import find_project_root  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import die_caller_error  # noqa: E402
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
 
@@ -753,14 +753,15 @@ def _entry_shape_error(key: Any, entry: Any) -> Optional[str]:
 def exit_on_observed_map_error(fn):
     """Decorate a CLI ``main`` so an unusable observed-map (``ObservedMapError``)
     exits 2 (``EXIT_CALLER_ERROR``, an environment error) with one ``ERROR:``
-    line naming the file, instead of a traceback at rc 1."""
+    line naming the file, instead of a traceback at rc 1; a tool that armed
+    its ``--json`` envelope gets one, ``reason: observed_map_unavailable``
+    (#3115, the name backtest_threshold already used)."""
     @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except ObservedMapError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+            die_caller_error(f"ERROR: {exc}", reason="observed_map_unavailable")
     return _wrapped
 
 

@@ -71,13 +71,15 @@ EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-e
 EXIT_VERIFY_FAILED = 2  # mismatch, not found, or duplicate (rollback-checklist signal)
 
 # An uncaught exception ends at EXIT_USAGE_ERROR (1), NOT the SSOT's crash
-# default 2 (#3090): here 2 would read as "hash mismatch". Set only when run
-# as a script (directly or via `da-tools`, both __main__) — importing this
-# module must not change the crash code of the importing process.
+# default 2 (#3090): here 2 would read as "hash mismatch". The caller-error
+# code too: a reader that closed stdout early ends at it (#3124). Set only
+# when run as a script (directly or via `da-tools`, both __main__) —
+# importing this module must not change the codes of the importing process.
 if __name__ == "__main__":
     import _lib_exitcodes  # noqa: E402
 
     _lib_exitcodes.set_crash_exit_code(EXIT_USAGE_ERROR)
+    _lib_exitcodes.set_caller_error_code(EXIT_USAGE_ERROR)
 
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
 _TOOL_DIR = Path(__file__).resolve().parent
