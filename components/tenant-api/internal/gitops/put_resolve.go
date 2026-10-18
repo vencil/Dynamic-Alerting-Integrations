@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -69,7 +70,10 @@ func CheckAPIManaged(tenantID string, existing []byte) error {
 // differ; the steps and their order do not:
 //
 //  1. resolve the tenant's file (#1673 ambiguity, #2078 placement, #2939
-//     unreadable tree) on configDir with walk;
+//     unreadable tree) on configDir with walk; then beforeRead on that file
+//     before anything reads it (the direct write's check that the file is
+//     what HEAD holds, #1535 item 6 — the preview asks it too, without the
+//     lock); nil for PR mode, whose fresh base is a clean checkout;
 //  2. read it and refuse a git-managed tenant (#3064, CheckAPIManaged) —
 //     before step 3, so the X-DA-Base-Hash precondition never answers about
 //     a file tenant-api does not show (CONFLICT versus TENANT_GIT_MANAGED
@@ -82,11 +86,16 @@ func CheckAPIManaged(tenantID string, existing []byte) error {
 //
 // err is a refusal from steps 1–3, typed as the write returns it.
 func (w *Writer) resolvePut(ctx context.Context, configDir, tenantID, yamlContent string,
-	walk func() (*cfg.TreeScan, error), afterResolve func(filePath string) error,
+	walk func() (*cfg.TreeScan, error), beforeRead, afterResolve func(filePath string) error,
 ) (res PutResolution, errs []string, err error) {
 	filePath, err := w.resolveTenantFilePath(configDir, tenantID, walk)
 	if err != nil {
 		return res, nil, err
+	}
+	if beforeRead != nil {
+		if err := beforeRead(filePath); err != nil {
+			return res, nil, err
+		}
 	}
 	// A read error leaves existing nil: never a no-op for the writer.
 	existing, rerr := readTenantFile(filePath)
@@ -127,5 +136,21 @@ func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (
 	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return res, errs, nil
 	}
-	return w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTreeForRead, nil)
+	// #1535 item 6: the write's TENANT_FILE_DIRTY verdict, when git gives
+	// one. Anything else that keeps the check from deciding (no repository,
+	// git failing) does not stop the preview: it answers the rest, and the
+	// write itself fails on it (its HEAD sample, or the check, under the
+	// lock). Logged, since the preview then says less than the write will.
+	dirty := func(filePath string) error {
+		err := w.checkTenantFileClean(filePath)
+		if errors.Is(err, ErrTenantFileDirty) {
+			return err
+		}
+		if err != nil {
+			slog.Warn("tenant preview: could not check the tenant file against HEAD; previewing without it",
+				"tenant", tenantID, "error", err)
+		}
+		return nil
+	}
+	return w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTreeForRead, dirty, nil)
 }

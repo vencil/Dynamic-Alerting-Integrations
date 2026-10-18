@@ -83,6 +83,9 @@ function CustomAlertsModal(props) {
   // 409 TENANT_GIT_MANAGED ({ error, reason }).
   const [gitReason, setGitReason] = useState('');
   const [gitManagedSave, setGitManagedSave] = useState(null);
+  // #1535: a save answered 409 TENANT_FILE_DIRTY ({ error }) — the tenant
+  // file has uncommitted changes in the server's repository.
+  const [fileDirtySave, setFileDirtySave] = useState(null);
   // #3064: an API-managed tenant read without source_hash (no write
   // permission): the list is shown, nothing in it can be changed.
   const [readOnlyList, setReadOnlyList] = useState(false);
@@ -194,6 +197,7 @@ function CustomAlertsModal(props) {
     setConflict(null);
     setNotLoadable(null);
     setGitManagedSave(null);
+    setFileDirtySave(null);
     setWarnings([]);
     saveCustomAlerts(tenantId, { custom_alerts: recipes, base_hash: baseHash })
       .then((res) => {
@@ -213,6 +217,14 @@ function CustomAlertsModal(props) {
           // tenant) — not a concurrent edit: a retry cannot succeed. Keep
           // the user's work, like Reef 6.
           setGitManagedSave({ error: res.data.error || '', reason: res.data.git_managed_reason || '' });
+          return;
+        }
+        if (res.status === 409 && res.data && res.data.code === 'TENANT_FILE_DIRTY') {
+          // #1535: the tenant file was changed in the repository outside
+          // tenant-api and not committed — not a concurrent edit: a refresh
+          // and retry fails the same way until someone commits or discards
+          // it. Show the backend's text; keep the user's work, like Reef 6.
+          setFileDirtySave({ error: res.data.error || '' });
           return;
         }
         if (res.status === 409 && res.data && res.data.code === 'TENANT_CONFIG_NOT_LOADABLE') {
@@ -328,6 +340,20 @@ function CustomAlertsModal(props) {
                   'Write refused: this tenant is managed in git, so refreshing and retrying will not help. Your edits are kept; make the change in git.')}
               </p>
               <p className="text-xs mt-1">{gitManagedSave.error || gitManagedSave.reason}</p>
+              <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
+                onClick={() => copy(JSON.stringify(recipes, null, 2))}>
+                {t('複製目前 recipe 備份', 'Copy current recipes')}
+              </button>
+            </div>
+          )}
+
+          {fileDirtySave && (
+            <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="file-dirty-save">
+              <p className="text-sm font-semibold">
+                {t('寫入被拒：此租戶的設定檔在伺服器的 repo 裡有未 commit 的修改，重整重試不會成功。你的編輯已保留，請先請管理者 commit 或捨棄那份修改。',
+                  'Write refused: this tenant\'s config file has uncommitted changes in the server\'s repository, so refreshing and retrying will not help. Your edits are kept; ask an operator to commit or discard those changes first.')}
+              </p>
+              <p className="text-xs mt-1">{fileDirtySave.error}</p>
               <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
                 onClick={() => copy(JSON.stringify(recipes, null, 2))}>
                 {t('複製目前 recipe 備份', 'Copy current recipes')}

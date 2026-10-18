@@ -533,6 +533,16 @@ type Writer struct {
 	// land. Always nil in production.
 	beforeCASAdvance func()
 
+	// afterBaseSample and afterTenantRead are TEST-ONLY seams (#1535 item
+	// 6): sampleJudgedBase calls afterBaseSample, when non-nil, right after
+	// it sampled HEAD as the judged base and before the write reads the
+	// tenant file; validateTenantFile calls afterTenantRead, when non-nil,
+	// after the reads (base_hash precondition, merge base) and before the
+	// generator judges — where HEAD used to be sampled. Always nil in
+	// production.
+	afterBaseSample func()
+	afterTenantRead func()
+
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
 	onBatchStaging func(*stagingTree)
@@ -810,12 +820,14 @@ func (w *Writer) gitOutputEnv(dir string, env []string, args ...string) ([]byte,
 // Flow (steps 6–9 live in commitFileChange):
 //  1. Pre-flight: validateBodyOnly — body-shaped defects only, no tree read
 //  2. Admission (single-writer token), then lock the tree and, before any
-//     read of it, leave a stranded PR branch (lockTreeOnBase, #1723)
+//     read of it, leave a stranded PR branch (lockTreeOnBase, #1723); then
+//     sample HEAD as the judged base, before any read of the tenant file
+//     (sampleJudgedBase, #1535 item 6)
 //  3. Resolve the tenant's file, under the lock (#1673 / #2078)
 //  4. WriteIfUnchanged only: base-hash precondition on that file
 //  5. validate, under the lock — the authoritative verdict and the
-//     notices returned (#1681); then the generator's verdict on HEAD
-//     (validateTenantFile, #2903 — required, #1535)
+//     notices returned (#1681); then the generator's verdict on the judged
+//     base (validateTenantFile, #2903 — required, #1535)
 //  6. Check HEAD is still the judged base
 //  7. Write the file resolved in step 3
 //  8. Commit that path alone onto the judged base from a temporary index
@@ -901,6 +913,13 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	}
 	defer w.unlockTree()
 
+	// #1535 item 6: the judged base is sampled BEFORE the tenant file is
+	// read (the precondition, resolvePut) — see sampleJudgedBase.
+	judgedBase, err := w.sampleJudgedBase()
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 3: AUTHORITATIVE resolve + validate, under the lock, against the
 	// tree the commit below lands on. Every in-process write that changes
 	// conf.d holds w.mu, which this goroutine now holds until the commit — so
@@ -936,7 +955,10 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 		return nil
 	}
-	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition)
+	// #1535 item 6: checkTenantFileClean runs on the resolved file before
+	// resolvePut reads it — the git-managed verdict, the precondition and
+	// validate's baseline are all taken on that file.
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, w.checkTenantFileClean, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -950,11 +972,10 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		return notices, nil
 	}
 
-	// #2903 (ADR-036 §4): the generator judges HEAD with this content written
-	// over the file, still under the lock — nothing is written before it
-	// passes.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
-	if err != nil {
+	// #2903 (ADR-036 §4): the generator judges the judged base with this
+	// content written over the file, still under the lock — nothing is
+	// written before it passes.
+	if err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content)); err != nil {
 		return nil, err
 	}
 
@@ -1468,10 +1489,22 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	defer w.unlockTree()
 
+	// #1535 item 6: the judged base is sampled BEFORE the merge base is
+	// read — see sampleJudgedBase.
+	judgedBase, err := w.sampleJudgedBase()
+	if err != nil {
+		return nil, err
+	}
+
 	// #1673: one resolution for the whole flow — the file we read below and the
 	// file we commit at the end must be the same one.
 	filePath, err := w.tenantFilePath(tenantID)
 	if err != nil {
+		return nil, err
+	}
+	// #1535 item 6: the merge base is the serving file, so it must be what
+	// the judged base holds (checkTenantFileClean) — before it is read.
+	if err := w.checkTenantFileClean(filePath); err != nil {
 		return nil, err
 	}
 	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge, TenantNamesOf(ctx))
@@ -1491,8 +1524,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 		return notices, nil
 	}
 	// #2903: the generator's verdict, under the lock, before the commit.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
-	if err != nil {
+	if err := w.validateTenantFile(ctx, judgedBase, filePath, tenantID, []byte(content)); err != nil {
 		return nil, err
 	}
 	if err := w.commitFileChange(

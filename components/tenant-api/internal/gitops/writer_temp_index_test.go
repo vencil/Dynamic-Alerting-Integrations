@@ -213,45 +213,48 @@ func TestDirectWrite_FailureLeavesOutOfBandStagedChange(t *testing.T) {
 	}
 }
 
-// The operator staged a change to the SAME file the API then writes. A
-// write that fails after its file was written (here: the compare-and-swap,
-// on a held ref lock) leaves that staged entry exactly as it was — the
-// write never touched the real index; a write that commits replaces it
-// with the committed bytes, as `git commit --only <path>` does.
+// The operator staged a change to the SAME file the API then writes. Since
+// #1535 item 6 the write is refused before it writes anything
+// (ErrTenantFileDirty: the index differs from HEAD for its path — a staged
+// change, with the worktree file equal to the staged one): the staged entry
+// and the file stay exactly as the operator left them, HEAD does not move.
+//
+// What this test used to pin — gitCommitOnto syncing the real index entry
+// of a path that carried the operator's staged blob, and putting that blob
+// back when the compare-and-swap then failed — can no longer be reached: a
+// staged path never gets past the check. The sync/unsync of the written
+// path's own entry is still pinned for a clean path:
+// TestDirectWrite_FailureLeavesOutOfBandStagedChange ("ref lock held" and
+// "HEAD moved while judged" fail after beforeCASAdvance; the written path is
+// left unstaged, i.e. its entry back at HEAD's) and
+// TestDirectWrite_SubdirGitDirKeepsTheRealIndexExact (the whole real index
+// byte-identical after a failed CAS).
 func TestDirectWrite_SamePathStagedEntry(t *testing.T) {
 	t.Parallel()
 	staged := oobBody(oobWritten, "88")
-	body := oobBody(oobWritten, "70")
-	for _, fail := range []bool{true, false} {
-		dir := oobRepo(t)
-		if err := os.WriteFile(filepath.Join(dir, oobWritten+".yaml"), []byte(staged), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		gitT(t, dir, "add", oobWritten+".yaml")
-		w := newTestWriter(dir, dir)
-		w.SetValidator(&recordingValidator{})
-		lock := filepath.Join(dir, ".git", "refs", "heads", "main.lock")
-		if fail {
-			w.beforeCASAdvance = func() {
-				if err := os.WriteFile(lock, nil, 0o644); err != nil {
-					t.Errorf("create ref lock: %v", err)
-				}
-			}
-		}
-		_, err := w.Write(context.Background(), oobWritten, "alice@example.com", body)
-		_ = os.Remove(lock)
-		if fail != (err != nil) {
-			t.Fatalf("fail=%v: err = %v", fail, err)
-		}
-		want := body
-		if fail {
-			want = staged
-		}
-		if got := gitT(t, dir, "show", ":"+oobWritten+".yaml"); got != want {
-			t.Errorf("fail=%v: staged entry = %q, want %q", fail, got, want)
-		}
-		assertOOBStillStaged(t, dir)
+	dir := oobRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, oobWritten+".yaml"), []byte(staged), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	gitT(t, dir, "add", oobWritten+".yaml")
+	w := newTestWriter(dir, dir)
+	v := &recordingValidator{}
+	w.SetValidator(v)
+	head := gitRevParse(t, dir, "HEAD")
+	_, err := w.Write(context.Background(), oobWritten, "alice@example.com", oobBody(oobWritten, "70"))
+	if !errors.Is(err, ErrTenantFileDirty) {
+		t.Fatalf("err = %v, want ErrTenantFileDirty", err)
+	}
+	if len(v.calls) != 0 || gitRevParse(t, dir, "HEAD") != head {
+		t.Fatalf("generator asked %d time(s) / HEAD moved", len(v.calls))
+	}
+	if got := gitT(t, dir, "show", ":"+oobWritten+".yaml"); got != staged {
+		t.Errorf("staged entry = %q, want the operator's", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, oobWritten+".yaml")); string(got) != staged {
+		t.Errorf("serving file = %q, want the operator's", got)
+	}
+	assertOOBStillStaged(t, dir)
 }
 
 // Batches commit in their own staging worktree (its own index): pinned so

@@ -95,7 +95,9 @@ func TestTenantFileSpelling_AmbiguousIsRefused(t *testing.T) {
 // on-disk state is not.
 func TestPutTenant_AmbiguousSpellingIsConflict(t *testing.T) {
 	t.Parallel()
-	dir := setupConfigDir(t, map[string]string{
+	// A repository: a write samples HEAD before it resolves the file (#1535
+	// item 6), so in a plain directory PUT would fail there first.
+	dir := seedGitTree(t, map[string]string{
 		spellingTenant + ".yaml": spellingBody("FROM-YAML"),
 		spellingTenant + ".yml":  spellingBody("FROM-YML"),
 	})
@@ -190,7 +192,9 @@ func assertConflictWithoutDir(t *testing.T, w *httptest.ResponseRecorder, dir st
 // PUT rides along: it maps the same sentinel and must not leak the path either.
 func TestTenantFileSpelling_AmbiguousConflictNamesNoServerPath(t *testing.T) {
 	t.Parallel()
-	dir := setupConfigDir(t, map[string]string{
+	// A repository: a write samples HEAD before it resolves the file (#1535
+	// item 6), so in a plain directory PUT would fail there first.
+	dir := seedGitTree(t, map[string]string{
 		spellingTenant + ".yaml": spellingBody("FROM-YAML"),
 		spellingTenant + ".yml":  spellingBody("FROM-YML"),
 	})

@@ -352,10 +352,11 @@ func TestDirectWrite_CASRefusesACommitBeforeTheAdvance(t *testing.T) {
 	}
 }
 
-// F8b: the short-circuit needs the body in the serving file AND in HEAD.
-// An uncommitted edit from outside that already holds the body is not a
-// no-op: the write is judged and committed, and leaves the tree clean.
-func TestWrite_UncommittedEditOfTheSameBodyIsCommitted(t *testing.T) {
+// F8b: an uncommitted edit from outside that already holds the body is not
+// a no-op. Since #1535 item 6 it is not committed under the caller's name
+// either: the write is refused (ErrTenantFileDirty) before the generator is
+// asked, HEAD does not move and the edit stays in the worktree.
+func TestWrite_UncommittedEditOfTheSameBodyIsRefused(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
 	w := newTestWriter(dir, dir)
@@ -373,17 +374,25 @@ func TestWrite_UncommittedEditOfTheSameBodyIsCommitted(t *testing.T) {
 	v := &recordingValidator{}
 	w.SetValidator(v)
 	head := gitRevParse(t, dir, "HEAD")
-	if _, err := w.Write(context.Background(), bindTenant, "op@example.com", body); err != nil {
-		t.Fatal(err)
+	_, err := w.Write(context.Background(), bindTenant, "op@example.com", body)
+	assertDirtyRefusal(t, dir, err, v, head, body)
+}
+
+// assertDirtyRefusal: refused with ErrTenantFileDirty, the generator not
+// asked, HEAD at head, and the serving file still the uncommitted edit.
+func assertDirtyRefusal(t *testing.T, dir string, err error, v *recordingValidator, head, edit string) {
+	t.Helper()
+	if !errors.Is(err, ErrTenantFileDirty) {
+		t.Fatalf("err = %v, want ErrTenantFileDirty", err)
 	}
-	if len(v.calls) != 1 {
-		t.Errorf("the generator was asked %d time(s), want 1", len(v.calls))
+	if len(v.calls) != 0 {
+		t.Errorf("the generator was asked %d time(s), want 0", len(v.calls))
 	}
-	if gitRevParse(t, dir, "HEAD~1") != head || headBlob(t, dir, bindTenant+".yaml") != body {
-		t.Errorf("the body was not committed on HEAD")
+	if gitRevParse(t, dir, "HEAD") != head {
+		t.Error("HEAD moved")
 	}
-	if st := gitStatus(t, dir); st != "" {
-		t.Errorf("the tree is left dirty:\n%s", st)
+	if got, _ := os.ReadFile(filepath.Join(dir, bindTenant+".yaml")); string(got) != edit {
+		t.Errorf("serving file = %q, want the uncommitted edit kept", got)
 	}
 }
 
@@ -446,10 +455,10 @@ func TestWrite_FailedCommitLeavesHEADAndRetryCommits(t *testing.T) {
 	}
 }
 
-// WriteMerged shares Write's no-op rule (unchangedFile): an uncommitted
-// edit from outside that already holds the merged content is judged and
-// committed, not answered as a no-op.
-func TestWriteMerged_UncommittedEditOfTheSameContentIsCommitted(t *testing.T) {
+// WriteMerged refuses the same way: an uncommitted edit from outside that
+// already holds the merged content is neither a no-op nor committed
+// (#1535 item 6).
+func TestWriteMerged_UncommittedEditOfTheSameContentIsRefused(t *testing.T) {
 	t.Parallel()
 	dir := initRepoWithDefaults(t)
 	w := newTestWriter(dir, dir)
@@ -467,22 +476,14 @@ func TestWriteMerged_UncommittedEditOfTheSameContentIsCommitted(t *testing.T) {
 	v := &recordingValidator{}
 	w.SetValidator(v)
 	head := gitRevParse(t, dir, "HEAD")
+	_, err := w.WriteMerged(context.Background(), bindTenant, "op@example.com",
+		func([]byte) (string, error) { return body, nil })
+	assertDirtyRefusal(t, dir, err, v, head, body)
+	// The operator commits the edit: file and HEAD both hold it — a no-op,
+	// nothing asked.
+	gitT(t, dir, "commit", "-q", "-a", "-m", "operator edit")
 	if _, err := w.WriteMerged(context.Background(), bindTenant, "op@example.com",
-		func([]byte) (string, error) { return body, nil }); err != nil {
-		t.Fatal(err)
-	}
-	if len(v.calls) != 1 {
-		t.Errorf("the generator was asked %d time(s), want 1", len(v.calls))
-	}
-	if gitRevParse(t, dir, "HEAD~1") != head || headBlob(t, dir, bindTenant+".yaml") != body {
-		t.Error("the merged content was not committed on HEAD")
-	}
-	if st := gitStatus(t, dir); st != "" {
-		t.Errorf("the tree is left dirty:\n%s", st)
-	}
-	// Now file and HEAD both hold it: a no-op, nothing asked.
-	if _, err := w.WriteMerged(context.Background(), bindTenant, "op@example.com",
-		func([]byte) (string, error) { return body, nil }); err != nil || len(v.calls) != 1 {
+		func([]byte) (string, error) { return body, nil }); err != nil || len(v.calls) != 0 {
 		t.Errorf("unchanged merge: err %v, calls %d (want a no-op)", err, len(v.calls))
 	}
 }

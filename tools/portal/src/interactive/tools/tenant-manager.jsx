@@ -415,7 +415,12 @@ export default function TenantManager() {
       });
       if (resp.ok) return { ok: true, data: await resp.json().catch(() => ({})) };
       const body = await resp.json().catch(() => ({ error: resp.statusText }));
-      if (resp.status === 409) {
+      if (resp.status === 409 && (body.code === 'TENANT_FILE_DIRTY' || body.code === 'TENANT_GIT_MANAGED')) {
+        // #1535 / #3064: a state of the file in the server's repository,
+        // not someone else's update — a refresh does not help; the backend
+        // text says what to do.
+        showNotification('error', body.error || t('寫入被拒。', 'Write refused.'));
+      } else if (resp.status === 409) {
         showNotification('error', t(
           '配置已被其他人更新，請重新整理頁面後再試。',
           'Configuration was updated by someone else. Please refresh the page and try again.'

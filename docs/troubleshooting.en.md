@@ -21,6 +21,7 @@ lang: en
 | Platform self-monitoring alerts are Firing in Prometheus but nobody is notified | Platform / SRE | [Platform Alerts Never Reach Anyone](#platform-alerts-never-reach-anyone) |
 | Rules not loaded in an Operator environment | Platform Engineer | [Prometheus Operator Common Issues](#prometheus-operator-common-issues) |
 | Every write through tenant-api answers 409 `TENANT_TREE_UNREADABLE` or 500 `TENANT_STORE_FAULT` | Platform Engineer | [Every tenant-api Write Is Refused](#every-tenant-api-write-is-refused-tenant_tree_unreadable--tenant_store_fault) |
+| A write of one tenant through tenant-api answers 409 `TENANT_FILE_DIRTY` (a batch: 422) | Platform Engineer | [A tenant-api Write Answers TENANT_FILE_DIRTY](#a-tenant-api-write-answers-tenant_file_dirty) |
 | A write through tenant-api answers 422 `GENERATOR_FINDINGS`, 429 / 422 `GENERATOR_REJECTED` or 503 `VALIDATOR_UNAVAILABLE` / `POLICY_UNAVAILABLE` | Platform Engineer | [tenant-api Writes Refused by the Generator Container](#tenant-api-writes-refused-by-the-generator-container-generator_findings--validator_unavailable) |
 
 ## SHA-256 Hot-Reload Delay
@@ -222,6 +223,16 @@ When only a partial update of one tenant (a batch patch, `PUT .../custom-alerts`
 Unlike the exporter's `ConfigFilesUnreadable` (see [SHA-256 Hot-Reload Delay](#sha-256-hot-reload-delay)), this is about the copy of conf.d tenant-api mounts.
 
 Causes and fixes: [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md#38-a-write-is-refused-while-confd-holds-an-entry-that-cannot-be-read-2939).
+
+## A tenant-api Write Answers TENANT_FILE_DIRTY
+
+> 👤 **For:** Platform Engineer / maintainers of tools that call tenant-api
+
+**Symptom**: in direct mode a write of one tenant answers 409 `TENANT_FILE_DIRTY` (a batch: 422, `code: TENANT_FILE_DIRTY` on the op), and a refresh and retry answers the same ([#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)).
+
+**Cause**: in the repository tenant-api mounts, this tenant file differs from HEAD — someone changed it outside tenant-api without committing, `git add`-ed without committing, deleted it, left an untracked file of that name, or marked its index entry `skip-worktree` / `assume-unchanged`; for a tenant file reached through symlinks, a link on the way or the in-repository target changed counts too.
+
+**Fix**: run `git status -- <tenant file>` in that repository (for the marks, `git ls-files -v -- <tenant file>`), commit or discard the change, then retry: `git restore --staged --worktree -- <tenant file>` for a tracked file, delete an untracked or gitignored file of that name, and for a newly added file commit it to keep it, or `git rm --cached -- <tenant file>` and delete the working-tree file to discard it. Details in [Tenant API Hardening §3.10](api/tenant-api-hardening.en.md#310-a-direct-write-is-refused-while-the-tenant-file-differs-from-head-1535).
 
 ## tenant-api Writes Refused by the Generator Container (`GENERATOR_FINDINGS` / `VALIDATOR_UNAVAILABLE`)
 

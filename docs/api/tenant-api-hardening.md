@@ -258,7 +258,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 **PR 模式的 `/validate` 例外**：PR 模式的 validate 只做 body 檢查、不讀樹（#1718：本機的樹可能落後 base），所以不會預告這兩種拒收，要到切分支時才判。
 
 - **要寫的租戶檔本身**：
-  - 是無法解析的 symlink（懸空、迴圈含自我迴圈、ENOTDIR）：寫入把它換成一般檔（直寫與 PR 模式都以 rename 取代目錄項目本身，不會順著 symlink 寫到它指向的地方），照常放行。這是 ADR-036 §4 的修復路徑：它沒有內容，換掉不會損失任何東西。批次扣掉的是整批所有 op 的租戶檔。
+  - 是無法解析的 symlink（懸空、迴圈含自我迴圈、ENOTDIR）：寫入把它換成一般檔（直寫與 PR 模式都以 rename 取代目錄項目本身，不會順著 symlink 寫到它指向的地方），照常放行。這是 ADR-036 §4 的修復路徑：它沒有內容，換掉不會損失任何東西。批次扣掉的是整批所有 op 的租戶檔。直寫模式下這個 symlink 必須已 commit：沒 commit 的 symlink 是工作樹與 HEAD 不一致，回 409 `TENANT_FILE_DIRTY`（見 §3.10）。
   - 讀取失敗（`read_error`）、是 FIFO 等非一般檔，或其他 stat 失敗：一律回 409 `TENANT_CONFIG_NOT_LOADABLE`（`config_error` 為 `unreadable` 或 `not_regular_file`；批次該筆同 code），**不分角色**，對所有租戶都有寫入權限的人也一樣。這個檔有內容只是讀不到，整檔替換等於靜默抹掉內容（#2405 原本就規定讀不了一律拒收）。它要在伺服器或 volume 上修，或從 git 重設。
 - **以前的回應**：別處有 FIFO 時，單筆寫入卡住約 5 秒（掃描時限）後回 500，批次在複製 conf.d 時回 500；懸空的 symlink 等其他項目不擋寫入。
 - **PR 模式**判的是切出分支的最新 base，也就是 git 裡的樹：PR 合併後服務吃的就是這份內容。服務中目錄裡沒 commit 的項目（未追蹤或被 `.gitignore` 的 FIFO 之類）不在那裡，所以不擋 PR 模式的寫入；單筆 PR 寫入與 PR 批次判的是同一棵樹，結果一致（[#2972](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2972)；以前單筆 PR 寫入判的是服務中的工作目錄，會因這類項目被拒）。這類項目仍會擋直寫模式，也照樣計入 `tenant_api_store_unreadable_entries`。例外：要寫的租戶檔本身在服務目錄裡是未追蹤的非一般檔（FIFO、socket、裝置檔、目錄，或指向它們的 symlink）時，PR 寫入回 409 `TENANT_CONFIG_NOT_LOADABLE`，與直寫模式同一個 code，不覆蓋它：PR 寫入會在服務目錄裡改寫這個路徑，覆蓋後再切回 base，這個項目就被刪掉了。
@@ -274,7 +274,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 - **期限**：給產生器的時間是請求剩下的時間（非同步批次從 task 開始起算 `--write-timeout`）；其中產生器保留的時間（產生器服務的 `--deadline-reserve-seconds`）留給 tenant-api 核對與 commit；剩下的時間不足以判定時直接回 429 `no_time`，不送出。tenant-api 這邊的對應常數與產生器的預設值由 `tests/ops/test_generator_deadline_reserve_parity.py` 對帳。
 - **驗的和寫的是同一份**：產生器回報它判的 base commit、每個檔的 sha256 與部署端 policy 檔（`--deploy-policy`，chart 掛同一份）的 sha256，都要和 tenant-api 要寫的一致；不一致就重判一次，仍不一致回 429 `mismatch`。commit 也綁在判定上：直寫的 commit 以 compare-and-swap 推進 HEAD（舊值必須是判定的 base），判定期間 HEAD 被 tenant-api 以外的 commit 移動，回 409（重新整理後重送），不 commit。這條路徑以 `commit-tree` 建 commit（CAS 需要以判定的 base 為 parent），所以不會執行 repo 的 client-side hooks（pre-commit、commit-msg），也不依 `commit.gpgsign` 簽章；批次與 PR 模式仍走 `git commit`。staging 之後 index 裡的內容與判定的位元組逐一比對，`.gitattributes` 改了內容就回 422 `normalized`。直寫單檔只要沒有 commit 成功（CAS 不符、`normalized`、或 git 本身失敗，例如 `index.lock` 被佔用），該檔一律還原成 HEAD 的樣子；index 動不了時仍以 HEAD 的 blob 還原工作目錄的檔案。
-- **沒有變更的單檔寫入**：`PUT` 的內容與現有檔案、也與 HEAD 裡的那份都逐位元組相同時直接回成功，不問產生器、不 commit。只有工作目錄裡的檔案相同（外部改了沒 commit，或前一次寫入失敗後檔案沒能還原）時照常判定並 commit。
+- **沒有變更的單檔寫入**：`PUT` 的內容與現有檔案逐位元組相同、且該檔與 HEAD 一致時直接回成功，不問產生器、不 commit。檔案與 HEAD 不一致（外部改了沒 commit 等）時不再判定並 commit，而是回 409 `TENANT_FILE_DIRTY`（見 §3.10）。
 
 | 結果 | HTTP | `code` | 說明 |
 |---|---|---|---|
@@ -292,6 +292,17 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 - **部分更新不得改到沒編輯的內容**：批次與 `PUT .../custom-alerts` 是把變更合併進現有租戶檔再整份重新輸出。寫入前把原檔與合併結果都解析成 yaml.v3 節點比對：編輯以外的每個節點寫出來都要相同（種類、style 與引號方式、寫出的 tag、純量原文、anchor、別名所指的內容），文件數與 anchor 也要相同；被編輯的鍵另外解碼確認（設定的是新值、刪掉的不在，`<<` 帶進的也算）。有任何差異（例如 flow 序列裡的 `1:20` 會被重新輸出成 `'1:20'`、block scalar 開頭空行被改、別名共用的租戶 block 連帶被改）就拒收：`TENANT_CONFIG_NOT_LOADABLE`（custom-alerts 回 409；批次是該筆結果的 code），`config_error` 為 `not_round_trippable`，訊息附第一個差異的位置（只在本租戶 block 內才寫出路徑，其他位置只說「另一處」）。合併寫出的字串一律加雙引號（custom-alerts 裡含換行的字串寫成 literal block `|`，讀回來不變時才用）。修法是用整檔 `PUT /tenants/{id}` 或直接在 git 改寫那個檔（[ADR-036 §4](../adr/036-single-parser-effective-config.md)）。
 - **解碼失敗的訊息不含檔案內容**：YAML 解碼失敗回給呼叫端的文字只說哪裡失敗與行號，parser 的原文只進 server log（一份檔可能有多個租戶，原文會引用別的租戶的值）。
 - **repo 裡不是一般檔的項目**：產生器從 git 物件取檔，symlink（mode 120000）、gitlink（160000）等不是 100644／100755 的項目一律是 `not_regular_file`（路徑中有一段以 `.` 開頭的除外，與所有讀取端略過隱藏項目一致），以 finding 擋下寫入：domain policy 檔名（`_domain_policy.yaml`／`.yml`）報 `domain_policy_unusable`，其他報 `tenant_file_unreadable`，與其他讀不了的檔同一條分類；把它換成一般檔即可。tenant-api 寫該路徑時本來就寫成一般檔（[#2981](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2981)）。
+
+### 3.10 租戶檔與 HEAD 不一致時，直寫拒收（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）
+
+**行為變更（breaking）**：直寫模式的寫入——`PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts`、`POST /tenants/batch`、`POST /groups/{id}/batch`——讀的是 tenant-api 那份工作樹裡的租戶檔（`base_hash` 比對、合併的基底、「沒有變更」的判斷），commit 卻落在 HEAD 上。兩者不同時，這些判斷都是對一份沒有任何 commit 持有的內容下的。所以寫入在拿到寫入鎖、取樣 HEAD 之後、讀檔之前，先請 git 比對這個租戶檔與 HEAD，不一致就回 409 `TENANT_FILE_DIRTY`，什麼都不寫。
+
+- **算不一致的情況**：工作樹有未 commit 的修改、已 `git add` 但未 commit、被刪除、API 要新建的檔名已有未追蹤的檔（含被 `.gitignore` 忽略的）、index 標了 `skip-worktree` 或 `assume-unchanged`（git 不比對這種檔，無從證明一致）；租戶檔經 symlink 抵達時，沿路每個 repo 內的連結與最後抵達的檔都要一致。`.gitattributes` 的正規化由 git 自己處理：`eol=crlf` 下 checkout 出的 CRLF 檔算一致。
+- **不判的情況**：symlink 指向這個 repo 以外的檔——repo 外、巢狀 repo 或 submodule 的工作樹內、`.git` 目錄內——git 無從比對，照舊信任工作樹。PR 模式不判：它切的是最新 base 的乾淨 checkout。
+- **回應**：`PUT` 類回 409 `TENANT_FILE_DIRTY`，訊息固定、不含路徑；`/diff` 回同一個 409、`/validate` 回 `valid: false` 並帶 `code: "TENANT_FILE_DIRTY"`（git 無法判定時預覽不擋）；批次整批 422、該筆 `code: TENANT_FILE_DIRTY`。重整重試不會成功。
+- **以前的回應**：外部的未 commit 修改被當成基底——可能被合併進去並掛在 API 使用者名下 commit，或在內容恰好相同時回成功卻沒有 commit。
+- **保證的範圍**：只擋進寫入鎖時已經存在的不一致。檢查到讀檔之間另一個程序再改檔不在保證內；那段時間落地的外部 commit 會讓 HEAD 移動，由 compare-and-swap 擋成 409 `CONFLICT`。
+- **怎麼修**：在 tenant-api 掛載的 repo 裡跑 `git status -- <租戶檔>`（skip-worktree／assume-unchanged 用 `git ls-files -v -- <租戶檔>` 看，標記為 `S` 或小寫），把那份修改 commit 或丟棄，再重試寫入。丟棄的方式依狀態而定：已追蹤檔的修改或刪除用 `git restore --staged --worktree -- <租戶檔>`；未追蹤的同名檔（狀態 `??`）、被 `.gitignore` 忽略的同名檔（`git status --ignored -- <租戶檔>` 顯示 `!!`）直接刪除該檔；新 `git add` 但 HEAD 沒有的檔（狀態 `A`）要保留就直接 commit，要捨棄就先 `git rm --cached -- <租戶檔>` 再刪除工作樹的檔（只移出 index 不刪檔，檔會變成未追蹤，重試仍是 409）；標記用 `git update-index --no-skip-worktree`／`--no-assume-unchanged` 解除。
 
 ---
 

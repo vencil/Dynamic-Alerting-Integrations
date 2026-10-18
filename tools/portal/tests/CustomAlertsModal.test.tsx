@@ -215,6 +215,20 @@ describe('CustomAlertsModal', () => {
     expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // edits kept
   });
 
+  it('#1535: a 409 TENANT_FILE_DIRTY on save shows the backend text, keeps the edits, no refresh-and-retry', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    const serverError = "the tenant's config file has uncommitted changes made outside tenant-api; nothing was written — commit or discard them in the repository, then retry";
+    const save = vi.fn(() => Promise.resolve({ ok: false, status: 409, data: { error: serverError, code: 'TENANT_FILE_DIRTY' } }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('file-dirty-save')).toBeInTheDocument());
+    expect(screen.getByTestId('file-dirty-save').textContent).toContain(serverError);
+    expect(screen.queryByTestId('conflict')).toBeNull();
+    expect(screen.queryByTestId('git-managed-save')).toBeNull();
+    expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // edits kept
+  });
+
   it('#2406 control: a base_hash 409 (code CONFLICT) still shows the conflict box', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
     const save = vi.fn(() => Promise.resolve({

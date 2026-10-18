@@ -167,6 +167,7 @@ func (w *Writer) confTopRel() (top, rel string, err error) {
 // stagingTree is one batch's worktree.
 type stagingTree struct {
 	root      string // the worktree
+	mirror    bool   // direct mode: conf.d is a copy of the serving one (openStaging)
 	configDir string // root/<conf.d relative to the top level>
 	rel       string
 	prior     *cfg.TreeScan // the staging tree's own walk prior
@@ -223,7 +224,7 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 		_ = os.RemoveAll(root)
 		return nil, fmt.Errorf("add batch worktree: %w", err)
 	}
-	st := &stagingTree{root: root, configDir: filepath.Join(root, rel), rel: rel,
+	st := &stagingTree{root: root, mirror: mirror, configDir: filepath.Join(root, rel), rel: rel,
 		changed: map[string][]string{}, targets: map[string]string{}}
 	if err := w.gitIn(root, "reset", "-q"); err != nil {
 		w.closeStaging(st)
@@ -450,6 +451,12 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 		st.targets[target] = op.TenantID
 		err = w.ensureNotDeclaredElsewhereIn(w.stagingScan(st), op.TenantID, filePath)
 	}
+	if err == nil && st.mirror {
+		// #1535 item 6: the op's merge base is the copy of the serving
+		// file, so the serving file must be what the batch's base (HEAD,
+		// sampled under this lock) holds — refused per op otherwise.
+		err = w.checkServingFileClean(st, filePath)
+	}
 	if err != nil {
 		return BatchOpOutcome{Err: err}, target
 	}
@@ -479,6 +486,16 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 		st.changed[rel] = append(st.changed[rel], op.TenantID)
 	}
 	return BatchOpOutcome{Notices: notices}, target
+}
+
+// checkServingFileClean is checkTenantFileClean for the serving file a
+// direct-mode staging path (filePath, under st.configDir) mirrors.
+func (w *Writer) checkServingFileClean(st *stagingTree, filePath string) error {
+	rel, err := filepath.Rel(st.configDir, filePath)
+	if err != nil {
+		return fmt.Errorf("check the tenant file against HEAD: %w", err)
+	}
+	return w.checkTenantFileClean(filepath.Join(w.configDir, rel))
 }
 
 // applyBatch runs every op on the staging tree — every op is judged, even

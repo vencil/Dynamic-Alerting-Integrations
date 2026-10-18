@@ -411,6 +411,13 @@ func main() {
 	if err := writer.PruneCommitIndexes(); err != nil {
 		slog.Warn("could not prune leftover temporary commit indexes", "error", err)
 	}
+	// #1535 item 6: every tenant write samples HEAD before it reads or
+	// judges anything, so without a readable HEAD every write fails with
+	// 500 — say so once at startup rather than only per request.
+	if err := writer.CheckHEAD(); err != nil {
+		slog.Warn("config dir has no readable git HEAD: every tenant write will fail with an internal error until it is a git repository with a commit",
+			"config_dir", *configDir, "git_dir", *gitDir, "error", err)
+	}
 	// v2.6.0: Register callback for real-time event broadcasting. #3123: the
 	// event is addressed to its tenant; EventStream delivers it only to
 	// subscribers who may read that tenant.

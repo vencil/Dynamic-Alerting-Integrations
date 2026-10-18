@@ -226,7 +226,11 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
 	// judges the branch point — the feature branch's HEAD, nothing committed
 	// on it yet — with the body written over the file.
-	if _, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content)); err != nil {
+	judged, jerr := w.sampleJudgedBase()
+	if jerr == nil {
+		jerr = w.validateTenantFile(ctx, judged, filePath, tenantID, []byte(content))
+	}
+	if err := jerr; err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
 	}
@@ -404,7 +408,7 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	if check != nil {
 		afterResolve = func(string) error { return check(st.configDir) }
 	}
-	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve)
+	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), nil, afterResolve)
 	if err != nil {
 		return "", "", nil, err
 	}
