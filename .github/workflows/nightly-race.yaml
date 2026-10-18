@@ -104,11 +104,24 @@ jobs:
           RAW: ${{ github.workspace }}/race-raw-${{ matrix.module }}.jsonl
           ERR: ${{ github.workspace }}/race-stderr-${{ matrix.module }}.log
         # -timeout=30m guards against single test hangs (default 10m is tight at 10x).
+        # It is a per-package-binary budget, so a package whose tests are merely
+        # slow hits it too: threshold-exporter's cmd/da-guard did, twice (#2977).
+        # Raising it is not the fix — that only postpones the next collision.
+        #
+        # -short (#2977 option A): the -count=10 here exists to catch isolation
+        # problems BETWEEN repetitions, which a reduced matrix exposes just as
+        # well. The exhaustive matrices that honour testing.Short() (cmd/da-guard's
+        # alias-spelling and null-override products) keep their FULL coverage in
+        # PR CI (ci.yml, -race -count=1, no -short), once per PR — a guard test in
+        # tests/ops/test_nightly_race_issue_policy.py pins both halves. Side effect:
+        # the vendored yaml.v3 TestLimits also skips under -short; tenant-api has
+        # no testing.Short() call, so -short is a no-op there. Making the matrices
+        # themselves cheap is tracked as TRK-3180 (#3180).
         # PACKAGES is intentionally unquoted: it is a multi-pattern list.
         run: |
           set -o pipefail
           rc=0
-          go test $PACKAGES -race -count=10 -timeout=30m -json 2>"$ERR" | tee "$RAW" || rc=$?
+          go test $PACKAGES -race -count=10 -short -timeout=30m -json 2>"$ERR" | tee "$RAW" || rc=$?
           echo "go test exited $rc"
           echo "go_exit_code=$rc" >> "$GITHUB_OUTPUT"
 
