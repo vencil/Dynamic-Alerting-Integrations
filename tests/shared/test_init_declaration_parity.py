@@ -1,8 +1,9 @@
 """Python half of tests/shared/init_declaration_parity_matrix.json (#1942).
 
 `da-tools init` skips any requested tenant another conf.d file POSSIBLY
-mentions (`init_project._possible_mentions`); it no longer decides whether
-the exporter can read a file (owner ruling, option 3). The Go half
+mentions (`init_project._possible_mentions`; since ADR-036 §2 the tenants a
+file declares as da-guard parse-tree reads it, every requested tenant for a
+file parse-tree cannot read). The Go half
 (components/threshold-exporter/app/pkg/config/init_declaration_parity_test.go)
 runs the exporter's `ScanDirTree` over every row of the same table. Neither
 side reads the other's source.
@@ -86,8 +87,11 @@ def test_init_covers_every_tenant_the_exporter_reads(tree, tmp_path) -> None:
 #: pinned separately: dropping the UTF-16 decodings or the escaped-line-break
 #: handling turned those rows into (d) and the table stayed green (round-5
 #: review F3, mutants M4/M6).
+#: ADR-036 §2 (#2906): what a file declares is da-guard parse-tree's answer.
+#: A UTF-16 file is outside its closed list (invalid_utf8): (d) is now the
+#: designed answer for it, pinned by `test_a_utf16_file_is_a_blanket_by_design`
+#: instead of being required concrete here.
 CONCRETE_REQUIRED = {
-    "R2-utf16le-with-bom",
     "R3-escaped-key-in-flow-with-tab",
     "R5-escaped-LF-break-in-key-with-tab",
     "R5-escaped-CR-break-in-key-with-tab",
@@ -105,6 +109,17 @@ def test_the_coverage_of_these_rows_is_concrete_not_a_blanket(tree, tmp_path):
     for rel, go_ids in tree["declarations"].items():
         got, why = ip._mentions(conf / rel, sorted(go_ids))
         assert why == "", f"{rel}: covered only by (d) — {why}"
+        assert set(go_ids) <= got, (rel, go_ids, got)
+
+
+@pytest.mark.parametrize(
+    "tree", [t for t in MATRIX["trees"] if t["name"] == "R2-utf16le-with-bom"],
+    ids=lambda t: t["name"])
+def test_a_utf16_file_is_a_blanket_by_design(tree, tmp_path):
+    conf = _build(tree, tmp_path)
+    for rel, go_ids in tree["declarations"].items():
+        got, why = ip._mentions(conf / rel, sorted(go_ids))
+        assert "invalid_utf8" in why, (rel, why)
         assert set(go_ids) <= got, (rel, go_ids, got)
 
 

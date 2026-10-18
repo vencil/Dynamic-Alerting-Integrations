@@ -155,14 +155,14 @@ def test_a_tenant_the_customers_file_may_declare_is_skipped(
 
 @pytest.mark.parametrize("body", [
     'tenants:\n  db-c:\n    note: "\\U00110000"\n',
-    "tenants:\n  db-c:\n    note: " + "[" * 3000 + "]" * 3000 + "\n",
+    "tenants:\n  db-c:\n    note: " + "[" * 20000 + "]" * 20000 + "\n",
     "tenants:\n  !!binary ZGItYw==: {}\n",
-], ids=["out-of-range-U-escape", "deep-flow-nesting", "explicit-tag"])
+], ids=["out-of-range-U-escape", "past-yaml-v3-depth", "explicit-tag"])
 def test_a_file_init_cannot_read_through_counts_as_mentioning_everyone(
         tmp_path, body):
-    """第 3 輪：`\\U00110000` 讓 PyYAML 丟 ValueError、深度巢狀丟
-    RecursionError，明確 tag 能把任何位元組變成 key——三者都是「可能提及
-    **每一個**要求的租戶」，而且不能是 traceback。
+    """第 3 輪：讀不了的檔是「可能提及**每一個**要求的租戶」，而且不能是
+    traceback。ADR-036 §2（#2906）起「讀不了」是 da-guard parse-tree 的判定：
+    超出範圍的 `\\U00110000`、超過 yaml.v3 深度上限的巢狀、不在允許清單的 tag。
 
     ⚠️ 用沒有 init 自有檔的樹：在 `_brownfield` 上，「提及每一個」也包括
     已存在的 `db-a.yaml`／`db-b.yaml` 的租戶，那是並存拒絕（下方拒絕表）。"""
@@ -174,6 +174,20 @@ def test_a_file_init_cannot_read_through_counts_as_mentioning_everyone(
     for t in ("db-c", "db-d"):
         assert f"{t} may already be declared by conf.d/team.yaml" in run.stderr
         assert not (out / "conf.d" / f"{t}.yaml").exists()
+
+
+def test_what_a_file_declares_is_yaml_v3_s_reading(tmp_path):
+    """ADR-036 §2：宣告取自 parse-tree——3000 層的巢狀 PyYAML 讀不了（先前因此
+    「提及每一個」），yaml.v3 照讀：team.yaml 只宣告 db-c，db-d 照常產生。"""
+    out = tmp_path / "repo"
+    _place(out, "team.yaml",
+           "tenants:\n  db-c:\n    note: " + "[" * 3000 + "]" * 3000 + "\n")
+    run = _run(out, "db-c,db-d")
+    assert run.returncode == 0, run.stderr[-800:]
+    assert "db-c may already be declared by conf.d/team.yaml" in run.stderr
+    assert "db-d may already be declared" not in run.stderr
+    assert not (out / "conf.d" / "db-c.yaml").exists()
+    assert (out / "conf.d" / "db-d.yaml").is_file()
 
 
 def test_a_customer_file_that_mentions_no_requested_tenant_draws_no_comment(
@@ -269,9 +283,10 @@ def test_a_file_init_cannot_read_through_does_not_block_its_own_paths(
     assert "HAND-EDIT" not in own.read_text(encoding="utf-8")   # 重寫了
     assert theirs.read_bytes() == before
     for t in ("db-a", "db-b"):
-        assert (f"init cannot read conf.d/team.yaml through (it carries an "
-                f"explicit YAML tag); if it also declares {t}, it duplicates "
-                f"conf.d/{t}.yaml") in run.stderr, run.stderr
+        assert ("init cannot read conf.d/team.yaml through (da-guard parse-tree "
+                "cannot read it (tag_not_allowed: ") in run.stderr, run.stderr
+        assert (f"; if it also declares {t}, it duplicates conf.d/{t}.yaml"
+                in run.stderr), run.stderr
     assert "da-tools guard defaults-impact" in run.stderr
     assert "init cannot read conf.d/team.yaml through" in run.stdout
     # db-c 沒有自有檔：(d) 照舊視為可能提及 ⇒ 跳過
@@ -281,7 +296,8 @@ def test_a_file_init_cannot_read_through_does_not_block_its_own_paths(
 
 _PLACEHOLDER_OWN = {
     "db-a.yaml": "# placeholder\n",
-    "team.yaml": "tenants:\n  db-a:\n    mysql_connections: !!str 5\n",
+    # a tag parse-tree does not read: (d), not a concrete mention
+    "team.yaml": "tenants:\n  db-a:\n    mysql_connections: !foo 5\n",
 }
 
 
@@ -314,9 +330,9 @@ def test_an_own_path_that_does_not_name_the_tenant_is_not_rewritten_cli(
     assert (out / "conf.d" / "db-a.yaml").read_bytes() == own_before
     assert "db-a may already be declared by conf.d/team.yaml" in run.stderr
     # 第 5 輪 F4：跳過訊息寫出 (d) 的原因與怎麼讓它可讀
-    assert ("init cannot read conf.d/team.yaml through (it carries an "
-            "explicit YAML tag)") in run.stderr, run.stderr
-    assert "`!Important`" in run.stderr
+    assert ("init cannot read conf.d/team.yaml through (da-guard parse-tree "
+            "cannot read it (tag_not_allowed: ") in run.stderr, run.stderr
+    assert "remove the tags parse-tree does not read" in run.stderr
 
 
 # ── owner 裁決（2026-09-25，第 1 輪 F2 的另一半）：重寫 init 自有路徑時，那個
@@ -361,15 +377,22 @@ def test_rewriting_an_own_path_that_declares_an_unrequested_tenant_cli(
     assert "conf.d/db-z.yaml" in run.stderr and "--tenants" in run.stderr
 
 
-def test_an_own_path_whose_keys_init_cannot_list_is_refused(tmp_path):
-    """列不出自有檔的所有 key（PyYAML 讀不了）也拒絕——列不出不等於沒有。"""
+def test_the_tenants_an_own_path_declares_are_yaml_v3_s_reading(tmp_path):
+    """ADR-036 §2：自有檔宣告了哪些租戶取自 parse-tree。TAB 分隔 PyYAML 讀不了
+    （先前因此「列不出所有 key」而拒絕），yaml.v3 照讀：只宣告 db-a 就照常
+    重寫，另宣告 db-z 就是 'drops' 拒絕。"""
     out = tmp_path / "repo"
-    _place(out, "db-a.yaml", "tenants:\n  db-a: {}\nnote:\t1\n")
-    before = _snapshot(out)
+    own = _place(out, "db-a.yaml", "tenants:\n  db-a: {}\nnote:\t1\n")
     run = _run(out, "db-a")
+    assert run.returncode == 0, run.stderr[-800:]
+    assert "note" not in own.read_text(encoding="utf-8")
+    out2 = tmp_path / "repo2"
+    _place(out2, "db-a.yaml", "tenants:\n  db-a: {}\n  db-z:\t{}\n")
+    before = _snapshot(out2)
+    run = _run(out2, "db-a")
     assert run.returncode == 1, run.stderr[-800:]
-    assert _snapshot(out) == before
-    assert "cannot list every tenant it declares" in run.stderr
+    assert _snapshot(out2) == before
+    assert "also declares db-z, which this run was not asked for" in run.stderr
 
 
 def test_an_own_path_declaring_only_its_tenant_is_still_rewritten(tmp_path):

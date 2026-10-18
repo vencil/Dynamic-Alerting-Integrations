@@ -310,7 +310,11 @@ def test_deprecate_rule_does_not_rewrite_a_file_its_scan_cannot_read(
                         "--config-dir", str(d), "--execute"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 1, p.stdout + p.stderr
-    assert "無法讀取" in p.stdout + p.stderr, p.stdout + p.stderr
+    # ADR-036 §2 (#2906): the scan is parse-tree's. yaml.v3 reads `=` as a
+    # string, so only the rewrite — PyYAML's text — cannot be produced; a
+    # plain `<<` value is outside parse-tree's closed list: unreadable.
+    want = "PyYAML 讀不了它" if bad == "=" else "無法讀取"
+    assert want in p.stdout + p.stderr, p.stdout + p.stderr
     assert (d / target).read_text(encoding="utf-8") == files[target]
 
 
@@ -338,8 +342,8 @@ def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
         "try:\n"
         "    pc.build_patch(cm, layout, 't1', 'mysql_slave_lag', '5')\n"
         "    built = 'built'\n"
-        "except yaml.constructor.ConstructorError as e:\n"
-        "    built = 'ConstructorError: ' + str(e).splitlines()[0]\n"
+        "except pc.ConfigMapShapeError as e:\n"
+        "    built = 'refused: ' + str(e).splitlines()[0]\n"
         "argv = ['patch_config.py', '--diff', 't1', 'mysql_slave_lag', '5']\n"
         "with mock.patch('patch_config.run_cmd', return_value=json.dumps(cm)) as run, \\\n"
         "        mock.patch('sys.argv', argv):\n"
@@ -354,8 +358,13 @@ def test_patch_config_refuses_a_key_its_reader_cannot_construct(layout, bad):
     p = subprocess.run([sys.executable, "-c", script, json.dumps(cm), layout],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, env=env)
     got = json.loads(p.stdout.strip().splitlines()[-1])
-    assert got["built"].startswith(
-        "ConstructorError: could not determine a constructor"), (got, p.stderr)
+    # ADR-036 §2 (#2906): the read is parse-tree's. yaml.v3 reads `=` as a
+    # string, so the key is found and only PyYAML — which produces the
+    # rewrite — cannot construct it; a plain `<<` value is outside
+    # parse-tree's closed list (tag_not_allowed): the key is unreadable.
+    want = ("PyYAML cannot read it to produce the rewrite" if bad == "="
+            else "tag_not_allowed")
+    assert got["built"].startswith("refused: ") and want in got["built"], (got, p.stderr)
     assert got["rc"] == 2 and got["sent"] == [], got
 
 
@@ -467,11 +476,12 @@ def test_dump_for_rewrite_is_safe_dump_for_ordinary_data():
 
 
 def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path):
-    """The refusal names the type YAML gives it (`int`), not `RawPlain`."""
+    """The refusal names the type yaml.v3 gives it (`!!int`, from parse-tree,
+    ADR-036 §2), not `RawPlain`."""
     (tmp_path / "_defaults.yaml").write_text("defaults: 5\n", encoding="utf-8")
     [(_p, ok, msg, _r)] = deprecate_rule.remove_from_all_defaults(
         "mysql_slave_lag", str(tmp_path))
-    assert not ok and "（int）" in msg, msg
+    assert not ok and "（!!int）" in msg, msg
 
 
 def test_a_reader_that_is_not_a_rewrite_still_gets_pyyaml_types():
