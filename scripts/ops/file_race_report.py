@@ -57,6 +57,15 @@ failure a "race detector flake". The current failure is neither a race
 banner; otherwise it uses repeat-run / test-isolation vocabulary. This is the
 follow-up the owner asked for in #932 triage and it was never done.
 
+The same rule applies one level down, to the "What this is" prose and the
+Triage steps (#3177). Isolation vocabulary — and the advice to bisect `-count`
+— appears ONLY when tests actually failed. A `-timeout` expiry gets its own
+verdict ("package timeout") and its own triage (where did the time go), and a
+failure nothing could be attributed to says exactly that, matching the warning
+above it. Before this, both of those shapes were narrated as leaked state
+between repetitions, and #2977 sent its reader hunting for state that did not
+exist while the real cause was a package running into its 30-minute deadline.
+
 Fail-closed direction
 ---------------------
 Every unknown resolves toward "worse", never toward "clean":
@@ -351,8 +360,10 @@ def parse_state(body: str) -> dict | None:
         km = re.search(rf"\b{key}=(\S*)", blob)
         val = km.group(1) if km else ""
         state[key] = "" if val in ("none", "[]") else val
+    # A key absent from an older block reads as 0 — `timed_out` (#3177) did not
+    # exist before, and "not recorded" must not make the block unreadable.
     for key in ("streak", "had_data_race", "build_failed", "unattributed",
-                "tests_truncated"):
+                "timed_out", "tests_truncated"):
         km = re.search(rf"\b{key}=(\d+)", blob)
         state[key] = int(km.group(1)) if km else 0
     return state
@@ -388,6 +399,7 @@ def render_state(state: dict) -> str:
         f"had_data_race={int(bool(state['had_data_race']))} "
         f"build_failed={int(bool(state['build_failed']))} "
         f"unattributed={int(bool(state['unattributed']))} "
+        f"timed_out={int(bool(state.get('timed_out')))} "
         f"tests_truncated={truncated} "
         f"tests=[{' '.join(tests)}] {STATE_CLOSE}"
     )
@@ -407,6 +419,7 @@ def load_fragment(frags_dir: Path, module: str) -> tuple[dict, str]:
     stub = {
         "module": module, "failed": True, "failed_tests": [], "race_tests": [],
         "had_data_race": False, "build_failed": False, "unattributed_failure": True,
+        "timed_out": False, "timeout_packages": [], "timeout_running_tests": [],
         "go_exit_code": -1, "fail_events": 0, "non_json_lines": 0, "total_events": 0,
         "raw_missing": True, "run_url": "", "workdir": "", "packages": "",
         "fragment_missing": True,
@@ -437,6 +450,13 @@ def verdict_suffix(frag: dict, green: bool, date: str) -> str:
     if frag.get("had_data_race"):
         n = len(frag.get("race_tests") or []) or len(frag.get("failed_tests") or [])
         return f"DATA RACE ({n} test(s))" if n else "DATA RACE"
+    if frag.get("timed_out"):
+        # Kept inside TITLE_SUFFIX_BUDGET (64): the combined form drops the
+        # package count, which the body's "Package timeout" section carries.
+        if frag.get("failed_tests"):
+            return f"package timeout + repeat-run failure in {len(frag['failed_tests'])} test(s)"
+        n_pkg = len(frag.get("timeout_packages") or []) or 1
+        return f"package timeout in {n_pkg} package(s)"
     if frag.get("failed_tests"):
         return f"repeat-run failure in {len(frag['failed_tests'])} test(s)"
     if frag.get("unattributed_failure"):
@@ -467,9 +487,9 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
         )
     if frag.get("unattributed_failure") and not frag.get("fragment_missing"):
         warn.append(
-            "⚠️ `go test` exited non-zero but no failing test, build failure, or race "
-            "banner could be attributed. Read the raw stream artifact before assuming "
-            "anything — this is the state the old workflow reported as if it were informative."
+            "⚠️ `go test` exited non-zero but no failing test, build failure, race "
+            "banner, or test-timeout panic could be attributed. Read the raw stream "
+            "artifact before assuming anything — this is the state the old workflow reported as if it were informative."
         )
     if frag.get("non_json_lines"):
         warn.append(
@@ -486,6 +506,7 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
         f"| Verdict | {verdict_suffix(frag, green, date)} |",
         f"| Data race detected | {'**yes**' if frag.get('had_data_race') else 'no'} |",
         f"| Build failed | {'**yes**' if frag.get('build_failed') else 'no'} |",
+        f"| Package timed out | {'**yes**' if frag.get('timed_out') else 'no'} |",
         f"| First seen | {state.get('first_seen') or date} ([run]({first_run})) |",
         f"| Latest run | {date} ([run]({run_url})) |",
         f"| Last green | {state.get('last_green') or 'never recorded'} |",
@@ -514,39 +535,108 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
                 f"the complete list is in the `race-raw-{module}` artifact._",
             ]
         out += [""]
+    elif not green and frag.get("timed_out"):
+        out += ["## Failing tests", "",
+                "_None reported — the package hit its `-timeout` before any test "
+                "reported a failure. See **Package timeout** below._", ""]
     elif not green:
         out += ["## Failing tests", "", "_None could be attributed — see the warnings above._", ""]
+
+    timeout_pkgs = frag.get("timeout_packages") or []
+    if frag.get("timed_out"):
+        out += ["## Package timeout", ""]
+        if not timeout_pkgs:
+            out += ["_The timed-out package could not be identified — read the raw "
+                    "stream artifact._", ""]
+        for tp in timeout_pkgs:
+            running = list(tp.get("running_tests") or [])
+            out += [f"`{tp.get('package') or '<unknown package>'}` hit "
+                    f"`-timeout {tp.get('after') or '?'}`. Tests still running at the "
+                    f"deadline ({len(running)}):", ""]
+            shown = running[:MAX_RENDERED_TESTS]
+            out += [f"- `{t}`" for t in shown] or ["- _none listed in the panic_"]
+            if len(running) > len(shown):
+                out += ["", f"_… and {len(running) - len(shown)} more — see the "
+                            f"`race-raw-{module}` artifact._"]
+            out += [""]
+        out += ["_Running at the deadline is not the same as failing: these tests were "
+                "in flight when the clock ran out, which makes them the first ones to "
+                "measure, not necessarily the slow ones._", ""]
 
     if frag.get("race_tests"):
         out += ["**Race banner attributed to:** "
                 + ", ".join(f"`{t}`" for t in frag["race_tests"]), ""]
 
+    # Each paragraph is gated on its OWN evidence (#3177). The isolation
+    # narrative used to be the unconditional `else`, so a timeout and an
+    # unattributed failure were both confidently described as leaked state.
+    nature: list[str] = []
+    steps: list[str] = []
+    if green:
+        nature.append(
+            "The latest run **passed**. This body does not re-diagnose the earlier "
+            "failure — see the run linked under *First seen*. One green night does not "
+            "prove it fixed."
+        )
     if frag.get("had_data_race"):
-        nature = ("A real data race was detected. This is a concurrency bug, not a flake — "
-                  "the report below is reproducible evidence, not a sampling artifact.")
-    elif frag.get("build_failed"):
-        nature = "The package failed to BUILD under `-race`. No test result exists for this run."
-    else:
-        nature = (
+        nature.append("A real data race was detected. This is a concurrency bug, not a flake — "
+                      "the report below is reproducible evidence, not a sampling artifact.")
+        steps.append("Read the race report in the artifact: its two stacks name the "
+                     "conflicting accesses.")
+    if frag.get("build_failed"):
+        nature.append("The package failed to BUILD under `-race`. No test result exists for "
+                      "this run.")
+        steps.append("Read the build error in the artifact; no test ran.")
+    if frag.get("timed_out"):
+        pkgs = ", ".join(f"`{tp.get('package')}`" for tp in timeout_pkgs) or "a package"
+        nature.append(
+            f"**Package timeout.** {pkgs} ran past `go test`'s `-timeout` and the test "
+            "binary was killed with `panic: test timed out`. No test reported a failure "
+            "for it — this is a time budget being exceeded, not a failing assertion, and "
+            "NOT evidence of leaked state between repetitions. Do not bisect `-count` "
+            "to look for an isolation bug."
+        )
+        steps.append(
+            f"Find where the time went: in the `race-raw-{module}` artifact, compare "
+            "the package's `Elapsed` with the `-timeout` above, and rank that package's "
+            "`pass`/`fail` events by `Elapsed`. Start with the tests listed as running "
+            "at the deadline."
+        )
+    if frag.get("failed_tests") and not frag.get("had_data_race"):
+        nature.append(
             "**No data race was detected.** This is a repeat-run / test-isolation failure: "
             "the test fails when the suite runs 10x in one process, which usually means "
             "leaked state between repetitions (package-level vars, shared temp dirs, a "
             "singleton, an unclosed goroutine) rather than a concurrency bug. Do not "
             "describe it as a race in the fix."
         )
-    out += ["## What this is", "", nature, ""]
+        steps.append("Bisect the repetition count (`-count=2`, `-count=5`) to find where "
+                     "isolation breaks.")
+    if not green and not nature:
+        # Unattributed (or a missing fragment): say what the warning says, and
+        # nothing more. Any specific diagnosis here would be a guess.
+        nature.append(
+            "**Cause NOT attributed.** `go test` failed, but nothing in the stream "
+            "identified why — no failing test, build failure, race banner, or timeout "
+            "panic. This report does not know whether it is a race, a timeout, or an "
+            "isolation problem; read the raw stream before assuming any of them."
+        )
+        steps.append("Read the raw stream artifact for a `panic:`, a signal, or a `FAIL` "
+                     "line, and attribute the cause before choosing a fix.")
+    out += ["## What this is", ""]
+    for para in nature:
+        out += [para, ""]
 
+    triage = [f"Reproduce: `{reproduce}`", *steps,
+              f"Full evidence — race report / panic / build error — is in the "
+              f"`race-raw-{module}` artifact on [the run]({run_url})."]
+    out += ["## Triage", ""]
+    out += [f"{i}. {step}" for i, step in enumerate(triage, 1)]
     out += [
-        "## Triage",
-        "",
-        f"1. Reproduce: `{reproduce}`",
-        "2. Bisect the repetition count (`-count=2`, `-count=5`) to find where isolation breaks.",
-        f"3. Full evidence — race report / panic / build error — is in the "
-        f"`race-raw-{module}` artifact on [the run]({run_url}).",
         "",
         "This issue is **refreshed in place** every night (silent body edit — GitHub does "
         "not notify on title/body edits). It is deliberately NOT auto-closed: one green "
-        "night does not prove a repeat-run failure is fixed. Close it by hand once the "
+        "night does not prove a nightly failure is fixed. Close it by hand once the "
         "fix lands.",
         "",
         "Auto-filed by [`.github/workflows/nightly-race.yaml`]"
@@ -620,6 +710,7 @@ def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
         "had_data_race": frag.get("had_data_race"),
         "build_failed": frag.get("build_failed"),
         "unattributed": frag.get("unattributed_failure"),
+        "timed_out": frag.get("timed_out"),
         "tests": frag.get("failed_tests") or prev.get("tests", []),
         "_had_issue": bool(num),
     }
@@ -633,6 +724,8 @@ def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
         summary.append(f"🚨 {degraded}")
     if frag.get("failed_tests"):
         summary.append("Failing: " + ", ".join(f"`{t}`" for t in frag["failed_tests"]))
+    for tp in frag.get("timeout_packages") or []:
+        summary.append(f"Timed out: `{tp.get('package')}` after `{tp.get('after')}`")
 
     if not do_file:
         summary.append("_(summary only — DO_FILE!=true, issues untouched)_")
