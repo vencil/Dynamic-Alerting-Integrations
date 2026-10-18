@@ -302,7 +302,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 - **回應**：`PUT` 類回 409 `TENANT_FILE_DIRTY`，訊息固定、不含路徑；`/diff` 回同一個 409、`/validate` 回 `valid: false` 並帶 `code: "TENANT_FILE_DIRTY"`（git 無法判定時預覽不擋）；批次整批 422、該筆 `code: TENANT_FILE_DIRTY`。重整重試不會成功。
 - **以前的回應**：外部的未 commit 修改被當成基底——可能被合併進去並掛在 API 使用者名下 commit，或在內容恰好相同時回成功卻沒有 commit。
 - **保證的範圍**：只擋進寫入鎖時已經存在的不一致。檢查到讀檔之間另一個程序再改檔不在保證內；那段時間落地的外部 commit 會讓 HEAD 移動，由 compare-and-swap 擋成 409 `CONFLICT`。
-- **怎麼修**：在 tenant-api 掛載的 repo 裡跑 `git status -- <租戶檔>`（skip-worktree／assume-unchanged 用 `git ls-files -v -- <租戶檔>` 看，標記為 `S` 或小寫），把那份修改 commit 或丟棄（`git restore --staged --worktree -- <租戶檔>`；標記用 `git update-index --no-skip-worktree`／`--no-assume-unchanged` 解除），再重試寫入。
+- **怎麼修**：在 tenant-api 掛載的 repo 裡跑 `git status -- <租戶檔>`（skip-worktree／assume-unchanged 用 `git ls-files -v -- <租戶檔>` 看，標記為 `S` 或小寫），把那份修改 commit 或丟棄，再重試寫入。丟棄的方式依狀態而定：已追蹤檔的修改或刪除用 `git restore --staged --worktree -- <租戶檔>`；未追蹤的同名檔（`??`）直接刪除該檔；新 `git add` 但 HEAD 沒有的檔（`A `）先 `git rm --cached -- <租戶檔>`，再刪除該檔或另行 commit；標記用 `git update-index --no-skip-worktree`／`--no-assume-unchanged` 解除。
 
 ---
 

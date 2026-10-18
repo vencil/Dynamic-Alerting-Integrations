@@ -232,7 +232,7 @@ Causes and fixes: [Tenant API Hardening §3.8](api/tenant-api-hardening.en.md#38
 
 **Cause**: in the repository tenant-api mounts, this tenant file differs from HEAD — someone changed it outside tenant-api without committing, `git add`-ed without committing, deleted it, left an untracked file of that name, or marked its index entry `skip-worktree` / `assume-unchanged`; for a tenant file reached through symlinks, a link on the way or the in-repository target changed counts too.
 
-**Fix**: run `git status -- <tenant file>` in that repository (for the marks, `git ls-files -v -- <tenant file>`), commit or discard the change, then retry. Details in [Tenant API Hardening §3.10](api/tenant-api-hardening.en.md#310-a-direct-write-is-refused-while-the-tenant-file-differs-from-head-1535).
+**Fix**: run `git status -- <tenant file>` in that repository (for the marks, `git ls-files -v -- <tenant file>`), commit or discard the change, then retry: `git restore --staged --worktree -- <tenant file>` for a tracked file, delete an untracked file of that name, and for a newly added file `git rm --cached -- <tenant file>` and then delete or commit it. Details in [Tenant API Hardening §3.10](api/tenant-api-hardening.en.md#310-a-direct-write-is-refused-while-the-tenant-file-differs-from-head-1535).
 
 ## tenant-api Writes Refused by the Generator Container (`GENERATOR_FINDINGS` / `VALIDATOR_UNAVAILABLE`)
 

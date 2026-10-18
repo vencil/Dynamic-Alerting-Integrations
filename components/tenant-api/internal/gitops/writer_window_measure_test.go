@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -743,11 +744,12 @@ func TestDirty_MiddleLinkRetargeted(t *testing.T) {
 }
 
 // A target inside a NESTED repository (its own .git, below the conf
-// repository): the conf repository's status answers nothing for it, so
-// it is "outside the repository" by cleanCheckPaths' definition and
-// trusted, like a target outside the top level. Pinned: an edit there does
-// not refuse the write. The same holds for a submodule's worktree and for
-// anything under .git.
+// repository). This pins GIT's behaviour, not a decision of ours: the conf
+// repository's status and ls-files -v report nothing for a file inside a
+// nested repository (or a submodule's working tree), so it reads as clean
+// and is in effect "outside the repository" — trusted, like a target
+// outside the top level (cleanCheckPaths). If git ever reported it, this
+// test would say so.
 func TestDirty_TargetInNestedRepoIsTrusted(t *testing.T) {
 	t.Parallel()
 	repo, conf := symRepo(t)
@@ -778,6 +780,74 @@ func TestDirty_TargetInNestedRepoIsTrusted(t *testing.T) {
 	symLink(t, filepath.Join("..", "shared", tn+".yaml"), filepath.Join(conf, tn+".yaml"))
 	if err := w.checkTenantFileClean(filepath.Join(conf, tn+".yaml")); !errors.Is(err, ErrTenantFileDirty) {
 		t.Fatalf("link retargeted: err = %v, want ErrTenantFileDirty", err)
+	}
+}
+
+// An ABSOLUTE symlink to a file inside the repository: resolution restarts
+// at the root for it (as the OS does), so the target is found in the
+// repository and compared — an edit there refuses the write.
+func TestDirty_AbsoluteSymlinkIntoRepo(t *testing.T) {
+	t.Parallel()
+	repo, conf := symRepo(t)
+	const tn = "tn-absin"
+	repoReal, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(repoReal, "shared", tn+".yaml")
+	symWrite(t, target, symBody(tn, "warning"))
+	symLink(t, target, filepath.Join(conf, tn+".yaml"))
+	gitT(t, repo, "add", "-A")
+	gitT(t, repo, "commit", "-q", "-m", "seed")
+	w := newTestWriter(conf, repo)
+	via := filepath.Join(conf, tn+".yaml")
+	if err := w.checkTenantFileClean(via); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+	symWrite(t, target, symBody(tn, "critical"))
+	if err := w.checkTenantFileClean(via); !errors.Is(err, ErrTenantFileDirty) {
+		t.Fatalf("target edited: err = %v, want ErrTenantFileDirty", err)
+	}
+}
+
+// A symlink LOOP (a tenant file linking to itself): resolution stops at
+// maxSymlinkHops instead of spinning, the link itself is still compared
+// (uncommitted → refused), and a committed one passes the check — the
+// write then takes the ADR-036 §4 repair path and replaces the link (no
+// content is read). Run with a deadline so a check that never returns
+// FAILS rather than hangs the package.
+func TestDirty_SymlinkLoopIsBounded(t *testing.T) {
+	t.Parallel()
+	repo, conf := symRepo(t)
+	const tn = "tn-loop"
+	link := filepath.Join(conf, tn+".yaml")
+	symLink(t, tn+".yaml", link)
+	w := newTestWriter(conf, repo)
+	check := func() error {
+		done := make(chan error, 1)
+		go func() { done <- w.checkTenantFileClean(link) }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(2 * time.Second):
+			t.Fatal("checkTenantFileClean did not return on a symlink loop")
+			return nil
+		}
+	}
+	if err := check(); !errors.Is(err, ErrTenantFileDirty) {
+		t.Fatalf("uncommitted loop link: err = %v, want ErrTenantFileDirty", err)
+	}
+	symWrite(t, filepath.Join(conf, "keep.yaml"), symBody("keep", "warning"))
+	gitT(t, repo, "add", "-A")
+	gitT(t, repo, "commit", "-q", "-m", "seed")
+	if err := check(); err != nil {
+		t.Fatalf("committed loop link: err = %v, want clean", err)
+	}
+	if _, err := w.Write(context.Background(), tn, "alice@example.com", symBody(tn, "disabled")); err != nil {
+		t.Fatalf("Write over the committed loop = %v, want the repair path", err)
+	}
+	if fi, err := os.Lstat(link); err != nil || !fi.Mode().IsRegular() {
+		t.Fatalf("after the write: %v, %v; want a regular file", fi, err)
 	}
 }
 

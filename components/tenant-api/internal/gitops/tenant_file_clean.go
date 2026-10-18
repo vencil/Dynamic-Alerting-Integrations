@@ -116,19 +116,39 @@ func (w *Writer) checkTenantFileClean(filePath string) error {
 // tracks as a link, and the file finally reached is the content a read
 // sees. Each of them is checked when it lies IN THIS REPOSITORY.
 //
-// "In this repository" means: below the conf repository's top level, not
-// inside its .git directory, and with that same top level as its own
-// (`git rev-parse --show-toplevel` run in its directory) — so not inside
-// a nested repository or a submodule's worktree, whose files the conf
-// repository's status does not report (it answers nothing for them, which
-// would read as clean). Anything else is "outside the repository": git
-// cannot compare it with HEAD, and it is trusted as it was before this
-// check existed.
+// "In this repository" means: below the conf repository's top level and
+// not inside its .git directory. Anything else is "outside the
+// repository": git cannot compare it with HEAD, and it is trusted as it
+// was before this check existed. A file inside a nested repository or a
+// submodule's working tree is below the top level, but the conf
+// repository's git reads it as clean — status and ls-files -v report
+// nothing for it — so it is in effect outside too, and trusted the same
+// way (TestDirty_TargetInNestedRepoIsTrusted pins that git behaviour).
 //
-// A resolution that does not finish — more than maxSymlinkHops links (a
-// loop) — checks the links met so far; the read that follows fails on the
-// same path, so the write is refused there (fail-closed in the read).
+// A resolution that does not finish — more than maxSymlinkHops links, a
+// loop — checks the links met so far. The file itself then has no content
+// a read could reach: the write treats it as an unresolvable tenant file,
+// the ADR-036 §4 repair path (it replaces the link, nothing is read or
+// lost), and an unresolvable entry elsewhere is the tree verdict's.
 func (w *Writer) cleanCheckPaths(filePath string) (top string, paths []string, err error) {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", nil, err
+	}
+	links, final := resolveLinks(abs)
+	if final != "" {
+		links = append(links, final)
+	}
+	// Each path once (a loop meets the same link again and again), before
+	// git is asked anything.
+	var candidates []string
+	seen := map[string]bool{}
+	for _, c := range links {
+		if !seen[c] {
+			seen[c] = true
+			candidates = append(candidates, c)
+		}
+	}
 	out, err := w.gitOutput(w.gitDir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", nil, err
@@ -138,23 +158,8 @@ func (w *Writer) cleanCheckPaths(filePath string) (top string, paths []string, e
 	if err != nil {
 		return "", nil, err
 	}
-	abs, err := filepath.Abs(filePath)
-	if err != nil {
-		return "", nil, err
-	}
-	links, final := resolveLinks(abs)
-	candidates := links
-	if final != "" {
-		candidates = append(candidates, final)
-	}
-	seen := map[string]bool{}
 	for _, c := range candidates {
-		rel, ok, err := w.inConfRepo(topReal, c)
-		if err != nil {
-			return "", nil, err
-		}
-		if ok && !seen[rel] {
-			seen[rel] = true
+		if rel, ok := inConfRepo(topReal, c); ok {
 			paths = append(paths, filepath.ToSlash(rel))
 		}
 	}
@@ -213,39 +218,17 @@ func splitPath(p string) []string {
 }
 
 // inConfRepo reports whether the absolute, directory-resolved path p is in
-// the conf repository whose resolved top level is topReal (see
-// cleanCheckPaths), and p relative to it.
-func (w *Writer) inConfRepo(topReal, p string) (string, bool, error) {
+// the conf repository whose resolved top level is topReal — below it, not
+// inside .git (see cleanCheckPaths) — and p relative to it.
+func inConfRepo(topReal, p string) (string, bool) {
 	rel, ok := inside(topReal, p)
 	if !ok || rel == "." {
-		return "", false, nil
+		return "", false
 	}
 	if first, _, _ := strings.Cut(filepath.ToSlash(rel), "/"); first == ".git" {
-		return "", false, nil
+		return "", false
 	}
-	// The nearest directory that exists, and its own repository.
-	dir := filepath.Dir(p)
-	for {
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			break
-		}
-		if dir == topReal || dir == filepath.Dir(dir) {
-			break
-		}
-		dir = filepath.Dir(dir)
-	}
-	out, err := w.gitOutput(dir, "rev-parse", "--show-toplevel")
-	if err != nil {
-		return "", false, fmt.Errorf("locate the repository of %s: %w", rel, err)
-	}
-	own, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
-	if err != nil {
-		return "", false, err
-	}
-	if own != topReal {
-		return "", false, nil // a nested repository or a submodule's worktree
-	}
-	return rel, true, nil
+	return rel, true
 }
 
 // inside reports p relative to root, and whether p is root or below it.
