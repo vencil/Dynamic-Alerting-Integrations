@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -112,6 +113,16 @@ func (w *Writer) sampleJudgedBase() (string, error) {
 		w.afterBaseSample()
 	}
 	return base, nil
+}
+
+// CheckHEAD reports whether the Writer's git dir has a readable HEAD — the
+// commit every tenant write samples first (sampleJudgedBase). When it does
+// not (conf.d is not a git repository, or HEAD is broken), every write
+// fails there with a server error, before any verdict on its body. For a
+// startup warning.
+func (w *Writer) CheckHEAD() error {
+	_, err := w.currentHEAD()
+	return err
 }
 
 // validateTenantFile is validateProposed for one tenant file under
@@ -280,8 +291,9 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 
 // unchangedFile is the no-op rule of the single-file writes (Write and
 // WriteMerged, #2903): content changes nothing only when it is
-// byte-identical both to the serving file (existing; nil when there is
-// none) and to base's blob of it (base: the judged base, HEAD). The
+// byte-identical to the serving file (existing; nil when there is none)
+// and base (the judged base, HEAD) stores exactly that as its blob of it
+// (storesAs: attribute-aware). The
 // serving file alone can hold bytes HEAD does not — an uncommitted edit
 // from outside, or a write whose file landed and whose commit failed
 // (index.lock) — and answering success for those would report a body that
@@ -289,17 +301,91 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 // committed and the generator not asked (the tree it would judge is
 // base's own). The batch's no-op rule is the same one (applyBatchOp).
 func (w *Writer) unchangedFile(base, filePath string, existing []byte, content string) bool {
-	return existing != nil && string(existing) == content && w.revHolds(w.gitDir, base, filePath, existing)
+	return existing != nil && string(existing) == content && w.storesAs(w.gitDir, base, filePath, existing)
 }
 
-// revHolds reports whether rev's blob of filePath (a path in the worktree
-// at dir) is exactly content (false when rev has no such file or it cannot
-// be read).
-func (w *Writer) revHolds(dir, rev, filePath string, content []byte) bool {
-	rel, err := filepath.Rel(dir, filePath)
-	if err != nil {
+// storesAs reports whether content, committed at filePath (a path in the
+// worktree at dir), would be stored as exactly the blob rev holds for the
+// file a read of filePath sees (revFile: a symlink followed) — false when
+// rev has no such file or either side cannot be read.
+//
+// ⛔ ATTRIBUTE-AWARE, NOT A BYTE COMPARE (#1535 item 6): with a
+// .gitattributes rule (`text eol=crlf`, a clean filter…) the worktree
+// holds other bytes than the blob, and a byte compare called an unchanged
+// file changed — the write then went on to stage it, and the staged blob
+// differed from the judged bytes (checkStagedAsValidated refused it).
+// `hash-object --path` (without -w: nothing is written to the object
+// store) applies the attributes of that path, as staging it would.
+func (w *Writer) storesAs(dir, rev, filePath string, content []byte) bool {
+	top, rel, oid, err := w.revFile(dir, rev, filePath)
+	if err != nil || oid == "" {
 		return false
 	}
-	blob, err := w.gitOutput(dir, "cat-file", "blob", rev+":./"+filepath.ToSlash(rel))
-	return err == nil && bytes.Equal(blob, content)
+	cmd, _, cancel := w.gitCmd("--no-optional-locks", "-C", top, "hash-object", "--path="+rel, "--stdin")
+	defer cancel()
+	cmd.Stdin = bytes.NewReader(content)
+	got, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(got)) == oid
+}
+
+// revBlob is rev's blob of the file a read of filePath (a path in the
+// worktree at dir) sees (revFile), nil when rev has no such file. Any
+// failure to tell is an error, never "no such file".
+func (w *Writer) revBlob(dir, rev, filePath string) ([]byte, error) {
+	_, _, oid, err := w.revFile(dir, rev, filePath)
+	if err != nil || oid == "" {
+		return nil, err
+	}
+	blob, err := w.gitOutput(dir, "cat-file", "blob", oid)
+	if err != nil {
+		return nil, fmt.Errorf("read %s's blob: %w", rev, err)
+	}
+	return blob, nil
+}
+
+// maxRevSymlinkHops bounds revFile's symlink chain (a loop is "no file").
+const maxRevSymlinkHops = 8
+
+// revFile finds, in rev, the regular file a read of filePath (a path in
+// the worktree at dir) would see: filePath's own entry, or — when rev
+// holds a symlink there (a tenant file linked to a shared one) — the entry
+// it points to, followed as the worktree follows it. top is the
+// repository's top level and rel that file's path from it; oid is "" when
+// rev has no such regular file (missing, a link leaving the repository or
+// looping, a directory). An error is a failure to tell.
+func (w *Writer) revFile(dir, rev, filePath string) (top, rel, oid string, err error) {
+	out, err := w.gitOutput(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", "", "", fmt.Errorf("locate the repository: %w", err)
+	}
+	top = strings.TrimSpace(string(out))
+	r, err := filepath.Rel(top, filePath)
+	if err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+		return top, "", "", nil
+	}
+	rel = filepath.ToSlash(r)
+	for hop := 0; hop <= maxRevSymlinkHops; hop++ {
+		listed, err := w.gitOutput(top, "ls-tree", "-z", "--full-tree", rev, "--", rel)
+		if err != nil {
+			return top, rel, "", fmt.Errorf("read %s's entry: %w", rev, err)
+		}
+		meta, _, found := strings.Cut(strings.TrimSuffix(string(listed), "\x00"), "\t")
+		fields := strings.Fields(meta)
+		if !found || len(fields) != 3 || fields[1] != "blob" {
+			return top, rel, "", nil
+		}
+		if fields[0] != "120000" {
+			return top, rel, fields[2], nil
+		}
+		target, err := w.gitOutput(top, "cat-file", "blob", fields[2])
+		if err != nil {
+			return top, rel, "", fmt.Errorf("read %s's link: %w", rev, err)
+		}
+		next := path.Clean(path.Join(path.Dir(rel), string(target)))
+		if path.IsAbs(string(target)) || next == ".." || strings.HasPrefix(next, "../") {
+			return top, rel, "", nil
+		}
+		rel = next
+	}
+	return top, rel, "", nil
 }

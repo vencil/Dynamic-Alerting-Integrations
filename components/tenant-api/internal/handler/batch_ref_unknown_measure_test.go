@@ -1,19 +1,19 @@
 package handler
 
-// #1535 item 6 — MEASUREMENT, not a fix: what an async direct batch's task
-// says when publishBatch's compare-and-swap (update-ref) fails AND HEAD
-// cannot be read afterwards, so the writer cannot tell whether the branch
-// moved. The fault is a reference-transaction hook on the serving branch's
-// ref: it refuses the update in "prepared" (git exits 1); in the "moved"
-// variant its "aborted" call then writes the new id into the branch ref
-// itself (a ref that moved although git reported an error); both variants
-// then point HEAD at a missing branch so `rev-parse HEAD` fails.
+// #1535 item 6 — a pin of CURRENT, to-be-fixed behaviour (BUG(#3173)):
+// what an async direct batch's task says when publishBatch's
+// compare-and-swap (update-ref) fails AND HEAD cannot be read afterwards,
+// so the writer cannot tell whether the branch moved. The fault is a
+// reference-transaction hook on the serving branch's ref: it refuses the
+// update in "prepared" (git exits 1); in the "moved" variant its "aborted"
+// call then writes the new id into the branch ref itself (a ref that moved
+// although git reported an error); both variants then point HEAD at a
+// missing branch so `rev-parse HEAD` fails.
 //
-// BUG(#3173), "moved" variant (measured in #1535 item 6, its fix tracked in
-// #3173): the batch IS on the branch, yet the task error says "nothing was
-// written". The assertions pin that current text; the fix turns them red
-// on purpose. Tenant ids are fixture names
-// (CLAUDE.md #9).
+// In the "moved" variant the batch IS on the branch, yet the task error
+// says "nothing was written". The assertions pin that text as it is today,
+// NOT as it should be: the #3173 fix turns them red on purpose and updates
+// them. Tenant ids are fixture names (CLAUDE.md #9).
 
 import (
 	"bytes"
@@ -111,11 +111,11 @@ func TestAsyncBatch_RefStateUnknown_TaskErrorText(t *testing.T) {
 				b, _ := json.Marshal(r)
 				results = append(results, string(b))
 			}
-			t.Logf("MEASURED %s: task status=%q error=%q results=%v branch moved=%v serving file changed=%v",
+			t.Logf("current behaviour (#3173) %s: task status=%q error=%q results=%v branch moved=%v serving file changed=%v",
 				name, task.Status, task.Error, results, branch != base, string(serving) != orig)
 
 			if task.Status != async.TaskFailed || !strings.HasPrefix(task.Error, "batch failed, nothing was written: ") {
-				t.Fatalf("task = %q %q; measured: failed, \"batch failed, nothing was written: …\"", task.Status, task.Error)
+				t.Fatalf("task = %q %q; current (#3173): failed, \"batch failed, nothing was written: …\"", task.Status, task.Error)
 			}
 			if moved {
 				// BUG(#3173): the branch holds the batch, the task says nothing was written,
@@ -124,7 +124,7 @@ func TestAsyncBatch_RefStateUnknown_TaskErrorText(t *testing.T) {
 					t.Fatalf("the branch did not move (%s): the moved variant did not fire", branch)
 				}
 				if string(serving) != orig {
-					t.Fatalf("serving file = %q; measured: still the original", serving)
+					t.Fatalf("serving file = %q; current (#3173): still the original", serving)
 				}
 			} else if branch != base || string(serving) != orig {
 				t.Fatalf("branch moved or serving file changed in the unmoved variant")

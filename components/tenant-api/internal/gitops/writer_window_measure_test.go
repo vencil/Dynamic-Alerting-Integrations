@@ -1,20 +1,19 @@
 package gitops
 
-// #1535 item 6 — the measurements of the issue's item 6, kept as
-// regression tests once the defects they found were fixed. They pin what
-// the direct write paths do when something outside tenant-api changes the
-// serving repository at the points the issue named:
+// #1535 item 6 regression tests: what the direct write paths do when
+// something outside tenant-api changes the serving repository —
 //
-//   - the old window between the single-tenant write reading the tenant
+//   - in the old window between the single-tenant write reading the tenant
 //     file (the base_hash precondition, the merge base) and sampling HEAD
-//     as the judged base — injected through afterTenantRead; and the gap
-//     the fix leaves, between the sample and the read (afterBaseSample);
+//     as the judged base — injected through afterTenantRead; and in the gap
+//     left between the sample and the read (afterBaseSample);
 //   - after the judged base is sampled (inside the validator, or at the
 //     batch's staging seam) — the compare-and-swap's side, as a control;
-//   - an uncommitted edit of the tenant file in the serving worktree, which
-//     the no-op rules compare against.
+//   - with an uncommitted edit of the tenant file in the serving worktree,
+//     which the no-op rules and the merge base must not take for the base
+//     commit's content (including under .gitattributes normalisation).
 //
-// FIXED(#1535-6) marks a scenario whose measured behaviour was a defect,
+// FIXED(#1535-6) marks a scenario whose behaviour before the fix was a defect,
 // now asserted fixed. BUG(#3173) marks one still open: it asserts the
 // CURRENT behaviour, so the fix turns it red on purpose. None is skipped.
 //
@@ -114,7 +113,7 @@ func (v *winHookValidator) ValidateWrites(context.Context, string, []ProposedFil
 // W1: WriteIfUnchanged's base_hash matched the file it read; an outside
 // commit of that file lands after the read, where HEAD used to be sampled.
 //
-// FIXED(#1535-6): measured before the fix — success, committed onto the
+// FIXED(#1535-6): before the fix — success, committed onto the
 // outside commit (the outside change overwritten with 200). The judged base
 // is now sampled before the read, so the outside commit moves HEAD off it:
 // ErrConflict (409), the outside commit kept, nothing written.
@@ -152,7 +151,7 @@ func TestWindow_WriteIfUnchanged_OutsideCommitBeforeRead(t *testing.T) {
 // W2: WriteMerged read its merge base; an outside commit adds a key to the
 // same file after the read.
 //
-// FIXED(#1535-6): measured before the fix — success, the merge (computed
+// FIXED(#1535-6): before the fix — success, the merge (computed
 // on the pre-commit bytes) committed onto the outside commit and the key it
 // added dropped. Now ErrConflict, the outside commit kept, nothing written.
 func TestWindow_WriteMerged_OutsideCommitAfterRead(t *testing.T) {
@@ -205,7 +204,6 @@ func wantOutsideKept(t *testing.T, dir string, err error, extHead, outside strin
 	if got := winServing(t, dir, winTenant); got != outside {
 		t.Fatalf("serving file = %q, want the outside commit's", got)
 	}
-	t.Logf("MEASURED %s: err=%v, HEAD=outside commit, outside bytes kept, nothing written", t.Name(), err)
 }
 
 // W3: an UNCOMMITTED outside edit of the tenant file lands after the read.
@@ -231,7 +229,6 @@ func TestWindow_WriteIfUnchanged_UncommittedEditAfterRead(t *testing.T) {
 	if got := winServing(t, dir, winTenant); got != body {
 		t.Fatalf("serving file = %q, want the API body", got)
 	}
-	t.Logf("MEASURED W3: err=nil, committed on base, uncommitted outside edit overwritten in the worktree")
 }
 
 // --- control: after the judged base is sampled ---------------------------
@@ -279,7 +276,6 @@ func TestWindow_Control_UnrelatedOutsideCommit(t *testing.T) {
 			if got := winServing(t, dir, winTenant); got != winBody(winTenant, "60", "") {
 				t.Fatalf("serving file = %q, want HEAD's", got)
 			}
-			t.Logf("MEASURED C2 %s: err=ErrConflict (retryable), HEAD=unrelated outside commit", where)
 		})
 	}
 }
@@ -305,7 +301,6 @@ func TestWindow_Batch_OutsideCommitAfterStaging(t *testing.T) {
 	if gitRevParse(t, dir, "HEAD") != extHead || winServing(t, dir, winTenant) != outside {
 		t.Fatal("HEAD / serving file is not the outside commit's")
 	}
-	t.Logf("MEASURED B1: err=ErrConflict, HEAD=outside commit, serving file=outside content")
 }
 
 // B2: an UNCOMMITTED outside edit of the op's file after the mirror: the
@@ -325,7 +320,6 @@ func TestWindow_Batch_UncommittedEditAfterStaging(t *testing.T) {
 	if gitRevParse(t, dir, "HEAD~1") != base || winServing(t, dir, winTenant) != body {
 		t.Fatal("want committed on base and the serving file = the batch's")
 	}
-	t.Logf("MEASURED B2: err=nil, committed on base, uncommitted outside edit overwritten in the worktree")
 }
 
 // --- no-op rules vs an uncommitted outside edit -------------------------
@@ -333,7 +327,7 @@ func TestWindow_Batch_UncommittedEditAfterStaging(t *testing.T) {
 // N1: the serving file holds an uncommitted outside edit X; a batch op's
 // new content is exactly X.
 //
-// FIXED(#1535-6): measured before the fix — the op was NoOp, the batch
+// FIXED(#1535-6): before the fix — the op was NoOp, the batch
 // succeeded and nothing was committed (the no-op test compared with the
 // serving file only). Now it is unchangedFile's rule, against the batch's
 // base: X is committed and the op is not a no-op.
@@ -369,16 +363,15 @@ func wantCommitted(t *testing.T, dir, headOld, want string) {
 	if st := gitT(t, dir, "status", "--porcelain", "--", winTenant+".yaml"); strings.TrimSpace(st) != "" {
 		t.Fatalf("git status shows the path: %q", st)
 	}
-	t.Logf("MEASURED %s: committed onto the old HEAD, HEAD file = serving file = the new content", t.Name())
 }
 
 // N1b: the same through ErrMergeNoOp — the serving file has an uncommitted
 // removal of the key an unset-only op would remove; the merge (judging the
 // serving bytes) says "nothing to remove".
 //
-// FIXED(#1535-6): measured before the fix — NoOp, no commit, HEAD still
-// carrying the key. Now the serving bytes (the state the op asked for) are
-// committed.
+// FIXED(#1535-6): before the fix — NoOp, no commit, HEAD still
+// carrying the key. Now the merge is run again on HEAD's blob, which does
+// carry the key: its removal is committed.
 func TestNoOp_Batch_MergeNoOpOnUncommittedEdit(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
@@ -408,7 +401,6 @@ func TestNoOp_Batch_MergeNoOpMatchingHEAD(t *testing.T) {
 	if _, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", winUnsetCPU); err != nil || gitRevParse(t, dir, "HEAD") != headOld {
 		t.Fatalf("WriteMerged = %v; want a no-op with HEAD unmoved", err)
 	}
-	t.Logf("MEASURED N1c: batch NoOp=true and WriteMerged nil, HEAD unmoved")
 }
 
 // winUnsetCPU removes container_cpu, or reports ErrMergeNoOp when the file
@@ -444,7 +436,6 @@ func TestNoOp_Write_ContentEqualsUncommittedEdit(t *testing.T) {
 	if gitRevParse(t, dir, "HEAD~1") != headOld || gitT(t, dir, "show", "HEAD:"+winTenant+".yaml") != x {
 		t.Fatal("want X committed onto the old HEAD")
 	}
-	t.Logf("MEASURED N2: err=nil, X committed")
 }
 
 // N3 (control): WriteMerged whose merge yields the uncommitted edit's
@@ -462,16 +453,15 @@ func TestNoOp_WriteMerged_ContentEqualsUncommittedEdit(t *testing.T) {
 	if gitRevParse(t, dir, "HEAD~1") != headOld || gitT(t, dir, "show", "HEAD:"+winTenant+".yaml") != x {
 		t.Fatal("want X committed onto the old HEAD")
 	}
-	t.Logf("MEASURED N3: err=nil, X committed")
 }
 
 // N4: WriteMerged's ErrMergeNoOp short-circuit — the same
 // uncommitted-removal setup as N1b.
 //
-// FIXED(#1535-6): measured before the fix — success with no commit, HEAD
+// FIXED(#1535-6): before the fix — success with no commit, HEAD
 // still carrying the key the caller asked to remove (the short-circuit
-// returned before unchangedFile). Now mergeNoOpContent asks the judged
-// base: the serving bytes are committed.
+// returned before unchangedFile). Now mergeNoOpContent merges the judged
+// base's blob again: the key's removal is committed.
 func TestNoOp_WriteMerged_MergeNoOpOnUncommittedEdit(t *testing.T) {
 	t.Parallel()
 	dir := winRepo(t)
@@ -509,7 +499,206 @@ func TestNoOp_WriteMerged_CommitsUncommittedEditAlong(t *testing.T) {
 	if a := strings.TrimSpace(gitT(t, dir, "log", "-1", "--format=%ae")); a != "alice@example.com" {
 		t.Fatalf("author = %q", a)
 	}
-	t.Logf("MEASURED N5: err=nil, commit (author alice) holds the outside container_cpu too; validator judged those bytes")
+}
+
+// --- a no-op merge on a dirty worktree: merged again on the base --------
+
+// winWriters runs fn once with a batch write and once with WriteMerged,
+// each on a fresh repository from setup; noop reports the batch outcome's
+// NoOp (WriteMerged has none: false).
+func winWriters(t *testing.T, setup func(t *testing.T) string, merge MergeFunc, fn func(t *testing.T, dir string, err error, noop bool)) {
+	t.Helper()
+	t.Run("batch", func(t *testing.T) {
+		t.Parallel()
+		dir := setup(t)
+		w := newTestWriter(dir, dir)
+		out, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: winTenant, Merge: merge}}, "alice@example.com")
+		fn(t, dir, err, err == nil && len(out) == 1 && out[0].NoOp)
+	})
+	t.Run("merged", func(t *testing.T) {
+		t.Parallel()
+		dir := setup(t)
+		w := newTestWriter(dir, dir)
+		_, err := w.WriteMerged(context.Background(), winTenant, "alice@example.com", merge)
+		fn(t, dir, err, false)
+	})
+}
+
+// wantUntouched: nothing committed (HEAD is head) and the serving file
+// still holds the uncommitted edit.
+func wantUntouched(t *testing.T, dir, head, serving string) {
+	t.Helper()
+	if got := gitRevParse(t, dir, "HEAD"); got != head {
+		t.Fatalf("HEAD = %s, want %s unmoved (nothing committed)", got, head)
+	}
+	if got := winServing(t, dir, winTenant); got != serving {
+		t.Fatalf("serving file = %q, want the uncommitted edit %q kept", got, serving)
+	}
+}
+
+// S1a: the worktree has an uncommitted edit unrelated to the op (WIP); the
+// unset-only op changes nothing on it, nor on HEAD's blob. A no-op: nothing
+// committed — the WIP is not committed under the caller's name.
+func TestNoOp_DirtyWorktree_MergeNoOpOnBaseToo(t *testing.T) {
+	t.Parallel()
+	wip := winBody(winTenant, "77", "")
+	setup := func(t *testing.T) string {
+		dir := winRepo(t)
+		winOutsideEdit(t, dir, winTenant, wip)
+		return dir
+	}
+	winWriters(t, setup, winUnsetCPU, func(t *testing.T, dir string, err error, noop bool) {
+		if err != nil {
+			t.Fatalf("err = %v, want a no-op success", err)
+		}
+		if strings.HasSuffix(t.Name(), "batch") && !noop {
+			t.Fatal("batch outcome is not NoOp")
+		}
+		wantUntouched(t, dir, gitRevParse(t, dir, "HEAD"), wip)
+		if gitT(t, dir, "log", "-1", "--format=%s") != "seed\n" {
+			t.Fatal("a commit was made")
+		}
+	})
+}
+
+// S1b: the same WIP, but HEAD's blob carries the key the op removes: the
+// write is the merge of HEAD's blob — the key removed, the WIP not in it.
+func TestNoOp_DirtyWorktree_MergeOfBaseIsCommitted(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) string {
+		dir := winRepo(t)
+		winOutsideCommit(t, dir, winTenant, winBody(winTenant, "60", "75"))
+		winOutsideEdit(t, dir, winTenant, winBody(winTenant, "77", "")) // WIP: threads 77, cpu removed
+		return dir
+	}
+	winWriters(t, setup, winUnsetCPU, func(t *testing.T, dir string, err error, noop bool) {
+		if err != nil || noop {
+			t.Fatalf("err = %v, noop = %v; want a write", err, noop)
+		}
+		if got := gitT(t, dir, "show", "HEAD:"+winTenant+".yaml"); got != winBody(winTenant, "60", "") {
+			t.Fatalf("HEAD's file = %q, want HEAD's blob merged (threads 60, no cpu) — not the WIP", got)
+		}
+		if got := winServing(t, dir, winTenant); got != winBody(winTenant, "60", "") {
+			t.Fatalf("serving file = %q, want the committed content", got)
+		}
+	})
+}
+
+// winSkipAbsent is a skip-absent op (as the handlers' group members): a
+// no-op when existing declares no section for the tenant, else it sets the
+// cpu key.
+func winSkipAbsent(existing []byte) (string, error) {
+	if !strings.Contains(string(existing), "  "+winTenant+":") {
+		return "", ErrMergeNoOp
+	}
+	return strings.Replace(string(existing), "\"60\"\n", "\"60\"\n    container_cpu: \"75\"\n", 1), nil
+}
+
+// S1c: a skip-absent op whose tenant has no file in HEAD; the worktree
+// holds an uncommitted file for it without its section. Skipped on both:
+// nothing committed, the file not added.
+func TestNoOp_DirtyWorktree_SkipAbsentStaysSkipped(t *testing.T) {
+	t.Parallel()
+	const dirty = "tenants: {}\n"
+	setup := func(t *testing.T) string {
+		dir := winRepo(t)
+		gitT(t, dir, "rm", "-q", "--", winTenant+".yaml")
+		gitT(t, dir, "commit", "-q", "-m", "seed")
+		winOutsideEdit(t, dir, winTenant, dirty)
+		return dir
+	}
+	winWriters(t, setup, winSkipAbsent, func(t *testing.T, dir string, err error, noop bool) {
+		if err != nil {
+			t.Fatalf("err = %v, want the op skipped", err)
+		}
+		if strings.HasSuffix(t.Name(), "batch") && !noop {
+			t.Fatal("batch outcome is not NoOp")
+		}
+		if out := gitT(t, dir, "ls-tree", "--name-only", "HEAD", "--", winTenant+".yaml"); strings.TrimSpace(out) != "" {
+			t.Fatal("the tenant file was committed")
+		}
+		wantUntouched(t, dir, gitRevParse(t, dir, "HEAD"), dirty)
+		if gitT(t, dir, "log", "-1", "--format=%s") != "seed\n" {
+			t.Fatal("a commit was made")
+		}
+	})
+}
+
+// S1d: the worktree's uncommitted edit carries a key validate refuses (a
+// bad version label); the op changes nothing on it nor on HEAD's blob. A
+// no-op success, not ErrValidation for bytes this write does not write.
+func TestNoOp_DirtyWorktree_InvalidEditIsNotThisWritesRefusal(t *testing.T) {
+	t.Parallel()
+	dirty := winBody(winTenant, "60", "") + "    container_cpu{version=\"V2\"}: \"60\"\n"
+	setup := func(t *testing.T) string {
+		dir := winRepo(t)
+		winOutsideEdit(t, dir, winTenant, dirty)
+		return dir
+	}
+	winWriters(t, setup, winUnsetCPU, func(t *testing.T, dir string, err error, noop bool) {
+		if err != nil {
+			t.Fatalf("err = %v, want a no-op success (errors.Is ErrValidation: %v)", err, errors.Is(err, ErrValidation))
+		}
+		if strings.HasSuffix(t.Name(), "batch") && !noop {
+			t.Fatal("batch outcome is not NoOp")
+		}
+		wantUntouched(t, dir, gitRevParse(t, dir, "HEAD"), dirty)
+		if gitT(t, dir, "log", "-1", "--format=%s") != "seed\n" {
+			t.Fatal("a commit was made")
+		}
+	})
+}
+
+// --- the no-op rule under .gitattributes normalisation -------------------
+
+// winCRLFRepo: `tn-*.yaml text eol=crlf`, the tenant file committed (as an
+// LF blob) and checked out as CRLF, as git's own checkout leaves it.
+func winCRLFRepo(t *testing.T) (dir, crlf string) {
+	t.Helper()
+	dir = winRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("tn-*.yaml text eol=crlf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitT(t, dir, "add", ".gitattributes")
+	gitT(t, dir, "commit", "-q", "-m", "seed")
+	crlf = strings.ReplaceAll(winBody(winTenant, "60", ""), "\n", "\r\n")
+	winOutsideEdit(t, dir, winTenant, crlf)
+	// `git diff` (content, after the clean filter) — `status` also flags
+	// the size change against the index entry.
+	if d := gitT(t, dir, "diff", "--", winTenant+".yaml"); strings.TrimSpace(d) != "" {
+		t.Fatalf("the CRLF worktree file is not what the blob checks out as: %q", d)
+	}
+	if blob := gitT(t, dir, "cat-file", "blob", "HEAD:"+winTenant+".yaml"); strings.Contains(blob, "\r") {
+		t.Fatal("the blob is not LF")
+	}
+	return dir, crlf
+}
+
+// S2: an identity op / a same-bytes PUT on a file git stores normalised is
+// a no-op, not a write the staged-bytes check then refuses. (A byte
+// compare of the CRLF worktree against the LF blob called it changed.)
+func TestNoOp_GitAttributesNormalisedFileIsUnchanged(t *testing.T) {
+	t.Parallel()
+	t.Run("batch", func(t *testing.T) {
+		t.Parallel()
+		dir, _ := winCRLFRepo(t)
+		head := gitRevParse(t, dir, "HEAD")
+		w := newTestWriter(dir, dir)
+		out, err := w.WriteBatch(context.Background(), []BatchOp{{TenantID: winTenant,
+			Merge: func(e []byte) (string, error) { return string(e), nil }}}, "alice@example.com")
+		if err != nil || len(out) != 1 || !out[0].NoOp || gitRevParse(t, dir, "HEAD") != head {
+			t.Fatalf("batch = %+v, %v; want a no-op with HEAD unmoved", out, err)
+		}
+	})
+	t.Run("write", func(t *testing.T) {
+		t.Parallel()
+		dir, crlf := winCRLFRepo(t)
+		head := gitRevParse(t, dir, "HEAD")
+		w := newTestWriter(dir, dir)
+		if _, err := w.Write(context.Background(), winTenant, "alice@example.com", crlf); err != nil || gitRevParse(t, dir, "HEAD") != head {
+			t.Fatalf("Write = %v; want a no-op with HEAD unmoved", err)
+		}
+	})
 }
 
 // --- publishBatch: update-ref fails and HEAD is then unreadable ----------
@@ -541,12 +730,14 @@ func refAndHeadFailingGit(t *testing.T, ranFirst bool) string {
 // it returns a plain error — not ErrConflict, not *BatchCommittedError —
 // and drops the publish marker.
 //
-// BUG(#3173) in P2 (ref moved; measured in #1535 item 6, its fix tracked
+// BUG(#3173) in P2 (ref moved; found in #1535 item 6, its fix tracked
 // in #3173): the batch IS on the branch, yet the error is the "not
 // committed" kind (the handler says "nothing was written", see handler
 // TestAsyncBatch_RefStateUnknown…), and with the marker gone nothing
 // brings the serving file up to the branch: the worktree stays at the old
-// bytes behind a HEAD that has the new ones.
+// bytes behind a HEAD that has the new ones. The assertions pin that
+// behaviour as it is today, NOT as it should be: the #3173 fix turns this
+// test red on purpose and updates it.
 func TestPublishBatch_RefFailsAndHeadUnreadable(t *testing.T) {
 	t.Parallel()
 	for _, ranFirst := range []bool{false, true} {
@@ -565,7 +756,7 @@ func TestPublishBatch_RefFailsAndHeadUnreadable(t *testing.T) {
 				Merge: func([]byte) (string, error) { return body, nil }}}, "alice@example.com")
 			var committed *BatchCommittedError
 			if err == nil || errors.Is(err, ErrConflict) || errors.As(err, &committed) || out != nil {
-				t.Fatalf("out=%v err=%v; measured: nil outcomes, a plain error", out, err)
+				t.Fatalf("out=%v err=%v; current (#3173): nil outcomes, a plain error", out, err)
 			}
 			if !strings.Contains(err.Error(), "advance the serving branch") {
 				t.Fatalf("err = %v", err)
@@ -585,15 +776,15 @@ func TestPublishBatch_RefFailsAndHeadUnreadable(t *testing.T) {
 					t.Fatal("the ref did not move")
 				}
 				if serving != winBody(winTenant, "60", "") {
-					t.Fatalf("serving file = %q; measured: still the old bytes", serving)
+					t.Fatalf("serving file = %q; current (#3173): still the old bytes", serving)
 				}
 				if st := gitT(t, dir, "status", "--porcelain", "--", winTenant+".yaml"); strings.TrimSpace(st) == "" {
-					t.Fatal("git status clean; measured: the path shows as changed (worktree behind HEAD)")
+					t.Fatal("git status clean; current (#3173): the path shows as changed (worktree behind HEAD)")
 				}
 			} else if head != base || serving != winBody(winTenant, "60", "") {
 				t.Fatalf("HEAD moved or serving file changed")
 			}
-			t.Logf("MEASURED %s: err=%q, marker removed, HEAD moved=%v, serving file old=%v",
+			t.Logf("current behaviour (#3173) %s: err=%q, marker removed, HEAD moved=%v, serving file old=%v",
 				name, err, head != base, serving == winBody(winTenant, "60", ""))
 		})
 	}

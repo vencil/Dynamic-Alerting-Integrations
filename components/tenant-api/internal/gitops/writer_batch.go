@@ -465,13 +465,14 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 	_, earlierOp := st.changed[rel]
 	if errors.Is(err, ErrMergeNoOp) {
 		// B2: the merge changes nothing in the file — accepted, nothing
-		// written, its notices kept (#1231 F5); unless base does not hold
-		// the file as it is, which is then written (mergeNoOpContent).
+		// written, its notices kept (#1231 F5); unless base does not store
+		// the file as it is and the merge of base's blob changes it, which
+		// is then written (mergeNoOpContent).
 		if earlierOp || relErr != nil {
 			return BatchOpOutcome{NoOp: true, Notices: notices}, target
 		}
 		var noop bool
-		content, notices, noop, err = w.mergeNoOpContent(st.configDir, st.root, st.base, op.TenantID, filePath, existing, notices, names)
+		content, notices, noop, err = w.mergeNoOpContent(st.configDir, st.root, st.base, op.TenantID, filePath, existing, op.Merge, notices, names)
 		if noop {
 			return BatchOpOutcome{NoOp: true, Notices: notices}, target
 		}
@@ -480,7 +481,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 		return BatchOpOutcome{Err: err}, target
 	}
 	if existing != nil && string(existing) == content &&
-		(earlierOp || w.revHolds(st.root, st.base, filePath, existing)) {
+		(earlierOp || w.storesAs(st.root, st.base, filePath, existing)) {
 		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
