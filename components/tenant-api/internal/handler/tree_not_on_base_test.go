@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -105,7 +105,7 @@ func snapshotRefs(t *testing.T, dir string) map[string]string {
 func putTenantDirect(t *testing.T, dir string) *httptest.ResponseRecorder {
 	t.Helper()
 	h := wrapWithRBACMiddleware(
-		PutTenant(&Deps{Writer: gitops.NewWriter(dir, dir), WriteMode: WriteModeDirect}),
+		PutTenant(&Deps{Writer: gitopstest.NewWriter(dir, dir), WriteMode: WriteModeDirect}),
 		permissiveRBACManager(t), rbac.PermWrite, TenantIDFromPath)
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a",
 		bytes.NewBufferString("tenants:\n  db-a:\n    _silent_mode: \"disable\"\n"))
@@ -167,7 +167,7 @@ func TestApplyPatch_StrandedOnPRBranch_PerOpCode(t *testing.T) {
 	t.Parallel()
 	dir := strandedRepo(t, false)
 	refs := snapshotRefs(t, dir)
-	res := applyPatch(context.Background(), gitops.NewWriter(dir, dir), dir,
+	res := applyPatch(context.Background(), gitopstest.NewWriter(dir, dir), dir,
 		BatchOperation{TenantID: "db-a", Patch: map[string]string{"_silent_mode": "disable"}},
 		"op@example.com")
 	if res.Status != "error" || res.Code != CodeTreeNotOnBase {

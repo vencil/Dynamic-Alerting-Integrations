@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 )
 
 // #2939: /effective walks on the Writer's bounded walk (#1977). A FIFO named
@@ -34,7 +34,7 @@ func TestGetTenantEffective_FIFOInTreeDoesNotBlock(t *testing.T) {
 			_ = f.Close()
 		}
 	})
-	h := GetTenantEffective(&Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, "")})
+	h := GetTenantEffective(&Deps{ConfigDir: dir, Writer: gitopstest.NewWriter(dir, "")})
 	type answer struct {
 		code int
 		body string
