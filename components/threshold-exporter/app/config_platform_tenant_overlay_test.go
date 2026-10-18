@@ -78,10 +78,6 @@ type overlayWalker struct {
 	EffectiveConfig map[string]any                 `json:"effective_config"`
 	PlatformOverlay []config.PlatformOverlaySource `json:"platform_overlay"`
 	ProfileOverlay  []config.ProfileOverlaySource  `json:"profile_overlay"` // #2117
-	// DescribeTenantEffectiveConfig is the Python half's column where
-	// describe_tenant.py still differs from /effective (#2115); Go only
-	// checks that it does differ, so a stale entry cannot linger.
-	DescribeTenantEffectiveConfig map[string]any `json:"describe_tenant_effective_config"`
 }
 
 func loadOverlayMatrix(t *testing.T) overlayMatrix {
@@ -397,11 +393,6 @@ func assertWalkerRow(t *testing.T, dir, tree, tenant string, want *overlayWalker
 	wantCfg, _ := json.Marshal(want.EffectiveConfig)
 	if !bytes.Equal(gotCfg, wantCfg) {
 		t.Errorf("%s: /effective %s effective_config = %s, want %s", tree, tenant, gotCfg, wantCfg)
-	}
-	if want.DescribeTenantEffectiveConfig != nil {
-		if py, _ := json.Marshal(want.DescribeTenantEffectiveConfig); bytes.Equal(py, wantCfg) {
-			t.Errorf("%s: %s describe_tenant_effective_config equals effective_config; drop it", tree, tenant)
-		}
 	}
 	if !reflect.DeepEqual(ec.PlatformOverlay, want.PlatformOverlay) {
 		t.Errorf("%s: /effective %s platform_overlay = %+v, want %+v", tree, tenant, ec.PlatformOverlay, want.PlatformOverlay)
