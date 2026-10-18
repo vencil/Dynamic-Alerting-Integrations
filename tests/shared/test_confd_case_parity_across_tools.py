@@ -1883,131 +1883,17 @@ def test_chaos_soak_perturbs_a_carrier_under_either_casing(
 # ⛔ Blind review measured this: the fix touched SIX filename sites in
 # `backtest_threshold.py`, the commit counted "of 4", and reverting three
 # of them left the whole suite green. The one that was not counted was
-# also the one still broken. The four tests above cover exactly one of
-# those sites (`extract_changes_from_dirs`); these cover the rest.
-
-def _git_conf_d_repo(root: pathlib.Path, carrier: str,
-                     before: str, after: str) -> pathlib.Path:
-    """A git repo whose `conf.d/<carrier>` changes between HEAD~1 and HEAD."""
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "conf.d").mkdir()
-    run = lambda *a: subprocess.run(  # noqa: E731
-        a, cwd=root, capture_output=True, timeout=60)
-    run("git", "init", "-q")
-    run("git", "config", "user.email", "t@example.invalid")
-    run("git", "config", "user.name", "t")
-    # ⛔ Two neighbours carrying the SAME edit, one per axis this path must
-    # not confuse with the tenant carrier:
-    #   `db-c.yml`       the spelling axis (#1603). ⚠️ THIS IS NO LONGER A
-    #                    "must not be seen" neighbour: #1603 widened these
-    #                    sites to `CONFIG_SUFFIXES`, so it is a second real
-    #                    carrier and the assertions below name it. It is
-    #                    kept rather than swapped out because it proves the
-    #                    two spellings behave identically under BOTH case
-    #                    arms, which is this file's own subject.
-    #   `.hidden.yaml`   the hidden axis — the exporter's scanner skips
-    #                    `.`-prefixed entries, and this chain SPLIT this
-    #                    path against itself by aligning the diff parser
-    #                    without aligning the listing beside it. With the
-    #                    split present, `changed_conf_files` below returns
-    #                    two entries and the assertions go red.
-    #   `neighbour.txt`  the UPPER bound: an extension the exporter never
-    #                    loads. Added with #1603 so "widened" cannot mean
-    #                    "accepts anything" — without it the upper-bound
-    #                    assertion in the HEAD~1 lookup test would pass for
-    #                    want of any non-carrier at all.
-    for name, body in ((carrier, before), ("db-c.yml", before),
-                       ("neighbour.txt", before), (".hidden.yaml", before)):
-        (root / "conf.d" / name).write_text(body, encoding="utf-8")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "before")
-    for name, body in ((carrier, after), ("db-c.yml", after),
-                       ("neighbour.txt", after), (".hidden.yaml", after)):
-        (root / "conf.d" / name).write_text(body, encoding="utf-8")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "after")
-    return root
-
-
-_BEFORE = "tenants:\n  acme:\n    cpu_usage: 80\n    mem_usage: 70\n"
-_AFTER_REMOVED = "tenants:\n  acme:\n    mem_usage: 70\n"
-
-
-def test_git_diff_path_reports_a_removal_under_either_casing(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
-    """⛔ The REMOVAL direction — a threshold being taken away, i.e. an
-    alert being disabled — through the `--git-diff` mode CI actually runs.
-
-    Three sites at once: `changed_conf_files`, the diff parser's tenant
-    extraction, and the HEAD~1 lookup that classifies a removal. The last
-    one re-SPELLED the carrier from the tenant id (`{tenant}.yaml`), and
-    because `config_stem` preserves case on purpose, an upper-cased
-    carrier made `git show` fail and the removal was dropped. Measured:
-    the operator saw "No threshold changes found." for a removal that was
-    really there — on `05d3136` AND on the first version of the fix.
-    """
-    mod = _import_tool("ops", "backtest_threshold")
-    kept = {}
-    for arm, carrier in (("lower", "db-a.yaml"), ("UPPER", "DB-A.YAML")):
-        repo = _git_conf_d_repo(tmp_path / arm, carrier,
-                                _BEFORE, _AFTER_REMOVED)
-        monkeypatch.chdir(repo)
-        files = mod.changed_conf_files()
-        parsed = mod.load_conf_files(files)
-        raw = mod.extract_changes_from_git_diff()
-        kept[arm] = (files, sorted(parsed),
-                     [(c["tenant"], c["metric"]) for c in
-                      mod.keep_flat_threshold_changes(raw, parsed)],
-                     sorted({c["tenant"] for c in raw}))
-    # ⚠️ `db-c.yml` is a CARRIER since #1603, so both arms report it too.
-    # Before that this asserted a single-item list, i.e. it pinned the
-    # spelling blindness as the expected answer.
-    assert kept["lower"][2] == [("db-a", "cpu_usage"), ("db-c", "cpu_usage")], (
-        f"the lower arm did not report exactly the two CARRIERS this fixture "
-        f"plants (`db-a.yaml` and `db-c.yml`).\n"
-        f"⚠️ If you ADDED a carrier to `_git_conf_d_repo`, the tool is fine "
-        f"and this expectation is what needs updating — every assertion in "
-        f"this test pins the exact set, deliberately, because 'at least "
-        f"these' cannot catch a reader that stops filtering. Do NOT remove "
-        f"your new neighbour to get green.\n"
-        f"got {kept['lower']}")
-    # ⛔ Assert the three sites SEPARATELY. Asserting only the final
-    # `kept` list left `changed_conf_files` uncovered: a removal is
-    # classified against HEAD~1, not against `parsed`, so reverting that
-    # site to a case-sensitive test made the file list empty and the end
-    # result was still right. Measured — it was a surviving mutant.
-    for arm, carrier, tid in (("lower", "db-a.yaml", "db-a"),
-                              ("UPPER", "DB-A.YAML", "DB-A")):
-        assert kept[arm][0] == [f"conf.d/{carrier}", "conf.d/db-c.yml"], (
-            f"[{arm}] `changed_conf_files` did not see the carriers git "
-            f"itself reported as changed; got {kept[arm][0]}")
-        assert kept[arm][1] == sorted([tid, "db-c"]), (
-            f"[{arm}] the changed files did not parse into their tenants; "
-            f"got {kept[arm][1]}")
-        # ⛔ The PARSER's own output, separately. Asserting only the final
-        # `kept` list left `changed_conf_files` uncovered (measured — it
-        # was a surviving mutant), so the axis is pinned where it is
-        # decided. ⚠️ Both spellings since #1603: this assertion used to
-        # read `== [tid]` with a message saying "this site accepts `.yaml`
-        # only", which was the defect stated as the contract.
-        assert kept[arm][3] == sorted([tid, "db-c"]), (
-            f"[{arm}] the git-diff parser attributed changes to "
-            f"{kept[arm][3]}; the `.yml` neighbour carries the same edit "
-            f"and this site takes both spellings (#1603)")
-    assert len(kept["UPPER"][2]) == len(kept["lower"][2]), (
-        f"the removal survived under `db-a.yaml` and was dropped under "
-        f"`DB-A.YAML`.\nlower: {kept['lower']}\nUPPER: {kept['UPPER']}")
-    assert sorted(kept["UPPER"][2]) == sorted(
-            [("DB-A", "cpu_usage"), ("db-c", "cpu_usage")]), (
-        f"tenant id must keep the carrier's case; got {kept['UPPER'][2]}")
-
+# also the one still broken. #3111 removed `--git-diff` with its diff parser
+# and HEAD~1 lookup, and the `--config-dir` recipe scan with it: the recipe
+# NOTE now reads the two trees da-guard served; the test below pins that it
+# answers the case, spelling, hidden and reserved axes as the exporter does.
 
 def test_config_dir_recipe_scan_sees_either_casing(
         tmp_path: pathlib.Path, da_guard_env) -> None:
-    """The fourth site: `main()`'s own `--config-dir` scan, which feeds the
-    custom-alert notice. It is a SEPARATE listing from
-    `extract_changes_from_dirs`, so the tests above cannot reach it — and
-    reverting it alone left the suite green.
+    """The recipe NOTE (`changed_recipe_tenants`, #3111): the tenants whose
+    recipes changed between the two trees da-guard served. It used to be a
+    separate Python listing that reverting alone left the suite green; it is
+    pinned here through the CLI on the same axes.
 
     Driven through the CLI because that is the only way this site runs.
 
@@ -2020,7 +1906,14 @@ def test_config_dir_recipe_scan_sees_either_casing(
     """
     def _recipe_body(tenant: str) -> str:
         return (f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
-                f"    _custom_alerts:\n      - recipe: threshold\n")
+                f"    _custom_alerts:\n      - recipe: threshold\n        name: q\n"
+                "        metric: m\n        op: '>'\n        window: 5m\n"
+                "        threshold: '150:warning'\n")
+
+    def _plain_body(tenant: str) -> str:
+        # #3111: the NOTE names the tenants whose recipes CHANGED, so the
+        # baseline holds the same tenants without them.
+        return f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
 
     bodies = _recipe_body("acme")
     seen = {}
@@ -2029,7 +1922,7 @@ def test_config_dir_recipe_scan_sees_either_casing(
         cur.mkdir(parents=True)
         base.mkdir(parents=True)
         (cur / carrier).write_text(bodies, encoding="utf-8")
-        (base / carrier).write_text(bodies, encoding="utf-8")
+        (base / carrier).write_text(_plain_body("acme"), encoding="utf-8")
         # ⛔ Three neighbours whose tenants must NOT reach the notice, one
         # per filter this site applies. Blind review deleted this site's
         # extension filter outright and the suite stayed green while a
@@ -2051,7 +1944,7 @@ def test_config_dir_recipe_scan_sees_either_casing(
                              ("db-c.yml", "yml_carrier"),
                              ("_defaults.yaml", "ghost_reserved")):
             (cur / name).write_text(_recipe_body(tenant), encoding="utf-8")
-            (base / name).write_text(_recipe_body(tenant), encoding="utf-8")
+            (base / name).write_text(_plain_body(tenant), encoding="utf-8")
         r = subprocess.run(
             [sys.executable, "-X", "utf8",
              str(TOOLS_DIR / "ops" / "backtest_threshold.py"),
@@ -2083,139 +1976,6 @@ def test_config_dir_recipe_scan_sees_either_casing(
             assert ghost not in seen[arm], (
                 f"[{arm}] `{ghost}` reached the operator-facing notice from "
                 f"a carrier this site must not read:\n{seen[arm][:400]}")
-
-
-def test_backtest_config_dir_scan_is_parse_tree_selection(
-        tmp_path: pathlib.Path) -> None:
-    """ADR-036 step 4 (#2906): `--config-dir`'s recipe scan no longer lists
-    the directory itself (the `_confd_entries` listing, its unreadable-root
-    warning and its `is_file()` axis are gone with it): the tenant files are
-    the ones `da-guard parse-tree` selects. A nested carrier is one, a
-    config-named DIRECTORY, a hidden file and a `.txt` are not."""
-    mod = _import_tool("ops", "backtest_threshold")
-    tree = tmp_path / "conf.d"
-    (tree / "notes.yaml").mkdir(parents=True)
-    (tree / "team").mkdir()
-    recipe = ("    _custom_alerts:\n      - {recipe: threshold, name: q, metric: m,"
-              " op: '>', window: 5m, threshold: '1:warning'}\n")
-    for rel, tenant in (("team/nested.yaml", "nested"), (".hidden.yaml", "ghost_hidden"),
-                        ("notes.txt", "ghost_txt"), ("db-a.yaml", "db-a")):
-        (tree / rel).write_text(f"tenants:\n  {tenant}:\n{recipe}", encoding="utf-8")
-    import _lib_parse_cache  # noqa: PLC0415
-    files = [str(tree / rel) for rel in
-             _lib_parse_cache.tenant_files(_lib_parse_cache.reader_for(tree).tree())]
-    assert mod.find_custom_alert_tenants(mod.load_conf_files(files, config_dir=str(tree))) == [
-        "db-a", "nested"]
-
-
-def test_head1_carrier_lookup_accepts_both_spellings(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
-    """The spelling axis (#1603) at the HEAD~1 carrier lookup, through REAL git.
-
-    ⛔ THIS TEST USED TO ASSERT THE OPPOSITE. It was named
-    `..._keeps_the_yaml_only_spelling` and required `_carrier_at_head1` to
-    answer `None` for a `.yml` carrier, on the reasoning that widening it
-    "would let a `.yml` carrier answer for a tenant this tool otherwise
-    cannot see". That premise stopped holding the moment the sites UPSTREAM
-    of it were widened: the tenant id reaching this function is now itself
-    parsed off a `.yml`, so a narrower set here resolves to None for a
-    tenant the very same run just reported a change for — the removal is
-    then dropped and the operator sees "No threshold changes found."
-
-    Kept in this file rather than folded into
-    `tests/ops/test_backtest_threshold.py` because the evidence type is
-    different: that suite fakes `subprocess.run`, this one drives a real
-    `git ls-tree` over a real repo.
-    """
-    mod = _import_tool("ops", "backtest_threshold")
-    repo = _git_conf_d_repo(tmp_path / "yml-only", "db-a.yml",
-                            _BEFORE, _AFTER_REMOVED)
-    monkeypatch.chdir(repo)
-    assert mod._carrier_at_head1("db-a") == "./conf.d/db-a.yml", (
-        "a `.yml` carrier did not answer for its tenant; the exporter is "
-        "serving it and every upstream site in this tool now reads it "
-        "(#1603)")
-    # UPPER BOUND — widened to `CONFIG_SUFFIXES`, not to "any file".
-    assert mod._carrier_at_head1("neighbour") is None, (
-        "a non-config extension answered for a tenant")
-    # ...and the control: the same lookup DOES find the spelling it accepts,
-    # so the assertion above is not passing for want of any carrier at all.
-    repo2 = _git_conf_d_repo(tmp_path / "yaml", "DB-A.YAML",
-                             _BEFORE, _AFTER_REMOVED)
-    monkeypatch.chdir(repo2)
-    assert mod._carrier_at_head1("DB-A") == "./conf.d/DB-A.YAML", (
-        "fixture is vacuous — the accepted spelling was not found either")
-    # ⛔ And the comparison is EXACT, not case-folded. `config_stem` keeps
-    # the carrier's case on purpose, so a folded compare here would hand
-    # back a DIFFERENT tenant's file — the write-plane rename this whole
-    # line of work exists to prevent, arriving through the back door.
-    # Blind review measured the folded version passing the suite.
-    assert mod._carrier_at_head1("db-a") is None, (
-        "`db-a` resolved to a carrier whose stem is `DB-A`; the stem "
-        "comparison must be exact, not case-folded")
-
-
-def test_git_diff_path_gives_one_answer_about_a_hidden_carrier(
-        tmp_path: pathlib.Path, monkeypatch) -> None:
-    """⛔ One process, one file, one answer.
-
-    This chain aligned `extract_changes_from_git_diff` on the hidden axis
-    and left the two listings beside it alone, so the tool contradicted
-    ITSELF inside a single run — `changed_conf_files` and
-    `load_conf_files` both reported `.hidden`, while the parser had
-    stopped producing changes for it. Measured against `05d3136`, which
-    was consistent the other way (it kept the carrier everywhere):
-
-        05d3136   KEPT = [('.hidden','cpu_usage'), ('real','cpu_usage')]
-        the split KEPT = [('real','cpu_usage')]
-                  changed_conf_files = ['conf.d/.hidden.yaml',
-                                        'conf.d/real.yaml']
-
-    Producing that split inside the change whose whole subject is "one
-    tree, one answer" is the sharpest way to get this wrong, and blind
-    review had already caught the identical split one code path over.
-    """
-    mod = _import_tool("ops", "backtest_threshold")
-    repo = tmp_path / "hidden"
-    (repo / "conf.d").mkdir(parents=True)
-    run = lambda *a: subprocess.run(  # noqa: E731
-        a, cwd=repo, capture_output=True, timeout=60)
-    run("git", "init", "-q")
-    run("git", "config", "user.email", "t@example.invalid")
-    run("git", "config", "user.name", "t")
-    for value in (80, 95):
-        (repo / "conf.d" / ".hidden.yaml").write_text(
-            f"tenants:\n  ghost:\n    cpu_usage: {value}\n", encoding="utf-8")
-        (repo / "conf.d" / "real.yaml").write_text(
-            f"tenants:\n  real:\n    cpu_usage: {value}\n", encoding="utf-8")
-        run("git", "add", "-A")
-        run("git", "commit", "-qm", str(value))
-    monkeypatch.chdir(repo)
-
-    files = mod.changed_conf_files()
-    parsed = mod.load_conf_files(files)
-    kept = mod.keep_flat_threshold_changes(
-        mod.extract_changes_from_git_diff(), parsed)
-    tenants = sorted({c["tenant"] for c in kept})
-
-    assert tenants == ["real"], (
-        f"fixture is vacuous or the visible tenant vanished; got {tenants}")
-    assert files == ["conf.d/real.yaml"], (
-        f"the listing still names a hidden carrier the parser will not "
-        f"produce changes for: {files}")
-    assert sorted(parsed) == ["real"], (
-        f"the loader still keys a hidden carrier: {sorted(parsed)}")
-    # ⛔ And `load_conf_files` INDEPENDENTLY. Asserting it only through the
-    # list `changed_conf_files` hands it cannot see the loader's own rule:
-    # once the listing filters hidden carriers out, reverting the loader
-    # changes nothing and the mutant survives. Measured — it did.
-    direct = mod.load_conf_files([
-        str(repo / "conf.d" / ".hidden.yaml"),
-        str(repo / "conf.d" / "real.yaml"),
-    ])
-    assert sorted(direct) == ["real"], (
-        f"`load_conf_files` keyed a hidden carrier it was handed directly: "
-        f"{sorted(direct)}")
 
 
 def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(

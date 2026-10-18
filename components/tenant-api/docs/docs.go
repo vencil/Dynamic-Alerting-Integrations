@@ -3598,7 +3598,7 @@ const docTemplate = `{
 var SwaggerInfo = &swag.Spec{
 	Version:          "v2.8.0",
 	Host:             "",
-	BasePath:         "/api/v1",
+	BasePath:         "",
 	Schemes:          []string{},
 	Title:            "Tenant API",
 	Description:      "Multi-tenant configuration management API for the Dynamic Alerting Platform.\nProvides CRUD over per-tenant alert thresholds, RBAC-scoped writes, and async batch operations.\nAuth is enforced by the oauth2-proxy sidecar and forwarded via X-Forwarded-Email / X-Forwarded-Groups.",

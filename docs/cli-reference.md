@@ -97,7 +97,9 @@ da-tools <command> --help
 | **未知子命令** | `2` | 呼叫端錯誤（[#1406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1406) 起；之前是 `1`）。訊息一律走 stderr，stdout 為空 |
 | **映像內找不到子命令對應的腳本** | `2` | 同上；stderr 點名缺的腳本檔與已搜尋路徑 |
 | 子命令自己的結束碼 | 原封透傳 | 工具在同一行程內以 `__main__` 執行，無重映射——語意見各命令章節的結束碼表與 SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
-| 子命令拋出未捕捉的例外（traceback） | `2` | 內部錯誤（[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090) 起；之前是直譯器預設的 `1`，與「有發現」撞碼）。stderr 先是 `Traceback`，最後一行是 `ERROR: unexpected internal error (<例外型別>): <訊息>`；工具在 crash 前已寫出的 stdout 保留。帶 `--json` 時，stdout 另有一份 envelope：`"status": "caller_error"`、`"reason": "internal_error"`、`"error": "<同一行 ERROR>"`；工具有早退報告時，另帶該報告的鍵（歸零）（[#3094](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3094)）。這份 envelope 一律是 JSON 物件，正常輸出是陣列的 `validate-config`、`analyze-gaps` 等工具也一樣；`threshold-recommend --export-patch` 的 stdout 是 YAML，沒有 envelope。參數解析完成前就 crash、或工具已印出自己的報告之後才 crash，都沒有這份 envelope；`config-diff` 與 `operator-generate` 自己接住 crash、只印 stderr 的路徑目前也沒有（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)）；`tenant-verify` 不輸出這份 envelope。分派層只攔 `Exception`，工具自己的 `sys.exit(N)` 與 Ctrl-C 照舊原封透傳。唯一例外是 `tenant-verify`：它的 `2` 是「驗證不一致」，crash 維持 `1`（見該節） |
+| 子命令拋出未捕捉的例外（traceback） | `2` | 內部錯誤（[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090) 起；之前是直譯器預設的 `1`，與「有發現」撞碼）。stderr 先是 `Traceback`，最後一行是 `ERROR: unexpected internal error (<例外型別>): <訊息>`；工具在 crash 前已寫出的 stdout 保留。帶 `--json` 時，stdout 另有一份 envelope：`"status": "caller_error"`、`"reason": "internal_error"`、`"error": "<同一行 ERROR>"`；工具有早退報告時，另帶該報告的鍵（歸零）（[#3094](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3094)）。這份 envelope 一律是 JSON 物件，正常輸出是陣列的 `validate-config`、`analyze-gaps` 等工具也一樣；`threshold-recommend --export-patch` 的 stdout 是 YAML，沒有 envelope。參數解析完成前就 crash、或工具已在 stdout 寫過東西之後才 crash，都沒有這份 envelope；`config-diff` 與 `operator-generate` 自己接住例外的路徑同樣以 `2` 結束，envelope 的 `reason` 分別是 `compare_failed`、`generate_failed`（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前 stdout 是空的）；`tenant-verify` 不輸出這份 envelope。分派層只攔 `Exception`，工具自己的 `sys.exit(N)` 與 Ctrl-C 照舊原封透傳。唯一例外是 `tenant-verify`：它的 `2` 是「驗證不一致」，crash 維持 `1`（見該節） |
+| 子命令以結束碼 `2` 結束（呼叫端錯誤），帶 `--json` | `2` | stdout 恰好一份 envelope：`"status": "caller_error"`，`"reason"` 是具名原因（`served_values_unavailable` 找不到或執行 da-guard 失敗、`yaml_file_unreadable` 輸入 YAML 讀不了、`output_unwritable` 輸出寫不進去、`observed_map_unavailable` observed-map 不可用；工具自己沒命名的是 `caller_error`），`"error"` 是 stderr 上那一行 `ERROR:`（沒命名原因時是工具在 stderr 最後一行以 `ERROR:` 開頭的訊息，沒有就是最後一行；換行與 tab 收成一個空白，控制字元與格式字元換成 `?`）；工具有早退報告時另帶該報告的鍵（歸零）。工具已自己在 stdout 印出文件時不再加印（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前許多這類路徑 stdout 是空的）。argparse 拒絕的參數仍然沒有 envelope；`threshold-recommend` 帶 `--export-patch`（未同時帶 `--generate-observed-map`）時 stdout 是 YAML 片段，也不加 envelope，呼叫端錯誤時 stdout 是空的 |
+| 讀端先關掉 pipe（`… \| head -c1`、`… \| true`）、執行中 fd 1 被關，或 stdout 寫不進去 | `2` | 工具寫 stdout 失敗時（執行中或結束前最後一次 flush），不論它原本要以什麼結束碼結束（含 crash、含工具在處理那個錯誤時以具名原因結束），一律以 `2` 結束（工具處理時自己指定了結束碼則用它；處理那個錯誤時又發生的另一個錯誤照舊是 crash 或工具自己的原因），stderr 一行 `ERROR: stdout was closed before all output was written`；寫不進去但不是讀端關閉（磁碟滿、`/dev/full`）時改為 `ERROR: cannot write to stdout: <原因>`。先前是直譯器自己的 `120`，寫入大量輸出時還會被報成 `unexpected internal error (BrokenPipeError)`（[#3124](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3124)）。只認 stdout 自己的寫入失敗：同樣的錯誤碼來自 socket、其他檔案或 stderr 時，照舊是 crash 或工具自己的原因。輸出在讀端關閉前已全部送出時，結束碼照舊。設了 `PYTHONUNBUFFERED=1` 時只認得傳到工具手上的寫入失敗；工具自己吞掉的輸出失敗（例如 `--help`）不在此列，結束碼照舊。`tenant-verify` 是 `1`。不是 stdout 的 `BrokenPipeError`（例如 socket）仍是 crash。shell 在工具啟動前就關掉 stdout（`>&-`）不在此列：輸出直接被丟棄，結束碼照舊，也沒有 envelope |
 
 各命令章節的結束碼表列的是主要觸發條件，**不是窮舉**：輸入壞到讓工具拋出未捕捉例外時，Python 工具一律是上面那列的 `2`（`tenant-verify` 是 `1`），Go 工具（`guard`、`batch-pr`、`parser`）的 panic 也是 `2`，表上不逐一列出。不經 `da-tools`、直接執行 `scripts/tools/` 下的腳本時也一樣：只要該腳本載入了 `_lib_exitcodes`（多數工具經 `_lib_io`／`_lib_python` 間接載入），之後發生的 crash 就是 `2`；在那之前的 import 期錯誤（例如缺 PyYAML）仍是 `1`。互動模式（`python -i`）不受影響。
 
@@ -121,7 +123,7 @@ da-tools <command> --help
 | `cutover` | Shadow Monitoring 一鍵切換 | `--tenant <name>` |
 | `blind-spot` | 掃描 cluster targets 與 tenant config 交叉比對盲區 | `--config-dir <dir>` |
 | `maintenance-scheduler` | 評估排程式維護窗口，自動建立 Alertmanager silence | `--config-dir <dir>` |
-| `backtest` | PR threshold 變更歷史回測 | `--git-diff` 或 `--config-dir` + `--baseline` |
+| `backtest` | PR threshold 變更歷史回測 | `--config-dir` + `--baseline` 或 `--tenant` + `--metric` + `--old-value`／`--new-value` |
 | `shadow-verify` | Shadow Monitoring 就緒度與收斂性驗證（preflight / runtime / convergence） | `<phase>` |
 | `byo-check` | BYO Prometheus & Alertmanager 整合驗證 | `<target>` |
 | `federation-check` | 多叢集 Federation 整合驗證（edge / central / e2e） | `<target>` |
@@ -318,7 +320,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 |------|------|
 | `0` | `status: healthy`，或 `status: unchecked`（Pod 與 exporter 兩項被跳過，其餘沒有問題） |
 | `1` | `status: error`：Pod 不在或不是 Running、`mysql_up` 不是 1 |
-| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，沒有 JSON，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr，沒有 JSON） |
+| `2` | 呼叫端錯誤：參數錯誤（缺 tenant，或 `--show-inheritance` 沒配 `--config-dir`）；Prometheus 查詢失敗（輸出仍是 `status: error` 的 JSON，`issues` 含 `Prometheus query failed`，與其他問題並存時也回 2）；要跑 Pod 檢查但環境裡沒有 `kubectl`，或 `kubectl` 在時限內沒回應（每次上限 120 秒；兩者都是 stderr 一行說明，[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)）；給了 `--config-dir` 而找不到 da-guard、exporter 丟掉或讀不到某個檔、或 da-guard 失敗（stderr 一行 `ERROR:` 加 da-guard 的 stderr）。stdout 依情況而定：缺 tenant 由 argparse 擋下，stdout 是空的；Prometheus 查詢失敗是上述 `status: error` 文件；其餘（`--show-inheritance` 沒配 `--config-dir`、`kubectl` 不在或沒回應、da-guard 這一類）是一份 `"status": "caller_error"` 的 envelope，da-guard 這一類的 `reason` 是 `served_values_unavailable`，其餘是 `caller_error`（[#3115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3115)；先前 stdout 是空的） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：`status` 是 `healthy` 或 `error` 都回 `0`，沒有 `kubectl` 時以 Python traceback 結束（rc=1）。用 v2.9.0 時請讀輸出的 `status`。 <!-- image-caveat: v2.9.0 -->
 
@@ -685,37 +687,58 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 **語法**
 
 ```bash
-da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
+da-tools backtest [--config-dir <dir> --baseline <dir> | --tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]] [options]
 ```
 
 **必需參數**
 
 選擇一種模式：
 
-1. **Git Diff 模式**：`--git-diff`
-   （在 Git repo 內執行，自動偵測變更）
-   ⚠️ 需要 `git` 在 PATH 上，且工作目錄是含 `conf.d/` 的目錄（工具以 cwd 為基準跑 `git diff HEAD~1 -- conf.d/`；客戶佈局下就是 repo 根）。容器內要把含 `conf.d/` 的目錄掛進來並用 `-w` 切到掛載點（例如 `-v $(pwd):/workspace -w /workspace`）。`ghcr.io/vencil/da-tools` 映像**沒有內建 git**，在該映像內跑這個模式時 `git diff` 跑不起來——請在裝有 git 的環境執行
-
-2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
+1. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
-   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。severity 只決定由哪支告警比較這一列，觸發點只看值（[#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)）：值或 severity 任一邊不同都是一列變更，兩邊 severity 不同時 `--json` 該列帶 `old_severity`／`new_severity`、文字與 Markdown 報告在值旁註明。只改 severity 到另一個有規則選的 severity（`70` → `70:critical`）照值回測（觸發點不變）。severity 後綴只能是 `warning` 或 `critical`，不分大小寫（`70:Critical` 即 critical）；其他後綴（`70:high`、空的 `70:`）讓整個值讀不懂，exporter 改送平台預設值、severity 為 warning（[#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)），所以 `70` → `70:high` 是「70 → 預設值」的一列值變更，兩邊都是讀不懂的值（`70:high` → `60:high`）則沒有變更；`--git-diff`／`--tenant` 只看寫法看不出預設值，這種值不回測（`value '...': this backtest cannot read it the way the exporter does`）。每一列由哪支告警比較，取自 served-values 對該 key 回報的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（規則只選 `severity="warning"`／`"critical"`；#3071 之後的 exporter 不送這種 row，`DA_GUARD_BINARY` 指向更舊的 da-guard 時才可能出現，例如把 `60:high` 照寫送成 `severity="high"`）沒有告警比較：那一邊視同沒有門檻，兩邊都沒有規則選的 severity 時不回測（`severity '...' is selected by no threshold rule`）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不讀，舊名底下的資料不算這個門檻的資料。一列的 row 若由比較不同 series 或不同方向的告警比較，一次回放代表不了兩者，該列不回測（`rows compared differently`）。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐條 `/metrics` series（名稱加完整 label set）比實際送出的值，不以門檻 key 為單位（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 series 或租戶（關掉、新增、移除、改到另一個 severity）那一邊記為無值。值比對整個 UTC 日：每條 series 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。severity 是 series 的一個 label，決定由哪支告警比較這一列（[#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)）：同一個值改到另一個 severity（`70` → `70:critical`）是兩列——warning 那條不再送出（`70` → 無值，該告警被靜默），critical 那條開始送出（無值 → `70`，新啟用）。同一條 series 改由另一個 key 送出（例如 `90:critical` 改寫成 `disable` 加 `<base>_critical: "90"`）不是變更。每一列的 `metric` 是比較它的告警的 key（critical row 為 `<metric_key>_critical`；帶維度的 row 再接上維度，例如 `mysql_connections_critical{db="a"}`，`--tenant` 也一樣），`keys` 列出兩邊在該列成立的時段內送出它的門檻 key；`keys` 不只是 `metric` 本身時，文字與 Markdown 報告在該列後註明 `(served by: ...)`。severity 後綴只能是 `warning` 或 `critical`，不分大小寫（`70:Critical` 即 critical）；其他後綴（`70:high`、空的 `70:`）讓整個值讀不懂，exporter 改送平台預設值、severity 為 warning（[#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)），所以 `70` → `70:high` 是「70 → 預設值」的一列值變更，兩邊都是讀不懂的值（`70:high` → `60:high`）則沒有變更；`--tenant` 只看寫法看不出預設值，這種值不回測（`value '...': this backtest cannot read it the way the exporter does`）。每一列由哪支告警比較，取自該列的 `/metrics` series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：severity 為 critical 的 row（`<base>` 在根目錄 `defaults:` 宣告時的 `<base>_critical`——即使租戶把 `<base>` 本身 `disable`——以及時段內覆寫成 `N:critical` 的 key）由 `<metric_key>_critical` 的告警比較，severity 為 warning 的 row 由 `<metric_key>` 的告警比較；其他 severity 的 row（規則只選 `severity="warning"`／`"critical"`；#3071 之後的 exporter 不送這種 row，`DA_GUARD_BINARY` 指向更舊的 da-guard 時才可能出現，例如把 `60:high` 照寫送成 `severity="high"`）沒有告警比較，不回測（`severity '...' is selected by no threshold rule`）——另外根目錄 `defaults:` 沒宣告 `<base>` 的 `<base>_critical` 會被當成 metric 為 `<x>_critical` 的 warning row 送出，沒有任何告警選這個 metric，所以不回測；舊拼法別名的 twin（`legacy_twin: true`）不算一條 series，舊名底下的資料不算這個門檻的資料。告警 key 在 observed-map 沒有條目、也不是 KNOWN_DEFERRED 的 row（例如 mongodb 沒有 `_critical` 告警，它的 critical row）沒有出廠告警比較，照列、不回測。告警的門檻是同一個 metric、同一個 severity 所有 row 的 `max by(tenant)`，帶維度的 row 也算在內：租戶（任一棵樹、一天中任何時段）也送了同 metric、同 severity 的帶維度 row 時，只改 base 的值不等於告警比的門檻，該列不回測（`dimensioned rows share this alert's threshold (max by tenant)`）。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`）。文字與 Markdown 報告列出未回測幾筆、各為什麼。custom-alert recipe（`_custom_alerts`）不在這個回測裡：兩棵樹各以 `da-guard served-values` 讀出每個租戶 exporter 送出的 custom-alert row（`_custom_alerts`；含 `_platform.yaml` 與子目錄裡的檔；recipe 的形狀、window、`for:`、名稱、mode、severity、值都在 row 裡）、recipe 在 `max_metrics_per_tenant` 截斷前要送的列數（`custom_alert_rows`），以及 exporter 整份拒收的非空 `_custom_alerts` 清單（`unserved`；空清單與沒寫相同），不同的租戶（新增、修改、移除 recipe，或被整份拒收的清單有變）列在 stderr 的 `NOTE:` 與 Markdown 的 recipe 區塊；只是換檔、內容不變的不列（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）。不列的三種：其一，清單裡**部分**項目被 exporter 拒收、其餘照送（未知 recipe、與前面某項同形狀同 severity），被拒的那項兩邊都不送、`unserved` 也沒有它，da-guard 只在 stderr 印一行 `custom alert "…" rejected`（逐行轉進工具的 stderr），JSON 裡沒有可比的欄位，而工具不解析 stderr；其二，`_defaults.yaml`（根目錄或子目錄）頂層的 `_custom_alerts`：custom-alert 編譯器讀它、其下每個租戶都繼承，exporter 不送，`served-values` 裡沒有它；其三，被 `max_metrics_per_tenant` 截掉的 recipe 裡的值變更：`custom_alert_rows` 只有截斷前的列數，看不到被截掉的列的內容（新增或移除被截掉的 recipe 會改變列數，仍會列出）。這三種請看 `config-diff`（`_` 開頭檔的頂層鍵逐鍵比較）與 `da-guard check` 的 `custom_alert_*` 列。
 
-3. **單一變更模式**：`--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
+2. **單一變更模式**：`--tenant <id> --metric <key> [--old-value <v>] [--new-value <v>]`
    （不讀任何配置檔，直接回測手給的一筆變更）
-   `--tenant` 須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個，否則結束碼 2；租戶 id 須是合法的 DNS-1123 label。值的讀法同 `--git-diff`（見下方「回測查什麼」）。同時給了 `--git-diff` 或 `--config-dir` 時以它們為準，這幾個旗標只做參數檢查。
+   `--tenant` 須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個，否則結束碼 2；租戶 id 須是合法的 DNS-1123 label。值的讀法見下方「回測查什麼」。`--tenant` 與 `--config-dir` 互斥，同時給會由參數解析擋下（結束碼 2）。
 
 **回測查什麼**（[#3017](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3017)、[#3002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3002)）
 
 - 每筆變更只查一次 Prometheus：該 key 的告警拿來和門檻比較的那條 recording rule（[`metric_observed_map.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/metric_observed_map.yaml) 的 `observed_series`），加上 `{tenant="<租戶>"}`。越界照告警的比較方向計數：`>` 的告警數高於門檻的點，`<` 的告警（下界，例如 `db2_bufferpool_hit_ratio`、`kafka_broker_count`）數低於門檻的點。先前一律以 `>` 計數，並依序猜 `<key>`、`tenant:<key>:max`、`<key>{namespace=...}` 三種名稱——將近一半的 key，告警比的不是其中任何一條。
-- `--git-diff`／`--tenant` 給的是檔裡寫的 key 與值：退役拼法先經別名表換成正名（例如 `mysql_cpu` → `mysql_threads_running`）。`--tenant` 給含 `{` 的 key 時不回測（`dimensioned key`）；⚠️ `--git-diff` 的 diff 解析根本看不到帶維度（加引號）的 key，只改這種 key 的 PR 會得到「No threshold changes found.」、結束碼 0。值照 exporter 的讀法：第一個 `:` 前是數字、後是 severity（`70:critical`；沒寫是 warning），`<base>_critical` key 的整個值就是數字。每一邊由它自己 severity 的告警比（critical 查 `<key>_critical` 的告警；`70` → `50:critical` 由兩支告警比，兩支比同一條 series、同一方向時照值回測，兩邊 severity 不同時 `--json` 該列帶 `old_severity`／`new_severity`、報告在值旁註明，[#3060](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3060)），severity 不是 warning／critical 的那一邊視同沒有門檻；兩邊都沒有規則選的 severity，或值這裡無法照 exporter 的讀法讀（`7O` 這種 exporter 也讀不懂的值，exporter 會改用預設值或丟掉那一列，從值本身看不出來；另有幾種 exporter 讀得懂、但這裡保守不讀的寫法，例如 `1_000`、`0x1p4`）時不回測。
-- 下列變更標為 `not_backtested`（風險 `UNKNOWN`、不影響結束碼、不查 Prometheus），`backtest` 為 `skipped: <理由>`、訊息為 `Not backtested: <理由>`：observed-map 沒有該 key（沒有出廠告警比較它；`container_cpu` 等 KNOWN_DEFERRED key 的告警比的是 observed-map 不收錄的 version-aware recording rule，理由另寫）；條目無法回放（待人工確認、複合告警沒有單一 series、方向未解析、不是 per-tenant series）；一列的 row 由比較不同 series 或不同方向的告警比較（三種模式皆然，`--git-diff`／`--tenant` 的 `70` → `50:critical` 也由兩支告警比）。理由講的若不是該列自己的 key（critical row 的 `_critical` 告警），前面冠上那個 key。
-- ⚠️ 已知近似：回放的是告警的比較運算元，不是告警本身——`for:`、維護期過濾、複合 AND 告警的其他條件都不模擬，所以計出的是「比較成立的點數」，不等於告警實際觸發的次數。`--git-diff`／`--tenant` 看不到租戶有沒有同 metric 的帶維度 row，門檻的 `max by(tenant)` 在這兩種模式下也不模擬；`<base>` 有沒有在根目錄 `defaults:` 宣告同樣看不到。沒有 `_critical` 告警的 key（observed-map 沒有 `<key>_critical` 條目，例如 mongodb）改成 `N:critical` 時不回測（理由冠上 `<key>_critical`），不會判成告警被靜默。
+- `--tenant` 給的是寫法上的 key 與值：退役拼法先經別名表換成正名（例如 `mysql_cpu` → `mysql_threads_running`）。給含 `{` 的 key 時不回測（`dimensioned key`）。值照 exporter 的讀法：最後一個 `:` 前是數字、後是 severity（`70:critical`；沒寫是 warning），`<base>_critical` key 的整個值就是數字。這一筆編輯照目錄比對的同一條規則換成 `/metrics` 的列（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）：每一邊是它那個 severity 的 row（critical 由 `<key>_critical` 的告警比），所以 `70` → `95:critical` 是兩列（warning 那列 `70` → 無值、critical 那列無值 → `95`），`70` → `70` 沒有變更；每列的 `metric` 是告警 key、值只留數字，`keys` 是給的 key。沒有出廠告警比較的 row（告警 key 在 observed-map 沒有條目、也不是 KNOWN_DEFERRED，例如 mongodb 沒有 `_critical` 告警）照列、不回測，所以 mongodb 的 `70` → `70:critical` 是 warning 告警被靜默（MEDIUM）加上一列不回測的 critical row。值這裡無法照 exporter 的讀法讀（`7O` 這種 exporter 也讀不懂的值，exporter 會改用預設值或丟掉那一列，從值本身看不出來；另有幾種 exporter 讀得懂、但這裡保守不讀的寫法，例如 `1_000`、`0x1p4`）時照寫法列一列、不回測。
+- 下列變更標為 `not_backtested`（風險 `UNKNOWN`、不影響結束碼、不查 Prometheus），`backtest` 為 `skipped: <理由>`、訊息為 `Not backtested: <理由>`：observed-map 沒有該 key（沒有出廠告警比較它；`container_cpu` 等 KNOWN_DEFERRED key 的告警比的是 observed-map 不收錄的 version-aware recording rule，理由另寫）；條目無法回放（待人工確認、複合告警沒有單一 series、方向未解析、不是 per-tenant series）；租戶 id 含 PromQL selector 照寫放不進去的字元（`"`、`\`、控制字元，或不是 UTF-8——目錄比對的租戶是 exporter 的 `tenants:` key，exporter 不以租戶 id 規則擋它；先前會組出不合法的 PromQL，以 `query_error` 結束碼 2）。
+- ⚠️ 已知近似：回放的是告警的比較運算元，不是告警本身——`for:`、維護期過濾、複合 AND 告警的其他條件都不模擬，所以計出的是「比較成立的點數」，不等於告警實際觸發的次數。`--tenant` 只看給它的那一個 key：看不到同一條 series 是否另由別的 key 送出、租戶有沒有同 metric 的帶維度 row（門檻的 `max by(tenant)` 不模擬），也看不到 `<base>` 有沒有在根目錄 `defaults:` 宣告。
+
+**`--git-diff` 已移除（[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）**
+
+`--git-diff` 曾在工具內自行取出 `HEAD~1` 的 `conf.d/` 再比對；改成由呼叫端自己 checkout PR 的 base，再以目錄比對模式比兩棵樹。仍帶 `--git-diff` 的呼叫以結束碼 2 結束（`--json` 的 envelope `reason` 為 `git_diff_removed`），訊息寫明改用的指令。
+
+```bash
+# 舊（已移除）
+python3 scripts/tools/ops/backtest_threshold.py --git-diff --prometheus <url>
+
+# 本機：把上一個 commit checkout 到另一個路徑，再比兩棵 conf.d/
+git worktree add /tmp/backtest-base HEAD~1
+python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
+  --baseline /tmp/backtest-base/<repo-path>/conf.d --prometheus <url>
+git worktree remove /tmp/backtest-base   # 若已直接刪掉目錄，改跑 git worktree prune
+
+# CI（GitHub Actions）：PR base 另外 checkout 到一個路徑
+#   - uses: actions/checkout@v6
+#     with:
+#       ref: ${{ github.event.pull_request.base.sha }}
+#       path: .backtest-base
+#       persist-credentials: false
+python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
+  --baseline "$GITHUB_WORKSPACE/.backtest-base/<repo-path>/conf.d" --prometheus <url>
+```
+
+`<repo-path>` 是從 repo 根到 `conf.d/` 所在目錄的路徑（客戶佈局下 `conf.d/` 在 repo 根，就是 `.`）。base 那棵樹要至少有一個 exporter 會讀的 config 檔（`.yaml`／`.yml`，不是隱藏檔），否則 da-guard 拒讀、結束碼 2（`served_values_unavailable`）。PR 第一次新增 `conf.d/` 時沒有可比的 base：本 repo 的 `backtest.yaml` 先檢查 base checkout 裡有沒有 `conf.d/`，沒有就略過回測，PR 留言寫明「base 沒有 `conf.d/` 可比」。
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--git-diff` | Git Diff 模式：讀 `git diff HEAD~1 -- conf.d/` 的門檻變更（需要 git，見上方「必需參數」） | false |
 | `--config-dir <DIR>` | 目錄比對模式：變更後的配置目錄（須搭配 `--baseline`） | （無） |
 | `--baseline <DIR>` | 目錄比對模式：變更前的配置目錄（須搭配 `--config-dir`） | （無） |
 | `--tenant <ID>` | 單一變更模式：租戶 id（須搭配 `--metric`，且 `--old-value`／`--new-value` 至少給一個） | （無） |
@@ -739,18 +762,11 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir> | --tenant <
 
 Prometheus 連得上、但查詢本身失敗（HTTP 400／503、逾時、回 `error` 狀態），該變更標為 `query_error`（風險 `UNKNOWN`），訊息為 `Prometheus query failed: <錯誤說明>`（HTTP 錯誤時是狀態行，例如 `HTTP Error 400: Bad Request`，不含 Prometheus 回應 body 裡的 `error`）（控制字元換成 `?`、過長截斷），其他變更照跑（[#3059](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3059)；先前被報成 `no_data`、結束碼 0）。報告多一個計數 `query_error`；文字報告印 `Query error: N`，Markdown 註明幾筆沒量成。有任何一筆 `query_error` 時，`--json` 頂層帶 `status: "partial"`、`reason: "query_error"`（全部量成時不帶 `status`，與先前相同），結束碼為 2。
 
-`-o/--output` 與 `--markdown-output` 每一條結束路徑都會寫（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)），例外如下：在檢查輸出路徑之前就結束的參數錯誤（`--lookback` 不可用、`--tenant` 缺參數或不合法、沒有變更來源），以及輸出路徑本身寫不進去；另外，未捕捉的例外（rc 2，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）與通過檢查之後才發生的寫入失敗也不保證寫出。結束碼為 2 時不要讀輸出檔：其中可能是上一次執行留下的內容。`-o` 與 `--markdown-output` 指向同一個檔時，後寫的 Markdown 會蓋掉 JSON。`-o` 寫的是這次 `--json` 會印的同一份 JSON，也就是完整報告，或是 `skipped`／`no_changes`／`caller_error` envelope。沒有回測時，`--markdown-output` 寫一段簡短說明，標題與完整報告相同，內文為 `Backtest not run: <原因>`，原因是 Prometheus 不可用、沒有門檻變更，或 ``caller error `<reason>` ``；有 custom-alert recipe 租戶時，照舊在後面接上 recipe 區塊。先前只有完整報告那條路徑會寫 `-o`；`--skip-if-unavailable` 與沒有變更這兩條，只在有 recipe 租戶時才寫 markdown。CI 以檔案是否非空決定要不要更新 PR 留言，所以留言會停在上一次的結果。
+`-o/--output` 與 `--markdown-output` 每一條結束路徑都會寫（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)），例外如下：在檢查輸出路徑之前就結束的參數錯誤（`--lookback` 不可用、`--tenant` 缺參數或不合法、沒有變更來源、給了已移除的 `--git-diff`），以及輸出路徑本身寫不進去；另外，未捕捉的例外（rc 2，[#3090](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3090)）與通過檢查之後才發生的寫入失敗也不保證寫出。結束碼為 2 時不要讀輸出檔：其中可能是上一次執行留下的內容。`-o` 與 `--markdown-output` 指向同一個檔時，後寫的 Markdown 會蓋掉 JSON。`-o` 寫的是這次 `--json` 會印的同一份 JSON，也就是完整報告，或是 `skipped`／`no_changes`／`caller_error` envelope。沒有回測時，`--markdown-output` 寫一段簡短說明，標題與完整報告相同，內文為 `Backtest not run: <原因>`，原因是 Prometheus 不可用、沒有門檻變更，或 ``caller error `<reason>` ``；有 custom-alert recipe 變更的租戶時，照舊在後面接上 recipe 區塊。先前只有完整報告那條路徑會寫 `-o`；`--skip-if-unavailable` 與沒有變更這兩條，只在有 recipe 租戶時才寫 markdown。CI 以檔案是否非空決定要不要更新 PR 留言，所以留言會停在上一次的結果。
 
 **範例**
 
 ```bash
-# Git Diff 模式——映像沒有 git，請在主機 checkout 上直接跑腳本
-#（與本 repo 的 .github/workflows/backtest.yaml 同一組呼叫），
-# 在含 conf.d/ 的目錄執行
-python3 scripts/tools/ops/backtest_threshold.py --git-diff \
-  --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \
-  --lookback 7d --skip-if-unavailable
-
 # 目錄比對模式
 da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7d
 ```
@@ -760,8 +776,8 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱），且沒有任何一筆 `query_error`；Prometheus 連不上、git 跑不了、有變更查詢失敗都不是 1，見下列 |
-| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）——參數檢查之後、讀 git／conf.d／observed-map 與查 Prometheus 之前先檢查（父目錄不存在、不是目錄或不可寫，或路徑本身是目錄、是不可寫的檔），帶 `--skip-if-unavailable`、沒有門檻變更時也一樣（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)；先前這兩種情況回 0 且不寫檔），`--json` 的 envelope `reason` 為 `output_unwritable`；conf.d 檔案內容讀不到（`da-guard parse-tree` 讀不了：不是 UTF-8、不是合法 YAML、重複鍵、頂層不是 mapping；訊息指名哪一檔與 `kind`，#1654、[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）；`da-guard parse-tree` 跑不了或整棵樹拒讀（找不到 da-guard、過舊，或 `--config-dir` 樹裡有 JSON 帶不了的非 UTF-8 檔名；`--json` 的 envelope `reason` 為 `parse_tree_failed`，#2906）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119）；observed-map（`metric_observed_map.yaml`）缺檔、讀不了、沒有 key 或有型別不對的條目（帶 `--skip-if-unavailable` 也一樣；`--json` 的 envelope `reason` 為 `observed_map_unavailable`，#3017）；`--tenant` 缺 `--metric` 或缺新舊值、沒有指定變更來源（帶 `--skip-if-unavailable` 也一樣，#3059）；`--tenant` 不是合法的租戶 id（ADR-035 的 DNS-1123 label：小寫英數與 `-`，1–63 字元，首尾須為英數；帶 `--skip-if-unavailable` 也一樣，[#3066](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3066)——先前 `a"b` 會組出不合法的 PromQL、回 0）；任何一筆變更 `query_error`——優先於 HIGH 的 1，帶 `--skip-if-unavailable` 也一樣，因為 Prometheus 連得上（#3059）。`--json` 下這三種參數錯與 Prometheus 連不上都輸出 `caller_error` envelope，`reason` 依序為 `tenant_args_missing`、`no_change_source`、`invalid_tenant_id`、`prometheus_unavailable`；`query_error` 輸出完整報告（`status: "partial"`） |
+| `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱），且沒有任何一筆 `query_error`；Prometheus 連不上、有變更查詢失敗都不是 1，見下列 |
+| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；給了已移除的 `--git-diff`（不論與哪個其他合法旗標一起給；訊息寫明改用的指令，`--json` 的 `reason` 為 `git_diff_removed`，[#3111](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3111)）；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）——參數檢查之後、讀 conf.d／observed-map 與查 Prometheus 之前先檢查（父目錄不存在、不是目錄或不可寫，或路徑本身是目錄、是不可寫的檔），帶 `--skip-if-unavailable`、沒有門檻變更時也一樣（[#3089](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3089)；先前這兩種情況回 0 且不寫檔），`--json` 的 envelope `reason` 為 `output_unwritable`；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；`--config-dir` 沒給 `--baseline`（`reason` 為 `baseline_missing`）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔或沒有任何 config 檔（帶 `--skip-if-unavailable` 也一樣，`reason` 為 `served_values_unavailable`，#2119；讀不了的檔先前在 `--config-dir` 那棵是 `conf_file_unreadable`，#3111 起兩棵一律由 da-guard 指名）；observed-map（`metric_observed_map.yaml`）缺檔、讀不了、沒有 key 或有型別不對的條目（帶 `--skip-if-unavailable` 也一樣；`--json` 的 envelope `reason` 為 `observed_map_unavailable`，#3017）；`--tenant` 缺 `--metric` 或缺新舊值、沒有指定變更來源（帶 `--skip-if-unavailable` 也一樣，#3059）；`--tenant` 不是合法的租戶 id（ADR-035 的 DNS-1123 label：小寫英數與 `-`，1–63 字元，首尾須為英數；帶 `--skip-if-unavailable` 也一樣，[#3066](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3066)——先前 `a"b` 會組出不合法的 PromQL、回 0）；任何一筆變更 `query_error`——優先於 HIGH 的 1，帶 `--skip-if-unavailable` 也一樣，因為 Prometheus 連得上（#3059）。`--json` 下這三種參數錯與 Prometheus 連不上都輸出 `caller_error` envelope，`reason` 依序為 `tenant_args_missing`、`no_change_source`、`invalid_tenant_id`、`prometheus_unavailable`；`query_error` 輸出完整報告（`status: "partial"`） |
 
 ---
 
@@ -1262,7 +1278,9 @@ da-tools config-history --config-dir conf.d/ diff 1 2
 
 在客戶 repo 中初始化 Dynamic Alerting 整合骨架。產生 CI/CD pipeline、conf.d/ 目錄、Kustomize overlays、pre-commit 配置。
 
-在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名，而且刻意寬鬆：檔中 `tenants:` 的 key、以及租戶 id 以獨立 token 出現在檔中任何位置（含引號內、註解、flow／JSON 寫法、UTF-16 等編碼、YAML escape 寫法如 `"db\x2dc"`）都算；讀不到、解不開或含明確 tag（`!!binary` 等）的檔視為可能提及每一個要求的租戶，跳過訊息會寫出原因與怎麼讓 init 讀得透。⚠️ 註解與字串裡以 `!` 開頭的字（例如 `# !Important`、`"wow !!"`）也會被當成 tag，使該檔被視為提及所有租戶——這是刻意接受的誤判。這種「讀不透」不會觸發下述並存拒絕：若 init 自有的 `conf.d/<t>.yaml` 已存在**且本身宣告 t**，init 照常重寫它並點名該檔請你用 guard 確認；自有檔存在但沒有宣告 t（例如佔位檔）時則視同沒有自有檔，跳過 t、不改寫它。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個檔**具體**提到了 t（`tenants:` 的 key 或租戶 id token；例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`），或 init 列不出那個檔宣告的所有租戶（PyYAML 讀不了它）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
+在 `conf.d/` 裡，init 只擁有**根目錄**的 `_defaults.yaml` 與 `<tenant>.yaml` 這兩種路徑。某個要求的租戶若**可能**已由你**其他檔案**宣告，init **跳過該租戶、不動那個檔**，並在 stderr 與摘要列出（例如「db-c 可能已由 conf.d/team.yaml 宣告，未產生 conf.d/db-c.yaml」），rc 仍為 0；根目錄已有其他拼法的 defaults 載體（如 `_defaults.yml`）時同樣不寫 `_defaults.yaml`。「可能宣告」依**內容**判斷、不看檔名：檔中 `tenants:` 的 key 算宣告；init 讀不透的檔（讀法見下段）視為可能宣告每一個要求的租戶，跳過訊息會寫出原因與怎麼讓 init 讀得透。這種「讀不透」不會觸發下述並存拒絕：若 init 自有的 `conf.d/<t>.yaml` 已存在**且本身宣告 t**，init 照常重寫它並點名該檔請你用 guard 確認；自有檔存在但沒有宣告 t（例如佔位檔）時則視同沒有自有檔，跳過 t、不改寫它。⚠️ **init 不檢查 exporter 能否讀取那個檔**——被跳過的租戶是否真的有宣告，請用 [`da-tools guard defaults-impact --config-dir <conf.d>`](#guard) 確認（它以 exporter 的讀法掃描整棵樹，重複宣告會直接報錯；該檔應出現在報告的 Scanned files 裡）。沒有提到要求租戶的客戶檔，init 不做任何評論（init 不是 validator）。以下情形 init **拒絕執行、rc 1、不寫入任何檔案**（含 `.da-init.yaml`），`--dry-run` 亦同：init 自己的 `conf.d/<t>.yaml` 已存在、而另一個讀得透的檔以 `tenants:` 的 key 宣告了 t（例如 `db-c.yaml` 與 `db-c.yml`；exporter 對同一租戶的兩份宣告會拒收整棵樹，該留哪一份要由你決定）；`_defaults.yaml` 與其他拼法的預設載體並存；init 要覆寫的 `conf.d/<t>.yaml` 可能也宣告了這次要求的另一個租戶（覆寫後那個租戶將無處宣告）；init 要覆寫的 `conf.d/<t>.yaml` 還宣告了這次**沒要求**的租戶（例如 `db-a.yaml` 宣告 db-a 與 db-z、只跑 `--tenants db-a`：重寫會讓 db-z 的宣告消失；請把 db-z 移到自己的檔如 `conf.d/db-z.yaml`，或把 db-z 也加進 `--tenants`）——`--force` 也一樣拒絕；init 要寫的路徑在輸出目錄以下的**任何一層**已有只差大小寫的既有項目（例如 `Conf.D/` 之於 `conf.d/`，在不分大小寫的檔案系統上是同一個路徑）。
+
+**讀法與寫入前確認（ADR-036 §2，#2906）**：另一個檔「宣告了哪些租戶」取自 `da-guard parse-tree`（yaml.v3 的讀法，與 exporter 的讀法相同，不再以文字搜尋近似）；parse-tree 讀不了的檔（語法錯、重複鍵、不在允許清單的 tag、非 UTF-8 等）視為可能宣告每一個要求的租戶。寫入任何檔之前，產生的 `conf.d/_defaults.yaml` 與 `conf.d/<tenant>.yaml` 都以 parse-tree 在要寫入的路徑讀回，內容必須正是產生的內容，否則結束碼 `1`、一個檔都不寫。`conf.d/` 已存在時、或要寫 conf.d 檔時都需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`。
 
 ⚠️ `--deploy kustomize` 時，被跳過的租戶若載體不在 `conf.d` 根目錄（例如 `conf.d/prod/db-c.yaml`），它**不會**進入產生的 ConfigMap（`configMapGenerator.files` 是扁平的；`make configmap-assemble` 同樣只收頂層檔，見 [GitOps 部署 §3](integration/gitops-deployment.md#3-configmap-assembly)），init 會在 stderr 與摘要 WARN 點名，rc 仍為 0。
 
@@ -1994,13 +2012,15 @@ python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespac
 
 **讀取**：純量取原文、不做型別轉換（`010` 就是 `010`）。
 
-**拒絕（結束碼 `2`、什麼都不寫）**：多個 key 宣告同一租戶；沒有讀得了的 key 宣告該租戶、又有 key 讀不了（訊息點名那些 key）；查找路徑上有 merge key `<<`；ConfigMap 的 `data` 不是 mapping；兩個 `_defaults`、既無 `_defaults` 也無 `config.yaml`；租戶區塊不是 mapping；要改的 key 宣告了一個以上的租戶（legacy 版面的 `config.yaml` 除外）；要新建的 key 以 `.` 或 `_` 開頭。⚠️ 改寫不改動該 key 其他值的內容（`010`、`12:30` 照原文寫回），但不保留寫法：註解會遺失，flow（`{k: v}`）改成 block，引號可能變成單引號或拿掉。
+**拒絕（結束碼 `2`、什麼都不寫）**：多個 key 宣告同一租戶；沒有讀得了的 key 宣告該租戶、又有 key 讀不了（訊息點名那些 key）；ConfigMap 的 `data` 不是 mapping；兩個 `_defaults`、既無 `_defaults` 也無 `config.yaml`；租戶區塊不是 mapping；要改的 key 宣告了一個以上的租戶（legacy 版面的 `config.yaml` 除外）；要新建的 key 以 `.` 或 `_` 開頭。⚠️ 改寫不改動該 key 其他值的內容（`010`、`12:30` 照原文寫回），但不保留寫法：註解會遺失，flow（`{k: v}`）改成 block，引號可能變成單引號或拿掉。
+
+**讀法與寫入前確認（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）**：誰宣告租戶、租戶區塊裡有什麼、寫不寫，一律取自 `da-guard parse-tree`（把 ConfigMap 的 key 當成 exporter 掛載的那個平面目錄，以 yaml.v3 的讀法讀：例如 `yes:`、`on:` 是字串鍵，`<<` merge 照展開）；PyYAML 只用來產生改寫的文字。送出 patch 之前，改寫後的文字再以 parse-tree 讀回：鍵、結構、每個純量的原文、型別與值必須正是原 key 套上這一次的修改，否則拒絕、什麼都不寫（結束碼 `2`、`reason: write_refused`，訊息點名第一個不同的位置）；parse-tree 讀不了的 key（重複鍵、語法錯、多份文件、不在允許清單的 tag 等）一律當成讀不了。PyYAML 改寫時會換掉寫法的值（例如 `!!float 1` 寫成 `1.0`）會讓整個 key 被拒寫，請先手動改成不會被改寫的寫法；沒動到的 `~`／空值照原樣寫回。找不到可用的 da-guard（`$DA_GUARD_BINARY` → `$PATH`）結束碼 `2`、`reason: da_guard_unavailable`。
 
 **寫後驗收（apply）**：新位元組與該 key 現有位元組相同 ⇒ 不寫、不等，結束碼 `0`。否則先經 `kubectl get --raw …/pods/<pod>:<port>/proxy/…`（只用 GET）逐一讀 Running 且未在刪除中的 pod 的 [`/api/v1/config/identity`](api/README.md)（`config_hash`：它服務的是哪一版位元組；`parse_failed`：因無法 parse 而被排除的 key）與 `/metrics`。patch 後由 patch 回傳的 ConfigMap 算出 exporter 服務該版本時應回報的 `config_hash`（exporter 會讀的 key——非 `.` 開頭、副檔名 `.yaml`／`.yml` 不分大小寫——依 key 排序、各自 SHA-256 後串接再 SHA-256；single-file 模式的 pod 則為 `config.yaml` 的 SHA-256），等每個 pod 回報相同值；之後的 `/metrics` 夾在兩次 identity 之間讀，兩次是同一次安裝才採用，否則重讀（有上限，超過視同逾時）。再逐 pod 比對全部 `user_*` series；parse 失敗看寫入後的 `parse_failed`：含被 patch 的 key、或含寫入前沒有的其他 key ⇒ 失敗，寫入前就已在其中的其他 key 只警告。⇒ 驗收通過代表每個 pod 服務的正是本次寫入產生的那一版整份位元組、且沒有把被 patch 的 key 當成無法 parse 排除；位元組生效後是否合預期（例如非數值被退回 default、未知 key 被忽略）不在此列，見 `patch-config --help`。對 identity 回 404 的舊 exporter，該 pod 退回舊驗法（等 `/api/v1/config` 的 `Last reload` 改變、比對 `da_config_parse_failure_total`），stderr 會提示、`--json` 的 `pods.<pod>.identity` 標為 `unavailable (404)`（否則為 `checked`）。`_` 開頭的 key（`_silent_mode`、`_profile` 等）不判目標租戶自己的 series，只列在 stderr（與 `--json`）。不合、逾時、途中連不到、寫入後被 Ctrl-C／SIGTERM 中斷或發生意外錯誤 ⇒ patch 回舊位元組（原本沒有的 key 會刪掉）並非 0 結束；寫入與回滾都以 ConfigMap 的 `resourceVersion` 為前置條件：讀取後被別人改過就不寫；回滾時同一個 key 已被別人改過就不回滾（不覆蓋對方）；驗收結束時 ConfigMap 必須仍是本次寫入產生的版本。patch 呼叫本身失敗時會重讀 ConfigMap 判定是否已套用。判準細節與已知殘留限制見 `patch-config --help`。
 
 **`--diff`**：只說要寫入什麼（`after`）與 apply 會不會寫（`changed`，與 apply 同一判定——apply 不送 patch 時為 `false`）。**不顯示目前值**：`--json` 的 `before` 恆為 `null`，文字輸出改印一行請讀者到 exporter 確認（要在本工具內讀出單一 key 的現值，得在 Python 端重做 exporter 的 key→series 對應，[#1950](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1950) 決策排除）。`default` 的 `after.state` 是 `key removed`，不推斷刪掉後生效的值。
 
-**`--json`**：每條結束路徑的 stdout 都是一份 JSON（stdout 已關閉，或寫入前就被信號結束的行程除外）；`--json --help` 為結束碼 `0`、`status: "help"`。結束碼 `2` 時鍵與預覽相同、值清空，另加 `status: "caller_error"` 與 `reason`（`bad_arguments`／`configmap_shape`／`configmap_changed`／`kubectl_failed`／`unexpected_error`）。apply 的文件沿用預覽的鍵（`before`／`after` 為 `null`），另加 `status`（`no-op`／`applied`／`verify-failed-rolled-back`／`timeout`／`unreachable`／`rollback-failed`／`interrupted-rolled-back`／`error-rolled-back`／`state-unknown`／`overwritten-by-another-writer`）、`exit_code`、`written`（結束時 ConfigMap 是否為新位元組；不明為 `null`）、`rolled_back`、`message`，以及 `pods.<pod>` 的 `identity`（`checked`／`unavailable (404)`）、`problems`／`warnings`／`target_changes`（目標租戶變動的 series，`before`／`after` 為 `null` 表示不存在）。
+**`--json`**：每條結束路徑的 stdout 都是一份 JSON（stdout 已關閉，或寫入前就被信號結束的行程除外）；`--json --help` 為結束碼 `0`、`status: "help"`。結束碼 `2` 時鍵與預覽相同、值清空，另加 `status: "caller_error"` 與 `reason`（`bad_arguments`／`configmap_shape`／`write_refused`／`da_guard_unavailable`／`configmap_changed`／`kubectl_failed`／`unexpected_error`）。apply 的文件沿用預覽的鍵（`before`／`after` 為 `null`），另加 `status`（`no-op`／`applied`／`verify-failed-rolled-back`／`timeout`／`unreachable`／`rollback-failed`／`interrupted-rolled-back`／`error-rolled-back`／`state-unknown`／`overwritten-by-another-writer`）、`exit_code`、`written`（結束時 ConfigMap 是否為新位元組；不明為 `null`）、`rolled_back`、`message`，以及 `pods.<pod>` 的 `identity`（`checked`／`unavailable (404)`）、`problems`／`warnings`／`target_changes`（目標租戶變動的 series，`before`／`after` 為 `null` 表示不存在）。
 
 **範例**
 
@@ -2158,7 +2178,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 |------|------|
 | `0` | 成功 |
 | `1` | 只有未捕捉的例外（stderr 有 traceback）。多數輸入錯誤是 2，但 `--from-onboard` 的 JSON 壞掉或形狀不對目前也會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；租戶 id 不是 DNS-1123 label（`--tenant`、互動輸入，或 `--from-onboard` 清單裡任一個；[ADR-035](adr/035-tenant-id-single-source.md)），什麼都不寫。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；租戶 id 不是 DNS-1123 label（`--tenant`、互動輸入，或 `--from-onboard` 清單裡任一個；[ADR-035](adr/035-tenant-id-single-source.md)），什麼都不寫；寫出 `_defaults.yaml`、`<tenant>.yaml`（1:N 時另有 `_instance_mapping.yaml`）之前，先以 `da-guard parse-tree` 在 `-o` 目錄裡要寫入的路徑讀回，內容不是產生的內容就一個檔都不寫（`--generate-profile` 的 `_profiles.yaml` 同樣先確認；`--from-onboard` 先確認所有租戶的檔，一個不過就一個都不寫）（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）；找不到可用的 da-guard 也是 2。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2371,13 +2391,15 @@ kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state.
 da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --execute
 ```
 
+**讀法（ADR-036 §2，#2906）**：哪些檔、每個檔的內容（含跨檔案引用的比對）一律取自 `da-guard parse-tree`（yaml.v3 的讀法）。要刪的檔是檔名主幹等於 tenant 的那一個，而且 parse-tree 讀出它的 `tenants:` 恰好只宣告這個 tenant；沒宣告它、或另宣告了別的租戶，pre-check 不通過（刪檔會連帶下架別人）。parse-tree 讀不了的檔具名、擋下 `--execute`。找不到可用的 da-guard 結束碼 `2`。
+
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
-| `1` | pre-check 未通過（找不到租戶檔、有無法解析的設定檔等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
-| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check` |
+| `1` | pre-check 未通過（找不到租戶檔、有 parse-tree 讀不了的設定檔、租戶檔沒宣告或另宣告了別的租戶等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了、不是 ConfigMap 文件或目錄、沒有任何紀錄，或含有不是 tenant-api state 紀錄的 key（例如存成了 `threshold-config`、或指到 conf.d）；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check`；找不到可用的 da-guard |
 
 ---
 
@@ -2409,7 +2431,7 @@ da-tools deprecate <metric_keys...> [options]
 
 **輸出**
 
-從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層，只有名字），以及平面目錄下非 `_` 前綴的租戶檔刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。**不是**把值寫成 `disable`：`defaults:` 是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：不寫入、rc 1；本工具 pure parser 讀不了的 `_` 檔同樣整輪降級（訊息會標明 exporter 讀得進去）；`defaults:` 的空值只警告。寫入之前（預覽與 `--execute` 都一樣）先以 `da-guard key-refs` 問 exporter（[#1822](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1822)）：root 層 `_` 前綴檔在 exporter 自己的 load 的 `parse_failed`（判的是只把 root 層 `_` 檔套上本輪寫入、放進空的暫存目錄後的樣子；那一次問不到就沿用現況的答案，不放行）或 `unreadable` 裡同樣整輪降級（rc 1）；經 exporter 正規化後屬於該 metric 的 key（alias 表的 legacy 拼法、`_critical`、各種維度鍵拼法）與 canonical key 一樣列為引用、一樣移除，子目錄 `_` 檔裡的這類拼法列為殘留；da-guard 的 stderr 整份照轉（`  da-guard| ` 前綴）。找不到 da-guard（`$DA_GUARD_BINARY` → `$PATH`）或它答不出來（含 da-guard 的任何 exit 2）時印「未體檢」與原因，行為與 rc 照舊，Step 3 另提醒檢查 alias 表的舊拼法。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 的殘留照印出的指引對該子樹跑 `--plane subtree`；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除；exporter 不讀或丟棄的區塊只警告。⚠️ NOT GUARDED：寫回是整份重新序列化，header 以外的註解會被移除（沒刪的未加引號純量照原文寫回，`010`、`yes` 不會改型；加引號的值可能換成單引號或拿掉引號）；平面判定仍靠 `--plane`（`subtree` 不採用 da-guard 對 `_` 前綴檔的判定）；本工具的載體鏡射擋下、exporter 其實收的檔仍擋。
+從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層，只有名字），以及平面目錄下非 `_` 前綴的租戶檔刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。**不是**把值寫成 `disable`：`defaults:` 是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：不寫入、rc 1；PyYAML（產生寫回的文字）讀不了的 `_` 檔同樣整輪降級（訊息會標明 exporter 讀得進去）。讀法與寫入前確認（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）：哪些檔、每個檔的內容、要刪哪些 key 一律取自 `da-guard parse-tree`（載體體檢依 yaml.v3 讀出的型別判：`!!int`／`!!float` 讀得進去，`!!null` 只警告，其他整份丟；parse-tree 讀不了的檔整份擋）；`--execute` 要寫的每一個檔（所有 metric 合併、每檔一次）都先以 parse-tree 讀回確認，全部通過才寫，一個不通過就一個位元組都不寫、rc 1、結尾具名（例如 PyYAML 把 `!!float 1` 寫成 `1.0`）。目錄另有被選的載體時，沒有讀取端讀的 defaults 拼法（例如 `_defaults.yaml` 旁的 `_defaults.yml`）不寫：其中若還有該 metric 的 key 就是殘留、rc 1；`defaults:` 的空值只警告。寫入之前（預覽與 `--execute` 都一樣）先以 `da-guard key-refs` 問 exporter（[#1822](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1822)）：root 層 `_` 前綴檔在 exporter 自己的 load 的 `parse_failed`（判的是只把 root 層 `_` 檔套上本輪寫入、放進空的暫存目錄後的樣子；那一次問不到就沿用現況的答案，不放行）或 `unreadable` 裡同樣整輪降級（rc 1）；經 exporter 正規化後屬於該 metric 的 key（alias 表的 legacy 拼法、`_critical`、各種維度鍵拼法）與 canonical key 一樣列為引用、一樣移除，子目錄 `_` 檔裡的這類拼法列為殘留；da-guard 的 stderr 整份照轉（`  da-guard| ` 前綴）。`key-refs` 答不出來（含它的任何 exit 2）時印「未體檢」與原因，行為與 rc 照舊；找不到可用的 da-guard（`$DA_GUARD_BINARY` → `$PATH`）則 parse-tree 也讀不了這棵樹，結束碼 2，Step 3 另提醒檢查 alias 表的舊拼法。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 的殘留照印出的指引對該子樹跑 `--plane subtree`；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除；exporter 不讀或丟棄的區塊只警告。⚠️ NOT GUARDED：寫回是整份重新序列化，header 以外的註解會被移除（沒刪的未加引號純量照原文寫回，`010`、`yes` 不會改型；加引號的值可能換成單引號或拿掉引號）；平面判定仍靠 `--plane`（`subtree` 不採用 da-guard 對 `_` 前綴檔的判定）；parse-tree 讀不了、exporter 其實收的檔仍擋。
 
 **範例**
 
@@ -2430,7 +2452,7 @@ docker run --rm \
 |------|------|
 | `0` | 成功 |
 | `1` | 下架未完成，原因逐一印在輸出裡。⚠️ 預覽模式對同一棵樹給同一個判斷 |
-| `2` | 配置目錄無效，或載體寫回失敗 |
+| `2` | 配置目錄無效、載體寫回失敗，或找不到可用的 da-guard |
 
 ---
 
@@ -3265,7 +3287,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 >
 > **`--min-delta-pct` 空間不對稱**：此旋鈕對上界比的是 **value 空間** delta、對下界比的是 **miss-rate 空間** delta——同一數值敏感度差很多（0.95 floor 的 25% miss ≈ 1.3% value）。`--min-delta-pct` 下限 `5.0` 指的是上界 5% value 邊界（下界 no-change 邊界為 10% miss），故該下限為下界的必要非充分條件。下界 key 建議搭配 `--lookback 14d`（週跑 govern 對下界覆蓋亦然）。
 >
-> **結束碼**（#656、[#3054](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3054)）：`--apply` 時，若失敗（`error` 加上斷路器略過）占「有送出、或本來要送出寫入」的租戶 ≥ 90%，結束碼為 `1`，讓排程的 Job 標為 Failed；否則為 `0`。dry-run 與沒有可處理租戶時一律 `0`。已有 pending PR（409）與 `no_changes` 算有送出、不算失敗；`--max-prs` 額滿而略過（`skipped`）與 `skipped_nested` 沒有送出，不計入。`error` 不只是寫入通道故障（PUT 失敗、HTTP 5xx、API 不在 PR 寫入模式）：讀取失敗（`GET failed`、`GET returned no raw_yaml`）與本地驗證拒寫（`keys not found in live config`、`refused to PUT (verify failed)`）也記為 `error`，同樣算失敗。連續 5 筆錯誤後斷路器略過其餘租戶，`--json` 的 `outcomes[].status` 為 `skipped_breaker`（先前與額滿略過同為 `skipped`）；`summary` 的 `skipped`（額滿）與 `skipped_breaker` 分開計數，文字 Summary 也分列 `skipped (--max-prs)` 與 `skipped (circuit breaker)`。#3054 起，開出過 PR 也不再讓這一輪直接算成功：有開出 PR、但其餘 ≥ 90% 失敗的一輪，結束碼從 `0` 變成 `1`。結束碼取決於這一輪有多少租戶（租戶少時一次失敗占的比例就高），但同一份計畫下失敗只會讓結束碼變高、不會變低；與計畫無關的寫入健康訊號請看 tenant-api 的 `tenant_api_writes_total{result}` 與告警 `TenantApiWriteErrorsHigh`。
+> **結束碼**（#656、[#3054](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3054)）：`--apply` 時，若失敗（`error` 加上斷路器略過）占「有送出、或本來要送出寫入」的租戶 ≥ 90%，結束碼為 `1`，讓排程的 Job 標為 Failed；否則為 `0`。dry-run 與沒有可處理租戶時一律 `0`。已有 pending PR（409）與 `no_changes` 算有送出、不算失敗；`--max-prs` 額滿而略過（`skipped`）與 `skipped_nested` 沒有送出，不計入。`error` 不只是寫入通道故障（PUT 失敗、HTTP 5xx、API 不在 PR 寫入模式）：讀取失敗（`GET failed`、`GET returned no raw_yaml`）與本地驗證拒寫（`keys not found in live config`、`refused to PUT (verify failed)`；後者是 [ADR-036](adr/036-single-parser-effective-config.md) §2 的寫入前確認：改前、改後兩份文字都以 `da-guard parse-tree` 讀，改後必須正是改前把那幾個 key 換成推薦值的字串，其餘鍵、結構、每個純量的原文／型別／值都不變；改前那份讀不了、或租戶檔路徑沒有讀取端也拒寫）也記為 `error`；da-guard 有執行但在某個租戶上失敗（例如逾時：`refused to PUT (verify could not run)`）同樣只把該租戶記為 `error`，計入上述比例。找不到可用的 da-guard（`$DA_GUARD_BINARY` → `$PATH`）則不屬於任何租戶：`--apply` 整輪中止、結束碼 `2`，不進 90% 的比例計算。連續 5 筆錯誤後斷路器略過其餘租戶，`--json` 的 `outcomes[].status` 為 `skipped_breaker`（先前與額滿略過同為 `skipped`）；`summary` 的 `skipped`（額滿）與 `skipped_breaker` 分開計數，文字 Summary 也分列 `skipped (--max-prs)` 與 `skipped (circuit breaker)`。#3054 起，開出過 PR 也不再讓這一輪直接算成功：有開出 PR、但其餘 ≥ 90% 失敗的一輪，結束碼從 `0` 變成 `1`。結束碼取決於這一輪有多少租戶（租戶少時一次失敗占的比例就高），但同一份計畫下失敗只會讓結束碼變高、不會變低；與計畫無關的寫入健康訊號請看 tenant-api 的 `tenant_api_writes_total{result}` 與告警 `TenantApiWriteErrorsHigh`。
 
 #### test-notification
 

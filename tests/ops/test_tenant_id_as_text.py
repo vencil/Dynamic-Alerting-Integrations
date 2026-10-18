@@ -813,16 +813,19 @@ def test_patch_config_keeps_a_profile_outside_tenants_typed():
 
 
 def test_patch_config_refuses_a_write_that_changes_the_declared_tenants(monkeypatch):
-    """The post-rewrite set guard: with the re-read typed again (the reader
+    """The post-rewrite guard: with the re-read typed again (the reader
     before #2237), `010:` is written as `8:` beside a new `010:` — the key
-    would declare {8, 010} where it declared {010}. Refused, nothing sent."""
+    would declare {8, 010} where it declared {010}. Refused, nothing sent.
+    Since ADR-036 §2 (#2906) the guard is the pre-write parse-tree
+    confirmation, which names the key that should not be there."""
     import yaml
     # #2220: the rewrite reads through `strict_load_for_rewrite` now (was
     # `strict_load_exporter_keys`); the typed stand-in is unchanged.
     monkeypatch.setattr(pc, "strict_load_for_rewrite",
                         lambda text, **_kw: yaml.safe_load(text))
     cm = _pc_cm("multi-file", "  010:\n" + _PC_BLOCK)
-    with pytest.raises(pc.ConfigMapShapeError, match="tenants it declares"):
+    with pytest.raises(pc.ConfigMapShapeError,
+                       match=r"content_differs.*at tenants: keys differ; unexpected \['8'\]"):
         pc.build_patch(cm, "multi-file", "010", "connections", "3")
 
 
@@ -917,9 +920,14 @@ def _ids_tenant_metadata(d, spell):
 
 
 def _ids_backtest(d, spell):
+    # #3111: the tenants whose recipes changed, from da-guard served-values.
     import backtest_threshold as m
-    _tree(d, {"t.yaml": _CA2216.format(id=spell)})
-    return set(m.find_custom_alert_tenants(m.load_conf_files([str(d / "t.yaml")])))
+    _tree(d / "base", {"t.yaml": f"tenants:\n  {spell}: {{}}\n"})
+    _tree(d / "cur", {"t.yaml": (
+        f"tenants:\n  {spell}:\n    _custom_alerts:\n      - recipe: threshold\n"
+        "        name: q\n        metric: m\n        op: '>'\n        window: 5m\n"
+        "        threshold: '150:warning'\n")})
+    return set(m.changed_recipe_tenants(m.load_trees(str(d / "cur"), str(d / "base"))))
 
 
 def _ids_custom_alerts(d, spell):
@@ -974,7 +982,8 @@ _READERS_2216 = {
 # #2115 0-B/B4: these take the tenants from da-guard served-values (Go's id).
 # check_retire_drift (#2858) takes the db_type from it, looked up by the id
 # its own walk read.
-_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata", "check_retire_drift"})
+_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata", "check_retire_drift",
+                                   "backtest_threshold"})
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))

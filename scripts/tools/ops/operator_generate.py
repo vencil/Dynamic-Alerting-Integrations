@@ -36,7 +36,7 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import arm_crash_envelope, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
@@ -1131,9 +1131,9 @@ def main():
             secret_key=args.secret_key,
             selector_labels=dict(args.selector_label),
         )
-    except Exception as exc:
-        print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    except Exception as exc:  # noqa: BLE001 — the tool's own "no result"
+        # #3115: through die_caller_error, so --json gets its one envelope.
+        die_caller_error(f"ERROR: {safe_label(exc)}", reason="generate_failed")
 
     # Emit CRDs. No --output-dir (or --dry-run) prints YAML to stdout; the write path writes files and
     # logs `Generated:` lines to stderr. Both hand back the documents the #1112
@@ -1153,8 +1153,7 @@ def main():
         except OutputWriteError as exc:
             # #1641: unusable --output-dir ⇒ rc=2 + one line, not a traceback
             # at rc=1 (which reads as "your config has a finding").
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+            die_caller_error(f"ERROR: {exc}", reason="output_unwritable")
 
     summary = build_summary(result, args.kustomize)
 
@@ -1170,4 +1169,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)

@@ -112,7 +112,10 @@ class Finding(NamedTuple):
     actual: str
 
 
-class _Captured(Exception):
+class _Captured(BaseException):
+    # BaseException, not Exception: a tool entered through
+    # `_lib_exitcodes.run(main)` (#3115) turns any Exception into a crash
+    # exit, so the capture must pass through it like SystemExit does.
     def __init__(self, parser: argparse.ArgumentParser) -> None:
         self.parser = parser
 
@@ -169,8 +172,10 @@ def introspect_defaults() -> tuple[dict[str, dict[str, Any]], list[str],
                 continue
             saved_argv, saved_path = sys.argv[:], sys.path[:]
             # A tool run as __main__ may set this process's crash exit code
-            # (tenant_verify sets 1, #3090); it must not outlive the run.
+            # (tenant_verify sets 1, #3090) and caller-error code (1 too,
+            # #3124); neither may outlive the run.
             saved_crash = _lib_exitcodes.get_crash_exit_code()
+            saved_caller = _lib_exitcodes.get_caller_error_code()
             sys.argv = [str(path)]
             sys.path.insert(0, str(path.parent))
             sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
@@ -204,6 +209,7 @@ def introspect_defaults() -> tuple[dict[str, dict[str, Any]], list[str],
             finally:
                 sys.argv, sys.path = saved_argv, saved_path
                 _lib_exitcodes.set_crash_exit_code(saved_crash)
+                _lib_exitcodes.set_caller_error_code(saved_caller)
     finally:
         argparse.ArgumentParser.parse_args = real_parse  # type: ignore[method-assign]
         argparse.ArgumentParser.parse_known_args = real_parse_known  # type: ignore[method-assign]

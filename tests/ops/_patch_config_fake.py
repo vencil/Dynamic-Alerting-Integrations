@@ -42,10 +42,31 @@ def yaml_rejects(key, text):
     return False
 
 
+#: A key the toy exporters read as {tenant: tenant whose thresholds it
+#: serves}: an exporter-side link a write to one tenant moves another
+#: through, which the write itself does not show. #1950 row 9 used a YAML
+#: anchor shared by two tenant blocks for this; since ADR-036 §2 (#2906)
+#: patch-config's pre-write parse-tree confirmation refuses that rewrite
+#: before it is written (the anchored block reads back changed), so the
+#: verification after the write is exercised through this link instead.
+MIRROR_KEY = "_mirror.yaml"
+MIRROR = {MIRROR_KEY: "t-b: t-a\n"}
+
+
+def _mirrored(data, lines):
+    links = yaml.safe_load(data.get(MIRROR_KEY) or "") or {}
+    out = [ln for ln in lines
+           if not any(f'tenant="{dst}"' in ln for dst in links)]
+    for dst, src in sorted(links.items()):
+        out += [ln.replace(f'tenant="{src}"', f'tenant="{dst}"') for ln in lines
+                if f'tenant="{src}"' in ln]
+    return out
+
+
 def render_thresholds(data, pod=None):
     """Toy exporter: one `user_threshold` per non-`_` key of each tenant, one
     `user_silent_mode` per `_silent_mode` other than `disable` (target = its
-    text)."""
+    text); a tenant `MIRROR_KEY` links serves its source's series."""
     lines = []
     for key in sorted(data):
         if key.startswith("_") or not data[key]:
@@ -59,7 +80,7 @@ def render_thresholds(data, pod=None):
                 elif not metric.startswith("_") and str(value) != "disable":
                     lines.append(f'user_threshold{{metric="{metric}",'
                                  f'tenant="{tenant}"}} {value}')
-    return "\n".join(lines) + "\n"
+    return "\n".join(_mirrored(data, lines)) + "\n"
 
 
 class FakeCluster:

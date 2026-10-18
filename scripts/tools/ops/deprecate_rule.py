@@ -16,17 +16,25 @@ canonical key 一樣列為引用、一樣移除；子目錄 `_` 檔裡的拼法�
 root 層 `_` 前綴檔的判定看「本輪寫入之後」：只把這些檔套上本輪寫入放進空的
 暫存 conf.d 再問一次（本輪要刪的 key 可能正是讓載體被丟的那一個），仍被丟就
 擋寫入、rc 1；那一次問不到就退回現況的答案；讀不到的檔看現況。
-找不到 da-guard（`$DA_GUARD_BINARY` → `$PATH`）或它答不出來時印「未體檢」與
-原因，行為與 rc 照舊：體檢是附加的，缺了它本工具的判定與 #1822 之前相同，
-不是前置條件的缺失（不回 rc 2），也不是對這棵樹的發現（不回 rc 1）。
-da-guard 的 exit 2 一律算「答不出來」（未體檢），不當成 exporter 拒絕整棵樹：
-它也可能只是 da-guard 寫不出 JSON（例如非 UTF-8 檔名）。
+da-guard 的 `key-refs` 答不出來時印「未體檢」與原因，行為與 rc 照舊：那一層
+體檢是附加的。da-guard 的 exit 2 一律算「答不出來」（未體檢），不當成 exporter
+拒絕整棵樹：它也可能只是 da-guard 寫不出 JSON（例如非 UTF-8 檔名）。
+
+讀取與寫入前確認（ADR-036 §2，#2906）：哪些檔、每個檔的內容、要刪哪些 key，
+一律取自 `da-guard parse-tree`（yaml.v3 的讀法）；PyYAML 只用來產生寫回的文字。
+`--execute` 要寫的每一個檔（所有 metric 合併、每檔一次）都先以 parse-tree 單檔
+模式讀回確認——鍵、結構、每個純量的原文／型別／值都必須是原檔拿掉那幾個 key
+——全部通過才寫，一個不通過就一個位元組都不寫、本輪降級為預覽、rc 1，結尾具名。
+PyYAML 改寫時換了寫法的檔（例如 `~` 或空值寫成 `null`、`!!float 1` 寫成 `1.0`）
+會因此被拒寫，請先手動改成不會被改寫的寫法。沒有任何讀取端讀的 defaults 拼法
+（目錄另有被選的那一個）不寫：其中若還有該 metric 的 key，結尾具名、rc 1。
+找不到可用的 da-guard（`$DA_GUARD_BINARY` → `$PATH`）是 rc 2。
 
 NOT GUARDED（da-guard 也沒回答的）:
   * 平面判定仍靠 `--plane`: da-guard 把 --config-dir 當 root 判，所以
     `--plane subtree` 不採用它對 `_` 前綴檔的判定（租戶檔與拼法照用）。
-  * 本工具自己的載體鏡射（`exporter_verdicts`）擋下、exporter 其實收的檔仍擋
-    （見該函式的 docstring）；體檢只補「鏡射說綠、exporter 整份丟」那一側。
+  * 本工具依 parse-tree 讀出的型別判載體（`_node_verdicts`）；parse-tree 讀不了、
+    exporter 其實收的檔（封閉清單以外的差異，ADR-036 §2）仍擋。
 
 下架＝刪 key，不是把值寫成 `disable`（#1787）: `disable` 是租戶 opt-out 的
 語意，而 root `defaults:` 的型別是 `map[string]float64`，一個字串會讓
@@ -53,11 +61,8 @@ exporter 丟掉整份載體。
 import sys
 import os
 import argparse
-import codecs
 import contextlib
 import io
-import math
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -71,24 +76,20 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-# #2216: this tool WRITES the files it reads, so a tenant id read with
-# PyYAML's typing went back to disk renamed (`010:` → `8:`, `yes:` → `true:`).
-# Keys are read as the exporter reads them — the scalar's source text (#2114,
-# `_lib_yaml_keys`) — and `safe_dump` quotes any text YAML would retype, so
-# the id written is the id read. Not strict, as the read was before (#2123).
-# `_profile` is the one VALUE that names such a key (a profile name): kept as
-# source text too, or `_profile: 010` is written as `8` next to a profile
-# still named `'010'`. Every other value keeps its PyYAML type.
-# #2220: the two steps that WRITE a file back (Step 1 carriers, Step 2 tenant
-# files) read through `load_yaml_file_for_rewrite` instead, where every plain
-# value is its source text, and dump with `dump_for_rewrite` — so a value the
-# step did not delete is written as it was (`010` stays `010`, not `8`).
-from _lib_python import load_yaml_file_exporter_keys  # noqa: E402
-from _lib_io import load_yaml_file_for_rewrite  # noqa: E402
-from _lib_yaml_keys import RawPlain, dump_for_rewrite  # noqa: E402
+# ADR-036 §2 (#2906): which files there are, what each one holds and what to
+# delete are read from `da-guard parse-tree` (yaml.v3's reading: tenant ids
+# and keys are their source text, `yes` is the string "yes"). PyYAML is used
+# for one thing only — producing the text of a rewrite: the two steps that
+# WRITE a file back read it through `load_yaml_file_for_rewrite`, where every
+# plain value is its source text (#2220), and dump with `dump_for_rewrite`.
+# That text is read back by parse-tree before anything is written.
+from _lib_io import load_yaml_file_for_rewrite, strict_load_for_rewrite  # noqa: E402
+from _lib_yaml_keys import dump_for_rewrite  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and reading)
+import _lib_parse_tree  # noqa: E402
+import _lib_write_check  # noqa: E402
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import duplicate_in_mapping  # noqa: E402  (#2123 shared check)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer)
     DA_GUARD_PREFIX,
@@ -97,72 +98,92 @@ from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer
     load_key_refs,
 )
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    defaults_files_in,
-    has_yaml_extension,
     is_defaults_name,
-    iter_config_files,
-    resolve_defaults_file,
     unusable_config_entries,
     unusable_reason,
     warn_nested,
 )
 
 
+def _reader(config_dir):
+    """這一輪對 *config_dir* 的 parse-tree 讀取端（`main` 開的 session 內，整輪
+    共用同一份文件——寫入之前的那一份）。"""
+    return _lib_parse_cache.reader_for(config_dir)
+
+
+def _unreadable_text(exc):
+    return f"da-guard parse-tree：{exc.kind}：{exc.message}"
+
+
+def _tree_read(reader, rel):
+    """`(data, error)`：parse-tree 讀出的 *rel*（yaml.v3 的值）；讀不了時 `error`
+    是一句話。"""
+    try:
+        return reader.read(rel), None
+    except _lib_parse_tree.FileUnreadable as exc:
+        return None, _unreadable_text(exc)
+
+
 def _read_yaml(path, *, for_rewrite=False):
     """`(data, error)`: 讀不到／解析失敗／頂層不是 mapping 時 `error` 是一句話。
 
-    `for_rewrite=True`（#2220）: 未加引號的純量讀成原文（`RawPlain`），給會
-    寫回檔案的 Step 1／Step 2 用；其餘讀取維持 PyYAML 型別。
+    ADR-036 §2（#2906）：內容一律是 `da-guard parse-tree` 的讀法——這份檔的
+    位元組以單檔模式、當成它所在目錄的那個檔讀（一個值是什麼、要不要改都依它
+    判）。`for_rewrite=True` 是唯一的例外：寫回時產生文字用的 PyYAML 讀取
+    （#2220，未加引號的純量讀成原文 `RawPlain`），不拿來做任何判定。
     """
-    try:
-        if for_rewrite:
+    if for_rewrite:
+        try:
             data = load_yaml_file_for_rewrite(path, default={})
-        else:
-            data = load_yaml_file_exporter_keys(path, default={},
-                                                raw_text_scalars=("_profile",))
-    except (OSError, yaml.YAMLError) as e:
-        return None, str(e).splitlines()[0] if str(e) else e.__class__.__name__
-    if data is None:
-        return {}, None
-    if not isinstance(data, dict):
-        return None, f"頂層不是 mapping（{type(data).__name__}）"
-    return data, None
+        except (OSError, yaml.YAMLError, RecursionError) as e:
+            return None, str(e).splitlines()[0] if str(e) else e.__class__.__name__
+        if data is None:
+            return {}, None
+        if not isinstance(data, dict):
+            return None, f"頂層不是 mapping（{type(data).__name__}）"
+        return data, None
+    p = Path(path)
+    try:
+        raw = p.read_bytes()
+    except OSError as e:
+        return None, e.strerror or e.__class__.__name__
+    try:
+        tree = _lib_write_check.read_as(p.parent, p.name, raw)
+        return _lib_parse_tree.to_python(tree.node(p.name)), None
+    except _lib_parse_tree.FileUnreadable as exc:
+        return None, _unreadable_text(exc)
 
 
 def load_yaml_file(path):
-    """讀 YAML mapping；讀不到就回 None（呼叫端自己具名，這裡不印）。"""
+    """讀 YAML mapping（parse-tree 的讀法）；讀不到就回 None（呼叫端自己具名，這裡不印）。"""
     data, _err = _read_yaml(path)
     return data
 
 
 def _load_for_rewrite(path):
-    """`load_yaml_file`，但未加引號的純量保留原文（#2220）；寫回路徑專用。"""
+    """寫回時產生文字用的 PyYAML 讀取（#2220）；讀不了回 None。"""
     data, _err = _read_yaml(path, for_rewrite=True)
     return data
 
 
-def _type_name(value):
-    """`type(value).__name__`；`RawPlain` 報 PyYAML 讀它時的型別，訊息與 #2220 前一致。"""
-    if isinstance(value, RawPlain):
-        try:
-            value = yaml.safe_load(str(value))
-        except yaml.YAMLError:
-            return "str"
-    return type(value).__name__
+def _type_name(node):
+    """parse-tree 節點的型別名（訊息用）：mapping／list，純量是 yaml.v3 的 tag。"""
+    if _lib_parse_tree.is_scalar(node):
+        return node["tag"]
+    return "list" if isinstance(node, list) else "mapping"
+
+
+def _render(data, header_comment=""):
+    """寫回的文字：檔頭註解＋PyYAML 的輸出（`RawPlain` 照原文寫回，#2220）。"""
+    return (header_comment or "") + dump_for_rewrite(
+        data, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def save_yaml_file(path, data, header_comment=""):
-    """安全寫入 YAML 檔案。"""
-    content = ""
-    if header_comment:
-        content += header_comment
-    # #2220: `RawPlain` values go back plain, as written; everything else is
-    # dumped exactly as `yaml.safe_dump` would.
-    content += dump_for_rewrite(data, default_flow_style=False,
-                                allow_unicode=True, sort_keys=False)
+    """安全寫入 YAML 檔案（不做寫入前確認；conf.d 的寫入走 `_write_confirmed`）。"""
     # #1641: an existing conf.d file (derived, not an output flag) that cannot
     # be written is rc 2, not rc 1.
-    write_text_or_die(path, content)
+    write_text_or_die(path, _render(data, header_comment))
 
 
 def metric_pattern_keys(metric_key, spellings=()):
@@ -196,359 +217,110 @@ def tenant_key_belongs_to_metric(key, metric_key, spellings=()):
     return False
 
 
-# ── 載體體檢：鏡射 yaml.v3 對 `map[string]float64` 的判定 ─────────────────
+# ── 載體體檢：parse-tree 讀出的 `defaults:` 能不能解成 map[string]float64 ──
 UNPARSEABLE = "unparseable"            # exporter 整份丟掉這個檔
 NULL_NOT_DECLARED = "null_not_declared"  # 這一個 key 寫成 null：exporter 當作沒宣告（只警告，#2518）
 UNREADABLE = "unreadable"              # 本工具讀不到，無法判定
-UNPARSED_BY_TOOL = "unparsed_by_tool"  # pure-Python parser 讀不了；exporter 未必
+UNPARSED_BY_TOOL = "unparsed_by_tool"  # PyYAML（產生寫回文字）讀不了；exporter 未必
 EXPORTER_DROPPED = "exporter_dropped"  # da-guard：exporter 自己的 load 丟掉／讀不到這份檔（#1822）
 BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, UNPARSED_BY_TOOL,
                             EXPORTER_DROPPED})
-# yaml.v3 是 libyaml 的移植：有 libyaml 就用它讀，scanner 層的判定才同源。
-_LOADER = yaml.CSafeLoader if yaml.__with_libyaml__ else yaml.SafeLoader
-# `ThresholdConfig` 會解碼的頂層 key（`pkg/config/types.go`）；其餘頂層 key 的子樹
-# Go 不解碼。
-_DECODED_SECTIONS = ("defaults", "optional_overrides", "state_filters",
-                     "tenants", "profiles", "max_metrics_per_tenant")
-
-_T_STR, _T_INT, _T_FLOAT, _T_NULL, _T_BOOL, _T_TS, _T_BIN, _T_MERGE = (
-    "!!str", "!!int", "!!float", "!!null", "!!bool", "!!timestamp", "!!binary",
-    "!!merge")
-_RESOLVABLE = frozenset({_T_STR, _T_BOOL, _T_INT, _T_FLOAT, _T_NULL, _T_TS})
-_YAML_NS = "tag:yaml.org,2002:"
-_RESOLVE_MAP = {}
-for _tag, _words in (
-        (_T_BOOL, ("true", "True", "TRUE", "false", "False", "FALSE")),
-        (_T_NULL, ("", "~", "null", "Null", "NULL")),
-        (_T_FLOAT, (".nan", ".NaN", ".NAN", ".inf", ".Inf", ".INF",
-                    "+.inf", "+.Inf", "+.INF", "-.inf", "-.Inf", "-.INF")),
-        (_T_MERGE, ("<<",))):
-    for _w in _words:
-        _RESOLVE_MAP[_w] = _tag
-_GO_INT = re.compile(
-    r"([+-]?)(?:0[xX]([0-9a-fA-F]+)|0[oO]([0-7]+)|0[bB]([01]+)|0([0-7]*)|([1-9][0-9]*))")
-_YAML_STYLE_FLOAT = re.compile(r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
-_GO_DEC_FLOAT = re.compile(r"[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?")
+_NUMBER_TAGS = ("!!int", "!!float")
 
 
-class _Dropped(Exception):
-    """整份檔會被 exporter 丟掉；訊息是理由。"""
+def _node_verdicts(node):
+    """root 層載體（parse-tree 讀得了的）的 `defaults:` exporter 讀不讀得進去:
+    `[(key, 原文, kind), ...]`。
 
-
-def _short_tag(tag):
-    if tag and tag.startswith(_YAML_NS):
-        return "!!" + tag[len(_YAML_NS):]
-    return tag
-
-
-def _hint(text):
-    c = text[:1] or "N"
-    if c in "+-":
-        return "S"
-    if c in "0123456789":
-        return "D"
-    if c in "yYnNtTfFoO~":
-        return "M"
-    if c == ".":
-        return "."
-    return ""
-
-
-def _go_parse_int(s, *, signed):
-    m = _GO_INT.fullmatch(s)
-    if not m:
-        return None
-    sign, hexd, octd, bind, legacy, dec = m.groups()
-    if sign and not signed:
-        return None
-    if hexd is not None:
-        v = int(hexd, 16)
-    elif octd is not None:
-        v = int(octd, 8)
-    elif bind is not None:
-        v = int(bind, 2)
-    elif legacy is not None:
-        v = int(legacy or "0", 8)
-    else:
-        v = int(dec)
-    if sign == "-":
-        v = -v
-    lo, hi = (-(1 << 63), (1 << 63) - 1) if signed else (0, (1 << 64) - 1)
-    return v if lo <= v <= hi else None
-
-
-def _underscore_ok(s):
-    saw = "^"
-    if s[:1] in ("-", "+"):
-        s = s[1:]
-    i, hexd = 0, False
-    if len(s) >= 2 and s[0] == "0" and s[1].lower() in "box":
-        i, saw, hexd = 2, "0", s[1].lower() == "x"
-    for ch in s[i:]:
-        if ch.isdigit() and ch.isascii() or hexd and ch.lower() in "abcdef":
-            saw = "0"
-        elif ch == "_":
-            if saw != "0":
-                return False
-            saw = "_"
-        elif saw == "_":
-            return False
-        else:
-            saw = "!"
-    return saw != "_"
-
-
-def _go_parse_float(s):
-    if "_" in s and not _underscore_ok(s):
-        return None
-    plain = s.replace("_", "")
-    if not _GO_DEC_FLOAT.fullmatch(plain):
-        return None
-    v = float(plain)
-    return None if math.isinf(v) else v      # strconv: ErrRange
-
-
-def _resolve(tag, text):
-    """resolve.go `resolve()` 回的 tag（`tag` 是顯式短 tag 或 None）。"""
-    if tag and tag not in _RESOLVABLE:
-        return tag
-    hint = _hint(text)
-    if hint and tag not in (_T_STR, _T_BIN):
-        if text in _RESOLVE_MAP:
-            return _RESOLVE_MAP[text]
-        if hint == ".":
-            if _go_parse_float(text) is not None:
-                return _T_FLOAT
-        elif hint in "DS":
-            plain = text.replace("_", "")
-            if _go_parse_int(plain, signed=True) is not None:
-                return _T_INT
-            if _go_parse_int(plain, signed=False) is not None:
-                return _T_INT
-            if (_YAML_STYLE_FLOAT.fullmatch(plain)
-                    and _go_parse_float(plain) is not None):
-                return _T_FLOAT
-    return _T_STR
-
-
-def _decoded(data):
-    """原文的行列表，供 mark 的 line/column 切片（兩種 loader 的 column 都不算 BOM）。"""
-    if data.startswith(codecs.BOM_UTF16_LE):
-        text = data.decode("utf-16-le", "replace")
-    elif data.startswith(codecs.BOM_UTF16_BE):
-        text = data.decode("utf-16-be", "replace")
-    else:
-        text = data.decode("utf-8", "replace")
-    lines = text.splitlines(keepends=True)
-    if lines and lines[0].startswith("﻿"):
-        lines[0] = lines[0][1:]
-    return lines
-
-
-def _source_of(node, lines):
-    s, e = node.start_mark, node.end_mark
-
-    def seg(i, a, b):
-        return lines[i][a:b] if i < len(lines) else ""
-
-    if s.line == e.line:
-        return seg(s.line, s.column, e.column)
-    return (seg(s.line, s.column, None) + "".join(lines[s.line + 1:e.line])
-            + seg(e.line, 0, e.column))
-
-
-def _explicit_tag(node, lines):
-    """顯式 tag 的短形式，沒有（或只有非特定的 `!`）就 None。"""
-    src = _source_of(node, lines)
-    if src.startswith("&"):
-        parts = src.split(None, 1)
-        src = parts[1] if len(parts) > 1 else ""
-    if not src.startswith("!"):
-        return None
-    if src.split(None, 1)[0] == "!":
-        return None
-    return _short_tag(node.tag)
-
-
-def _scalar_verdict(node, lines):
-    """decode.go `scalar()` 對 float64 目標的下場: accepted / null / dropped。
-
-    null：yaml.v3 解成 0，但 exporter 的 ParseConfigFile 接著把寫成 null 的
-    key 拿掉（#2518）——這個 key 等於沒寫，不是 0 閾值。"""
-    if not isinstance(node, yaml.ScalarNode):
-        return "dropped"
-    tag = _explicit_tag(node, lines)
-    if tag == _T_STR or (tag is None and node.style in ('"', "'", "|", ">")):
-        return "dropped"                       # indicatedString
-    rtag = _resolve(tag, node.value)
-    if tag is None or tag == rtag or tag == _T_BIN:
-        final = rtag
-    elif tag == _T_FLOAT and rtag == _T_INT:
-        final = _T_FLOAT
-    else:
-        return "dropped"                       # "cannot decode … as a …"
-    if final in (_T_INT, _T_FLOAT):
-        return "accepted"
-    if final == _T_NULL:
-        return "null"
-    return "dropped"
-
-
-def _raw_of(node, lines):
-    if isinstance(node, yaml.MappingNode):
-        return "<mapping>"
-    if isinstance(node, yaml.SequenceNode):
-        return "<list>"
-    src = _source_of(node, lines).splitlines() or ["(空)"]
-    return src[0] + ("…" if len(src) > 1 else "")
-
-
-def _no_duplicate_keys(node):
-    """decode.go `mapping()` 的 uniqueKeys 檢查（單層）。判定用共用的
-    `_lib_io.duplicate_in_mapping`（#2123：node 種類＋原文相同即重複）。"""
-    hit = duplicate_in_mapping(node)
-    if hit is not None:
-        dup = hit[0]
-        raise _Dropped(
-            f"重複 key `{dup.value if isinstance(dup, yaml.ScalarNode) else ''}`")
-
-
-def _walk_duplicate_keys(node, visiting=frozenset()):
-    """decode.go `mapping()` 的 uniqueKeys 檢查，套到這棵子樹的每一層 mapping。"""
-    if id(node) in visiting:
-        return
-    visiting = visiting | {id(node)}
-    if isinstance(node, yaml.MappingNode):
-        _no_duplicate_keys(node)
-        for _k, v in node.value:
-            _walk_duplicate_keys(v, visiting)
-    elif isinstance(node, yaml.SequenceNode):
-        for v in node.value:
-            _walk_duplicate_keys(v, visiting)
-
-
-def _is_merge_key(node):
-    return (isinstance(node, yaml.ScalarNode) and node.value == "<<"
-            and _short_tag(node.tag) == _T_MERGE)
-
-
-def _effective_entries(node, seen, visiting):
-    """decode.go `mapping()`+`merge()` 會解碼的 `(key, value)`，顯式在前、merge 在後。"""
-    if id(node) in visiting:
-        raise _Dropped("anchor 自我參照")
-    visiting = visiting | {id(node)}
-    _no_duplicate_keys(node)
-    merge_node = None
+    ADR-036 §2（#2906）：值是 yaml.v3 讀出的節點，判定只看它的 tag——`!!int`／
+    `!!float` 解得成 float64；`!!null` 是「沒宣告」（#2518）；其他（字串、布林、
+    日期、mapping、list）讓 exporter 整份丟掉這個載體。先前這裡是一份 yaml.v3
+    `resolve()`／`decode.go` 的 Python 仿製，已刪；真值表照舊是
+    `tests/golden/fixtures/defaults-carrier-oracle.json`（Go 測試
+    `TestDefaultsCarrierOracle` 是裁判）。文件層級的項目 key 為 None。
+    """
+    defaults = node.get("defaults")
+    if defaults is None:
+        return []
+    if _lib_parse_tree.is_scalar(defaults):
+        if defaults["tag"] == "!!null":
+            return []                          # `defaults:` 空值＝nil map
+        return [(None, "defaults 不是 mapping（scalar）", UNPARSEABLE)]
+    if isinstance(defaults, list):
+        return [(None, "defaults 不是 mapping（list）", UNPARSEABLE)]
     out = []
-    for k, v in node.value:
-        if _is_merge_key(k):
-            merge_node = v
-            continue
-        if not isinstance(k, yaml.ScalarNode):
-            raise _Dropped("key 不是純量")
-        if seen is not None:
-            if k.value in seen:
+    for key in sorted(defaults):
+        val = defaults[key]
+        if _lib_parse_tree.is_scalar(val):
+            if val["tag"] in _NUMBER_TAGS:
                 continue
-            seen.add(k.value)
-        out.append((k, v))
-    if merge_node is not None:
-        if seen is None:
-            seen = {k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode)}
-        sources = (merge_node.value if isinstance(merge_node, yaml.SequenceNode)
-                   else [merge_node])
-        for src in sources:
-            if not isinstance(src, yaml.MappingNode):
-                raise _Dropped("`<<` 的值不是 mapping")
-            out.extend(_effective_entries(src, seen, visiting))
+            raw = val["text"].splitlines()[0] if val["text"] else "(空)"
+            if "\n" in val["text"].rstrip("\n"):
+                raw += "…"
+            out.append((key, raw, NULL_NOT_DECLARED if val["tag"] == "!!null"
+                        else UNPARSEABLE))
+        else:
+            out.append((key, "<list>" if isinstance(val, list) else "<mapping>",
+                        UNPARSEABLE))
     return out
 
 
-def exporter_verdicts(data):
-    """root 層載體的位元組 exporter 讀不讀得進去: `[(key, 原文, kind), ...]`。
-
-    輸入是檔案的 bytes。判定鏡射 yaml.v3 的 `decode.go`（`scalar()`／
-    `mapping()`／`merge()`／`indicatedString()`）與 `resolve.go`（`resolve()`）對
-    `ThresholdConfig`（`defaults: map[string]float64`）的行為；真值表在
-    `tests/golden/fixtures/defaults-carrier-oracle.json`，Go 測試
-    `TestDefaultsCarrierOracle` 是那張表的裁判。文件層級的項目 key 為 None。
-
-    本函式說綠、exporter 卻整份丟的檔（值形狀、第二份 document 的 scanner 錯誤、
-    merge key 的覆寫等向量表以外的面），由 `exporter_precheck` 問 exporter 自己的
-    load 補上（#1822）；那時這裡只是第二意見。未體檢時這裡就是全部判定。
-
-    已知近似與 NOT GUARDED（體檢補不了的那一側：本函式擋、exporter 收）:
-      * 重複 key: Go 會解碼的頂層區塊（`_DECODED_SECTIONS`）底下所有深度都檢查。
-        Go 對這些區塊內「未知欄位」底下的重複 key 會接受、本函式會擋——刻意
-        fail-closed（YAML 1.2 本就不允許，且寫回的 safe_dump 會靜默丟掉前一個）。
-        其他頂層 key 的子樹不看，與 Go 同。
-      * merge key 的覆寫判定以 key 的字面文字比對；非 `!!str` 解析的 key（數字／
-        布林／null）與 alias 當 key，Go 用解碼後的值比對，可能分歧（本函式多擋）。
-      * 沒有 libyaml 時 pure parser 的 scanner 錯誤（如 tab）回 `UNPARSED_BY_TOOL`，
-        不冒充 exporter 的判定（有 libyaml 時同一格由 `carrier_health` 補上）。
-    """
+def _verdicts_of(load_node, rewrite_text):
+    """`_node_verdicts` of the node `load_node()` returns, plus「本工具自己寫不寫
+    得回去」：parse-tree 讀得了、PyYAML（產生寫回文字）讀不了的檔回
+    `UNPARSED_BY_TOOL`。parse-tree 讀不了的檔整份 `UNPARSEABLE`（`read_failure`
+    是 `UNREADABLE`）。"""
     try:
-        root = next(yaml.compose_all(data, Loader=_LOADER), None)
-    except yaml.YAMLError as e:
-        first = str(e).splitlines()[0] if str(e) else e.__class__.__name__
-        if _LOADER is yaml.SafeLoader and isinstance(e, yaml.scanner.ScannerError):
-            return [(None, first, UNPARSED_BY_TOOL)]
-        return [(None, first, UNPARSEABLE)]
-    if root is None:
-        return []
-    if not isinstance(root, yaml.MappingNode):
-        return [(None, "頂層不是 mapping", UNPARSEABLE)]
-    lines = _decoded(data)
-    try:
-        _no_duplicate_keys(root)
-        top = {k.value: v for k, v in root.value if isinstance(k, yaml.ScalarNode)}
-        for section in _DECODED_SECTIONS:
-            if section in top:
-                _walk_duplicate_keys(top[section])
-        defaults = top.get("defaults")
-        if defaults is None:
-            return []
-        if isinstance(defaults, yaml.ScalarNode):
-            if _scalar_verdict(defaults, lines) == "null":
-                return []                      # `defaults:` 空值＝nil map
-            raise _Dropped("defaults 不是 mapping（scalar）")
-        if not isinstance(defaults, yaml.MappingNode):
-            raise _Dropped("defaults 不是 mapping（list）")
-        out = []
-        for key_node, val_node in _effective_entries(defaults, None, frozenset()):
-            verdict = _scalar_verdict(val_node, lines)
-            if verdict == "accepted":
-                continue
-            out.append((key_node.value, _raw_of(val_node, lines),
-                        NULL_NOT_DECLARED if verdict == "null" else UNPARSEABLE))
-        return out
-    except _Dropped as e:
-        return [(None, str(e), UNPARSEABLE)]
-
-
-def carrier_health(data):
-    """`exporter_verdicts` 加上「本工具自己讀不讀得了」: 讀寫走 PyYAML 的 pure
-    parser，它拒絕而 libyaml／yaml.v3 接受的檔（如 tab）回 `UNPARSED_BY_TOOL`。"""
-    items = exporter_verdicts(data)
-    if _LOADER is yaml.SafeLoader or any(k in BLOCKING_KINDS for _, _, k in items):
+        node = load_node()
+    except _lib_parse_tree.FileUnreadable as exc:
+        kind = UNREADABLE if exc.kind == "read_failure" else UNPARSEABLE
+        return [(None, f"{exc.kind}：{exc.message}", kind)]
+    items = _node_verdicts(node)
+    if any(k in BLOCKING_KINDS for _, _, k in items):
         return items
     try:
-        next(yaml.compose_all(data, Loader=yaml.SafeLoader), None)
-    except yaml.scanner.ScannerError as e:
+        strict_load_for_rewrite(rewrite_text())
+    except (yaml.YAMLError, UnicodeDecodeError, RecursionError, ValueError) as e:
         first = str(e).splitlines()[0] if str(e) else e.__class__.__name__
         return [(None, f"exporter 讀得進去；{first}", UNPARSED_BY_TOOL)]
-    except yaml.YAMLError:
-        pass                                   # 兩邊都拒絕的檔上面已經列了
     return items
 
 
-def carrier_health_at(path):
-    """`carrier_health` 讀檔版；讀不到回一個 `UNREADABLE` 項（key None）。"""
+def exporter_verdicts(data):
+    """`carrier_health` 不含「本工具讀不讀得了」那一層：*data*（檔案的 bytes）
+    以 parse-tree 單檔模式、當成空 conf.d 的 `_defaults.yaml` 讀，再交給
+    `_node_verdicts`。"""
+    def load():
+        with tempfile.TemporaryDirectory(prefix="deprecate-rule-") as empty:
+            return _lib_write_check.read_as(empty, "_defaults.yaml", data).node(
+                "_defaults.yaml")
     try:
-        with open(path, "rb") as fh:
-            data = fh.read()
+        return _node_verdicts(load())
+    except _lib_parse_tree.FileUnreadable as exc:
+        return [(None, f"{exc.kind}：{exc.message}", UNPARSEABLE)]
+
+
+def carrier_health(data):
+    """root 層載體的位元組（不在任何樹裡，空 conf.d 的 `_defaults.yaml`）的體檢:
+    `exporter_verdicts` 加上 PyYAML 讀不讀得了（`UNPARSED_BY_TOOL`）。"""
+    def load():
+        with tempfile.TemporaryDirectory(prefix="deprecate-rule-") as empty:
+            return _lib_write_check.read_as(empty, "_defaults.yaml", data).node(
+                "_defaults.yaml")
+    return _verdicts_of(load, lambda: data.decode("utf-8"))
+
+
+def carrier_health_at(path):
+    """`carrier_health`，讀這一輪 parse-tree 文件裡的那個檔（*path* 所在目錄的
+    樹；`main` 的 session 內同一份文件）；讀不到回一個 `UNREADABLE` 項（key None）。"""
+    p = Path(path)
+    try:
+        with open(p, "rb") as fh:
+            text = fh.read()
     except OSError as e:
         return [(None, e.strerror or e.__class__.__name__, UNREADABLE)]
-    return carrier_health(data)
+    reader = _reader(p.parent)
+    return _verdicts_of(lambda: reader.node(p.name), lambda: text.decode("utf-8"))
 
 
 # ── 掃描與完成度 ──────────────────────────────────────────────────────────
@@ -675,7 +447,7 @@ def _occurrences_in(data, metric_key, spellings=()):
     declared = data.get("optional_overrides") or []
     if isinstance(declared, list):
         out += [("optional_overrides", pk, "（宣告，無值）")
-                for pk in pattern_keys if pk in declared]
+                for pk in pattern_keys if pk in _declared_texts(declared)]
     for section in ("tenants", "profiles"):
         block = data.get(section) or {}
         if not isinstance(block, dict):
@@ -689,26 +461,33 @@ def _occurrences_in(data, metric_key, spellings=()):
     return out
 
 
-def scan_for_metric(metric_key, config_dir, spellings=()):
-    """平面掃描 conf.d 這一層引用該 metric 的檔。
+def _declared_texts(declared):
+    """`optional_overrides:` 的項目當成 key 名比對（值形狀的項目不算）。"""
+    return [d if isinstance(d, str) else str(d) for d in declared
+            if not isinstance(d, (dict, list))]
+
+
+def _top_files(config_dir, reader):
+    """parse-tree 選到的這一層（不含子目錄）的檔名，排序；名字像設定檔、卻不是一般
+    檔的項目（目錄、懸空連結）不在其中——`main` 以 `unusable_reason` 具名略過。"""
+    base = Path(config_dir)
+    return sorted(rel for rel in reader.tree().selected
+                  if "/" not in rel and (base / rel).is_file())
+
+
+def scan_for_metric(metric_key, config_dir, spellings=(), *, reader=None):
+    """平面掃描 conf.d 這一層引用該 metric 的檔（parse-tree 選的檔與讀法）。
 
     回傳 `[{filename, path, occurrences}, ...]`；讀不了的檔以 `("unreadable",
-    "", 原因)` 列入，不靜默略過。#1607 的 `is_file()` 過濾在這裡，具名在 `main`
-    （本函式每個 metric 跑一次）。
+    "", 原因)` 列入，不靜默略過。*reader* 預設是這一輪的那一份文件；寫入後的
+    重掃傳一個新的 `ConfdReader`。
     """
     findings = []
     config_base = Path(config_dir)
     warn_nested(config_base, tool="deprecate_rule")
-    entries = sorted(config_base.iterdir())
-    for entry in (
-        p for p in entries
-        if p.is_file() and has_yaml_extension(p.name)
-    ):
-        filename = entry.name
-        path = str(entry)
-        if filename.startswith('.'):
-            continue
-        data, err = _read_yaml(path)
+    reader = reader or _reader(config_dir)
+    for filename in _top_files(config_dir, reader):
+        data, err = _tree_read(reader, filename)
         if err is not None:
             occurrences = [("unreadable", "", err)]
         else:
@@ -716,36 +495,41 @@ def scan_for_metric(metric_key, config_dir, spellings=()):
         if occurrences:
             findings.append({
                 "filename": filename,
-                "path": path,
+                "path": str(config_base / filename),
                 "occurrences": occurrences,
             })
     return findings
 
 
-def nested_residue(metric_key, config_dir, spellings=()):
+def nested_residue(metric_key, config_dir, spellings=(), *, reader=None):
     """子目錄裡（平面那一層以下）仍引用該 metric 的檔——只讀，供完成度判定。
 
     形狀同 `scan_for_metric`，`filename` 是相對 POSIX 路徑（含 `/`，所以
-    `section_owner` 判給手動）。
+    `section_owner` 判給手動）。檔是 parse-tree 選的那些。
     """
     base = Path(config_dir)
+    reader = reader or _reader(config_dir)
     out = []
-    for p in iter_config_files(base, recursive=True):
-        if p.parent == base:
+    for rel in sorted(r for r in reader.tree().selected if "/" in r):
+        if not (base / rel).is_file():
             continue
-        data, err = _read_yaml(str(p))
+        data, err = _tree_read(reader, rel)
         occurrences = ([("unreadable", "", err)] if err is not None
                        else _occurrences_in(data, metric_key, spellings))
         if occurrences:
-            out.append({"filename": p.relative_to(base).as_posix(),
-                        "path": str(p), "occurrences": occurrences})
+            out.append({"filename": rel, "path": str(base / rel),
+                        "occurrences": occurrences})
     return out
 
 
-def out_of_reach(entries, plane="root"):
+def out_of_reach(entries, plane="root", *, config_dir=None):
     """這一層本工具不寫的載體 `[(名字, 理由), ...]`: 子目錄、`_` 前綴檔的
-    `tenants:`／`profiles:` 區塊（含 `_defaults.yaml` 自己的）。"""
+    `tenants:`／`profiles:` 區塊（含 `_defaults.yaml` 自己的）、沒有讀取端的
+    defaults 拼法（parse-tree 的 `not_read`）。"""
     bad = {b.name for b in unusable_config_entries(entries)}
+    reader = _reader(config_dir if config_dir is not None
+                     else (entries[0].parent if entries else "."))
+    tree = reader.tree()
     out = []
     for e in entries:
         if e.name in bad or e.name.startswith("."):
@@ -753,9 +537,13 @@ def out_of_reach(entries, plane="root"):
         if e.is_dir():
             out.append((f"{e.name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
                                       "`--config-dir <子樹> --plane subtree`"))
-        elif (e.is_file() and has_yaml_extension(e.name)
-              and e.name.startswith("_") and plane == "root"):
-            data, err = _read_yaml(str(e))
+        elif e.name in tree.not_read and is_defaults_name(e.name):
+            out.append((e.name, f"沒有讀取端讀這個 defaults 拼法（parse-tree："
+                                f"{tree.not_read[e.name]}），本工具不寫它；"
+                                f"殘留需手動移除或刪掉此檔"))
+        elif (e.name in tree.selected and e.name.startswith("_")
+              and plane == "root"):
+            data, err = _tree_read(reader, e.name)
             if err is not None:
                 continue                       # 載體體檢會具名
             for section in ("tenants", "profiles"):
@@ -768,90 +556,169 @@ def out_of_reach(entries, plane="root"):
 def defaults_carriers(config_dir):
     """conf.d 這一層所有 defaults 載體（`_defaults.yaml`／`.yml`，任意大小寫）。
 
-    exporter 每個目錄只讀一個載體（#1674：`.yaml` 拼法勝過 `.yml`，見
-    `_lib_confd.select_defaults_carrier`），其餘拼法會被 WARN 且不被任何平面
-    讀取。這裡仍列舉全部拼法、從每一個移除：沒被讀的那個一旦另一個被刪掉就會
-    變成載體，留著舊 key 等於埋一個會復活的閾值。平面讀取，`warn_nested` 具名子目錄。
+    exporter 每個目錄只讀一個載體（#1674：`.yaml` 拼法勝過 `.yml`）；哪一個由
+    parse-tree 的選檔說（ADR-036 §2）。沒被選的拼法（`not_read`）照樣列出：它
+    若持有該 metric 的 key 是殘留（`remove_from_all_defaults` 不寫它——沒有讀取
+    端的路徑不寫，ADR-036 §2——而是具名、rc 1），否則一旦被選的那個被刪掉就會
+    變成載體，埋一個會復活的閾值。平面讀取，`warn_nested` 具名子目錄。
     """
     base = Path(config_dir)
     warn_nested(base, tool="deprecate_rule")
-    entries = sorted(base.iterdir())
-    return defaults_files_in(base, [e.name for e in entries if e.is_file()])
+    tree = _reader(config_dir).tree()
+    names = {n for n in (*tree.selected, *tree.not_read)
+             if "/" not in n and is_defaults_name(n) and (base / n).is_file()}
+    return [base / n for n in sorted(names)]
 
 
-def remove_from_all_defaults(metric_key, config_dir, execute=False, spellings=()):
+def remove_from_all_defaults(metric_key, config_dir, execute=False, spellings=(),
+                             *, done=False):
     """對每個 defaults 載體執行 `_remove_in_carrier`。
 
-    回傳每個載體一筆 `(path, ok, msg, removed)`。沒有任何載體時回
-    `resolve_defaults_file` 的正典路徑那一筆（`_defaults.yaml 不存在`）。
-    平面讀取: 子樹載體要用 `--config-dir` 指到那一層。
+    回傳每個載體一筆 `(path, ok, msg, removed)`。沒有任何載體時回正典路徑
+    那一筆（`_defaults.yaml 不存在`）。平面讀取: 子樹載體要用 `--config-dir`
+    指到那一層。*done*：本輪已由 `apply_rewrites` 寫入（訊息用「已」）。
     """
     base = Path(config_dir)
     carriers = defaults_carriers(base)
     if not carriers:
-        carriers = [resolve_defaults_file(base)]
-    return [(p, *_remove_in_carrier(metric_key, p, execute, spellings))
+        carriers = [base / "_defaults.yaml"]
+    return [(p, *_remove_in_carrier(metric_key, p, execute, spellings, done=done))
             for p in carriers]
 
 
-def _remove_in_carrier(metric_key, defaults_path, execute=False, spellings=()):
-    """從一個 defaults 載體移除 metric 的所有相關 key。
-
-    回傳 `(ok, msg, removed)`，`removed` 為 `[(平面, key, 原值), ...]`，平面是
-    `"defaults"` 或 `"optional_overrides"`。要刪的 key 來自 `metric_pattern_keys`
-    ——掃描用的同一份。沒有相關 key 的載體是具名 no-op，一個位元組都不寫。
-    """
-    defaults_path = str(defaults_path)
-    name = Path(defaults_path).name
-    if not Path(defaults_path).exists():
-        return False, f"{name} 不存在", []
-
-    data = _load_for_rewrite(defaults_path)
-    if data is None:
-        return False, f"無法讀取 {name}", []
-
-    # `defaults:` 空值是空區塊；list／scalar 是壞檔，不改寫、具名拒絕。
-    defaults = data.get("defaults")
-    if defaults is None:
-        defaults = {}
-    if not isinstance(defaults, dict):
-        return False, (f"defaults 不是 mapping（{_type_name(defaults)}），"
-                       f"本工具不改寫，請先修檔"), []
-
-    pattern_keys = metric_pattern_keys(metric_key, spellings)
-    declared = data.get("optional_overrides")
-    declared_hit = ([pk for pk in pattern_keys if pk in declared]
-                    if isinstance(declared, list) else [])
-
-    removed = [("defaults", pk, defaults[pk]) for pk in pattern_keys
-               if pk in defaults]
+def _carrier_plan(node, pattern_keys):
+    """parse-tree 節點上的判定：`(removed, defaults 的錯誤)`。`removed` 是
+    `[(平面, key, 原值), ...]`（原值是 yaml.v3 的值）。`defaults:` 空值是空區塊；
+    list／scalar 是壞檔，不改寫、具名拒絕。"""
+    defaults = node.get("defaults")
+    is_null = defaults is None or (_lib_parse_tree.is_scalar(defaults)
+                                   and defaults["tag"] == "!!null")
+    is_map = isinstance(defaults, dict) and not _lib_parse_tree.is_scalar(defaults)
+    if not (is_null or is_map):
+        return [], (f"defaults 不是 mapping（{_type_name(defaults)}），"
+                    f"本工具不改寫，請先修檔")
+    defaults = defaults if is_map else {}
+    declared = node.get("optional_overrides")
+    declared = declared if isinstance(declared, list) else []
+    declared_texts = [d["text"] for d in declared if _lib_parse_tree.is_scalar(d)]
+    removed = [("defaults", pk, _lib_parse_tree.to_python(defaults[pk]))
+               for pk in pattern_keys if pk in defaults]
     removed += [("optional_overrides", pk, "（宣告，無值）")
-                for pk in declared_hit]
+                for pk in pattern_keys if pk in declared_texts]
+    return removed, None
 
-    if not removed:
-        return True, f"{name} 沒有 {metric_key} 相關 key，略過", []
 
-    if not execute:
-        return True, f"將從 {name} 移除 {len(removed)} 個 key", removed
-
-    # 只碰本輪刪過東西的平面；清空的平面整個拿掉（schema 不要求 `defaults:`
-    # 存在，`init_project` 對空 list 的立場也是不寫）。
-    if any(where == "defaults" for where, _, _ in removed):
-        for where, pk, _val in removed:
-            if where == "defaults":
-                del defaults[pk]
+def _carrier_rewrite(path, node, keys):
+    """寫回一個載體、拿掉 *keys*（`defaults:` 與 `optional_overrides:` 兩個平面）:
+    `(text, expected)`。判定與預期取自 parse-tree 節點 *node*；PyYAML 只產生文字
+    （讀不了時 `ValueError`）。只碰本輪刪過東西的平面；清空的平面整個拿掉。"""
+    keys = set(keys)
+    data = _load_for_rewrite(str(path))
+    if data is None:
+        raise ValueError("PyYAML 讀不了它，無法產生寫回的文字")
+    _lib_write_check.keep_null_spelling(data, node)  # `key:` / `~` written as read
+    hit_defaults = isinstance(node.get("defaults"), dict) and \
+        not _lib_parse_tree.is_scalar(node["defaults"]) and \
+        bool(keys & set(node["defaults"]))
+    declared = node.get("optional_overrides")
+    hit_declared = isinstance(declared, list) and any(
+        _lib_parse_tree.is_scalar(d) and d["text"] in keys for d in declared)
+    if hit_defaults:
+        defaults = data.get("defaults") or {}
+        for pk in keys:
+            defaults.pop(pk, None)
         if defaults:
             data["defaults"] = defaults
         else:
             data.pop("defaults", None)
-    if declared_hit:
-        kept = [k for k in declared if k not in declared_hit]
+    if hit_declared:
+        kept = [k for k in (data.get("optional_overrides") or []) if k not in keys]
         if kept:
             data["optional_overrides"] = kept
         else:
             data.pop("optional_overrides", None)
 
-    save_yaml_file(defaults_path, data, _header_of(defaults_path))
+    def change(tree):
+        if hit_defaults:
+            for pk in keys:
+                tree["defaults"].pop(pk, None)
+            if not tree["defaults"]:
+                del tree["defaults"]
+        if hit_declared:
+            tree["optional_overrides"] = [
+                d for d in tree["optional_overrides"]
+                if not (_lib_parse_tree.is_scalar(d) and d["text"] in keys)]
+            if not tree["optional_overrides"]:
+                del tree["optional_overrides"]
+    return _render(data, _header_of(path)), _lib_write_check.with_change(node, change)
+
+
+def _write_confirmed(config_dir, items):
+    """ADR-036 §2：`[(path, text, expected), ...]` 全部先以 parse-tree 確認（寫入
+    的路徑、讀回的內容），一個不通過就一個位元組都不寫（WriteRefused）；全部
+    通過才逐一寫入。"""
+    base = Path(config_dir)
+    _lib_write_check.confirm_all(base, [
+        (Path(p).relative_to(base).as_posix(), text, expected)
+        for p, text, expected in items])
+    for p, text, _expected in items:
+        write_conf_text(p, text)
+
+
+def write_conf_text(path, text):
+    """一個已確認的 conf.d 檔寫入（#1641: 寫不了是 rc 2）。"""
+    write_text_or_die(str(path), text)
+
+
+def _remove_in_carrier(metric_key, defaults_path, execute=False, spellings=(), *,
+                       done=False):
+    """從一個 defaults 載體移除 metric 的所有相關 key。
+
+    回傳 `(ok, msg, removed)`，`removed` 為 `[(平面, key, 原值), ...]`，平面是
+    `"defaults"` 或 `"optional_overrides"`。要刪的 key 來自 `metric_pattern_keys`
+    ——掃描用的同一份；讀法是 parse-tree 的（ADR-036 §2）。沒有相關 key 的載體
+    是具名 no-op，一個位元組都不寫。沒有讀取端讀的拼法不寫：有 key 就是殘留
+    （ok=False，手動移除）。
+    """
+    defaults_path = Path(defaults_path)
+    name = defaults_path.name
+    if not defaults_path.exists():
+        return False, f"{name} 不存在", []
+    reader = _reader(defaults_path.parent)
+    tree = reader.tree()
+    pattern_keys = metric_pattern_keys(metric_key, spellings)
+    if name in tree.not_read:
+        # Read for the question "does it still hold the key" only; never written.
+        try:
+            node = _lib_write_check.read_as(defaults_path.parent, name,
+                                            defaults_path.read_bytes()).node(name)
+        except (OSError, _lib_parse_tree.FileUnreadable):
+            return True, f"{name} 沒有讀取端讀它，本工具不寫入", []
+        removed, _err = _carrier_plan(node, pattern_keys)
+        if not removed:
+            return True, f"{name} 沒有 {metric_key} 相關 key，略過", []
+        return False, (f"{name} 沒有任何讀取端讀它（parse-tree：{tree.not_read[name]}），"
+                       f"本工具不寫入；其中 {len(removed)} 個 key 請手動移除或刪掉此檔"), removed
+    try:
+        node = reader.node(name)
+    except _lib_parse_tree.FileUnreadable:
+        return False, f"無法讀取 {name}", []
+    removed, err = _carrier_plan(node, pattern_keys)
+    if err:
+        return False, err, []
+    if not removed:
+        return True, f"{name} 沒有 {metric_key} 相關 key，略過", []
+    if done:
+        return True, f"已從 {name} 移除 {len(removed)} 個 key", removed
+    if not execute:
+        return True, f"將從 {name} 移除 {len(removed)} 個 key", removed
+    try:
+        text, expected = _carrier_rewrite(defaults_path, node, pattern_keys)
+        _write_confirmed(defaults_path.parent, [(defaults_path, text, expected)])
+    except ValueError as exc:
+        return False, f"{name}：{exc}，本工具不改寫，請先修檔", removed
+    except _lib_write_check.WriteRefused as exc:
+        return False, f"{name}：寫入前的 parse-tree 確認不通過，未寫入：{exc.detail}", removed
     return True, f"已從 {name} 移除 {len(removed)} 個 key", removed
 
 
@@ -867,47 +734,109 @@ def _header_of(path):
     return header
 
 
+def _tenant_plan(node, belongs):
+    """parse-tree 節點上的判定：`[(tenant, key, 原值), ...]`。"""
+    tenants = node.get("tenants")
+    if not isinstance(tenants, dict) or _lib_parse_tree.is_scalar(tenants):
+        return []
+    out = []
+    for tenant_name, cfg in tenants.items():
+        if not isinstance(cfg, dict) or _lib_parse_tree.is_scalar(cfg):
+            continue
+        out += [(tenant_name, key, _lib_parse_tree.to_python(cfg[key]))
+                for key in cfg if belongs(key)]
+    return out
+
+
+def _tenant_rewrite(path, node, hits):
+    """寫回一個租戶檔、拿掉 *hits*（`[(tenant, key, _), ...]`，取自 parse-tree）:
+    `(text, expected)`；PyYAML 只產生文字（讀不了時 `ValueError`）。"""
+    data = _load_for_rewrite(str(path))
+    tenants = data.get("tenants") if isinstance(data, dict) else None
+    if not isinstance(tenants, dict):  # parse-tree read a mapping: PyYAML did not
+        raise ValueError("PyYAML 讀不了它，無法產生寫回的文字")
+    _lib_write_check.keep_null_spelling(data, node)  # `key:` / `~` written as read
+    for tenant_name, key, _val in hits:
+        cfg = tenants.get(tenant_name)
+        if isinstance(cfg, dict):
+            cfg.pop(key, None)
+
+    def change(tree):
+        for tenant_name, key, _val in hits:
+            tree["tenants"][tenant_name].pop(key, None)
+    return _render(data, _header_of(path)), _lib_write_check.with_change(node, change)
+
+
 def remove_from_tenants(metric_key, config_dir, execute=False, *,
-                        skip=frozenset(), spellings=()):
-    """從平面目錄下非 `_` 前綴的租戶檔移除該 metric 的 key；`skip` 裡的檔不碰。"""
+                        skip=frozenset(), spellings=(), done=False):
+    """從平面目錄下非 `_` 前綴的租戶檔移除該 metric 的 key；`skip` 裡的檔不碰。
+
+    判定（哪個檔、哪個 key）取自 parse-tree；`execute` 時每個檔寫入前都經
+    parse-tree 確認，一個不通過就這一批都不寫（WriteRefused 往上丟）。
+    """
     removed = []
     config_base = Path(config_dir)
     warn_nested(config_base, tool="deprecate_rule")
-    for entry in sorted(
-        p for p in config_base.iterdir()
-        if p.is_file() and has_yaml_extension(p.name)
-    ):
-        filename = entry.name
-        path = str(entry)
-        if (filename.startswith('_') or filename.startswith('.')
-                or filename in skip):
+    reader = _reader(config_dir)
+    writes = []
+    for filename in _top_files(config_dir, reader):
+        if filename.startswith('_') or filename in skip:
             continue
-
-        data = _load_for_rewrite(path)  # 讀不了的檔 `scan_for_metric` 已具名
-        if data is None:
+        try:
+            node = reader.node(filename)  # 讀不了的檔 `scan_for_metric` 已具名
+        except _lib_parse_tree.FileUnreadable:
             continue
-
-        tenants = data.get("tenants") or {}
-        if not isinstance(tenants, dict):
-            continue
-        modified = False
-        for tenant_name, tenant_config in tenants.items():
-            if not isinstance(tenant_config, dict):
-                continue
-            keys_to_remove = [key for key in tenant_config
-                              if tenant_key_belongs_to_metric(key, metric_key,
-                                                              spellings)]
-            for key in keys_to_remove:
-                val = tenant_config[key]
-                removed.append((filename, tenant_name, key, val))
-                if execute:
-                    del tenant_config[key]
-                    modified = True
-
-        if modified and execute:
-            save_yaml_file(path, data, _header_of(path))
-
+        hits = _tenant_plan(node, lambda k: tenant_key_belongs_to_metric(
+            k, metric_key, spellings))
+        removed += [(filename, t, k, v) for t, k, v in hits]
+        if hits and execute and not done:
+            path = config_base / filename
+            writes.append((path, *_tenant_rewrite(path, node, hits)))
+    if writes:
+        _write_confirmed(config_base, writes)
     return removed
+
+
+def plan_rewrites(config_dir, metrics, spellings, *, skip=frozenset()):
+    """本輪 `--execute` 要寫的每一個檔 `[(path, text, expected), ...]`，所有
+    metric 合併（每個檔只寫一次）。判定取自這一輪的 parse-tree 文件，文字由
+    PyYAML 產生；PyYAML 讀不了一個要改寫的檔時 `ValueError`（含檔名）。"""
+    base = Path(config_dir)
+    reader = _reader(config_dir)
+    tree = reader.tree()
+    keys = {k for m in metrics for k in metric_pattern_keys(m, spellings[m])}
+    out = []
+    for path in defaults_carriers(base):
+        if path.name in tree.not_read:
+            continue
+        try:
+            node = reader.node(path.name)
+        except _lib_parse_tree.FileUnreadable:
+            continue
+        removed, err = _carrier_plan(node, sorted(keys))
+        if removed and not err:
+            try:
+                out.append((path, *_carrier_rewrite(path, node, keys)))
+            except ValueError as exc:
+                raise ValueError(f"{path.name}：{exc}") from None
+
+    def belongs(k):
+        return any(tenant_key_belongs_to_metric(k, m, spellings[m]) for m in metrics)
+    for filename in _top_files(config_dir, reader):
+        if filename.startswith('_') or filename in skip:
+            continue
+        try:
+            node = reader.node(filename)
+        except _lib_parse_tree.FileUnreadable:
+            continue
+        hits = _tenant_plan(node, belongs)
+        if hits:
+            path = base / filename
+            try:
+                out.append((path, *_tenant_rewrite(path, node, hits)))
+            except ValueError as exc:
+                raise ValueError(f"{filename}：{exc}") from None
+    return out
 
 
 # ── exporter 的真 oracle（#1822）─────────────────────────────────────────
@@ -947,23 +876,23 @@ def _print_guard_lines(what, lines):
 
 
 def root_platform_files(config_dir):
-    """這一層 exporter 會逐檔解碼的 `_` 前綴檔 `[(名字, 實際路徑), ...]`。
+    """這一層的 `_` 前綴檔 `[(名字, 實際路徑), ...]`：parse-tree 選到的，以及它列在
+    `not_read` 的 defaults 拼法（暫存 conf.d 裡的選檔要與這一層相同）。
 
-    照 exporter 的 walk：不跟目錄 symlink；檔案 symlink 以連結所在目錄解析
-    （`os.path.realpath(連結路徑)`，不是 readlink 原文，也與行程的 CWD 無關）。
-    懸空的連結不在其中；權限讀不到的一般檔在其中（`isfile` 看不出來），由
-    `exporter_after_writes` 讀的時候略過——兩者都由現況那次的 `unreadable` 擋下。
+    照 exporter 的 walk（parse-tree 的就是它）：不跟目錄 symlink；檔案 symlink
+    以連結所在目錄解析（`os.path.realpath(連結路徑)`）。不是一般檔的不在其中。
     """
     # Flat on purpose: only the root `_` files bear on the verdict (see
     # `exporter_after_writes`); the nested-tree WARN is the tool's, printed once.
     warn_nested(Path(config_dir), tool="deprecate_rule")
+    tree = _reader(config_dir).tree()
     out = []
-    for e in sorted(Path(config_dir).iterdir()):
-        if (not e.name.startswith("_") or not has_yaml_extension(e.name)):
+    for name in sorted({*tree.selected, *tree.not_read}):
+        if "/" in name or not name.startswith("_"):
             continue
-        real = os.path.realpath(str(e))
+        real = os.path.realpath(str(Path(config_dir) / name))
         if os.path.isfile(real):
-            out.append((e.name, real))
+            out.append((name, real))
     return out
 
 
@@ -975,7 +904,7 @@ def exporter_after_writes(config_dir, metrics, spellings):
 
     只看 root 層 `_` 檔本身：exporter 判它們丟不丟只看各檔的位元組與哪些
     根載體存在（Go 測試 `TestKeyRefs_RootPlatformVerdictIsPerFile` 釘住），與
-    租戶檔、子目錄無關。所以把它們（套上本輪 Step 1 的寫入，同一段寫入邏輯）
+    租戶檔、子目錄無關。所以把它們（套上本輪的寫入，同一段 `plan_rewrites`）
     放進一個只有它們的暫存 conf.d 再問一次；真的 conf.d 一個位元組都不碰。
     """
     tmp = None
@@ -998,9 +927,8 @@ def exporter_after_writes(config_dir, metrics, spellings):
                 (copy / name).write_bytes(data)
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
-                for m in metrics:
-                    remove_from_all_defaults(m, copy, execute=True,
-                                             spellings=spellings[m])
+                for path, text, _expected in plan_rewrites(copy, metrics, spellings):
+                    path.write_text(text, encoding="utf-8", newline="\n")
         except (Exception, SystemExit) as e:  # noqa: BLE001 — fail-closed below
             return None, f"無法在暫存目錄套用本輪寫入（{e.__class__.__name__}: {e}）"
         tree, unchecked, lines = exporter_precheck(copy, metrics)
@@ -1018,7 +946,8 @@ def _health_reason(key, raw, kind):
     if kind == UNREADABLE:
         return f"本工具讀不了（無法讀取：{raw}），無法判定 exporter 讀不讀得進去"
     if kind == UNPARSED_BY_TOOL:
-        return f"本工具讀不了（pure parser 限制）：{raw}；請先修檔"
+        return (f"本工具讀不了（寫回的文字由 PyYAML 產生，它讀不了這份檔）：{raw}；"
+                f"請先修檔")
     if kind == EXPORTER_DROPPED:
         return (f"exporter 讀不進這份檔（da-guard：{raw}；原因見上方 "
                 f"`{DA_GUARD_PREFIX.strip()}` 行），整份檔會被丟棄，下架不會生效；請先修檔")
@@ -1030,8 +959,14 @@ def _health_reason(key, raw, kind):
             f"目錄），請加 `--plane subtree`")
 
 
+@_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
 def main():
     """CLI entry point: 規則/指標下架工具。."""
+    with _lib_parse_cache.session():  # one parse-tree document for the run
+        _main()
+
+
+def _main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="規則/指標下架工具 — 三步安全淘汰 metric key"
@@ -1070,7 +1005,8 @@ def main():
     for bad in unusable_config_entries(entries):
         print(f"  ⚠️  略過 {safe_label(bad.name)}——{unusable_reason(bad)}",
               file=sys.stderr)
-    unreachable = out_of_reach(entries, args.plane)
+    reader = _reader(args.config_dir)
+    unreachable = out_of_reach(entries, args.plane, config_dir=base)
     if unreachable:
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")
         for name, reason in unreachable:
@@ -1097,10 +1033,7 @@ def main():
     health = {}
     blocked = set()
     tenant_bad = {}        # 租戶檔 → exporter 讀不進去的原因；本輪不改寫它
-    for e in entries:
-        if (not e.is_file() or not has_yaml_extension(e.name)
-                or e.name.startswith(".")):
-            continue
+    for e in (base / n for n in _top_files(base, reader)):
         items = carrier_health_at(e)
         name = safe_label(e.name)
         if e.name.startswith("_"):
@@ -1110,7 +1043,7 @@ def main():
                     items = [i for i in items
                              if i[2] in (UNREADABLE, UNPARSED_BY_TOOL)
                              or (i[2] == UNPARSEABLE and i[0] is None
-                                 and _read_yaml(str(e))[1] is not None)]
+                                 and _tree_read(reader, e.name)[1] is not None)]
                     if items:
                         health[e.name] = items
                         blocked.add(e.name)
@@ -1132,7 +1065,7 @@ def main():
                 if kind != UNPARSEABLE:
                     continue
                 if key is None:
-                    if _read_yaml(str(e))[1] is not None:
+                    if _tree_read(reader, e.name)[1] is not None:
                         continue               # `scan_for_metric` 會以無法讀取具名
                     print(f"  ⚠️  {name} exporter 讀不進去（{safe_label(raw)}）"
                           f"——整份租戶檔會被丟掉；本工具不寫它")
@@ -1152,7 +1085,8 @@ def main():
     if oracle is not None:
         for name in oracle.parse_failed:
             if ("/" in name or name.startswith("_") or name in tenant_bad
-                    or _read_yaml(str(base / name))[1] is not None):
+                    or name not in reader.tree().selected
+                    or _tree_read(reader, name)[1] is not None):
                 continue                       # 讀不了的 `scan_for_metric` 會具名
             print(f"  ⚠️  {safe_label(name)} exporter 讀不進去（da-guard：parse_failed）"
                   f"——整份租戶檔會被丟掉；本工具不寫它")
@@ -1192,6 +1126,25 @@ def main():
                else "exporter 或本工具讀不進去")
         print(f"\n  ⛔ 本輪降級為預覽：{safe_label('、'.join(sorted(blocked)))} "
               f"{who}，一個位元組都不寫；請先修掉結尾具名的殘留再重跑")
+    # ADR-036 §2 (#2906): every file this run rewrites — all metrics merged,
+    # one write per file — is confirmed by `da-guard parse-tree` before ANY
+    # is written; one refusal (or a file PyYAML cannot produce the rewrite
+    # of) and nothing is written: the run is a preview, rc 1, the reason
+    # named at the end.
+    refused = None
+    if write:
+        try:
+            _write_confirmed(base, plan_rewrites(base, args.metrics, spellings,
+                                                 skip=tenant_bad))
+        except _lib_write_check.WriteRefused as exc:
+            refused = (exc.rel, f"寫入前的 parse-tree 確認不通過（{exc.reason}）：{exc.detail}")
+        except ValueError as exc:
+            name, _sep, why = str(exc).partition("：")
+            refused = (name, f"{why}，本工具不改寫，請先修檔")
+        if refused is not None:
+            write = False
+            print(f"\n  ⛔ 本輪降級為預覽：{safe_label(refused[0])} 的寫回沒有通過寫入前"
+                  f"確認，一個位元組都不寫；請先修掉結尾具名的問題再重跑")
     action = "已移除" if write else ("將移除（本輪未寫入）" if args.execute
                                    else "將移除")
 
@@ -1241,8 +1194,8 @@ def main():
             results = []
         else:
             results = remove_from_all_defaults(metric, args.config_dir,
-                                               execute=write,
-                                               spellings=spellings[metric])
+                                               spellings=spellings[metric],
+                                               done=write)
         for carrier, ok, msg, removed in results:
             print(f"\n  Step 1: {safe_label(carrier.name)}")
             icon = "✅" if ok else "❌"
@@ -1252,15 +1205,16 @@ def main():
             print(f"  {icon} {safe_label(msg)}")
             for where, key, val in removed:
                 plane = "" if where == "defaults" else f"{where} 的 "
-                print(f"     🗑️  {action} {plane}{safe_label(key)}"
-                      f"（原值: {safe_label(val)}）")
+                print(f"     🗑️  {action if ok else '殘留（本工具不寫）'} "
+                      f"{plane}{safe_label(key)}（原值: {safe_label(val)}）")
             if not ok and carrier.name not in health:
                 incomplete.append((metric, carrier.name, msg))
 
         # Step 2 (as printed): 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
-        removed = remove_from_tenants(metric, args.config_dir, execute=write,
-                                      skip=tenant_bad, spellings=spellings[metric])
+        removed = remove_from_tenants(metric, args.config_dir,
+                                      skip=tenant_bad, spellings=spellings[metric],
+                                      done=write)
         if removed:
             for filename, tenant, key, val in removed:
                 print(f"  🗑️  {action}: {safe_label(filename)} → "
@@ -1281,8 +1235,12 @@ def main():
 
     # 完成度是 KEY 級: 重掃（或預覽時用掃描結果）扣掉本工具會清的，剩下的具名。
     # 載體體檢已具名的檔不再以「無法讀取」重複列。
+    after = _lib_parse_cache.ConfdReader(args.config_dir) if write else None
     for metric in args.metrics:
-        findings = (scan_for_metric(metric, args.config_dir, spellings[metric])
+        # After the writes: a NEW parse-tree read (the run's document is the
+        # tree as it was before them).
+        findings = (scan_for_metric(metric, args.config_dir, spellings[metric],
+                                    reader=after)
                     if write else findings_by_metric[metric])
         findings = findings + nested_by_metric[metric]
         for name, section, key, val, designed in unclearable_occurrences(
@@ -1303,6 +1261,8 @@ def main():
         for key, raw, kind in items:
             incomplete.append(("載體體檢", carrier_name,
                                _health_reason(key, raw, kind)))
+    if refused is not None:
+        incomplete.append(("寫入前確認", refused[0], refused[1]))
 
     # 總結
     print(f"\n{'='*60}")

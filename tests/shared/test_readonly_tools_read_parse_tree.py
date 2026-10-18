@@ -12,7 +12,9 @@
    頂層不是 mapping）出現在輸出或錯誤裡，不是悄悄略過。
 4. **沒有 da-guard ⇒ exit 2**：parse-tree 那一條路拿不到 binary 時是呼叫端
    錯誤，不是「沒有發現」。只換掉 parse-tree 的 binary 解析，served-values /
-   effective 照常，所以量到的是 parse-tree 那條路的對應。
+   effective 照常，所以量到的是 parse-tree 那條路的對應。backtest 沒有
+   parse-tree 那條路（#3111 起兩棵樹都經 served-values），它那一列另外把
+   `DA_GUARD_BINARY` 整個換掉，量 served-values 拿不到 binary 的結束碼。
 
 ⛔ 第 2 項的 patch 範圍是「整個 PyYAML 的解析」，比「conf.d 的解析」寬：凡是
 工具本來就會讀非 conf.d YAML 的（metric dictionary、rule pack、chart values、
@@ -212,54 +214,55 @@ def test_mapping_rules_without_da_guard_is_exit_2(tmp_path, monkeypatch, no_pars
     assert _mapping_main(monkeypatch, _write(tmp_path, _MAP)) == 2
 
 
-# ── backtest_threshold (the conf.d reads of `--git-diff` / `--config-dir`) ─
-# Only the conf.d readers are driven: the observed-map the backtest itself
-# needs is not conf.d and is read with PyYAML.
+# ── backtest_threshold (`--config-dir` / `--baseline`) ──────────────────
+# #3111 removed `--git-diff` and the recipe scan that read tenant files: both
+# trees, recipes included, are read by `da-guard served-values` (the
+# exporter's own load), so the backtest has no `parse-tree` reader. The four
+# rows below pin that on the served-values path. The observed-map the
+# backtest itself needs is not conf.d and is read with PyYAML.
 
 _BT = {"db-a.yaml": ("tenants:\n  db-a:\n    cpu: '70'\n    _custom_alerts:\n"
                      "      - {recipe: threshold, name: q, metric: m, op: '>', window: 5m,"
                      " threshold: '1:warning'}\n"),
        "team/db-b.yaml": "tenants:\n  db-b:\n    on: yes\n"}
+_BT_BASE = {"db-a.yaml": "tenants:\n  db-a:\n    cpu: '70'\n",
+            "team/db-b.yaml": "tenants:\n  db-b:\n    on: yes\n"}
+
+
+def _bt_trees(tmp_path, new=_BT):
+    bt = _tool("backtest_threshold")
+    return bt, bt.load_trees(str(_write(tmp_path / "new", new)),
+                             str(_write(tmp_path / "base", _BT_BASE)))
 
 
 def test_backtest_reads_the_yaml_v3_way(tmp_path):
-    bt = _tool("backtest_threshold")
-    d = _write(tmp_path, _BT)
-    parsed = bt.load_conf_files([str(d / "db-a.yaml"), str(d / "team/db-b.yaml")],
-                                config_dir=str(d))
-    assert parsed["db-b"] == {"tenants": {"db-b": {"on": "yes"}}}  # PyYAML: {True: True}
-    assert bt.find_custom_alert_tenants(parsed) == ["db-a"]
+    bt, trees = _bt_trees(tmp_path)
+    db_b = trees[1][1].tenants["db-b"]
+    assert "on" in db_b.keys and db_b.unserved == {"on": "yes"}  # PyYAML: {True: True}
+    assert bt.changed_recipe_tenants(trees) == ["db-a"]
 
 
-def test_backtest_parses_no_yaml(tmp_path, monkeypatch, no_yaml_parse):
-    bt = _tool("backtest_threshold")
-    d = _write(tmp_path, _BT)
-    assert bt.load_conf_files([str(d / "db-a.yaml")]) and bt.load_conf_files(
-        [str(d / "db-a.yaml")], config_dir=str(d))
-    real = subprocess.run
-
-    def git_show(cmd, *a, **k):
-        if cmd and cmd[0] == "git":
-            return type("R", (), {"returncode": 0, "stdout": b"tenants:\n  x:\n    k: '1'\n"})()
-        return real(cmd, *a, **k)
-    monkeypatch.setattr(subprocess, "run", git_show)
-    assert bt._flat_keys_at_head1("x") == {"k"}
+def test_backtest_parses_no_yaml(tmp_path, no_yaml_parse):
+    bt, trees = _bt_trees(tmp_path)
+    assert bt.changed_recipe_tenants(trees) == ["db-a"]
 
 
 def test_backtest_names_an_unreadable_conf_file(tmp_path):
-    bt = _tool("backtest_threshold")
-    d = _write(tmp_path, {"db-a.yaml": b"tenants:\n  a\xff: {}\n"})
-    with pytest.raises(YamlFileError, match="invalid_utf8"):
-        bt.load_conf_files([str(d / "db-a.yaml")])
+    with pytest.raises(YamlFileError, match="db-a.yaml"):
+        _bt_trees(tmp_path, {"db-a.yaml": b"tenants:\n  a\xff: {}\n"})
 
 
 def test_backtest_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys, no_parse_tree_binary):
+    """No `parse-tree` binary changes nothing (the backtest has no such
+    reader); no da-guard at all is rc 2, `served_values_unavailable`."""
+    _bt_trees(tmp_path)
     bt = _tool("backtest_threshold")
-    d = _write(tmp_path, _BT)
-    monkeypatch.setattr(sys, "argv", ["bt", "--config-dir", str(d), "--baseline", str(d),
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    monkeypatch.setattr(sys, "argv", ["bt", "--config-dir", str(tmp_path / "new"),
+                                      "--baseline", str(tmp_path / "base"),
                                       "--prometheus", "http://127.0.0.1:9", "--json"])
     assert _exit_code(bt.main) == 2
-    assert json.loads(capsys.readouterr().out)["reason"] == "parse_tree_failed"
+    assert json.loads(capsys.readouterr().out)["reason"] == "served_values_unavailable"
 
 
 # ── policy_opa_bridge (`input.defaults`) ────────────────────────────────

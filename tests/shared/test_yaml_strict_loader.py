@@ -196,17 +196,17 @@ def test_image_pin_still_refuses_a_merge_key():
                          [r for r in _IDENTITY if r[2]], ids=[r[0] for r in _IDENTITY if r[2]])
 def test_every_folded_in_check_refuses_what_yaml_v3_refuses(name, doc, rejected):
     """The raw-text half now reaches the lints that compared values only
-    (`"1"` / `1` used to pass both), and the three node walkers keep it."""
+    (`"1"` / `1` used to pass both), and the shared node walker keeps it.
+    (patch_config's and deprecate_rule's own walkers left with ADR-036 §2,
+    #2906: they read conf.d through da-guard parse-tree, whose duplicate_key
+    is yaml.v3's — tests/shared/test_writers_confirm_parse_tree.py.)"""
     import check_admin_config_schema as adm
     import check_image_pin_capability as pin
-    import patch_config as pc
     with pytest.raises(yaml.YAMLError):
         adm._load_all_strict(doc)
     with pytest.raises(yaml.YAMLError):
         pin.load_all_strict(doc)
-    with pytest.raises(pc.ConfigMapShapeError, match="twice"):
-        pc.read_node(doc, "t.yaml")
-    assert find_duplicate_key(yaml.compose(doc)) is not None  # deprecate_rule's walker
+    assert find_duplicate_key(yaml.compose(doc)) is not None
 
 
 # ── #2114: the strict + exporter-key composition in `_lib_io` ──────────────

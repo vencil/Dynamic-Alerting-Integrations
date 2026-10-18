@@ -389,7 +389,7 @@ The following tools reduce manual operations during Shadow Monitoring:
 |------|-------|--------|
 | **Auto-convergence** ✅ | `validate --auto-detect-convergence --stability-window 5` | Track cross-round state for each metric pair, auto-generate `cutover-readiness.json` and stop watch when all pairs match for N consecutive rounds |
 | **Batch health report** ✅ | `batch-diagnose` (da-tools CLI) | Post-cutover: auto-discover tenants → parallel `diagnose` → health score + remediation steps |
-| **Threshold backtest** ✅ | `backtest --git-diff --prometheus <url>` | When PR modifies thresholds, backtest 7 days of historical data, CI auto-produces risk assessment |
+| **Threshold backtest** ✅ | `backtest --config-dir <the PR's conf.d> --baseline <the base's conf.d> --prometheus <url>` | When PR modifies thresholds, backtest 7 days of historical data, CI auto-produces risk assessment |
 | **Shadow Dashboard** ✅ | Grafana mount `shadow-monitoring-dashboard.json` (see §8.1 below) | Real-time display: shadow rule count, per-tenant status, old/new metric trend comparison, delta convergence graph |
 | **One-command cutover** ✅ | `da-tools cutover --readiness-json <path> --tenant <t>` (see §7.1) | Single command completes full cutover workflow. Supports `--dry-run` preview, `--force` bypass readiness checks |
 | **Shadow verify** ✅ | `da-tools shadow-verify <preflight\|runtime\|convergence\|all>` | Three-phase automated verification: pre-flight + runtime inspection + convergence check, replaces manual curl + awk operations |

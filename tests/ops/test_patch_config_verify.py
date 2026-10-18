@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 import patch_config as pc  # noqa: E402
-from _patch_config_fake import FakeCluster, render_thresholds  # noqa: E402
+from _patch_config_fake import MIRROR, FakeCluster, render_thresholds  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -82,10 +82,10 @@ class TestApplyVerified:
         assert "No-op" in capsys.readouterr().err
 
     def test_other_tenant_change_rolls_back_with_1(self, capsys):
-        # #1950 列 9：legacy config.yaml 用 anchor 共用區塊，改 t-a 連帶 t-b。
-        old = ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-               "  t-b: *s\n")
-        c = FakeCluster({"config.yaml": old})
+        # #1950 列 9：改 t-a 連帶 t-b（exporter 端的連結 `MIRROR`；anchor 共用
+        # 區塊自 ADR-036 §2 起在寫入前就被 parse-tree 確認擋下）。
+        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        c = FakeCluster({"config.yaml": old, **MIRROR})
         assert _run(c, "t-a", "mysql_connections", "60") == pc.EXIT_VERIFY_FAILED
         assert c.data["config.yaml"] == old          # 回到舊位元組
         assert len(c.patches) == 2
@@ -146,9 +146,8 @@ class TestApplyVerified:
         assert c.data["t-a.yaml"] == T_A and len(c.patches) == 2
 
     def test_rollback_failure_is_5(self, capsys):
-        old = ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-               "  t-b: *s\n")
-        c = FakeCluster({"config.yaml": old}, fail_patch={1})
+        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        c = FakeCluster({"config.yaml": old, **MIRROR}, fail_patch={1})
         assert _run(c, "t-a", "mysql_connections", "60") == pc.EXIT_ROLLBACK_FAILED
         assert "still holds the new bytes" in capsys.readouterr().err
 
@@ -160,13 +159,12 @@ class TestApplyVerified:
         assert "t-new.yaml" not in c.data
 
     def test_rollback_waits_for_the_pods_that_reloaded(self):
-        old = ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-               "  t-b: *s\n")
-        c = FakeCluster({"config.yaml": old})
+        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        c = FakeCluster({"config.yaml": old, **MIRROR})
         _run(c, "t-a", "mysql_connections", "60")
         assert c.gen["exporter-0"] == 2  # patch + rollback both reloaded
         assert render_thresholds(c.loaded["exporter-0"]) == \
-            render_thresholds({"config.yaml": old})
+            render_thresholds({"config.yaml": old, **MIRROR})
 
 
 class TestVerifyPod:
@@ -284,9 +282,8 @@ class TestUnderscoreKeysAndJson:
         assert 'user_silent_mode{target_severity="warning",tenant="t-a"}: 1 -> (absent)' in err
 
     def test_underscore_key_that_moves_another_tenant_rolls_back(self):
-        old = ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-               "    _silent_mode: warning\n  t-b: *s\n")
-        c = FakeCluster({"config.yaml": old})
+        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n    _silent_mode: warning\n"
+        c = FakeCluster({"config.yaml": old, **MIRROR})
         assert _run(c, "t-a", "_silent_mode", "disable") == pc.EXIT_VERIFY_FAILED
         assert c.data["config.yaml"] == old and len(c.patches) == 2
 
@@ -302,9 +299,8 @@ class TestUnderscoreKeysAndJson:
             "before": "1", "after": None}]
 
     def test_json_rollback_envelope(self, capsys):
-        old = ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-               "  t-b: *s\n")
-        c = FakeCluster({"config.yaml": old})
+        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        c = FakeCluster({"config.yaml": old, **MIRROR})
         assert _run(c, "--json", "t-a", "mysql_connections", "60") == 1
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["exit_code"], doc["written"],
@@ -315,8 +311,8 @@ class TestUnderscoreKeysAndJson:
     @pytest.mark.parametrize("cluster,status,code,written", [
         (lambda: FakeCluster(_multi(), no_pods=True), "unreachable", 4, False),
         (lambda: FakeCluster(_multi(), reload=lambda n: False), "timeout", 3, False),
-        (lambda: FakeCluster({"config.yaml": "tenants:\n  t-a: &s\n    m: '5'\n"
-                                             "  t-b: *s\n"}, fail_patch={1}),
+        (lambda: FakeCluster({"config.yaml": "tenants:\n  t-a:\n    m: '5'\n",
+                              **MIRROR}, fail_patch={1}),
          "rollback-failed", 5, True),
     ], ids=["unreachable", "timeout", "rollback-failed"])
     def test_json_every_failure_is_one_envelope(self, capsys, cluster, status,
@@ -619,8 +615,7 @@ class _Raises:
         raise self.exc
 
 
-_ANCHOR_CM = {"config.yaml": ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-                              "  t-b: *s\n")}
+_ANCHOR_CM = {"config.yaml": "tenants:\n  t-a:\n    mysql_connections: '50'\n", **MIRROR}
 # (cluster, value, expected rc, ConfigMap holds the new bytes at the end)
 _OUTCOMES = {
     "ok": (lambda: FakeCluster(_multi()), "65", 0, True),

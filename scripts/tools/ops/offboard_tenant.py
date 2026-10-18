@@ -26,6 +26,13 @@ Pre-check 項目:
      federation 子集；AccountID 配發只列為資訊（永不回收，ADR-021）。
      工具不寫 state store，只印出要呼叫的 tenant-api API。沒給 --state 時
      標為「未判定」，--execute 需另加 --skip-state-check 才執行。
+
+讀取（ADR-036 §2，#2906）：哪些檔、每個檔的內容一律取自 `da-guard parse-tree`
+（yaml.v3 的讀法），不經 PyYAML。要刪的檔是 parse-tree 選到、檔名主幹等於 tenant
+的那一個，而且 parse-tree 讀出它的 `tenants:` 恰好只宣告這個 tenant——沒宣告它、或
+另宣告了別的租戶，Pre-check 不通過（刪檔會連帶下架別的租戶）。parse-tree 讀不了的
+檔一律具名、擋下 --execute；沒有可用的 da-guard（`$DA_GUARD_BINARY`→`$PATH`）
+結束碼 2。
 """
 
 import sys
@@ -33,7 +40,6 @@ import os
 import re
 import argparse
 from pathlib import Path
-import yaml
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -45,14 +51,13 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
-    has_yaml_extension,
-    unusable_config_entries,
     unusable_reason,
     warn_nested,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import strict_load_exporter_keys  # noqa: E402  (#2123 duplicate key = YAML error; #2216 tenant id as text)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
+import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
+import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import LEGACY_STATE_FILES  # noqa: E402  (#2883)
 from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets live in tenant-api's state store)
@@ -62,73 +67,68 @@ from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets l
 )
 
 
+def _reader(config_dir):
+    """The run's parse-tree reader of *config_dir* (one document per run)."""
+    return _lib_parse_cache.reader_for(config_dir)
+
+
+def _top_level(config_dir):
+    """The top-level files parse-tree selects (root-relative names), sorted:
+    this tool reads conf.d FLAT (`warn_nested` names what that leaves out)."""
+    return sorted(rel for rel in _reader(config_dir).tree().selected if "/" not in rel)
+
+
 def find_config_file(tenant, config_dir):
-    """尋找 tenant 的設定檔案。"""
-    # #1588: the carrier is found by comparing STEMS, not by pasting an
-    # extension onto the tenant id. `alpha.YAML` exists on disk but
-    # `base / "alpha.yaml"` does not, and the caller reads that miss as
-    # "this tenant has no config" — measured: offboarding pre-check
-    # reported ✅ 通過 for a tenant whose entire config it could not see.
-    #
-    # ⛔ The comparison is exact, not case-folded: `config_stem` preserves
-    # the original case (`Upper.YAML` -> `Upper`), and folding here would
-    # let `--tenant alpha` offboard a DIFFERENT tenant named `Alpha`.
+    """tenant 的設定檔：parse-tree 選到的頂層檔裡，檔名主幹等於 tenant 的那一個。
+
+    #1588: the carrier is found by comparing STEMS, never by pasting an
+    extension onto the id (`alpha.YAML` is alpha's), and exactly — not
+    case-folded (`Alpha` is another tenant). ADR-036 §2: which files there
+    are is parse-tree's answer (a directory named `<tenant>.yaml/` is in its
+    `unreadable`, named by `load_all_configs`)."""
     base = Path(config_dir)
-    # ⚠️ FLAT, and this now says so. The exporter reads the tree
-    # recursively, so a tenant whose carrier lives in a subdirectory is
-    # invisible here — and this is the OFFBOARD pre-check, where
-    # "no config found" reads as "safe to remove". `warn_nested`
-    # prints at most once per directory and nothing at all on a flat
-    # tree, so the common case is unchanged.
+    # ⚠️ FLAT, and this says so (`warn_nested`): a tenant whose carrier lives
+    # in a subdirectory is not found here — the OFFBOARD pre-check, where
+    # "no config found" must not read as "safe to remove".
     warn_nested(base)
-    try:
-        entries = sorted(base.iterdir())
-    except OSError:
+    if not base.is_dir():
         return None
-    # #1607: `is_file()` here is the THIRD axis, and this is the worst place
-    # for it to be silent — a DIRECTORY named `<tenant>.yaml/` makes this
-    # return None and the pre-check print "❌ 找不到設定檔案", which reads as
-    # "nothing to remove". ⛔ The naming is done ONCE in `load_all_configs`,
-    # which always runs a few lines later in the same pre-check and does not
-    # run twice; this function is called twice per invocation (pre-check and
-    # execute), so reporting here would say everything twice.
-    for entry in entries:
-        if entry.is_file() and config_stem(entry.name) == tenant:
-            return str(entry)
+    for rel in _top_level(config_dir):
+        # A file parse-tree cannot read is still the tenant's file (named
+        # unreadable by `load_all_configs`, which blocks --execute).
+        if config_stem(rel) == tenant and (base / rel).is_file():
+            return str(base / rel)
     return None
 
 
-#: Keys whose list value is a list of tenant ids (#2216).
-_TENANT_ID_LISTS = ("exclude_tenants", "tenants", "members")
+def declared_by(path, config_dir):
+    """The tenants the file at *path* declares, as parse-tree reads it (its
+    `tenants:` mapping's keys), or None when parse-tree cannot read it."""
+    try:
+        data = _reader(config_dir).read(path)
+    except _lib_parse_tree.FileUnreadable:
+        return None
+    tenants = data.get("tenants")
+    return sorted(tenants) if isinstance(tenants, dict) else []
 
 
 def load_all_configs(config_dir, unreadable=None):
-    """載入 conf.d 下所有設定檔案。
+    """載入 conf.d 頂層的所有設定檔（parse-tree 選到的檔，ADR-036 §2）。
 
-    unreadable: optional list; the name of every YAML file that could not be
-    read (I/O error, YAML error incl. a duplicate key) is appended to it, so
-    the caller can count it instead of only seeing the ⚠️ line (#2179).
+    unreadable: optional list; the name of every file parse-tree cannot read
+    (a YAML error incl. a duplicate key, not a regular file, …) is appended
+    to it, so the caller can count it instead of only seeing the ⚠️ line
+    (#2179). Each entry is {"path", "data" (yaml.v3's values), "nodes"
+    (parse-tree's nodes: every key and scalar as its source text)}.
     """
     configs = {}
     base = Path(config_dir)
     # #1911: flat by design here — but a hierarchical conf.d must not
     # look like an empty one. Name the files this scan cannot see.
     warn_nested(base, tool="offboard_tenant")
-    entries = sorted(base.iterdir())
-    # #1607: the single naming point for what `is_file()` drops in this tool
-    # — see `find_config_file`. Same channel as the unreadable-file warning
-    # below, because it is the same fact for the operator: this entry looks
-    # like configuration and was NOT taken into account by the pre-check.
-    for bad in unusable_config_entries(entries):
-        print(f"  ⚠️  略過 {safe_label(bad.name)}: {unusable_reason(bad)}")
-    yaml_paths = [
-        p for p in entries
-        if p.is_file() and has_yaml_extension(p.name)
-    ]
-    for entry in yaml_paths:
-        filename = entry.name
-        if filename.startswith('.'):
-            continue
+    reader = _reader(config_dir)
+    tree = reader.tree()
+    for filename in _top_level(config_dir):
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
             # #2856; it imports this copy at startup only while the store has
@@ -136,25 +136,44 @@ def load_all_configs(config_dir, unreadable=None):
             print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 只在 state store 沒有這筆紀錄時"
                   "於開機匯入它（引用改由 --state 判定）")
             continue
+        if not (base / filename).is_file():
+            # #1607: an entry with a config name that is not a file (a
+            # directory, a dangling link) — parse-tree lists it as
+            # not_regular_file / read_failure; named in the shared wording,
+            # and skipped as before (warn-and-continue, not a blocker).
+            print(f"  ⚠️  略過 {safe_label(filename)}: {unusable_reason(base / filename)}")
+            continue
         try:
-            with open(entry, 'r', encoding='utf-8') as f:
-                # Strict (#2123): a key written twice in one mapping is a
-                # YAMLError, so the file is named ⚠️ unreadable like a syntax
-                # error instead of reporting PyYAML's last value.
-                # #2216: tenant ids are the keys' source text, as the
-                # exporter reads them — `010:` is tenant "010", not 8.
-                # The lists that name tenants by VALUE are read as text too
-                # (`exclude_tenants:` in a policy, `tenants:` in a domain
-                # policy, `members:` in `_groups.yaml`), so a reference
-                # written `[010]` is found by check_cross_references.
-                data = strict_load_exporter_keys(
-                    f, raw_text_sequences=_TENANT_ID_LISTS) or {}
-            configs[filename] = {"path": str(entry), "data": data}
-        except (OSError, yaml.YAMLError) as e:
-            print(f"  ⚠️  無法讀取 {safe_label(filename)}: {safe_label(e)}")
+            nodes = reader.node(filename)
+        except _lib_parse_tree.FileUnreadable:
+            kind, message = tree.unreadable[filename]
+            print(f"  ⚠️  無法讀取 {safe_label(filename)}: da-guard parse-tree: "
+                  f"{safe_label(kind)}: {safe_label(message)}")
             if unreadable is not None:
                 unreadable.append(filename)
+            continue
+        configs[filename] = {"path": str(base / filename),
+                             "data": _lib_parse_tree.to_python(nodes),
+                             "nodes": nodes}
     return configs
+
+
+def _texts(nodes, *, values=False):
+    """Every mapping key and scalar source text under parse-tree *nodes*
+    (*values*: a structure of Python values instead — each scalar's str)."""
+    out, stack = [], [nodes]
+    while stack:
+        n = stack.pop()
+        if not values and _lib_parse_tree.is_scalar(n):
+            out.append(n["text"])
+        elif isinstance(n, dict):
+            out.extend(str(k) for k in n)
+            stack.extend(n.values())
+        elif isinstance(n, list):
+            stack.extend(n)
+        elif values and n is not None:
+            out.append(str(n))
+    return out
 
 
 def check_cross_references(tenant, configs):
@@ -163,9 +182,11 @@ def check_cross_references(tenant, configs):
     for filename, info in configs.items():
         if filename.startswith(f"{tenant}."):
             continue  # 跳過自己
-        # 搜尋檔案內容中是否出現 tenant 名稱
-        content = yaml.dump(info["data"], default_flow_style=False)
-        if tenant in content:
+        # 搜尋檔案內容中是否出現 tenant 名稱：每個 key 與純量的原文（parse-tree，
+        # 所以 `[010]` 這種以值點名租戶的清單也找得到，#2216）。
+        texts = (_texts(info["nodes"]) if "nodes" in info
+                 else _texts(info["data"], values=True))
+        if any(tenant in t for t in texts):
             references.append(filename)
     return references
 
@@ -191,13 +212,20 @@ def _legacy_refs(tenant, state, config_dir):
     if config_dir is None:
         return refs
     base = Path(config_dir)
+    tree = _reader(config_dir).tree()
     for name in LEGACY_STATE_FILES:
         path = base / name
         if name == "_account_registry.yaml" or name in state.records or not path.is_file():
             continue
-        with open(path, "r", encoding="utf-8") as f:
-            data = strict_load_exporter_keys(f, raw_text_sequences=_TENANT_ID_LISTS) or {}
-        if tenant in yaml.dump(data, default_flow_style=False):
+        if name in tree.unreadable:
+            kind, message = tree.unreadable[name]
+            refs.append((f"conf.d 的 {safe_label(name)} 讀不了（da-guard parse-tree: "
+                         f"{safe_label(kind)}），無法判定其中的引用",
+                         f"修好或刪除 {safe_label(str(path))} 後重跑"))
+            continue
+        if name not in tree.selected:
+            continue
+        if any(tenant in t for t in _texts(tree.node(name))):
             refs.append((f"conf.d 的 {safe_label(name)}（state store 沒有這筆紀錄，tenant-api 下次開機會匯入）",
                          f"刪除 {safe_label(str(path))}，或先讓 tenant-api 匯入後再以 API 清除"))
     if subset_key(tenant) not in state.records:
@@ -259,6 +287,19 @@ def run_precheck(tenant, config_dir, state=None):
     config_file = find_config_file(tenant, config_dir)
     if config_file:
         report.append(f"✅ 設定檔案: {safe_label(config_file)}")
+        # ADR-036 §2: whether deleting this file offboards exactly this tenant
+        # is parse-tree's answer — the tenants its `tenants:` declares.
+        declared = declared_by(config_file, config_dir)
+        if declared is not None and declared != [tenant]:
+            others = [t for t in declared if t != tenant]
+            if tenant not in declared:
+                report.append(f"❌ {safe_label(config_file)} 沒有宣告 {safe_label(tenant)}"
+                              "（da-guard parse-tree 讀出的 tenants:）")
+                issues.append("設定檔沒有宣告此 tenant")
+            if others:
+                report.append(f"❌ {safe_label(config_file)} 另宣告了 "
+                              f"{safe_label(', '.join(others))}——刪檔會一併下架它們")
+                issues.append(f"設定檔另宣告了其他 tenant: {safe_label(', '.join(others))}")
     else:
         report.append(f"❌ 找不到設定檔案: {safe_label(tenant)}.yaml")
         issues.append("設定檔案不存在")
@@ -358,6 +399,7 @@ def execute_offboard(tenant, config_dir):
 
 
 @exit_on_yaml_file_error  # #2883: an unreadable --state record → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
 def main():
     """CLI entry point: 安全的 Tenant 下架工具。."""
     try_utf8_stdout()
@@ -386,6 +428,11 @@ def main():
             print(f"ERROR: {safe_label(e)}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
+    with _lib_parse_cache.session():  # one parse-tree document for the run
+        _run(args, state)
+
+
+def _run(args, state):
     can_proceed, report = run_precheck(args.tenant, args.config_dir, state)
 
     for line in report:

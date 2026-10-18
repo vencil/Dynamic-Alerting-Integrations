@@ -32,6 +32,7 @@ Guardrails baked in (#719 / Gemini adversarial review):
 """
 from __future__ import annotations
 
+import enum
 import re
 from typing import Any, Optional
 
@@ -348,7 +349,7 @@ import sys  # noqa: E402
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
 from _lib_compat import find_project_root  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import die_caller_error  # noqa: E402
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
 
@@ -753,14 +754,15 @@ def _entry_shape_error(key: Any, entry: Any) -> Optional[str]:
 def exit_on_observed_map_error(fn):
     """Decorate a CLI ``main`` so an unusable observed-map (``ObservedMapError``)
     exits 2 (``EXIT_CALLER_ERROR``, an environment error) with one ``ERROR:``
-    line naming the file, instead of a traceback at rc 1."""
+    line naming the file, instead of a traceback at rc 1; a tool that armed
+    its ``--json`` envelope gets one, ``reason: observed_map_unavailable``
+    (#3115, the name backtest_threshold already used)."""
     @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except ObservedMapError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+            die_caller_error(f"ERROR: {exc}", reason="observed_map_unavailable")
     return _wrapped
 
 
@@ -814,20 +816,43 @@ usable_for_recommend = resolve_observed
 _BACKTEST_DIRECTIONS = {">": "above", "<": "below"}
 
 
-def lookup(observed_map: dict[str, dict[str, Any]], key: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
-    """``(entry, None)`` for a threshold key in canonical spelling (a caller
-    canonicalizes retired aliases and drops a ``{...}`` dimension part), or
-    ``(None, reason)`` when the map has no entry: a KNOWN_DEFERRED key, whose
-    alerts compare a version-aware recording rule the map does not record, or
-    a key no shipped alert compares. A ``<base>_critical`` key is its own entry
-    (a pack that normalizes only severity="warning" has none for it)."""
+class LookupKind(enum.Enum):
+    """What the observed-map says about a threshold key (#3111 (e))."""
+    COMPARED = "compared"              # an entry: what the key's shipped alert compares
+    KNOWN_DEFERRED = "known_deferred"  # its alerts compare a recording rule the map does not record
+    NO_ALERT = "no_alert"              # no shipped alert compares the key
+
+
+def lookup(observed_map: dict[str, dict[str, Any]], key: str) -> tuple[LookupKind, Optional[dict[str, Any]]]:
+    """``(kind, entry)`` for a threshold key in canonical spelling (a caller
+    canonicalizes retired aliases and drops a ``{...}`` dimension part);
+    ``entry`` is the map's entry for ``COMPARED`` and None otherwise.
+
+    ``NO_ALERT`` is the map's own answer, not a guess: the drift-guard
+    (``check_threshold_observed_map.py --ci``) fails on every coverage gap — a
+    key an ``- alert:`` expr references through ``alert_threshold:<key>`` that
+    has no entry and is not KNOWN_DEFERRED — so a key in neither is one no
+    shipped alert compares. A
+    ``<base>_critical`` key is its own entry (a pack that normalizes only
+    severity="warning" has none for it) and is checked the same way. An
+    alert that reads ``user_threshold`` directly is not seen by that guard;
+    none of the shipped ones compares a threshold that way."""
+    if key in KNOWN_DEFERRED:
+        return LookupKind.KNOWN_DEFERRED, None
     entry = observed_map.get(key)
     if entry is not None:
-        return entry, None
-    if key in KNOWN_DEFERRED:
-        return None, ("its alerts compare a version-aware recording rule the "
-                      f"observed-map does not record (KNOWN_DEFERRED: {KNOWN_DEFERRED[key]})")
-    return None, "no shipped alert compares this key (not in metric_observed_map.yaml)"
+        return LookupKind.COMPARED, entry
+    return LookupKind.NO_ALERT, None
+
+
+def lookup_reason(kind: LookupKind, key: str) -> Optional[str]:
+    """Why a key ``lookup`` did not find as ``COMPARED`` is not replayed, or None."""
+    if kind is LookupKind.KNOWN_DEFERRED:
+        return ("its alerts compare a version-aware recording rule the "
+                f"observed-map does not record (KNOWN_DEFERRED: {KNOWN_DEFERRED[key]})")
+    if kind is LookupKind.NO_ALERT:
+        return "no shipped alert compares this key (not in metric_observed_map.yaml)"
+    return None
 
 
 def usable_for_backtest(entry: dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:

@@ -86,6 +86,18 @@ _PATH_ENV = {
                            "      environment: {VALUE}\n"),
 }
 
+#: A tenant file's `_metadata.domain` — the directory migrate_conf_d moves it
+#: under: a string is a path, a boolean is unplaceable.
+_META_DOMAIN = {
+    "tenant-a.yaml": "tenants:\n  tenant-a:\n    _metadata:\n      domain: {VALUE}\n",
+}
+#: Another file's value naming the tenant being offboarded (`yes`): a string
+#: "yes" is a cross-reference, a boolean is not.
+_OFFBOARD_REF = {
+    "yes.yaml": 'tenants:\n  "yes":\n    mysql_connections: "70"\n',
+    "other.yaml": "tenants:\n  other:\n    note: {VALUE}\n",
+}
+
 _VARIANTS = {"plain": "yes", "quoted": '"yes"', "bool": "true"}
 
 # tool → (script, argv ({d} = the conf.d, {out} = a scratch dir), tree,
@@ -122,6 +134,11 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
     "lint/check_path_metadata_consistency.py": (
         "lint/check_path_metadata_consistency.py", ["--config-dir", "{d}", "--ci"],
         _PATH_ENV, (), ""),
+    # ── the conf.d writers switched in step E2 (#2906) ──
+    "dx/migrate_conf_d.py": (
+        "dx/migrate_conf_d.py", ["--conf-d", "{d}", "--dry-run"], _META_DOMAIN, (), ""),
+    "ops/offboard_tenant.py": (
+        "ops/offboard_tenant.py", ["yes", "--config-dir", "{d}"], _OFFBOARD_REF, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -141,6 +158,17 @@ _GO_FIXED = (_GO + "; fixed repo-relative conf.d trees, no conf.d argument to pr
 _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, no value a "
             "yes/\"yes\"/true probe tells apart — "
             "tests/shared/test_readonly_tools_read_parse_tree.py")
+#: Step E2 (#2906): the conf.d writers. Every decision is parse-tree's, PyYAML
+#: only produces the text of a write, and parse-tree reads that text back
+#: before it is written (ADR-036 §2). They take no conf.d argument a probe can
+#: drive without a cluster or an API (patch_config: a ConfigMap via kubectl;
+#: threshold_govern: tenant-api; da_assembler: a CR), or write what they
+#: generate rather than read a value (init_project, scaffold_tenant), or read
+#: a value whose yes / "yes" / true readings end the same (deprecate_rule:
+#: every non-number `defaults:` value is a dropped carrier) — their own rows
+#: are in tests/shared/test_writers_confirm_parse_tree.py.
+_GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes — "
+              "tests/shared/test_writers_confirm_parse_tree.py")
 _OWNER_2115 = ("--config-dir reads served-values only; the single-file `--tenant-config` "
                "branch stays on PyYAML by owner ruling #2115 (decision 4: not switched), "
                "and no run mixes the two")
@@ -148,7 +176,7 @@ _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
-    "_lib_yaml_keys.py": _LIB, "dx/custom_alerts/__init__.py": _LIB,
+    "_lib_yaml_keys.py": _LIB, "_lib_write_check.py": _LIB, "dx/custom_alerts/__init__.py": _LIB,
     "dx/custom_alerts/loader.py": _LIB, "dx/custom_alerts/entries.py": _GO, "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
     "ops/_grar_validate.py": _LIB, "ops/_gsvc_child.py": _LIB, "ops/_gsvc_proto.py": _LIB,
@@ -175,23 +203,23 @@ _NOT_PROBED: dict[str, str] = {
     "ops/maintenance_scheduler.py": _PENDING, "ops/operator_check.py": _PENDING,
     "ops/baseline_discovery.py": _PENDING, "ops/threshold_recommend.py": _PENDING,
     "ops/blind_spot_discovery.py": _GO,
-    "dx/compile_custom_alerts.py": _GO, "dx/migrate_conf_d.py": _PENDING,
+    "dx/compile_custom_alerts.py": _GO,
     "dx/tenant_verify.py": _GO, 
     "lint/check_retire_drift.py": _GO_KEYS, "lint/check_scrape_reachability.py": _PENDING,
     "lint/check_threshold_observed_map.py": _PENDING,
     "lint/check_threshold_reachability.py": _GO_FIXED,
     "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _GO_FIXED,
     "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
-    "ops/backtest_threshold.py": _GO_KEYS, "ops/batch_diagnose.py": _PENDING,
-    "ops/config_history.py": _PENDING, "ops/da_assembler.py": _PENDING,
-    "ops/deprecate_rule.py": _PENDING, "ops/diagnose.py": _GO,
+    "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _PENDING,
+    "ops/config_history.py": _PENDING, "ops/da_assembler.py": _GO_WRITER,
+    "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
     "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
-    "ops/init_project.py": _PENDING, "ops/migrate_rule.py": _PENDING,
-    "ops/migrate_to_operator.py": _PENDING, "ops/offboard_tenant.py": _PENDING,
+    "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _PENDING,
+    "ops/migrate_to_operator.py": _PENDING,
     "ops/onboard_platform.py": _PENDING, "ops/operator_generate.py": _PENDING,
-    "ops/patch_config.py": _PENDING,
-    "ops/scaffold_tenant.py": _PENDING, "ops/threshold_govern.py": _PENDING,
+    "ops/patch_config.py": _GO_WRITER,
+    "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_WRITER,
 }
 
 

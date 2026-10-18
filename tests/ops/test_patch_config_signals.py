@@ -26,9 +26,11 @@ TOOL = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops" / "patc
 OLD = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: '70'\n",
        "t-b.yaml": "tenants:\n  t-b:\n    mysql_connections: '60'\n"}
-# #1950 列 9：改 t-a 連帶改 t-b ⇒ 驗收失敗、回滾（不靠信號觸發的回滾）。
-ANCHOR = {"config.yaml": ("tenants:\n  t-a: &s\n    mysql_connections: '50'\n"
-                          "  t-b: *s\n")}
+# #1950 列 9：改 t-a 連帶改 t-b ⇒ 驗收失敗、回滾（不靠信號觸發的回滾）。連帶
+# 經假 exporter 的 `_mirror.yaml`（t-b 送出 t-a 的閾值）；anchor 共用區塊自
+# ADR-036 §2 起在寫入前就被 parse-tree 確認擋下，到不了驗收。
+ANCHOR = {"config.yaml": "tenants:\n  t-a:\n    mysql_connections: '50'\n",
+          "_mirror.yaml": "t-b: t-a\n"}
 
 FAKE_KUBECTL = textwrap.dedent('''\
     #!/usr/bin/env python3
@@ -92,12 +94,19 @@ FAKE_KUBECTL = textwrap.dedent('''\
         if path == "api/v1/config":
             print(f"Last reload:   g{gen()}")
         else:
+            links = yaml.safe_load(cm().get("_mirror.yaml") or "") or {}
+            rows = []
             for k, v in sorted(cm().items()):
                 if k.startswith("_"):
                     continue
                 for t, b in ((yaml.safe_load(v) or {}).get("tenants") or {}).items():
                     for m, val in (b or {}).items():
-                        print(f'user_threshold{{metric="{m}",tenant="{t}"}} {val}')
+                        rows.append((t, m, val))
+            rows = [r for r in rows if r[0] not in links] + [
+                (dst, m, val) for dst, src in sorted(links.items())
+                for t, m, val in rows if t == src]
+            for t, m, val in rows:
+                print(f'user_threshold{{metric="{m}",tenant="{t}"}} {val}')
     else:
         sys.exit(f"fake kubectl: unexpected {a}")
 ''')

@@ -12,7 +12,10 @@
 // @description    Provides CRUD over per-tenant alert thresholds, RBAC-scoped writes, and async batch operations.
 // @description    Auth is enforced by the oauth2-proxy sidecar and forwarded via X-Forwarded-Email / X-Forwarded-Groups.
 // @license.name   See repository LICENSE
-// @BasePath       /api/v1
+//
+// 刻意不宣告 @BasePath：各 handler 的 @Router 已寫完整路徑（/api/v1/...），
+// OpenAPI 2.0 的 path 相對於 basePath，兩者並存會組出 /api/v1/api/v1/...
+// （#2597；守衛 tests/contract/test_swagger_basepath.py）。
 package main
 
 import (

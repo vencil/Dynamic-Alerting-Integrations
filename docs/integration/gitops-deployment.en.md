@@ -59,7 +59,7 @@ Each PR triggers `.github/workflows/validate.yaml`, which runs the following che
 | Custom rule deny-list | `lint_custom_rules.py --ci` | Forbidden functions / tenant isolation violations |
 | Version consistency | `bump_docs.py --check` | Cross-file version mismatch |
 | **Configuration change blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment shows affected tenants/metrics  |
-| **Threshold history backtest** | `backtest --git-diff --prometheus <url>` | Risk-level report posted to PR comment  |
+| **Threshold history backtest** | `backtest --config-dir <the PR's conf.d> --baseline <the base's conf.d> --prometheus <url>` | Risk-level report posted to PR comment  |
 
 All checks pass + CODEOWNERS-specified reviewer approves → merge allowed.
 

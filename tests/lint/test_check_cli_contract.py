@@ -1844,9 +1844,10 @@ class TestRealRepo:
         assert v7(cut) == [("backtest", "--skip-if-unavailable")]
 
     def test_the_v7_disclosures_are_counted_on_the_real_tree(self, result):
-        """init's four `help=SUPPRESS` GitOps flags are the only hidden ones;
-        every section with options now has an option table."""
-        assert result["stats"]["v7_suppressed_options"] == 4, result["stats"]
+        """init's four `help=SUPPRESS` GitOps flags and backtest's removed
+        `--git-diff` (#3111) are the only hidden ones; every section with
+        options now has an option table."""
+        assert result["stats"]["v7_suppressed_options"] == 5, result["stats"]
         assert result["stats"]["v7_sections_without_option_table"] == 0
         # guard / batch-pr / parser: Go wrappers, no argparse parser to compare
         assert result["stats"]["v7_sections_without_parser"] == 3, result["stats"]
@@ -1970,6 +1971,7 @@ class TestEnvironmentIsScrubbed:
 _SETS_CRASH_CODE = (
     "import _lib_exitcodes\n"
     "_lib_exitcodes.set_crash_exit_code(1)\n"
+    "_lib_exitcodes.set_caller_error_code(1)\n"
     "import argparse\n"
     "argparse.ArgumentParser().parse_args()\n"
 )
@@ -1983,7 +1985,9 @@ def test_a_tool_that_sets_the_crash_code_does_not_leave_it_set(tmp_path, monkeyp
     ec = mod._lib_exitcodes
     # idempotent reset (not save-then-restore): the test starts from the default
     monkeypatch.setattr(ec, "_crash_exit_code", ec.EXIT_CALLER_ERROR)
+    monkeypatch.setattr(ec, "_caller_error_code", ec.EXIT_CALLER_ERROR)
 
     captured, _unscoreable, blind, _faults = mod.introspect_parsers()
     assert "sets-crash" in captured and not blind, (captured, blind)  # the tool ran
     assert ec.get_crash_exit_code() == ec.EXIT_CALLER_ERROR
+    assert ec.get_caller_error_code() == ec.EXIT_CALLER_ERROR  # #3124

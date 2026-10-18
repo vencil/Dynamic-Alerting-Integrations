@@ -326,24 +326,6 @@ def fx(tmp_path_factory) -> dict[str, Path]:
         (files / f"{name}.bad.yaml").write_bytes(_dirty(doc))
     out["files"] = files
 
-    # --git-diff needs a repo whose HEAD~1..HEAD touches conf.d/ (ticket recipe)
-    def repo(name: str, doc: bytes) -> Path:
-        r = root / name
-        (r / "conf.d").mkdir(parents=True)
-        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
-                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
-
-        def g(*a: str) -> None:
-            subprocess.run(["git", "-C", str(r), *a], check=True,
-                           capture_output=True, timeout=_TIMEOUT, env=env)
-        g("init", "-q")
-        (r / "conf.d" / "alpha.yaml").write_bytes(doc + b"    mem_usage: 70\n")
-        g("add", "-A"); g("commit", "-qm", "before")
-        (r / "conf.d" / "alpha.yaml").write_bytes(doc)
-        g("add", "-A"); g("commit", "-qm", "after")
-        return r
-    out["repo_ok"] = repo("repo_ok", CLEAN_DOC)
-    out["repo_bad"] = repo("repo_bad", XFF_DOC)
     return out
 
 
@@ -394,16 +376,10 @@ _ROWS = [
     ("threshold_recommend", OPS / "threshold_recommend.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
-    # envelope tools: their own load-site handlers, not the decorator
-    ("backtest --git-diff", OPS / "backtest_threshold.py",
-     lambda f: ["--git-diff", "--prometheus", _PROM, "--skip-if-unavailable"], "repo_bad",
-     "conf.d/alpha.yaml",
-     lambda f: ["--git-diff", "--prometheus", _PROM, "--skip-if-unavailable"], EXIT_OK),
-    ("backtest --config-dir", OPS / "backtest_threshold.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
-                "--prometheus", _PROM, "--skip-if-unavailable"], None, "alpha.yaml",
-     lambda f: ["--config-dir", str(f["confd_ok"]), "--baseline", str(f["confd_ok"]),
-                "--prometheus", _PROM, "--skip-if-unavailable"], EXIT_OK),
+    # envelope tools: their own load-site handlers, not the decorator.
+    # (backtest left this table with #3111: it reads no file itself — da-guard
+    # names an undecodable file on either side, pinned by
+    # test_backtest_served_values_matrix::test_a_tree_da_guard_refuses_exits_2.)
     ("policy_engine _defaults", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad_defaults"])], None, "_defaults.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--policy", str(f["files"] / "policy.yaml")],
@@ -429,8 +405,7 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # parse reason when effective refuses a file.
 # ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
 _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
-                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
-                    "backtest --git-diff", "backtest --config-dir"}
+                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant"}
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
@@ -497,16 +472,17 @@ def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, nam
 
 
 @pytest.mark.parametrize("label, script, argv, cwd, reason", [
-    ("backtest --git-diff", OPS / "backtest_threshold.py",
-     lambda f: ["--git-diff", "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
-     "repo_bad", "conf_file_unreadable"),
+    ("backtest --config-dir", OPS / "backtest_threshold.py",
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--baseline", str(f["confd_ok"]),
+                "--prometheus", _PROM, "--json", "--skip-if-unavailable"],
+     None, "served_values_unavailable"),
     ("policy_engine tenant", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--policy",
                 str(f["files"] / "policy.yaml"), "--json"], None, "yaml_file_unreadable"),
     ("policy_engine _defaults", OPS / "policy_engine.py",
      lambda f: ["--config-dir", str(f["confd_bad_defaults"]), "--json"], None,
      "yaml_file_unreadable"),
-], ids=["backtest --git-diff", "policy_engine tenant", "policy_engine _defaults"])
+], ids=["backtest --config-dir", "policy_engine tenant", "policy_engine _defaults"])
 def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cwd, reason):
     """These two tools promise --json one document on EVERY terminal path
     (their existing ``caller_error`` envelope); measured before: 0 bytes."""
@@ -519,22 +495,26 @@ def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cw
     assert "Traceback" not in p.stderr
 
 
-@pytest.mark.parametrize("label, script, argv", [
+@pytest.mark.parametrize("label, script, argv, reason", [
     ("analyze_gaps --json", OPS / "analyze_rule_pack_gaps.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"]),
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "served_values_unavailable"),
     ("onboard --json", OPS / "onboard_platform.py",
      lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"),
-                "--dry-run", "--json"]),
+                "--dry-run", "--json"], "yaml_file_unreadable"),
     ("policy_opa_bridge --json", OPS / "policy_opa_bridge.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"]),
+     lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "served_values_unavailable"),
 ], ids=["analyze_gaps", "onboard", "policy_opa_bridge"])
-def test_decorated_tools_leave_stdout_empty_under_json(fx, label, script, argv):
-    """No envelope convention on their caller-error paths (their existing
-    ``sys.exit(EXIT_CALLER_ERROR)`` sites are stderr-only), so the wrapper
-    is stderr-only too — and stdout must not carry a half-written document."""
+def test_decorated_tools_emit_one_envelope_under_json(fx, label, script, argv, reason):
+    """The decorators exit through ``_lib_exitcodes.die_caller_error`` (#3115):
+    a tool that armed its ``--json`` envelope gets exactly one, naming the
+    reason — stdout used to be empty here — and still no traceback."""
+    import json
     p = _run(script, argv(fx))
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
-    assert p.stdout == "", p.stdout[:200]
+    doc = json.loads(p.stdout)
+    assert (doc["status"], doc["reason"]) == ("caller_error", reason), doc
+    assert doc["error"].startswith("ERROR: cannot read"), doc
+    assert "Traceback" not in p.stderr
 
 
 def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
@@ -727,13 +707,17 @@ def test_scan_sees_the_known_population():
     a new consumer is fine (it will be judged), a smaller count means the
     scanner went blind."""
     found = {p.name for p in _tool_modules() if _scan(p).sites}
+    # deprecate_rule.py left with ADR-036 §2 (#2906, step E2): its reads are
+    # parse-tree's (`_read_yaml`, `_tree_read`); PyYAML is left only for the
+    # text of a rewrite, and `test_deprecate_rule_names_and_continues` above
+    # still pins its handling of an unreadable file.
     # check_routing_profiles.py left with ADR-036 step 4 (#2906): it reads
     # conf.d through `da-guard parse-tree` (`_lib_io.load_confd_file`); its
     # row above pins the refusal. validate_config.py's own reads moved the
     # same way; the lib load sites it keeps are guarded where they are.
     expected = {
         "analyze_rule_pack_gaps.py", "backtest_threshold.py",
-        "deprecate_rule.py", "generate_tenant_mapping_rules.py",
+        "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
         "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
         "blind_spot_discovery.py",

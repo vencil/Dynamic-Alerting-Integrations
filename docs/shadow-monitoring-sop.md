@@ -389,7 +389,7 @@ docker run --rm --user $(id -u):$(id -g) \
 |------|------|------|
 | **Auto-convergence** ✅ | `validate --auto-detect-convergence --stability-window 5` | 追蹤每個 metric pair 的跨 round 狀態，所有 pairs 連續 N 輪 match 後自動產出 `cutover-readiness.json` 並停止 watch |
 | **Batch health report** ✅ | `batch-diagnose`（da-tools CLI） | 切換後自動發現 tenants → 並行 `diagnose` → health score + remediation steps |
-| **Threshold backtest** ✅ | `backtest --git-diff --prometheus <url>` | PR 修改 threshold 時回測 7 天歷史數據，CI 自動產出風險評估 |
+| **Threshold backtest** ✅ | `backtest --config-dir <PR 的 conf.d> --baseline <base 的 conf.d> --prometheus <url>` | PR 修改 threshold 時回測 7 天歷史數據，CI 自動產出風險評估 |
 | **Shadow Dashboard** ✅ | Grafana 掛載 `shadow-monitoring-dashboard.json`（見下方 §8.1） | 即時顯示 shadow rule 數量、per-tenant 狀態、old/new metric 對比趨勢、delta 收斂圖 |
 | **One-command cutover** ✅ | `da-tools cutover --readiness-json <path> --tenant <t>`（見 §7.1） | 單一指令完成切換全流程。支援 `--dry-run` 預覽、`--force` 跳過 readiness 檢查 |
 | **Shadow verify** ✅ | `da-tools shadow-verify <preflight\|runtime\|convergence\|all>` | 三階段自動驗證：前置檢查 + 巡檢 + 收斂判定，替代手動 curl + awk 操作 |

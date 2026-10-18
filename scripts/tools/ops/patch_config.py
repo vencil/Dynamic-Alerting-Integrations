@@ -4,8 +4,21 @@
 Supports both legacy (single config.yaml key) and multi-file (per-tenant YAML keys)
 ConfigMap structures: a '_defaults' key (.yaml/.yml, any casing) means
 multi-file, else 'config.yaml' means legacy. The tenant's key is the one whose
-`tenants:` declares it. This tool's reading of the ConfigMap is not the
-exporter's; known divergences are tracked in #1950.
+`tenants:` declares it.
+
+The ConfigMap's keys are read by `da-guard parse-tree` (ADR-036 §2, #2906),
+as the exporter mounts them — one flat directory: who declares the tenant,
+what its block holds and whether a write changes anything are decided from
+that, never from PyYAML, which only produces the text of the rewrite. That
+text is read back by parse-tree before anything is sent: unless it is the
+key as it was with this one change (every key, structure, and each scalar's
+source text, tag and value), or if parse-tree cannot read the key as it is,
+nothing is written — exit 2, `--json` reason `write_refused` (a key
+parse-tree cannot read: `configmap_shape`). A key PyYAML rewrites in a
+spelling yaml.v3 reads differently (`~` or an empty value written `null`,
+`!!float 1` written `1.0`) is refused whole: respell it by hand first. No
+usable da-guard (`$DA_GUARD_BINARY`, then `$PATH`) is exit 2, reason
+`da_guard_unavailable`.
 
 Usage: patch_config.py <tenant> <metric_key> <value>
        patch_config.py --diff [--json] <tenant> <metric_key> <value>
@@ -57,9 +70,11 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope)
 from _lib_python import format_json_report, positive_seconds  # noqa: E402
 from _lib_io import (  # noqa: E402
-    find_duplicate_key,         # #2123 shared check
     strict_load_for_rewrite,    # #2216 / #2237 / #2220: text keys, plain values as written
 )
+import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection)
+import _lib_parse_tree  # noqa: E402
+import _lib_write_check  # noqa: E402
 from _lib_yaml_keys import dump_for_rewrite  # noqa: E402  (#2220)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -70,8 +85,6 @@ from _lib_confd import (  # noqa: E402
 )
 
 LEGACY_KEY = "config.yaml"
-_NULL = "tag:yaml.org,2002:null"
-_MERGE = "tag:yaml.org,2002:merge"
 
 # Where the ConfigMap and the exporter pods are. Taken from the chart
 # (helm/threshold-exporter/templates/{service,deployment}.yaml: namespace,
@@ -166,7 +179,8 @@ signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   ends. SIGKILL cannot be handled: the ConfigMap may stay at the new bytes
   and no envelope is printed.
 exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back;
-  {EXIT_CALLER_ERROR} caller error, nothing written; {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
+  {EXIT_CALLER_ERROR} caller error, nothing written (also: the rewrite refused by the
+  pre-write `da-guard parse-tree` confirmation, or no usable da-guard); {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
   {EXIT_EXPORTER_UNREACHABLE} exporter unreachable (before the write: nothing written; after: rolled
   back); {EXIT_ROLLBACK_FAILED} rollback failed - the ConfigMap may still hold the new bytes;
   {EXIT_ABORTED_ROLLED_BACK} interrupted or an unexpected error after the write, rolled back;
@@ -228,71 +242,102 @@ def _cm_keys(cm_data):
     return data or {}
 
 
-def read_node(text, label, strict=True):
-    """Root node of the FIRST document in `text` (None if there is none);
-    later documents are not read. Refused: a syntax error in what is read,
-    nesting too deep to walk, and — when `strict` — a duplicate key in any
-    mapping."""
-    try:
-        root = next(yaml.compose_all(text or "", Loader=yaml.SafeLoader), None)
-        if strict:
-            _refuse_duplicate_keys(root, label)
-    except yaml.YAMLError as exc:
-        raise _Unparseable(f"{label} does not parse as YAML: {exc}") from exc
-    except RecursionError as exc:
-        raise _Unparseable(f"{label} is nested too deeply.") from exc
-    return root
+class _WriteRefused(ConfigMapShapeError):
+    """ADR-036 §2: the rewritten key, read back by `da-guard parse-tree`, is
+    not the original with this change applied (or the key is not one a
+    reader reads); nothing is written."""
 
 
-def _refuse_duplicate_keys(root, label):
-    """The shared YAML-standard check (#2123, `_lib_io.find_duplicate_key`:
-    yaml.v3's raw-key identity, every mapping under `root`), reported in this
-    tool's own words and exception class."""
-    hit = find_duplicate_key(root)
-    if hit is not None:
-        dup, first, _mapping = hit
-        key = dup.value if isinstance(dup, yaml.ScalarNode) else "<non-scalar>"
-        raise ConfigMapShapeError(
-            f"{label} has the key {key!r} twice in one mapping "
-            f"(lines {first.start_mark.line + 1} and {dup.start_mark.line + 1}).")
+class _ConfdView:
+    """The ConfigMap's keys as the exporter mounts them — one flat directory
+    of files — read by `da-guard parse-tree` (ADR-036 §2, #2906): which keys
+    a reader selects and each one's content as yaml.v3 reads it. Every
+    decision of this tool (who declares a tenant, what its block holds,
+    whether a write changes anything) is taken from this, never from PyYAML;
+    PyYAML only produces the text of a rewrite (`_patch_carrier`)."""
 
-
-def _entries(node, label, strict=True):
-    """{key text: value node} of a mapping node, {} for any other node. A null
-    key is skipped; so is a non-scalar key unless `strict`. Refused: a merge
-    (`<<`) key, a duplicate key, and — when `strict` — a non-scalar key."""
-    if not isinstance(node, yaml.MappingNode):
-        return {}
-    out, dup = {}, None
-    for k, v in node.value:
-        if not isinstance(k, yaml.ScalarNode):
-            if strict:
-                raise ConfigMapShapeError(f"{label} has a non-scalar mapping key.")
-            continue
-        if k.tag == _MERGE:
+    def __init__(self, data):
+        # Two keys that differ only in case are two files in the exporter's
+        # mount but one file in a temporary directory on a case-insensitive
+        # filesystem (macOS, Windows): one would overwrite the other and
+        # parse-tree would read a ConfigMap that does not exist. Refused.
+        folded = {}
+        for key in data:
+            if isinstance(key, str):
+                folded.setdefault(key.casefold(), []).append(key)
+        twins = sorted(sorted(ks) for ks in folded.values() if len(ks) > 1)
+        if twins:
             raise ConfigMapShapeError(
-                f"{label} has a merge key `<<` on the path being read.")
-        dup = k.value if k.value in out else dup
-        if k.tag != _NULL:
-            out[k.value] = v
-    if dup is not None:
-        raise _Unparseable(f"{label} has the key {dup!r} twice in one mapping.")
-    return out
+                "threshold-config has keys that differ only in case ("
+                + "; ".join(", ".join(ks) for ks in twins)
+                + "); this tool reads the keys as files, and on a "
+                "case-insensitive filesystem they would be one file — rename "
+                "one of them.")
+        self._tmp = tempfile.TemporaryDirectory(prefix="patch-config-")
+        self.root = self._tmp.name
+        for key, text in data.items():
+            if not isinstance(key, str) or "/" in key or key in (".", "..") \
+                    or "\0" in key:
+                continue  # not a ConfigMap key; the mount has no such file
+            path = os.path.join(self.root, key)
+            with open(path, "wb") as fh:
+                # A value that is not a string (malformed data) fails here,
+                # as an unexpected error — never read as an empty key.
+                fh.write(("" if text is None else text).encode(
+                    "utf-8", "surrogateescape"))
+            os.chmod(path, 0o600)
+        self.tree = _lib_parse_tree.load(self.root, None, PARSE_TREE_TIMEOUT_S)
+
+    def node(self, key):
+        """The key's content (parse-tree nodes), None when no reader reads it.
+        Raises _Unparseable when parse-tree cannot read it."""
+        try:
+            return self.tree.node(key)
+        except _lib_parse_tree.FileUnreadable as exc:
+            raise _Unparseable(f"{key} cannot be read (da-guard parse-tree: "
+                               f"{exc.kind}: {exc.message}).") from None
+        except KeyError:
+            return None
+
+
+#: The views of the ConfigMaps this run has read, by content.
+_VIEWS = {}
+PARSE_TREE_TIMEOUT_S = 120
+
+
+def _view(cm_data):
+    data = _cm_keys(cm_data)
+    fp = hashlib.sha256(json.dumps(
+        sorted((str(k), v if isinstance(v, str) else None) for k, v in data.items()),
+        ensure_ascii=False).encode("utf-8", "surrogateescape")).hexdigest()
+    view = _VIEWS.get(fp)
+    if view is None:
+        view = _VIEWS[fp] = _ConfdView(data)
+    return view
 
 
 def _is_null(node):
-    return isinstance(node, yaml.ScalarNode) and node.tag == _NULL
+    return _lib_parse_tree.is_scalar(node) and node["tag"] == "!!null"
+
+
+def _is_mapping(node):
+    return isinstance(node, dict) and not _lib_parse_tree.is_scalar(node)
 
 
 def _mapping_or_null(node):
-    return node is None or _is_null(node) or isinstance(node, yaml.MappingNode)
+    return node is None or _is_null(node) or _is_mapping(node)
+
+
+def _entries(node):
+    """{key text: value node} of a mapping node, {} for any other node."""
+    return dict(node) if _is_mapping(node) else {}
 
 
 def _text(node):
-    """Source text of a scalar (None for null); YAML text of a collection."""
-    if isinstance(node, yaml.ScalarNode):
-        return None if _is_null(node) else node.value
-    return yaml.serialize(node)
+    """Source text of a scalar (None for null and for a collection)."""
+    if _lib_parse_tree.is_scalar(node):
+        return None if _is_null(node) else node["text"]
+    return None
 
 
 def find_defaults_key(data):
@@ -326,24 +371,22 @@ def is_carrier_candidate(key):
 
 
 def tenant_declarations(cm_data, skipped=None):
-    """tenant id → set of keys whose `tenants:` declares it. Only the root and
-    `tenants:` mappings are checked here; a target key is read strictly. A key
-    that does not parse, or repeats a key there, is refused, or — given a
-    `skipped` list — declares nothing and is added to it; a `<<` there is
-    refused."""
-    data = _cm_keys(cm_data)
+    """tenant id → set of keys whose `tenants:` declares it, as `da-guard
+    parse-tree` reads the ConfigMap (ADR-036 §2): only the keys a reader
+    selects that are not `_`-prefixed, keyed by each tenant key's source
+    text. A key parse-tree cannot read is refused, or — given a `skipped`
+    list — declares nothing and is added to it."""
+    view = _view(cm_data)
     declared = {}
-    for key in sorted(k for k in data if is_carrier_candidate(k)):
+    for key in _lib_parse_cache.tenant_files(view.tree):
         try:
-            root = read_node(data[key], key, strict=False)
-            tenants = _entries(root, key, strict=False).get("tenants")
-            ids = _entries(tenants, key, strict=False)
+            root = view.node(key)
         except _Unparseable as exc:
             if skipped is None:
                 raise
             skipped.append(str(exc))
             continue
-        for tenant in ids:
+        for tenant in _entries(_entries(root).get("tenants")):
             declared.setdefault(tenant, set()).add(key)
     return declared
 
@@ -372,13 +415,13 @@ def tenant_block(cm_data, tenant):
     key = locate_tenant_key(cm_data, tenant)
     if key is None:
         return None, {}
-    root = read_node(_cm_keys(cm_data)[key], key)
-    block = _entries(_entries(root, key)["tenants"], key)[tenant]
+    root = _view(cm_data).node(key)
+    block = _entries(_entries(root)["tenants"])[tenant]
     if not _mapping_or_null(block):
         raise ConfigMapShapeError(
             f"tenant '{tenant}' in {key} is not a mapping of metric keys; "
             f"refusing to read or overwrite it.")
-    return key, _entries(block, key)
+    return key, _entries(block)
 
 
 def _is_default(value):
@@ -399,24 +442,42 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
             raise ConfigMapShapeError(
                 f"patch-config does not create {key}: it only uses YAML keys "
                 f"that are not dot-hidden or `_`-prefixed as tenant keys.")
+    view = _view(cm_data)
     old = _cm_keys(cm_data).get(key) or ""
-    declared = set(_entries(_entries(read_node(old, key), key).get("tenants"), key))
+    # The decisions are parse-tree's (ADR-036 §2): which tenants the key
+    # declares, whether its `tenants:` is a mapping.
+    old_nodes = view.node(key) if key in _cm_keys(cm_data) else None
+    if key in _cm_keys(cm_data) and old_nodes is None:
+        raise ConfigMapShapeError(
+            f"no reader reads {key} (da-guard parse-tree); patch-config does "
+            f"not write it.")
+    old_nodes = old_nodes if old_nodes is not None else {}
+    old_tenants = old_nodes.get("tenants")
+    if not _mapping_or_null(old_tenants):
+        raise ConfigMapShapeError(
+            f"{key} or its `tenants:` is not a YAML mapping; refusing to "
+            f"overwrite it.")
+    declared = set(_entries(old_tenants))
     if key != shared_key and len(declared | {tenant}) > 1:
         raise ConfigMapShapeError(
             f"{key} would declare tenants {sorted(declared | {tenant})}; "
             f"patch-config only writes a key that declares one. Edit {key} "
             f"by hand.")
-    # #2216 / #2237: keys are read as the exporter reads them — the scalar's
-    # source text (#2114) — so `010:` stays tenant "010" instead of being
-    # read as 8 (which renamed it, or folded it into a tenant `8:` next to
-    # it). #2220: every UNQUOTED value is kept as its source text as well
+    # The text of the rewrite (PyYAML only produces it, ADR-036 §2).
+    # #2216 / #2237: keys are read as their source text, so `010:` stays
+    # tenant "010". #2220: every UNQUOTED value is kept as its source text
     # (`RawPlain`) and `dump_for_rewrite` writes it back plain, so the values
-    # this patch does not touch are written as they were — `010` stays `010`
-    # (a `_profile: 010` stays bound to profile `010:`), `12:30` stays
-    # `12:30`, not 8 / 750. A quoted value was text already; a new value is
-    # a `str` and is quoted when YAML would retype it (`'50'`), as before.
+    # this patch does not touch are written as they were. A new value is a
+    # `str` and is quoted when YAML would retype it (`'50'`), as before.
     # ⚠️ The rewrite still drops the key's comments.
-    doc = strict_load_for_rewrite(old) or {}
+    try:
+        doc = strict_load_for_rewrite(old) or {}
+    except (yaml.YAMLError, RecursionError) as exc:
+        raise ConfigMapShapeError(
+            f"{key}: PyYAML cannot read it to produce the rewrite ({exc}); "
+            f"edit it by hand.") from exc
+    # Untouched nulls keep their spelling (`key:`, `~`): text production only.
+    _lib_write_check.keep_null_spelling(doc, old_nodes)
     tenants = doc.get("tenants") if isinstance(doc, dict) else []
     if tenants is None:
         tenants = doc["tenants"] = {}
@@ -430,11 +491,22 @@ def _patch_carrier(cm_data, tenant, metric_key, value, create_key,
     else:
         own[metric_key] = str(value)
     new = dump_for_rewrite(doc, sort_keys=False)
-    after = set(_entries(_entries(read_node(new, key), key).get("tenants"), key))
-    if after != declared | {tenant}:
-        raise ConfigMapShapeError(
-            f"rewriting {key} would change the tenants it declares from "
-            f"{sorted(declared | {tenant})} to {sorted(after)}; refusing.")
+
+    def _change(tree):
+        if not _is_mapping(tree.get("tenants")):
+            tree["tenants"] = {}
+        block = tree["tenants"].get(tenant)
+        block = block if _is_mapping(block) else {}
+        if _is_default(value):
+            block.pop(metric_key, None)
+        else:
+            block[metric_key] = _lib_write_check.scalar(str(value))
+        tree["tenants"][tenant] = block
+    expected = _lib_write_check.with_change(old_nodes, _change)
+    try:
+        _lib_write_check.confirm(view.root, key, new, expected)
+    except _lib_write_check.WriteRefused as exc:
+        raise _WriteRefused(str(exc)) from None
     return {"data": {key: new}}
 
 
@@ -1277,7 +1349,9 @@ def _outcome(status, message=None, reason=None, written=False,
             "written": written, "rolled_back": rolled_back, "changed": changed}
 
 
-_PREWRITE_REASONS = ((ConfigMapShapeError, "configmap_shape"),
+_PREWRITE_REASONS = ((_WriteRefused, "write_refused"),
+                     (ConfigMapShapeError, "configmap_shape"),
+                     (_lib_parse_tree.ParseTreeError, "da_guard_unavailable"),
                      (KubectlError, "kubectl_failed"))
 
 
@@ -1646,4 +1720,5 @@ def _answer(args, mode, report, outcome, code):
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)
