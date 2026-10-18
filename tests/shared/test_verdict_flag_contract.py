@@ -1047,7 +1047,9 @@ def test_explain_route_has_no_violation_exit():
     turn into a verdict.
 
     * every `return` of main() is EXIT_OK / EXIT_CALLER_ERROR;
-    * the only way out is `sys.exit(main())`: no other sys.exit / os._exit,
+    * the only way out is `_lib_exitcodes.run(main)` (#3115: it exits with
+      main()'s return value, as `sys.exit(main())` did, and adds only the
+      caller-error / crash codes): no sys.exit / os._exit,
       no builtin exit() / quit(), no exit function imported by name, and no
       SystemExit named anywhere (bare or as `builtins.SystemExit`).
 
@@ -1062,7 +1064,11 @@ def test_explain_route_has_no_violation_exit():
     exits = [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Call) and (
         (isinstance(n.func, ast.Attribute) and n.func.attr in ("exit", "_exit"))
         or (isinstance(n.func, ast.Name) and n.func.id in ("exit", "quit")))]
-    assert exits == ["sys.exit(main())"], f"exit calls other than sys.exit(main()): {exits}"
+    assert exits == [], f"exit calls besides _lib_exitcodes.run(main): {exits}"
+    runs = [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute) and n.func.attr == "run"
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == "_lib_exitcodes"]
+    assert runs == ["_lib_exitcodes.run(main)"], f"process entry is not run(main): {runs}"
     imported = [f"{n.module}.{a.name}" for n in ast.walk(tree)
                 if isinstance(n, ast.ImportFrom) and n.module in ("sys", "os", "builtins")
                 for a in n.names if a.name in ("exit", "_exit", "SystemExit")]

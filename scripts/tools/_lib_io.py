@@ -25,7 +25,7 @@ from _lib_constants import ONBOARD_HINTS_FILENAME
 from _lib_yaml_keys import (ExporterKeyLoader, KeepPlainScalarText,
                             load_exporter_keys, load_for_rewrite)
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
-from _lib_exitcodes import EXIT_CALLER_ERROR
+from _lib_exitcodes import EXIT_CALLER_ERROR, die_caller_error
 
 _F = TypeVar("_F", bound=Callable[..., Any])
 
@@ -859,9 +859,12 @@ def exit_on_yaml_file_error(fn: _F) -> _F:
 
     ⚠️ Only :class:`YamlFileError`. A bare ``yaml.YAMLError`` has no path to
     name and did not come from the helper; it keeps propagating so the
-    layer that raised it stays visible. Tools that owe stdout a ``--json``
-    envelope on this path (``backtest_threshold``, ``policy_engine``)
-    catch the error themselves at the load site instead of using this.
+    layer that raised it stays visible.
+
+    ``--json`` (#3115): the exit goes through ``die_caller_error`` with
+    ``reason="yaml_file_unreadable"``, so a tool that armed its envelope
+    (``_lib_exitcodes.arm_crash_envelope``) gets one on stdout here too —
+    a tool no longer has to catch the error itself to keep that promise.
 
     Lives here rather than in ``_lib_exitcodes`` because that module is
     kept stdlib-only for the tools that import nothing else; this one
@@ -874,8 +877,8 @@ def exit_on_yaml_file_error(fn: _F) -> _F:
         except YamlFileError as exc:
             # ``safe_label``: the path is an untrusted filename (#1538) —
             # measured, a ``\x1b[31m`` in the name reached the terminal raw.
-            print(f"ERROR: cannot read {safe_label(exc)}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+            die_caller_error(f"ERROR: cannot read {safe_label(exc)}",
+                             reason="yaml_file_unreadable")
     return _wrapped  # type: ignore[return-value]
 
 
@@ -1076,12 +1079,13 @@ class OutputWriteError(OSError):
         return f"cannot {self.action} {self.path}: {detail} — {hint}"
 
 
-def _die_on_write_error(exc: OutputWriteError, exit_code: int) -> None:
-    """Print the one-line message to stderr and exit — no traceback."""
+def _die_on_write_error(exc: OutputWriteError, exit_code: Optional[int]) -> None:
+    """Print the one-line message to stderr and exit — no traceback; an armed
+    ``--json`` envelope says ``reason: output_unwritable`` (#3115)."""
     # #1538: the path is operator argv — still escape control characters
     # before it reaches a terminal (blind review).
-    print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
-    sys.exit(exit_code)
+    die_caller_error(f"ERROR: {safe_label(str(exc))}", reason="output_unwritable",
+                     code=exit_code)
 
 
 # #3105: ``0o600`` on a regular file only (both writers below). A device or
@@ -1182,13 +1186,14 @@ def write_text_or_die(
     content: str,
     *,
     flag: Optional[str] = None,
-    exit_code: int = EXIT_CALLER_ERROR,
+    exit_code: Optional[int] = None,
 ) -> None:
     """:func:`write_text_secure`, but an unusable path ends the process.
 
     #1641. On :class:`OutputWriteError` prints ``ERROR: <message>`` to stderr
-    and exits with *exit_code* (default ``EXIT_CALLER_ERROR`` = 2, the
-    exit-code SSOT's "IO failure" cell) — no traceback, and NOT rc=1, which
+    and exits with *exit_code* (default: the process caller-error code,
+    ``EXIT_CALLER_ERROR`` = 2 unless the tool set another — the exit-code
+    SSOT's "IO failure" cell) — no traceback, and NOT rc=1, which
     would read as "your config has a violation".
 
     Args:
@@ -1212,7 +1217,7 @@ def write_json_or_die(
     indent: int = 2,
     ensure_ascii: bool = False,
     flag: Optional[str] = None,
-    exit_code: int = EXIT_CALLER_ERROR,
+    exit_code: Optional[int] = None,
 ) -> None:
     """:func:`write_json_secure`, but an unusable path ends the process.
 
@@ -1244,7 +1249,7 @@ def ensure_dir_or_die(
     path: Any,
     *,
     flag: Optional[str] = None,
-    exit_code: int = EXIT_CALLER_ERROR,
+    exit_code: Optional[int] = None,
 ) -> None:
     """:func:`ensure_dir`, but an unusable path ends the process (rc=2)."""
     try:
@@ -1415,16 +1420,16 @@ def exit_on_output_write_error(fn: _F) -> _F:
     ⚠️ Only :class:`OutputWriteError`, never a bare ``OSError``: an
     ``OSError`` that reached ``main`` from somewhere else (an unreadable
     INPUT, a socket) has no output path to name and no flag to point at, and
-    turning it into this message would misattribute it. Tools that must emit
-    a ``--json`` envelope on stdout for this path catch the error themselves
-    instead of using this.
+    turning it into this message would misattribute it. A tool that armed
+    its ``--json`` envelope gets one here, ``reason: output_unwritable``
+    (#3115) — no need to catch the error itself.
     """
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
         except OutputWriteError as exc:
-            _die_on_write_error(exc, EXIT_CALLER_ERROR)
+            _die_on_write_error(exc, None)
     return _wrapped  # type: ignore[return-value]
 
 

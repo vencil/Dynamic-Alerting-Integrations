@@ -166,12 +166,17 @@ def _force_utf8_subprocess_io():
 @pytest.fixture(autouse=True)
 def _disarm_crash_envelope():
     """A tool's ``main([... "--json"])`` called in-process arms the
-    process-wide crash envelope (#3094); it must not outlive that test.
-    Idempotent reset, not save-then-restore (see test-map.md)."""
+    process-wide crash envelope (#3094) with whatever ``sys.stdout`` was
+    then (a capture or fake stream); a tool run in-process as ``__main__``
+    may set the process caller-error and crash codes (tenant_verify: 1);
+    stdout write failures are recorded process-wide (#3124). None of it may
+    outlive that test — a stale armed stream that fails turned a green run
+    into rc 2 at interpreter exit, depending on test order. Idempotent
+    reset of every piece, not save-then-restore (see test-map.md)."""
     yield
     ec = sys.modules.get("_lib_exitcodes")
     if ec is not None:
-        ec.disarm_crash_envelope()
+        ec.reset_exit_state()
 
 
 # ── Session-scoped constant fixtures ──────────────────────────────────
