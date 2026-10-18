@@ -233,7 +233,10 @@ def test_a_map_tag_on_a_sequence_keeps_policy_engine_at_rc_2(tmp_path, capsys):
     assert out["status"] == "caller_error" and out["reason"] == "yaml_file_unreadable", out
 
 
-_TRAILING_TAB_TENANT = "tenants:\n  tx:\n    cpu: 80\t\n"   # pure parser refuses
+# A file `da-guard parse-tree` refuses (duplicate_key). Since ADR-036 step 4
+# (#2906) every reader here reads parse-tree; the trailing TAB the pure-Python
+# parser refused before is read by yaml.v3.
+_UNREADABLE_TENANT = "tenants:\n  tx:\n    cpu: 80\n    cpu: 90\n"
 
 
 def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
@@ -244,7 +247,7 @@ def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
     vanished — two answers in one run."""
     d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  cpu: 70\ntenants:\n  tx:\n    cpu: 60\n",
-        "tx.yaml": _TRAILING_TAB_TENANT})
+        "tx.yaml": _UNREADABLE_TENANT})
     assert declared_tenant_ids(d) == set()
     got = _grar_parse.load_tenant_tree(str(d))
     assert "tx" not in got.dedup_configs, got.dedup_configs
@@ -253,14 +256,14 @@ def test_a_file_the_pure_parser_refuses_declares_nothing(tmp_path, capsys):
 
 
 def test_tenant_uniqueness_agrees_with_yaml_syntax_about_one_file(tmp_path):
-    """`yaml_syntax` (pure parser) calls the trailing-tab file unreadable;
+    """`yaml_syntax` calls the file unreadable (parse-tree's duplicate_key);
     `tenant_uniqueness` must not read it anyway and report a duplicate from
     a file the same run says it cannot read."""
     import validate_config as vc
     d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  cpu: 70\n",
         "a.yaml": "tenants:\n  tx:\n    cpu: 80\n",
-        "b.yaml": _TRAILING_TAB_TENANT})
+        "b.yaml": _UNREADABLE_TENANT})
     r = vc.check_tenant_uniqueness(str(d))
     assert r["status"] == vc.WARN, r
     assert "b.yaml" in " ".join(r["details"]), r

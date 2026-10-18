@@ -19,8 +19,7 @@
     "severities joined by ',', '' = none); null = tenant absent from the exporter.",
     "walker = the walker plane (#2019): /effective (pkg/config ResolveEffective,",
     "also da-guard and the exporter's merged_hash) and describe_tenant.py --show-sources:",
-    "{effective_config, platform_overlay} (describe_tenant: see #2115 below for the rows where",
-    "it differs); platform_overlay null = the field is omitted;",
+    "{effective_config, platform_overlay}; platform_overlay null = the field is omitted;",
     "walker null = tenant not found. Go asserts metric/exporter_dedup/silent_mode and",
     "walker (and that walker agrees with those three); Python dedup/group_wait and walker.",
     "A tenant file whose FIRST document does not parse declares nothing on either",
@@ -79,16 +78,16 @@
     "layer writes whole (w1: a tenant `{default: ...}` is not merged with a subtree schedule's",
     "windows). Go requires exactly one spelling of metric_key there and that its value is the",
     "metric column. merged_hash is unchanged: it stays the hash of the leaf-by-leaf merge.",
-    "describe_tenant.py does not follow yet: walker.describe_tenant_effective_config (optional)",
-    "is what it reports where it differs - each layer's own spelling side by side, the windows",
-    "merged; Python asserts it in place of effective_config. Measured on main fc5438c4 before",
-    "the fix: a1/a4/a5/s1/s2/s3/s4 /effective carried both spellings, w1 the subtree's window.",
+    "describe_tenant.py reports exactly this column since #2906 (it reads da-guard effective).",
+    "Measured on main fc5438c4 before the fix: a1/a4/a5/s1/s2/s3/s4 /effective carried both",
+    "spellings, w1 the subtree's window.",
     "#2518 n-rows: a threshold written as null (tenant file, root platform `tenants:`",
     "entry or profile) is no write on every plane: the layer below shows through.",
     "#2708 n5-n9: `{default: null}` (also with `overrides: []`) and no window is that same",
     "null on every layer, a subtree `_defaults.yaml` included: the layer below shows through.",
     "n10-n13: the same with `expires:` / `reason:` beside the null default (no window).",
-    "#2914 row: a threshold profile's `_routing` / `_severity_dedup` are applied by no plane (config.IsRoutingLayerKey): dedup, exporter_dedup and walker all agree."
+    "#2914 row: a threshold profile's `_routing` / `_severity_dedup` are applied by no plane (config.IsRoutingLayerKey): dedup, exporter_dedup and walker all agree.",
+    "ADR-036 step 4 (#2906): the routing plane (`dedup`, `group_wait`) reads parse-tree, which refuses a file of several documents (multiple_documents): such a tenant file declares nothing there, and the generator refuses the tree (tenant_file_unreadable)."
   ],
   "trees": [
     {
@@ -484,7 +483,7 @@
         "tx": {
           "metric": 60,
           "tenant_api": null,
-          "dedup": "disable",
+          "dedup": null,
           "group_wait": null,
           "exporter_dedup": "disable",
           "silent_mode": "warning",
@@ -1647,10 +1646,6 @@
             "effective_config": {
               "mysql_cpu": "90"
             },
-            "describe_tenant_effective_config": {
-              "mysql_cpu": "90",
-              "mysql_threads_running": 30
-            },
             "platform_overlay": null,
             "profile_overlay": null
           }
@@ -1726,10 +1721,6 @@
             "effective_config": {
               "mysql_cpu": "90"
             },
-            "describe_tenant_effective_config": {
-              "mysql_cpu": "90",
-              "mysql_threads_running": 30
-            },
             "platform_overlay": null,
             "profile_overlay": null
           }
@@ -1754,10 +1745,6 @@
           "walker": {
             "effective_config": {
               "mysql_cpu": 70
-            },
-            "describe_tenant_effective_config": {
-              "mysql_cpu": 70,
-              "mysql_threads_running": 30
             },
             "platform_overlay": [
               {
@@ -1792,10 +1779,6 @@
             "effective_config": {
               "mysql_cpu": "35"
             },
-            "describe_tenant_effective_config": {
-              "mysql_cpu": "35",
-              "mysql_threads_running": 40
-            },
             "platform_overlay": null,
             "profile_overlay": null
           }
@@ -1820,10 +1803,6 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_cpu": 40
-            },
-            "describe_tenant_effective_config": {
-              "mysql_threads_running": 30,
               "mysql_cpu": 40
             },
             "platform_overlay": null,
@@ -1853,10 +1832,6 @@
             "effective_config": {
               "mysql_cpu": 50
             },
-            "describe_tenant_effective_config": {
-              "mysql_threads_running": 40,
-              "mysql_cpu": 50
-            },
             "platform_overlay": null,
             "profile_overlay": null
           }
@@ -1881,10 +1856,6 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
-              "mysql_threads_running": "50"
-            },
-            "describe_tenant_effective_config": {
-              "mysql_cpu": 40,
               "mysql_threads_running": "50"
             },
             "platform_overlay": null,
@@ -1912,17 +1883,6 @@
             "effective_config": {
               "mysql_connections": {
                 "default": "160"
-              }
-            },
-            "describe_tenant_effective_config": {
-              "mysql_connections": {
-                "default": "160",
-                "overrides": [
-                  {
-                    "window": "22:00-06:00",
-                    "value": "300"
-                  }
-                ]
               }
             },
             "platform_overlay": null,

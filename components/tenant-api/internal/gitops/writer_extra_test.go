@@ -100,7 +100,7 @@ func TestValidate_NoTenantsKey(t *testing.T) {
 
 func TestNewWriter_BothDirs(t *testing.T) {
 	t.Parallel()
-	w := NewWriter("/config", "/git")
+	w := newTestWriter("/config", "/git")
 	if w.configDir != "/config" {
 		t.Errorf("configDir = %q, want /config", w.configDir)
 	}
@@ -111,7 +111,7 @@ func TestNewWriter_BothDirs(t *testing.T) {
 
 func TestNewWriter_EmptyGitDir(t *testing.T) {
 	t.Parallel()
-	w := NewWriter("/config", "")
+	w := newTestWriter("/config", "")
 	if w.gitDir != "/config" {
 		t.Errorf("gitDir should default to configDir, got %q", w.gitDir)
 	}
@@ -121,7 +121,7 @@ func TestNewWriter_ReadsEnvVars(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "Test Bot")
 	t.Setenv("GIT_COMMITTER_EMAIL", "bot@test.com")
 
-	w := NewWriter("/config", "")
+	w := newTestWriter("/config", "")
 	if w.committerName != "Test Bot" {
 		t.Errorf("committerName = %q, want 'Test Bot'", w.committerName)
 	}
@@ -134,7 +134,7 @@ func TestNewWriter_ReadsEnvVars(t *testing.T) {
 
 func TestWrite_ValidationFailure(t *testing.T) {
 	dir := t.TempDir()
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	// Invalid YAML should fail validation before touching disk
 	_, err := w.Write(context.Background(), "db-a", "test@example.com", "{{invalid yaml")
@@ -155,7 +155,7 @@ func TestWrite_ValidationFailure(t *testing.T) {
 func TestWrite_MissingTenantSection(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	_, err := w.Write(context.Background(), "db-a", "test@example.com", "tenants:\n  db-b:\n    cpu: \"80\"\n")
 	if err == nil {
@@ -175,7 +175,7 @@ func TestWrite_MissingTenantSection(t *testing.T) {
 func TestValidationFailuresWrapErrValidation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	ctx := context.Background()
 	const bad = "{{invalid yaml"
 
@@ -196,7 +196,7 @@ func TestValidationFailuresWrapErrValidation(t *testing.T) {
 func TestDiff_NewFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	w := NewWriter(dir, "")
+	w := newTestWriter(dir, "")
 
 	diff, err := w.Diff("new-tenant", "line1\nline2\n")
 	if err != nil {
@@ -216,7 +216,7 @@ func TestDiff_IdenticalContent(t *testing.T) {
 	content := "tenants:\n  db-a:\n    cpu: \"80\"\n"
 	testutil.WriteYAML(t, dir, "db-a.yaml", content)
 
-	w := NewWriter(dir, "")
+	w := newTestWriter(dir, "")
 	diff, err := w.Diff("db-a", content)
 	if err != nil {
 		t.Fatalf("Diff returned error: %v", err)
@@ -232,7 +232,7 @@ func TestDiff_ModifiedContent(t *testing.T) {
 	original := "tenants:\n  db-a:\n    cpu: \"80\"\n"
 	testutil.WriteYAML(t, dir, "db-a.yaml", original)
 
-	w := NewWriter(dir, "")
+	w := newTestWriter(dir, "")
 	proposed := "tenants:\n  db-a:\n    cpu: \"90\"\n"
 	diff, err := w.Diff("db-a", proposed)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestDiff_ModifiedContent(t *testing.T) {
 func TestDiff_EmptyProposed(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	w := NewWriter(dir, "")
+	w := newTestWriter(dir, "")
 
 	// New file with empty content
 	diff, err := w.Diff("empty-tenant", "")
@@ -282,7 +282,7 @@ func TestWrite_InGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	yamlContent := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	_, err := w.Write(context.Background(), "db-a", "test@example.com", yamlContent)
@@ -305,7 +305,7 @@ func TestWrite_UpdateExistingInGitRepo(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	// First write
 	yaml1 := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
@@ -333,7 +333,7 @@ func TestWrite_DifferentTenants(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	yaml1 := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	if _, err := w.Write(context.Background(), "db-a", "alice@example.com", yaml1); err != nil {
@@ -357,7 +357,7 @@ func TestWrite_AuthorEmailParsing(t *testing.T) {
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	// Email with @ should extract name from prefix
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
@@ -386,7 +386,7 @@ func TestWrite_CommitterFromEnv(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_NAME", "DA Portal Bot")
 	t.Setenv("GIT_COMMITTER_EMAIL", "bot@da.local")
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 
 	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
 	if _, err := w.Write(context.Background(), "db-a", "operator@example.com", yaml); err != nil {
@@ -408,14 +408,14 @@ func TestWrite_CommitterFromEnv(t *testing.T) {
 	}
 }
 
-// --- currentHEAD / commitParent tests ---
+// --- currentHEAD tests ---
 
 func TestCurrentHEAD_InGitRepo(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	initGitRepo(t, dir)
 
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	head, err := w.currentHEAD()
 	if err != nil {
 		t.Fatalf("currentHEAD: %v", err)
@@ -428,32 +428,10 @@ func TestCurrentHEAD_InGitRepo(t *testing.T) {
 func TestCurrentHEAD_NotGitRepo(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	_, err := w.currentHEAD()
 	if err == nil {
 		t.Error("expected error for non-git directory")
-	}
-}
-
-func TestCommitParent_InGitRepo(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	initGitRepo(t, dir)
-
-	w := NewWriter(dir, dir)
-
-	// Write to create a second commit
-	yaml := "tenants:\n  db-a:\n    _silent_mode: \"warning\"\n"
-	if _, err := w.Write(context.Background(), "db-a", "test@example.com", yaml); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-
-	parent, err := w.commitParent()
-	if err != nil {
-		t.Fatalf("commitParent: %v", err)
-	}
-	if len(parent) < 7 {
-		t.Errorf("expected parent hash, got: %q", parent)
 	}
 }
 

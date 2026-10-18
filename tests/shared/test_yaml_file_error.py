@@ -427,6 +427,10 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # #2116: threshold_recommend reads served-values (then effective) too.
 # #2751: maintenance_scheduler reads effective, and served-values for the
 # parse reason when effective refuses a file.
+# ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
+_PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
+                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
+                    "backtest --git-diff", "backtest --config-dir"}
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
@@ -467,7 +471,11 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
         assert "not valid UTF-8" in p.stderr, "the generator's parse reason must reach the operator"
         return
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
-    if label in _SERVED_VALUES_ROWS:
+    if label in _PARSE_TREE_ROWS:
+        # ADR-036 step 4 (#2906): read through `da-guard parse-tree`, whose
+        # kind tells bad bytes from bad syntax.
+        assert "invalid_utf8" in p.stderr, p.stderr[-500:]
+    elif label in _SERVED_VALUES_ROWS:
         # #2115: the verdict is the exporter's (da-guard served-values
         # parse_failed): no Python cause class, but the exporter's own parse
         # reason — here the byte that is not UTF-8 — is carried along.
@@ -600,8 +608,7 @@ def _is_guard(handler: str) -> bool:
 # whole point was one answer, not twenty-one.
 _HAND_GUARDED: dict[str, tuple[str, str]] = {
     "ops/backtest_threshold.py": ("main", "YamlFileError"),   # --json envelope
-    "ops/policy_engine.py": ("main", "YamlFileError"),        # --json envelope
-    "ops/validate_config.py": ("_run_check", "_INPUT_ERRORS"),  # dispatch wrapper (#1448)
+    "ops/policy_engine.py": ("_main", "YamlFileError"),       # --json envelope
 }
 
 
@@ -720,8 +727,12 @@ def test_scan_sees_the_known_population():
     a new consumer is fine (it will be judged), a smaller count means the
     scanner went blind."""
     found = {p.name for p in _tool_modules() if _scan(p).sites}
+    # check_routing_profiles.py left with ADR-036 step 4 (#2906): it reads
+    # conf.d through `da-guard parse-tree` (`_lib_io.load_confd_file`); its
+    # row above pins the refusal. validate_config.py's own reads moved the
+    # same way; the lib load sites it keeps are guarded where they are.
     expected = {
-        "check_routing_profiles.py", "analyze_rule_pack_gaps.py", "backtest_threshold.py",
+        "analyze_rule_pack_gaps.py", "backtest_threshold.py",
         "deprecate_rule.py", "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
         "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
@@ -775,7 +786,6 @@ def test_hand_guarded_list_only_shrinks():
     set may lose members, never gain them without editing this literal."""
     assert set(_HAND_GUARDED) == {
         "ops/backtest_threshold.py", "ops/policy_engine.py",
-        "ops/validate_config.py",
     }
     for rel in _HAND_GUARDED:
         assert (TOOLS / rel).is_file(), rel
@@ -831,11 +841,14 @@ def test_scanner_still_flags_a_handler_that_does_not_catch_it():
 
 
 def test_scanner_sees_reexport_through_a_tool_module():
-    """`from policy_engine import load_yaml_file` resolves to the lib helper
-    (policy_engine imports it and does not define its own). #2114: so does
-    the strict exporter-key sibling it reads policies with."""
-    assert _sites_of("from policy_engine import load_yaml_file\ndef f(p):\n    return load_yaml_file(p)\n")
-    assert _sites_of("from policy_engine import load_yaml_file_strict_exporter_keys\n"
+    """`from generate_tenant_mapping_rules import load_yaml_file` resolves to
+    the lib helper (the tool imports it and does not define its own). #2114:
+    so does the strict exporter-key sibling `analyze_rule_pack_gaps` reads
+    its single file with. (policy_engine was the example until #2906 moved
+    its policy reads to parse-tree.)"""
+    assert _sites_of("from generate_tenant_mapping_rules import load_yaml_file\n"
+                     "def f(p):\n    return load_yaml_file(p)\n")
+    assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file_strict_exporter_keys\n"
                      "def f(p):\n    return load_yaml_file_strict_exporter_keys(p)\n")
     # control: a tool's OWN function of the same name is not the lib
     assert not _sites_of("from generate_alertmanager_routes import load_tenant_configs\ndef f(p):\n    return load_tenant_configs(p)\n")

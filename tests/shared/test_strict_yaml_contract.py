@@ -39,13 +39,12 @@ a local alias (`ld = yaml.safe_load; ld(f)`), and passing the reader as a
 value instead of calling it (`map(yaml.safe_load, …)`,
 `map(load_yaml_file, …)`). Readers written in a shape the predicate cannot
 see are pinned by behaviour instead, in
-`test_duplicate_key_rejected_across_tools._TOOLS`. ⚠️ That includes the
-`_lib_parse_cache.ParseMode` shape (#2901): the generator's conf.d reads pass
-the parser to `read_confd_yaml` as a value, so `_lib_confd.declared_tenant_ids`
-— lenient by design (an existence lookup that declares a file's tenants even
-when the exporter's decode rejects the file; its docstring) — is no longer
-flagged here. Every parser handed to a ParseMode is enumerated instead by
-`tests/ops/test_lib_parse_cache.py::test_every_parser_call_in_the_reader_modules_is_accounted_for`.
+`test_duplicate_key_rejected_across_tools._TOOLS`. The route generator and
+the tools on its read path (`_lib_confd.declared_tenant_ids` /
+`tenant_declarations` included) read conf.d through `da-guard parse-tree`
+since ADR-036 step 4 (#2906), not with PyYAML; that no PyYAML call in the
+generator's modules reads conf.d is pinned by
+`tests/ops/test_lib_parse_cache.py::test_no_pyyaml_call_in_the_reader_modules_reads_confd`.
 """
 from __future__ import annotations
 
@@ -84,15 +83,9 @@ LENIENT_BY_DESIGN: dict[str, str] = {
         "reads Kubernetes manifests, not a tenant conf.d",
     "lint/check_md_yaml_drift.py":
         "reads YAML fences / CRDs quoted in docs, not a tenant conf.d",
-    "lint/check_path_metadata_consistency.py":
-        "warning-only (always exits 0) path-vs-_metadata advisory; the verdict on "
-        "whether the file is valid YAML is check_confd_schema's (strict)",
-    "lint/check_retire_drift.py":
-        "reads the repo's own conf.d for db_type; skips what it cannot parse — the "
-        "YAML verdict on those trees is check_confd_schema's (strict, same pre-commit run)",
     "lint/check_threshold_unit_sanity.py":
-        "\"unparseable YAML is another gate's job\" (its own comment) — that gate is "
-        "check_confd_schema (strict)",
+        "its conf.d trees are read by da-guard parse-tree (#2906); the lenient reads "
+        "left are docs' fenced YAML and template-data's embedded examples, not a conf.d",
     "ops/deprecate_rule.py":
         "its verdict on a repeated key is exporter_verdicts' (compose + the shared "
         "duplicate_in_mapping): such a tenant file is named and never rewritten — "

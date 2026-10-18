@@ -226,14 +226,9 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// Step 3d (#2903, ADR-036 §4 "PR 模式驗的是分支起點"): the generator
 	// judges the branch point — the feature branch's HEAD, nothing committed
 	// on it yet — with the body written over the file.
-	judgedBase, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content))
-	if err != nil {
+	if _, err := w.validateTenantFile(ctx, filePath, tenantID, []byte(content)); err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
-	}
-	var validated []byte
-	if judgedBase != "" {
-		validated = []byte(content)
 	}
 
 	// Step 4: write file — the tenant's existing file on THIS branch, whatever
@@ -248,8 +243,11 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 		return nil, fmt.Errorf("write file: %w", err)
 	}
 
-	// Step 5: commit on feature branch
-	committed, err := w.gitCommit(filePath, tenantID, authorEmail, validated)
+	// Step 5: commit on feature branch. Its index is the clean base's
+	// (checkoutBaseClean: `reset --hard`), so the commit holds this path
+	// only — no out-of-band staged file rides along (#1535).
+	committed, err := w.gitCommitPaths(w.gitDir, []string{filePath}, tenantCommitMessage(tenantID),
+		authorEmail, map[string][]byte{filePath: []byte(content)})
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		if w.stagedRefusal(err) {

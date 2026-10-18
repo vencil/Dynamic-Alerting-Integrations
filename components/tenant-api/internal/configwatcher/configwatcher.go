@@ -65,10 +65,11 @@ type ReadFunc func() (data []byte, exists bool, err error)
 // returns the error without Store-ing; a NewWithReader partial snapshot aside),
 // so a config an admin edited with a typo silently stops taking effect. BOTH reload paths are silent:
 //   - WatchLoop (periodic tick) logs a WARN and moves on.
-//   - Reload (post-write refresh) returns the error, but every production
-//     caller discards it — `_ = mgr.Reload()` in handler/group.go, view.go and
-//     federation/policy.go — and then answers 200 OK, so the caller never
-//     learns the snapshot went stale.
+//   - Reload (post-write refresh) returns the error, but its one production
+//     caller discards it — `_ = mgr.Reload()` in handler/state.go's
+//     reloadState, run after a groups / views / federation-policy write that
+//     succeeded or may have (#1535) — and the handler then answers, so the
+//     caller never learns the snapshot went stale.
 //
 // The observer records the outcome (ok) of each load so the handler can drive
 // TWO complementary metrics from one observation point:
@@ -76,11 +77,13 @@ type ReadFunc func() (data []byte, exists bool, err error)
 //     for dashboards/trend (Gemini #1056 disposition 3a).
 //   - a per-component STATE gauge (last-reload-successful) — answers "is this
 //     manager CURRENTLY serving stale config", which the counter structurally
-//     cannot: a single-shot Reload failure (groups/views never retry) leaves
-//     the counter at 1, below any rate threshold, yet the config IS stale.
+//     cannot: a failure is counted once per attempt, so how many it adds up
+//     to depends on the retry cadence (the WatchLoop interval), while the
+//     config IS stale from the first one until a load succeeds.
 type ReloadObserver interface {
-	// RecordReload reports the outcome of one reload attempt (a WatchLoop tick
-	// or a post-write Reload) for the named component (the Watcher's label,
+	// RecordReload reports the outcome of one reload attempt (a WatchLoop tick,
+	// a post-write Reload, or a ReloadAsync on its own background goroutine —
+	// so it may be called from several goroutines) for the named component (the Watcher's label,
 	// e.g. "RBAC" / "policy" / "groups"). ok=false means load() returned an
 	// error and kept the last-good snapshot.
 	RecordReload(component string, ok bool)
@@ -117,9 +120,9 @@ type Watcher[T any] struct {
 	// unconditionally (even before an observer is installed). SetReloadObserver
 	// replays it so a startup parse failure — which happens while reloadObs is
 	// still nil — is reflected on the gauge the moment the observer is wired,
-	// instead of the gauge sitting at its assumed-current default forever for a
-	// no-WatchLoop manager that may never reload again. Defaults true (open mode
-	// / pre-load are healthy).
+	// instead of the gauge sitting at its assumed-current default until the
+	// next load (a WatchLoop tick, or forever for a watcher nobody runs a
+	// WatchLoop for). Defaults true (open mode / pre-load are healthy).
 	//
 	// Concurrency: both the WRITE (loadLocked's defer) and the READ
 	// (SetReloadObserver's replay) hold loadMu, so lastOK is fully serialised with
@@ -134,6 +137,11 @@ type Watcher[T any] struct {
 	// read-only; the goroutine-start / write-before-serve provides the
 	// happens-before edge so no atomic is needed (matches SetScopeAuditor).
 	reloadObs ReloadObserver
+
+	// asyncPending is set while a ReloadAsync goroutine is WAITING for loadMu
+	// and cleared, under loadMu, just before that goroutine reads. See
+	// ReloadAsync for why it means "waiting", not "running".
+	asyncPending atomic.Bool
 }
 
 // New constructs a Watcher and runs an initial load. The initial
@@ -211,11 +219,12 @@ func (w *Watcher[T]) Get() *T {
 // WatchLoop ticker fires.
 //
 // The outcome is recorded on the reload observer (by load()) as well as
-// returned: every production caller discards the error (`_ = mgr.Reload()` —
-// handler/group.go, handler/view.go, handler/federation/policy.go) and still
-// answers 200 OK, so without the metric a post-write reload failure is just as
-// silent as a WatchLoop tick failure and leaves the manager serving the stale
-// snapshot.
+// returned: its production caller discards the error (`_ = mgr.Reload()` in
+// handler/state.go's reloadState) and the handler answers anyway — a 2xx, or
+// the error of a write whose outcome is unknown (ReloadAsync) — so without the
+// metric a post-write reload failure is just as silent as a WatchLoop tick
+// failure and leaves the manager serving the stale snapshot until a later
+// load succeeds.
 func (w *Watcher[T]) Reload() error {
 	w.loadMu.Lock()
 	defer w.loadMu.Unlock()
@@ -225,6 +234,38 @@ func (w *Watcher[T]) Reload() error {
 	// under the lock (a cheap atomic update in config_reload_metrics.go, no
 	// lock-ordering risk), so Reload's post-write failures are observed too.
 	return w.loadLocked()
+}
+
+// ReloadAsync is Reload in the background, coalesced: it returns at once, and
+// at most one background reload WAITS for loadMu at a time — a call while one
+// is already waiting is dropped. tenant-api calls it after a write whose
+// outcome is unknown (#1535), so during an API-server outage a stream of
+// failed writes queues one reload, not one per write, each of which would
+// hold loadMu for a read of up to the store's call timeout.
+//
+// The flag means "waiting", not "running", and is cleared under loadMu right
+// before the read. A dropped call is therefore always covered by a read that
+// starts after it: the waiting goroutine has not read yet. With "running"
+// semantics a call arriving while a reload is mid-read would be dropped
+// although that read may predate the write the call is about, and the
+// snapshot would miss the write until the next WatchLoop tick. So in the worst
+// case two background reloads exist per watcher: one reading, one waiting.
+//
+// A panic in the read or parse is turned into a failed reload by loadLocked,
+// as on every other path, so the goroutine never takes the process down.
+func (w *Watcher[T]) ReloadAsync() {
+	if !w.asyncPending.CompareAndSwap(false, true) {
+		return
+	}
+	go w.reloadAsync()
+}
+
+func (w *Watcher[T]) reloadAsync() {
+	w.loadMu.Lock()
+	defer w.loadMu.Unlock()
+	w.asyncPending.Store(false)
+	w.lastHash = ""
+	_ = w.loadLocked()
 }
 
 // SetReloadObserver installs the optional reload-outcome metric sink. In
@@ -241,8 +282,8 @@ func (w *Watcher[T]) Reload() error {
 // On install it REPLAYS the initial-load outcome (w.lastOK): the initial load in
 // New() ran while reloadObs was nil, so without this replay a file that was
 // already broken at startup would leave the gauge at its assumed-current default
-// until the next reload — which, for a no-WatchLoop manager (groups/views) that
-// gets no write, may never come. Healthy and open-mode managers replay ok=true
+// until the next load — a WatchLoop tick later, or never for a watcher nobody
+// runs a WatchLoop for (tests, tools). Healthy and open-mode managers replay ok=true
 // (gauge stays 1), so there is no false positive. The replay goes through
 // RecordReload, so a replayed startup FAILURE also increments the failure counter
 // once — a real load failure counted once; it stays below the
@@ -317,15 +358,26 @@ func (w *Watcher[T]) load() error {
 // The outcome (err == nil) is captured at EVERY exit via a named-return + defer,
 // so success paths (dedup no-op, missing-file, parse OK) and failure paths are all
 // covered from ONE point (this is the single funnel every caller reaches: New→load,
-// WatchLoop→load, Reload→loadLocked), keeping the failure counter and the
+// WatchLoop→load, Reload→loadLocked, ReloadAsync→loadLocked), keeping the failure counter and the
 // last-reload-successful gauge consistent. The defer ALWAYS records w.lastOK — held
 // under loadMu, so its write is serialised with lastHash — and forwards to the
 // observer when one is present. During New()'s initial load reloadObs is nil (it is
 // installed post-construction), so that load emits no live metric — but its outcome
-// is preserved in lastOK and REPLAYED by SetReloadObserver (matters for
-// groups/views: no WatchLoop, may never reload again).
+// is preserved in lastOK and REPLAYED by SetReloadObserver (it matters until the
+// first WatchLoop tick, and always for a watcher run without one).
+//
+// A panic in the read or the parse is recovered here and returned as the error
+// — before the outcome is recorded, so it is recorded once, as a failure, and
+// the last-good snapshot stays. This covers every path: a WatchLoop tick and a
+// ReloadAsync goroutine have no HTTP recovery above them to stop a panic from
+// taking the process down, and a request-path Reload would otherwise answer
+// 500 for a write that succeeded.
 func (w *Watcher[T]) loadLocked() (err error) {
 	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("load %s: panic: %v", w.path, r)
+			slog.Error("config reload panicked", "component", w.label, "path", w.path, "panic", r)
+		}
 		w.lastOK = err == nil
 		if w.reloadObs != nil {
 			w.reloadObs.RecordReload(w.label, err == nil)

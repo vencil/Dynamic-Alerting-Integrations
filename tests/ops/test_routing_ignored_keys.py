@@ -72,11 +72,13 @@ def test_non_string_keys_are_passed_over():
 
 
 def test_loader_key_text_is_named(tmp_path):
-    """`1:` / `on:` are keys the generator does not read; `~:` is dropped."""
+    """`1:` / `on:` are keys the generator does not read (their source text,
+    as parse-tree writes every key). A `~:` key would be parse-tree's
+    `null_key`: the whole file unreadable (tests/ops/test_grar_match_null_key.py)."""
     import _grar_parse as gp
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 70\n", encoding="utf-8")
     (tmp_path / "tx.yaml").write_text(
-        "tenants:\n  tx:\n    cpu: '80'\n    _routing:\n      on: x\n      1: y\n      ~: z\n"
+        "tenants:\n  tx:\n    cpu: '80'\n    _routing:\n      on: x\n      1: y\n"
         "      receiver: {type: webhook, url: 'https://t.example/g'}\n", encoding="utf-8")
     tree = gp.load_tenant_tree(str(tmp_path))
     got = sorted(w.field for w in tree.schema_warnings if isinstance(w, IgnoredKeyWarning))

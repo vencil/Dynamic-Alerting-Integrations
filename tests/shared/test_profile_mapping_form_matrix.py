@@ -7,11 +7,8 @@ Go 的讀法（pkg/config `withProfileText` ← `ScheduledValue.UnmarshalYAML`�
   `!!binary` 是解碼後的位元組；其餘鍵不選 profile。
 - 沒寫 `default:`、但經 merge key 帶進來（`{<<: {default: x}}`）：ScheduledValue 看到 `<<`，
   走任意 mapping 的分支，以 merged mapping 的 yaml.v3 `Marshal` 文字（`default: x\\n`）當
-  profile 名稱。**describe 刻意不鏡像**（減法裁決：不移植 yaml.v3 Marshal）：`_profile`
-  留成 generic mapping、不選 profile，並在 stderr 印 WARNING 點名檔案與租戶。fixture 不定義
-  以 Marshal 文字命名的 profile，所以兩邊的「值」相同；`_profile` 允許不同，describe 自算的
-  hash（`--what-if` 的兩個 merged_hash）也可能不同；`--show-sources` 印的 merged_hash 自 #1549
-  起讀自 da-guard——見 `MERGE_KEY_SHAPES` 那組已知分歧列。
+  profile 名稱。describe 以前刻意不鏡像（留成 generic mapping 並印 WARNING）；#2906 起它讀
+  da-guard effective，`MERGE_KEY_SHAPES` 那組原本的已知分歧列改為四樣全部相同。
 - 其他 mapping（完全沒有 `default`）、sequence、null：原樣保留，不選 profile。
 
 每格在租戶檔與根平台檔 `tenants:` 兩個位置各量一次，比對三樣東西：effective_config 的
@@ -19,9 +16,8 @@ Go 的讀法（pkg/config `withProfileText` ← `ScheduledValue.UnmarshalYAML`�
 describe 對 mapping 一律不綁 profile、`_profile` 原樣留成 dict，除了「沒有 default」與
 對照組之外每格都分歧。
 
-`{default: [..]}` / `{default: {..}}` 也是刻意**不**鏡像的一格：yaml.v3 無法把它解成字串，
-exporter 拒收整份檔（rc 3）；describe 不鏡像整檔拒收（`_read_profiles` 的先例），本檔把
-這個已知分歧釘住，免得哪天被當成「一致」。
+`{default: [..]}` / `{default: {..}}`：yaml.v3 無法把它解成字串，exporter 拒收整份檔
+（rc 3）；這原也是已知分歧，#2906 起 describe 一樣不描述該檔的租戶。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
@@ -37,7 +33,6 @@ import pytest
 
 import _lib_tenant_values as tv
 import config_diff
-from _platform_fs import symlink_or_skip
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -46,10 +41,7 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 # One profile, `010`. No profile is named by a yaml.v3 Marshal text
-# (`default: "010"`): the merge-key rows are a known divergence on `_profile`
-# and on the hash describe computes itself (`--what-if`); the merged_hash
-# `--show-sources` prints is read from da-guard since #1549. Their served
-# value must still agree.
+# (`default: "010"`), so the merge-key rows bind nothing on either side.
 _PROFILES = 'profiles:\n  "010":\n    mysql_connections: 10\n'
 
 # (name, `_profile:` as written, the value Go serves for mysql_connections)
@@ -75,9 +67,9 @@ SHAPES = [
     ("null-CONTROL", "~", 80),
 ]
 WHERE = ("tenant-file", "platform-tenants")
-# Known divergence (#2515 減法): `default` only through a merge key. Go elects
-# the merged mapping's yaml.v3 Marshal text (an unknown profile here); describe
-# keeps the generic mapping and elects nothing, and says so on stderr.
+# `default` only through a merge key (#2515): Go elects the merged mapping's
+# yaml.v3 Marshal text (an unknown profile here). A known divergence until
+# #2906; describe now shows Go's reading.
 MERGE_KEY_SHAPES = [
     ("merge-key", "{<<: {default: '010'}}"),
     ("merge-key-bare", "{<<: {default: 010}}"),
@@ -179,6 +171,13 @@ def test_config_diff_blast_radius_is_the_tenants_go_binds(tmp_path, name, profil
     p = subprocess.run([sys.executable, config_diff.__file__, "--old-dir", str(old),
                         "--new-dir", str(new), "--at", "2026-10-10T00:00:00Z", "--format", "json"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    if "!!binary" in profile:
+        # ADR-036 step 4 (#2906): the route generator reads parse-tree, which
+        # cannot read a `!!binary` file (tag_not_allowed) — so config_diff's
+        # render of that tree is refused and nothing is compared (rc 2).
+        assert p.returncode == 2, (name, where, p.returncode, p.stderr[-1000:])
+        assert "da-guard parse-tree" in p.stderr, (name, where, p.stderr[-1000:])
+        return
     doc = json.loads(p.stdout)
     # 必響：010 確實改了（#1516 P3b 起以 parse-tree 讀出的值比較，列在 platform_settings）。
     # 只斷言「包含」：`!!binary` 寫在 `_defaults.yaml` 的那格，parse-tree 讀不了該檔，
@@ -208,37 +207,29 @@ def test_the_comparison_can_ring(tmp_path):
 
 
 @pytest.mark.parametrize("profile", ["{default: ['010']}", "{default: {a: 1}}"])
-def test_a_non_scalar_default_is_a_known_divergence(tmp_path, profile):
-    """exporter 拒收整份檔；describe 不鏡像整檔拒收，`_profile` 留成 mapping、不選 profile。"""
+def test_a_non_scalar_default_is_refused_as_go_refuses_it(tmp_path, profile):
+    """exporter 拒收整份檔（rc 3）。這原是已知分歧（describe 不鏡像整檔拒收）；#2906 起
+    describe 讀 da-guard effective，所以 t1 一樣不描述：rc 2、點名該檔。"""
     conf_d = _tree(tmp_path, profile, "tenant-file")
     with pytest.raises(tv.ParseFailedError):
         tv.load_effective(conf_d)
-    got = _reading(conf_d)
-    assert isinstance(got["_profile"], dict) and got["bound"] == [] and got["value"] == 80, got
+    p = subprocess.run([sys.executable, str(DESCRIBE), "-c", str(conf_d), "t1", "--format", "json"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    assert p.returncode == 2, p.stderr
+    assert "WARNING: skipped t1.yaml — " in p.stderr and "Tenant 't1' not found" in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("where", WHERE)
 @pytest.mark.parametrize("name,profile", MERGE_KEY_SHAPES, ids=[s[0] for s in MERGE_KEY_SHAPES])
-def test_merge_key_only_default_is_a_named_known_divergence(tmp_path, name, profile, where):
-    """已知分歧列：值與 Go 相同（兩邊都沒綁 profile）；`_profile` 允許不同
-    （Go 的 `_profile` 是 Marshal 文字，describe 是 generic mapping，不斷言相等）；stderr 有
-    WARNING，點名檔案與租戶，每個檔、每個租戶只印一次。"""
+def test_merge_key_only_default_is_read_as_go_reads_it(tmp_path, name, profile, where):
+    """原是已知分歧列（describe 留成 generic mapping、印 WARNING）；#2906 起 describe 的值
+    就是 da-guard effective 的，`_profile` 也是 Go 的 Marshal 文字，四樣全部相同、不再警告。"""
     conf_d = _tree(tmp_path, profile, where)
     oracle = _oracle(conf_d)
     assert isinstance(oracle["_profile"], str) and "default: " in oracle["_profile"], oracle
     assert oracle["bound"] == []                         # 前提：Marshal 文字不是任何 profile
-    got = _reading(conf_d)
-    assert got["value"] == oracle["value"] == 80, got
-    assert got["bound"] == [] and isinstance(got["_profile"], dict), got
-    assert "default" in got["_profile"], got
-    # #1549: --show-sources prints da-guard's merged_hash, not one over `_profile` as read here.
-    assert got["merged_hash"] == oracle["merged_hash"], got
-    err = _describe_proc(conf_d, "-s").stderr
-    fname = "t1.yaml" if where == "tenant-file" else "_defaults.yaml"
-    lines = [l for l in err.splitlines() if "only through a merge key" in l]
-    assert len(lines) == 1, err
-    assert lines[0].startswith("WARNING: ") and fname in lines[0] and "tenant 't1'" in lines[0]
-    assert "`_profile` in the effective config shown here differs" in lines[0], lines[0]
+    assert _reading(conf_d) == oracle
+    assert "merge key" not in _describe_proc(conf_d, "-s").stderr
 
 
 def test_written_default_and_plain_mappings_do_not_warn(tmp_path):
@@ -248,31 +239,3 @@ def test_written_default_and_plain_mappings_do_not_warn(tmp_path):
         (tmp_path / str(i)).mkdir()
         err = _describe_proc(_tree(tmp_path / str(i), profile, "tenant-file")).stderr
         assert "merge key" not in err, (profile, err)
-
-
-
-def test_warning_is_printed_once_on_the_what_if_path(tmp_path):
-    """T1：what-if 路徑上 WARNING 每檔恰好 1 行，**同一個檔被讀兩次也一樣**。
-
-    樹內多一個 `_alias.yaml -> _defaults.yaml` symlink，scanner 把同一個檔（解析後路徑相同）
-    讀兩次；去重以解析後路徑為鍵，所以樹內那一側只印 1 行，`--what-if` 副本另印 1 行。
-
-    ⛔ 這格要殺的突變是「拿掉 `_UNMIRRORED_PROFILE_WARNED` 去重」（#2739 留言 B）：突變後樹內
-    那一側變 2 行。舊版只用「樹內檔 + 樹外副本」兩個不同的檔，每檔本來就只讀一次，突變下照樣
-    綠——#2097 F1 之後樹內檔不能再當 `--what-if`，原本的同檔重讀路徑消失，改由 symlink 觸發。"""
-    conf_d = _tree(tmp_path, "{<<: {default: '010'}}", "platform-tenants")
-    carrier = conf_d / "_defaults.yaml"
-    symlink_or_skip("_defaults.yaml", conf_d / "_alias.yaml")
-    copy = tmp_path / "edit" / "_defaults.yaml"
-    copy.parent.mkdir()
-    copy.write_text(carrier.read_text(encoding="utf-8"), encoding="utf-8")
-    p = subprocess.run([sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d),
-                        "--what-if", str(copy), "--replaces", str(carrier), "--format", "json"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-    assert p.returncode == 0, p.stderr
-    lines = [l for l in p.stderr.splitlines() if "only through a merge key" in l]
-    tree_side = [l for l in lines if str(copy) not in l and str(conf_d) in l]
-    assert len(tree_side) == 1, p.stderr
-    assert sum(str(copy) in l for l in lines) == 1, p.stderr
-    assert len(lines) == 2, p.stderr

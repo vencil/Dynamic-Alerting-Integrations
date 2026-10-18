@@ -52,8 +52,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple, Optional, Union
 
-import yaml
-
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
 # legacy Windows cp950/cp936 consoles when printing emoji to stdout).
@@ -64,7 +62,6 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope,
 )
-from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -77,7 +74,6 @@ try:
         YamlFileError,
         detect_cli_lang,
         format_json_report,
-        load_yaml_file,
         parse_duration_seconds,
         safe_label,
     )
@@ -86,24 +82,22 @@ except ImportError:
         YamlFileError,
         detect_cli_lang,
         format_json_report,
-        load_yaml_file,
         parse_duration_seconds,
         safe_label,
     )
-# #2123: policy YAML is read strictly — a key written twice in one mapping is
-# a YAMLError (YamlFileError from the file reader), not PyYAML's last value.
-# #2114: on that same strict read, `exclude_tenants` items are source text
-# (the `*_exporter_keys` variants compose the two loaders in `_lib_io`).
+# ADR-036 step 4 (#2906): every policy file is read by `da-guard parse-tree`
+# (yaml.v3), as the tenants the rules compare with are read by Go — a conf.d
+# file (`_defaults.yaml`'s `_policies`) from the tree's one document, as the
+# route generator this tool asks for `_routing` reads it; a standalone policy
+# file (`--policy`, validate-config's `--policy-dsl`) in parse-tree's file
+# mode, in no tree. A key written twice is a file parse-tree cannot read.
 try:
-    from _lib_io import (
-        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
-        strict_load_exporter_keys, strict_safe_load,
-    )
+    from _lib_io import load_confd_file
 except ImportError:
-    from scripts.tools._lib_io import (  # type: ignore[no-redef]
-        load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
-        strict_load_exporter_keys, strict_safe_load,
-    )
+    from scripts.tools._lib_io import load_confd_file  # type: ignore[no-redef]
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 
 # #2115 0-B: the values a rule reads come from Go (served-values / effective).
 from _lib_tenant_values import (  # noqa: E402
@@ -134,6 +128,12 @@ VALID_SEVERITIES = frozenset({"error", "warning"})
 # #2114: keys whose list items are tenant ids — read as source text, the way
 # `load_tenant_configs` reads the tenant keys they are compared with.
 POLICY_TENANT_LISTS = frozenset({"exclude_tenants"})
+
+#: The parse-tree conversion of a conf.d file holding `_policies`: every
+#: value by its yaml.v3 tag, `exclude_tenants` items as their source text.
+POLICY_READ = _lib_parse_cache.ParseMode(
+    "parse-tree:to_python(text_sequences=('exclude_tenants',))",
+    lambda node: _lib_parse_tree.to_python_text_sequences(node, POLICY_TENANT_LISTS))
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,8 @@ class PolicyResult:
 # ---------------------------------------------------------------------------
 # Policy loading
 # ---------------------------------------------------------------------------
-def load_policies(source: str) -> list[PolicyRule]:
+def load_policies(source: str, config_dir: Optional[str] = None, *,
+                  reader: Any = None) -> list[PolicyRule]:
     """從 YAML 檔案或 _defaults.yaml 載入策略規則。
 
     Args:
@@ -217,8 +218,28 @@ def load_policies(source: str) -> list[PolicyRule]:
     讀法比對，否則 ``exclude_tenants: [010]`` 會被 PyYAML 讀成 ``8``、
     對不上租戶 ``"010"``。
     """
-    return rules_from_policy_data(load_yaml_file_strict_exporter_keys(
-        source, raw_text_sequences=POLICY_TENANT_LISTS), source=str(source))
+    if config_dir is not None:
+        # A conf.d file (ADR-036 step 4): parse-tree's reading of it.
+        return rules_from_policy_data(
+            load_confd_file(config_dir, source, mode=POLICY_READ, reader=reader),
+            source=str(source))
+    return rules_from_policy_data(read_policy_file(source), source=str(source))
+
+
+def read_policy_file(path: str) -> Any:
+    """A standalone policy file (one of no conf.d tree) as yaml.v3 reads it
+    — `da-guard parse-tree`'s file mode (ADR-036 step 4, #2906), with
+    `exclude_tenants` items as their source text (#2114). None for a path
+    that is not a file; an empty file is ``{}``. A file parse-tree cannot
+    read (bad syntax, a key written twice, not UTF-8, a top level that is
+    not a mapping) raises YamlFileError, whose ``cause`` is the
+    `FileUnreadable`; no usable parse-tree raises ParseTreeError."""
+    if not (path and Path(path).is_file()):
+        return None
+    try:
+        return _lib_parse_cache.read_file_alone(path, POLICY_READ)
+    except FileUnreadable as exc:
+        raise YamlFileError(str(path), exc) from exc
 
 
 #: The keys a rule is read for (#2961) — `PolicyRule`'s fields — and those of
@@ -589,6 +610,9 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
         raise ServedValuesError(
             "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
             f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
+    if routing:
+        # Raises ParseTreeError here, not as the generator's exit below.
+        _lib_parse_cache.reader_for(config_dir).require()
     routed = _resolved_routing(config_dir) if routing else {}
 
     views: dict[str, dict[str, Any]] = {}
@@ -1215,6 +1239,12 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
         for line in exc.lines:
             print(safe_label(line), file=sys.stderr)
         reason = "routing_tree_refused"
+    elif isinstance(exc, ParseTreeError):
+        # ADR-036 step 4: no usable `da-guard parse-tree` — nothing of the
+        # conf.d was read.
+        print(f"ERROR: cannot read the conf.d through `da-guard parse-tree`: "
+              f"{safe_label(' '.join(str(exc).split()))}", file=sys.stderr)
+        reason = "da_guard_failed"
     else:
         print_load_error(exc)
         reason = ("yaml_file_unreadable" if isinstance(exc, ParseFailedError)
@@ -1234,7 +1264,14 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """CLI 進入點。"""
+    """CLI 進入點。One parse-tree reading of the conf.d per run (ADR-036
+    step 4): `_defaults.yaml` here and the route generator's read below
+    share it."""
+    with _lib_parse_cache.session():
+        return _main(argv)
+
+
+def _main(argv: Optional[list[str]] = None) -> int:
     try_utf8_stdout()
     lang = detect_cli_lang()
     parser = build_parser(lang)
@@ -1305,11 +1342,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     # this lookup skips; tenants in subdirectories ARE evaluated (their values
     # come from the exporter's own load), so the generic FLAT/SKIPPED warning
     # would contradict the report.
-    defaults_path = str(resolve_defaults_file(
-        Path(args.config_dir), skipped_note=POLICIES_SKIPPED_NOTE))
-    if Path(defaults_path).is_file():
+    # ADR-036 step 4 (#2906): the root carrier is parse-tree's choice
+    # (`defaults_carriers`), and the nested ones it names are parse-tree's.
+    try:
+        pt_tree = _lib_parse_cache.reader_for(args.config_dir).tree()
+        _lib_parse_cache.warn_skipped_nested_carriers(
+            pt_tree, tool="policy_engine", note=POLICIES_SKIPPED_NOTE)
+        defaults_rel = _lib_parse_cache.root_defaults_carrier(pt_tree)
+    except ParseTreeError as exc:
+        return _load_error_exit(exc, args, 0)
+    defaults_path = os.path.join(args.config_dir, defaults_rel or "_defaults.yaml")
+    if defaults_rel is not None:
         try:
-            rules.extend(load_policies(defaults_path))
+            rules.extend(load_policies(defaults_path, args.config_dir))
+        except ParseTreeError as exc:
+            return _load_error_exit(exc, args, 0)
         except YamlFileError as exc:
             return _unreadable_yaml_exit(exc, args, lang)
         except InvalidPolicyRules as exc:
@@ -1329,25 +1376,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         # the not-found path emits.
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
-            with open(args.policy, encoding="utf-8") as f:
-                # #2123 strict; #2114 `exclude_tenants` items as source
-                # text, see `load_policies`. Same pure parser as before.
-                policy_data = strict_load_exporter_keys(
-                    f, raw_text_sequences=POLICY_TENANT_LISTS)
+            # ADR-036 step 4 (#2906): yaml.v3, as the tenants it is compared
+            # with — parse-tree's file mode; #2114 `exclude_tenants` items as
+            # source text, see `load_policies`.
+            policy_data = read_policy_file(args.policy)
+        except ParseTreeError as exc:
+            return _load_error_exit(exc, args, 0)
+        except YamlFileError as e:
+            cause = e.cause
+            if isinstance(cause, FileUnreadable) and cause.kind == "top_level_not_mapping":
+                problem = ("policy_file_invalid",
+                           f"top level of {args.policy!r} is not a mapping "
+                           f"({cause.message}); expected a mapping with a `policies:` list",
+                           f"{args.policy!r} 的頂層不是 mapping（{cause.message}），應為含 "
+                           "`policies:` 清單的 mapping")
+            else:
+                kind = getattr(cause, "kind", type(cause).__name__)
+                message = getattr(cause, "message", str(cause))
+                problem = ("policy_file_invalid",
+                           f"{args.policy!r} is not valid YAML ({kind}): {message}",
+                           f"{args.policy!r} 不是有效的 YAML（{kind}）: {message}")
         except OSError as e:
             problem = ("policy_file_unreadable",
                        f"cannot read {args.policy!r}: {e}",
                        f"無法讀取 {args.policy!r}: {e}")
-        except UnicodeDecodeError as e:
-            # ⛔ NOT an OSError — it is a ValueError, so the handler above
-            # does not see it.
-            problem = ("policy_file_invalid",
-                       f"{args.policy!r} is not valid UTF-8: {e}",
-                       f"{args.policy!r} 不是有效的 UTF-8: {e}")
-        except yaml.YAMLError as e:
-            problem = ("policy_file_invalid",
-                       f"{args.policy!r} is not valid YAML: {e}",
-                       f"{args.policy!r} 不是有效的 YAML: {e}")
         else:
             # An EMPTY file parses to None and stays "no rules" (rc 0 below,
             # the #1649 content axis); any other non-mapping top level is
@@ -1451,7 +1503,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # generator) reads them — #2115 0-B; see the module docstring.
     try:
         inputs = load_policy_inputs(args.config_dir, routing=rules_read_routing(rules))
-    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, RoutingTreeRefused) as exc:
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, RoutingTreeRefused,
+            ParseTreeError) as exc:
         return _load_error_exit(exc, args, len(rules))
     tenant_configs = inputs.views
     if not tenant_configs:

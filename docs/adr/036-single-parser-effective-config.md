@@ -414,7 +414,6 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
   - 只在樹上有只能由產生器判定的內容時才回 4：路由、policy，或只由產生器讀、以及拼錯而只有產生器會報的 `_` 鍵（判法見 [ADR-038](./038-unread-keys-judged-by-readers.md)）。沒有這類內容的樹照常回 0。
   - 同時符合多個 exit code 時，優先順序是 3 > 1 > 4（3 是有檔讀不了，1 是有錯誤等級的 finding；3 優先於 1 與現在相同）。
   - exit 3 的範圍以 [CLI 參考的 guard 一節](../cli-reference.md#guard)為唯一定義：exporter 載入時整份丟掉的檔、合併時解碼失敗的檔（`_defaults.yaml` 鏈或租戶檔），以及讀不到的檔、子目錄或路徑。`parse-tree` 判為讀不了、exporter 卻照讀的檔不以 exit 3 回報，而是列為未判定證據（`generator_unreadable`，exit 4），交給產生器判。步驟 4 之前的產生器（PyYAML）不一定拒收這類檔：固定語料裡就有它照讀的列，例如檔案中段的 BOM、`!!binary` 這類型別標記；但有些它會整份拒收，例如因重複鍵。步驟 4 起產生器改讀 `parse-tree` 的 JSON，這類檔一律由產生器拒收。
-  - **步驟 4 之前的已知窗口**：產生器在步驟 4 之前仍用 PyYAML 讀檔。今天只有 PyYAML 拒收的寫法，放在沒有路由鍵的租戶檔裡時（以固定語料 `tests/shared/parse_tree_corpus.json` 裡分類為 `pyyaml_only`、檔名不以 `_` 開頭的那些列為準，例如同一個錨點名稱定義兩次、以 TAB 分隔、不存在的日期 `2001-13-45`、block 純量標頭後緊接 `#` 的 `|#`），yaml.v3 讀得了，`parse-tree` 照常讀出，da-guard 回 0；產生器卻整份拒收這個檔。所以步驟 4 之前，CI 不能只跑 da-guard，必須搭配 `da-tools generate-routes --validate --strict`（下面的遷移方式）。步驟 4 讓產生器改讀 `parse-tree` 的 JSON 後，產生器與 da-guard 讀到同樣的內容，這個窗口就消失。
   - 步驟 4 完成時，重新評估 exit 4 是否仍有存在必要：屆時 da-guard 回 4 的條件仍是在預測產生器會不會判；如果真實的樹幾乎都回 4，這個條件就沒有資訊量。
   - 不另設旗標讓 CI 宣告「路由已由產生器判過」：`da-tools init` 產生的客戶 CI 範本本來就跑 `generate-routes --validate --strict`，不會單獨跑 da-guard。
   - 遷移方式：在 CI 原本跑 da-guard 的地方，加一步 `da-tools generate-routes --validate --strict`。
@@ -565,7 +564,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 |---|---|
 | Python 呼叫 Go binary、讀 JSON 的現有機制 | `scripts/tools/_lib_tenant_values.py`（`served-values`／`effective`） |
 | Python 端的 YAML 讀取與檔案選擇函式庫（改讀 `parse-tree`） | `scripts/tools/_lib_io.py`、`_lib_confd.py`、`_lib_yaml_keys.py` |
-| Python 端模仿 yaml.v3 的 loader | `_lib_yaml_keys.ExporterKeyLoader`、`_lib_io` 的 `StrictExporterKeyLoader` 系列、`describe_tenant` 的 `_GoKeyLoader` |
+| Python 端模仿 yaml.v3 的 loader | `_lib_yaml_keys.ExporterKeyLoader`、`_lib_io` 的 `StrictExporterKeyLoader` 系列、`describe_tenant` 的 `_GoKeyLoader`（步驟 4 已刪除：describe-tenant 改讀 `da-guard effective`） |
 | 寫 conf.d 的工具（PyYAML 產生文字；保留） | `_lib_io` 的 `StrictRewriteLoader`、`strict_load_for_rewrite`／`load_yaml_file_for_rewrite` 與 `_lib_yaml_keys.dump_for_rewrite` 的呼叫端（例如 `patch_config`、`deprecate_rule`、`da_assembler`）；以 `yaml.safe_dump` 產生新檔的 `scaffold_tenant` 等 |
 | 產生器另外讀的 policy 檔名 | `_grar_parse.py` 的 `_POLICY_FILENAMES`；exporter 不讀巢狀 `_` 檔的說明在 `flat_build.go` |
 | portal 只做預覽的解析 | js-yaml 經 `tools/portal/src/interactive/tools/_common/validation/yaml-parser.js`；手寫的逐行解析 `tools/portal/src/interactive/tools/config-lint/lint.js` |

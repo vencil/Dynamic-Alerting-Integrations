@@ -94,7 +94,7 @@ func TestTreeUnreadable_DanglingSymlinkElsewhereRefusesEveryPath(t *testing.T) {
 			gitRun(t, dir, "add", "-A")
 			gitRun(t, dir, "commit", "-m", "dangling link")
 			head := gitRevParse(t, dir, "HEAD")
-			err := treeVerdictVia(t, mode, NewWriter(dir, dir), "dang-t")
+			err := treeVerdictVia(t, mode, newTestWriter(dir, dir), "dang-t")
 			assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: "gone.yaml", Reason: cfg.UnreadableStatError}}, false)
 			if got := gitRevParse(t, dir, "HEAD"); got != head {
 				t.Errorf("HEAD moved %s → %s", head, got)
@@ -125,7 +125,7 @@ func TestTreeUnreadable_DanglingTargetIsTheRepairPath(t *testing.T) {
 				gitRun(t, dir, "add", "-A")
 				gitRun(t, dir, "commit", "-m", "dangling tenant file")
 			}
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			var branch string
 			ctx := context.Background()
 			body := tenantBody("fix-t")
@@ -192,7 +192,7 @@ func TestTreeUnreadable_BatchExcludesEveryTarget(t *testing.T) {
 	if err := os.Symlink("missing-target.yaml", filepath.Join(dir, "bt-b.yaml")); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	ops := []BatchOp{
 		{TenantID: "bt-a", Merge: func([]byte) (string, error) { return "tenants:\n  bt-a:\n    _silent_mode: \"critical\"\n", nil }},
 		{TenantID: "bt-b", Merge: func([]byte) (string, error) { return tenantBody("bt-b"), nil }},
@@ -224,7 +224,7 @@ func TestTreeUnreadable_PreviewMatchesWrite(t *testing.T) {
 			if err := os.Symlink("missing-target.yaml", filepath.Join(dir, c.link)); err != nil {
 				t.Skipf("symlink: %v", err)
 			}
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			verdicts := map[string]error{}
 			for _, mode := range []string{"DryRunValidate", "Diff", "Write"} { // previews first: Write changes the tree
 				verdicts[mode] = treeVerdictVia(t, mode, w, c.tenant)
@@ -279,7 +279,7 @@ func TestTreeUnreadable_UnresolvableLinksElsewhereAreGitFixable(t *testing.T) {
 				}
 				gitRun(t, dir, "add", "-A")
 				gitRun(t, dir, "commit", "-m", "unresolvable link")
-				err := treeVerdictVia(t, mode, NewWriter(dir, dir), "un-t")
+				err := treeVerdictVia(t, mode, newTestWriter(dir, dir), "un-t")
 				assertTreeUnreadable(t, mode, err, []cfg.UnreadableFile{{RelKey: c.link, Reason: cfg.UnreadableStatError}}, false)
 			})
 		}
@@ -302,7 +302,7 @@ func TestTreeUnreadable_SelfLoopTargetIsTheRepairPath(t *testing.T) {
 				gitRun(t, dir, "add", "-A")
 				gitRun(t, dir, "commit", "-m", "self-loop tenant file")
 			}
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			body := tenantBody("loop-t")
 			var branch string
 			switch mode {

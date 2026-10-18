@@ -91,7 +91,7 @@ lang: en
 | `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |
 | `coverage_delta.py` | Per-file + total coverage delta between two runs. |
 | `coverage_gap_analysis.py` | Per-file coverage ranking report |
-| `describe_tenant.py` | Describe effective tenant config — resolve _defaults.yaml inheritance chain. |
+| `describe_tenant.py` | Describe effective tenant config — as the exporter's resolver answers it. |
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |
@@ -251,7 +251,7 @@ lang: en
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_key_verdict.py`: The one verdict on "does any reader read this key" (ADR-038 decisions 4–7).
-- `scripts/tools/_lib_parse_cache.py`: conf.d parse entry point with a content-addressed cache.
+- `scripts/tools/_lib_parse_cache.py`: the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`: read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_prometheus.py`: HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`: Shared library for Dynamic Alerting Python tools.

@@ -19,8 +19,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
@@ -28,12 +26,11 @@ from _lib_python import is_disabled as _is_disabled  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-# #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
-from _lib_io import strict_load_exporter_keys  # noqa: E402
-from _lib_yaml_keys import ExporterKeyLoader  # noqa: E402  (#2504)
-# #2901: every conf.d parse on this path goes through `read_confd_yaml`, so the
-# generator container can answer it from a content-addressed cache.
-from _lib_parse_cache import ParseMode, read_confd_yaml  # noqa: E402
+# ADR-036 step 4 (#2906): every conf.d read on this path is `da-guard
+# parse-tree`'s, through one reader per run (and, in the generator container,
+# its content-addressed cache).
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     duplicate_declarations,
@@ -41,8 +38,6 @@ from _lib_confd import (  # noqa: E402
     is_reserved_name,
     list_config_tree,
     overlay_platform_tenants,
-    readable_carriers,
-    select_defaults_carrier,
     tenant_declarations,
     unusable_config_paths,
     unusable_reason,
@@ -51,7 +46,6 @@ from _lib_confd import (  # noqa: E402
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
     Finding,
-    _substitute_tenant,
     chain_levels,
     domain_policy_levels,
     merge_routing_with_defaults,
@@ -98,12 +92,46 @@ from _grar_routes import (  # noqa: E402
 # strict mode must surface that instead of staying green.
 _POLICY_FILENAMES = ("_domain_policy.yaml", "_domain_policy.yml")
 
-# #2901 (ADR-036 §3): the routing reader's read of a conf.d file — tenant ids
-# as text (#2114), a domain policy's `tenants:` list as text, a repeated key
-# an error (#2123). One mode for every file this reader opens.
-ROUTING_READ = ParseMode(
-    "_lib_io.strict_load_exporter_keys(raw_text_sequences=('tenants',))",
-    lambda f: strict_load_exporter_keys(f, raw_text_sequences=("tenants",)))
+# ADR-036 step 4 (#2906): the routing reader's conversion of a conf.d file's
+# parse-tree content — tenant ids are keys, so source text; a domain policy's
+# `tenants:` list as source text too, so `[010]` meets tenant "010". A
+# repeated key, a null key, several documents are parse-tree's `unreadable`.
+# One mode for every file this reader opens.
+ROUTING_READ = _lib_parse_cache.TENANT_LISTS_AS_TEXT
+
+# What to do about a file parse-tree cannot read, by its kind
+# (internal/parsetree Kinds); any other kind gets the generic remedy.
+_UNREADABLE_REMEDY = {
+    "syntax_error": "repair the YAML syntax in {f}",
+    "invalid_utf8": "re-save {f} as UTF-8",
+    "duplicate_key": "write each key once per mapping in {f}",
+    "multiple_documents": "keep one YAML document in {f} (no `---` after the first)",
+    "null_key": "give every key in {f} a name (no `~:`, `null:` or empty key)",
+    "top_level_not_mapping": ("{f}'s top level must be a mapping — the keys this reader "
+                              "looks for (tenants, defaults, domain_policies, _routing_*) "
+                              "all live at its top level"),
+}
+
+
+def unreadable_reason(e: FileUnreadable) -> str:
+    """The reason clause of a file parse-tree could not read: its kind (the
+    closed-list code, ADR-036 §2) and parse-tree's message."""
+    return f"could not be read ({e.kind}): {' '.join(e.message.split())}"
+
+
+def unreadable_remedy(e: FileUnreadable, fname: str) -> str:
+    """What the author does about it, by kind."""
+    return _UNREADABLE_REMEDY.get(
+        e.kind, "rewrite {f} so da-guard parse-tree can read it").format(f=fname)
+
+
+def parse_tree_failure_exit(e: ParseTreeError, config_dir: str) -> "None":
+    """No usable `da-guard parse-tree` (missing, failing, a document this
+    tool cannot read): nothing of the tree was read, so exit 2 — the caller
+    error every tool gives a missing or failing da-guard."""
+    print(f"ERROR: {safe_label(config_dir)}: cannot read the conf.d through "
+          f"`da-guard parse-tree` (ADR-036): {' '.join(str(e).split())}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 # #2981 (ADR-036 §3): the conf.d entries the generator service took from
@@ -579,9 +607,9 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
 
 def _unselected_carrier(fname: str, chosen: str, level: str,
                         result: dict) -> None:
-    """#2906: a readable defaults carrier the directory's selection passed
-    over (`select_defaults_carrier`; da-guard parse-tree: `not_read`
-    reason `unselected_defaults_carrier`). No plane reads it, so whatever
+    """#2906: a defaults carrier the directory's selection passed over
+    (da-guard parse-tree: `not_read` reason `unselected_defaults_carrier`;
+    *chosen* is its `defaults_carriers` entry for the directory). No plane reads it, so whatever
     it says is not in force: a `WARN … skipping` line, blocking under
     `--validate` like every other line for config that is written and not
     rendered. The file is never opened here — its content cannot change
@@ -930,7 +958,7 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     """Extract per-tenant config from a tenant overrides dict.
 
     Handles: tenant keys, _routing_profile (ADR-007), _severity_dedup,
-    _metadata, _routing (explicit or disabled).
+    _routing (explicit or disabled). `_metadata` is not read (#3043).
     Mutates *result* in place.
     """
     result["all_tenants"].append(tenant)
@@ -965,10 +993,8 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
         mode = "enable"
     result["dedup_configs"][tenant] = mode
 
-    # v1.11.0: Metadata extraction
-    metadata = overrides.get("_metadata")
-    if metadata and isinstance(metadata, dict):
-        result["metadata_configs"][tenant] = _substitute_tenant(metadata, tenant)
+    # #3043: `_metadata` is not read here — nothing the generator renders
+    # uses it (the exporter serves it as tenant_metadata_info).
 
     # Routing: "disable" string → skip routing
     routing = overrides.get("_routing")
@@ -991,190 +1017,18 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
         result.setdefault("routing_refused", {})[tenant] = routing
 
 
-# ── #2504: a null key in a routes `match` ──────────────────────────────────
-#
-# The shared loader drops a null key (`~:`, `null:`, an empty `? ` key) in
-# EVERY mapping, as the exporter does. In a routes `match` that is fail-open:
-# `{~: x, severity: critical}` became a route on severity alone, wider than
-# written, while yaml.v3 keeps the key. So, after the normal read, the null key is put back —
-# as `None`, which `route_entry_matchers` refuses as "not a valid label
-# name", exactly like `a-b` — but ONLY at the paths the generator reads a
-# route `match` from (ROUTE_MATCH_SOURCES), never by key text: a tenant
-# named `match`, or `_metadata.match`, is not a route match.
-#
-# ⛔ The loader is NOT changed, and no object of the normal read is mutated.
-# A `match` can be an alias of a mapping used elsewhere (`match: *t`, with
-# `&t` a tenant body); the route gets a NEW dict (the original's items plus
-# the null key) along a copied path, so every other reference still sees the
-# mapping with its null key dropped.
-#
-# Where the generator reads a route `match` (each in any file it reads; the
-# later stages decide which files count):
-#   * tenants.<id>._routing.routes[i].match — tenant files and root platform
-#     `tenants:` overlays;
-#   * routing_profiles.<name>.routes[i].match — `_routing_profiles.yaml`.
-# `_routing_defaults.routes` is dropped before any merge (blocking WARN), and
-# `_routing_enforced.match` is a list of matcher strings, not a mapping.
-ROUTE_MATCH_SOURCES = (("tenants", "_routing"), ("routing_profiles", None))
-
-_NULL_TAG = "tag:yaml.org,2002:null"
-_STR_TAG = "tag:yaml.org,2002:str"
-# A NUL cannot occur in a YAML stream, so no key written in a file is this.
-_NULL_KEY_TEXT = "\x00null-key"
-
-
-class _NullKeyAsTextLoader(ExporterKeyLoader):
-    """The routing reader's loader, but every null key reads as
-    ``_NULL_KEY_TEXT: ""`` instead of being dropped. Used only to find null
-    keys by structural path; its result is never routed on. Merge keys
-    expand as in the normal read, so a null key merged into a ``match`` is
-    seen.
-
-    ⛔ The null key's VALUE is replaced by an empty ``!!str`` scalar, never
-    constructed (#2504 review F3). The normal read skips a null key without
-    building its value, so a value SafeConstructor cannot build
-    (``2024-13-45``, ``=``, ``!!int x``, ``!vault x``, a
-    ``!!python/object``) is harmless there; built here, it failed the whole
-    probe — and with it the match check for the whole file, so the route
-    was widened again. With the value replaced, this read constructs exactly
-    the nodes the normal read constructs (an aliased value node is still
-    built where the normal read builds it), so it can fail only where that
-    read fails, plus I/O on the second ``open``.
-    """
-
-    raw_text_sequences = frozenset({"tenants"})
-
-    def construct_document(self, node):  # noqa: D102 — see class
-        stack, seen = [node], set()
-        while stack:
-            n = stack.pop()
-            if n is None or id(n) in seen:
-                continue
-            seen.add(id(n))
-            if isinstance(n, yaml.MappingNode):
-                pairs = []
-                for k, v in n.value:
-                    if isinstance(k, yaml.ScalarNode) and k.tag == _NULL_TAG:
-                        k = yaml.ScalarNode(_STR_TAG, _NULL_KEY_TEXT,
-                                            k.start_mark, k.end_mark)
-                        v = yaml.ScalarNode(_STR_TAG, "", v.start_mark,
-                                            v.end_mark)
-                    else:
-                        stack.extend((k, v))
-                    pairs.append((k, v))
-                n.value = pairs
-            elif isinstance(n, yaml.SequenceNode):
-                stack.extend(n.value)
-        return super().construct_document(node)
-
-
-def _null_key_probe_parse(stream) -> object:
-    loader = _NullKeyAsTextLoader(stream)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
-
-
-# #2901: the probe's own parse mode — a different result from ROUTING_READ
-# for the same bytes, so a different cache key.
-NULL_KEY_PROBE = ParseMode("_grar_parse._NullKeyAsTextLoader", _null_key_probe_parse)
-
-
-def _probe_null_keys(path: str) -> object:
-    """*path* read by ``_NullKeyAsTextLoader``; None when that read fails.
-
-    Called only after the strict read of the same file succeeded; per the
-    loader's docstring the probe then fails only on I/O (the file vanished
-    or changed between the two reads), and ``keep_route_match_null_keys``
-    keeps the normal read as it is.
-    """
-    try:
-        return read_confd_yaml(path, NULL_KEY_PROBE)
-    except Exception:  # noqa: BLE001 — see docstring
-        return None
-
-
-def _sub(obj: object, key: str | None) -> object:
-    if key is None:
-        return obj
-    return obj.get(key) if isinstance(obj, dict) else None
-
-
-def _route_lists(data: dict):
-    """``(top, name, routes)`` for every routes list at ROUTE_MATCH_SOURCES."""
-    for top, inner in ROUTE_MATCH_SOURCES:
-        block = data.get(top)
-        if not isinstance(block, dict):
-            continue
-        for name, body in block.items():
-            routes = _sub(_sub(body, inner), "routes")
-            if isinstance(routes, list):
-                yield top, name, routes
-
-
-def keep_route_match_null_keys(data: object, path: str) -> object:
-    """*data* (the normal read of *path*) with each route ``match`` that has
-    a null key in the file replaced by a copy carrying ``None: ""``. The
-    value is the probe's placeholder, never the file's (it is not built, see
-    ``_NullKeyAsTextLoader``). No verdict reads it — ``route_entry_matchers``
-    refuses the label first, and ``routing_values_not_string`` skips a key
-    that is no label name — but ``explain_route`` displays it as ``''``.
-
-    Returns *data* itself when nothing changes; otherwise a new top-level
-    mapping whose changed containers, along the route's path only, are
-    shallow copies — nothing of *data* is mutated (see the section comment).
-    """
-    if not isinstance(data, dict) or not any(
-            isinstance(e, dict) and isinstance(e.get("match"), dict)
-            for _t, _n, routes in _route_lists(data) for e in routes):
-        return data  # no route match to judge: skip the second read
-    raw = _probe_null_keys(path)
-    if not isinstance(raw, dict):
-        return data
-    out = data
-    for top, inner in ROUTE_MATCH_SOURCES:
-        block, raw_block = data.get(top), raw.get(top)
-        if not isinstance(block, dict) or not isinstance(raw_block, dict):
-            continue
-        new_block = None
-        for name, body in block.items():
-            routing = _sub(body, inner)
-            routes = _sub(routing, "routes")
-            raw_routes = _sub(_sub(raw_block.get(name), inner), "routes")
-            if not (isinstance(routes, list) and isinstance(raw_routes, list)
-                    and len(routes) == len(raw_routes)):
-                continue
-            new_routes = None
-            for idx, (entry, raw_entry) in enumerate(zip(routes, raw_routes)):
-                match, raw_match = _sub(entry, "match"), _sub(raw_entry, "match")
-                if not (isinstance(match, dict) and isinstance(raw_match, dict)
-                        and _NULL_KEY_TEXT in raw_match):
-                    continue
-                if new_routes is None:
-                    new_routes = list(routes)
-                new_routes[idx] = {**entry, "match": {
-                    **match, None: raw_match[_NULL_KEY_TEXT]}}
-            if new_routes is None:
-                continue
-            new_routing = {**routing, "routes": new_routes}
-            if new_block is None:
-                new_block = dict(block)
-            new_block[name] = (new_routing if inner is None
-                               else {**body, inner: new_routing})
-        if new_block is not None:
-            if out is data:
-                out = dict(data)
-            out[top] = new_block
-    return out
-
-
-def _parse_config_files(config_dir: str) -> dict:
+def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader | None" = None
+                        ) -> dict:
     """Parse all YAML files in config_dir and extract raw data.
+
+    ADR-036 step 4 (#2906): each file's content is `da-guard parse-tree`'s
+    (*reader*; the session's reader of *config_dir* when None). A file
+    parse-tree cannot read is booked as skipped with its kind; no usable
+    da-guard exits 2 (``parse_tree_failure_exit``).
 
     Returns a dict with keys:
         all_tenants, defaults_keys, routing_defaults, enforced_routing,
-        explicit_routing, disabled_tenants, dedup_configs, metadata_configs,
+        explicit_routing, disabled_tenants, dedup_configs,
         tenant_keys, routing_profiles, domain_policies, tenant_profile_refs.
 
     Delegates to:
@@ -1190,7 +1044,6 @@ def _parse_config_files(config_dir: str) -> dict:
         "explicit_routing": {},
         "disabled_tenants": set(),
         "dedup_configs": {},
-        "metadata_configs": {},
         "tenant_keys": {},
         "routing_profiles": {},      # v2.1.0 ADR-007: named routing configs
         "domain_policies": {},       # v2.1.0 ADR-007: domain compliance constraints
@@ -1284,6 +1137,13 @@ def _parse_config_files(config_dir: str) -> dict:
         # message about a flat tree reads exactly as it did before #2326.
         return p.relative_to(root_path).as_posix()
 
+    if reader is None:
+        reader = _lib_parse_cache.reader_for(config_dir)
+    try:
+        reader.require()
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
+
     for bad in unusable:
         rel = _rel(bad)
         _drop_unreadable_file(
@@ -1301,152 +1161,84 @@ def _parse_config_files(config_dir: str) -> dict:
     # #1469: ONE predicate for "what is a config file", shared with
     # `check_yaml_syntax` — the walker's own list.
     # #1674: ONE carrier per directory, chosen by the rule every exporter
-    # plane reads (`select_defaults_carrier`, over the carriers that can be
-    # read). Any other carrier spelling is ignored WHOLE, as the exporter
-    # ignores it — never opened — and named once, as its own finding (#2906).
+    # plane reads. Any other carrier spelling is ignored WHOLE, as the
+    # exporter ignores it — never opened — and named once, as its own
+    # finding (#2906). ⛔ Which file that is, is parse-tree's verdict
+    # (`ConfdReader.not_read` / `carrier`), never `select_defaults_carrier`:
+    # a second implementation of the rule that read a file parse-tree lists
+    # in `not_read` would die rc 2 on `NotSelected` (#2906 review).
     # #1982: every tenant entry of every file, in read order, applied AFTER
     # the loop — see `_apply_tenant_entries`.
     tenant_entries: list[tuple[str, object, dict]] = []
     listed = listing.files
-    carriers_by_dir: dict[Path, list[Path]] = {}
-    for p in listed:
-        if is_defaults_name(p.name):
-            carriers_by_dir.setdefault(p.parent, []).append(p)
-    selected: dict[Path, "Path | None"] = {}
-    readable_set: set[Path] = set()
-    for d, carriers in carriers_by_dir.items():
-        readable, _unreadable = readable_carriers(carriers)
-        readable_set.update(readable)
-        chosen = select_defaults_carrier(readable)
-        selected[d] = chosen
-        # #2906: each readable carrier not selected is a finding — this
-        # replaces `warn_multi_carrier`'s stderr line on this path, so the
-        # one fact is printed once, by the stream.
-        for p in sorted((p for p in readable if p != chosen), key=_rel):
-            _unselected_carrier(_rel(p), _rel(chosen),
-                                PurePosixPath(_rel(p)).parent.as_posix(), result)
+    try:
+        _read, not_read = reader.split_not_read(listed)
+        skipped_by_dir: dict[Path, list[Path]] = {}
+        for p in listed:  # directories in walk order, as the findings were
+            skipped_by_dir.setdefault(p.parent, [])
+        for p, _why in not_read:
+            skipped_by_dir[p.parent].append(p)
+        # #2906: each carrier not selected is a finding — this replaces
+        # `warn_multi_carrier`'s stderr line on this path, so the one fact
+        # is printed once, by the stream.
+        for d, skipped_here in skipped_by_dir.items():
+            if not skipped_here:
+                continue
+            chosen = reader.carrier(d)
+            for p in sorted(skipped_here, key=_rel):
+                _unselected_carrier(_rel(p), _rel(chosen) if chosen is not None
+                                    else "another carrier",
+                                    PurePosixPath(_rel(p)).parent.as_posix(), result)
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
+    skipped_set = {p for p, _why in not_read}
     for path_p in listed:
         fname = _rel(path_p)
         level = PurePosixPath(fname).parent.as_posix()
-        path = str(path_p)
-        chosen = selected.get(path_p.parent)
-        if is_defaults_name(path_p.name) and (
-                chosen is None or path_p.name != chosen.name):
-            if path_p in readable_set:
-                # The unselected spelling: named above (#2906, a finding),
-                # never opened.
-                continue
-            # unreadable: fall through, the read below books it as skipped
-        # ⛔ `open()` is INSIDE the try. It was outside it for one round, and
-        # an open-ended `except` around only `safe_load` reads exactly like
-        # one that covers the read — measured: a *directory* named
-        # `beta.yaml` (an interrupted `mkdir`, a bad merge) raised
-        # `PermissionError` from this line, escaped every clause below, and
-        # made `validate-config` exit **2** ("this tool broke, report it")
-        # while its own `yaml_syntax` row said PASS. The scope of a guard is
-        # part of the guard.
-        #
-        # #2114: tenant ids are the keys' source TEXT, as the exporter keys
-        # them — `010:` is "010" (PyYAML's own typing made it 8, and a bool
-        # id from `yes:` crashed `{{tenant}}` substitution). A domain
-        # policy's `tenants:` list is read as text too, so it still meets the
-        # tenant keys. Same pure parser `yaml.safe_load` used, so every
-        # branch below still sees the errors it was written for.
+        if path_p in skipped_set:
+            # The unselected spelling: named above (#2906, a finding), never
+            # opened. A carrier parse-tree cannot read is not here: the read
+            # below books it as skipped.
+            continue
+        # Not in `not_read`: a defaults-named file here is its directory's
+        # selected carrier (or one the read below drops as unreadable).
+        is_carrier = is_defaults_name(path_p.name)
+        # ADR-036 step 4 (#2906): the content is parse-tree's. A file it
+        # cannot read (`unreadable`: a syntax error, a repeated key — the
+        # exporter's yaml.v3 rejects that file —, a null key, several
+        # documents, a top level that is not a mapping, not UTF-8, …) is
+        # dropped WHOLE and booked with its kind. An empty file is {}.
         try:
-            # Strict (#2123): a key written twice in one mapping is a
-            # YAMLError naming the line — the exporter's yaml.v3 rejects
-            # the file, so it must not route on PyYAML's last value.
-            # #2901: `read_confd_yaml` opens the file itself, inside this try.
-            data = read_confd_yaml(path, ROUTING_READ)
-        except yaml.YAMLError as e:
-            _drop_unreadable_file(
-                fname, f"failed to parse: {e}",
-                f"repair the YAML syntax in {fname}", result,
-                warning=f"  WARN: skip unparseable {fname}: {e}")
+            data = reader.read(path_p, ROUTING_READ)
+        except FileUnreadable as e:
+            _drop_unreadable_file(fname, unreadable_reason(e),
+                                  unreadable_remedy(e, fname), result)
             continue
-        except UnicodeDecodeError as e:
-            # An editor that saved this file in the local code page.
-            # #1448 made this a first-class finding in validate-config;
-            # the sibling reader on the generate-routes / explain-route
-            # path used to let it escape as a traceback.
-            _drop_unreadable_file(
-                fname,
-                f"not valid UTF-8 ({e.reason} at byte {e.start})",
-                f"re-save {fname} as UTF-8", result)
-            continue
-        except Exception as e:  # noqa: BLE001
-            # ⛔ Open-ended, and for the same reason `check_yaml_syntax`
-            # is: this loop is reading ONE named file, so whatever comes
-            # back it can say which one. Listing the types is a bet that
-            # keeps losing — the first version of this branch listed the
-            # two above, and a customer file nested ~500 levels deep
-            # (roughly half `sys.getrecursionlimit()`:
-            # 495 flow-style, 493 block-style on this host)
-            # made `yaml.safe_load` raise `RecursionError` (not a
-            # YAMLError), which escaped here and killed
-            # `generate-routes --validate --strict` with a traceback and
-            # zero bytes on stdout: #1448's original symptom, surviving
-            # on the shared path the fix claimed to have closed.
-            _drop_unreadable_file(
-                fname,
-                f"could not be read — {e.__class__.__name__}: "
-                f"{' '.join(str(e).split())}",
-                f"see the error above for what {fname} needs", result)
-            continue
+        except ParseTreeError as e:
+            parse_tree_failure_exit(e, config_dir)
+        except ValueError as e:
+            # A tag or shape `to_python` does not read: check_shape refuses
+            # those first, so this is a da-guard this tool does not match.
+            parse_tree_failure_exit(ParseTreeError(str(e)), config_dir)
 
-        # ⛔ `is None`, not `not data`, and the shape check comes FIRST.
-        # `if not data: continue` sat above the isinstance check for one
-        # round, so every FALSY non-mapping — `[]`, `0`, `false` — skipped
-        # out before anything looked at its shape. Measured: a
-        # `_domain_policy.yaml` whose whole body is `[]` left `--strict` at
-        # exit 0 printing `OK: all configs valid` with zero policies
-        # enforced, while `validate-config` called the same file "top level
-        # must be a mapping" and exited 1. Two readers, two verdicts, one
-        # file. An empty mapping (`{}`) still skips quietly below — that one
-        # really is a document with nothing in it.
-        # #1460: parsed — a mapping or an empty document both count as READ;
-        # the shape check below may still drop it, and books that separately.
+        # #1460: read — a mapping (an empty file is an empty mapping).
         result["files_read"] += 1
-        if data is None:
-            continue
-        # #2504: a null key in a routes `match` is put back as None (by
-        # structural path, on a copy — see keep_route_match_null_keys).
-        data = keep_route_match_null_keys(data, path)
-
-        # #1447: a document that parses cleanly but is not a mapping (a bare
-        # YAML list, a lone scalar) reaches `data.get(...)` below and raises
-        # AttributeError, which took the whole run with it. It is a
-        # wrong-shaped *input*, not a defect here, so it drops out the same
-        # way an unparseable file does — through the same helper, so the two
-        # cannot report differently.
-        if not isinstance(data, dict):
-            result["files_read"] -= 1  # #1460: dropped, so not read after all
-            _drop_unreadable_file(
-                fname,
-                f"top level must be a mapping, got {type(data).__name__}",
-                f"make {fname} a mapping — the keys this reader looks for "
-                f"(tenants, defaults, domain_policies, _routing_*) all live "
-                f"at its top level",
-                result)
-            continue
 
         if not data:
             continue
 
-        # #2904: routing where nothing reads it. `chosen` is this directory's
-        # selected carrier (an unselected spelling never got here).
+        # #2904: routing where nothing reads it. `is_carrier`: this
+        # directory's selected carrier (an unselected spelling never got here).
         _unread_routing(
             data, fname,
-            is_carrier=chosen is not None and path_p.name == chosen.name,
+            is_carrier=is_carrier,
             is_root_platform=level == ROOT_LEVEL and is_reserved_name(path_p.name),
             result=result)
 
         if level == ROOT_LEVEL:
             _parse_platform_config(data, fname, result)
         else:
-            _parse_nested_config(
-                data, fname, level,
-                chosen is not None and path_p.name == chosen.name, result)
+            _parse_nested_config(data, fname, level, is_carrier, result)
 
         if "tenants" not in data:
             continue
@@ -1540,13 +1332,27 @@ def _parse_config_files(config_dir: str) -> dict:
     # #2315: validate-config's `tenant_uniqueness` scan, called — not
     # re-derived — so the two tools agree on every duplicate. It walks the
     # whole tree, as the exporter does, although this reader routes the root.
-    result["duplicate_tenants"] = duplicate_declarations(
-        tenant_declarations(config_dir)[0])
-    _apply_tenant_entries(config_dir, tenant_entries, result)
+    try:
+        result["duplicate_tenants"] = duplicate_declarations(
+            tenant_declarations(config_dir, reader)[0])
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
+    _apply_tenant_entries(config_dir, tenant_entries, result, reader)
     return result
 
 
-def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
+def _declared_ids(config_dir: str, reader: "_lib_parse_cache.ConfdReader | None") -> set:
+    """`declared_tenant_ids` through this run's reader; no usable parse-tree
+    exits 2 (`parse_tree_failure_exit`)."""
+    try:
+        return declared_tenant_ids(config_dir, reader)
+    except ParseTreeError as e:
+        parse_tree_failure_exit(e, config_dir)
+        raise  # unreachable: parse_tree_failure_exit exits
+
+
+def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
+                          reader: "_lib_parse_cache.ConfdReader | None" = None) -> None:
     """Hand each tenant ONE merged block: platform file first, tenant file wins.
 
     ⛔ THIS USED TO RUN PER FILE, AND THE FILENAME DECIDED WHO WON. A root
@@ -1566,7 +1372,7 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
     platform file cannot create a tenant.
     """
     merged, orphans = overlay_platform_tenants(
-        entries, lambda: declared_tenant_ids(config_dir))
+        entries, lambda: _declared_ids(config_dir, reader))
     for fname, tenant in orphans:
         print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(tenant))} "
               f"ignored — no tenant file declares tenant "
@@ -1702,7 +1508,6 @@ class TenantTree:
     dedup_configs: dict[str, str]
     schema_warnings: list[str]
     enforced_routing: dict | None
-    metadata_configs: dict[str, dict]
     files_read: int = 0
     files_skipped: list[tuple[str, str]] = field(default_factory=list)
     tenant_file_errors: list[tuple[str, str]] = field(default_factory=list)
@@ -1735,8 +1540,11 @@ class TenantTree:
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
+        # #3043: the fifth slot was the tenants' `_metadata`, read and used by
+        # nothing; it is no longer read and is always {} — kept so the
+        # 5-tuple's callers keep their arity.
         return (self.routing_configs, self.dedup_configs, self.schema_warnings,
-                self.enforced_routing, self.metadata_configs)
+                self.enforced_routing, {})
 
 
 def load_tenant_configs(
@@ -1768,14 +1576,15 @@ def load_tenant_configs(
       - Layer 3: explicit tenant _routing overrides
 
     Returns:
-        (routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs):
+        (routing_configs, dedup_configs, schema_warnings, enforced_routing, {}):
         - routing_configs: {tenant_name: routing_config_dict} for tenants with _routing
         - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable");
           its keys are the generator's tenant set — what a `{{tenant}}`
           `_routing_enforced` expands over (#2519) — every valid id loaded
         - schema_warnings: list of validation warning strings
         - enforced_routing: dict or None — platform enforced routing config (v1.7.0+)
-        - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0+)
+        - {}: the tenants' `_metadata` until #3043, which nothing used; no
+          longer read, kept so the tuple keeps five fields
 
     Note:
         All tenants appear in dedup_configs even if they have no _routing config.
@@ -1795,15 +1604,17 @@ def load_tenant_tree(
     config_dir: str,
     *,
     strict_policies: bool = False,
+    reader: "_lib_parse_cache.ConfdReader | None" = None,
 ) -> TenantTree:
     """``load_tenant_configs`` with the file accounting attached (#1460).
 
     Same pipeline, same warnings, same exit-2 on an unusable directory; the
     only addition is that a file this reader dropped is returned as data
     (``TenantTree.tenant_file_errors`` / ``files_skipped``) instead of
-    surviving only as a stderr WARN line.
+    surviving only as a stderr WARN line. *reader*: as for
+    ``_parse_config_files`` (the session's reader of *config_dir* when None).
     """
-    parsed = _parse_config_files(config_dir)
+    parsed = _parse_config_files(config_dir, reader)
 
     routing_configs = _merge_tenant_routing(
         parsed, parsed["routing_defaults"])
@@ -1979,7 +1790,7 @@ def load_tenant_tree(
 
     return TenantTree(
         routing_configs, parsed["dedup_configs"], schema_warnings,
-        parsed["enforced_routing"], parsed["metadata_configs"],
+        parsed["enforced_routing"],
         files_read=parsed.get("files_read", 0),
         files_skipped=list(parsed.get("files_skipped", [])),
         tenant_file_errors=list(parsed.get("tenant_file_errors", [])),

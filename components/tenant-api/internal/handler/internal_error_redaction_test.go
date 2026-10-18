@@ -26,6 +26,7 @@ import (
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -250,9 +251,9 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 }
 
 // End to end on the direct write path: a write that fails for a server-side
-// reason (conf.d is not a git repository, so the commit fails) keeps its
-// status — the tenant write fallback is a 400 — but answers msgWriteFailed
-// instead of git's own text.
+// reason (conf.d is not a git repository, so the commit fails) is the server's
+// 500 INTERNAL_ERROR (#1535; it was a 400) and answers msgWriteFailed instead
+// of git's own text.
 func TestPutTenant_ServerSideWriteFailureNamesNoServerPath(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil) // deliberately not a git repo
@@ -265,15 +266,15 @@ func TestPutTenant_ServerSideWriteFailureNamesNoServerPath(t *testing.T) {
 	w := httptest.NewRecorder()
 	wrapWithRBACMiddleware(h, rbacMgr, "write", TenantIDFromPath).ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want the 400 fallback (the fault did not fire as designed); body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want the 500 fallback (the fault did not fire as designed); body: %s", w.Code, w.Body.String())
 	}
 	var got ErrorResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Error != msgWriteFailed {
-		t.Errorf("error = %q, want %q (git's own text stays in the log)", got.Error, msgWriteFailed)
+	if got.Error != msgWriteFailed || got.Code != CodeInternal {
+		t.Errorf("error = %q code = %q, want %q %s (git's own text stays in the log)", got.Error, got.Code, msgWriteFailed, CodeInternal)
 	}
 }
 
@@ -303,7 +304,7 @@ func TestPutGroup_UnparseableGroupsFileIsConfigDecodeError(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{"_groups.yaml": "grops:\n  g-a:\n    label: a\n"})
 	initGitRepo(t, configDir)
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{State: mustDirState(configDir), Writer: gitops.NewWriter(configDir, configDir), Groups: groups.NewDirManager(configDir), RBAC: rbacMgr}
+	d := &Deps{State: mustDirState(configDir), Writer: gitopstest.NewWriter(configDir, configDir), Groups: groups.NewDirManager(configDir), RBAC: rbacMgr}
 	body, _ := json.Marshal(PutGroupRequest{Label: "gx", Members: []string{"t-owned"}})
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(body))
 	req.Header.Set("X-Forwarded-Email", "op@example.com")

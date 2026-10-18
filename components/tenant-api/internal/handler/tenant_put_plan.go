@@ -190,7 +190,7 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 		return false
 	}
 	// #1723: the tree was on a PR branch and nothing was written —
-	// retryable, not the 400 fallback below.
+	// retryable, not the fallback below.
 	if errors.Is(err, gitops.ErrTreeNotOnBase) {
 		WriteTreeNotOnBase(rw, r, err)
 		return false
@@ -220,7 +220,7 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 		return false
 	}
 	// #1673: two files claim this tenant. The request is well-formed; the
-	// on-disk state is ambiguous — 409, not the 400 fallback.
+	// on-disk state is ambiguous — 409, not the fallback.
 	if errors.Is(err, confd.ErrAmbiguousTenantFile) {
 		WriteJSONError(rw, r, http.StatusConflict, err.Error())
 		return false
@@ -230,10 +230,9 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 	if writeTenantPlacementError(rw, r, d, err) {
 		return false
 	}
-	// #1700: the text is the caller's only when it is about the request; a
-	// file / git failure keeps its path in the log.
-	WriteJSONError(rw, r, http.StatusBadRequest, writeErrorText(r, err))
-	return !writeErrorIsForClient(err)
+	// #1700 / #1535: about the request → 400 with its text; a file / git
+	// failure (the commit stage included) → 500, its detail in the log.
+	return writeTenantWriteFailure(rw, r, err)
 }
 
 // verdictCapture is the http.ResponseWriter /validate hands planPut for its

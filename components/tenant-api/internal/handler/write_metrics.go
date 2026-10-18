@@ -39,10 +39,10 @@ package handler
 // content, refused by the route generator's findings, a forbidden write
 // scope) — that is the caller's to fix, not the write plane failing. The
 // checks that refuse a request before the writer is called are not attempts
-// either. Two answers say less than they mean and are counted as error:
-// the 400 a direct write answers for a git or file failure (its text is
-// withheld, writeErrorIsForClient), and the 403 a forge answers when
-// tenant-api's own token may not open the PR/MR. A direct batch whose commit
+// either. One answer says less than it means and is counted as error: the
+// 403 a forge answers when tenant-api's own token may not open the PR/MR. (A
+// direct write's git or file failure used to be another, a 400; since #1535
+// it is the 500 it is — writeTenantWriteFailure.) A direct batch whose commit
 // landed but did not finish cleanly (409, committed: true) is an error too —
 // though its commit is written.
 //
@@ -198,7 +198,7 @@ func markWriteFault(w http.ResponseWriter) {
 
 func writeWriteResultMetrics(w io.Writer) {
 	m := processWriteResults.Load()
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_writes_total Write attempts to the config repository by result: one per git commit or PR/MR attempt (a batch counts once). ok = 2xx, conflict = 409, error = server-side failure: 5xx/429, a direct write's git or file failure answered 400, the forge refusing tenant-api's own token (403), a batch committed but not finished cleanly (409 committed: true; its commit is written). Requests refused as invalid or forbidden, and failures after the client went away, are not counted.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_writes_total Write attempts to the config repository by result: one per git commit or PR/MR attempt (a batch counts once). ok = 2xx, conflict = 409, error = server-side failure: 5xx/429, the forge refusing tenant-api's own token (403), a batch committed but not finished cleanly (409 committed: true; its commit is written). Requests refused as invalid or forbidden, and failures after the client went away, are not counted.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_writes_total counter\n")
 	for i, l := range writeResultLabels {
 		_, _ = fmt.Fprintf(w, "tenant_api_writes_total{result=%q} %d\n", l, m.counters[i].Load())

@@ -78,7 +78,11 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text, split_threshold_severity  # noqa: E402
-from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
+# ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
+# (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions
 
@@ -265,46 +269,46 @@ _DOC_DIRS = ["docs"]
 
 
 def _iter_yaml_files(root: str):
+    """The structured artifacts that are not conf.d (`_YAML_GLOBS`)."""
     for rel in _YAML_GLOBS:
         p = os.path.join(root, rel)
         if os.path.isfile(p):
             yield rel, p
+
+
+def _as_source_text(node):
+    """A parse-tree node with every scalar as its source text — what the
+    exporter reads a threshold from (`_lib_parse_tree.scalar_text`): `70`,
+    `"70:critical"` and `0x46` are the texts `70`, `70:critical`, `0x46`,
+    and `_as_number` reads each as the exporter's grammar would."""
+    if _lib_parse_tree.is_scalar(node):
+        return _lib_parse_tree.scalar_text(node)
+    if isinstance(node, dict):
+        return {k: _as_source_text(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_as_source_text(v) for v in node]
+    return node
+
+
+def _iter_confd_docs(root: str, unread: list[str]):
+    """(surface, document) for every file `da-guard parse-tree` selects in
+    each `_YAML_DIRS` conf.d (ADR-036 step 4, #2906: the exporter's own
+    walk — both spellings in any case, `.`-prefixed entries skipped, #1588 /
+    #1630 — and yaml.v3's reading, every scalar as its source text). A file
+    parse-tree cannot read is appended to *unread* (an error: its values were
+    not checked), never skipped. No usable da-guard raises ParseTreeError."""
     for d in _YAML_DIRS:
         base = os.path.join(root, d)
-        for dirpath, dirs, files in os.walk(base):
-            # #1630 (HIDDEN axis): the exporter never merges a `.`-prefixed
-            # file nor anything under a `.`-prefixed directory
-            # (`config_hierarchy.go`: skip / `SkipDir`). Measured before
-            # this fix: `.hidden.yaml` carrying `k: 300` for a `%` unit →
-            # 1 OUT-OF-DOMAIN error, same for `.draft/x.yaml` — a red gate
-            # for a value no tenant can ever be served. Pruning in place so
-            # `os.walk` does not descend.
-            dirs[:] = [d for d in dirs if not is_hidden_name(d)]
-            for f in sorted(files):
-                if is_hidden_name(f):
-                    continue
-                # #1588: was `f.endswith((".yaml", ".yml"))`, i.e. yet
-                # another hand-written copy of the extension rule — and a
-                # case-SENSITIVE one. Measured on this gate before the fix,
-                # with the same body under two spellings of the same name:
-                # `_defaults.yaml` -> 1 OUT-OF-DOMAIN error, `_DEFAULTS.YAML`
-                # -> 0. A unit-sanity gate that returns green because the
-                # carrier was upper-cased is worse than no gate: it reports
-                # a clean bill for a file it never opened.
-                #
-                # The accepted SET is unchanged (both spellings, as before);
-                # only the case folding moves, and it moves into the shared
-                # predicate rather than into one more copy.
-                #
-                # ⚠️ The ordinals are gone on purpose: two sites in this
-                # same change each called themselves "the 12th copy",
-                # which cannot both be true. A count nobody recomputes
-                # is a number that goes stale the moment it is written —
-                # `grep -rl has_yaml_extension scripts/tools/` answers it
-                # correctly forever.
-                if has_yaml_extension(f):
-                    p = os.path.join(dirpath, f)
-                    yield os.path.relpath(p, root).replace(os.sep, "/"), p
+        if not os.path.isdir(base):
+            continue
+        reader = _lib_parse_cache.reader_for(base)
+        for rel in sorted(reader.tree().selected):
+            surface = f"{d}/{rel}"
+            try:
+                yield surface, _as_source_text(reader.node(rel))
+            except FileUnreadable as exc:
+                unread.append(f"NOT-READ: {surface}: da-guard parse-tree cannot read it "
+                              f"({exc.kind}: {exc.message}); its values were not checked.")
 
 
 def _iter_doc_files(root: str):
@@ -323,14 +327,21 @@ def _read(path: str) -> str:
         return fh.read()
 
 
-def _collect(root: str) -> list[tuple[str, str, float, bool]]:
+def _collect(root: str, unread: list[str] | None = None
+             ) -> list[tuple[str, str, float, bool]]:
     """Return [(surface, key, value, is_threshold)] over every scannable artifact.
 
     `is_threshold` is False for OBSERVED values (the recommendation file's
     percentiles): they share the key's unit, so the domain check applies, but
     they are not a configured threshold and must not feed tier ordering.
+    `unread` collects one NOT-READ error per conf.d file parse-tree cannot
+    read (`_iter_confd_docs`).
     """
     found: list[tuple[str, str, float, bool]] = []
+
+    for rel, doc in _iter_confd_docs(root, unread if unread is not None else []):
+        for key, val in _walk_values(doc):
+            found.append((rel, key, val, True))
 
     for rel, path in _iter_yaml_files(root):
         try:
@@ -458,7 +469,10 @@ def run_check(
 
     # 2. Value-in-domain.
     per_surface: dict[str, dict[str, float]] = {}
-    for surface, key, value, is_threshold in _collect(root):
+    unread: list[str] = []
+    collected = _collect(root, unread)
+    errors.extend(unread)
+    for surface, key, value, is_threshold in collected:
         meta = spec[key]
         unit = meta.get("unit")
         dimension = UNIT_DIMENSION[unit]
@@ -510,7 +524,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        result = run_check()
+        with _lib_parse_cache.session():
+            result = run_check()
+    except ParseTreeError as exc:
+        # ADR-036 step 4 (#2906): the conf.d trees are read by da-guard.
+        print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: unit-sanity check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

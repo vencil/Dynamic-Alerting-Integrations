@@ -71,11 +71,9 @@
           "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance windows. Supports one-time expiry and recurring schedules (v1.11.0). Distinct from silent_mode."
         },
         "_severity_dedup": {
-          "type": "string",
+          "$ref": "#/definitions/severityDedup",
           "title": "Severity Deduplication Mode",
-          "description": "Controls Alertmanager inhibition behavior for multi-severity alerts. Values: 'enable' (default — suppress the warning notification when critical fires for the same tenant + metric_group), 'disable' (receive both notifications). Matches ResolveSeverityDedup in components/threshold-exporter/app/pkg/config/resolve.go. See docs/design/config-driven.md §2.8 for details.",
-          "enum": ["enable", "disable"],
-          "default": "enable"
+          "description": "Controls Alertmanager inhibition behavior for multi-severity alerts: 'enable' (default — suppress the warning notification when critical fires for the same tenant + metric_group) or 'disable' (receive both notifications). See definitions.severityDedup for every spelling read, and docs/design/config-driven.md §2.8."
         },
         "_namespaces": {
           "type": "array",
@@ -1081,20 +1079,30 @@
     "httpProxyConnectHeader": { "type": "object", "title": "Proxy CONNECT Headers", "additionalProperties": { "type": ["array", "null"], "items": { "type": "string" } } },
     "yamlTrue": {
       "title": "YAML boolean true",
-      "description": "The values of definitions.yamlBool that mean true.",
-      "$comment": "#2984: the subset of yamlBool that _lib_validation._yaml_bool_true reads as true; tests/shared/test_receiver_spec_parity.py pins it to that function over the yamlBool enum.",
-      "enum": [true, "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"]
+      "description": "The value of definitions.yamlBool that means true: the boolean true.",
+      "$comment": "#2984 / #2906: the true half of yamlBool; tests/shared/test_receiver_spec_parity.py pins the two together.",
+      "enum": [true]
     },
     "httpConfigOrNull": {
       "title": "HTTP client configuration or null",
       "description": "http_config: null counts as not given, as in Alertmanager.",
       "anyOf": [{ "$ref": "#/definitions/httpConfig" }, { "type": "null" }]
     },
+    "severityDedup": {
+      "title": "Severity dedup mode",
+      "description": "'enable' (default) or 'disable', and every other spelling the route generator and the exporter's ResolveSeverityDedup read (trimmed, any case): enable / enabled / on / true turn dedup on, disable / disabled / off / false turn it off. Also an unquoted true / false, or null (the default, enable). Any other value — `\"no\"`, an unquoted `no` or `yes` (strings to yaml.v3), a number — is refused, as the route generator refuses the whole tree on it.",
+      "$comment": "#2906: the word list is _grar_parse.SEVERITY_DEDUP_*_WORDS, pinned to resolve.go's ResolveSeverityDedup by tests/shared/test_severity_dedup_vocabulary_parity.py.",
+      "default": "enable",
+      "anyOf": [
+        { "type": ["boolean", "null"] },
+        { "type": "string", "pattern": "^\\s*(?:[Ee][Nn][Aa][Bb][Ll][Ee][Dd]?|[Dd][Ii][Ss][Aa][Bb][Ll][Ee][Dd]?|[Oo][Nn]|[Oo][Ff][Ff]|[Tt][Rr][Uu][Ee]|[Ff][Aa][Ll][Ss][Ee])\\s*$" }
+      ]
+    },
     "yamlBool": {
       "title": "YAML boolean",
-      "description": "true / false, null (not given), or a YAML 1.1 boolean word (yes / no / on / off in three spellings each) that PyYAML and Alertmanager read as a boolean but a YAML 1.2 editor reads as a string. `y` / `n` are refused on purpose: Alertmanager reads them as booleans, the Python route generator does not.",
-      "$comment": "#2295: the enum is the one authored list; Python reads it from here at run time (ADR-036: no Go copy remains).",
-      "anyOf": [{ "type": ["boolean", "null"] }, { "enum": ["true", "True", "TRUE", "false", "False", "FALSE", "yes", "Yes", "YES", "no", "No", "NO", "on", "On", "ON", "off", "Off", "OFF"] }]
+      "description": "true / false (unquoted), or null (not given). A string is refused whatever it spells — `\"true\"`, and an unquoted `yes` / `no` / `on` / `off`, which yaml.v3 reads as a string — as the route generator refuses it (it reads conf.d through da-guard parse-tree and judges a boolean field by type alone, ADR-036 §2).",
+      "$comment": "#2906: no YAML 1.1 word list any more; the route generator takes exactly this (_lib_validation.is_bool_or_unset).",
+      "type": ["boolean", "null"]
     },
     "routingOverride": {
       "type": "object",
@@ -1298,10 +1306,8 @@
           "description": "Default silent mode inherited by all tenants under this directory."
         },
         "_severity_dedup": {
-          "type": "string",
-          "enum": ["enable", "disable"],
-          "default": "enable",
-          "description": "Default severity dedup mode for tenants under this directory. Same vocabulary as the tenant-level key: 'enable' (default) | 'disable'."
+          "$ref": "#/definitions/severityDedup",
+          "description": "Default severity dedup mode for tenants under this directory. Same vocabulary as the tenant-level key (definitions.severityDedup)."
         },
         "_custom_alerts": {
           "$ref": "#/definitions/customAlertList",

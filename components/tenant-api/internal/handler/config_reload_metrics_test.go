@@ -110,8 +110,8 @@ func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
 		`# TYPE tenant_api_config_last_reload_successful gauge`,
 		`tenant_api_config_last_reload_successful{component="RBAC"} 0`,
 		// groups: ONE failure flips the gauge to 0 even though the counter (1) is
-		// below any rate threshold — this is exactly the single-shot gap the gauge
-		// closes for groups/views.
+		// below any rate threshold — the gauge does not wait for retries to add
+		// up.
 		`tenant_api_config_last_reload_successful{component="groups"} 0`,
 		`tenant_api_config_last_reload_successful{component="tenantorg"} 1`,
 		`tenant_api_config_last_reload_successful{component="views"} 1`,

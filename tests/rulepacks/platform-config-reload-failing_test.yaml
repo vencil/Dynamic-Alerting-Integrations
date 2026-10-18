@@ -48,9 +48,9 @@ tests:
         exp_alerts: []
 
   # 3) Single transient blip: exactly one failed reload (e.g. a mid-write read,
-  #    or one discarded post-write Reload error) — counter steps 0→1 once and
-  #    stays flat. increase[15m] peaks at 1 (< 2) → the `> 2` noise floor keeps
-  #    this GREEN.
+  #    or one discarded post-write reload error, cleared by the next tick) —
+  #    counter steps 0→1 once and stays flat. increase[15m] peaks at 1 (< 2) →
+  #    the `> 2` noise floor keeps this GREEN.
   #
   #    ⚠️ The eval at 13m is the DISCRIMINATOR for the noise floor, and must not
   #    be removed. The 0→1 step at t5 sits in the [15m] window for t∈[5,20), so

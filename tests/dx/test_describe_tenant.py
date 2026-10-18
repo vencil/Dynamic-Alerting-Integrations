@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Tests for describe_tenant.py — Effective tenant config resolution with ADR-017 semantics."""
+"""Tests for describe_tenant.py — every value is `da-guard effective`'s (ADR-036).
 
-import hashlib
+The tool reads no conf.d file with a YAML parser of its own (#2906): the
+effective config, the chain, the overlays and the hashes are Go's, and the
+custom-alert compiler's `_custom_alerts` view reads conf.d through
+`da-guard parse-tree`. The Python imitation of the exporter these tests
+used to pin against Go (deep_merge, the yaml.v3-imitating loaders, the Go
+JSON / key renderers, `_canonical_hash`) is gone; what is pinned now is the
+tool's own behavior and that it shows Go's values as Go writes them.
+"""
+
 import json
 import os
 import subprocess
@@ -22,62 +30,20 @@ import describe_tenant as dt  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 
+DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
 
-# ---------------------------------------------------------------------------
-# Test: deep_merge()
-# ---------------------------------------------------------------------------
 
-class TestDeepMerge:
-    """Tests for deep_merge() — ADR-017 semantics."""
+@pytest.fixture(autouse=True)
+def _da_guard(da_guard_env):
+    """Every mode reads da-guard effective: the binary built from this checkout."""
+    return da_guard_env
 
-    def test_deep_merge_basic(self):
-        base = {"a": 1, "b": {"x": 10}}
-        override = {"b": {"y": 20}, "c": 3}
-        result = dt.deep_merge(base, override)
-        assert result == {"a": 1, "b": {"x": 10, "y": 20}, "c": 3}
 
-    def test_deep_merge_scalar_override(self):
-        base = {"a": 1, "b": 2}
-        override = {"b": 99}
-        result = dt.deep_merge(base, override)
-        assert result == {"a": 1, "b": 99}
-
-    def test_deep_merge_array_replace(self):
-        base = {"endpoints": ["a", "b"], "config": {"x": 1}}
-        override = {"endpoints": ["c", "d"]}
-        result = dt.deep_merge(base, override)
-        assert result["endpoints"] == ["c", "d"]
-        assert result["config"] == {"x": 1}
-
-    def test_deep_merge_null_optout(self):
-        # #1339: the null opt-out is per-key. Reserved (`_`-prefixed) keys are
-        # deleted; threshold keys are NOT — the exporter's emitting path
-        # ignores a null there and keeps using the platform default, so a
-        # diagnostic that deleted the key would contradict /metrics. The
-        # sanctioned way to stop alerting on a threshold key is "disable".
-        base = {"_silent_mode": "warning", "a": 1, "b": 2, "c": {"x": 10, "y": 20, "_z": 30}}
-        override = {"_silent_mode": None, "a": None, "c": {"y": None, "_z": None}}
-        result = dt.deep_merge(base, override)
-        assert "_silent_mode" not in result, "reserved key: null still opts out"
-        assert result["a"] == 1, "threshold key: null must not delete the inherited value"
-        assert result["b"] == 2
-        assert result["c"] == {"x": 10, "y": 20}, "same rule applies at depth"
-
-    def test_deep_merge_metadata_skip(self):
-        base = {"_metadata": {"v": 1}, "config": {"x": 10}}
-        override = {"_metadata": {"v": 999}}
-        result = dt.deep_merge(base, override)
-        # _metadata from base is NOT deep_merged; it's skipped entirely
-        assert result.get("_metadata", {}).get("v") == 1
-
-    def test_deep_merge_empty_dicts(self):
-        base = {"a": 1}
-        override = {}
-        result = dt.deep_merge(base, override)
-        assert result == {"a": 1}
-
-        result = dt.deep_merge({}, override)
-        assert result == {}
+def _go_effective(conf_d, *extra):
+    """`da-guard effective` over conf_d, run directly: (rc, document or None)."""
+    r = subprocess.run([os.environ["DA_GUARD_BINARY"], "effective", "--config-dir", str(conf_d), *extra],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    return r.returncode, (json.loads(r.stdout) if r.stdout.strip() else None)
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +80,7 @@ class TestConfDScanner:
         assert len(scanner.tenants) == 2
         assert "tenant-a" in scanner.tenants
         assert "tenant-b" in scanner.tenants
-        assert scanner.tenants["tenant-a"]["name"] == "Tenant A"
+        assert scanner.effective_config("tenant-a")["name"] == "Tenant A"
 
     def test_scanner_hierarchical(self, tmp_path):
         conf_d = tmp_path / "conf.d"
@@ -146,7 +112,8 @@ class TestConfDScanner:
 
         scanner = dt.ConfDScanner(conf_d)
         assert "acme-prod" in scanner.tenants
-        assert len(scanner.defaults_chain["acme-prod"]) >= 2
+        assert scanner.tenants["acme-prod"].defaults_chain == ["_defaults.yaml", "acme/_defaults.yaml"]
+        assert scanner.effective_config("acme-prod") == {"timeout": 20, "region": "us", "replicas": 3}
 
     def test_scanner_effective_config_with_defaults(self, tmp_path):
         conf_d = tmp_path / "conf.d"
@@ -182,7 +149,7 @@ class TestConfDScanner:
 class TestSourceInfo:
     """Tests for source_info() — traceability & hashing."""
 
-    def test_source_info_structure(self, tmp_path, da_guard_env):
+    def test_source_info_structure(self, tmp_path):
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
 
@@ -212,21 +179,20 @@ class TestSourceInfo:
         conf_d.mkdir()
 
         (conf_d / "_defaults.yaml").write_text(
-            yaml.dump({"defaults": {"env": "prod"}}),
+            yaml.dump({"defaults": {"mysql_connections": 80}}),
             encoding="utf-8"
         )
         (conf_d / "tenants.yaml").write_text(
-            yaml.dump({"tenants": {"t1": {"app": "myapp"}}}),
+            yaml.dump({"tenants": {"t1": {"pg_connections": 70}}}),
             encoding="utf-8"
         )
 
         # The hash of the merged config includes the defaults: the same tree
-        # without `_defaults.yaml` hashes differently. This tool's own
-        # canonical hash (#1549: the printed merged_hash is da-guard's, None
-        # without one).
-        with_defaults = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("t1"))
+        # without `_defaults.yaml` hashes differently. Both are da-guard's.
+        with_defaults = dt.ConfDScanner(conf_d).source_info("t1")["merged_hash"]
+        assert with_defaults == _go_effective(conf_d)[1]["tenants"]["t1"]["merged_hash"]
         (conf_d / "_defaults.yaml").unlink()
-        without = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("t1"))
+        without = dt.ConfDScanner(conf_d).source_info("t1")["merged_hash"]
         assert isinstance(with_defaults, str) and with_defaults != without
 
 
@@ -266,41 +232,27 @@ class TestDiffTenants:
         assert "only_in_t-b" in diff
 
 
-def test_unreadable_subdirs_are_named_even_when_underscore_prefixed(
-        tmp_path, monkeypatch, capsys):
-    """#2054: the `_`-prefix filter is for ENTRIES this scanner never reads.
-
-    The exporter descends `_`-prefixed directories (`_arch/arch.yaml` is a
-    tenant to it), so an unreadable `_locked/` hides tenants exactly like
-    `locked/` does — and must be named the same way. Blind review measured
-    `_locked/` silently dropped while `locked/` warned.
-
-    `os.scandir` is patched rather than `chmod 000`-ed: root ignores the
-    mode bits and this suite often runs as uid 0 (same seam as
-    tests/shared/test_lib_confd.py `_deny_scandir`).
-    """
+def test_entries_the_exporter_cannot_read_are_named_and_the_rest_described(tmp_path):
+    """#2054 / #2588: an entry the exporter's walk cannot read — `_`-prefixed
+    or not — is named on stderr (da-guard's `unreadable`), the rest of the
+    tree is still described, and no merged_hash is reported (a value it
+    would have given may be missing). Dangling links, because root ignores
+    the mode bits a `chmod 000` would rely on."""
     conf_d = tmp_path / "conf.d"
-    for name in ("_locked", "locked"):
-        (conf_d / name).mkdir(parents=True)
-        (conf_d / name / "h.yaml").write_text(
-            f"tenants:\n  {name.strip('_')}x: {{}}\n", encoding="utf-8")
+    conf_d.mkdir()
     (conf_d / "a.yaml").write_text("tenants:\n  a: {}\n", encoding="utf-8")
-    denied = {os.fspath(conf_d / "_locked"), os.fspath(conf_d / "locked")}
-    real = os.scandir
-
-    def fake(path=".", *a, **kw):
-        if os.fspath(path) in denied:
-            raise PermissionError(13, "Permission denied", os.fspath(path))
-        return real(path, *a, **kw)
-
-    monkeypatch.setattr(os, "scandir", fake)
-    monkeypatch.setattr(dt, "_ca_loader", None)  # its own walk; not under test
-    scanner = dt.ConfDScanner(conf_d)
-    err = capsys.readouterr().err
-    assert "a" in scanner.tenants  # the rest of the scan still works
-    for name in ("_locked", "locked"):
-        assert f"WARNING: skipped {conf_d.resolve() / name} — is a directory that could not be read" in err, (
-            name, err)
+    for name in ("_locked.yaml", "locked.yaml"):
+        try:
+            symlink_or_skip("nowhere/" + name, conf_d / name)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"symlinks unavailable here: {exc}")
+    r = subprocess.run([sys.executable, DESCRIBE, "a", "--conf-d", str(conf_d), "--show-sources"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["merged_hash"] is None and out["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE
+    for name in ("_locked.yaml", "locked.yaml"):
+        assert f"{name} (stat_error)" in r.stderr, r.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +266,7 @@ class TestCLI:
         result = subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), "--help"],
             capture_output=True,
-            timeout=5,
+            timeout=60,
         )
         assert result.returncode == 0
         assert "describe" in result.stdout.decode().lower() or "usage" in result.stdout.decode().lower()
@@ -341,7 +293,7 @@ class TestCLI:
                 "--show-sources",
             ],
             capture_output=True,
-            timeout=5,
+            timeout=60,
         )
         assert result.returncode == 0
         output = json.loads(result.stdout.decode())
@@ -370,7 +322,7 @@ class TestCLI:
                 "--all",
             ],
             capture_output=True,
-            timeout=5,
+            timeout=60,
         )
         assert result.returncode == 0
         output = json.loads(result.stdout.decode())
@@ -442,11 +394,14 @@ class TestDuplicateDeclaration:
         ["acme", "--show-sources"],
         ["zeta", "--diff", "acme"],
         ["acme", "--diff", "zeta"],
-        ["acme", "--what-if", "WHATIF"],
+        ["acme", "--what-if", "WHATIF", "--replaces", "DEFAULTS"],
     ], ids=["default", "show-sources", "diff-other-side", "diff-this-side", "what-if"])
     def test_every_mode_refuses_the_duplicated_tenant(self, tmp_path, shape, mode):
         conf_d, files = self._tree(tmp_path, shape)
-        args = [str(conf_d / "_defaults.yaml") if a == "WHATIF" else a for a in mode]
+        draft = tmp_path / "draft.yaml"
+        draft.write_text("defaults:\n  cpu_pct: 55\n", encoding="utf-8")
+        args = [{"WHATIF": str(draft), "DEFAULTS": str(conf_d / "_defaults.yaml")}.get(a, a)
+                for a in mode]
         r = self._run(conf_d, *args)
         assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stdout, r.stderr)
         assert r.stdout == ""
@@ -454,29 +409,36 @@ class TestDuplicateDeclaration:
         assert ", ".join(files) in r.stderr, r.stderr
 
     @pytest.mark.parametrize("shape", SHAPES)
-    def test_the_unduplicated_tenant_is_still_described(self, tmp_path, shape):
+    def test_the_unduplicated_tenant_is_refused_with_the_tree(self, tmp_path, shape):
+        """#2906: every value is da-guard effective's, and the exporter rejects
+        the WHOLE tree when a tenant is declared twice (a full load rejects
+        the conf.d; `da-guard effective` exits 2). So the other tenant is not
+        described either — by name, with the duplicate named — where this
+        tool used to describe it from its own Python merge."""
         conf_d, _ = self._tree(tmp_path, shape)
+        assert _go_effective(conf_d)[0] == 2
         r = self._run(conf_d, "zeta")
-        assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 20}
-        assert "duplicate tenant ID" not in r.stderr
+        assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stderr)
+        assert r.stdout == ""
+        assert "tenant 'zeta' is not described: the exporter rejects the whole conf.d" in r.stderr, r.stderr
+        assert "(acme)" in r.stderr, r.stderr
 
     @pytest.mark.parametrize("shape", SHAPES)
-    def test_all_reports_the_duplicate_once_and_describes_the_rest(self, tmp_path, shape):
+    def test_all_reports_the_duplicate_once_and_describes_nothing(self, tmp_path, shape):
         conf_d, files = self._tree(tmp_path, shape)
         r = self._run(conf_d, "--all")
         assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stderr)
-        out = json.loads(r.stdout)
-        assert list(out) == ["zeta"], "the duplicated tenant must not be described"
+        assert json.loads(r.stdout) == {}, "the exporter serves no tenant of this tree"
         assert r.stderr.count("duplicate tenant ID 'acme'") == 1, r.stderr
         assert ", ".join(files) in r.stderr
+        assert "no other tenant is described" in r.stderr, r.stderr
 
     def test_all_output_file_is_still_written_before_the_nonzero_exit(self, tmp_path):
         conf_d, _ = self._tree(tmp_path, "two-files")
         dest = tmp_path / "effective.json"
         r = self._run(conf_d, "--all", "--output", str(dest))
         assert r.returncode == dt.EXIT_VIOLATION, r.stderr
-        assert list(json.loads(dest.read_text(encoding="utf-8"))) == ["zeta"]
+        assert json.loads(dest.read_text(encoding="utf-8")) == {}
 
     def test_configmap_root_link_is_not_a_duplicate(self, tmp_path):
         # The no-false-positive control: a ConfigMap mount lists the tenant
@@ -505,10 +467,10 @@ class TestDuplicateDeclaration:
         cpu_pct 70 (`da-guard effective`: parse_failed [zbad.yaml], acme 70).
 
         This was a pinned KNOWN divergence (#1942): describe counted zbad.yaml
-        as a second carrier and refused acme as a duplicate (rc 1). Since
-        #2115 describe skips a tenant file the exporter cannot decode
-        (`_undecodable_tenant_body`), so it answers as Go does: acme from
-        good.yaml, rc 0, zbad.yaml named on stderr.
+        as a second carrier and refused acme as a duplicate (rc 1). A file in
+        da-guard effective's `parse_failed` declares nothing to the duplicate
+        check (#2906), so it answers as Go does: acme from good.yaml, rc 0,
+        zbad.yaml named on stderr, no merged_hash (the tree drops a file).
         ⚠️ validate_config's `tenant_uniqueness` still counts zbad.yaml
         (`_lib_confd.declared_tenant_ids`) — a divergence left to that tool.
         """
@@ -522,8 +484,7 @@ class TestDuplicateDeclaration:
         assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
         assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
         assert "duplicate" not in r.stderr, r.stderr
-        assert f"skipped {conf_d / 'zbad.yaml'}" in r.stderr, r.stderr
-        assert "tenant 'other' is a int, not a mapping" in r.stderr, r.stderr
+        assert "WARNING: skipped zbad.yaml — " in r.stderr, r.stderr
 
     @pytest.mark.parametrize("shape", SHAPES)
     def test_validate_config_flags_the_same_tenant_and_files(self, tmp_path, shape):
@@ -545,7 +506,8 @@ class TestDuplicateDeclaration:
 # ---------------------------------------------------------------------------
 
 class TestWhatIf:
-    """Tests for --what-if mode: simulate modified _defaults.yaml and return diff + hash change."""
+    """--what-if: a draft's bytes at a tree path (`--replaces` substitute,
+    `--at` create), judged by `da-guard effective --overlay` (#2906)."""
 
     def _setup_conf_d(self, tmp_path):
         """Build a fixture: L0 defaults + tenant file → returns conf.d Path."""
@@ -561,7 +523,8 @@ class TestWhatIf:
             }),
             encoding="utf-8",
         )
-        (conf_d / "tenants.yaml").write_text(
+        (conf_d / "team").mkdir()
+        (conf_d / "team" / "tenants.yaml").write_text(
             yaml.dump({
                 "tenants": {
                     "whatif-tenant": {
@@ -576,28 +539,19 @@ class TestWhatIf:
 
     def _run_cli(self, conf_d, tenant_id, what_if_path, *extra):
         """Run describe_tenant --what-if and return the completed process."""
-        result = subprocess.run(
-            [
-                sys.executable,
-                os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"),
-                tenant_id,
-                "--conf-d", str(conf_d),
-                "--what-if", str(what_if_path),
-                *map(str, extra),
-            ],
-            capture_output=True,
-            timeout=5,
+        return subprocess.run(
+            [sys.executable, DESCRIBE, tenant_id, "--conf-d", str(conf_d),
+             "--what-if", str(what_if_path), *map(str, extra)],
+            capture_output=True, timeout=60,
         )
-        return result
 
     def test_what_if_substitute_changes_hash(self, tmp_path):
         """--what-if <copy> --replaces <L0>: a copy that bumps a tenant-visible
         field → substitute + hash changes; an unchanged copy → no change.
         #2097 F1: the L0 file itself as --what-if compared it with itself
-        (an in-place edit always read "no reload") and is now rc 2."""
+        (an in-place edit always read "no reload") and is rc 2."""
         conf_d = self._setup_conf_d(tmp_path)
         l0_path = conf_d / "_defaults.yaml"
-        # What-if: bump pg_replication_lag_seconds to 60 (tenant does NOT override)
         whatif = tmp_path / "whatif.yaml"
         whatif.write_text(
             yaml.dump({
@@ -614,10 +568,17 @@ class TestWhatIf:
         assert output["tenant_id"] == "whatif-tenant"
         assert output["substitution_type"] == "substitute"
         assert output["replaces"] == str(l0_path.resolve())
+        assert output["at"] is None
         assert output["merged_hash_changed"] is True
         assert output["would_trigger_reload"] is True
         assert output["changed_keys"] == {
             "pg_replication_lag_seconds": {"baseline": 30, "what_if": 60}}
+        # Both hashes are Go's: the baseline is the tree's, the what-if one
+        # the tree's with the draft written there.
+        assert output["baseline_merged_hash"] == \
+            _go_effective(conf_d)[1]["tenants"]["whatif-tenant"]["merged_hash"]
+        assert output["what_if_merged_hash"] == _go_effective(
+            conf_d, "--overlay", f"_defaults.yaml={whatif}")[1]["tenants"]["whatif-tenant"]["merged_hash"]
 
         # Unchanged copy → substitute, no change
         same = tmp_path / "same.yaml"
@@ -629,72 +590,112 @@ class TestWhatIf:
         assert output["merged_hash_changed"] is False
         assert output["would_trigger_reload"] is False
 
-        # The L0 file itself, without --replaces → rc 2 naming the remedy
-        result = self._run_cli(conf_d, "whatif-tenant", l0_path)
+        # The L0 file itself as its own replacement → rc 2
+        result = self._run_cli(conf_d, "whatif-tenant", l0_path, "--replaces", l0_path)
         assert result.returncode == 2
-        assert b"--replaces" in result.stderr
+        assert b"are the same file" in result.stderr
 
-    def test_what_if_append_adds_new_field(self, tmp_path):
-        """Appending a what-if defaults that introduces a new field → merged_hash changes + added_keys populated."""
+    def test_what_if_at_adds_a_chain_level(self, tmp_path):
+        """--at <new path>: the draft is a new `_defaults.yaml` level between
+        the root and the tenant — create, its new key in added_keys."""
         conf_d = self._setup_conf_d(tmp_path)
-        # Place what-if OUTSIDE conf.d/ to trigger "append-external"
-        whatif = tmp_path / "whatif_external.yaml"
-        whatif.write_text(
-            yaml.dump({
-                "defaults": {
-                    "pg_locks_count": 100,  # new field, not in L0 or tenant
-                }
-            }),
-            encoding="utf-8",
-        )
-        result = self._run_cli(conf_d, "whatif-tenant", whatif)
+        whatif = tmp_path / "whatif_level.yaml"
+        whatif.write_text(yaml.dump({"defaults": {"pg_locks_count": 100,
+                                                  "pg_stat_activity_count": 1}}), encoding="utf-8")
+        at = conf_d / "team" / "_defaults.yaml"
+        result = self._run_cli(conf_d, "whatif-tenant", whatif, "--at", at)
         assert result.returncode == 0, f"stderr: {result.stderr.decode()}"
         output = json.loads(result.stdout.decode())
-        assert output["substitution_type"] == "append-external"
+        assert output["substitution_type"] == "create"
+        assert output["at"] == str(at.resolve()) and output["replaces"] is None
         assert output["merged_hash_changed"] is True
-        assert output["would_trigger_reload"] is True
-        assert "pg_locks_count" in output["added_keys"]
-        assert output["added_keys"]["pg_locks_count"] == 100
+        assert output["added_keys"] == {"pg_locks_count": 100}
+        assert output["changed_keys"] == {}, "the tenant's own 300 still wins over the new level"
+        assert not at.exists(), "nothing is written to the tree"
 
     def test_what_if_tenant_override_shields_from_change(self, tmp_path):
         """If tenant overrides a field, changing that field in what-if defaults should NOT change merged_hash."""
         conf_d = self._setup_conf_d(tmp_path)
         whatif = tmp_path / "whatif.yaml"
-        # Change pg_stat_activity_count in defaults — but tenant overrides with 300
         whatif.write_text(
             yaml.dump({
                 "defaults": {
                     "pg_stat_activity_count": 999,  # tenant still overrides with 300
+                    "pg_replication_lag_seconds": 30,
                 }
             }),
             encoding="utf-8",
         )
-        result = self._run_cli(conf_d, "whatif-tenant", whatif)
+        result = self._run_cli(conf_d, "whatif-tenant", whatif, "--replaces", conf_d / "_defaults.yaml")
         assert result.returncode == 0, f"stderr: {result.stderr.decode()}"
         output = json.loads(result.stdout.decode())
-        # Tenant override shields this field → merged hash NOT changed
-        # (in effective config, pg_stat_activity_count is still 300 from tenant)
         assert output["merged_hash_changed"] is False
         assert output["would_trigger_reload"] is False
 
     def test_what_if_file_not_found(self, tmp_path):
         """Non-existent --what-if path → exit 2 (EXIT_CALLER_ERROR, #452) with clear error."""
         conf_d = self._setup_conf_d(tmp_path)
-        result = self._run_cli(conf_d, "whatif-tenant", tmp_path / "does-not-exist.yaml")
+        result = self._run_cli(conf_d, "whatif-tenant", tmp_path / "does-not-exist.yaml",
+                               "--replaces", conf_d / "_defaults.yaml")
         assert result.returncode == EXIT_CALLER_ERROR
         assert b"--what-if file not found" in result.stderr
 
+    def test_bare_what_if_is_refused_naming_both_forms(self, tmp_path):
+        """#2906: the implicit `insert` / `append-external` forms are gone —
+        without --replaces or --at nothing is guessed."""
+        conf_d = self._setup_conf_d(tmp_path)
+        draft = tmp_path / "draft.yaml"
+        draft.write_text("defaults:\n  pg_locks_count: 1\n", encoding="utf-8")
+        for path in (draft, conf_d / ".draft.yaml"):
+            if not path.exists():
+                path.write_text("defaults:\n  pg_locks_count: 1\n", encoding="utf-8")
+            result = self._run_cli(conf_d, "whatif-tenant", path)
+            assert result.returncode == EXIT_CALLER_ERROR, result.stderr
+            err = result.stderr.decode()
+            assert "--replaces <file>" in err and "--at <path>" in err, err
+            assert "_defaults.yaml" in err, err
+            assert result.stdout == b""
+
+    @pytest.mark.parametrize("case", ["at-exists", "at-outside", "at-missing-parent", "at-hidden",
+                                      "replaces-missing", "replaces-unlisted", "both"])
+    def test_what_if_refusals(self, tmp_path, case):
+        conf_d = self._setup_conf_d(tmp_path)
+        draft = tmp_path / "draft.yaml"
+        draft.write_text("defaults:\n  pg_locks_count: 1\n", encoding="utf-8")
+        (conf_d / ".hidden.yaml").write_text("defaults: {}\n", encoding="utf-8")
+        args, want = {
+            "at-exists": (["--at", conf_d / "_defaults.yaml"], "already exists"),
+            "at-outside": (["--at", tmp_path / "elsewhere" / "_defaults.yaml"], "not inside the scanned tree"),
+            "at-missing-parent": (["--at", conf_d / "nope" / "_defaults.yaml"], "not a directory the walk descends"),
+            "at-hidden": (["--at", conf_d / ".snap" / "_defaults.yaml"], "not a name the walk reads"),
+            "replaces-missing": (["--replaces", conf_d / "gone.yaml"], "is not a file of the scanned tree"),
+            "replaces-unlisted": (["--replaces", conf_d / ".hidden.yaml"], "not a name the walk reads"),
+            "both": (["--replaces", conf_d / "_defaults.yaml", "--at", conf_d / "team" / "_defaults.yaml"],
+                     "cannot be used together"),
+        }[case]
+        result = self._run_cli(conf_d, "whatif-tenant", draft, *args)
+        assert result.returncode == EXIT_CALLER_ERROR, result.stderr
+        assert want in result.stderr.decode(), result.stderr.decode()
+        assert b"Traceback" not in result.stderr
+        assert result.stdout == b""
+
+    def test_what_if_that_drops_the_tenant_is_named(self, tmp_path):
+        """The draft stands in for the tenant's own file and no longer
+        declares it: Go resolves no such tenant — rc 2, said."""
+        conf_d = self._setup_conf_d(tmp_path)
+        draft = tmp_path / "draft.yaml"
+        draft.write_text("tenants:\n  someone-else: {}\n", encoding="utf-8")
+        result = self._run_cli(conf_d, "whatif-tenant", draft, "--replaces", conf_d / "team" / "tenants.yaml")
+        assert result.returncode == EXIT_CALLER_ERROR, result.stderr
+        assert b"resolves no tenant 'whatif-tenant'" in result.stderr
+
     def test_what_if_help_text_no_longer_stub(self):
         """--what-if help text must not claim 'not yet implemented' (P0 #5 fix)."""
-        result = subprocess.run(
-            [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), "--help"],
-            capture_output=True,
-            timeout=5,
-        )
+        result = subprocess.run([sys.executable, DESCRIBE, "--help"], capture_output=True, timeout=10)
         assert result.returncode == 0
         help_text = result.stdout.decode()
         assert "not yet implemented" not in help_text.lower()
-        assert "--what-if" in help_text
+        assert "--what-if" in help_text and "--at" in help_text
 
 
 # ---------------------------------------------------------------------------
@@ -752,113 +753,55 @@ class TestLinkTargetOutsideConfD:
         assert out["source_file"] == "tk.yaml"
         assert out["defaults_chain"] == ["_defaults.yaml"]
 
-    def test_what_if_depth_of_an_outside_carrier_is_its_link_level(self, tmp_path):
-        # The root carrier links outside conf.d; a what-if one level down must
-        # be INSERTED after it. Taking the level from the resolved target made
-        # `relative_to` raise into the what-if's own ValueError handler and
-        # silently misfiled it as append-external.
-        conf_d = tmp_path / "conf.d"
-        (conf_d / "sub").mkdir(parents=True)
-        (tmp_path / "shared").mkdir()
-        (tmp_path / "shared" / "base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
-        (conf_d / "tk.yaml").write_text("tenants:\n  tk: {}\n", encoding="utf-8")
-        self._link(conf_d / "_defaults.yaml", "../shared/base.yaml")
-        # #2097: a `.`-prefixed draft — a file of the scanned tree would be
-        # substituted in place, not inserted as a level.
-        whatif = conf_d / "sub" / ".whatif.yaml"
-        whatif.write_text("defaults:\n  mem_pct: 1\n", encoding="utf-8")
-        r = self._run(conf_d, "tk", "--what-if", str(whatif))
-        assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)["substitution_type"] == "insert"
-
-    def _whatif_tree(self, tmp_path):
-        conf_d = tmp_path / "c"
-        (conf_d / "sub").mkdir(parents=True)
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
-        (conf_d / "sub" / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
-        (conf_d / "sub" / "tw.yaml").write_text("tenants:\n  tw: {}\n", encoding="utf-8")
-        return conf_d
-
-    def test_what_if_link_takes_its_entry_level_like_a_regular_file(self, tmp_path):
-        # #1967 blind review F2: the what-if file's OWN level came from its
-        # resolved path, so a root-level link to a file outside conf.d was
-        # append-external while an identical regular file was inserted.
-        conf_d = self._whatif_tree(tmp_path)
-        (tmp_path / "o").mkdir()
-        (tmp_path / "o" / "w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
-        # #2097: `.`-prefixed drafts the walker does not list — a file of the
-        # scanned tree would be substituted in place, not inserted as a level.
-        (conf_d / ".whatif_real.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
-        self._link(conf_d / ".whatif.yaml", "../o/w.yaml")
-        outs = []
-        for name in (".whatif.yaml", ".whatif_real.yaml"):
-            r = self._run(conf_d, "tw", "--what-if", str(conf_d / name))
-            assert r.returncode == 0, r.stderr
-            out = json.loads(r.stdout)
-            outs.append((out["substitution_type"], out["what_if_merged_hash"]))
-        assert outs[0] == outs[1], outs
-        assert outs[0][0] == "insert"
-
-    def test_what_if_link_into_a_deeper_dir_is_at_its_entry_level(self, tmp_path):
-        # `_x.yaml -> sub/deep/_y.yaml` sits at the ROOT level (0), below
-        # `sub/_defaults.yaml`, so its cpu_pct is overridden by 70 and the
-        # merged_hash does not move. At the target's level (2) it would be
-        # the nearest level and win with 10.
-        # #2097: link and target both outside the walker's listing (a
-        # `.`-prefixed entry, a pruned `.`-prefixed directory) — a file of the
-        # scanned tree would be substituted in place, not inserted as a level.
-        conf_d = self._whatif_tree(tmp_path)
-        (conf_d / "sub" / ".deep").mkdir()
-        (conf_d / "sub" / ".deep" / "_y.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
-        self._link(conf_d / ".x.yaml", "sub/.deep/_y.yaml")
-        r = self._run(conf_d, "tw", "--what-if", str(conf_d / ".x.yaml"))
-        assert r.returncode == 0, r.stderr
-        out = json.loads(r.stdout)
-        assert out["substitution_type"] == "insert"
-        assert out["merged_hash_changed"] is False, out
-
     def _linked_conf_d_tree(self, tmp_path):
         # conf.d is ITSELF a link (`c -> real`): the scanner resolves it, so a
-        # level must be computed against the holder's REAL directory, not the
-        # path spelling the caller typed.
+        # tree path must be computed against the holder's REAL directory, not
+        # the path spelling the caller typed (#1967).
         real = tmp_path / "real"
         (real / "sub").mkdir(parents=True)
         (real / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
-        (real / "sub" / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
         (real / "sub" / "tw.yaml").write_text("tenants:\n  tw: {}\n", encoding="utf-8")
-        # #2097: a `.`-prefixed draft the walker does not list (a file of the
-        # scanned tree would be substituted in place, not inserted).
-        (real / ".w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
         self._link(tmp_path / "c", "real")
-        return tmp_path / "c"
+        draft = tmp_path / "draft.yaml"
+        draft.write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        return tmp_path / "c", draft
 
-    def _assert_root_level_insert(self, conf_d, whatif):
-        # `.w.yaml` is at the ROOT level, below `sub/_defaults.yaml` (70), so
-        # its 10 is overridden and the merged_hash does not move.
-        r = self._run(conf_d, "tw", "--what-if", whatif)
+    @pytest.mark.parametrize("spelling", ["through-the-link", "real-path", "dotdot"])
+    def test_what_if_at_is_one_tree_path_however_spelled(self, tmp_path, spelling):
+        # `c/sub/_defaults.yaml`, `real/sub/_defaults.yaml` and
+        # `real/sub/../sub/_defaults.yaml` name one tree path: each creates
+        # the same `sub/_defaults.yaml` level (10 wins over the root's 50).
+        conf_d, draft = self._linked_conf_d_tree(tmp_path)
+        at = {"through-the-link": conf_d / "sub" / "_defaults.yaml",
+              "real-path": tmp_path / "real" / "sub" / "_defaults.yaml",
+              "dotdot": os.path.join(str(tmp_path), "real", "sub", "..", "sub", "_defaults.yaml")}[spelling]
+        r = self._run(conf_d, "tw", "--what-if", str(draft), "--at", str(at))
         assert r.returncode == 0, r.stderr
         out = json.loads(r.stdout)
-        assert (out["substitution_type"], out["merged_hash_changed"]) == ("insert", False), out
+        assert out["substitution_type"] == "create"
+        assert out["at"] == str(tmp_path / "real" / "sub" / "_defaults.yaml")
+        assert out["changed_keys"] == {"cpu_pct": {"baseline": 50, "what_if": 10}}
 
-    def test_what_if_level_through_a_linked_conf_d(self, tmp_path):
-        # Without resolving the holder, `c/` is not under the resolved conf.d
-        # (`real/`) and the what-if was misfiled as append-external.
-        conf_d = self._linked_conf_d_tree(tmp_path)
-        self._assert_root_level_insert(conf_d, str(conf_d / ".w.yaml"))
+    def test_what_if_draft_that_is_a_link_reads_its_target(self, tmp_path):
+        conf_d, draft = self._linked_conf_d_tree(tmp_path)
+        self._link(tmp_path / "draft-link.yaml", "draft.yaml")
+        outs = []
+        for d in (draft, tmp_path / "draft-link.yaml"):
+            r = self._run(conf_d, "tw", "--what-if", str(d), "--replaces", str(conf_d / "_defaults.yaml"))
+            assert r.returncode == 0, r.stderr
+            out = json.loads(r.stdout)
+            outs.append((out["changed_keys"], out["what_if_merged_hash"]))
+        assert outs[0] == outs[1], outs
 
-    def test_what_if_level_of_a_path_spelled_with_dotdot(self, tmp_path):
-        # `real/sub/../.w.yaml` is the root-level file; counted lexically its
-        # holder is two levels deep and it was inserted as the nearest level.
-        conf_d = self._linked_conf_d_tree(tmp_path)
-        self._assert_root_level_insert(conf_d, os.path.join(str(tmp_path), "real", "sub", "..", ".w.yaml"))
-
-    def test_link_target_inside_conf_d_keeps_the_resolved_path(self, tmp_path):
+    def test_link_target_inside_conf_d_is_reported_as_go_reports_it(self, tmp_path):
         (tmp_path / "sub").mkdir()
         (tmp_path / "sub" / "_real.txt").write_text("tenants:\n  tg: {}\n", encoding="utf-8")
         self._link(tmp_path / "tg.yaml", "sub/_real.txt")
         r = self._run(tmp_path, "tg", "--show-sources")
         assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)["source_file"] == "sub/_real.txt"
+        # #2906: the path da-guard effective reports for it, whatever it is.
+        go = _go_effective(tmp_path)[1]["tenants"]["tg"]
+        assert json.loads(r.stdout)["source_file"] == go["source_file"]
 
 
 # ---------------------------------------------------------------------------
@@ -1065,7 +1008,7 @@ class TestPlatformOverlayCLI:
     def _run(self, *args):
         return subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), *args],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
     def test_default_output_carries_platform_overlay_only_when_supplied(self, tmp_path):
         conf_d = self._tree(tmp_path)
@@ -1095,18 +1038,21 @@ class TestPlatformOverlayCLI:
         conf_d = self._tree(tmp_path)
         edited = tmp_path / "edited.yaml"
         edited.write_text(self.PLATFORM.replace('"60"', '"55"'), encoding="utf-8")
-        scanner = dt.ConfDScanner(conf_d)
-        blocks = scanner.platform_blocks(
-            "tx", replace={str((conf_d / "_defaults.yaml").resolve()): yaml.safe_load(edited.read_text())})
-        assert blocks == [("_defaults.yaml", {"mysql_connections": "55"})]
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(edited),
+                        "--replaces", str(conf_d / "_defaults.yaml"))
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["changed_keys"] == {"mysql_connections": {"baseline": "60", "what_if": "55"}}
 
     def test_multi_document_and_unparseable_tenant_files_do_not_end_the_run(self, tmp_path):
         conf_d = self._tree(tmp_path, tm__yaml="tenants:\n  tm: {}\n---\nfoo: 1\n",
                             tb__yaml="tenants:\n  tb: [\n")
         res = self._run("--all", "--conf-d", str(conf_d))
         assert res.returncode == 0, res.stderr
-        assert set(json.loads(res.stdout)) == {"tx", "ty", "tm"}
-        assert "tb.yaml" in res.stderr and "does not parse" in res.stderr
+        out = json.loads(res.stdout)
+        assert set(out) == {"tx", "ty", "tm"}
+        assert "WARNING: skipped tb.yaml — " in res.stderr, res.stderr
+        assert all(t["merged_hash"] is None for t in out.values())
 
     def test_an_unparseable_file_declares_nothing_for_the_duplicate_check(self, tmp_path):
         """#2049 × #2019: a tenant file skipped as unparseable declares no
@@ -1147,7 +1093,7 @@ class TestProfileOverlayCLI:
     def _run(self, *args):
         return subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py"), *args],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
     def test_default_output_carries_profile_overlay_only_when_supplied(self, tmp_path):
         conf_d = self._tree(tmp_path)
@@ -1182,13 +1128,12 @@ class TestProfileOverlayCLI:
                                                encoding="utf-8")
         edited = tmp_path / "edited.yaml"
         edited.write_text(self.DEFAULTS + self.PROFILES, encoding="utf-8")
-        scanner = dt.ConfDScanner(conf_d)
-        replace = {str((conf_d / "_defaults.yaml").resolve()): yaml.safe_load(edited.read_text())}
-        layer, _platform, profile = scanner._tenant_layer("tx", {}, replace=replace)
-        assert layer["mysql_connections"] == 60 and layer["pg_connections"] == 90, layer
-        assert profile == [
-            {"profile": "std", "file": "_defaults.yaml", "keys": ["mysql_connections"]},
-            {"profile": "std", "file": "_profiles.yaml", "keys": ["pg_connections"]}]
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(edited),
+                        "--replaces", str(conf_d / "_defaults.yaml"))
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["changed_keys"] == {"mysql_connections": {"baseline": 80, "what_if": 60}}, out
+        assert out["added_keys"] == {} and out["removed_keys"] == {}, out
 
     def test_alias_spelling_in_the_tenant_file_blocks_the_fill_in(self, tmp_path):
         """#1231 × #2117: a tenant writing the deprecated spelling already
@@ -1196,7 +1141,11 @@ class TestProfileOverlayCLI:
         (ApplyProfiles' hasAliasEquivalent)."""
         # The deprecated spelling comes from the alias table, not a literal:
         # the #1231 pre-commit hook forbids the retired key as a live value.
-        legacy = dt._legacy_spelling("mysql_threads_running")
+        ops_dir = os.path.join(REPO_ROOT, "scripts", "tools", "ops")
+        if ops_dir not in sys.path:
+            sys.path.append(ops_dir)
+        from _grar_validate import _legacy_tenant_key
+        legacy = _legacy_tenant_key("mysql_threads_running")
         if legacy is None:
             pytest.skip("no deprecated spelling of mysql_threads_running in its alias window")
         conf_d = self._tree(tmp_path)
@@ -1222,656 +1171,456 @@ class TestProfileOverlayCLI:
             {"profile": "std", "file": "_profiles.yaml", "keys": ["mysql_connections"]}]
 
 
-class TestYamlTypedScalarParity:
-    """#2371: a value PyYAML reads as `date` / `datetime` / `bytes` (an
-    unquoted `2026-12-31`, a `!!binary`) used to end every mode with a
-    TypeError traceback while the exporter served the tree. The hash and the
-    output now render them as the exporter's canonical JSON does; timestamps
-    are decided at read time by yaml.v3's layouts, not PyYAML's.
 
-    The Go column is the oracle, measured with pkg/config
-    `CanonicalJSON(ComputeEffectiveConfig(t1.yaml, "t1", [_defaults.yaml]))`
-    over the same two files. The date and `!!binary` shapes are also
-    re-checked against Go on every run by the golden rows `yaml-date` /
-    `yaml-binary` (tests/golden, TestGoldenParity_*); the rest are pinned
-    here only."""
 
-    DEFAULTS = "defaults:\n  mysql_connections: 50\n"
-    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
+# ---------------------------------------------------------------------------
+# Go's values, as Go writes them (#2906)
+# ---------------------------------------------------------------------------
+#
+# These shapes are the ones this tool's PyYAML imitation of the exporter was
+# measured against (#2371 / #2415 / #2459: timestamps, `!!binary`, mapping
+# keys yaml.v3 spells with `%v`, explicit tags, `_defaults.yaml` documents
+# of every shape) — including the rows that imitation could not align and
+# pinned as strict xfails. The imitation is gone: the oracle for every row
+# is `da-guard effective` run directly on the same tree, and the tool must
+# show exactly its answer — the same tenants, the same effective config,
+# chain, overlays, source hash and (on a tree the load reads whole) the
+# same merged_hash.
 
-    def _tree(self, tmp_path, tenant_body, defaults=None):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text(defaults or self.DEFAULTS, encoding="utf-8")
-        (conf_d / "t1.yaml").write_text(
-            "tenants:\n  t1:\n" + textwrap.indent(tenant_body, "    "), encoding="utf-8")
-        return conf_d
+VALUE_BODIES = [
+    ('date', '_state_maintenance:\n  target: all\n  expires: 2026-12-31\n', None),
+    ('date-tagged', '_x:\n  at: !!timestamp 2026-12-31\n', None),
+    ('date-in-list', '_x:\n  - 2026-12-31\n  - a\n', None),
+    ('date-year-below-1000', '_x:\n  at: 0999-01-02\n', None),
+    ('date-in-defaults', 'mysql_connections: 60\n', 'defaults:\n  mysql_connections: 50\n  _state_maintenance:\n    expires: 2026-12-31\n'),
+    ('date-in-defaults-merged', '_state_maintenance:\n  target: all\n', 'defaults:\n  _state_maintenance:\n    expires: 2026-12-31\n'),
+    ('datetime-z', '_x:\n  at: 2026-12-31T10:20:30Z\n', None),
+    ('datetime-lower-t-z', '_x:\n  at: 2026-12-31t10:20:30Z\n', None),
+    ('datetime-plus-zero', '_x:\n  at: 2026-12-31T10:20:30+00:00\n', None),
+    ('datetime-offset', '_x:\n  at: 2026-12-31T10:20:30+08:00\n', None),
+    ('datetime-negative-offset', '_x:\n  at: 2026-12-31T10:20:30-05:30\n', None),
+    ('datetime-fraction-6', '_x:\n  at: 2026-12-31T10:20:30.123456Z\n', None),
+    ('datetime-fraction-1', '_x:\n  at: 2026-12-31T10:20:30.5Z\n', None),
+    ('datetime-fraction-trailing-zeros', '_x:\n  at: 2026-12-31T10:20:30.500Z\n', None),
+    ('datetime-one-digit-fields', '_x:\n  at: 2026-1-2T3:04:05Z\n', None),
+    ('datetime-naive-t', '_x:\n  at: 2026-12-31T10:20:30\n', None),
+    ('datetime-naive-t-fraction', '_x:\n  at: 2026-12-31T10:20:30.5\n', None),
+    ('binary-utf8', '_routing:\n  receiver:\n    type: webhook\n    url: !!binary aHR0cDovL3g=\n', None),
+    ('binary-cjk', '_x:\n  v: !!binary 5Lit5paH\n', None),
+    ('binary-empty', '_x:\n  v: !!binary ""\n', None),
+    ('binary-in-defaults', 'mysql_connections: 60\n', 'defaults:\n  _x:\n    v: !!binary aHR0cDovL3g=\n'),
+    ('binary-invalid-byte', '_routing:\n  receiver:\n    type: webhook\n    url: !!binary /w==\n', None),
+    ('binary-nul-and-invalid', '_x:\n  v: !!binary YQDA/2I=\n', None),
+    ('binary-truncated-sequence', '_x:\n  v: !!binary 5Lg=\n', None),
+    ('binary-overlong', '_x:\n  v: !!binary wIA=\n', None),
+    ('binary-encoded-surrogate', '_x:\n  v: !!binary 7aCA\n', None),
+    ('string-real-fffd', '_x:\n  v: "\\ufffd"\n', None),
+    ('datetime-space-no-zone', '_silent_mode:\n  expires: 2026-12-31 23:59:59\n', None),
+    ('datetime-space-fraction', '_x:\n  at: 2026-12-31 10:20:30.5\n', None),
+    ('datetime-two-spaces', '_x:\n  at: 2026-12-31  10:20:30\n', None),
+    ('datetime-space-in-defaults', 'mysql_connections: 60\n', 'defaults:\n  _x:\n    at: 2026-12-31 10:20:30\n'),
+    ('datetime-naive-t-trailing-zeros', '_x:\n  at: 2026-12-31T10:20:30.500\n', None),
+    ('datetime-naive-lower-t', '_x:\n  at: 2026-12-31t10:20:30\n', None),
+    ('datetime-space-before-zone', '_x:\n  at: 2026-12-31 10:20:30 +08:00\n', None),
+    ('datetime-space-then-z', '_x:\n  at: 2026-12-31 10:20:30Z\n', None),
+    ('datetime-hour-only-zone', '_x:\n  at: 2026-12-31T10:20:30+08\n', None),
+    ('datetime-fraction-9', '_x:\n  at: 2026-12-31T10:20:30.123456789Z\n', None),
+    ('datetime-fraction-10', '_x:\n  at: 2026-12-31T10:20:30.1234567891Z\n', None),
+    ('datetime-comma-fraction', '_x:\n  at: 2026-12-31T10:20:30,5Z\n', None),
+    ('datetime-hour-24', '_x:\n  at: 2026-12-31T24:00:00Z\n', None),
+    ('datetime-second-60', '_x:\n  at: 2026-12-31 23:59:60\n', None),
+    ('datetime-tagged-space', '_x:\n  at: !!timestamp 2026-12-31 10:20:30\n', None),
+    ('datetime-quoted', '_x:\n  at: "2026-12-31 23:59:59"\n', None),
+    ('date-one-digit-fields', '_x:\n  at: 2026-1-2\n', None),
+    ('date-one-digit-in-defaults', 'mysql_connections: 60\n', 'defaults:\n  _x:\n    at: 2026-1-2\n'),
+    ('date-in-list-go-only-layouts', '_x:\n  - 2026-12-31 23:59:59\n  - 2026-1-2\n', None),
+    ('date-month-13', '_x:\n  at: 2026-13-01\n', None),
+    ('date-day-0', '_x:\n  at: 2026-12-00\n', None),
+    ('date-arabic-indic-digits', '_x:\n  at: ٢٠٢٦-١٢-٣١\n', None),
+    ('date-feb-30', '_x:\n  at: 2026-02-30\n', None),
+    ('zone-minute-60-carries', '_x:\n  at: 2026-12-31T10:20:30+08:60\n', None),
+    ('zone-minute-60-carries-negative', '_x:\n  at: 2026-12-31T10:20:30-00:60\n', None),
+    ('zone-23-59', '_x:\n  at: 2026-12-31T10:20:30+23:59\n', None),
+    ('zone-hour-99-stays-text', '_x:\n  at: 2026-12-31T10:20:30.500+99:00\n', None),
+    ('zone-hour-25-stays-text', '_x:\n  at: 2026-12-31T10:20:30+25:00\n', None),
+    ('zone-minute-61-stays-text', '_x:\n  at: 2026-12-31T10:20:30+08:61\n', None),
+    ('year-0', '_x:\n  at: 0000-01-01\n', None),
+    ('year-0-leap-day', '_x:\n  at: 0000-02-29\n', None),
+    ('year-0-space-clock', '_x:\n  at: 0000-12-31 10:20:30\n', None),
+    ('year-0-in-defaults', 'mysql_connections: 60\n', 'defaults:\n  _x:\n    at: 0000-01-01\n'),
+    ('year-1-not-leap', '_x:\n  at: 0001-02-29\n', None),
+    ('year-2100-not-leap', '_x:\n  at: 2100-02-29\n', None),
+    ('quoted-go-only-layout', "_x:\n  at: '2026-1-2'\n", None),
+    ('block-strip-go-only-layout', '_x:\n  at: |-\n    2026-1-2\n', None),
+    ('block-keep-go-only-layout', '_x:\n  at: |\n    2026-1-2\n', None),
+    ('block-keep-date', '_x:\n  at: |\n    2026-12-31\n', None),
+    ('tagged-block-strip-date', '_x:\n  at: !!timestamp |-\n    2026-12-31\n', None),
+    ('zone-24-00', '_x:\n  at: 2026-12-31T10:20:30+24:00\n', None),
+    ('zone-minus-23-60', '_x:\n  at: 2026-12-31T10:20:30-23:60\n', None),
+    ('zone-24-01', '_x:\n  at: 2026-12-31T10:20:30+24:01\n', None),
+    ('zone-24-00-one-digit-fields', '_x:\n  at: 2026-1-2T1:2:3+24:00\n', None),
+    ('key-ts-foo-direct', '!!timestamp foo: 1\n', None),
+    ('key-ts-foo-nested', '_x:\n  !!timestamp foo: 1\n', None),
+    ('key-ts-quoted', "_x:\n  !!timestamp '2026-12-31': 1\n", None),
+    ('explicit-str-on-a-go-only-timestamp', '_x:\n  at: !!str 2026-1-2\n', None),
+    ('explicit-timestamp-go-cannot-parse', '_x:\n  at: !!timestamp 2026-12-31T10:20:30\n', None),
+    ('explicit-timestamp-month-13', '_x:\n  at: !!timestamp 2026-13-01\n', None),
+    ('tab-between-date-and-time', '_x:\n  at: 2026-12-31\t10:20:30\n', None),
+    ('explicit-timestamp-word', '_x:\n  at: !!timestamp foo\n', None),
+    ('explicit-timestamp-empty', '_x:\n  at: !!timestamp\n', None),
+    ('explicit-timestamp-quoted-empty', '_x:\n  at: !!timestamp ""\n', None),
+    ('explicit-timestamp-block-keep', '_x:\n  at: !!timestamp |\n    2026-12-31\n', None),
+]
+KEYS = [
+    '2026-12-31',
+    '"2026-12-31"',
+    "'2026-12-31'",
+    '!!str 2026-12-31',
+    '!!timestamp 2026-12-31',
+    '2026-1-2',
+    '0999-01-02',
+    '2026-13-01',
+    '2026-02-30',
+    '2026-12-31T10:20:30Z',
+    '2026-12-31t10:20:30Z',
+    '2026-12-31T10:20:30+00:00',
+    '2026-12-31T10:20:30+08:00',
+    '2026-12-31T10:20:30-05:30',
+    '2026-12-31T10:20:30.5Z',
+    '2026-12-31T10:20:30,5Z',
+    '2026-12-31T10:20:30.123456789Z',
+    '2026-12-31 10:20:30',
+    '2026-12-31  10:20:30',
+    '2026-12-31T10:20:30',
+    '2026-12-31T24:00:00Z',
+    '2026-12-31T10:20:30+08:60',
+    '2026-12-31T10:20:30+99:00',
+    '2026-12-31T10:20:30+08:61',
+    '2026-12-31T10:20:30+24:00',
+    '0000-01-01',
+    '0001-02-29',
+    '1',
+    '010',
+    '0777',
+    '08',
+    '0888',
+    '0x1F',
+    '-0x1F',
+    '+0x1F',
+    '0x_1F',
+    '0x',
+    '0o17',
+    '0b101',
+    '0b',
+    '1_000',
+    '1__0',
+    '+5',
+    '-5',
+    '9223372036854775808',
+    '18446744073709551615',
+    '+18446744073709551615',
+    '18446744073709551616',
+    '-9223372036854775809',
+    '1.5',
+    '1.0',
+    '0.',
+    '.5',
+    '+1.5',
+    '1.5_0',
+    '-0.0',
+    '0.1',
+    '1e3',
+    '1.5e3',
+    '1e21',
+    '1e400',
+    '1000000.0',
+    '123456.0',
+    '123456789.0',
+    '0.0001',
+    '1e-4',
+    '0.00001',
+    '-1.5e-7',
+    '.inf',
+    '-.Inf',
+    '+.INF',
+    '.nan',
+    '.5_0',
+    '.5e1_0',
+    '.5E+3',
+    '.5e400',
+    '._5',
+    '.5_',
+    '.5__0',
+    '.5e_1',
+    '._',
+    'true',
+    'True',
+    'TRUE',
+    'false',
+    'yes',
+    'on',
+    'no',
+    'off',
+    'y',
+    '12:30',
+    '1:30:00',
+    '!!str 010',
+    '"010"',
+    '!!int 010',
+    '!!float 1',
+    'abc',
+    '~',
+    'null',
+    '!!str 1e3',
+]
+DEFAULTS_SHAPES = {
+    'unclosed-flow': b'defaults: [\n',
+    'not-utf8': b'defaults:\n  x: "\xff\xfe"\n',
+    'surrogate-escape': b'defaults:\n  _x: "\\udfff"\n',
+    'tagged-int': b'defaults:\n  x: !!int foo\n',
+    'tagged-float': b'defaults:\n  x: !!float foo\n',
+    'tagged-bool': b'defaults:\n  x: !!bool foo\n',
+    'tagged-bool-yes': b'defaults:\n  x: !!bool yes\n',
+    'tagged-bool-mixed-case': b'defaults:\n  x: !!bool tRuE\n',
+    'tagged-binary-bad-chars': b'defaults:\n  x: !!binary "%%%"\n',
+    'tagged-binary-unpadded': b'defaults:\n  x: !!binary "aGVsbG8"\n',
+    'defaults-list': b'defaults: [1, 2]\n',
+    'defaults-scalar': b'defaults: 5\n',
+    'document-list': b'- 1\n- 2\n',
+    'document-scalar': b'hello\n',
+    'document-false': b'false\n',
+}
+DEFAULTS_DOCUMENTS = {
+    'control': ('defaults:\n  mysql_connections: 80\n', '664e2553d242d345'),
+    'multi-doc': ('defaults:\n  mysql_connections: 80\n---\ndefaults:\n  mysql_connections: 90\n', '664e2553d242d345'),
+    'multi-doc-later-unparseable': ('defaults:\n  mysql_connections: 80\n---\n: : [\n', '664e2553d242d345'),
+    'multi-doc-later-bad-shape': ('defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n', '664e2553d242d345'),
+    'multi-doc-empty-first': ('---\n---\ndefaults:\n  mysql_connections: 80\n', 'dc8202dfc4683b17'),
+    'defaults-null': ('defaults: ~\n', 'dc8202dfc4683b17'),
+    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '664e2553d242d345'),
+    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '01fde994832c3568'),
+    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '01fde994832c3568'),
+    'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', '0ee9af955f7e7e01'),
+}
+NOT_A_MAPPING = {'list': '- 1\n- 2\n', 'scalar': 'hello\n', 'false': 'false\n'}
 
-    # (id, tenant body, defaults or None, Go canonical JSON)
-    ALIGNED = [
-        ("date", "_state_maintenance:\n  target: all\n  expires: 2026-12-31\n", None,
-         '{"_state_maintenance":{"expires":"2026-12-31T00:00:00Z","target":"all"},"mysql_connections":50}'),
-        ("date-tagged", "_x:\n  at: !!timestamp 2026-12-31\n", None,
-         '{"_x":{"at":"2026-12-31T00:00:00Z"},"mysql_connections":50}'),
-        ("date-in-list", "_x:\n  - 2026-12-31\n  - a\n", None,
-         '{"_x":["2026-12-31T00:00:00Z","a"],"mysql_connections":50}'),
-        ("date-year-below-1000", "_x:\n  at: 0999-01-02\n", None,
-         '{"_x":{"at":"0999-01-02T00:00:00Z"},"mysql_connections":50}'),
-        ("date-in-defaults", "mysql_connections: 60\n",
-         "defaults:\n  mysql_connections: 50\n  _state_maintenance:\n    expires: 2026-12-31\n",
-         '{"_state_maintenance":{"expires":"2026-12-31T00:00:00Z"},"mysql_connections":60}'),
-        ("date-in-defaults-merged", "_state_maintenance:\n  target: all\n",
-         "defaults:\n  _state_maintenance:\n    expires: 2026-12-31\n",
-         '{"_state_maintenance":{"expires":"2026-12-31T00:00:00Z","target":"all"}}'),
-        ("datetime-z", "_x:\n  at: 2026-12-31T10:20:30Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-lower-t-z", "_x:\n  at: 2026-12-31t10:20:30Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-plus-zero", "_x:\n  at: 2026-12-31T10:20:30+00:00\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-offset", "_x:\n  at: 2026-12-31T10:20:30+08:00\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30+08:00"},"mysql_connections":50}'),
-        ("datetime-negative-offset", "_x:\n  at: 2026-12-31T10:20:30-05:30\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30-05:30"},"mysql_connections":50}'),
-        ("datetime-fraction-6", "_x:\n  at: 2026-12-31T10:20:30.123456Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.123456Z"},"mysql_connections":50}'),
-        ("datetime-fraction-1", "_x:\n  at: 2026-12-31T10:20:30.5Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
-        ("datetime-fraction-trailing-zeros", "_x:\n  at: 2026-12-31T10:20:30.500Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
-        ("datetime-one-digit-fields", "_x:\n  at: 2026-1-2T3:04:05Z\n", None,
-         '{"_x":{"at":"2026-01-02T03:04:05Z"},"mysql_connections":50}'),
-        ("datetime-naive-t", "_x:\n  at: 2026-12-31T10:20:30\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30"},"mysql_connections":50}'),
-        ("datetime-naive-t-fraction", "_x:\n  at: 2026-12-31T10:20:30.5\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.5"},"mysql_connections":50}'),
-        ("binary-utf8", "_routing:\n  receiver:\n    type: webhook\n    url: !!binary aHR0cDovL3g=\n", None,
-         '{"_routing":{"receiver":{"type":"webhook","url":"http://x"}},"mysql_connections":50}'),
-        ("binary-cjk", "_x:\n  v: !!binary 5Lit5paH\n", None,
-         '{"_x":{"v":"中文"},"mysql_connections":50}'),
-        ("binary-empty", '_x:\n  v: !!binary ""\n', None,
-         '{"_x":{"v":""},"mysql_connections":50}'),
-        ("binary-in-defaults", "mysql_connections: 60\n",
-         "defaults:\n  _x:\n    v: !!binary aHR0cDovL3g=\n",
-         '{"_x":{"v":"http://x"},"mysql_connections":60}'),
-        # Invalid UTF-8: encoding/json writes the six characters \ufffd per
-        # invalid BYTE (a truncated sequence is two), not a raw U+FFFD.
-        ("binary-invalid-byte", "_routing:\n  receiver:\n    type: webhook\n    url: !!binary /w==\n", None,
-         r'{"_routing":{"receiver":{"type":"webhook","url":"\ufffd"}},"mysql_connections":50}'),
-        ("binary-nul-and-invalid", "_x:\n  v: !!binary YQDA/2I=\n", None,
-         r'{"_x":{"v":"a\u0000\ufffd\ufffdb"},"mysql_connections":50}'),
-        ("binary-truncated-sequence", "_x:\n  v: !!binary 5Lg=\n", None,
-         r'{"_x":{"v":"\ufffd\ufffd"},"mysql_connections":50}'),
-        ("binary-overlong", "_x:\n  v: !!binary wIA=\n", None,
-         r'{"_x":{"v":"\ufffd\ufffd"},"mysql_connections":50}'),
-        ("binary-encoded-surrogate", "_x:\n  v: !!binary 7aCA\n", None,
-         r'{"_x":{"v":"\ufffd\ufffd\ufffd"},"mysql_connections":50}'),
-        # Control: a real U+FFFD in a string stays a raw character.
-        ("string-real-fffd", '_x:\n  v: "\\ufffd"\n', None,
-         '{"_x":{"v":"\ufffd"},"mysql_connections":50}'),
-    ]
+# Whole files (#2371 review 3 F1): what else is in the file around t1.
+WHOLE_FILES = [
+    ("other-tenant-in-file-24h",
+     "tenants:\n  t1:\n    mysql_connections: 60\n  t2:\n    _x:\n      at: 2026-12-31T10:20:30+24:00\n", None),
+    ("root-sibling-24h",
+     "tenants:\n  t1:\n    mysql_connections: 60\nextra: 2026-12-31T10:20:30+24:00\n", None),
+    ("overridden-default-24h", "tenants:\n  t1:\n    _x: 1\n",
+     "defaults:\n  mysql_connections: 50\n  _x: 2026-12-31T10:20:30+24:00\n"),
+    ("tenantid-ts-foo", "tenants:\n  !!timestamp foo:\n    a: 1\n  t1:\n    a: 2\n", None),
+    ("surrogate-value", 'tenants:\n  t1:\n    _x: "\\udfff"\n', None),
+    ("surrogate-profile", 'tenants:\n  t1:\n    _profile: "\\udfff"\n', None),
+    ("refused-bool-tag", 'tenants:\n  t1:\n    x: !!bool yes\n', None),
+    ("refused-binary-tag", 'tenants:\n  t1:\n    x: !!binary "%%%"\n', None),
+    ("multi-document", "tenants:\n  t1: {}\n---\nfoo: 1\n", None),
+]
 
-    # Timestamps where yaml.v3's rules and PyYAML's disagree. The reader
-    # (`_GoKeyLoader`) decides them from the source text by yaml.v3's four
-    # layouts, so each is Go's answer, not PyYAML's (review F3).
-    ALIGNED = ALIGNED + [
-        ("datetime-space-no-zone", "_silent_mode:\n  expires: 2026-12-31 23:59:59\n", None,
-         '{"_silent_mode":{"expires":"2026-12-31T23:59:59Z"},"mysql_connections":50}'),
-        ("datetime-space-fraction", "_x:\n  at: 2026-12-31 10:20:30.5\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
-        ("datetime-two-spaces", "_x:\n  at: 2026-12-31  10:20:30\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-space-in-defaults", "mysql_connections: 60\n",
-         "defaults:\n  _x:\n    at: 2026-12-31 10:20:30\n",
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":60}'),
-        ("datetime-naive-t-trailing-zeros", "_x:\n  at: 2026-12-31T10:20:30.500\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.500"},"mysql_connections":50}'),
-        ("datetime-naive-lower-t", "_x:\n  at: 2026-12-31t10:20:30\n", None,
-         '{"_x":{"at":"2026-12-31t10:20:30"},"mysql_connections":50}'),
-        ("datetime-space-before-zone", "_x:\n  at: 2026-12-31 10:20:30 +08:00\n", None,
-         '{"_x":{"at":"2026-12-31 10:20:30 +08:00"},"mysql_connections":50}'),
-        ("datetime-space-then-z", "_x:\n  at: 2026-12-31 10:20:30Z\n", None,
-         '{"_x":{"at":"2026-12-31 10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-hour-only-zone", "_x:\n  at: 2026-12-31T10:20:30+08\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30+08"},"mysql_connections":50}'),
-        ("datetime-fraction-9", "_x:\n  at: 2026-12-31T10:20:30.123456789Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.123456789Z"},"mysql_connections":50}'),
-        ("datetime-fraction-10", "_x:\n  at: 2026-12-31T10:20:30.1234567891Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.123456789Z"},"mysql_connections":50}'),
-        ("datetime-comma-fraction", "_x:\n  at: 2026-12-31T10:20:30,5Z\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.5Z"},"mysql_connections":50}'),
-        ("datetime-hour-24", "_x:\n  at: 2026-12-31T24:00:00Z\n", None,
-         '{"_x":{"at":"2026-12-31T24:00:00Z"},"mysql_connections":50}'),
-        ("datetime-second-60", "_x:\n  at: 2026-12-31 23:59:60\n", None,
-         '{"_x":{"at":"2026-12-31 23:59:60"},"mysql_connections":50}'),
-        ("datetime-tagged-space", "_x:\n  at: !!timestamp 2026-12-31 10:20:30\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("datetime-quoted", '_x:\n  at: "2026-12-31 23:59:59"\n', None,
-         '{"_x":{"at":"2026-12-31 23:59:59"},"mysql_connections":50}'),
-        ("date-one-digit-fields", "_x:\n  at: 2026-1-2\n", None,
-         '{"_x":{"at":"2026-01-02T00:00:00Z"},"mysql_connections":50}'),
-        ("date-one-digit-in-defaults", "mysql_connections: 60\n",
-         "defaults:\n  _x:\n    at: 2026-1-2\n",
-         '{"_x":{"at":"2026-01-02T00:00:00Z"},"mysql_connections":60}'),
-        ("date-in-list-go-only-layouts", "_x:\n  - 2026-12-31 23:59:59\n  - 2026-1-2\n", None,
-         '{"_x":["2026-12-31T23:59:59Z","2026-01-02T00:00:00Z"],"mysql_connections":50}'),
-        # PyYAML raised ValueError on these and dropped the whole tenant file.
-        ("date-month-13", "_x:\n  at: 2026-13-01\n", None,
-         '{"_x":{"at":"2026-13-01"},"mysql_connections":50}'),
-        ("date-day-0", "_x:\n  at: 2026-12-00\n", None,
-         '{"_x":{"at":"2026-12-00"},"mysql_connections":50}'),
-        ("date-arabic-indic-digits", "_x:\n  at: ٢٠٢٦-١٢-٣١\n", None,
-         '{"_x":{"at":"٢٠٢٦-١٢-٣١"},"mysql_connections":50}'),
-        ("date-feb-30", "_x:\n  at: 2026-02-30\n", None,
-         '{"_x":{"at":"2026-02-30"},"mysql_connections":50}'),
-        # time.Parse's zone bounds: an hour above 24 or a minute above 60 is
-        # a parse error (the text stays); within them the offset is
-        # hours*60 + minutes, re-spelled — `+08:60` IS +09:00 (review 2 F1).
-        ("zone-minute-60-carries", "_x:\n  at: 2026-12-31T10:20:30+08:60\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30+09:00"},"mysql_connections":50}'),
-        ("zone-minute-60-carries-negative", "_x:\n  at: 2026-12-31T10:20:30-00:60\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30-01:00"},"mysql_connections":50}'),
-        ("zone-23-59", "_x:\n  at: 2026-12-31T10:20:30+23:59\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30+23:59"},"mysql_connections":50}'),
-        ("zone-hour-99-stays-text", "_x:\n  at: 2026-12-31T10:20:30.500+99:00\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30.500+99:00"},"mysql_connections":50}'),
-        ("zone-hour-25-stays-text", "_x:\n  at: 2026-12-31T10:20:30+25:00\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30+25:00"},"mysql_connections":50}'),
-        ("zone-minute-61-stays-text", "_x:\n  at: 2026-12-31T10:20:30+08:61\n", None,
-         '{"_x":{"at":"2026-12-31T10:20:30+08:61"},"mysql_connections":50}'),
-        # Year 0 is a (leap) year to time.Parse; `datetime` cannot hold it
-        # (review 2 F3).
-        ("year-0", "_x:\n  at: 0000-01-01\n", None,
-         '{"_x":{"at":"0000-01-01T00:00:00Z"},"mysql_connections":50}'),
-        ("year-0-leap-day", "_x:\n  at: 0000-02-29\n", None,
-         '{"_x":{"at":"0000-02-29T00:00:00Z"},"mysql_connections":50}'),
-        ("year-0-space-clock", "_x:\n  at: 0000-12-31 10:20:30\n", None,
-         '{"_x":{"at":"0000-12-31T10:20:30Z"},"mysql_connections":50}'),
-        ("year-0-in-defaults", "mysql_connections: 60\n", "defaults:\n  _x:\n    at: 0000-01-01\n",
-         '{"_x":{"at":"0000-01-01T00:00:00Z"},"mysql_connections":60}'),
-        ("year-1-not-leap", "_x:\n  at: 0001-02-29\n", None,
-         '{"_x":{"at":"0001-02-29"},"mysql_connections":50}'),
-        ("year-2100-not-leap", "_x:\n  at: 2100-02-29\n", None,
-         '{"_x":{"at":"2100-02-29"},"mysql_connections":50}'),
-        # Only a PLAIN scalar is ever a time: quoted and block ones are text
-        # to yaml.v3 (review 2 F4 — `_construct_str`'s style guard, and the
-        # `|` block's trailing newline, which `$` used to let through).
-        ("quoted-go-only-layout", "_x:\n  at: '2026-1-2'\n", None,
-         '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
-        ("block-strip-go-only-layout", "_x:\n  at: |-\n    2026-1-2\n", None,
-         '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
-        ("block-keep-go-only-layout", "_x:\n  at: |\n    2026-1-2\n", None,
-         '{"_x":{"at":"2026-1-2\\n"},"mysql_connections":50}'),
-        ("block-keep-date", "_x:\n  at: |\n    2026-12-31\n", None,
-         '{"_x":{"at":"2026-12-31\\n"},"mysql_connections":50}'),
-        ("tagged-block-strip-date", "_x:\n  at: !!timestamp |-\n    2026-12-31\n", None,
-         '{"_x":{"at":"2026-12-31T00:00:00Z"},"mysql_connections":50}'),
-    ]
+_DEFAULTS = "defaults:\n  mysql_connections: 50\n"
 
-    # The exporter has no merged_hash for these, so neither does this tool:
-    # the file takes the existing "does not parse" path (no tenant t1).
-    GO_REFUSES = [
-        # yaml.v3 refuses the FILE: "cannot decode !!str `foo` as a !!timestamp"
-        # (review 2 F2).
-        ("explicit-timestamp-word", "_x:\n  at: !!timestamp foo\n"),
-        ("explicit-timestamp-empty", "_x:\n  at: !!timestamp\n"),
-        ("explicit-timestamp-quoted-empty", '_x:\n  at: !!timestamp ""\n'),
-        ("explicit-timestamp-block-keep", "_x:\n  at: !!timestamp |\n    2026-12-31\n"),
-    ]
 
-    # What the reader still cannot align. `None` = the exporter has no
-    # merged_hash for t1 (yaml.v3 refuses the file, or CanonicalJSON fails).
-    DIVERGENT = [
-        # Go parses a 24h+ zone offset, but CanonicalJSON fails once the value
-        # is in the tenant's effective config, so the exporter has no hash;
-        # this tool renders it as usual (review 3 F1: refusing the file was
-        # wider than Go — see TestYamlTimestampScope).
-        ("zone-24-00", "_x:\n  at: 2026-12-31T10:20:30+24:00\n", None, None),
-        ("zone-minus-23-60", "_x:\n  at: 2026-12-31T10:20:30-23:60\n", None, None),
-        ("zone-24-01", "_x:\n  at: 2026-12-31T10:20:30+24:01\n", None, None),
-        ("zone-24-00-one-digit-fields", "_x:\n  at: 2026-1-2T1:2:3+24:00\n", None, None),
-        # An explicit `!!timestamp` is refused for VALUES only: yaml.v3 also
-        # refuses the file for one on a key or a tenant id; here the key is
-        # its text (review 3 F3; tenant id: TestYamlTimestampScope).
-        ("key-ts-foo-direct", "!!timestamp foo: 1\n", None, None),
-        ("key-ts-foo-nested", "_x:\n  !!timestamp foo: 1\n", None, None),
-        # …and yaml.v3 decodes a quoted key tagged `!!timestamp` as a time.
-        ("key-ts-quoted", "_x:\n  !!timestamp '2026-12-31': 1\n", None,
-         '{"_x":{"2026-12-31 00:00:00 +0000 UTC":1},"mysql_connections":50}'),
-        # An explicit tag PyYAML's own resolver would also have inferred leaves
-        # no trace once composed: read as the plain `2026-1-2`, i.e. a time.
-        ("explicit-str-on-a-go-only-timestamp", "_x:\n  at: !!str 2026-1-2\n", None,
-         '{"_x":{"at":"2026-1-2"},"mysql_connections":50}'),
-        # yaml.v3: "cannot decode !!str `…` as a !!timestamp". PyYAML would
-        # tag these texts `!!timestamp` unasked, so the explicit tag leaves no
-        # trace and the text is kept (`!!timestamp foo` IS refused: GO_REFUSES).
-        ("explicit-timestamp-go-cannot-parse", "_x:\n  at: !!timestamp 2026-12-31T10:20:30\n", None, None),
-        ("explicit-timestamp-month-13", "_x:\n  at: !!timestamp 2026-13-01\n", None, None),
-        # A parser difference, not a typing one (#2123): PyYAML's scanner
-        # refuses the tab and the file is skipped; yaml.v3 keeps the text.
-        ("tab-between-date-and-time", "_x:\n  at: 2026-12-31\t10:20:30\n", None,
-         '{"_x":{"at":"2026-12-31\\t10:20:30"},"mysql_connections":50}'),
-    ]
+def _trees():
+    """(id, {path: content}) for every row above."""
+    for i, b, d in VALUE_BODIES:
+        yield f"value:{i}", {"_defaults.yaml": d or _DEFAULTS,
+                             "t1.yaml": "tenants:\n  t1:\n" + textwrap.indent(b, "    ")}
+    for k in KEYS:
+        yield f"key-in-tenant:{k}", {"_defaults.yaml": _DEFAULTS,
+                                     "t1.yaml": f"tenants:\n  t1:\n    _x:\n      {k}: v\n"}
+        yield f"key-in-defaults:{k}", {"_defaults.yaml": f"defaults:\n  _x:\n    {k}: v\n",
+                                       "t1.yaml": "tenants:\n  t1:\n    mysql_connections: 60\n"}
+    for i, t, d in WHOLE_FILES:
+        yield f"file:{i}", {"_defaults.yaml": d or _DEFAULTS, "t1.yaml": t, "t9.yaml": "tenants:\n  t9: {}\n"}
+    for i, (d, _h) in DEFAULTS_DOCUMENTS.items():
+        yield f"defaults-doc:{i}", {"_defaults.yaml": d, "t1.yaml": 'tenants:\n  t1:\n    redis_memory: "50"\n'}
+    for i, d in NOT_A_MAPPING.items():
+        yield f"defaults-not-a-mapping:{i}", {"_defaults.yaml": d, "t1.yaml": "tenants:\n  t1: {}\n"}
+    for i, raw in DEFAULTS_SHAPES.items():
+        for carrier in ("_defaults.yaml", "sub/_defaults.yaml"):
+            files = {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    mysql_connections: 10\n",
+                     "sub/ts.yaml": "tenants:\n  ts: {}\n"}
+            files[carrier] = raw
+            yield f"defaults-shape:{carrier}:{i}", files
 
-    def _python_canonical(self, tmp_path, body, defaults):
-        conf_d = self._tree(tmp_path, body, defaults)
-        eff = dt.ConfDScanner(conf_d).effective_config("t1")
-        return dt._canonical_json(eff), dt._canonical_hash(eff)
 
-    @pytest.mark.parametrize("body,defaults,go_json",
-                             [c[1:] for c in ALIGNED], ids=[c[0] for c in ALIGNED])
-    def test_canonical_json_and_merged_hash_match_go(self, tmp_path, body, defaults, go_json):
-        got_json, got_hash = self._python_canonical(tmp_path, body, defaults)
-        assert got_json == go_json
-        assert got_hash == hashlib.sha256(go_json.encode("utf-8")).hexdigest()[:16]
+TREES = list(_trees())
 
-    @pytest.mark.parametrize(
-        "body,defaults,go_json",
-        [pytest.param(*c[1:], marks=pytest.mark.xfail(
-            strict=True, reason="#2371: explicit tag lost at compose time, a "
-                                "PyYAML/yaml.v3 parser difference, or a >=24h zone "
-                                "Go's CanonicalJSON refuses — see DIVERGENT"))
-         for c in DIVERGENT],
-        ids=[c[0] for c in DIVERGENT])
-    def test_known_divergence_from_go(self, tmp_path, body, defaults, go_json):
-        if go_json is None:  # yaml.v3 refuses the file: no tenant t1 at all
-            with pytest.raises(KeyError):
-                self._python_canonical(tmp_path, body, defaults)
+
+def _write(tmp_path, files):
+    conf_d = tmp_path / "conf.d"
+    for rel, content in files.items():
+        p = conf_d / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+    return conf_d
+
+
+class TestShowsGoValuesVerbatim:
+    """Every row: `--all` is da-guard effective's answer, field for field."""
+
+    FIELDS = ("tenant_id", "source_file", "source_hash", "defaults_chain", "effective_config")
+
+    @pytest.mark.parametrize("files", [f for _i, f in TREES], ids=[i for i, _f in TREES])
+    def test_all_is_da_guard_effective(self, tmp_path, files):
+        conf_d = _write(tmp_path, files)
+        go_rc, go = _go_effective(conf_d)
+        res = subprocess.run([sys.executable, DESCRIBE, "--all", "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert "Traceback" not in res.stderr, res.stderr
+        if go is None or not go["tenants"]:
+            # Go resolves no tenant (it refuses the tree, or a chain file
+            # stops the resolve): nothing is described, rc 2, said.
+            assert res.returncode == EXIT_CALLER_ERROR, (go_rc, res.returncode, res.stderr)
+            assert res.stdout == ""
             return
-        got_json, _ = self._python_canonical(tmp_path, body, defaults)
-        assert got_json == go_json
-
-    @pytest.mark.parametrize("body", [c[1] for c in GO_REFUSES], ids=[c[0] for c in GO_REFUSES])
-    def test_what_go_cannot_hash_is_not_described(self, tmp_path, body):
-        conf_d = self._tree(tmp_path, body)
-        (conf_d / "t2.yaml").write_text("tenants:\n  t2: {}\n", encoding="utf-8")
-        with pytest.raises(KeyError):
-            dt.ConfDScanner(conf_d).effective_config("t1")
-        res = subprocess.run([sys.executable, self.DESCRIBE, "--all", "--conf-d", str(conf_d)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
         assert res.returncode == 0, res.stderr
-        assert "Traceback" not in res.stderr
-        assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
-        assert set(json.loads(res.stdout)) == {"t2"}
+        out = json.loads(res.stdout)
+        assert set(out) == set(go["tenants"])
+        dropped = bool(go["parse_failed"] or go["unreadable"])
+        for tid, info in out.items():
+            want = go["tenants"][tid]
+            for field in self.FIELDS:
+                assert info[field] == want[field], (tid, field)
+            for field in ("platform_overlay", "profile_overlay"):
+                assert info.get(field) == want.get(field), (tid, field)
+            assert info["merged_hash"] == (None if dropped else want["merged_hash"])
+            if dropped:
+                assert info["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE
+        if dropped:
+            assert "skips or cannot read file(s) of this tree" in res.stderr, res.stderr
 
-    def test_the_go_merged_hash_of_an_unquoted_date(self, tmp_path, da_guard_env):
-        """The merged_hash Go computes for the issue's own shape, via the CLI
-        (read from da-guard since #1549)."""
-        conf_d = self._tree(tmp_path, self.ALIGNED[0][1])
-        res = subprocess.run([sys.executable, self.DESCRIBE, "t1", "--conf-d", str(conf_d), "--show-sources"],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+    @pytest.mark.parametrize("case", sorted(DEFAULTS_DOCUMENTS))
+    def test_merged_hash_is_the_exporters(self, tmp_path, case):
+        """#2459's measured ResolveEffective MergedHash for each document
+        shape (`_defaults.yaml` + `tx.yaml`), now read from da-guard."""
+        body, go_hash = DEFAULTS_DOCUMENTS[case]
+        conf_d = _write(tmp_path, {"_defaults.yaml": body, "tx.yaml": 'tenants:\n  tx:\n    redis_memory: "50"\n'})
+        _rc, go = _go_effective(conf_d)
+        assert go["tenants"]["tx"]["merged_hash"] == go_hash
+        res = subprocess.run([sys.executable, DESCRIBE, "tx", "--show-sources", "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert res.returncode == 0, res.stderr
-        assert json.loads(res.stdout)["merged_hash"] == "2a9fcc779be99d98"
+        # Reported only on a tree the exporter's load reads whole (#1549).
+        dropped = go["parse_failed"] or go["unreadable"]
+        assert json.loads(res.stdout)["merged_hash"] == (None if dropped else go_hash)
 
-    @pytest.mark.parametrize("body", [
-        "_state_maintenance:\n  target: all\n  expires: 2026-12-31\n",
-        "_x:\n  at: 2026-12-31T10:20:30+08:00\n",
-        "_routing:\n  receiver:\n    type: webhook\n    url: !!binary aHR0cDovL3g=\n",
-        "_x:\n  v: !!binary /w==\n",
-    ], ids=["date", "datetime", "binary", "binary-invalid-utf8"])
+    def test_a_subdirectory_defaults_not_a_mapping_is_served_as_go_serves_it(self, tmp_path):
+        """In a sub-directory the exporter serves `defaults: [1]` beside
+        `mysql_connections: 81` (both planes take the whole document;
+        merged_hash cef3dbb6…). This tool used to refuse it (rc 2, "an
+        unsupported shape"); it now shows Go's answer."""
+        conf_d = _write(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                                   "team/_defaults.yaml": "defaults: [1]\nmysql_connections: 81\n",
+                                   "team/tx.yaml": 'tenants:\n  tx:\n    redis_memory: "50"\n'})
+        res = subprocess.run([sys.executable, DESCRIBE, "tx", "--show-sources", "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["effective_config"]["mysql_connections"] == 81
+        assert out["merged_hash"].startswith("cef3dbb6"), out["merged_hash"]
+
+    @pytest.mark.parametrize("files", [
+        {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      at: 2026-12-31T10:20:30+08:00\n"},
+        {"_defaults.yaml": "defaults:\n  _x:\n    2026-12-31: v\n", "t1.yaml": "tenants:\n  t1: {}\n"},
+        {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      v: !!binary aHR0cDovL3g=\n"},
+        {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    a: .inf\n    b: .nan\n"},
+    ], ids=["datetime", "date-key", "binary", "non-finite"])
     @pytest.mark.parametrize("mode", [
         ["t1"], ["t1", "--show-sources"], ["t1", "--format", "yaml"],
         ["--all"], ["--all", "--format", "yaml"],
     ], ids=lambda m: " ".join(m))
-    def test_no_mode_ends_in_a_traceback(self, tmp_path, body, mode):
-        conf_d = self._tree(tmp_path, body)
-        res = subprocess.run([sys.executable, self.DESCRIBE, *mode, "--conf-d", str(conf_d)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+    def test_no_mode_ends_in_a_traceback(self, tmp_path, files, mode):
+        conf_d = _write(tmp_path, files)
+        res = subprocess.run([sys.executable, DESCRIBE, *mode, "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert res.returncode == 0, res.stderr
         assert "Traceback" not in res.stderr
-        out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
-        assert out
-
-
-class TestYamlTimestampScope:
-    """#2371 review 3 F1: a 24h+ zone offset stops the exporter only once it
-    is IN a tenant's effective config (CanonicalJSON). Anywhere else in the
-    tree t1 is still described, as Go describes it. Whole files, because the
-    point is what else is in them. Go column measured with pkg/config."""
-
-    DEFAULTS = "defaults:\n  mysql_connections: 50\n"
-    CASES = [
-        pytest.param(
-            "tenants:\n  t1:\n    mysql_connections: 60\n  t2:\n    _x:\n      at: 2026-12-31T10:20:30+24:00\n",
-            DEFAULTS, '{"mysql_connections":60}', id="other-tenant-in-file-24h"),
-        pytest.param(
-            "tenants:\n  t1:\n    mysql_connections: 60\nextra: 2026-12-31T10:20:30+24:00\n",
-            DEFAULTS, '{"mysql_connections":60}', id="root-sibling-24h"),
-        pytest.param(
-            "tenants:\n  t1:\n    _x: 1\n", DEFAULTS + "  _x: 2026-12-31T10:20:30+24:00\n",
-            '{"_x":1,"mysql_connections":50}', id="overridden-default-24h"),
-        # yaml.v3 refuses the file for an explicit `!!timestamp` on a tenant
-        # id; this tool refuses it for values only (review 3 F3).
-        pytest.param(
-            "tenants:\n  !!timestamp foo:\n    a: 1\n  t1:\n    a: 2\n", DEFAULTS, None,
-            id="tenantid-ts-foo", marks=pytest.mark.xfail(
-                strict=True, reason="#2371: `!!timestamp` refused on values only, not tenant ids")),
-    ]
-
-    @pytest.mark.parametrize("tenant_yaml,defaults_yaml,go_json", CASES)
-    def test_t1_is_described_as_go_describes_it(self, tmp_path, tenant_yaml, defaults_yaml, go_json):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text(defaults_yaml, encoding="utf-8")
-        (conf_d / "t1.yaml").write_text(tenant_yaml, encoding="utf-8")
-        if go_json is None:  # the exporter has no t1
-            with pytest.raises(KeyError):
-                dt.ConfDScanner(conf_d).effective_config("t1")
-            return
-        assert dt._canonical_json(dt.ConfDScanner(conf_d).effective_config("t1")) == go_json
-
-
-class TestYamlMappingKeyParity:
-    """#2371: mapping KEYS. Below a tenant id yaml.v3 decodes a mapping with
-    a non-string key into `map[any]any`, and pkg/config spells each key with
-    `fmt.Sprintf("%v", k)` — an unquoted `2026-12-31:` is
-    "2026-12-31 00:00:00 +0000 UTC". A `date` key in a `_defaults.yaml` ended
-    every mode with "keys must be str…"; in a tenant file the key was its
-    source text, so merged_hash differed from the exporter's.
-
-    Go column: pkg/config `CanonicalJSON(ComputeEffectiveConfig(...))` over
-    the same two files, measured with time.Local = UTC (the `+00:00` row
-    depends on it). The same key is tried in the tenant file and in the
-    `_defaults.yaml`; golden row `yaml-keys` re-checks a few against Go on
-    every run."""
-
-    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
-
-    # (key as written, the exporter's spelling)
-    ALIGNED = [
-        ("2026-12-31", "2026-12-31 00:00:00 +0000 UTC"),
-        ('"2026-12-31"', "2026-12-31"),
-        ("'2026-12-31'", "2026-12-31"),
-        ("!!str 2026-12-31", "2026-12-31"),
-        ("!!timestamp 2026-12-31", "2026-12-31 00:00:00 +0000 UTC"),
-        ("2026-1-2", "2026-01-02 00:00:00 +0000 UTC"),
-        ("0999-01-02", "0999-01-02 00:00:00 +0000 UTC"),
-        ("2026-13-01", "2026-13-01"),
-        ("2026-02-30", "2026-02-30"),
-        ("2026-12-31T10:20:30Z", "2026-12-31 10:20:30 +0000 UTC"),
-        ("2026-12-31t10:20:30Z", "2026-12-31 10:20:30 +0000 UTC"),
-        ("2026-12-31T10:20:30+00:00", "2026-12-31 10:20:30 +0000 UTC"),
-        ("2026-12-31T10:20:30+08:00", "2026-12-31 10:20:30 +0800 +0800"),
-        ("2026-12-31T10:20:30-05:30", "2026-12-31 10:20:30 -0530 -0530"),
-        ("2026-12-31T10:20:30.5Z", "2026-12-31 10:20:30.5 +0000 UTC"),
-        ("2026-12-31T10:20:30,5Z", "2026-12-31 10:20:30.5 +0000 UTC"),
-        ("2026-12-31T10:20:30.123456789Z", "2026-12-31 10:20:30.123456789 +0000 UTC"),
-        ("2026-12-31 10:20:30", "2026-12-31 10:20:30 +0000 UTC"),
-        ("2026-12-31  10:20:30", "2026-12-31 10:20:30 +0000 UTC"),
-        ("2026-12-31T10:20:30", "2026-12-31T10:20:30"),
-        ("2026-12-31T24:00:00Z", "2026-12-31T24:00:00Z"),
-        # Zone bounds and minute carry, as for values (review 2 F1); a key
-        # is spelled by String(), which a 24h offset does not trouble.
-        ("2026-12-31T10:20:30+08:60", "2026-12-31 10:20:30 +0900 +0900"),
-        ("2026-12-31T10:20:30+99:00", "2026-12-31T10:20:30+99:00"),
-        ("2026-12-31T10:20:30+08:61", "2026-12-31T10:20:30+08:61"),
-        ("2026-12-31T10:20:30+24:00", "2026-12-31 10:20:30 +2400 +2400"),
-        ("0000-01-01", "0000-01-01 00:00:00 +0000 UTC"),
-        ("0001-02-29", "0001-02-29"),
-        ("1", "1"), ("010", "8"), ("0777", "511"), ("08", "8"), ("0888", "888"),
-        ("0x1F", "31"), ("-0x1F", "-31"), ("+0x1F", "31"), ("0x_1F", "31"), ("0x", "0x"),
-        ("0o17", "15"), ("0b101", "5"), ("0b", "0b"), ("1_000", "1000"), ("1__0", "10"),
-        ("+5", "5"), ("-5", "-5"),
-        ("9223372036854775808", "9223372036854775808"),
-        ("18446744073709551615", "18446744073709551615"),
-        ("+18446744073709551615", "1.8446744073709552e+19"),
-        ("18446744073709551616", "1.8446744073709552e+19"),
-        ("-9223372036854775809", "-9.223372036854776e+18"),
-        ("1.5", "1.5"), ("1.0", "1"), ("0.", "0"), (".5", "0.5"), ("+1.5", "1.5"),
-        ("1.5_0", "1.5"), ("-0.0", "-0"), ("0.1", "0.1"),
-        ("1e3", "1000"), ("1.5e3", "1500"), ("1e21", "1e+21"), ("1e400", "1e400"),
-        ("1000000.0", "1e+06"), ("123456.0", "123456"), ("123456789.0", "1.23456789e+08"),
-        ("0.0001", "0.0001"), ("1e-4", "0.0001"), ("0.00001", "1e-05"), ("-1.5e-7", "-1.5e-07"),
-        (".inf", "+Inf"), ("-.Inf", "-Inf"), ("+.INF", "+Inf"), (".nan", "NaN"),
-        # yaml.v3's `.` hint runs ParseFloat on the text as written, so an
-        # underscore must pass underscoreOK (review F2); the digit hint strips
-        # them first (`1__0` above is 10).
-        (".5_0", "0.5"), (".5e1_0", "5e+09"), (".5E+3", "500"), (".5e400", ".5e400"),
-        ("._5", "._5"), (".5_", ".5_"), (".5__0", ".5__0"), (".5e_1", ".5e_1"), ("._", "._"),
-        ("true", "true"), ("True", "true"), ("TRUE", "true"), ("false", "false"),
-        ("yes", "yes"), ("on", "on"), ("no", "no"), ("off", "off"), ("y", "y"),
-        ("12:30", "12:30"), ("1:30:00", "1:30:00"),
-        ("!!str 010", "010"), ('"010"', "010"), ("!!int 010", "8"), ("!!float 1", "1"),
-        ("abc", "abc"),
-    ]
-
-    # yaml.v3 keeps a null key as "<nil>"; the #2114 key reader drops it. An
-    # explicit `!!str` PyYAML would also have inferred leaves no trace.
-    DIVERGENT = [("~", "<nil>"), ("null", "<nil>"), ("!!str 1e3", "1e3")]
-
-    def _tree(self, tmp_path, key, where):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        if where == "tenant":
-            (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
-            (conf_d / "t1.yaml").write_text(f"tenants:\n  t1:\n    _x:\n      {key}: v\n", encoding="utf-8")
-        else:
-            (conf_d / "_defaults.yaml").write_text(f"defaults:\n  _x:\n    {key}: v\n", encoding="utf-8")
-            (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n    mysql_connections: 60\n", encoding="utf-8")
-        return conf_d
-
-    @staticmethod
-    def _go_json(go_key, where):
-        return json.dumps({"_x": {go_key: "v"}, "mysql_connections": 50 if where == "tenant" else 60},
-                          sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-
-    @pytest.mark.parametrize("where", ["tenant", "defaults"])
-    @pytest.mark.parametrize("key,go_key", ALIGNED, ids=[k for k, _ in ALIGNED])
-    def test_key_is_spelled_as_the_exporter_spells_it(self, tmp_path, key, go_key, where):
-        eff = dt.ConfDScanner(self._tree(tmp_path, key, where)).effective_config("t1")
-        go_json = self._go_json(go_key, where)
-        assert dt._canonical_json(eff) == go_json
-        assert dt._canonical_hash(eff) == hashlib.sha256(go_json.encode("utf-8")).hexdigest()[:16]
-
-    @pytest.mark.parametrize("where", ["tenant", "defaults"])
-    @pytest.mark.parametrize(
-        "key,go_key",
-        [pytest.param(k, g, marks=pytest.mark.xfail(
-            strict=True, reason="#2371: the key reader has no trace of what Go keys on"))
-         for k, g in DIVERGENT],
-        ids=[k for k, _ in DIVERGENT])
-    def test_known_key_divergence_from_go(self, tmp_path, key, go_key, where):
-        eff = dt.ConfDScanner(self._tree(tmp_path, key, where)).effective_config("t1")
-        assert dt._canonical_json(eff) == self._go_json(go_key, where)
-
-    def test_a_date_key_merges_across_defaults_and_tenant(self, tmp_path):
-        """One key to Go (both are time.Time), so their bodies deep-merge."""
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  _x:\n    2026-12-31:\n      a: 1\n", encoding="utf-8")
-        (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n    _x:\n      2026-12-31:\n        b: 2\n", encoding="utf-8")
-        eff = dt.ConfDScanner(conf_d).effective_config("t1")
-        assert dt._canonical_json(eff) == '{"_x":{"2026-12-31 00:00:00 +0000 UTC":{"a":1,"b":2}}}'
-
-    @pytest.mark.xfail(strict=True, reason="#2371: `010` and `8` are one Go key, two text keys here")
-    def test_two_spellings_of_one_go_key_merge(self, tmp_path):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  _x:\n    010:\n      a: 1\n", encoding="utf-8")
-        (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n    _x:\n      8:\n        b: 2\n", encoding="utf-8")
-        eff = dt.ConfDScanner(conf_d).effective_config("t1")
-        assert dt._canonical_json(eff) == '{"_x":{"8":{"a":1,"b":2}}}'
-
-    @pytest.mark.parametrize("where", ["tenant", "defaults"])
-    @pytest.mark.parametrize("key", ["2026-12-31", "2026-12-31T10:20:30+08:00", "2026-12-31 10:20:30.5", "010"])
-    @pytest.mark.parametrize("mode", [
-        ["t1"], ["t1", "--show-sources"], ["t1", "--format", "yaml"],
-        ["--all"], ["--all", "--format", "yaml"],
-    ], ids=lambda m: " ".join(m))
-    def test_no_mode_ends_in_a_traceback(self, tmp_path, key, where, mode):
-        conf_d = self._tree(tmp_path, key, where)
-        res = subprocess.run([sys.executable, self.DESCRIBE, *mode, "--conf-d", str(conf_d)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
-        assert res.returncode == 0, res.stderr
-        assert "Traceback" not in res.stderr
-        # yaml.safe_load refuses a `!!python/...` tag: no key object leaked out.
         out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
         effective = (out["t1"] if "--all" in mode else out)["effective_config"]
-        assert list(effective["_x"]) == [dt._go_plain_key(key)]
+        assert effective == _go_effective(conf_d)[1]["tenants"]["t1"]["effective_config"]
 
     @pytest.mark.parametrize("fmt", ["json", "yaml"])
     def test_all_keeps_tenant_ids_as_source_text(self, tmp_path, fmt):
-        """Review F1: `--all` is keyed by TENANT ID, which the exporter keys by
-        source text (#2114). Respelled as `%v`, tenants `010` and `8` both
-        became "8" and one silently replaced the other."""
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
-        (conf_d / "a.yaml").write_text("tenants:\n  010:\n    mysql_connections: 10\n", encoding="utf-8")
-        (conf_d / "b.yaml").write_text("tenants:\n  8:\n    mysql_connections: 8\n", encoding="utf-8")
-        res = subprocess.run([sys.executable, self.DESCRIBE, "--all", "--format", fmt, "--conf-d", str(conf_d)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
+        """`--all` is keyed by TENANT ID, which the exporter keys by source
+        text (#2114): tenants `010` and `8` are two tenants."""
+        conf_d = _write(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                                   "a.yaml": "tenants:\n  010:\n    mysql_connections: 10\n",
+                                   "b.yaml": "tenants:\n  8:\n    mysql_connections: 8\n"})
+        res = subprocess.run([sys.executable, DESCRIBE, "--all", "--format", fmt, "--conf-d", str(conf_d)],
+                             capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert res.returncode == 0, res.stderr
         out = yaml.safe_load(res.stdout) if fmt == "yaml" else json.loads(res.stdout)
         assert set(out) == {"010", "8"}, out
-        assert out["010"]["tenant_id"] == "010"
         assert out["010"]["effective_config"] == {"mysql_connections": 10}
-        assert out["8"]["tenant_id"] == "8"
         assert out["8"]["effective_config"] == {"mysql_connections": 8}
 
-    def test_a_surrogate_escape_is_a_file_that_does_not_parse(self, tmp_path):
-        """yaml.v3 refuses `"\\udfff"` (invalid Unicode escape); PyYAML built
-        the str and the hash died in UnicodeEncodeError. Now the tenant file
-        takes the "does not parse" path, as the exporter does not load it."""
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
-        (conf_d / "t1.yaml").write_text('tenants:\n  t1:\n    _x: "\\udfff"\n', encoding="utf-8")
-        (conf_d / "t2.yaml").write_text("tenants:\n  t2: {}\n", encoding="utf-8")
-        res = subprocess.run([sys.executable, self.DESCRIBE, "--all", "--conf-d", str(conf_d)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
-        assert res.returncode == 0, res.stderr
-        assert "Traceback" not in res.stderr
-        assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
-        assert set(json.loads(res.stdout)) == {"t2"}
 
-    # A `_profile:` value is read as source text (#2297) without passing
-    # construct_scalar, so `_GoKeyLoader.construct_mapping` refuses the
-    # surrogate for it separately; these two keep that refusal honest.
-    def test_a_surrogate_profile_in_a_tenant_file_drops_that_file(self, tmp_path):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
-        (conf_d / "t1.yaml").write_text('tenants:\n  t1:\n    _profile: "\\udfff"\n', encoding="utf-8")
-        res = subprocess.run([sys.executable, self.DESCRIBE, "t1", "--conf-d", str(conf_d)],
-                             capture_output=True, text=True, encoding="utf-8", timeout=20)
-        assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
-        assert "Traceback" not in res.stderr
-        assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
-        assert "Tenant 't1' not found" in res.stderr
+class TestTreesGoDoesNotResolve:
+    """A tree whose tenant Go does not resolve — a chain `_defaults.yaml` the
+    resolve rejects, a tenant file the load skips: named, rc 2 (the code
+    #2413 gave an unparseable `_defaults.yaml`), never a traceback."""
 
-    def test_a_surrogate_profile_in_a_root_platform_file_contributes_nothing(self, tmp_path):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
-        (conf_d / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 60\n", encoding="utf-8")
-
-        def merged_hash():
-            # rc 0 and no traceback through the CLI; the hash compared is
-            # this tool's own canonical hash of the merged config, which is
-            # what this test guards (#1549: the printed merged_hash is
-            # da-guard's, None without one — and da-guard exits 3 on `_x.yaml`).
-            res = subprocess.run([sys.executable, self.DESCRIBE, "tx", "--conf-d", str(conf_d), "--show-sources"],
-                                 capture_output=True, text=True, encoding="utf-8", timeout=20)
-            assert res.returncode == 0, res.stderr
-            assert "Traceback" not in res.stderr
-            own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("tx"))
-            assert isinstance(own, str)
-            return own, res.stderr
-
-        without, _ = merged_hash()
-        # A root platform file that does not parse contributes nothing, and
-        # silently — as Go drops it (`_read_platform_files`).
-        (conf_d / "_x.yaml").write_text('tenants:\n  tx:\n    _profile: "\\udfff"\n', encoding="utf-8")
-        with_file, _ = merged_hash()
-        assert with_file == without
-
-
-class TestUnparseableDefaults:
-    """#2413: a `_defaults.yaml` that does not parse ends the run with
-    EXIT_CALLER_ERROR and names the file, instead of a traceback (rc 1).
-
-    Fails when the `DefaultsParseError` raise in `ConfDScanner._scan` or its
-    catch in `main` is removed: every case below then prints a Traceback
-    with rc 1 and no file name. The `tagged-*` shapes also fail when that
-    raise catches only `yaml.YAMLError` / `UnicodeDecodeError`."""
-
-    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
-
-    SHAPES = {
-        "unclosed-flow": b"defaults: [\n",
-        "not-utf8": b'defaults:\n  x: "\xff\xfe"\n',
-        "surrogate-escape": b'defaults:\n  _x: "\\udfff"\n',
-        # An explicit tag whose text does not fit it: PyYAML raises
-        # ValueError / KeyError here, not a YAMLError.
-        "tagged-int": b"defaults:\n  x: !!int foo\n",
-        "tagged-float": b"defaults:\n  x: !!float foo\n",
-        "tagged-bool": b"defaults:\n  x: !!bool foo\n",
-        # #2459: parses, but yaml.v3 refuses it — PyYAML read True / b"".
-        "tagged-bool-yes": b"defaults:\n  x: !!bool yes\n",
-        "tagged-bool-mixed-case": b"defaults:\n  x: !!bool tRuE\n",
-        "tagged-binary-bad-chars": b'defaults:\n  x: !!binary "%%%"\n',
-        "tagged-binary-unpadded": b'defaults:\n  x: !!binary "aGVsbG8"\n',
-        # #2459: parses, but `defaults:` is not a mapping — an
-        # AttributeError traceback before.
-        "defaults-list": b"defaults: [1, 2]\n",
-        "defaults-scalar": b"defaults: 5\n",
-        # #2459: parses, but the document itself is not a mapping — a
-        # traceback before for a list or a string.
-        "document-list": b"- 1\n- 2\n",
-        "document-scalar": b"hello\n",
-        "document-false": b"false\n",
-    }
-    # #2459: these parse; the message says the shape is unsupported
-    # (DefaultsShapeError), not that the file does not parse.
-    UNSUPPORTED = {"defaults-list", "defaults-scalar", "document-list",
-                   "document-scalar", "document-false"}
-    MODES = {
-        "tenant": ["tr"],
-        "all-json": ["--all"],
-        "all-yaml": ["--all", "--format", "yaml"],
-    }
-
-    def _tree(self, tmp_path):
-        conf_d = tmp_path / "conf.d"
-        (conf_d / "sub").mkdir(parents=True)
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
-        (conf_d / "tr.yaml").write_text("tenants:\n  tr:\n    mysql_connections: 10\n", encoding="utf-8")
-        (conf_d / "sub" / "ts.yaml").write_text("tenants:\n  ts: {}\n", encoding="utf-8")
-        return conf_d
+    def _tree(self, tmp_path, carrier_bytes=None, tenant=None):
+        files = {"_defaults.yaml": _DEFAULTS, "tr.yaml": tenant or "tenants:\n  tr:\n    mysql_connections: 10\n",
+                 "sub/ts.yaml": "tenants:\n  ts: {}\n"}
+        if carrier_bytes is not None:
+            files["_defaults.yaml"] = carrier_bytes
+        return _write(tmp_path, files)
 
     def _run(self, *args):
-        return subprocess.run([sys.executable, self.DESCRIBE, *args],
-                              capture_output=True, text=True, encoding="utf-8", timeout=20)
+        return subprocess.run([sys.executable, DESCRIBE, *args],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
 
-    @pytest.mark.parametrize("mode", sorted(MODES))
-    @pytest.mark.parametrize("shape", sorted(SHAPES))
-    @pytest.mark.parametrize("carrier", ["_defaults.yaml", "sub/_defaults.yaml"])
-    def test_unparseable_defaults_is_a_named_caller_error(self, tmp_path, carrier, shape, mode):
-        conf_d = self._tree(tmp_path)
-        (conf_d / carrier).write_bytes(self.SHAPES[shape])
-        res = self._run(*self.MODES[mode], "--conf-d", str(conf_d))
+    @pytest.mark.parametrize("mode", [["tr"], ["--all"], ["--all", "--format", "yaml"]],
+                             ids=lambda m: " ".join(m))
+    def test_unparseable_defaults_is_named_and_the_values_are_gos(self, tmp_path, mode):
+        """#2906: a root `_defaults.yaml` that does not parse is the
+        exporter's to judge. Its load skips the file and still resolves the
+        tenants (without that level) — so they are described as Go resolves
+        them, the file named and no merged_hash, where this tool used to stop
+        the whole run (rc 2, #2413)."""
+        conf_d = self._tree(tmp_path, b"defaults: [\n")
+        go_rc, go = _go_effective(conf_d)
+        assert go_rc == 3 and go["tenants"], (go_rc, go)
+        res = self._run(*mode, "--conf-d", str(conf_d))
         assert "Traceback" not in res.stderr, res.stderr
-        assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
-        verdict = "has an unsupported shape" if shape in self.UNSUPPORTED else "does not parse"
-        assert f"{conf_d / carrier} {verdict}" in res.stderr, res.stderr
-        assert res.stdout == ""
+        assert res.returncode == 0, (res.returncode, res.stderr)
+        assert "WARNING: skipped _defaults.yaml — " in res.stderr, res.stderr
+        out = yaml.safe_load(res.stdout) if "yaml" in mode else json.loads(res.stdout)
+        got = out if mode == ["tr"] else out["tr"]
+        assert got["effective_config"] == go["tenants"]["tr"]["effective_config"]
 
-    @pytest.mark.parametrize("shape", sorted(SHAPES))
-    def test_unparseable_what_if_file_is_named(self, tmp_path, shape):
+    @pytest.mark.parametrize("shape", sorted(DEFAULTS_SHAPES))
+    def test_a_draft_that_does_not_decode_there_is_named(self, tmp_path, shape):
+        """--what-if <draft> --replaces _defaults.yaml: rc 2 naming the draft
+        exactly when the exporter's load would skip that path with these
+        bytes, or no longer resolve the tenant (da-guard run directly)."""
         conf_d = self._tree(tmp_path)
-        what_if = tmp_path / "what-if.yaml"
-        what_if.write_bytes(self.SHAPES[shape])
-        res = self._run("tr", "--conf-d", str(conf_d), "--what-if", str(what_if))
+        draft = tmp_path / "what-if.yaml"
+        draft.write_bytes(DEFAULTS_SHAPES[shape])
+        _rc, go = _go_effective(conf_d, "--overlay", f"_defaults.yaml={draft}")
+        refused = go is None or "_defaults.yaml" in go["parse_failed"] or "tr" not in go["tenants"]
+        res = self._run("tr", "--conf-d", str(conf_d), "--what-if", str(draft),
+                        "--replaces", str(conf_d / "_defaults.yaml"))
         assert "Traceback" not in res.stderr, res.stderr
-        assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
-        assert str(what_if.resolve()) in res.stderr, res.stderr
-        # #2459: a shape refusal is not reported as a parse failure.
-        if shape in self.UNSUPPORTED:
-            assert "has an unsupported shape" in res.stderr, res.stderr
-            assert "Failed to parse" not in res.stderr, res.stderr
+        if refused:
+            assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
+            assert str(draft.resolve()) in res.stderr, res.stderr
+        else:
+            assert res.returncode == 0, res.stderr
+            base = _go_effective(conf_d)[1]["tenants"]["tr"]["effective_config"]
+            want = go["tenants"]["tr"]["effective_config"]
+            out = json.loads(res.stdout)
+            assert out["changed_keys"] == {k: {"baseline": base[k], "what_if": want[k]}
+                                           for k in base if k in want and base[k] != want[k]}
+            assert out["added_keys"] == {k: want[k] for k in want if k not in base}
+            assert out["removed_keys"] == {k: base[k] for k in base if k not in want}
+            assert out["what_if_merged_hash"] == go["tenants"]["tr"]["merged_hash"]
 
-    # must-trigger controls: the paths around the fix are unchanged.
     def test_control_parseable_defaults_still_describe(self, tmp_path):
         conf_d = self._tree(tmp_path)
         res = self._run("--all", "--conf-d", str(conf_d))
@@ -1879,185 +1628,103 @@ class TestUnparseableDefaults:
         out = json.loads(res.stdout)
         assert out["tr"]["effective_config"] == {"mysql_connections": 10}
         assert out["ts"]["effective_config"] == {"mysql_connections": 50}
-        assert "does not parse" not in res.stderr
+        assert "skips or cannot read" not in res.stderr
 
     def test_control_unparseable_tenant_file_is_still_skipped(self, tmp_path):
-        conf_d = self._tree(tmp_path)
-        (conf_d / "tr.yaml").write_text("tenants: [\n", encoding="utf-8")
+        conf_d = self._tree(tmp_path, tenant="tenants: [\n")
         res = self._run("--all", "--conf-d", str(conf_d))
         assert res.returncode == 0, res.stderr
         assert set(json.loads(res.stdout)) == {"ts"}
-        assert "WARNING: skipped" in res.stderr and "tr.yaml" in res.stderr
+        assert "WARNING: skipped tr.yaml — " in res.stderr, res.stderr
 
-
-class TestDefaultsDocumentParity:
-    """#2459: `_defaults.yaml` documents the exporter DOES serve, described
-    with its merged_hash. `_hash` is this tool's own canonical hash of the
-    effective config it reads (`--what-if` prints that one; the merged_hash
-    `--show-sources` prints is da-guard's since #1549, which would make the
-    rows Go against Go). Every `go_hash` below is ResolveEffective's
-    MergedHash for the same two-file tree (`_defaults.yaml` + `tx.yaml`),
-    measured with a scratch Go program built against
-    components/threshold-exporter/app (`config.LoadDir` +
-    `config.ResolveEffective`); the flat load served the same values.
-
-    Fails when `_load_yaml` reads the whole stream again (the multi-document
-    rows: "does not parse", rc 2), when it stops tolerating a null
-    document or `defaults: ~` (AttributeError), or when the chain stops taking
-    Go's `extractDefaultsBlock` (the `defaults: ~` + sibling row)."""
-
-    TENANT = 'tenants:\n  tx:\n    redis_memory: "50"\n'
-    WITH_80 = "664e2553d242d345"   # defaults {mysql_connections: 80}
-    NOTHING = "dc8202dfc4683b17"   # no defaults at all
-
-    CASES = {
-        # must-trigger control: the plain shape, same hash as Go.
-        "control": ("defaults:\n  mysql_connections: 80\n", WITH_80),
-        # yaml.v3 Unmarshal decodes the FIRST document only; a later one
-        # is never read, even when it would not parse or has a bad shape.
-        "multi-doc": ("defaults:\n  mysql_connections: 80\n---\n"
-                      "defaults:\n  mysql_connections: 90\n", WITH_80),
-        "multi-doc-later-unparseable": (
-            "defaults:\n  mysql_connections: 80\n---\n: : [\n", WITH_80),
-        "multi-doc-later-bad-shape": (
-            "defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n", WITH_80),
-        "multi-doc-empty-first": ("---\n---\ndefaults:\n  mysql_connections: 80\n",
-                                  NOTHING),
-        # null is no defaults block; the rest of the document is (Go's
-        # extractDefaultsBlock), and the null key itself merges away.
-        "defaults-null": ("defaults: ~\n", NOTHING),
-        "defaults-null-with-sibling": ("defaults: ~\nmysql_connections: 80\n", WITH_80),
-        # an explicit tag yaml.v3 accepts keeps loading.
-        "tagged-bool-true": ("defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n",
-                             "01fde994832c3568"),
-        "tagged-bool-quoted": ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n',
-                               "01fde994832c3568"),
-        "tagged-binary-block": ("defaults:\n  mysql_connections: 80\n"
-                                "  x: !!binary |\n    aGVs\n    bG8=\n", "0ee9af955f7e7e01"),
-    }
-    # Not a mapping: refused, naming the file (rc 2 on the CLI).
-    NOT_A_MAPPING = {"list": "- 1\n- 2\n", "scalar": "hello\n", "false": "false\n"}
-
-    def _hash(self, tmp_path, body):
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text(body, encoding="utf-8")
-        (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
-        return dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("tx"))
-
-    @pytest.mark.parametrize("case", sorted(CASES))
-    def test_merged_hash_matches_the_exporter(self, tmp_path, case):
-        body, go_hash = self.CASES[case]
-        assert self._hash(tmp_path, body) == go_hash
-
-    @pytest.mark.parametrize("case", sorted(NOT_A_MAPPING))
-    def test_a_document_that_is_not_a_mapping_is_refused(self, tmp_path, case):
-        """Owner's ruling on #2459: refused like a `defaults:` that is not a
-        mapping, not described around. The CLI half (rc 2, every mode, a
-        sub-directory level, `--what-if`) is TestUnparseableDefaults'
-        `document-*` shapes; the control is CASES["control"] — the same
-        file as a mapping describes with the exporter's hash."""
-        with pytest.raises(dt.DefaultsShapeError, match="the document is a .*, not a mapping"):
-            self._hash(tmp_path, self.NOT_A_MAPPING[case])
-
-    def _sub_tree(self, tmp_path, sub_defaults):
-        conf_d = tmp_path / "conf.d"
-        (conf_d / "team").mkdir(parents=True)
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
-                                               encoding="utf-8")
-        (conf_d / "team" / "_defaults.yaml").write_text(sub_defaults, encoding="utf-8")
-        (conf_d / "team" / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
-        return conf_d
-
-    def _describe(self, conf_d, *args):
-        return subprocess.run(
-            [sys.executable, TestUnparseableDefaults.DESCRIBE, *args, "--conf-d", str(conf_d)],
-            capture_output=True, text=True, encoding="utf-8", timeout=20)
-
-    def test_a_subdirectory_defaults_not_a_mapping_is_named_unsupported(self, tmp_path):
-        """In a sub-directory the exporter DOES serve `defaults: [1]` beside
-        `mysql_connections: 81` (both planes take the whole document: 81 on
-        /metrics, merged_hash cef3dbb6…). Refused all the same (one rule for
-        every level), but the message must not claim the file does not
-        parse — it parses, and the exporter reads it."""
-        conf_d = self._sub_tree(tmp_path, "defaults: [1]\nmysql_connections: 81\n")
-        res = self._describe(conf_d, "tx", "--show-sources")
+    def test_a_tenant_in_a_skipped_file_is_not_found_and_says_why(self, tmp_path):
+        conf_d = self._tree(tmp_path, tenant='tenants:\n  tr:\n    x: !!bool yes\n')
+        res = self._run("tr", "--conf-d", str(conf_d))
         assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-        carrier = conf_d / "team" / "_defaults.yaml"
-        assert f"{carrier} has an unsupported shape" in res.stderr, res.stderr
-        assert "does not parse" not in res.stderr, res.stderr
-        assert res.stdout == ""
+        assert "Tenant 'tr' not found — the exporter's load skips" in res.stderr, res.stderr
+        assert "tr.yaml" in res.stderr
 
-    def test_control_subdirectory_defaults_mapping_matches_the_exporter(self, tmp_path, da_guard_env):
-        """Must-trigger control for the test above: the same level written
-        as a mapping describes with rc 0 and ResolveEffective's hash."""
-        conf_d = self._sub_tree(tmp_path, "defaults:\n  mysql_connections: 81\n")
-        res = self._describe(conf_d, "tx", "--show-sources")
+    def test_multi_document_what_if_reads_its_first_document(self, tmp_path):
+        """The draft is read as yaml.v3 reads that path: its first document."""
+        conf_d = _write(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                                   "tx.yaml": 'tenants:\n  tx:\n    redis_memory: "50"\n'})
+        what_if = tmp_path / "what-if.yaml"
+        what_if.write_text("defaults:\n  mysql_connections: 90\n---\n: : [\n", encoding="utf-8")
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(what_if),
+                        "--replaces", str(conf_d / "_defaults.yaml"))
         assert res.returncode == 0, res.stderr
-        assert json.loads(res.stdout)["merged_hash"][:16] == "e4404f52c8e88f56"
+        assert json.loads(res.stdout)["changed_keys"] == {
+            "mysql_connections": {"baseline": 80, "what_if": 90}}
 
-    def _custom_alerts_tree(self, tmp_path, root_defaults):
-        conf_d = tmp_path / "conf.d"
-        (conf_d / "team").mkdir(parents=True)
-        (conf_d / "_defaults.yaml").write_text(root_defaults, encoding="utf-8")
-        (conf_d / "team" / "_defaults.yaml").write_text(yaml.dump({"_custom_alerts": [
-            {"recipe": "threshold", "name": "team_policy", "metric": "policy_metric",
-             "op": ">", "window": "5m", "threshold": "200:critical"}]}), encoding="utf-8")
-        (conf_d / "team" / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
-        return conf_d
-
-    def test_a_root_document_not_a_mapping_stops_before_custom_alerts(self, tmp_path):
-        """With the root document skipped, the `_custom_alerts` walker went
-        on to read it, failed, and fell back to REPLACE with a WARN. The
-        refusal stops the run before that walker runs."""
-        res = self._describe(self._custom_alerts_tree(tmp_path, "- 1\n"), "tx")
-        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-        assert "has an unsupported shape" in res.stderr, res.stderr
-        assert "inheritance resolution failed" not in res.stderr, res.stderr
-
-    def test_control_custom_alerts_resolve_under_a_mapping_root(self, tmp_path):
-        res = self._describe(self._custom_alerts_tree(
-            tmp_path, "defaults:\n  mysql_connections: 80\n"), "tx")
+    def test_a_root_document_not_a_mapping_leaves_custom_alerts_resolved(self, tmp_path):
+        """The custom-alert walker reads the root carrier through parse-tree:
+        a document that is not a mapping is one file it quarantines, not a
+        resolver failure — the subtree's policy still resolves."""
+        conf_d = _write(tmp_path, {"_defaults.yaml": "- 1\n",
+                                   "team/_defaults.yaml": yaml.dump({"_custom_alerts": [
+                                       {"recipe": "threshold", "name": "team_policy", "metric": "policy_metric",
+                                        "op": ">", "window": "5m", "threshold": "200:critical"}]}),
+                                   "team/tx.yaml": 'tenants:\n  tx:\n    redis_memory: "50"\n'})
+        res = self._run("tx", "--conf-d", str(conf_d))
         assert res.returncode == 0, res.stderr
         assert "inheritance resolution failed" not in res.stderr, res.stderr
         eff = json.loads(res.stdout)["effective_config"]
         assert [a["name"] for a in eff["_custom_alerts"]] == ["team_policy"]
 
-    @pytest.mark.parametrize("value", ["!!bool yes", '!!binary "%%%"'])
-    def test_a_tenant_file_with_a_refused_tag_is_skipped(self, tmp_path, value):
-        """The tag rules live on the loader every conf.d read shares, so a
-        tenant file holding such a value is skipped (named on stderr) like
-        any tenant file that does not parse; ResolveEffective refuses the
-        tenant too ("parse tenant: …"). Control: the same file with a plain
-        value describes."""
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
-                                               encoding="utf-8")
-        tenant = conf_d / "tx.yaml"
-        tenant.write_text(self.TENANT + f"    x: {value}\n", encoding="utf-8")
-        res = self._describe(conf_d, "tx")
-        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
-        assert f"WARNING: skipped {tenant} — does not parse" in res.stderr, res.stderr
-        tenant.write_text(self.TENANT + "    x: plain\n", encoding="utf-8")
-        assert self._describe(conf_d, "tx").returncode == 0
 
-    def test_multi_document_what_if_reads_its_first_document(self, tmp_path):
-        """The `--what-if` file stands in for a `_defaults.yaml`, so it is
-        read the same way: its first document. Refused with rc 2 before."""
-        conf_d = tmp_path / "conf.d"
-        conf_d.mkdir()
-        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
-                                               encoding="utf-8")
-        (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
-        what_if = tmp_path / "what-if.yaml"
-        what_if.write_text("defaults:\n  mysql_connections: 90\n---\n: : [\n",
-                           encoding="utf-8")
-        res = subprocess.run(
-            [sys.executable, TestUnparseableDefaults.DESCRIBE, "tx", "--conf-d",
-             str(conf_d), "--what-if", str(what_if)],
-            capture_output=True, text=True, encoding="utf-8", timeout=20)
-        assert res.returncode == 0, res.stderr
-        out = json.loads(res.stdout)
-        assert out["changed_keys"] == {
-            "mysql_connections": {"baseline": 80, "what_if": 90}}
+class TestNoPythonYamlReadOfConfD:
+    """ADR-036 tool closure (#2906): one run reads conf.d one way. Every
+    mode runs in-process here with PyYAML's parsers made to fail — the pure
+    one (every Loader builds a `yaml.reader.Reader`) and libyaml's
+    (`CParser`): any YAML parse in the run, of a conf.d file or anything
+    else, ends the test. Output via `yaml.dump` is an emitter, not a parse."""
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        conf_d = _write(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_custom_alerts:\n"
+                              "  - {recipe: threshold, name: p, metric: m, op: '>', window: 5m, threshold: '1:warning'}\n",
+            "_profiles.yaml": "profiles:\n  std:\n    pg_connections: 5\n",
+            "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+            "team/a.yaml": "tenants:\n  ta:\n    _profile: std\n  tb: {}\n",
+        })
+        draft = tmp_path / "draft.yaml"
+        draft.write_text("defaults:\n  mysql_connections: 60\n", encoding="utf-8")
+        return conf_d, draft
+
+    @pytest.fixture
+    def no_yaml_parse(self, monkeypatch):
+        calls = []
+
+        def refuse(self, *a, **kw):
+            calls.append(a[:1])
+            raise AssertionError(f"PyYAML parse during describe-tenant: {a[:1]!r:.120}")
+
+        monkeypatch.setattr(yaml.reader.Reader, "__init__", refuse)
+        if hasattr(yaml, "CParser"):
+            monkeypatch.setattr(yaml.CParser, "__init__", refuse)
+        return calls
+
+    @pytest.mark.parametrize("mode", [
+        ["--all"], ["--all", "--format", "yaml"], ["ta", "--show-sources"], ["ta"],
+        ["ta", "--diff", "tb"], ["ta", "--what-if", "DRAFT", "--replaces", "TEAM"],
+        ["tb", "--what-if", "DRAFT", "--at", "NEW"],
+    ], ids=lambda m: " ".join(m))
+    def test_every_mode_parses_no_yaml(self, tree, no_yaml_parse, monkeypatch, capsys, mode):
+        conf_d, draft = tree
+        subst = {"DRAFT": str(draft), "TEAM": str(conf_d / "team" / "_defaults.yaml"),
+                 "NEW": str(conf_d / "team" / "_x.yaml")}
+        monkeypatch.setattr(sys, "argv", ["describe_tenant", *[subst.get(a, a) for a in mode],
+                                          "--conf-d", str(conf_d)])
+        try:
+            dt.main()
+        except SystemExit as exc:
+            assert exc.code in (0, None), capsys.readouterr().err
+        out = capsys.readouterr().out
+        assert out.strip(), "nothing was described"
+        assert no_yaml_parse == []
+
+    def test_the_guard_fires_on_a_yaml_parse(self, no_yaml_parse):
+        """Must-fire control: the patch really stops a PyYAML parse."""
+        with pytest.raises(AssertionError, match="PyYAML parse"):
+            yaml.safe_load("a: 1\n")

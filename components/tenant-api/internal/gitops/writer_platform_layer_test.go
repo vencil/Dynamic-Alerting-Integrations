@@ -54,7 +54,7 @@ func platformLayerRepo(t *testing.T, platform string) (*Writer, string) {
 		files["_platform.yaml"] = platform
 	}
 	dir := seedTreeRepo(t, files)
-	return NewWriter(dir, dir), dir
+	return newTestWriter(dir, dir), dir
 }
 
 func TestPlatformLayerProblemsNeverBlockTheTenant(t *testing.T) {
@@ -166,7 +166,7 @@ func TestPlatformLayerElectingADefinedProfileIsNotFlagged(t *testing.T) {
 		"_platform.yaml": "tenants:\n  tx:\n    _profile: std\n",
 		"tx.yaml":        platformLayerTenant,
 	})
-	errs, notices, err := previewDryRun(context.Background(), NewWriter(dir, dir), "tx", platformLayerTenant)
+	errs, notices, err := previewDryRun(context.Background(), newTestWriter(dir, dir), "tx", platformLayerTenant)
 	if err != nil {
 		t.Fatal(err)
 	}

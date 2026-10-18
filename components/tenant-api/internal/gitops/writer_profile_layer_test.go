@@ -35,7 +35,7 @@ func TestProfileLayerProblemsNeverBlockTheTenant(t *testing.T) {
 				"_profiles.yaml": "profiles:\n  strict:\n" + tc.block,
 				"tx.yaml":        profileLayerTenant,
 			})
-			w := NewWriter(dir, dir)
+			w := newTestWriter(dir, dir)
 			errs, notices, err := previewDryRun(context.Background(), w, "tx", profileLayerTenant)
 			if err != nil {
 				t.Fatalf("DryRunValidate: %v", err)
@@ -77,7 +77,7 @@ func TestProfileLayerTenantElectsAProfile(t *testing.T) {
 				files[tc.where] = tc.profiles
 			}
 			dir := seedTreeRepo(t, files)
-			errs, notices, err := previewDryRun(context.Background(), NewWriter(dir, dir), "tx", tc.body)
+			errs, notices, err := previewDryRun(context.Background(), newTestWriter(dir, dir), "tx", tc.body)
 			if err != nil {
 				t.Fatal(err)
 			}

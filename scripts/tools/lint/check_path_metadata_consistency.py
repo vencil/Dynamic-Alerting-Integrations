@@ -9,14 +9,18 @@ Implements the design contract from `docs/schemas/tenant-config.schema.json`
     environment. Explicit _metadata fields override path-inferred values.
     CI may warn when path and field disagree.
 
-This tool is **warning-only** (always exits 0). Its job is to surface
-drift between filesystem placement and declared metadata without
-blocking merges — the schema already permits override.
+This tool is **warning-only** (exits 0 on any finding). Its job is to
+surface drift between filesystem placement and declared metadata without
+blocking merges — the schema already permits override. It reads the tree
+through `da-guard parse-tree` (ADR-036 step 4, #2906): no usable da-guard
+is a caller error, exit 2 — nothing was checked.
 
 Rules:
-  1. Scan `<config-dir>/**/*.yaml` (default: components/threshold-exporter
-     /config/conf.d/). Files whose basename starts with `_` are skipped
-     (they are defaults/policies/profiles, not tenant files).
+  1. Scan the tenant files `da-guard parse-tree` selects under
+     `<config-dir>` (default: components/threshold-exporter/config/conf.d/),
+     as yaml.v3 reads them. Files whose basename starts with `_` are
+     skipped (they are defaults/policies/profiles, not tenant files). A
+     file parse-tree cannot read is named as NOT checked.
   2. For each tenant block, extract `_metadata.{domain,region,environment}`
      values if present.
   3. Walk the file's parent-directory segments. If a segment exactly matches
@@ -39,21 +43,17 @@ import sys
 from pathlib import Path
 from typing import Iterable, NamedTuple
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
-from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
-    has_yaml_extension,
-    is_dir_symlink,
-    is_reserved_name,
-    list_config_tree,
-    unusable_reason,
-)
+# ADR-036 step 4 (#2906): the tenant files, and what each holds, are
+# `da-guard parse-tree`'s — the exporter's walk, yaml.v3's reading (tenant
+# ids as source text, #2216).
+import _lib_parse_cache  # noqa: E402
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 
 # Conservative allowlist of strings that carry environment semantics when
 # they appear as a directory segment. Keep narrow to avoid false positives
@@ -89,48 +89,16 @@ def find_repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def iter_tenant_files(config_dir: Path,
-                      entries: Iterable[Path] | None = None) -> Iterable[Path]:
-    """Tenant files under `config_dir`, optionally from an existing listing.
-
-    ⛔ `entries` exists so `main` can walk the tree ONCE and still get this
-    selection from the one place that defines it. Inlining the three
-    conditions at the call site instead — which the first version of the
-    #1607 fix did — is the "one rule, several hand-copies" shape #1911 is
-    about, reproduced inside its own fix. Same reason `defaults_files_in`
-    and `unusable_config_entries` take already-listed input.
-    """
-    # #1607: the `is_file()` filter is a THIRD axis and it is silent here.
-    # ⛔ The report for what it drops lives in `main`, NOT in this generator:
-    # `scan` also consumes it, so naming them here would print twice.
-    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). This site used to pass
-    # `(".yaml",)`, so a tenant declared in `db-a.yml` was not scanned at all:
-    # measured on a tree where the path says `staging/` and `_metadata` says
-    # `prod`, the `.yaml` spelling reports 2 mismatches on stderr while
-    # the `.yml` spelling reports
-    # `0 mismatch(es) across 0 tenant file(s)`, rc=0, stderr empty — a lint
-    # calling a tree clean because it never opened it. The exporter
-    # (`scanDirHierarchical`, `config_hierarchy.go`) reads both spellings.
-    #
-    # ⛔ NOT `rglob("*")` (#2081). The exporter's walker
-    # (`pkg/config.ScanDirTree`) prunes `.`-prefixed directories and drops
-    # `.`-prefixed files; `rglob` prunes no `.`-prefixed name, so it also
-    # walks into a ConfigMap mount's `..<ts>/` payload. Measured before this
-    # change: `.old.yaml` and
-    # `.snap/acme.yaml` were scanned and reported, and on a ConfigMap-mount
-    # layout (`..2026_09_25/acme.yaml` + `..data` link + `acme.yaml` link)
-    # the one tenant file was read twice — `2 mismatch(es) across 2 tenant
-    # file(s)` where the exporter sees one file. `list_config_tree` is the
-    # shared walk that mirrors the exporter (#2054).
-    listing = (list_config_tree(config_dir).files
-               if entries is None else entries)
-    for path in sorted(
-        p for p in listing
-        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
-    ):
-        if path.name.startswith("_"):
-            continue
-        yield path
+def iter_tenant_files(config_dir: Path) -> Iterable[Path]:
+    """Tenant files under `config_dir`: the ones `da-guard parse-tree`
+    selects (the exporter's walk: both spellings in any case, #1603;
+    `.`-prefixed entries pruned, #2081; a ConfigMap mount's payload read
+    once), minus `_`-prefixed platform files — readable or not (`main`
+    names an unreadable one). Raises ParseTreeError."""
+    tree = _lib_parse_cache.reader_for(config_dir).tree()
+    for rel in _lib_parse_cache.tenant_files(tree):
+        if rel not in tree.unreadable:
+            yield config_dir / rel
 
 
 def _path_inferences(
@@ -197,16 +165,14 @@ def scan_file(
     filepath: Path,
     config_dir: Path,
 ) -> list[Mismatch]:
-    try:
-        raw = filepath.read_text(encoding="utf-8")
-    except OSError:
+    if not filepath.is_file():
         return []
     try:
-        # #2216: tenant ids are the keys' source text, as the exporter reads
-        # them — `010:` is tenant "010", not 8.
-        data = load_exporter_keys(raw)
-    except yaml.YAMLError:
-        # Malformed YAML is another tool's problem — we don't block on it.
+        data = _lib_parse_cache.reader_for(config_dir).read(filepath)
+    except (FileUnreadable, _lib_parse_cache.NotSelected):
+        # Unreadable: named as NOT checked by `main` (parse-tree's
+        # `unreadable`). Not selected (outside the tree, a hidden name): no
+        # reader reads it, so there is nothing to check.
         return []
 
     inferences = _path_inferences(filepath, config_dir)
@@ -277,10 +243,16 @@ def _format_mismatch(m: Mismatch, repo_root: Path) -> str:
 
 
 def main() -> int:
+    with _lib_parse_cache.session():
+        return _main()
+
+
+def _main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Warn when conf.d/ directory path disagrees with tenant "
-            "_metadata.{domain,region,environment}. Always exits 0."
+            "_metadata.{domain,region,environment}. Exits 0 on any finding; "
+            "2 when da-guard parse-tree cannot read the tree."
         )
     )
     parser.add_argument(
@@ -315,46 +287,33 @@ def main() -> int:
         )
         return EXIT_OK
 
-    # #1607: named once, here, for the reason `iter_tenant_files` states.
-    # A config-named directory or broken symlink is a tenant file this lint
-    # did NOT check, so the "N tenant file(s)" tail below would otherwise
-    # read as coverage it does not have.
-    #
-    # ⛔ `_`-prefixed entries are excluded, because `iter_tenant_files` drops
-    # them whatever their shape — they are defaults/policies/profiles, never
-    # tenant files. Without this the lint prints a machine-parseable
-    # `path:0: warning:` line about a file it was never going to check, which
-    # a CI annotation consumer cannot act on. Same reasoning as `suffixes`,
-    # one axis over.
-    #
-    # ⛔ ONE walk for all three answers. `main` previously called
-    # `iter_tenant_files` twice (once through `scan`, once to count) and the
-    # first version of this report added a third `rglob`. Beyond the wasted
-    # I/O, separate walks let the warnings, the findings and the "N tenant
-    # file(s)" tail describe three different trees if anything changes under
-    # `conf.d` mid-run. `scan`/`scan_file` stay as they are — they are the
-    # tested entry points; only `main` stops re-walking.
-    #
-    # ⛔ The "not checked" report comes from `listing.unusable`, NOT from
-    # `unusable_config_entries(listing.files)`: `files` holds only regular
-    # files, so asking it for unusable entries always answers `[]` and every
-    # test that pins a named-not-skipped entry would go quiet (#2081).
-    # `unusable` carries the same hidden pruning as `files`, and both
-    # spellings (#1603), so the report and the selection agree about which
-    # entries exist.
-    listing = list_config_tree(config_dir)
-    for bad in listing.unusable:
-        # The `_` name filter is for ENTRIES only. A directory the walk could
-        # not read is named whatever it is called: the exporter descends
-        # `_`-prefixed directories, so a locked `_arch/` hides tenants too
-        # (same rule as `describe_tenant`, #2054). A directory SYMLINK too
-        # (#1972): `_shared -> .payload/_shared` hides a subtree as well.
-        if (bad in listing.unscannable or is_dir_symlink(bad)
-                or not is_reserved_name(bad.name)):
-            print(f"{bad}:0: warning: not checked — {unusable_reason(bad)}",
+    # #1607: an entry the walk could not read (a config-named directory, a
+    # broken symlink, a directory link, a file that does not parse) is one
+    # this lint did NOT check, so it is named, once — or the "N tenant
+    # file(s)" tail below would read as coverage it does not have. ONE
+    # parse-tree document answers the warnings, the findings and the tail
+    # (#2906: parse-tree's `unreadable`, not a second Python walk).
+    try:
+        tree = _lib_parse_cache.reader_for(config_dir).tree()
+        tenant_files = list(iter_tenant_files(config_dir))
+    except ParseTreeError as exc:
+        print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    for rel, (kind, message) in sorted(tree.unreadable.items()):
+        # The `_` name filter is for FILES only. A subtree the walk could not
+        # descend is named whatever it is called: the exporter descends
+        # `_`-prefixed directories, so a directory it could not list (a
+        # `read_failure` on a directory: a locked `_arch/`, #2081) or a
+        # directory link (`_shared`, #1972) hides tenants too. A directory
+        # with a config file name (`_defaults.yaml/`, `not_regular_file`)
+        # is a file slot, not a subtree: not named.
+        entry = config_dir / rel
+        if (not rel.rsplit("/", 1)[-1].startswith("_")
+                or (entry.is_dir() and (entry.is_symlink() or kind == "read_failure"))):
+            print(f"{safe_label(str(entry))}:0: warning: not checked — "
+                  f"{safe_label(message)} ({kind})",
                   file=sys.stderr)
 
-    tenant_files = list(iter_tenant_files(config_dir, listing.files))
     mismatches: list[Mismatch] = []
     for filepath in tenant_files:
         mismatches.extend(scan_file(filepath, config_dir))

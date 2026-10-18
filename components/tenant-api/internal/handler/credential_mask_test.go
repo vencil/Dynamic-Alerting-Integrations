@@ -21,6 +21,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/credmask"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -79,7 +80,7 @@ func newMaskFixture(t *testing.T, tenantYAML string) *maskFixture {
 	initGitRepo(t, dir)
 	mgr := newRBACManager(t, maskRBAC)
 	return &maskFixture{dir: dir, mgr: mgr, d: &Deps{
-		Writer:    gitops.NewWriter(dir, dir),
+		Writer:    gitopstest.NewWriter(dir, dir),
 		WriteMode: WriteModeDirect,
 		ConfigDir: dir,
 		RBAC:      mgr,

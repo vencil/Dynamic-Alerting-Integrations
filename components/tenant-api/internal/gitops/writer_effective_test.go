@@ -85,7 +85,7 @@ func TestResolveEffective_SeesAWriteThatReturned(t *testing.T) {
 	t.Parallel()
 	dir := seedTreeRepo(t, map[string]string{"_defaults.yaml": effDefaults, "t1.yaml": effTenant("t1", "61")})
 	ageTree(t, dir)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	if got := effValue(t, w, "t1"); got != "61" {
 		t.Fatalf("before the write: %v", got)
 	}
@@ -137,7 +137,7 @@ func TestResolveEffective_DoesNotJoinAReadWalkInFlight(t *testing.T) {
 func TestResolveEffective_StuckWalkFailsReadsNotWrites(t *testing.T) {
 	t.Parallel()
 	dir := seedTreeRepo(t, map[string]string{"_defaults.yaml": effDefaults, "t1.yaml": effTenant("t1", "61")})
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	w.treeScanTimeout = 100 * time.Millisecond
 	walks, _, release := holdFirstWalk(t, w)
 

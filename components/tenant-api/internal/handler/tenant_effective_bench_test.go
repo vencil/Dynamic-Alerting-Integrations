@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 )
 
 func buildEffectiveBenchTree(b *testing.B) string {
@@ -83,7 +83,7 @@ func benchGetTenantEffective(b *testing.B, withWriter bool) {
 	root := buildEffectiveBenchTree(b)
 	d := &Deps{ConfigDir: root}
 	if withWriter {
-		d.Writer = gitops.NewWriter(root, "")
+		d.Writer = gitopstest.NewWriter(root, "")
 	}
 	h := GetTenantEffective(d)
 	get := func() {

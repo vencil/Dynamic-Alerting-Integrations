@@ -57,7 +57,7 @@ func literalRepo(t *testing.T) (repo string, w *Writer) {
 	if got := gitOut(t, repo, "ls-files", "--", litTarget); !strings.Contains(got, litDecoy) {
 		t.Fatalf("fixture: the glob does not reach the decoy (ls-files = %q)", got)
 	}
-	return repo, NewWriter(filepath.Join(repo, "conf[1]"), repo)
+	return repo, newTestWriter(filepath.Join(repo, "conf[1]"), repo)
 }
 
 func writeRel(t *testing.T, repo, rel, body string) {
@@ -87,7 +87,7 @@ func TestGitEnv_LiteralPathspecs(t *testing.T) {
 	t.Setenv("GIT_ICASE_PATHSPECS", "1")
 	t.Setenv("GIT_NOGLOB_PATHSPECS", "1")
 	t.Setenv("GIT_LITERAL_PATHSPECS", "0")
-	cmd, _, cancel := NewWriter(repo, repo).gitCmd("-C", repo, "ls-files", "--", litTarget)
+	cmd, _, cancel := newTestWriter(repo, repo).gitCmd("-C", repo, "ls-files", "--", litTarget)
 	defer cancel()
 	if got := pathspecVars(cmd.Env); got != "GIT_LITERAL_PATHSPECS=1" {
 		t.Fatalf("pathspec settings in git's env = %q, want only GIT_LITERAL_PATHSPECS=1", got)
@@ -118,7 +118,7 @@ func pathspecVars(env []string) string {
 func TestLiteralPathspecs_OnlyCommandsThatRunNoHook(t *testing.T) {
 	t.Setenv("GIT_LITERAL_PATHSPECS", "1")
 	t.Setenv("GIT_NOGLOB_PATHSPECS", "1")
-	w := NewWriter(t.TempDir(), t.TempDir())
+	w := newTestWriter(t.TempDir(), t.TempDir())
 	for _, c := range []struct {
 		args    []string
 		literal bool
@@ -206,7 +206,9 @@ func TestLiteralPathspec_AddStagesOnlyTarget(t *testing.T) {
 	repo, w := literalRepo(t)
 	writeRel(t, repo, litTarget, "target: 2\n")
 	writeRel(t, repo, litDecoy, "decoy: 2\n")
-	if _, err := w.stagePaths(repo, []string{filepath.Join(repo, litTarget)}, nil); err != nil {
+	target := filepath.Join(repo, litTarget)
+	if _, err := w.stagePaths(repo, nil, []string{target},
+		map[string][]byte{target: []byte("target: 2\n")}, ""); err != nil {
 		t.Fatalf("stagePaths: %v", err)
 	}
 	if got := stagedSet(t, repo); got != litTarget {
@@ -221,7 +223,7 @@ func TestLiteralPathspec_RefusalUnstagesOnlyTarget(t *testing.T) {
 	gitRun(t, repo, "add", "--", litDecoy) // someone else's staged change
 	writeRel(t, repo, litTarget, "target: 2\n")
 	target := filepath.Join(repo, litTarget)
-	_, err := w.stagePaths(repo, []string{target}, map[string][]byte{target: []byte("not what is on disk\n")})
+	_, err := w.stagePaths(repo, nil, []string{target}, map[string][]byte{target: []byte("not what is on disk\n")}, "")
 	if err == nil || !w.stagedRefusal(err) {
 		t.Fatalf("stagePaths err = %v, want the staged-bytes refusal", err)
 	}
@@ -230,8 +232,10 @@ func TestLiteralPathspec_RefusalUnstagesOnlyTarget(t *testing.T) {
 	}
 }
 
-// write_validator.go restoreFromHEAD: `reset -q -- <file>` and
-// `checkout -q HEAD -- <file>`.
+// write_validator.go restoreFromHEAD: `restore --source=HEAD --worktree --
+// <file>`. Since #1535 it touches no index entry at all (gitCommitOnto
+// keeps the real index), so both staged entries — the target's included —
+// are still staged.
 func TestLiteralPathspec_RestoreFromHEADTouchesOnlyTarget(t *testing.T) {
 	repo, w := literalRepo(t)
 	writeRel(t, repo, litDecoy, "decoy: staged\n")
@@ -245,8 +249,8 @@ func TestLiteralPathspec_RestoreFromHEADTouchesOnlyTarget(t *testing.T) {
 	if got := readRel(t, repo, litTarget); got != "target: 1\n" {
 		t.Errorf("target = %q, want HEAD's", got)
 	}
-	if got := stagedSet(t, repo); got != litDecoy {
-		t.Errorf("staged = %q, want only %q (reset reached the decoy)", got, litDecoy)
+	if got, want := stagedSet(t, repo), litDecoy+"\n"+litTarget; got != want {
+		t.Errorf("staged = %q, want %q (restore touched the index)", got, want)
 	}
 	if got := readRel(t, repo, litDecoy); got != "decoy: on disk\n" {
 		t.Errorf("decoy on disk = %q, want its own edit (checkout reached the decoy)", got)
@@ -308,7 +312,7 @@ func TestLiteralPathspec_StagingChecksOutOnlyConfD(t *testing.T) {
 	if got := gitOut(t, repo, "ls-files", "--", "conf[1]"); !strings.Contains(got, "conf1") {
 		t.Fatalf("fixture: the glob does not reach the decoy (ls-files = %q)", got)
 	}
-	w := NewWriter(filepath.Join(repo, "conf[1]"), repo)
+	w := newTestWriter(filepath.Join(repo, "conf[1]"), repo)
 	st, err := w.openStaging("HEAD", "", false)
 	if err != nil {
 		t.Fatalf("openStaging: %v", err)
@@ -332,7 +336,7 @@ func TestLiteralPathspec_HistoricalMaxReadsOnlyTarget(t *testing.T) {
 	if got := gitOut(t, repo, "ls-files", "--", "_reg[1].yaml"); !strings.Contains(got, "_reg1.yaml") {
 		t.Fatalf("fixture: the glob does not reach the decoy (ls-files = %q)", got)
 	}
-	got, err := NewWriter(repo, repo).HistoricalMaxUint(context.Background(), "_reg[1].yaml", "next_id")
+	got, err := newTestWriter(repo, repo).HistoricalMaxUint(context.Background(), "_reg[1].yaml", "next_id")
 	if err != nil {
 		t.Fatalf("HistoricalMaxUint: %v", err)
 	}
@@ -349,7 +353,7 @@ func TestLiteralPathspec_HistoricalMaxReadsOnlyTarget(t *testing.T) {
 func TestLiteralPathspec_TrackedCheck(t *testing.T) {
 	repo, _ := literalRepo(t)
 	confDir := filepath.Join(repo, "conf[1]")
-	w := NewWriter(confDir, confDir) // gitDir below the top level
+	w := newTestWriter(confDir, confDir) // gitDir below the top level
 
 	// Untracked, non-regular: refused, though the glob names the tracked decoy.
 	untracked := filepath.Join(confDir, "u.yaml")

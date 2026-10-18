@@ -86,7 +86,7 @@ func TestGitHooks_SeeNoPathspecSetting_DirectBatch(t *testing.T) {
 	envLog, yamlLog := installEnvHooks(t, dir,
 		"pre-commit", "commit-msg", "post-commit", "reference-transaction")
 	inheritPathspecEnv(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	if _, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("h-a", silentBody("h-a", "critical")),
 		setOp("h-new", silentBody("h-new", "warning")),
@@ -113,7 +113,7 @@ func TestGitHooks_SeeNoPathspecSetting_PRBatch(t *testing.T) {
 	envLog, yamlLog := installEnvHooks(t, dir,
 		"pre-commit", "post-checkout", "pre-push", "reference-transaction")
 	inheritPathspecEnv(t)
-	w := NewWriter(filepath.Join(dir, "conf"), dir)
+	w := newTestWriter(filepath.Join(dir, "conf"), dir)
 	op := PRBatchOp{TenantID: "p-a", Merge: func([]byte) (string, error) { return silentBody("p-a", "critical"), nil }}
 	if _, err := w.WritePRBatch(context.Background(), []PRBatchOp{op}, "op@example.com"); err != nil {
 		t.Fatalf("WritePRBatch: %v", err)
@@ -174,7 +174,7 @@ func TestGitHooks_PostIndexChangeSeesLiteral(t *testing.T) {
 		t.Fatal(err)
 	}
 	inheritPathspecEnv(t)
-	w := NewWriter(dir, dir)
+	w := newTestWriter(dir, dir)
 	if _, err := w.WriteBatch(context.Background(), []BatchOp{
 		setOp("x-a", silentBody("x-a", "critical")),
 	}, "op@example.com"); err != nil {
