@@ -3692,7 +3692,7 @@ class _Conflict(NamedTuple):
 
     detail: str = ''
     """'clobber': the tenant whose init path would be overwritten; 'drops':
-    the unrequested tenants it declares, comma-joined ('' = cannot list)."""
+    the unrequested tenants it declares, comma-joined (never empty)."""
 
 
 class _ConfdPlan(NamedTuple):
@@ -3767,9 +3767,9 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         very file, so after the rewrite it would be declared nowhere);
       * 'drops' — tenants this run was NOT asked for (owner ruling on #1942,
         round-1 F2: refuse, do not overwrite; `--force` included). Found by
-        parse-tree; if init cannot list the file's keys it refuses
-        the same way. An own file init cannot read through at all (d) keeps
-        its existing handling and is not listed here.
+        parse-tree's `tenants:` keys. An own file init cannot read through
+        (d) keeps its existing handling (skip / unverified) and is never
+        listed here, so every 'drops' names the tenants it would lose.
     """
     out = Path(output_dir)
     conf_dir = out / 'conf.d'
@@ -3847,11 +3847,10 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
         own = _own(t)
         if own not in mentions or own in blanket:
             continue
-        keys = confd.declared(f'{t}.yaml')[0]
-        lost = None if keys is None else sorted(keys - set(requested))
-        if lost is None or lost:
-            conflicts.append(_Conflict('drops', t, [own],
-                                       ', '.join(lost or [])))
+        # Not (d), so parse-tree read it: `declared` lists its keys.
+        lost = sorted((confd.declared(f'{t}.yaml')[0] or set()) - set(requested))
+        if lost:
+            conflicts.append(_Conflict('drops', t, [own], ', '.join(lost)))
 
     own_defaults = [p for p in root_defaults if p.name == '_defaults.yaml']
     other_defaults = [p for p in root_defaults if p.name != '_defaults.yaml']
@@ -4044,18 +4043,6 @@ def _conflict_row(c: _Conflict, is_zh: bool) -> str:
                 f"--tenants (so init does not rewrite {f}), then re-run.")
     if c.kind == 'drops':
         f = c.files[0]
-        if not c.detail:
-            return (f"init 會重寫 {f}（租戶 {c.tenant} 的 init 路徑），但無法列出"
-                    f"它宣告的所有租戶（PyYAML 讀不了這個檔），重寫可能讓其他"
-                    f"租戶的宣告消失。請先確認它只宣告 {c.tenant}（或把其他租戶"
-                    f"移到各自的檔案）再重跑。"
-                    if is_zh else
-                    f"init would rewrite {f} (its own path for tenant "
-                    f"{c.tenant}) but cannot list every tenant it declares "
-                    f"(PyYAML cannot parse the file), so the rewrite could drop "
-                    f"another tenant's declaration. Make sure it declares only "
-                    f"{c.tenant} (move any other tenant to a file of its own), "
-                    f"then re-run.")
         first = c.detail.split(', ')[0]
         return (f"init 會重寫 {f}（租戶 {c.tenant} 的 init 路徑），但它也宣告了"
                 f"這次沒要求的 {c.detail}；重寫會讓 {c.detail} 的宣告消失。請把 "
@@ -5460,8 +5447,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              'file), or defaults in another spelling '
                              '(_defaults.yml), is skipped and named; if init\'s '
                              'own file already exists and another file '
-                             'concretely names the same tenant (a tenants: key '
-                             'or the id as a token), or if a conf.d/<tenant>.yaml '
+                             'declares the same tenant (a tenants: key as '
+                             'da-guard parse-tree reads it), or if a '
+                             'conf.d/<tenant>.yaml '
                              'it would rewrite also declares a tenant not in '
                              '--tenants, the run is refused (rc 1) and nothing '
                              'is written'
@@ -5476,8 +5464,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              '.gitlab-ci.yml，也不會改寫 conf.d 裡的其他檔案：'
                              '可能已由你自己的檔案宣告的租戶（db-c.yml、多租戶'
                              '檔）或其他拼法的預設（_defaults.yml）會被跳過並'
-                             '列出；若 init 自己的檔已存在、且另一個檔具體提到'
-                             '同一個租戶（tenants: 的 key 或租戶 id token），'
+                             '列出；若 init 自己的檔已存在、且另一個檔宣告了'
+                             '同一個租戶（da-guard parse-tree 讀到的 tenants: '
+                             'key），'
                              '或它要重寫的 conf.d/<tenant>.yaml 還宣告了不在 '
                              '--tenants 裡的租戶，則拒絕執行（rc 1），'
                              '不寫入任何檔案')

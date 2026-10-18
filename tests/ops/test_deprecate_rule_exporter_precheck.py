@@ -18,12 +18,13 @@ without it CI would only ever take the unavailable path.
 """
 
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_shebang_scripts, symlink_or_skip  # noqa: E402
 
 import deprecate_rule  # noqa: E402
 
@@ -209,11 +210,12 @@ def test_a_tenant_file_the_exporter_drops_is_left_alone_and_named(tmp_path, da_g
 
 def _key_refs_fails(tmp_path, da_guard):
     """A da-guard that answers parse-tree and fails key-refs (exit 2)."""
+    require_shebang_scripts()  # the wrapper below is one
     wrapper = tmp_path / "da-guard-no-key-refs"
     wrapper.write_text(
         "#!/bin/sh\n"
         "if [ \"$1\" = key-refs ]; then echo 'key-refs: refused' >&2; exit 2; fi\n"
-        f"exec '{da_guard}' \"$@\"\n", encoding="utf-8")
+        f"exec {shlex.quote(str(da_guard))} \"$@\"\n", encoding="utf-8")
     wrapper.chmod(0o755)
     return {**os.environ, "DA_GUARD_BINARY": str(wrapper)}
 
