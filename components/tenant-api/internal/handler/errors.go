@@ -193,6 +193,17 @@ const (
 	// git_managed_reason (a fixed code naming no other tenant). Nothing
 	// written.
 	CodeTenantGitManaged = "TENANT_GIT_MANAGED"
+	// CodeTenantFileDirty marks a 409 refusing a direct-mode tenant write, or
+	// its preview, because the tenant's conf.d file in tenant-api's copy
+	// differs from the commit it would land on (#1535 item 6,
+	// gitops.ErrTenantFileDirty): modified, staged, deleted or untracked
+	// outside tenant-api, or — for a symlinked tenant file — its target in
+	// the repository changed. Every verdict a write takes (base hash, merge,
+	// no-op) is on that file, so a write over it would judge or commit
+	// bytes no commit holds. Fixed text, no path. Nothing written; commit or
+	// discard the change in the repository, then retry. Also carried per op
+	// on a direct-mode batch (BatchResult.Code).
+	CodeTenantFileDirty = "TENANT_FILE_DIRTY"
 	// CodeGeneratorFindings marks a 422 from a write the generator container
 	// judged and refused (#2903, ADR-036 §4): the conf.d tree at the commit
 	// the write lands on, with the write applied, does not pass
@@ -268,6 +279,12 @@ func writeTenantFileNotRegular(w http.ResponseWriter, r *http.Request, tenantID 
 // may see (an RBAC-restricted caller must not learn other files' names).
 const msgTenantDeclaredElsewhere = "tenant id is declared by another conf.d file (or by several); " +
 	"conf.d must declare each tenant exactly once"
+
+// msgTenantFileDirty is the FIXED client-facing text for
+// gitops.ErrTenantFileDirty: the error's own text names the path and git's
+// status line, which only the server log may see.
+const msgTenantFileDirty = "the tenant's config file has uncommitted changes made outside tenant-api; " +
+	"nothing was written — commit or discard them in the repository, then retry"
 
 // msgTenantTreeScan is the fixed client-facing text for gitops.ErrTenantTreeScan
 // (the declared-elsewhere check could not run, so nothing was written).
@@ -416,6 +433,7 @@ func writeTenantGitManaged(w http.ResponseWriter, r *http.Request, err error) bo
 //   - gitops.ErrTenantTreeScan          → 500 INTERNAL_ERROR (the conf.d walk
 //     could not run; the guard fails closed rather than risk a duplicate)
 //   - gitops.ErrTenantGitManaged        → 409 TENANT_GIT_MANAGED (#3064)
+//   - gitops.ErrTenantFileDirty         → 409 TENANT_FILE_DIRTY (#1535)
 func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, d *Deps, err error) bool {
 	if writeTenantTreeUnreadable(w, r, d, err) || writeTenantTargetUnreadable(w, r, err) || writeTenantGitManaged(w, r, err) {
 		return true
@@ -427,6 +445,9 @@ func writeTenantPlacementError(w http.ResponseWriter, r *http.Request, d *Deps, 
 	case errors.Is(err, gitops.ErrTenantTreeScan):
 		slog.Error("tenant write refused: conf.d scan failed", "error", err)
 		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeInternal, msgTenantTreeScan)
+	case errors.Is(err, gitops.ErrTenantFileDirty):
+		slog.Warn("tenant write refused: tenant file differs from HEAD", "error", err)
+		WriteJSONErrorWithCode(w, r, http.StatusConflict, CodeTenantFileDirty, msgTenantFileDirty)
 	default:
 		return false
 	}

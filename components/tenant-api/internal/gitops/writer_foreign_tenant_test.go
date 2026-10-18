@@ -91,7 +91,9 @@ func TestWriteRefusesTenantSectionsItWouldAdd(t *testing.T) {
 // whose body declares db-a alone, so `other` cannot be overwritten.
 func TestWriteRefusesAGrandfatheredSharedFile(t *testing.T) {
 	dir := initRepoOnMain(t)
-	seedBase(t, dir, "db-a.yaml", grandfathered)
+	// Committed (seedCommitted): a direct write refuses a tenant file that
+	// differs from HEAD (ErrTenantFileDirty, #1535 item 6) first.
+	seedCommitted(t, dir, "db-a.yaml", grandfathered)
 	_, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly)
 	if !errors.Is(err, ErrTenantGitManaged) {
 		t.Fatalf("err = %v, want the git-managed refusal", err)
@@ -337,7 +339,7 @@ func TestSharedFileIsGitManagedInEitherSpelling(t *testing.T) {
 	for _, spelling := range []string{"db-a.yaml", "db-a.yml"} {
 		t.Run(spelling, func(t *testing.T) {
 			dir := initRepoOnMain(t)
-			seedBase(t, dir, spelling, grandfathered)
+			seedCommitted(t, dir, spelling, grandfathered)
 
 			if _, err := newW(dir).Write(context.Background(), "db-a", "a@example.com", ownOnly); !errors.Is(err, ErrTenantGitManaged) {
 				t.Fatalf("err = %v, want the git-managed refusal for %s", err, spelling)

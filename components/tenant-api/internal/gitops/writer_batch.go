@@ -167,7 +167,7 @@ func (w *Writer) confTopRel() (top, rel string, err error) {
 // stagingTree is one batch's worktree.
 type stagingTree struct {
 	root      string // the worktree
-	base      string // openStaging's rev; an op's no-op is judged on it (#1535 item 6)
+	mirror    bool   // direct mode: conf.d is a copy of the serving one (openStaging)
 	configDir string // root/<conf.d relative to the top level>
 	rel       string
 	prior     *cfg.TreeScan // the staging tree's own walk prior
@@ -224,7 +224,7 @@ func (w *Writer) openStaging(rev, branch string, mirror bool) (*stagingTree, err
 		_ = os.RemoveAll(root)
 		return nil, fmt.Errorf("add batch worktree: %w", err)
 	}
-	st := &stagingTree{root: root, base: rev, configDir: filepath.Join(root, rel), rel: rel,
+	st := &stagingTree{root: root, mirror: mirror, configDir: filepath.Join(root, rel), rel: rel,
 		changed: map[string][]string{}, targets: map[string]string{}}
 	if err := w.gitIn(root, "reset", "-q"); err != nil {
 		w.closeStaging(st)
@@ -451,44 +451,33 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 		st.targets[target] = op.TenantID
 		err = w.ensureNotDeclaredElsewhereIn(w.stagingScan(st), op.TenantID, filePath)
 	}
+	if err == nil && st.mirror {
+		// #1535 item 6: the op's merge base is the copy of the serving
+		// file, so the serving file must be what the batch's base (HEAD,
+		// sampled under this lock) holds — refused per op otherwise.
+		err = w.checkServingFileClean(st, filePath)
+	}
 	if err != nil {
 		return BatchOpOutcome{Err: err}, target
 	}
 	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge, names)
-	// #1535 item 6: an op is a no-op only when the file it leaves is what
-	// the batch's base holds (unchangedFile's rule) — or what an earlier op
-	// of this batch wrote, which the batch commits anyway. The staging
-	// tree is a copy of the SERVING tree (direct mode): an uncommitted edit
-	// there equal to the op's result used to be answered NoOp, and the
-	// batch succeeded without committing it.
-	rel, relErr := filepath.Rel(st.root, filePath)
-	_, earlierOp := st.changed[rel]
 	if errors.Is(err, ErrMergeNoOp) {
-		// B2: the merge changes nothing in the file — accepted, nothing
-		// written, its notices kept (#1231 F5); unless base does not store
-		// the file as it is and the merge of base's blob changes it, which
-		// is then written (mergeNoOpContent).
-		if earlierOp || relErr != nil {
-			return BatchOpOutcome{NoOp: true, Notices: notices}, target
-		}
-		var noop bool
-		content, notices, noop, err = w.mergeNoOpContent(st.configDir, st.root, st.base, op.TenantID, filePath, existing, op.Merge, notices, names)
-		if noop {
-			return BatchOpOutcome{NoOp: true, Notices: notices}, target
-		}
+		// B2: the merge changes nothing — accepted, nothing written, its
+		// notices kept (#1231 F5).
+		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if err != nil {
 		return BatchOpOutcome{Err: err}, target
 	}
-	if existing != nil && string(existing) == content &&
-		(earlierOp || w.storesAs(st.root, st.base, filePath, existing)) {
+	if existing != nil && string(existing) == content {
 		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
 	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
 		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}, target
 	}
-	if relErr != nil {
-		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, relErr)}, target
+	rel, err := filepath.Rel(st.root, filePath)
+	if err != nil {
+		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, err)}, target
 	}
 	if _, seen := st.changed[rel]; !seen {
 		st.order = append(st.order, rel)
@@ -497,6 +486,16 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 		st.changed[rel] = append(st.changed[rel], op.TenantID)
 	}
 	return BatchOpOutcome{Notices: notices}, target
+}
+
+// checkServingFileClean is checkTenantFileClean for the serving file a
+// direct-mode staging path (filePath, under st.configDir) mirrors.
+func (w *Writer) checkServingFileClean(st *stagingTree, filePath string) error {
+	rel, err := filepath.Rel(st.configDir, filePath)
+	if err != nil {
+		return fmt.Errorf("check the tenant file against HEAD: %w", err)
+	}
+	return w.checkTenantFileClean(filepath.Join(w.configDir, rel))
 }
 
 // applyBatch runs every op on the staging tree — every op is judged, even

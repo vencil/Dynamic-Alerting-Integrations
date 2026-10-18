@@ -50,7 +50,8 @@ type ValidateResponse struct {
 // @Description The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
 // @Description holds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare
 // @Description tenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false
-// @Description with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), a tenant another conf.d file also
+// @Description with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file differing from HEAD
+// @Description in this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also
 // @Description declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
 // @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
 // @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
@@ -100,8 +101,11 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 		var code string
 		if err != nil {
 			errs = []string{dryRunRefusalMessage(err, d != nil && treePathsVisible(d.RBAC, rbac.RequestPrincipal(r)))}
-			if errors.Is(err, gitops.ErrTenantGitManaged) {
+			switch {
+			case errors.Is(err, gitops.ErrTenantGitManaged):
 				code = CodeTenantGitManaged
+			case errors.Is(err, gitops.ErrTenantFileDirty):
+				code = CodeTenantFileDirty
 			}
 		}
 		writeJSON(w, http.StatusOK, ValidateResponse{
@@ -156,6 +160,9 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 	case errors.Is(err, gitops.ErrTenantTreeScan):
 		slog.Error("tenant dry-run: conf.d scan failed", "error", err)
 		return msgTenantTreeScan
+	case errors.Is(err, gitops.ErrTenantFileDirty):
+		slog.Warn("tenant dry-run: tenant file differs from HEAD", "error", err)
+		return msgTenantFileDirty
 	default:
 		slog.Error("tenant dry-run: cannot resolve tenant file", "error", err)
 		return msgTenantFileUnresolved

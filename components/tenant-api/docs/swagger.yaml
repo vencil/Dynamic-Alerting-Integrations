@@ -2236,7 +2236,13 @@ paths:
             a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file)
             for every caller: it is never replaced. A tenant file that is itself an
             unresolvable symlink (dangling, looping, or with a non-directory in its
-            path) does not count: the write replaces it'
+            path) does not count: the write replaces it; or code TENANT_FILE_DIRTY
+            (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
+            differs from the commit the write lands on (modified, staged, deleted
+            or untracked outside tenant-api, or a symlinked tenant file''s target
+            in the repository changed; a target outside the repository is not judged):
+            fixed text, no path; nothing written; commit or discard the change in
+            the repository, then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2414,7 +2420,13 @@ paths:
             text and in unreadable only for a caller with write permission on all
             tenants). The tenant''s own file being unreadable in any other way (a
             failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
-            or not_regular_file) for every caller: it is never replaced'
+            or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY
+            (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
+            differs from the commit the write lands on (modified, staged, deleted
+            or untracked outside tenant-api, or a symlinked tenant file''s target
+            in the repository changed; a target outside the repository is not judged):
+            fixed text, no path; nothing written; commit or discard the change in
+            the repository, then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2541,7 +2553,13 @@ paths:
             text and in unreadable only for a caller with write permission on all
             tenants). The tenant''s own file being unreadable in any other way (a
             failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
-            or not_regular_file) for every caller: it is never replaced'
+            or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY
+            (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
+            differs from the commit the write lands on (modified, staged, deleted
+            or untracked outside tenant-api, or a symlinked tenant file''s target
+            in the repository changed; a target outside the repository is not judged):
+            fixed text, no path; nothing written; commit or discard the change in
+            the repository, then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2786,7 +2804,8 @@ paths:
         The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
         holds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare
         tenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false
-        with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), a tenant another conf.d file also
+        with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file differing from HEAD
+        in this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also
         declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
         listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
         base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718).
@@ -2889,25 +2908,26 @@ paths:
             on the latest base branch the PR/MR would be cut from — so nothing was
             written and no PR/MR was opened. results lists every operation in request
             order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE,
-            TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR,
-            INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE
-            (#2939): the tree after the batch holds an unresolvable symlink (dangling,
-            looping, or with a non-directory in its path) that no operation replaces;
-            every operation not refused for another reason carries it; an operation
-            whose own tenant file cannot be read (and is not an unresolvable symlink
-            (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE,
-            and the message names the entries only for a caller with write permission
-            on all tenants (otherwise their number); an async task''s stored results
-            never name them. Also when the route generator container refuses the batch
-            as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is
-            judged once): every result is status error with code GENERATOR_FINDINGS
-            (its message names the findings about that result''s tenant) and findings[]
-            / findings_compared_with_base / unrelated_findings_withheld carry the
-            findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory,
-            incomplete, too_large: the files the batch produces are too large to judge
-            in one request — split the batch, invalid_request, normalized: git attributes
-            would commit other bytes than the ones judged). An async batch''s task
-            carries the same per-op results.'
+            TENANT_FILE_DIRTY (direct mode, #1535: the operation''s tenant file differs
+            from HEAD in tenant-api''s copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE,
+            CONFIG_DECODE_ERROR, INTERNAL_ERROR) for the refused ones, not_applied
+            for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch
+            holds an unresolvable symlink (dangling, looping, or with a non-directory
+            in its path) that no operation replaces; every operation not refused for
+            another reason carries it; an operation whose own tenant file cannot be
+            read (and is not an unresolvable symlink (dangling, looping, or with a
+            non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message
+            names the entries only for a caller with write permission on all tenants
+            (otherwise their number); an async task''s stored results never name them.
+            Also when the route generator container refuses the batch as a whole (#2903,
+            ADR-036 §4: the tree with the whole batch applied is judged once): every
+            result is status error with code GENERATOR_FINDINGS (its message names
+            the findings about that result''s tenant) and findings[] / findings_compared_with_base
+            / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
+            or code GENERATOR_REJECTED (memory, incomplete, too_large: the files the
+            batch produces are too large to judge in one request — split the batch,
+            invalid_request, normalized: git attributes would commit other bytes than
+            the ones judged). An async batch''s task carries the same per-op results.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "429":

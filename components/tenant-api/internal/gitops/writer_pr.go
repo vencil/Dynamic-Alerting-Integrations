@@ -408,7 +408,7 @@ func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yam
 	if check != nil {
 		afterResolve = func(string) error { return check(st.configDir) }
 	}
-	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), afterResolve)
+	res, errs, err := w.resolvePut(ctx, st.configDir, tenantID, yamlContent, w.stagingScan(st), nil, afterResolve)
 	if err != nil {
 		return "", "", nil, err
 	}

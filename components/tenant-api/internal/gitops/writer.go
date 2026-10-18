@@ -955,7 +955,10 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 		return nil
 	}
-	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, precondition)
+	// #1535 item 6: checkTenantFileClean runs on the resolved file before
+	// resolvePut reads it — the git-managed verdict, the precondition and
+	// validate's baseline are all taken on that file.
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, w.checkTenantFileClean, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -965,7 +968,7 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 	filePath, existing, content, notices := res.FilePath, res.Existing, res.Content, res.Notices
 
 	// No-op short-circuit (unchangedFile, the rule WriteMerged shares).
-	if w.unchangedFile(judgedBase, filePath, existing, content) {
+	if w.unchangedFile(filePath, existing, content) {
 		return notices, nil
 	}
 
@@ -992,12 +995,6 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 // bytes (nil when the file does not exist yet — a brand-new tenant). It is
 // invoked while the writer holds w.mu, so the merge base can never go stale
 // between the read and the write.
-//
-// It can be called TWICE for one write (#1535 item 6, mergeNoOpContent):
-// when it returns ErrMergeNoOp on a worktree file the base commit does not
-// store as it is, it is called again on the base's blob, and that second
-// call's result is the one written. A closure that records a verdict about
-// existing (the handlers' absent-member flags) must let the last call win.
 type MergeFunc func(existing []byte) (string, error)
 
 // ErrMergeNoOp is what a MergeFunc returns (errors.Is) when the edit it was
@@ -1461,49 +1458,6 @@ func (w *Writer) readMergeValidateIn(configDir, tenantID, filePath string, merge
 	return content, existing, notices, nil
 }
 
-// mergeNoOpContent decides a merge that returned ErrMergeNoOp on existing —
-// the file at filePath as read in the worktree at dir (configDir: its
-// conf.d) — against base, the commit the write lands on (#1535 item 6).
-//
-// When base stores existing as it is (storesAs), the no-op stands. When it
-// does not, the worktree holds what base does not — an uncommitted edit
-// from outside, a write whose commit failed — and a verdict taken on it
-// is a verdict on bytes no commit holds. The merge is then run again on
-// base's own blob (nil when base has no such file):
-//
-//   - a no-op there too: a no-op — nothing written, nothing validated (the
-//     worktree's own defects are not this write's to refuse; a skip op on
-//     a tenant base does not have stays skipped);
-//   - content: that content is the write — validated here as a write's
-//     content is, its notices replacing the no-op's. It replaces the
-//     worktree file, the uncommitted edit included, as any write replaces
-//     an uncommitted edit of its file; the edit is NOT committed under the
-//     caller's name.
-func (w *Writer) mergeNoOpContent(configDir, dir, base, tenantID, filePath string, existing []byte, merge MergeFunc, notices []string, names TenantNames) (content string, out []string, noop bool, err error) {
-	if w.storesAs(dir, base, filePath, existing) {
-		return "", notices, true, nil
-	}
-	baseBlob, err := w.revBlob(dir, base, filePath)
-	if err != nil {
-		return "", nil, false, fmt.Errorf("%w for %s: %w", errReadTenantFile, tenantID, err)
-	}
-	if err := CheckAPIManaged(tenantID, baseBlob); err != nil {
-		return "", nil, false, err
-	}
-	content, merr := merge(baseBlob)
-	if errors.Is(merr, ErrMergeNoOp) {
-		return "", notices, true, nil
-	}
-	if merr != nil {
-		return "", nil, false, fmt.Errorf("%w for %s: %w", ErrMergeFailed, tenantID, merr)
-	}
-	errs, out := validateReplacing(configDir, tenantID, filePath, content, false, names)
-	if len(errs) > 0 {
-		return "", nil, false, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
-	}
-	return content, out, false, nil
-}
-
 // WriteMerged persists a tenant config whose content is computed, UNDER the
 // single-writer lock, from the current on-disk file. This is the race-free
 // read-merge-write the batch patch path needs (#1097): a partial patch must
@@ -1548,19 +1502,14 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	if err != nil {
 		return nil, err
 	}
-	names := TenantNamesOf(ctx)
-	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge, names)
+	// #1535 item 6: the merge base is the serving file, so it must be what
+	// the judged base holds (checkTenantFileClean) — before it is read.
+	if err := w.checkTenantFileClean(filePath); err != nil {
+		return nil, err
+	}
+	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge, TenantNamesOf(ctx))
 	if errors.Is(err, ErrMergeNoOp) {
-		// B2: the merge changes nothing in the serving file. A success with
-		// nothing written only when the judged base stores that file as it
-		// is, or the merge changes nothing on base's own blob either
-		// (#1535 item 6, mergeNoOpContent); otherwise the merge of base's
-		// blob is the write.
-		var noop bool
-		content, notices, noop, err = w.mergeNoOpContent(w.configDir, w.gitDir, judgedBase, tenantID, filePath, existing, merge, notices, names)
-		if noop {
-			return notices, nil
-		}
+		return notices, nil // B2: the merge changes nothing — success, nothing written, notices kept
 	}
 	if err != nil {
 		return nil, err
@@ -1571,7 +1520,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	// generator need not be asked about HEAD's own tree. Treat an unchanged
 	// merge as success (#1097 self-review). `existing == nil` (a new tenant)
 	// never matches, so it still commits the new file.
-	if w.unchangedFile(judgedBase, filePath, existing, content) {
+	if w.unchangedFile(filePath, existing, content) {
 		return notices, nil
 	}
 	// #2903: the generator's verdict, under the lock, before the commit.

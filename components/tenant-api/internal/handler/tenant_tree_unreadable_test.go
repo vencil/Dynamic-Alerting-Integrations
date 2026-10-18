@@ -80,6 +80,18 @@ func (f *treeFixture) do(t *testing.T, h http.HandlerFunc, perm rbac.Permission,
 	return w
 }
 
+// commit commits everything in the fixture's tree: a direct write refuses a
+// tenant file that differs from HEAD (TENANT_FILE_DIRTY, #1535 item 6), so
+// a broken link meant as the repair path's starting point is a committed one.
+func (f *treeFixture) commit(t *testing.T) {
+	t.Helper()
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "fixture"}} {
+		if out, err := exec.Command("git", append([]string{"-C", f.dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+}
+
 func (f *treeFixture) put(t *testing.T, group, tenantID string) *httptest.ResponseRecorder {
 	return f.do(t, PutTenant(f.d), rbac.PermWrite, group, "PUT", "/api/v1/tenants/"+tenantID, tenantID,
 		"tenants:\n  "+tenantID+":\n    _silent_mode: \"critical\"\n")
@@ -191,6 +203,7 @@ func TestTreeUnreadable_PutOverDanglingTargetRepairsTheTree(t *testing.T) {
 	if err := os.Symlink("missing-target.yaml", target); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
+	f.commit(t)
 	if w := f.put(t, "team", "tu-b"); w.Code != http.StatusOK {
 		t.Fatalf("PUT over the dangling tenant file = %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -225,6 +238,7 @@ func TestTreeUnreadable_PreviewsGivePutsVerdict(t *testing.T) {
 				if err := os.Symlink("missing-target.yaml", filepath.Join(f.dir, c.link)); err != nil {
 					t.Skipf("symlink: %v", err)
 				}
+				f.commit(t)
 				body := "tenants:\n  " + c.tenant + ":\n    _silent_mode: \"critical\"\n"
 				vw := f.do(t, ValidateTenant(f.d), rbac.PermRead, group, "POST", "/api/v1/tenants/"+c.tenant+"/validate", c.tenant, body)
 				var vr ValidateResponse
@@ -369,6 +383,7 @@ func TestTreeUnreadable_PutOverSelfLoopTargetRepairsTheTree(t *testing.T) {
 	if err := os.Symlink("tu-l.yaml", target); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
+	f.commit(t)
 	if w := f.put(t, "team,readers", "tu-l"); w.Code != http.StatusOK {
 		t.Fatalf("PUT over the self-loop tenant file = %d, want 200: %s", w.Code, w.Body.String())
 	}

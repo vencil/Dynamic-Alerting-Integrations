@@ -16,9 +16,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -112,12 +114,21 @@ func TestPutTenantCustomAlerts_InLockGitManaged(t *testing.T) {
 			// The receiver address pins it to THIS writer, not a parallel test's.
 			waitForGoroutine(t, "PutTenantCustomAlerts", fmt.Sprintf("gitops.(*Writer).acquireWrite(%p", f.writer))
 
+			// The rewrite is a commit made outside tenant-api: an uncommitted
+			// one would be TENANT_FILE_DIRTY (#1535 item 6) before either
+			// verdict this test is about. The parked write's judged base is
+			// then stale, so it ends in ErrConflict — it only holds the token.
 			if err := os.WriteFile(filepath.Join(f.configDir, orgEnfTenantIn+".yaml"), []byte(c.rewrite), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			for _, args := range [][]string{{"add", "-A", "--", orgEnfTenantIn + ".yaml"}, {"commit", "-q", "-m", "outside rewrite"}} {
+				if out, err := exec.Command("git", append([]string{"-C", f.configDir}, args...)...).CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, out)
+				}
+			}
 			close(v.release)
 			released = true
-			if err := <-aDone; err != nil {
+			if err := <-aDone; err != nil && !errors.Is(err, gitops.ErrConflict) {
 				t.Fatalf("parking write: %v", err)
 			}
 			w := <-bDone

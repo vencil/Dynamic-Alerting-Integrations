@@ -121,10 +121,11 @@ func TestTreeUnreadable_DanglingTargetIsTheRepairPath(t *testing.T) {
 				t.Skipf("symlink: %v", err)
 			}
 			pr := mode == "WritePR" || mode == "WritePRBatch"
-			if pr { // the PR modes cut from the base git holds
-				gitRun(t, dir, "add", "-A")
-				gitRun(t, dir, "commit", "-m", "dangling tenant file")
-			}
+			// Committed in every mode: a direct write refuses an uncommitted
+			// tenant file (ErrTenantFileDirty, #1535 item 6); the repair path is
+			// for a broken link git holds.
+			gitRun(t, dir, "add", "-A")
+			gitRun(t, dir, "commit", "-m", "dangling tenant file")
 			w := newTestWriter(dir, dir)
 			var branch string
 			ctx := context.Background()
@@ -192,6 +193,8 @@ func TestTreeUnreadable_BatchExcludesEveryTarget(t *testing.T) {
 	if err := os.Symlink("missing-target.yaml", filepath.Join(dir, "bt-b.yaml")); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
+	gitRun(t, dir, "add", "-A") // committed: see TestTreeUnreadable_DanglingTargetIsTheRepairPath
+	gitRun(t, dir, "commit", "-m", "dangling tenant file")
 	w := newTestWriter(dir, dir)
 	ops := []BatchOp{
 		{TenantID: "bt-a", Merge: func([]byte) (string, error) { return "tenants:\n  bt-a:\n    _silent_mode: \"critical\"\n", nil }},
@@ -224,6 +227,8 @@ func TestTreeUnreadable_PreviewMatchesWrite(t *testing.T) {
 			if err := os.Symlink("missing-target.yaml", filepath.Join(dir, c.link)); err != nil {
 				t.Skipf("symlink: %v", err)
 			}
+			gitRun(t, dir, "add", "-A") // committed: see TestTreeUnreadable_DanglingTargetIsTheRepairPath
+			gitRun(t, dir, "commit", "-m", "dangling link")
 			w := newTestWriter(dir, dir)
 			verdicts := map[string]error{}
 			for _, mode := range []string{"DryRunValidate", "Diff", "Write"} { // previews first: Write changes the tree
@@ -298,10 +303,11 @@ func TestTreeUnreadable_SelfLoopTargetIsTheRepairPath(t *testing.T) {
 				t.Skipf("symlink: %v", err)
 			}
 			pr := mode == "WritePR" || mode == "WritePRBatch"
-			if pr {
-				gitRun(t, dir, "add", "-A")
-				gitRun(t, dir, "commit", "-m", "self-loop tenant file")
-			}
+			// Committed in every mode: a direct write refuses an uncommitted
+			// tenant file (ErrTenantFileDirty, #1535 item 6); the repair path is
+			// for a broken link git holds.
+			gitRun(t, dir, "add", "-A")
+			gitRun(t, dir, "commit", "-m", "self-loop tenant file")
 			w := newTestWriter(dir, dir)
 			body := tenantBody("loop-t")
 			var branch string
