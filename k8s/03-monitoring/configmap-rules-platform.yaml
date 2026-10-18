@@ -922,8 +922,10 @@ data:
           # _groups.yaml / _views.yaml with a typo gets NO behaviour change — the
           # new (broken) config is silently ignored while the stale one keeps
           # enforcing. BOTH reload paths are silent: the periodic WatchLoop only
-          # WARN-logs, and the post-write Reload returns an error that every
-          # handler discards (`_ = mgr.Reload()`) before answering 200 OK.
+          # WARN-logs, and the reload after a groups / views / federation-policy
+          # write (synchronous on success, in the background when the write's
+          # outcome is unknown — #1535) discards its error; the handler answers
+          # regardless.
           # tenant_api_config_reload_failures_total{component}
           # (handler/config_reload_metrics.go) records both and makes them alertable.
           #
@@ -934,10 +936,16 @@ data:
           # (a) a single transient mid-write blip that recovers on the next tick and
           # (b) increase() extrapolation noise from a counter reset on pod restart
           # (the standard SRE guard, cf. ConfigParseFailure above). ⚠️ The threshold
-          # is therefore tuned to the TICK-driven path: a lone post-write Reload
-          # failure (groups / views) is COUNTED and visible on the dashboard but
-          # will not by itself trip this alert — that needs 3+ within 15m. The
-          # {component} label rides through so on-call knows WHICH config is stuck.
+          # is therefore tuned to the TICK-driven path. Every manager runs one
+          # (groups / views too since #2856), and a failed post-write reload
+          # leaves the dedup hash cleared, so a YAML that stays broken keeps
+          # failing every tick whichever path saw it first. A lone failure the
+          # next tick clears (a transient read error) is COUNTED and visible on
+          # the dashboard but will not by itself trip this alert. With a long
+          # --reload-interval (around 5m or more) a stuck manager may never
+          # reach 3 failures in 15m; TenantApiConfigReloadStale below covers
+          # that. The {component} label rides through so on-call knows WHICH
+          # config is stuck.
           # `for: 5m` debounces further — last-good is still being served, so there
           # is no sub-5m urgency.
           - alert: TenantApiConfigReloadFailing
@@ -965,19 +973,19 @@ data:
 
           # --- tenant-api config reload STALE (current-state gauge) ---
           # Companion to TenantApiConfigReloadFailing above. That one is a RATE
-          # alert (increase()>2) tuned to the WatchLoop tick path; it structurally
-          # CANNOT fire for a single-shot Reload failure — a post-write Reload
-          # (groups / views) that fails once leaves the counter at 1 (below the
-          # threshold) yet the config IS stale (memory != store) until the next
-          # successful reload.
+          # alert (increase()>2 over 15m): how fast the counter climbs depends on
+          # the retry cadence, the WatchLoop interval (--reload-interval, 30s by
+          # default). With an interval around 5m or more a manager that stays
+          # stale may never reach 3 failures in 15m, and even at 30s it waits for
+          # the failures to add up plus its `for: 5m` — yet the config IS stale
+          # (memory != store) from the first failure.
           #
           # tenant_api_config_last_reload_successful{component} (0 = last reload
           # failed, serving stale last-good; 1 = current) closes that gap: it flips
           # to 0 on ANY reload failure and stays 0 until a load succeeds, so `== 0`
-          # catches the single-shot case AND fires immediately/persistently for a
-          # stuck WatchLoop manager (no 15m-window masking). `for: 2m` debounces a
-          # transient mid-write blip on a WatchLoop manager (flips 0 one tick, back
-          # to 1 the next). The gauge defaults to 1 so a never-reloaded deployment
+          # fires for a stuck manager whatever the retry cadence, and without the
+          # 15m-window masking. `for: 2m` debounces a transient mid-write blip
+          # (flips 0 one tick, back to 1 the next). The gauge defaults to 1 so a never-reloaded deployment
           # does not false-alarm. Recovery: every manager clears on the next good
           # WatchLoop tick (groups / views also run one since #2856), a successful
           # write-reload, or a pod restart (startup re-reads).
@@ -998,11 +1006,12 @@ data:
                 is broken — fix it; a `read ...` (transient I/O) error means the
                 YAML is fine but a re-read failed — re-apply the config (re-PUT) or
                 restart the pod. Every manager (rbac / policy / tenantorg /
-                federation-policy / groups / views) clears on the next good
-                WatchLoop tick; groups, views and federation-policy are read from
-                the tenant-api-state ConfigMap, not conf.d. This gauge catches the
-                single-shot post-write Reload failure that
-                TenantApiConfigReloadFailing (a rate alert) cannot.
+                federation-policy / groups / views) retries on every WatchLoop
+                tick (--reload-interval, 30s by default) and clears on the first
+                good one; groups, views and federation-policy are read from the
+                tenant-api-state ConfigMap, not conf.d. Unlike
+                TenantApiConfigReloadFailing (a failure-rate alert), this fires
+                however rarely the reload is retried.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
           # --- tenant-api cannot have writes judged (ADR-036 §5, #2903) ---

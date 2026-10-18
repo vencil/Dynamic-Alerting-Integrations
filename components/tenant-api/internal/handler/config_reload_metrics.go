@@ -7,8 +7,9 @@ package handler
 // federation-policy) embeds configwatcher.Watcher, which keeps serving the
 // LAST-GOOD snapshot when a reload parse fails — so an admin's typo in
 // _rbac.yaml / _tenant_orgs.yaml / etc. silently stops taking effect. Both
-// reload paths are silent (WatchLoop only WARN-logs; the post-write Reload's
-// error is discarded by every caller before answering 200 OK).
+// reload paths are silent (WatchLoop only WARN-logs; the reload after a state
+// write — Reload, or ReloadAsync in the background when the write's outcome is
+// unknown — has its error discarded, and the handler answers regardless).
 //
 // The Watcher reports the outcome of EVERY load through the
 // configwatcher.ReloadObserver interface; the concrete store lives here (the
@@ -79,9 +80,10 @@ var configReloadComponents = [...]string{
 
 // ConfigReloadMetrics holds the per-component reload-failure counter and the
 // current last-reload-successful gauge. It satisfies configwatcher.ReloadObserver.
-// Both stores are atomic so recording is lock-free and safe from both writer
-// goroutines: each Watcher's WatchLoop ticker and the request goroutines that
-// call Reload after a write.
+// Both stores are atomic so recording is lock-free and safe from every writer
+// goroutine: each Watcher's WatchLoop ticker, the request goroutines that call
+// Reload after a write, and the background goroutine of ReloadAsync (after a
+// write whose outcome is unknown, #1535).
 type ConfigReloadMetrics struct {
 	// counters and states are fixed-size parallel arrays to configReloadComponents,
 	// sized FROM it at compile time (len of an array value is a constant

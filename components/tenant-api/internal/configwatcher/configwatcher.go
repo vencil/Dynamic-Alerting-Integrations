@@ -81,8 +81,9 @@ type ReadFunc func() (data []byte, exists bool, err error)
 //     to depends on the retry cadence (the WatchLoop interval), while the
 //     config IS stale from the first one until a load succeeds.
 type ReloadObserver interface {
-	// RecordReload reports the outcome of one reload attempt (a WatchLoop tick
-	// or a post-write Reload) for the named component (the Watcher's label,
+	// RecordReload reports the outcome of one reload attempt (a WatchLoop tick,
+	// a post-write Reload, or a ReloadAsync on its own background goroutine —
+	// so it may be called from several goroutines) for the named component (the Watcher's label,
 	// e.g. "RBAC" / "policy" / "groups"). ok=false means load() returned an
 	// error and kept the last-good snapshot.
 	RecordReload(component string, ok bool)
@@ -250,10 +251,8 @@ func (w *Watcher[T]) Reload() error {
 // snapshot would miss the write until the next WatchLoop tick. So in the worst
 // case two background reloads exist per watcher: one reading, one waiting.
 //
-// A panic in the read or parse is recovered and logged: on the request path
-// the HTTP server's recovery would catch it, but nothing does in a goroutine
-// of our own, and it would take the process down. It is recorded as a failed
-// reload.
+// A panic in the read or parse is turned into a failed reload by loadLocked,
+// as on every other path, so the goroutine never takes the process down.
 func (w *Watcher[T]) ReloadAsync() {
 	if !w.asyncPending.CompareAndSwap(false, true) {
 		return
@@ -264,17 +263,6 @@ func (w *Watcher[T]) ReloadAsync() {
 func (w *Watcher[T]) reloadAsync() {
 	w.loadMu.Lock()
 	defer w.loadMu.Unlock()
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("config reload panicked", "component", w.label, "path", w.path, "panic", r)
-			// loadLocked's own defer already ran and, seeing a nil err,
-			// recorded a success; correct it.
-			w.lastOK = false
-			if w.reloadObs != nil {
-				w.reloadObs.RecordReload(w.label, false)
-			}
-		}
-	}()
 	w.asyncPending.Store(false)
 	w.lastHash = ""
 	_ = w.loadLocked()
@@ -370,15 +358,26 @@ func (w *Watcher[T]) load() error {
 // The outcome (err == nil) is captured at EVERY exit via a named-return + defer,
 // so success paths (dedup no-op, missing-file, parse OK) and failure paths are all
 // covered from ONE point (this is the single funnel every caller reaches: New→load,
-// WatchLoop→load, Reload→loadLocked), keeping the failure counter and the
+// WatchLoop→load, Reload→loadLocked, ReloadAsync→loadLocked), keeping the failure counter and the
 // last-reload-successful gauge consistent. The defer ALWAYS records w.lastOK — held
 // under loadMu, so its write is serialised with lastHash — and forwards to the
 // observer when one is present. During New()'s initial load reloadObs is nil (it is
 // installed post-construction), so that load emits no live metric — but its outcome
 // is preserved in lastOK and REPLAYED by SetReloadObserver (it matters until the
 // first WatchLoop tick, and always for a watcher run without one).
+//
+// A panic in the read or the parse is recovered here and returned as the error
+// — before the outcome is recorded, so it is recorded once, as a failure, and
+// the last-good snapshot stays. This covers every path: a WatchLoop tick and a
+// ReloadAsync goroutine have no HTTP recovery above them to stop a panic from
+// taking the process down, and a request-path Reload would otherwise answer
+// 500 for a write that succeeded.
 func (w *Watcher[T]) loadLocked() (err error) {
 	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("load %s: panic: %v", w.path, r)
+			slog.Error("config reload panicked", "component", w.label, "path", w.path, "panic", r)
+		}
 		w.lastOK = err == nil
 		if w.reloadObs != nil {
 			w.reloadObs.RecordReload(w.label, err == nil)

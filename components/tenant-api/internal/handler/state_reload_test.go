@@ -344,9 +344,13 @@ func TestMutateState_UnknownOutcomeReloadsAreCoalesced(t *testing.T) {
 	case <-time.After(eventuallyTimeout):
 		t.Fatal("no reload started after the first unknown-outcome write")
 	}
-	// The rest arrive while it is mid-read, spaced so that each background
-	// goroutine a failure starts has run up to where it waits for the lock
-	// before the next failure.
+	// The rest arrive while it is mid-read. The expected count is
+	// deterministic without any spacing: the second failure's goroutine
+	// cannot clear the pending flag before the held read releases loadMu, so
+	// every later CompareAndSwap fails. The 10ms gap only gives each started
+	// goroutine time to reach the lock, so that a variant clearing the flag
+	// before taking loadMu (which would start one reload per failure) is
+	// caught reliably rather than only when the scheduler happens to run it.
 	for i := 1; i < n; i++ {
 		fail()
 		time.Sleep(10 * time.Millisecond)
