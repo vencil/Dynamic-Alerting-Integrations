@@ -28,7 +28,7 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
+import yaml  # output only (yaml.dump); conf.d is read through parse-tree
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,10 +45,12 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     load_yaml_file,
     write_text_or_die,
-    iter_yaml_files,
 )
-from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231 duplicate key = YAML error; #2216 tenant id as text)
-from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+from _lib_io import YamlFileError  # noqa: E402
+# ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`.
+import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
+from _lib_parse_tree import FileUnreadable  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -132,44 +134,64 @@ _MAPPING_FILE_NAMES = ('_instance_mapping.yaml', '_instance_mapping.yml')
 
 
 def find_mapping_file(config_dir: str) -> str | None:
-    """Find _instance_mapping.yaml in config-dir."""
-    base = Path(config_dir)
+    """`_instance_mapping.yaml` (else `.yml`) at the root of config-dir, among
+    the files `da-guard parse-tree` selects (ADR-036 step 4, #2906). Raises
+    ParseTreeError when parse-tree cannot run."""
+    tree = _lib_parse_cache.reader_for(config_dir).tree()
     for name in _MAPPING_FILE_NAMES:
-        candidate = base / name
-        if candidate.is_file():
-            return str(candidate)
+        if name in tree.selected:
+            return str(Path(config_dir) / name)
     return None
+
+
+def _text_of(node):
+    """A scalar node's source text, else its value (`None` for no node)."""
+    if node is None:
+        return None
+    if _lib_parse_tree.is_scalar(node):
+        return _lib_parse_tree.scalar_text(node) if node["tag"] != "!!null" else None
+    return _lib_parse_tree.to_python(node)
 
 
 def parse_mapping_file(path: str) -> list[InstanceMapping]:
     """Parse _instance_mapping.yaml into structured mappings.
 
+    Read through `da-guard parse-tree` (ADR-036 step 4, #2906): the file at
+    the root of the conf.d it sits in, as yaml.v3 reads it. A file parse-tree
+    cannot read raises YamlFileError (rc 2 via exit_on_yaml_file_error).
+
     #2216: an entry's ``tenant:`` value is a tenant id, read as its source
     text — ``tenant: 010`` is tenant "010", not the int 8 ``.strip()``
-    raised on.
+    raised on. ``filter:`` is its source text as well (a PromQL matcher).
     """
-    data = load_yaml_file_exporter_keys(path, raw_text_scalars=("tenant",))
-    if not data or not isinstance(data, dict):
-        return []
-
-    raw = data.get('instance_tenant_mapping', {})
-    if not isinstance(raw, dict):
+    p = Path(path)
+    try:
+        root = _lib_parse_cache.reader_for(p.parent).node(p.name)
+    except FileUnreadable as exc:
+        raise YamlFileError(str(path), exc) from exc
+    raw = root.get('instance_tenant_mapping')
+    if not isinstance(raw, dict) or _lib_parse_tree.is_scalar(raw):
         return []
 
     result: list[InstanceMapping] = []
     for instance, entries_raw in sorted(raw.items()):
         if not isinstance(entries_raw, list):
-            print(f"WARN: instance={instance}: expected list of mappings, got {type(entries_raw).__name__}",
+            kind = ('mapping' if isinstance(entries_raw, dict)
+                    and not _lib_parse_tree.is_scalar(entries_raw) else 'scalar')
+            print(f"WARN: instance={instance}: expected list of mappings, got {kind}",
                   file=sys.stderr)
             continue
         entries: list[MappingEntry] = []
         for item in entries_raw:
-            if not isinstance(item, dict):
-                print(f"WARN: instance={instance}: expected mapping dict, got {type(item).__name__}",
+            if not isinstance(item, dict) or _lib_parse_tree.is_scalar(item):
+                kind = 'list' if isinstance(item, list) else 'scalar'
+                print(f"WARN: instance={instance}: expected mapping dict, got {kind}",
                       file=sys.stderr)
                 continue
-            tenant = item.get('tenant', '').strip()
-            filter_expr = item.get('filter', '').strip()
+            tenant = _text_of(item.get('tenant'))
+            filter_expr = _text_of(item.get('filter'))
+            tenant = tenant.strip() if isinstance(tenant, str) else ''
+            filter_expr = filter_expr.strip() if isinstance(filter_expr, str) else ''
             if not tenant:
                 print(f"WARN: instance={instance}: entry missing 'tenant' field", file=sys.stderr)
                 continue
@@ -184,26 +206,22 @@ def parse_mapping_file(path: str) -> list[InstanceMapping]:
 
 
 def collect_tenant_ids_from_config_dir(config_dir: str) -> set[str]:
-    """Collect all tenant IDs from tenant YAML files in config-dir."""
-    tenant_ids: set[str] = set()
-    for filename, filepath in iter_yaml_files(config_dir, skip_reserved=True):
-        # Strict (#2231): a tenant file holding a key twice is one the
-        # exporter drops whole — rc 2 via exit_on_yaml_file_error, like bad
-        # syntax, instead of validating against the ids PyYAML kept.
-        # #2216: tenant ids are the keys' source text, as the exporter
-        # reads them — `010:` is tenant "010", not 8.
-        data = load_yaml_file_strict_exporter_keys(filepath)
-        if not data or not isinstance(data, dict):
-            continue
-        # Wrapper format: {tenants: {name: ...}}
-        tenants_block = data.get('tenants', {})
-        if isinstance(tenants_block, dict):
-            tenant_ids.update(tenants_block.keys())
-        else:
-            # Flat format: filename = tenant name
-            base = Path(filename).stem
-            tenant_ids.add(base)
-    return tenant_ids
+    """Every tenant id a tenant file of config-dir declares, at any depth.
+
+    ADR-036 step 4 (#2906): the files are the ones `da-guard parse-tree`
+    selects, and the ids the keys of each `tenants:` mapping as yaml.v3 keys
+    the exporter's map — source text (#2216: `010:` is tenant "010", not 8).
+    A file parse-tree cannot read raises YamlFileError (rc 2): what it
+    declares is unknown, so the validation could not be answered. A file
+    with no `tenants:` mapping declares no tenant — the exporter serves none
+    from it (the flat format is not read).
+    """
+    declared, unreadable = _lib_parse_cache.declared_tenants(
+        _lib_parse_cache.reader_for(config_dir))
+    if unreadable:
+        first = unreadable[0]
+        raise YamlFileError(str(Path(config_dir) / first.file), first)
+    return set(declared)
 
 
 def load_metrics_from_dictionary(dict_path: str) -> list[str]:
@@ -386,6 +404,7 @@ def estimate_cardinality(mappings: list[InstanceMapping], metric_count: int) -> 
 # ---------------------------------------------------------------------------
 
 @exit_on_yaml_file_error  # #1654: unreadable mapping/tenant/dictionary file → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
 def main() -> None:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(

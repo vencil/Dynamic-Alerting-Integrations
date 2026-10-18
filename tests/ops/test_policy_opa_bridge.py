@@ -21,6 +21,7 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import policy_opa_bridge as pob  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import YamlFileError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -101,12 +102,15 @@ class TestLoadDefaults:
     def test_missing_file_returns_empty(self, tmp_path):
         assert pob.load_defaults(str(tmp_path)) == {}
 
-    def test_loads_dict(self, tmp_path, monkeypatch):
-        f = tmp_path / "_defaults.yaml"
-        f.write_text("x", encoding="utf-8")
-        monkeypatch.setattr(pob, "load_yaml_file_strict",
-                            lambda p: {"mysql_connections": 80})
-        assert pob.load_defaults(str(tmp_path)) == {"mysql_connections": 80}
+    def test_loads_dict(self, tmp_path):
+        """ADR-036 step 4 (#2906): read by `da-guard parse-tree` — yaml.v3's
+        values: `yes` is the string, `0o17` the int 15, a timestamp its text
+        (OPA's input is JSON). PyYAML read True, "0o17" and a `date`."""
+        (tmp_path / "_defaults.yaml").write_text(
+            "mysql_connections: 80\nflag: yes\noctal: 0o17\nsince: 2001-12-14\n",
+            encoding="utf-8")
+        assert pob.load_defaults(str(tmp_path)) == {
+            "mysql_connections": 80, "flag": "yes", "octal": 15, "since": "2001-12-14"}
 
     def test_reads_the_selected_carrier_not_a_hardcoded_name(self, tmp_path):
         """#1674: a root holding only `_defaults.yml` gave OPA no defaults,
@@ -119,11 +123,12 @@ class TestLoadDefaults:
             "defaults:\n  cpu_pct: 50\n", encoding="utf-8")
         assert pob.load_defaults(str(tmp_path)) == {"defaults": {"cpu_pct": 50}}
 
-    def test_non_dict_returns_empty(self, tmp_path, monkeypatch):
-        f = tmp_path / "_defaults.yaml"
-        f.write_text("x", encoding="utf-8")
-        monkeypatch.setattr(pob, "load_yaml_file_strict", lambda p: ["list"])
-        assert pob.load_defaults(str(tmp_path)) == {}
+    def test_non_mapping_is_a_file_parse_tree_cannot_read(self, tmp_path):
+        """#2906: a top level that is not a mapping is a file parse-tree
+        (and the exporter) cannot read — named, rc 2 in `main` — not `{}`."""
+        (tmp_path / "_defaults.yaml").write_text("- list\n", encoding="utf-8")
+        with pytest.raises(YamlFileError, match="top_level_not_mapping"):
+            pob.load_defaults(str(tmp_path))
 
 
 # ---------------------------------------------------------------------------

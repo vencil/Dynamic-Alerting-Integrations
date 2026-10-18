@@ -779,7 +779,8 @@ class TestProfileLookupSharesTheChainRead:
             assert chain["resolved"] == resolved
         result = self._check(d)
         assert "skipped_unusable_files" not in result["inheritance_chain"]
-        assert "WARN" not in capsys.readouterr().err
+        _assert_only_unread_declared_warns(
+            capsys.readouterr().err, fname == "_defaults.yaml" and "!!set" in body)
 
     @pytest.mark.parametrize("case", sorted(_WRONG_TYPE))
     def test_a_wrong_type_value_fails_closed(self, tmp_path, case):
@@ -812,6 +813,21 @@ class TestProfileLookupSharesTheChainRead:
             "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
         with pytest.raises(ParseFailedError, match="_platform.yaml"):
             diagnose.lookup_tenant_profile("tx", str(tmp_path))
+
+
+def _assert_only_unread_declared_warns(err: str, root_set: bool) -> None:
+    """No WARN — except, for a root `_defaults.yaml` that holds a `!!set`, the
+    one naming why `optional_overrides` was not read: the exporter decodes the
+    set by its kind, `da-guard parse-tree` refuses the tag (ADR-036 §2), and
+    `declared` is read through parse-tree (#2906) — so it is left empty and
+    said so, never guessed."""
+    warns = [line for line in err.splitlines() if "WARN" in line]
+    if not root_set:
+        assert warns == []
+        return
+    assert warns and all(
+        line.strip() == "WARN: _defaults.yaml: optional_overrides not read "
+                        "(declared left empty): tag_not_allowed" for line in warns), err
 
 
 class TestSetTagReadAsTheExporterReadsIt:
@@ -872,7 +888,8 @@ class TestSetTagReadAsTheExporterReadsIt:
         assert chain["profile_name"] == profile
         assert chain["resolved"] == served
         assert diagnose.lookup_tenant_profile("tx", d) == profile
-        assert "WARN" not in capsys.readouterr().err
+        _assert_only_unread_declared_warns(
+            capsys.readouterr().err, case == "defaults" and bool(tag))
 
     def test_a_tenants_set_names_tenants_with_no_keys(self, tmp_path, capsys):
         """`tenants: !!set {tx}` is `tenants: {tx: ~}` on /metrics: the
