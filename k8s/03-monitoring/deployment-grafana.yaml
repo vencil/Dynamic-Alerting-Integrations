@@ -55,7 +55,7 @@ spec:
             # rejects an entry without `@<version>`. Air-gapped clusters MUST
             # pre-bake the plugin into a custom image and remove this env var.
             - name: GF_PLUGINS_PREINSTALL_SYNC
-              value: "victoriametrics-logs-datasource@0.32.0"
+              value: "victoriametrics-logs-datasource@0.33.1"
             # Grafana 12.4 also installs these app plugins from grafana.com in
             # the background, unpinned and auto-updated, unless they are
             # disabled (pkg/setting/setting_plugins.go defaultPreinstallPlugins).
