@@ -286,7 +286,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 |---|---|---|---|
 | 有 finding | 422 | `GENERATOR_FINDINGS` | `findings[]` 是產生器的 finding，與這次寫入的檔或租戶相關的排前面並標 `related: true`；`findings_compared_with_base: true` 時每筆另有 `pre_existing`（寫入前就有）。不相關的 finding 只給對所有租戶有寫入權限的呼叫者看，其他人只拿到 `unrelated_findings_withheld`（數量）。批次則是一般的 422 `status: rejected`，每筆結果都是這個 code，訊息列出與該筆租戶相關的 finding |
 | 產生器這次沒判出結果，可重試 | 429（`Retry-After`） | `GENERATOR_REJECTED` | `reason`：`busy`、`deadline`、`git_read`、`mismatch`、`no_time`（剩下的時間不夠判定） |
-| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request`、`normalized`（`.gitattributes` 的 eol、text 或 filter 在 staging 時改了內容，commit 的不會是判定過的那份）、`unknown`（產生器回了 tenant-api 不認得的 reason） |
+| 產生器這次沒判出結果，重送也一樣 | 422 | `GENERATOR_REJECTED` | `reason`：`memory`、`incomplete`、`too_large`（整批寫入後的檔案太大，請拆批）、`invalid_request`、`normalized`（`.gitattributes` 的 eol 或 text 在 staging 時改了內容，commit 的不會是判定過的那份；filter driver 不會走到這裡，見 §3.11）、`unknown`（產生器回了 tenant-api 不認得的 reason） |
 | 產生器容器不可用 | 503（`Retry-After`） | `VALIDATOR_UNAVAILABLE` | `reason`：`unreachable`（連不上或期限內沒回應）、`bad_response`、`amtool_missing`、`generator_too_old`、`internal_error` |
 | 部署端 policy 檔不可用 | 503（`Retry-After`） | `POLICY_UNAVAILABLE` | `reason`：`policy_unusable`（產生器讀不了）、`policy_unreadable`（tenant-api 讀不了自己掛的那份） |
 
@@ -309,6 +309,19 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 - **以前的回應**：外部的未 commit 修改被當成基底——可能被合併進去並掛在 API 使用者名下 commit，或在內容恰好相同時回成功卻沒有 commit。
 - **保證的範圍**：只擋進寫入鎖時已經存在的不一致。檢查到讀檔之間另一個程序再改檔不在保證內；那段時間落地的外部 commit 會讓 HEAD 移動，由 compare-and-swap 擋成 409 `CONFLICT`。
 - **怎麼修**：在 tenant-api 掛載的 repo 裡跑 `git status -- <租戶檔>`（skip-worktree／assume-unchanged 用 `git ls-files -v -- <租戶檔>` 看，標記為 `S` 或小寫），把那份修改 commit 或丟棄，再重試寫入。丟棄的方式依狀態而定：已追蹤檔的修改或刪除用 `git restore --staged --worktree -- <租戶檔>`；未追蹤的同名檔（狀態 `??`）、被 `.gitignore` 忽略的同名檔（`git status --ignored -- <租戶檔>` 顯示 `!!`）直接刪除該檔；新 `git add` 但 HEAD 沒有的檔（狀態 `A`）要保留就直接 commit，要捨棄就先 `git rm --cached -- <租戶檔>` 再刪除工作樹的檔（只移出 index 不刪檔，檔會變成未追蹤，重試仍是 409）；標記用 `git update-index --no-skip-worktree`／`--no-assume-unchanged` 解除。
+
+### 3.11 git 設定指名了會執行外部程式的 driver 時，拒絕啟動與寫入（[#3175](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3175)）
+
+**行為變更（breaking）**：tenant-api 跑 git 時讀得到的 git 設定裡，只要有下列任何一個鍵，就拒絕啟動；啟動後才出現（例如 init container 或 sidecar 改了 `.git/config`），則拒絕之後的每一筆寫入與預覽。
+
+- **被拒的鍵**：`filter.<名稱>.clean`、`filter.<名稱>.smudge`、`filter.<名稱>.process`、`diff.<名稱>.textconv`、`diff.<名稱>.command`、`merge.<名稱>.driver`。來源不限：conf repo 自己的 `.git/config`、worktree 設定、global（`~/.gitconfig`、`$XDG_CONFIG_HOME/git/config` 或 `GIT_CONFIG_GLOBAL` 指的檔）、system（`/etc/gitconfig`）、經 `include`／`includeIf` 引入的檔、環境變數注入的（`GIT_CONFIG_COUNT`／`GIT_CONFIG_KEY_<n>`、`GIT_CONFIG_PARAMETERS`，scope 顯示為 `command`）。同一 section 下不指名程式的鍵（`filter.<名稱>.required`、`diff.<名稱>.binary`、`merge.<名稱>.name`）不擋。**沒有允許清單**。
+- **為什麼**：這些鍵指名的程式，git 會在處理 `.gitattributes` 選中的檔案時執行——`git add`、`git status` 跑 clean filter，`git checkout` 跑 smudge，`git diff`／`git log -p` 跑 textconv 或外部 diff。程式本身由 git 設定決定（operator 控制），但**對哪些檔、何時執行由 `.gitattributes` 決定，能 commit 到 conf repo 的人就能改**。而 `POST /tenants/{id}/diff`、`/validate` 的預覽會跑 `git status`（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535) 的租戶檔一致性檢查），只需要讀權限；不擋的話，只有讀權限的人也能讓 tenant-api 反覆執行這些程式。
+- **用 git-lfs 或 git-crypt 的 config repo 不能接 tenant-api**：兩者都靠 filter driver（`git lfs install` 會把 `filter.lfs.*` 寫進 global 設定）。tenant-api 不以 `-c filter.<名稱>.clean=` 之類的設定把 driver 關掉再繼續：那樣 git 會把工作樹的位元組原樣入庫（lfs 指標、git-crypt 的明文），且被 filter 的檔全部判成有未 commit 的修改。
+- **core.fsmonitor**：tenant-api 的每一個 git 指令都帶 `-c core.fsmonitor=false`，設了也不會執行；這個設定經 `GIT_CONFIG_PARAMETERS` 也傳到 hook 裡跑的 git 指令。關掉它不改變任何結果，只是 git 自己掃工作樹。
+- **hooks 照常支援**：conf repo 的 client-side hooks（`pre-commit`、`commit-msg`、`post-commit`、`pre-push`、`reference-transaction`、`post-checkout`、`post-index-change`）照舊在 tenant-api 自己的 git 指令中執行。信任模型不同：hook 放在 `.git/hooks`（或 `core.hooksPath` 指的目錄），只有能改 tenant-api 那份 repo 的檔案系統或 git 設定的人才放得進去，commit 內容選不了要跑哪個 hook，也不會因預覽而執行。代價也一樣要知道：hook 以 tenant-api 的身分、在寫入鎖之下執行，受 `TENANT_API_GIT_TIMEOUT` 約束；直寫單檔以 `commit-tree` 建 commit，不跑 `pre-commit`／`commit-msg`（§3.9）。
+- **偵測本身不執行任何程式**：以 `git config --show-scope --get-regexp` 讀設定（與 tenant-api 平常跑 git 同一個環境、同一個 repo），這個指令只讀設定檔，不跑 driver 也不跑 fsmonitor。
+- **回應**：啟動時直接結束，`FATAL:` 訊息列出每個鍵的 scope 與鍵名（例如 `local filter.lfs.clean, command diff.x.textconv`），**不印值**——值是一段指令，可能含路徑或憑證。執行中被拒的寫入（`PUT`、custom-alerts、批次、PR 模式）回 500 `INTERNAL_ERROR`，訊息固定、帶 `request_id`，scope 與鍵名只進 server log；async 批次的 task 每一筆都是 `INTERNAL_ERROR`；`/diff` 同樣回 500；`/validate` 回 `valid: false` 與固定訊息；PR 模式的租戶列表不推算依設定的狀態（`config_derived` 帶原因，只有不受範圍限制的讀者看得到 scope 與鍵名，與其他載入錯誤相同）。啟動與寫入時，設定讀不出來（設定檔格式錯、repo 目錄不存在）也一樣拒絕：讀不到就無從證明沒有；預覽遇到這種情況則與 git 失敗時相同，略過與 HEAD 的一致性檢查、不跑 `git status`。重試不會成功。
+- **怎麼修**：在 tenant-api 的容器裡（同一個使用者與環境）跑 `git -C <conf repo> config --show-scope --show-origin --get-regexp '^(filter\..+\.(clean|smudge|process)|diff\..+\.(textconv|command)|merge\..+\.driver)$'`，依 scope 與來源檔把那些鍵刪掉（`git config --unset`，或改 global／system 設定檔、移除注入的 `GIT_CONFIG_*` 環境變數），再重啟 tenant-api。
 
 ---
 

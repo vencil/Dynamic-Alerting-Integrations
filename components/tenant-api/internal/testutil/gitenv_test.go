@@ -268,3 +268,40 @@ func TestEveryPackageThatRunsGitDisablesAutoMaintenance(t *testing.T) {
 		t.Errorf("these packages run git in tests but their TestMain does not call testutil.DisableGitAutoMaintenance(): %v", missing)
 	}
 }
+
+// #3175: tenant-api refuses to run with a filter / diff / merge driver in
+// its git config, so the copy of the host's config leaves those keys out
+// (a git-lfs host has filter.lfs.* there) and keeps everything else as git
+// read it — a subsection with dots or quotes, a value with quotes, a key
+// written without "=".
+func TestDisableGitAutoMaintenance_CopyDropsDriverKeysOnly(t *testing.T) {
+	home := isolateGit(t)
+	writeFile(t, filepath.Join(home, ".gitconfig"), "[user]\n\tname = From Global\n"+
+		"[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = s\n\tprocess = p\n\trequired = true\n"+
+		"[diff \"t\"]\n\ttextconv = tc\n\tcommand = dc\n\tbinary = true\n"+
+		"[merge \"m\"]\n\tdriver = md\n\tname = kept\n"+
+		"[url \"https://example.invalid/a.b/\"]\n\tinsteadOf = gh:\n"+
+		"[y \"a \\\"b\\\"\"]\n\tv = \"q\\\"z\"\n\tflag\n")
+	disable(t)
+	dir := t.TempDir()
+	git(t, "-C", dir, "init", "-q")
+	for _, k := range []string{"filter.lfs.clean", "filter.lfs.smudge", "filter.lfs.process",
+		"diff.t.textconv", "diff.t.command", "merge.m.driver"} {
+		if got := gitGet(t, dir, k); got != "" {
+			t.Errorf("%s = %q: the driver key was copied", k, got)
+		}
+	}
+	for k, want := range map[string]string{
+		"user.name": "From Global", "filter.lfs.required": "true", "diff.t.binary": "true",
+		"merge.m.name": "kept", "url.https://example.invalid/a.b/.insteadof": "gh:",
+		`y.a "b".v`: `q"z`,
+	} {
+		if got := gitGet(t, dir, k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+	if got := git(t, "-C", dir, "config", "--type=bool", "--get", `y.a "b".flag`); got != "true" {
+		t.Errorf(`y.a "b".flag (written without "=") = %q, want true`, got)
+	}
+	wantAllOff(t, "with driver keys in the global config", func(k string) string { return gitGet(t, dir, k) })
+}

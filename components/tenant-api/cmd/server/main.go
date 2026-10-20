@@ -389,6 +389,13 @@ func main() {
 
 	writer := gitops.NewWriter(*configDir, *gitDir)
 	writer.SetBaseBranch(*gitBaseBranch) // #638: explicit PR-mode base (forge-neutral)
+	// #3175: no start while the git config names a filter, diff or merge
+	// driver — before any other git command here (RecoverBatchPublish's
+	// checkout below would run a smudge filter). Every write and preview
+	// checks again.
+	if err := writer.CheckGitDrivers(); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 	// #2903 (ADR-036 §4): every content-changing write asks the generator
 	// container before it commits; /metrics reads its state and appends its
 	// own metrics.
