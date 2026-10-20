@@ -111,6 +111,7 @@ func TestWritePRBatch_AllNoOp_ReturnsErrNoChanges(t *testing.T) {
 
 func TestWritePRBatch_MergesPreservingKeys(t *testing.T) {
 	dir := seedTenantRepo(t)
+	addBareRemote(t, dir) // the push must succeed (#1724)
 	w := newTestWriter(dir, dir)
 	// Exercise the writer plumbing (read current file under lock → merge →
 	// validate → commit on branch). The merge is a passthrough that appends one
@@ -120,25 +121,12 @@ func TestWritePRBatch_MergesPreservingKeys(t *testing.T) {
 	merge := func(existing []byte) (string, error) {
 		return string(existing) + "    _silent_mode: warning\n", nil
 	}
-	if _, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com"); err != nil {
+	res, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "db-a", Merge: merge}}, "op@example.com")
+	if err != nil {
 		t.Fatalf("WritePRBatch: %v", err)
 	}
 
-	// Find the created batch branch (push failed → branch retained).
-	branches := gitOut(t, dir, "branch", "--format=%(refname:short)")
-	var branch string
-	for _, ln := range strings.Split(branches, "\n") {
-		ln = strings.TrimSpace(ln)
-		if strings.HasPrefix(ln, "tenant-api/batch/") {
-			branch = ln
-			break
-		}
-	}
-	if branch == "" {
-		t.Fatalf("no tenant-api/batch/* branch found; branches:\n%s", branches)
-	}
-
-	committed := gitOut(t, dir, "show", branch+":db-a.yaml")
+	committed := gitOut(t, dir, "show", originRef(res.BranchName)+":db-a.yaml")
 	for _, want := range []string{"mysql_connections", "mysql_threads_running", "_metadata", "team-x", "# warning threshold", "_silent_mode"} {
 		if !strings.Contains(committed, want) {
 			t.Errorf("#1097 PR-mode regression: committed file missing %q:\n%s", want, committed)

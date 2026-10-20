@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-07
-updated_at: 2026-10-11
+updated_at: 2026-10-20
 ---
 # ADR-011: PR-based Write-back 模式
 
@@ -24,6 +24,8 @@ updated_at: 2026-10-11
 2026-10-10：更正寫回模式的設定方式：是 `--write-mode`／`TA_WRITE_MODE`，不是 conf.d 裡的 `_write_mode` 設定。
 
 2026-10-11：群組（`_groups.yaml`）、saved views（`_views.yaml`）、federation 白名單與子集、AccountID 帳本移出 conf.d/，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），寫入不產生 commit 也不開 PR（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。下文「已知限制」與「為何不把 `_groups.yaml` 拆成多個檔案」已照此更新。
+
+2026-10-20：分支名在 UTC 時間之後多一段亂數，同一秒的兩次寫入不再撞名；push 失敗的寫入回 503 `GIT_PUSH_FAILED`、不開 PR（[#1724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1724)）。下文範例與「已知限制」已照此更新。
 
 ## 名詞
 
@@ -104,13 +106,13 @@ TA_GITHUB_TOKEN=<token>          # 從 Kubernetes Secret 注入
 
 ### 範例：單一租戶寫入
 
-`PUT /api/v1/tenants/db-a-prod`，操作者 `alice@example.com`。tenant-api 開出的分支是 `tenant-api/{租戶 ID}/{UTC 時間}`，例如 `tenant-api/db-a-prod/20260406-143022`；commit 內容與直接寫回相同（只改這個租戶的 YAML），author 是操作者的 email。建立的 PR：
+`PUT /api/v1/tenants/db-a-prod`，操作者 `alice@example.com`。tenant-api 開出的分支是 `tenant-api/{租戶 ID}/{UTC 時間}-{12 位十六進位亂數}`，例如 `tenant-api/db-a-prod/20260406-143022-3f9c2a7b10de`；commit 內容與直接寫回相同（只改這個租戶的 YAML），author 是操作者的 email。建立的 PR：
 
 ```json
 {
   "title": "[tenant-api] Update db-a-prod configuration",
   "body": "**Operator:** alice@example.com\n**Source:** tenant-manager UI\n**Tenant:** db-a-prod",
-  "head": "tenant-api/db-a-prod/20260406-143022",
+  "head": "tenant-api/db-a-prod/20260406-143022-3f9c2a7b10de",
   "base": "main"
 }
 ```
@@ -242,7 +244,8 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 **已知限制**
 
 - **群組、saved views 與 federation 設定不走 PR**：群組定義（`_groups.yaml`）、saved views（`_views.yaml`）、federation 白名單與子集、AccountID 帳本是 tenant-api 自己的紀錄，存在 state store、不在 conf.d/ git 樹，任何寫回模式下都直接寫入，四眼原則不涵蓋它們；稽核靠每次寫入的結構化 `state_write` 日誌。
-- **批量寫入不檢查待審核 PR**：「同一租戶只能有一個待審核 PR」只在單筆寫入檢查；批量寫入（`POST /api/v1/tenants/batch`、`POST /api/v1/groups/{id}/batch`）的 PR 路徑不做這個檢查，開出的分支名稱是 `tenant-api/batch/<UTC 時間>`。單筆寫入的檢查也看不到批量寫入開出的 PR：批量 PR 尚未合併時，單筆寫入仍可能替同一個租戶再開一個 PR。
+- **批量寫入不檢查待審核 PR**：「同一租戶只能有一個待審核 PR」只在單筆寫入檢查；批量寫入（`POST /api/v1/tenants/batch`、`POST /api/v1/groups/{id}/batch`）的 PR 路徑不做這個檢查，開出的分支名稱是 `tenant-api/batch/<UTC 時間>-<12 位十六進位亂數>`。單筆寫入的檢查也看不到批量寫入開出的 PR：批量 PR 尚未合併時，單筆寫入仍可能替同一個租戶再開一個 PR。
+- **push 失敗不開 PR，但 origin 可能留下分支**：分支推不上 origin（被拒、連不上、逾時）時，寫入回 503 `GIT_PUSH_FAILED` 並帶 `Retry-After`，不開 PR，本機分支刪掉，重試會切一條新分支。push 逾時但遠端其實已收下時，origin 會留著一條沒有 PR 指向的 `tenant-api/` 分支，tenant-api 不會自己清，要由維運刪除。
 - **只能跑一個副本**：「同一租戶只能有一個待審核 PR」的檢查存在單一 process 的記憶體裡，不跨 Pod 協調，多個副本可能替同一個租戶開出重複的 PR。Helm chart 在 `replicaCount` 大於 1 時拒絕渲染。
 
 ## 考慮過的替代方案

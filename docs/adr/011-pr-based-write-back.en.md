@@ -19,6 +19,8 @@ lang: en
 
 2026-10-11: groups (`_groups.yaml`), saved views (`_views.yaml`), the federation whitelist and subsets, and the AccountID registry moved out of conf.d/ into tenant-api's state store (the `tenant-api-state` ConfigMap on Kubernetes); their writes produce no commit and open no PR ([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)). "Known limitations" and "Why not split `_groups.yaml` into several files?" below are updated to match.
 
+2026-10-20: branch names carry a random suffix after the UTC time, so two writes in the same second no longer collide; a write whose push fails answers 503 `GIT_PUSH_FAILED` and opens no PR ([#1724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1724)). The examples and "Known limitations" below are updated to match.
+
 ## Terms
 
 - **Direct write-back (direct)**: the commit-on-write of [ADR-009](009-tenant-manager-crud-api.md): the API modifies YAML in conf.d/ and commits immediately.
@@ -98,13 +100,13 @@ write request → write-back mode?
 
 ### Example: single-tenant write
 
-`PUT /api/v1/tenants/db-a-prod` by operator `alice@example.com`. tenant-api creates a branch named `tenant-api/{tenant ID}/{UTC time}`, for example `tenant-api/db-a-prod/20260406-143022`; the commit content is the same as with direct write-back (only this tenant's YAML changes), and the author is the operator's email. The PR it creates:
+`PUT /api/v1/tenants/db-a-prod` by operator `alice@example.com`. tenant-api creates a branch named `tenant-api/{tenant ID}/{UTC time}-{12 random hex digits}`, for example `tenant-api/db-a-prod/20260406-143022-3f9c2a7b10de`; the commit content is the same as with direct write-back (only this tenant's YAML changes), and the author is the operator's email. The PR it creates:
 
 ```json
 {
   "title": "[tenant-api] Update db-a-prod configuration",
   "body": "**Operator:** alice@example.com\n**Source:** tenant-manager UI\n**Tenant:** db-a-prod",
-  "head": "tenant-api/db-a-prod/20260406-143022",
+  "head": "tenant-api/db-a-prod/20260406-143022-3f9c2a7b10de",
   "base": "main"
 }
 ```
@@ -236,7 +238,8 @@ Group definitions do not go through a PR (see "Known limitations"), and concurre
 **Known limitations**
 
 - **Groups, saved views and federation settings bypass PRs**: group definitions (`_groups.yaml`), saved views (`_views.yaml`), the federation whitelist and subsets, and the AccountID registry are tenant-api's own records, kept in the state store rather than the conf.d/ git tree. They are written directly in every write-back mode, so the four-eyes principle does not cover them; each write is audited by a structured `state_write` log event.
-- **Batch writes do not check for pending PRs**: the "one pending PR per tenant" check runs only for single writes; the PR path of batch writes (`POST /api/v1/tenants/batch`, `POST /api/v1/groups/{id}/batch`) does not perform it, and the branch it creates is named `tenant-api/batch/<UTC time>`. The single-write check does not see PRs opened by batch writes either: while a batch PR is unmerged, a single write can still open another PR for the same tenant.
+- **Batch writes do not check for pending PRs**: the "one pending PR per tenant" check runs only for single writes; the PR path of batch writes (`POST /api/v1/tenants/batch`, `POST /api/v1/groups/{id}/batch`) does not perform it, and the branch it creates is named `tenant-api/batch/<UTC time>-<12 random hex digits>`. The single-write check does not see PRs opened by batch writes either: while a batch PR is unmerged, a single write can still open another PR for the same tenant.
+- **A failed push opens no PR, but may leave a branch on origin**: when the branch cannot be pushed to origin (rejected, unreachable, timed out), the write answers 503 `GIT_PUSH_FAILED` with `Retry-After`, opens no PR and deletes the local branch; a retry cuts a new branch. When a push times out after the remote did accept it, origin keeps a `tenant-api/` branch that no PR points to; tenant-api does not clean it up, an operator has to delete it.
 - **Single replica only**: the "one pending PR per tenant" check lives in the memory of a single process and is not coordinated across Pods, so more replicas can open duplicate PRs for the same tenant. The Helm chart refuses to render when `replicaCount` is greater than 1.
 
 ## Alternatives considered
