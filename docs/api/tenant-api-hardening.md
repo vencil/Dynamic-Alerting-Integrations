@@ -105,6 +105,8 @@ curl -H "X-Request-ID: cust-incident-2026-04-29-001" \
 
 `code` 為 `INTERNAL_ERROR` 的回應，`error` 一律是固定文字 `internal error; the server log has the details under this request_id`。原本的錯誤文字可能帶 conf.d 的絕對路徑、暫存檔路徑或 git 訊息，只寫進 server log，並附上同一個 `request_id`；排錯時拿回應裡的 `request_id` 去 grep log。少數本身就不含伺服器資訊、只說明哪個操作失敗的固定訊息（例如 conf.d 掃描失敗）照常回傳。
 
+不經身分驗證的 `GET /ready` 也一樣（[#2811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2811)）：body 只有 `status`，失敗時再加一個固定的 `reason`——`config_dir_unavailable`（config 目錄 stat 失敗）、`config_dir_not_a_directory`、`human_socket_down`（啟用 human socket 時自測失敗）；200 時只有 `{"status":"ready"}`。config 目錄、socket 路徑與錯誤原文只寫進 server log 的 `readiness check failed` 一行，附 `request_id`。status code 不變，kubelet 只看它。
+
 tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}/custom-alerts` 與 batch 的逐筆結果，驗證錯誤與 merge 錯誤照常顯示原文，讀檔、暫存檔、git 這類伺服器端失敗改回 `the write failed; the server log has the details…`，HTTP status 不變。
 
 兩個錯誤刻意保留文字，所以用自己的 code：

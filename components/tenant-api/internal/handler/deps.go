@@ -20,6 +20,7 @@ package handler
 //	allocation-free.
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
@@ -183,6 +184,12 @@ type Deps struct {
 	// nil (every production Deps) is cfg.LoadRootPlatform. A test seam, per
 	// Deps so parallel tests do not share it.
 	loadRoot func(configDir string) cfg.RootPlatform
+
+	// readyLog receives Ready's failure lines (the config dir, socket path and
+	// error text the unauthenticated /ready body withholds, #2811); nil (every
+	// production Deps) is slog.Default(). A test seam, per Deps so parallel
+	// tests do not share it — the same shape as loadRoot.
+	readyLog *slog.Logger
 
 	// MaxBodyBytes caps the request body of the non-batch write
 	// handlers; readLimitedBody answers a body over it with 413

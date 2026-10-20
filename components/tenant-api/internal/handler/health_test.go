@@ -102,15 +102,20 @@ func TestReady_HumanSocketAbsent(t *testing.T) {
 	_ = ln.Close()
 
 	path := filepath.Join(t.TempDir(), "never-created.sock")
-	code, body := callReady(t, &Deps{ConfigDir: t.TempDir(), HumanSocketPath: path})
+	logs := &syncBuffer{}
+	code, body := callReady(t, &Deps{ConfigDir: t.TempDir(), HumanSocketPath: path, readyLog: jsonLogger(logs)})
 	if code != http.StatusServiceUnavailable {
 		t.Fatalf("Ready over an absent socket = %d, want 503", code)
 	}
 	if body["reason"] != "human_socket_down" {
 		t.Errorf("reason = %q, want human_socket_down (body %v)", body["reason"], body)
 	}
-	if body["human_socket"] != path {
-		t.Errorf("human_socket = %q, want %q", body["human_socket"], path)
+	// #2811: the socket path goes to the log, not the unauthenticated body.
+	if _, ok := body["human_socket"]; ok {
+		t.Errorf("body %v names the socket path", body)
+	}
+	if !strings.Contains(logs.String(), path) {
+		t.Errorf("log does not name the socket %q; logs:\n%s", path, logs.String())
 	}
 	if humanSocketUp.Load() {
 		t.Error("human_socket_up gauge still true after a failed self-dial")
@@ -158,12 +163,18 @@ func TestReady_HumanSocketNon2xx(t *testing.T) {
 	ln, path := listenUDS(t)
 	serveHealthOnUDS(t, ln, http.StatusInternalServerError)
 
-	code, body := callReady(t, &Deps{ConfigDir: t.TempDir(), HumanSocketPath: path})
+	logs := &syncBuffer{}
+	code, body := callReady(t, &Deps{ConfigDir: t.TempDir(), HumanSocketPath: path, readyLog: jsonLogger(logs)})
 	if code != http.StatusServiceUnavailable || body["reason"] != "human_socket_down" {
 		t.Fatalf("Ready over a 500 /health = (%d, %v), want 503/human_socket_down", code, body)
 	}
-	if got := body["error"]; !strings.Contains(got, "returned status 500") {
-		t.Errorf("error = %q, want it to carry the observed status 500", got)
+	// The observed status is in the log line; the body keeps the fixed reason
+	// only (#2811).
+	if !strings.Contains(logs.String(), "returned status 500") {
+		t.Errorf("log does not carry the observed status 500; logs:\n%s", logs.String())
+	}
+	if _, ok := body["error"]; ok {
+		t.Errorf("body %v carries the error text", body)
 	}
 }
 
