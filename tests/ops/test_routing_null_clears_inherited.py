@@ -55,8 +55,12 @@ def _tree(tmp_path: Path, keyword: str, spelling: str) -> Path:
 
 def _children(tmp_path: Path, keyword: str, spelling: str) -> dict[str, list[str]]:
     gar = importlib.import_module("generate_alertmanager_routes")
-    routing, dedup, schema_warnings, enforced, _mc = gar.load_tenant_configs(
+    tree = gar.load_tenant_tree(
         str(_tree(tmp_path, keyword, spelling)))
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    schema_warnings = tree.schema_warnings
+    enforced = tree.enforced_routing
     routes, _r, warnings = gar.generate_routes(routing, enforced_routing=enforced,
                                                tenants=dedup)
     assert gar.blocking_generation_errors(schema_warnings + warnings) == []

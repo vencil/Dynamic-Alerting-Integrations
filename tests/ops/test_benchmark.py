@@ -10,7 +10,7 @@
   3. validate_and_clamp — 含 guardrail 檢查
   4. generate_routes — 10 / 50 / 100 tenant 擴展
   5. generate_inhibit_rules — 100 tenant
-  6. load_tenant_configs — 10 tenant 磁碟讀取
+  6. load_tenant_tree — 10 tenant 磁碟讀取
 """
 
 import os
@@ -37,7 +37,7 @@ from _lib_python import parse_duration_seconds, format_duration, validate_and_cl
 from generate_alertmanager_routes import (
     generate_routes,
     generate_inhibit_rules,
-    load_tenant_configs,
+    load_tenant_tree,
 )
 
 
@@ -132,11 +132,11 @@ class TestGenerateInhibitScaling:
         benchmark(generate_inhibit_rules, dedup)
 
 
-# ── load_tenant_configs disk I/O ──────────────────────────────
+# ── load_tenant_tree disk I/O ──────────────────────────────
 
 
 class TestLoadTenantConfigsBenchmark:
-    """load_tenant_configs 磁碟讀取效能。"""
+    """load_tenant_tree 磁碟讀取效能。"""
 
     def test_10_tenants_from_disk(self, benchmark):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -148,4 +148,4 @@ class TestLoadTenantConfigsBenchmark:
                     routing={"receiver": make_receiver("webhook")},
                     severity_dedup="enable",
                 ))
-            benchmark(load_tenant_configs, tmpdir)
+            benchmark(load_tenant_tree, tmpdir)
