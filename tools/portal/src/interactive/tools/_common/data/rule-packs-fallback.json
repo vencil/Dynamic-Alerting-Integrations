@@ -216,7 +216,7 @@
         "es_pending_tasks": {
           "value": 50,
           "unit": "count",
-          "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded but absent from scaffold"
+          "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold"
         },
         "es_search_latency_ms": {
           "value": 1000,

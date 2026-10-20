@@ -427,7 +427,7 @@ tenants:
         group_by: [persistentvolumeclaim]  # evaluate per-PVC (a small near-full volume isn't hidden by a large empty one)
 ```
 
-For the full example (threshold / rate / ratio / p99 / absence / `==` recipes) see [`recipes/examples/conf.d/shop.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop.yaml); for recipe syntax, per-mode semantics, and safe-adoption guidance (incl. the dead-exporter blind spot) see [Custom Rule Governance](../custom-rule-governance.md). Run `make custom-alerts-compile` to recompile the rule pack after editing.
+For the full example (threshold / rate / ratio / p99 / absence / `==` recipes) see [`recipes/examples/conf.d/shop-a.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/recipes/examples/conf.d/shop-a.yaml); for recipe syntax, per-mode semantics, and safe-adoption guidance (incl. the dead-exporter blind spot) see [Custom Rule Governance](../custom-rule-governance.md). Run `make custom-alerts-compile` to recompile the rule pack after editing.
 
 ### Step C: Verify
 
