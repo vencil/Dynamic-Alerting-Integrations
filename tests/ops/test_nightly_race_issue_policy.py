@@ -768,6 +768,16 @@ def _go_test_commands(run: str) -> list[list[str]]:
     return cmds
 
 
+# Package patterns that include cmd/da-guard, where the exhaustive matrices
+# live. A narrower scope (`./internal/...`) keeps the step green while the
+# matrices silently stop running in PR CI.
+_DA_GUARD_PACKAGES = ("./...", "./cmd/...", "./cmd/da-guard", "./cmd/da-guard/...")
+
+
+def _covers_da_guard(tokens: list[str]) -> bool:
+    return any(tok in _DA_GUARD_PACKAGES for tok in tokens if tok.startswith("./"))
+
+
 def _has_short(tokens: list[str]) -> bool:
     for tok in tokens:
         m = _SHORT_FLAG_RE.match(tok)
@@ -803,7 +813,7 @@ def test_nightly_go_test_runs_with_short() -> None:
 def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
     """#2977 acceptance 3: PR CI keeps the exhaustive matrix (no -short)."""
     jobs = _load_workflow(CI_WORKFLOW)["jobs"]
-    found, shorted = [], []
+    found, shorted, narrowed = [], [], []
     for job_id, job in jobs.items():
         for step in (job or {}).get("steps") or []:
             if str(step.get("working-directory") or "").rstrip("/") != EXPORTER_WORKDIR:
@@ -815,6 +825,8 @@ def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
                 found.append(where)
                 if _has_short(cmd):
                     shorted.append(f"{where}: go test {' '.join(cmd)}")
+                if not _covers_da_guard(cmd):
+                    narrowed.append(f"{where}: go test {' '.join(cmd)}")
     assert found, (
         f"no `go test ... -race` step with working-directory {EXPORTER_WORKDIR} in "
         "ci.yml — the step moved or was renamed; re-anchor this guard, do not delete it"
@@ -823,4 +835,9 @@ def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
         "PR CI's threshold-exporter race step runs with -short, so the exhaustive "
         "cmd/da-guard matrices are reduced in EVERY gate (#2977 acceptance 3; make "
         "them cheaper instead, #3180):\n  " + "\n  ".join(shorted)
+    )
+    assert not narrowed, (
+        "PR CI's threshold-exporter race step no longer includes cmd/da-guard, so "
+        "its exhaustive matrices run in no gate at all (#2977 acceptance 3):\n  "
+        + "\n  ".join(narrowed)
     )

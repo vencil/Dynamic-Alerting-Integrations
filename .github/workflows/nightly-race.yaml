@@ -112,7 +112,8 @@ jobs:
         # problems BETWEEN repetitions, which a reduced matrix exposes just as
         # well. The exhaustive matrices that honour testing.Short() (cmd/da-guard's
         # alias-spelling and null-override products) keep their FULL coverage in
-        # PR CI (ci.yml, -race -count=1, no -short), once per PR — a guard test in
+        # PR CI (ci.yml, -race -count=1, no -short), once per PR that passes the
+        # exporter job's go/docs path gate — a guard test in
         # tests/ops/test_nightly_race_issue_policy.py pins both halves. Side effect:
         # the vendored yaml.v3 TestLimits also skips under -short; tenant-api has
         # no testing.Short() call, so -short is a no-op there. Making the matrices
