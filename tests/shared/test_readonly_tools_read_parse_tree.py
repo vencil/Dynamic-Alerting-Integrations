@@ -474,6 +474,87 @@ def test_reachability_without_da_guard_is_exit_2(no_parse_tree_binary):
     assert _tool("check_threshold_reachability").main(["--ci"]) == 2
 
 
+# ── check_account_registry_monotonic (git blobs, not files on disk) ─────
+# The registry is read from `git show` blobs, so it goes through parse-tree's
+# file mode (`_lib_parse_cache.read_text_as`); tenant-api's `account.Parse`
+# decodes it with yaml.v3 into a uint32.
+
+_AR_REL = "conf.d/_account_registry.yaml"
+
+
+def _ar_repo(tmp_path, monkeypatch, committed, staged):
+    """A git repo whose HEAD holds *committed* and whose index holds *staged*
+    (None: the file is never written), with the tool pointed at it."""
+    mono = _tool("check_account_registry_monotonic")
+    root = tmp_path / "repo"
+    (root / "conf.d").mkdir(parents=True)
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
+                       timeout=30)
+
+    git("init", "--quiet", "--initial-branch=main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    git("config", "commit.gpgsign", "false")
+    git("commit", "--quiet", "--allow-empty", "-m", "root")
+    for text, commit in ((committed, True), (staged, False)):
+        if text is None:
+            continue
+        (root / _AR_REL).write_text(text, encoding="utf-8")
+        git("add", _AR_REL)
+        if commit:
+            git("commit", "--quiet", "-m", "registry")
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("LINT_DIFF_BASE", raising=False)
+    monkeypatch.setattr(mono, "PROJECT_ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["mono", "--ci", "--registry-path", _AR_REL])
+    return mono
+
+
+def test_account_registry_reads_the_counter_the_yaml_v3_way(tmp_path, monkeypatch):
+    """`0o2000` is 1024 to yaml.v3 and tenant-api (PyYAML: the string
+    "0o2000", a fail-closed rc 1); 1024 → 1023 is then a decrease. `yes`
+    is the string "yes" (PyYAML: True) — not an integer either way."""
+    mono = _ar_repo(tmp_path, monkeypatch, "next_account_id: 0o2000\n",
+                    "next_account_id: 1025\n")
+    assert mono.parse_next_account_id("next_account_id: 0o2000\n") == 1024
+    assert mono.evaluate(_AR_REL, None)["previous"] == 1024
+    assert _exit_code(mono.main) == 0
+    with pytest.raises(mono.RegistryParseError, match=r"'yes' \(str\)"):
+        mono.parse_next_account_id("next_account_id: yes\n")
+
+
+def test_account_registry_parses_no_yaml(tmp_path, monkeypatch, no_yaml_parse):
+    mono = _ar_repo(tmp_path, monkeypatch, "next_account_id: 1001\n",
+                    "next_account_id: 1000\n")
+    assert _exit_code(mono.main) == 1  # a decrease, read without PyYAML
+
+
+def test_account_registry_names_an_unreadable_blob(tmp_path, monkeypatch, capsys):
+    """A key written twice: yaml.v3 refuses it (PyYAML kept the last) —
+    fail-closed rc 1, the reason named."""
+    mono = _ar_repo(tmp_path, monkeypatch, "next_account_id: 1001\n",
+                    "next_account_id: 1001\nnext_account_id: 1002\n")
+    assert _exit_code(mono.main) == 1
+    assert "duplicate_key" in capsys.readouterr().err
+
+
+def test_account_registry_without_da_guard_is_exit_2(tmp_path, monkeypatch,
+                                                     no_parse_tree_binary):
+    mono = _ar_repo(tmp_path, monkeypatch, "next_account_id: 1001\n",
+                    "next_account_id: 1002\n")
+    assert _exit_code(mono.main) == 2
+
+
+def test_account_registry_absent_needs_no_da_guard(tmp_path, monkeypatch,
+                                                   no_parse_tree_binary):
+    """No registry at a revision: nothing is read, so no da-guard is needed
+    (the CI path, where the file is not tracked)."""
+    mono = _ar_repo(tmp_path, monkeypatch, None, None)
+    assert _exit_code(mono.main) == 0
+
+
 # ── operator_generate / migrate_to_operator (the tenant set, F1) ────────
 #
 # Both take their tenants from `_lib_confd.tree_tenants`: the keys of each

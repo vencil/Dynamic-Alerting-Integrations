@@ -694,11 +694,17 @@ func (m *Manager) allowedScopedModes(p *VerifiedPrincipal, tenantID string, want
 // (handler.OrgAllowed), and per-tenant READS via AllowedInOrgRead (the middleware
 // read-by-id gate + handler.OrgAllowedRead for the collection filters). The only
 // legitimate Allowed callers left are the platform-scope tenantID="*" checks
-// (org-scope deliberately does not apply to platform scope — an org-scoped rule
-// is not a platform admin) and the middleware's own write-mount branch (which
-// checks read on "*" or defers the per-tenant org decision to the handler's
-// RequireOrgWrite). Pinned by the go/ast tripwire, see guards_ast_test.go
-// (P4c emptied its allowlist).
+// for READS and checks that judge no tenant (invariant I6: there is no tenant
+// org list for the org axis to compare against) and the middleware's own
+// write-mount branch (which checks read on "*" or defers the per-tenant org
+// decision to the handler's RequireOrgWrite). Pinned by the go/ast tripwire,
+// see guards_ast_test.go (P4c emptied its allowlist).
+//
+// ⛔ Allowed(p, "*", PermAdmin) is NOT a platform-admin bar: an ORG-SCOPED
+// "*" admin rule passes it in every mode. I6 does not make an org-scoped
+// rule a platform admin; a platform-admin decision uses
+// PlatformAdminNonOrgScoped (reverse.go) — the /audit endpoints, the
+// federation whitelist PUT and the account backfill (#3160).
 //
 // Allowed records NO would-deny signal — recording lives in AllowedInOrg
 // (org_write) and AllowedInOrgRead (org) only, so nothing routed through the
