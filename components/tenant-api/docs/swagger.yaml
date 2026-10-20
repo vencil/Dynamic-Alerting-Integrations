@@ -1034,6 +1034,18 @@ definitions:
           additionalProperties: {}
           type: object
         type: array
+      declared_elsewhere:
+        description: |-
+          DeclaredElsewhere is true when a conf.d file other than the tenant's
+          own declares the tenant id too (#3172): every write to the tenant is
+          then refused with 409 TENANT_DECLARED_ELSEWHERE, and threshold-exporter
+          refuses a tree that declares an id twice (the whole tree stays on its
+          last good load, so an edit here does not take effect). The same verdict
+          /diff and PUT give, on /diff's walk. One bit only: it names no file
+          and no other tenant — the bit /effective's 409 already gives a caller
+          with read permission. Absent when it could not be judged (the conf.d
+          walk failed or timed out; see the server log) — absent is not false.
+        type: boolean
       git_managed_reason:
         description: |-
           GitManagedReason says why the tenant is git-managed (managed_by: git):
@@ -2119,6 +2131,10 @@ paths:
         source_hash empty (masked: true);
         or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
         (inside the tenant's own section: anywhere else makes the tenant git-managed).
+        declared_elsewhere (#3172), on every 200 shape: true when a conf.d file other than the tenant's own also
+        declares the tenant id — every write to the tenant is then refused with 409 TENANT_DECLARED_ELSEWHERE (the
+        verdict /diff gives), and threshold-exporter keeps the whole tree on its last good load. It names no file
+        and no other tenant. Absent (not false) when the conf.d walk behind it could not run.
       parameters:
       - description: Tenant ID
         in: path

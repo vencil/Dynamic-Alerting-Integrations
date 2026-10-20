@@ -1091,6 +1091,47 @@ func (w *Writer) JudgeWrite(tenantID string) error {
 	return err
 }
 
+// DeclaredElsewhere reports whether a conf.d file other than tenantID's own
+// top-level file declares tenantID — the condition a write of tenantID is
+// refused on with ErrTenantDeclaredElsewhere (#3172). GET /tenants/{id}
+// carries it so that a reader learns from the GET what PUT and /diff would
+// answer, instead of from a 409.
+//
+// Same judgement, same walk as the previews: ensureNotDeclaredElsewhereIn on
+// scanTreeForRead (the shared read walk on the prior, no lock), against the
+// file a write would land on (confd.TenantFilePathForWrite). It is NOT a
+// second scan: a GET joins a read walk already in flight, and an unchanged
+// file is not read again (#2153). Only this one guard is asked —
+// placement and the whole-tree verdict (resolveTenantFilePath's other
+// checks) are not, so an unreadable entry elsewhere does not make this an
+// error.
+//
+// ⚠️ Superset of /effective's 409: that is the walker's duplicate verdict
+// (two files declare the id). This is also true when the tenant's own file
+// declares nothing for the id (a `tenants: {}` shell, a file the walker
+// cannot decode) and another file does — /effective then serves the other
+// file's declaration, while every write is refused.
+//
+// A walk that cannot run (ErrTenantTreeScan, wrapped) is returned as an
+// error: the answer is unknown, not false.
+func (w *Writer) DeclaredElsewhere(tenantID string) (bool, error) {
+	if err := guardTenantID(tenantID); err != nil {
+		return false, err
+	}
+	target, err := confd.TenantFilePathForWrite(w.configDir, tenantID)
+	if err != nil {
+		return false, err
+	}
+	err = w.ensureNotDeclaredElsewhereIn(w.scanTreeForRead, tenantID, target)
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, ErrTenantDeclaredElsewhere):
+		return true, nil
+	}
+	return false, err
+}
+
 // resolveTenantFilePath is the body of tenantFilePath / previewTenantFilePath
 // and of WritePRChecked's resolution on the fresh base (prResolveOnBase);
 // configDir is the conf.d resolved in and walk is its walk, which the #2078

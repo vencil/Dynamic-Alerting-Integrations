@@ -101,6 +101,16 @@ type TenantDetail struct {
 	// tenants), id_mismatch (the one tenant is not the file's name). A
 	// fixed code: it names no tenant. Absent when managed_by is api.
 	GitManagedReason string `json:"git_managed_reason,omitempty" enums:"not_tenant_document,several_documents,yaml_indirection,tenant_count,id_mismatch"`
+	// DeclaredElsewhere is true when a conf.d file other than the tenant's
+	// own declares the tenant id too (#3172): every write to the tenant is
+	// then refused with 409 TENANT_DECLARED_ELSEWHERE, and threshold-exporter
+	// refuses a tree that declares an id twice (the whole tree stays on its
+	// last good load, so an edit here does not take effect). The same verdict
+	// /diff and PUT give, on /diff's walk. One bit only: it names no file
+	// and no other tenant — the bit /effective's 409 already gives a caller
+	// with read permission. Absent when it could not be judged (the conf.d
+	// walk failed or timed out; see the server log) — absent is not false.
+	DeclaredElsewhere *bool `json:"declared_elsewhere,omitempty"`
 }
 
 // Values of TenantDetail.ManagedBy (#3064).
@@ -124,6 +134,8 @@ type tenantDetailGitManaged struct {
 	ConfigError      string                   `json:"config_error,omitempty"`
 	ManagedBy        string                   `json:"managed_by"`
 	GitManagedReason string                   `json:"git_managed_reason"`
+	// DeclaredElsewhere: as on TenantDetail.
+	DeclaredElsewhere *bool `json:"declared_elsewhere,omitempty"`
 }
 
 // tenantDetailNotLoadable is TenantDetail for a file with a config_error: the
@@ -139,6 +151,8 @@ type tenantDetailNotLoadable struct {
 	Masked          bool   `json:"masked,omitempty"`
 	RawYAMLWithheld bool   `json:"raw_yaml_withheld,omitempty"`
 	ManagedBy       string `json:"managed_by"`
+	// DeclaredElsewhere: as on TenantDetail.
+	DeclaredElsewhere *bool `json:"declared_elsewhere,omitempty"`
 }
 
 // sourceHashFor is the source_hash a caller is shown: empty when the caller
@@ -195,6 +209,10 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Description source_hash empty (masked: true);
 // @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
 // @Description (inside the tenant's own section: anywhere else makes the tenant git-managed).
+// @Description declared_elsewhere (#3172), on every 200 shape: true when a conf.d file other than the tenant's own also
+// @Description declares the tenant id — every write to the tenant is then refused with 409 TENANT_DECLARED_ELSEWHERE (the
+// @Description verdict /diff gives), and threshold-exporter keeps the whole tree on its last good load. It names no file
+// @Description and no other tenant. Absent (not false) when the conf.d walk behind it could not run.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -243,6 +261,10 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// #3172: whether another conf.d file declares the id too — PUT's and
+		// /diff's TENANT_DECLARED_ELSEWHERE verdict, on the Writer's shared
+		// read walk. Carried on every 200 shape below.
+		elsewhere := declaredElsewhereFor(d, tenantID)
 
 		// #2373: a file threshold-exporter rejects whole (cfg.ParseTenantFile
 		// — not YAML, the wrong shape, or a non-UTF-8 declared tenant id) is
@@ -259,19 +281,20 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// nullable) and does not require them, so absence stays valid.
 		// #3064: a git-managed tenant gets the effective view only.
 		if gitReason := confd.TenantFileManagement(data, tenantID); gitReason != "" {
-			getGitManagedTenant(w, r, d, tenantID, data, gitReason)
+			getGitManagedTenant(w, r, d, tenantID, data, gitReason, elsewhere)
 			return
 		}
 		if reason := tenantConfigError(data); reason != "" {
 			raw, masked, withheld := rawYAMLFor(r, d, tenantID, data)
 			writeJSON(w, http.StatusOK, tenantDetailNotLoadable{
-				ID:              tenantID,
-				RawYAML:         raw,
-				SourceHash:      sourceHashFor(data, masked || withheld),
-				ConfigError:     reason,
-				Masked:          masked,
-				RawYAMLWithheld: withheld,
-				ManagedBy:       managedByAPI,
+				ID:                tenantID,
+				RawYAML:           raw,
+				SourceHash:        sourceHashFor(data, masked || withheld),
+				ConfigError:       reason,
+				Masked:            masked,
+				RawYAMLWithheld:   withheld,
+				ManagedBy:         managedByAPI,
+				DeclaredElsewhere: elsewhere,
 			})
 			return
 		}
@@ -341,16 +364,17 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			}
 		}
 		detail := TenantDetail{
-			ID:              tenantID,
-			RawYAML:         raw,
-			Resolved:        tenantResolved,
-			Warnings:        warnings,
-			Notices:         notices,
-			SourceHash:      sourceHashFor(data, masked || withheld),
-			CustomAlerts:    customAlerts,
-			Masked:          masked,
-			RawYAMLWithheld: withheld,
-			ManagedBy:       managedByAPI,
+			ID:                tenantID,
+			RawYAML:           raw,
+			Resolved:          tenantResolved,
+			Warnings:          warnings,
+			Notices:           notices,
+			SourceHash:        sourceHashFor(data, masked || withheld),
+			CustomAlerts:      customAlerts,
+			Masked:            masked,
+			RawYAMLWithheld:   withheld,
+			ManagedBy:         managedByAPI,
+			DeclaredElsewhere: elsewhere,
 		}
 
 		writeJSON(w, http.StatusOK, detail)
@@ -364,8 +388,9 @@ func GetTenant(d *Deps) http.HandlerFunc {
 // confirm a guess of the whole shared file), no custom_alerts (an alias or a
 // merge key can carry another tenant's content into it). A file that cannot
 // be loaded answers config_error alone, as tenantDetailNotLoadable does.
-func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, data []byte, gitReason string) {
-	out := tenantDetailGitManaged{ID: tenantID, ManagedBy: managedByGit, GitManagedReason: gitReason}
+func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, data []byte, gitReason string, elsewhere *bool) {
+	out := tenantDetailGitManaged{ID: tenantID, ManagedBy: managedByGit, GitManagedReason: gitReason,
+		DeclaredElsewhere: elsewhere}
 	if reason := tenantConfigError(data); reason != "" {
 		out.ConfigError = reason
 		writeJSON(w, http.StatusOK, out)
@@ -389,6 +414,25 @@ func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenant
 	}
 	out.Resolved = &resolved
 	writeJSON(w, http.StatusOK, out)
+}
+
+// declaredElsewhereFor is GET's declared_elsewhere (#3172): the Writer's
+// judgement (gitops.Writer.DeclaredElsewhere — the #2078 guard PUT and /diff
+// refuse on, on the shared read walk), or nil when it cannot be given: no
+// Writer (handler-test literals), or a walk that failed or timed out. A nil
+// is omitted from the body, so an unjudged tree never reads as "no". The
+// walk's error carries server paths: log only.
+func declaredElsewhereFor(d *Deps, tenantID string) *bool {
+	if d.Writer == nil {
+		return nil
+	}
+	v, err := d.Writer.DeclaredElsewhere(tenantID)
+	if err != nil {
+		slog.Warn("tenant GET: cannot judge whether another conf.d file declares the tenant",
+			"tenant", tenantID, "error", err)
+		return nil
+	}
+	return &v
 }
 
 // msgCustomAlertsUnparseable is the fixed 500 text when a tenant's
