@@ -416,7 +416,7 @@ GitOps 寫入（`Write` / `WritePR` / `WritePRBatch`）全程持一把 process �
 | 確定已寫 | 分支已在這次的 commit 上 | 照成功回應；batch 的工作樹沒跟上時仍是 409 `committed: true` |
 | 未知 | `update-ref` 回錯，且 HEAD 與分支 ref 都讀不到 | 503，`… it may have been committed — refresh to see whether it was before retrying`；非同步 batch 的 task `error` 同句，不寫 `nothing was written` |
 
-分支被別人移到第三個 commit 時仍是 409 衝突。結果未知的 batch 會保留 publish marker，下一次寫入（或重啟）讀得到分支時由它把工作樹帶到分支上。PR 模式在 push 之前不動 base 分支，push 本身的失敗另有 `GIT_PUSH_FAILED`（§5.5）。
+分支被別人移到第三個 commit 時仍是 409 衝突。單租戶直寫在寫服務中的租戶檔**之前**就寫下 publish marker（`<git common dir>/tenant-api-batch-publish`），直到這個檔回到已知狀態（已發布、與 HEAD 相同、或已照 HEAD 放回）才刪掉，所以結果未知、或任何一步失敗而檔沒能放回時（含程序被殺）它都還在；batch 則在結果未知時保留它。下一次寫入（或重啟）讀得到分支時由它收尾：commit 已在分支上，就把工作樹的這些檔與 index 帶到分支上；不在（或單租戶寫入還沒走到 commit），batch 的工作樹本來就沒動，單租戶寫入已寫出的服務中檔案則照 HEAD 放回（index 仍記著這次 commit 的內容時一併重設），該租戶不會一直卡在 `TENANT_FILE_DIRTY`。HEAD 一直讀不到（或收尾本身一直失敗）的期間，每一次寫入都失敗，錯誤訊息指出這個 marker。收尾會覆寫這段期間對該檔的手動修改；PR 模式的寫入不在這個 marker 的範圍內。PR 模式在 push 之前不動 base 分支，push 本身的失敗另有 `GIT_PUSH_FAILED`（§5.5）。
 
 ### 5.5 PR-mode checkout 紀律 + SIGKILL 殘鎖自癒（#638）
 

@@ -234,7 +234,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	}
 	defer w.releaseWrite()
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()
@@ -627,7 +627,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 		}
 	}
 
-	if err := w.lockTreeRecovered(); err != nil { // #2900: finish an interrupted batch publish
+	if err := w.lockTreeRecovered(); err != nil { // #2900/#3173: settle an interrupted publish
 		return nil, err
 	}
 	defer w.unlockTree()

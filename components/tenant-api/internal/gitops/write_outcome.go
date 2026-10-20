@@ -46,9 +46,11 @@ var ErrWriteOutcomeUnknown = errors.New("whether the write was committed is unkn
 // PushError, the git error is kept in Cause and rendered with %v, never
 // wrapped: a cause that wraps ErrGitTimeout or ErrWriteOverloaded would
 // otherwise let a caller answer "nothing was written" or "retry shortly".
-// A batch's publish marker is kept, so the next write (or startup) brings
-// the serving worktree up to the branch if the batch did land
-// (RecoverBatchPublish).
+// The write's publish marker is kept — a batch's and a single tenant
+// write's alike — so the next write (or startup) settles the serving
+// worktree once the branch can be read (RecoverBatchPublish): brought up to
+// the branch if the write did land, and for a single tenant write, whose
+// file was already written, put back as HEAD has it if it did not.
 type WriteOutcomeUnknownError struct {
 	Commit string // the commit the ref update tried to publish
 	Cause  error

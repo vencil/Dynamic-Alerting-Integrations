@@ -153,7 +153,10 @@ func (w *Writer) PruneCommitIndexes() error {
 // serving file back (restoreFromHEAD). A ref update that reports an error
 // after HEAD reached the commit (git killed by its timeout once the ref was
 // written) is a commit: committed is true; one after which neither HEAD
-// nor the branch can be read is *WriteOutcomeUnknownError (#3173). Any
+// nor the branch can be read is *WriteOutcomeUnknownError (#3173). The
+// publish marker this writes before the ref update goes only when the
+// commit is published; on every other return it is the caller's
+// (commitFileChange) to remove once the serving file is put back. Any
 // other error — a git timeout before or at the ref update included, when
 // the branch is read back unmoved — published nothing. Caller holds w.mu.
 //
@@ -227,6 +230,22 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 	if err != nil {
 		return false, err
 	}
+	// #3173: the publish marker gets the commit (commitFileChange wrote it
+	// without one, before the serving file), before anything outside the
+	// temporary index is touched for this commit — as publishBatch writes
+	// it before its ref update; an atomic replace, so the marker is always
+	// one or the other. It records that the serving file holds the write
+	// (markerServingWritten). Its lifetime follows the serving file, not the
+	// outcome: it goes here only once the commit is published (the file
+	// then IS the branch's); on every other return it stays, and
+	// commitFileChange removes it only after the serving file is put back
+	// (restoreFromHEAD) — never on an unknown outcome. Whatever is left,
+	// RecoverBatchPublish settles on the next write (or startup). When the
+	// replace fails, nothing is published and the commit-less marker stays
+	// right: the real index is not synced yet.
+	if err := w.writePublishMarker(commit, []string{idxPath}, true); err != nil {
+		return false, fmt.Errorf("record the publish: %w", err)
+	}
 	committedEntry, err := w.indexEntries(env, filePath)
 	if err != nil {
 		return false, fmt.Errorf("read the committed index entry: %w", err)
@@ -256,6 +275,7 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 			// was synced before the ref update), so it is not undone.
 			slog.Warn("gitops: HEAD update reported an error after it took effect",
 				"tenant", tenantID, "commit", commit, "error", err)
+			w.removePublishMarker()
 			return true, nil
 		case herr == nil && now == base:
 			// The ref did not move: nothing was published — a timeout
@@ -272,18 +292,25 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 			// was published is unknown (#3173), and the caller says so
 			// (*WriteOutcomeUnknownError). unsyncIndexEntry still only
 			// undoes the sync while HEAD does not hold the written blob (it
-			// cannot tell either: then it undoes it), and the caller puts
-			// the serving file back as HEAD has it. Either way the index can
-			// be wrong — a staged revert of a published commit, or a staged
-			// unjudged write — so the operator has to look: logged as an
-			// error, naming the commit.
+			// cannot tell either: then it undoes it), and the caller's
+			// restoreFromHEAD fails for the same unreadable HEAD — so the
+			// serving file keeps the write and the index entry can be wrong
+			// either way. The publish marker stays (commitFileChange keeps
+			// it on this outcome whatever the restore did): the next write
+			// (or startup) runs RecoverBatchPublish first, which — once HEAD can
+			// be read — brings the file and its index entry up to the branch
+			// if the commit landed, and puts the file back as HEAD has it
+			// if it did not (the index entry too, while it still names this
+			// commit's blob); until then every write is refused, naming the
+			// marker.
 			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
-			slog.Error("gitops: HEAD unreadable after a failed HEAD update; whether the write was published is unknown — check HEAD and the index",
+			slog.Error("gitops: HEAD unreadable after a failed HEAD update; whether the write was published is unknown — the publish marker is kept",
 				"tenant", tenantID, "commit", commit, "path", idxPath, "error", herr)
 			return false, &WriteOutcomeUnknownError{Commit: commit,
 				Cause: fmt.Errorf("advance HEAD: %w; read the branch back: %w", err, herr)}
 		}
 	}
+	w.removePublishMarker()
 	return true, nil
 }
 
