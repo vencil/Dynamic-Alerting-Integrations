@@ -77,3 +77,24 @@ func TestCheckValuesNotServed_NilSkips(t *testing.T) {
 		t.Errorf("findings = %v, want none", got)
 	}
 }
+
+// #3140 / #3141: both value_unparsed messages name a non-finite number among
+// the values the exporter cannot read, and the two spellings a
+// `disable:<severity>` may have meant — with the key's own critical tier for
+// a plain key.
+func TestValueNotServedMessage_NamesNonFiniteAndDisableSpellings(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ key, reason, critical string }{
+		{"mysql_connections", config.NotServedValueUnparsed, "`mysql_connections_critical: disable`"},
+		{"mysql_connections_critical", config.NotServedValueUnparsedDropped, "`<key>_critical: disable`"},
+		{`mysql_connections{db="a"}`, config.NotServedValueUnparsedDropped, "`<key>_critical: disable`"},
+	} {
+		msg := valueNotServedMessage(tc.key, config.NotServedKey{Reason: tc.reason, File: "t.yaml"})
+		for _, want := range []string{"not a finite number", "`NaN`", "`disable:critical`",
+			"write `disable` to switch the whole key off", tc.critical} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("%s/%s: message lacks %q: %s", tc.key, tc.reason, want, msg)
+			}
+		}
+	}
+}

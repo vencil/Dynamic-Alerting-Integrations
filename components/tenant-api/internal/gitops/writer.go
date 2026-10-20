@@ -2148,8 +2148,11 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 		return errs
 	}
 	// ADR-024 §S5 recipe validation is per-tenant and reads only the body, so it
-	// belongs on this side of the line.
-	return cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
+	// belongs on this side of the line. So does a threshold written as a
+	// non-finite number (#3140): the exporter's own predicate, which da-guard's
+	// value_not_served refuses the tree over.
+	errs = cfg.NonFiniteThresholdWrites(tcfg.Tenants[tenantID])
+	return append(errs, cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)...)
 }
 
 // validate checks an incoming tenant YAML body before it is written.

@@ -43,6 +43,7 @@ type servedOut struct {
 				Value    any    `json:"value"`
 				Severity string `json:"severity"`
 				Error    string `json:"error"`
+				Reason   string `json:"reason"`
 			} `json:"segments"`
 			Expires string `json:"expires"`
 			Expired *bool  `json:"expired"`
@@ -64,6 +65,7 @@ type servedOut struct {
 			Hint         string              `json:"hint"`
 			Disable      string              `json:"disable"`
 			ServedFamily []string            `json:"served_family"`
+			Refused      string              `json:"refused"`
 		} `json:"keys"`
 	} `json:"tenants"`
 	Aliases map[string]string `json:"aliases"`
@@ -871,22 +873,35 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 	}
 }
 
+// #3140: a non-finite tenant value (`NaN`, `+Inf`, `-inf:critical`) is a
+// value the exporter cannot read — it serves the platform default, at
+// severity warning (the `:critical` goes with the refused value, #2377) —
+// and a non-finite root default serves no default row while a tenant's own
+// value is served (the key is read like an `optional_overrides:` one).
+// It used to pin all three served as written.
 func TestServedValues_NonFiniteThresholds(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": defaultsOnly + "  redis_memory: 70\n  container_cpu: 75\n",
+		"_defaults.yaml": defaultsOnly + "  redis_memory: 70\n  container_cpu: 75\n  pg_connections: .nan\n" +
+			"  redis_keys: -.inf\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: NaN\n    redis_memory: \"+Inf\"\n" +
-			"    container_cpu: \"-inf:critical\"\n",
+			"    container_cpu: \"-inf:critical\"\n    pg_connections: \"60\"\n",
 	}, "")
 	mustOK(t, code, stderr)
 	tv := doc.Tenants["tenant-a"]
-	for key, want := range map[string]string{"mysql_connections": "NaN", "redis_memory": "+Inf", "container_cpu": "-Inf"} {
+	for key, want := range map[string]any{"mysql_connections": float64(80), "redis_memory": float64(70),
+		"container_cpu": float64(75), "pg_connections": float64(60)} {
 		if got := tv.Values[key]; got != want {
-			t.Errorf("values[%q] = %#v, want %q", key, got, want)
+			t.Errorf("values[%q] = %#v, want %v", key, got, want)
 		}
 	}
-	if tv.Severities["container_cpu"] != "critical" {
-		t.Errorf("severities = %v", tv.Severities)
+	if _, served := tv.Values["redis_keys"]; served {
+		t.Errorf("values[redis_keys] = %#v, want no row: the root writes it as -.inf", tv.Values["redis_keys"])
+	}
+	for _, key := range []string{"mysql_connections", "redis_memory", "container_cpu", "pg_connections"} {
+		if tv.Severities[key] != "warning" {
+			t.Errorf("severities[%q] = %q, want warning: %v", key, tv.Severities[key], tv.Severities)
+		}
 	}
 }
 

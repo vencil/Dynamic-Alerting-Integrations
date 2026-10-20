@@ -35,6 +35,7 @@ Usage:
 """
 import argparse
 import errno
+import functools
 import json
 import math
 import os
@@ -65,6 +66,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import GO_SPACE, THRESHOLD_SEVERITIES, split_threshold_severity  # noqa: E402  (#3071)
+from _lib_validation import NonFiniteThresholdError, parse_threshold_number  # noqa: E402  (#3140)
 # #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
 # not here.
 from _lib_tenant_values import (  # noqa: E402
@@ -82,6 +84,7 @@ from _lib_tenant_values import (  # noqa: E402
 # spelling goes through the alias table first.
 import _observed_map_lib as observed_map_lib  # noqa: E402
 from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
+import _registry_lib as registry_lib  # noqa: E402  (#3140: platform defaults)
 
 # ---------------------------------------------------------------------------
 # Default settings
@@ -590,18 +593,17 @@ def parse_threshold_value(key, raw):
     number and severity, each trimmed, an ASCII severity lower-cased
     (`"70:Critical"` is critical; no `:` is `warning`), and a severity other
     than `_COMPARED_SEVERITIES` (`70:high`, the empty `70:`) makes the value
-    unreadable (`_lib_validation.split_threshold_severity`). The number is read with Python's `float`
-    only where it agrees with Go's `ParseFloat` (measured, go1.x):
-
-    * refused, Go refuses too: a non-ASCII digit; a signed NaN (`+nan`);
-      an overflow (`1e400` — Go returns ErrRange, so the exporter treats the
-      value as unreadable, while `float` answers inf);
-    * refused although Go accepts — conservative, it only costs a backtest:
-      an underscore (`1_000`), a hex float (`0x1p4`);
-    * accepted, both agree: decimals, `NaN`, `Inf` / `-inf` / `infinity`.
+    unreadable (`_lib_validation.split_threshold_severity`). The number is
+    `_lib_validation.parse_threshold_number`'s (#3140): what Go's
+    `ParseFloat` reads, conservatively (a hex float or an underscore is
+    refused although Go accepts it — it only costs a backtest), and finite —
+    `NaN` / `Inf` / `-inf` / `infinity` raise NonFiniteThresholdError, a
+    ValueError: the exporter refuses them as it refuses `abc`.
 
     A value the exporter itself cannot read is replaced with the default or
-    dropped, which this tool cannot see from the value alone."""
+    dropped, which this tool cannot see from the value alone; for a
+    non-finite one `--tenant` reads what the exporter serves instead
+    (`_written_side`)."""
     if raw is None or is_disabled(str(raw)):
         return None
     if key.endswith("_critical"):
@@ -609,15 +611,47 @@ def parse_threshold_value(key, raw):
     else:
         # #3071: raises for a severity the exporter cannot read either.
         number, severity = split_threshold_severity(raw)
-    if not number.isascii() or "_" in number:
-        raise ValueError(raw)
-    value = float(number)
-    spelled = number.lower().lstrip("+-")
-    if math.isnan(value) and number.lower() != "nan":
-        raise ValueError(raw)  # `+nan` / `-nan`: Go refuses a signed NaN
-    if math.isinf(value) and spelled not in ("inf", "infinity"):
-        raise ValueError(raw)  # overflow: Go's ErrRange
-    return value, severity
+    return parse_threshold_number(number), severity
+
+
+@functools.lru_cache(maxsize=1)
+def _registry_tiers():
+    """`{key: tier}` of the threshold registry, extracted in memory from
+    scaffold_tenant.RULE_PACKS (no repo file needed, so the da-tools image
+    has it too), with each `defaults`-tier key's shipped platform default:
+    `({key: tier}, {key: default})`."""
+    keys = registry_lib.registry_keys(registry_lib.build_registry_doc())
+    return ({k: e.get("tier") for k, e in keys.items()},
+            {k: e.get("value") for k, e in keys.items() if e.get("tier") == "defaults"})
+
+
+def _written_side(key, dims, raw):
+    """One side of a `--tenant` change as the row the exporter serves for it
+    (`parse_threshold_value`), with a non-finite number read as the exporter
+    reads it (#3140): it refuses the value, so a base key serves its platform
+    default (`_registry_tiers`, at severity warning — the `:severity` goes
+    with the refused value, #2377), and a `_critical`, dimensioned or
+    `optional_overrides:` key serves no row (None). A key whose default this
+    tool cannot know raises, as any value it cannot read does.
+
+    ⚠️ The platform default is the shipped one; a deployment whose root
+    `_defaults.yaml` writes another serves that. `--config-dir` reads the
+    exporter's own answer."""
+    try:
+        return parse_threshold_value(key, raw)
+    except NonFiniteThresholdError:
+        tiers, defaults = _registry_tiers()
+        if dims or key.endswith("_critical") or tiers.get(key) == "optional_overrides":
+            served = None
+        elif defaults.get(key) is not None:
+            served = (float(defaults[key]), "warning")
+        else:
+            raise  # a key the registry does not know: its default is not known here
+        print(f"NOTE: {raw!r} for {key}{dims} is not a finite number; the exporter refuses it and "
+              + ("serves no row for it" if served is None
+                 else f"serves the platform default {_render_served(served[0])} instead")
+              + ", which is what is backtested", file=sys.stderr)
+        return served
 
 
 def _no_alert(key):
@@ -655,7 +689,7 @@ def written_changes(tenant, metric, old_value, new_value):
     key = canonical_key(metric, DEPRECATED_KEY_ALIASES)
     base, brace, dims = key.partition("{")
     try:
-        sides = [parse_threshold_value(base, raw) for raw in (old_value, new_value)]
+        sides = [_written_side(base, brace + dims, raw) for raw in (old_value, new_value)]
     except ValueError:
         return [{"tenant": tenant, "metric": metric, "old_value": old_value,
                  "new_value": new_value}]

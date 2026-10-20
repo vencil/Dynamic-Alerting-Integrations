@@ -25,10 +25,13 @@ package config
 //     (not threshold-shaped) and the tenant keeps a shallower one
 //     (FlatBuild.RejectedChainValues, less the keys the tenant sets itself:
 //     FlatBuild.rejectedTenantSets).
-//   - value_unparsed: resolveBaseRows cannot parse the tenant's value and
+//   - value_unparsed: resolveBaseRows cannot parse the tenant's value (a
+//     non-finite number included, #3140; `disable:<severity>` too, #3141) and
 //     serves the platform default instead (rejectRecorder).
 //   - value_unparsed_dropped: the critical / dimensional / declared phase
-//     cannot parse the value and serves no row for it (rejectRecorder).
+//     cannot parse the value and serves no row for it — and so does the base
+//     phase when the root writes the key as a non-finite number, leaving no
+//     default to fall back to (rejectRecorder).
 //   - window_invalid: a `window:` of the value's schedule is one
 //     parseTimeWindow refuses — the window the resolver WARNs about and
 //     matches at no minute (#2065; rejectRecorder, at the phases' resolveValue

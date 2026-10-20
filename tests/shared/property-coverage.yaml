@@ -52,6 +52,10 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      _go_lower: "#3141 helper of is_disabled / custom_alert_disabled; exercised by is_disabled's property laws (the case-folding mutation targets it) and table-covered by threshold_value_matrix.json"
+      _disable_word: "#3141 helper of is_disabled / custom_alert_disabled; table-covered by threshold_value_matrix.json (row_disabled, custom_alert_disabled, written by Go)"
+      parse_threshold_number: "#3140 table-covered by threshold_value_matrix.json (float_ok, written by Go's parseThresholdNumber)"
+      routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
       receiver_required_problem: "#2180 required receiver fields by the schema's type + pattern (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"

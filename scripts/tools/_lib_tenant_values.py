@@ -53,7 +53,7 @@ is what keeps either of them off column 0.
   of every threshold key /metrics serves at
   some minute of it (or whose `expires:` the exporter honours), canonical
   spelling → `KeySchedule` (#2115 (c)): `segments`, each a
-  `ScheduleSegment(start, end, value, severity, error, series)` — `"HH:MM"` to
+  `ScheduleSegment(start, end, value, severity, error, series, reason)` — `"HH:MM"` to
   `"HH:MM"` (the last ends `"24:00"`), in order with no gap; `value` a float
   as in `values`, or None when the key has no /metrics row in that segment
   (`severity` None too). `error` is None except in a segment (never the one
@@ -102,7 +102,11 @@ is what keeps either of them off column 0.
   has /metrics rows, kept or dropped; any other `_` key as the registry
   declares, except a `_state_<filter>` for a filter the root does not
   declare), and if
-  not, why (`SERVED_KEY_REASONS`). For a `_` key, `registered` says whether
+  not, why (`SERVED_KEY_REASONS`; #3140: `value_non_finite` /
+  `value_unparsed` is a value the row resolver refused and served no row
+  for, not a switch-off, and `refused` names such a refusal also when the
+  platform default is served instead). A no-row schedule segment's `reason`
+  says the same per part of the day (`SEGMENT_REASONS`). For a `_` key, `registered` says whether
   the registry lists it and `declared` names its other readers, reader ->
   layers. Facts, not a verdict: `disabled` does not say whether switching
   the key off changed anything: with `disable_effects=True` (da-guard
@@ -321,6 +325,10 @@ class ScheduleSegment(NamedTuple):
     severity: str | None    # None exactly when value is None
     error: str | None = None  # da-guard's text when /metrics cannot be gathered in [start, end)
     series: tuple[Series, ...] | None = None  # None exactly when value is None
+    # #3140, only when value is None: why there is no row — one of
+    # SEGMENT_REASONS ("disabled", "value_non_finite", "value_unparsed"), or
+    # None when there is nothing to serve.
+    reason: str | None = None
 
 
 class KeySchedule(NamedTuple):
@@ -402,7 +410,19 @@ class ServedKey(NamedTuple):
     # and for partial the family keys still served.
     disable: str | None = None
     served_family: tuple[str, ...] = ()
+    # #3140: why the exporter's row resolver refused the key's value at
+    # `at` — one of `SERVED_KEY_REFUSALS` ("non_finite", "unparsed") — both
+    # when it then served the platform default (`exporter` True) and when it
+    # served no row (`reason` "value_non_finite" / "value_unparsed"). None
+    # when the value is read (a number, or a disable).
+    refused: str | None = None
 
+
+#: The closed set of served-values' `keys[*].refused` (pkg/config Refused*).
+SERVED_KEY_REFUSALS = frozenset({"non_finite", "unparsed"})
+
+#: The closed set of a no-row schedule segment's `reason` (#3140).
+SEGMENT_REASONS = frozenset({"disabled", "value_non_finite", "value_unparsed"})
 
 #: The closed set of served-values' `keys[*].disable`.
 DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
@@ -412,6 +432,7 @@ DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
 SERVED_KEY_REASONS = frozenset({
     "disabled", "no_row", "undeliverable", "shadowed", "not_exporter_key",
     "state_filter_undeclared", "unregistered", "retired",
+    "value_non_finite", "value_unparsed",
 })
 
 
@@ -949,8 +970,13 @@ def _served_key(e: Any) -> ServedKey:
     family = tuple(str(k) for k in (e.get("served_family") or ()))
     if family and disable != "partial":
         raise ValueError(f"served_family with disable {disable!r}")
+    refused = e.get("refused")
+    if refused is not None and refused not in SERVED_KEY_REFUSALS:
+        raise ValueError(f"refused {refused!r}")
+    if (reason in ("value_non_finite", "value_unparsed")) != (refused is not None and not exporter):
+        raise ValueError(f"reason {reason!r} with refused {refused!r}")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
-                     disable, family)
+                     disable, family, refused)
 
 
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
@@ -1015,12 +1041,16 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
                                             str(seg["error"])))
             continue
         value = seg["value"]
+        reason = seg.get("reason")
+        if reason is not None and (value is not None or reason not in SEGMENT_REASONS):
+            raise ValueError(f"segment reason {reason!r} with value {value!r}")
         segments.append(ScheduleSegment(
             str(seg["from"]), str(seg["to"]),
             None if value is None else _threshold(value),
             None if value is None else str(seg["severity"]),
             None,
-            None if value is None else _series_list(seg["series"])))
+            None if value is None else _series_list(seg["series"]),
+            reason))
     expired = s.get("expired")
     if expired is not None and not isinstance(expired, bool):
         raise ValueError(f"expired is not a boolean: {expired!r}")

@@ -258,17 +258,17 @@ MUTATIONS: list[Mutation] = [
         target_file="scripts/tools/_lib_validation.py",
         test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
         label="is_disabled: drop case-folding (.lower() removed)",
-        fn_name="is_disabled",
-        old="    return value.strip().lower() in _DISABLED_VALUES",
-        new="    return value.strip() in _DISABLED_VALUES",
+        fn_name="_go_lower",
+        old='    return "".join("i" if c == "\\u0130" else c.lower() for c in text)',
+        new="    return text",
     ),
     Mutation(
         target_file="scripts/tools/_lib_validation.py",
         test_file="tests/shared/test_property_tools.py tests/shared/test_lib_python.py",
         label="is_disabled: drop whitespace strip",
-        fn_name="is_disabled",
-        old="    return value.strip().lower() in _DISABLED_VALUES",
-        new="    return value.lower() in _DISABLED_VALUES",
+        fn_name="split_threshold_severity",
+        old="    text = str(raw).strip(GO_SPACE)",
+        new="    text = str(raw)",
     ),
     # ── validate_and_clamp (_lib_validation) ──────────────────────
     Mutation(

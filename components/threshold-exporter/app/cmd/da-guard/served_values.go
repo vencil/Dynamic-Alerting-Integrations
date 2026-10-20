@@ -247,6 +247,16 @@ type servedKey struct {
 	Declared map[string][]string `json:"declared,omitempty"`
 	// Hint is the registry's hint for a retired key.
 	Hint string `json:"hint,omitempty"`
+	// Refused (#3140), for a threshold key only: why the row resolver
+	// refused the key's value at --at — config.RefusedNonFinite
+	// ("non_finite": NaN or ±Inf) or config.RefusedUnparsed ("unparsed") —
+	// whether it then served the platform default (a base key: Exporter
+	// true) or no row (Reason value_non_finite / value_unparsed). Absent
+	// when the value is read: a number, or a disable (Reason disabled). Set
+	// only when the resolver itself recorded the refusal
+	// (config.TenantValuesNotServed), so a key the platform does not declare
+	// stays no_row whatever it holds.
+	Refused string `json:"refused,omitempty"`
 	// Disable, only with --disable-effects and only for a key that reads
 	// `disable` in some part of the day and is not a registered `_` key:
 	// what switching it off does to the user_threshold rows /metrics serves — effective, partial (ServedFamily is still served) or
@@ -283,7 +293,41 @@ const (
 	keyReasonUnregistered = "unregistered"
 	// keyReasonRetired: a retired key (Hint says what replaced it).
 	keyReasonRetired = "retired"
+	// keyReasonValueNonFinite (#3140): the resolver refused the key's value
+	// as a non-finite number (NaN, ±Inf) and serves no row for it — not a
+	// switch-off: the alert the value was written for can never fire.
+	keyReasonValueNonFinite = "value_non_finite"
+	// keyReasonValueUnparsed (#3140): the resolver refused the key's value
+	// as one it cannot read and serves no row for it.
+	keyReasonValueUnparsed = "value_unparsed"
 )
+
+// refusedReason is the keyReason* / segment reason of a refusal
+// (config.RefusedValueAt) that leaves no row.
+func refusedReason(refused string) string {
+	if refused == config.RefusedNonFinite {
+		return keyReasonValueNonFinite
+	}
+	return keyReasonValueUnparsed
+}
+
+// recordedRefusals is, lazily, whether the resolver recorded a refused
+// value (NotServedValueUnparsed / NotServedValueUnparsedDropped, over the
+// whole UTC day) for a canonical key of tenant: the condition under which
+// served-values names a refusal at all (servedKey.Refused).
+func recordedRefusals(cfg *config.ThresholdConfig, tenant string, at time.Time) func(canon string) bool {
+	var table map[string]string
+	return func(canon string) bool {
+		if table == nil {
+			table = cfg.TenantValuesNotServed(tenant, at)
+			if table == nil {
+				table = map[string]string{}
+			}
+		}
+		r := table[canon]
+		return r == config.NotServedValueUnparsed || r == config.NotServedValueUnparsedDropped
+	}
+}
 
 // servedTimeBox is one entry of servedTenantValues.TimeBoxes.
 type servedTimeBox struct {
@@ -332,6 +376,11 @@ type scheduleSegment struct {
 	Severity *string         `json:"severity,omitempty"`
 	Series   []metricsSeries `json:"series,omitempty"`
 	Error    string          `json:"error,omitempty"`
+	// Reason (#3140), only on a segment whose Value is null: why the key
+	// serves no row there — "disabled" (a disable written for that part of
+	// the day), "value_non_finite" or "value_unparsed" (a value the resolver
+	// refused; keyReason*). Absent when there is nothing to serve.
+	Reason string `json:"reason,omitempty"`
 }
 
 // jsonNull is a segment's Value when the key is not served: an explicit JSON
@@ -797,7 +846,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		for k, sv := range undeliverable[tenant] {
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
-		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at)
+		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedRefusals(cfg, tenant, at))
 		out[tenant] = tv
 	}
 	if withSchedules {
@@ -842,7 +891,7 @@ func addDisableEffects(cfg *config.ThresholdConfig, at time.Time,
 // resolver's own).
 func servedKeys(tv servedTenantValues,
 	overrides map[string]config.ScheduledValue, undeliverable map[string]config.ScheduledValue,
-	at time.Time,
+	at time.Time, recorded func(canon string) bool,
 ) map[string]servedKey {
 	out := map[string]servedKey{}
 	add := func(k string) {
@@ -862,15 +911,23 @@ func servedKeys(tv servedTenantValues,
 			if !written {
 				sv, written = undeliverable[k]
 			}
+			refused := ""
+			if written && !inUndeliverable && (!isAlias || !canonWritten) {
+				if r := config.RefusedValueAt(canon, sv, at); r != "" && recorded(canon) {
+					refused = r
+				}
+			}
 			switch {
 			case isAlias && canonWritten:
 				e.Reason = keyReasonShadowed
 			case kept || dropped:
-				e.Exporter = true
+				e.Exporter, e.Refused = true, refused
 			case written && config.DisabledAt(sv, at):
 				e.Reason = keyReasonDisabled
 			case inUndeliverable:
 				e.Reason = keyReasonUndeliverable
+			case refused != "":
+				e.Reason, e.Refused = refusedReason(refused), refused
 			default:
 				e.Reason = keyReasonNoRow
 			}

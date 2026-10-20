@@ -2902,12 +2902,43 @@ class TestRootDefaultsValues:
         assert "drops ALL of it" not in detail, detail
 
     @pytest.mark.parametrize("value", ["80", "0", "-5", "1.5", "1e3", "0x10",
-                                       ".inf", "!!float 80"])
+                                       "!!float 80"])
     def test_numbers_the_exporter_decodes_pass(self, tmp_path, value):
-        """Must-stay-green: every spelling here decodes in yaml.v3."""
+        """Must-stay-green: every spelling here decodes in yaml.v3 to a
+        finite number. (`.inf` used to be here; #3140 below.)"""
         d = self._tree(tmp_path, f"defaults:\n  mysql_connections: {value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
+
+    @pytest.mark.parametrize("value", [".inf", "-.inf", "+.inf", ".nan", ".NaN", ".INF",
+                                       "!!float .inf"])
+    def test_non_finite_numbers_fail(self, tmp_path, value):
+        """#3140: yaml.v3 decodes these to NaN / ±Inf; the exporter serves no
+        default row for the key (da-guard's root_default_non_finite). The
+        file loads, so the line names the key only, never "drops ALL"."""
+        d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
+                       f"  mysql_connections: {value}\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert "`defaults.mysql_connections` is" in detail and "not a finite number" in detail, detail
+        assert "container_cpu" not in detail and "drops ALL of it" not in detail, detail
+
+    def test_non_finite_under_an_underscore_key_is_not_a_threshold(self, tmp_path):
+        """`_` keys are no threshold (#3045): `_x: .nan` is the dead-config WARN."""
+        d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n  _x: .nan\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.WARN, r
+
+    def test_non_finite_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
+        """#3140: validate-config 0 → 1 for a root `.nan`."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: .nan\n")
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] root_defaults" in out, out
 
     def test_defaults_that_is_not_a_mapping_fails(self, tmp_path):
         """`defaults: 80` loads in PyYAML and is dropped whole by the exporter;
@@ -2952,15 +2983,19 @@ class TestRootDefaultsValues:
     def test_row_verdict_matches_the_go_judged_oracle(self, tmp_path, case):
         """The same truth table the Go test `TestDefaultsCarrierOracle`
         judges against the exporter's own `parsePartialConfig`: this row
-        FAILs exactly where the exporter drops the carrier or decodes a 0,
-        save the listed deviations — so the row cannot drift from the
+        FAILs exactly where the exporter drops the carrier, decodes a 0 or
+        serves no default row for a key it decodes (#3140), save the listed
+        deviations — so the row cannot drift from the
         exporter without this going red."""
         d = self._tree(tmp_path, case["doc"])
         r = vc._run_check("root_defaults", vc.check_root_defaults, str(d),
                           _config_dir=str(d))
+        # #3140: a key the exporter decodes but serves no default row for (a
+        # non-finite number, `default_row: false`) FAILs too.
         want = _ORACLE_ROW_DEVIATIONS.get(
             case["name"],
-            vc.PASS if case["exporter"] == "accepted" else vc.FAIL)
+            vc.PASS if case["exporter"] == "accepted" and case.get("default_row", True)
+            else vc.FAIL)
         assert r["status"] == want, (case, r)
 
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):

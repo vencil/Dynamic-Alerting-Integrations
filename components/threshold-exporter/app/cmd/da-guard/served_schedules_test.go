@@ -378,7 +378,7 @@ func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 		{"tenant-a", "mysql_connections_critical", []map[string]any{
 			row("00:00", "15:00", 95, "critical"), errSeg, row("16:00", "24:00", 95, "critical")}},
 		{"tenant-a", "redis_memory", []map[string]any{
-			row("00:00", "01:00", 60, "warning"), {"from": "01:00", "to": "02:00", "value": nil},
+			row("00:00", "01:00", 60, "warning"), {"from": "01:00", "to": "02:00", "value": nil, "reason": "disabled"},
 			row("02:00", "15:00", 60, "warning"), errSeg, row("16:00", "24:00", 60, "warning")}},
 		{"tenant-b", "mysql_connections", []map[string]any{
 			row("00:00", "15:00", 80, "warning"), errSeg, row("16:00", "24:00", 80, "warning")}},

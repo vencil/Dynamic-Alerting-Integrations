@@ -62,6 +62,14 @@ func checkValuesNotServed(input CheckInput) []Finding {
 	return out
 }
 
+// disableSuffixFix is the value_unparsed* messages' sentence on
+// `disable:<severity>` (#3141), which the exporter reads as no disable: the
+// two spellings it may have meant, for key k — the exporter's own text
+// (config.DisableWithSeverityHint, which its WARN carries too).
+func disableSuffixFix(k string) string {
+	return config.DisableWithSeverityHint(k) + "."
+}
+
 func sortedNotServedTenants(input CheckInput) []string {
 	out := make([]string, 0, len(input.ValuesNotServed))
 	for id := range input.ValuesNotServed {
@@ -82,16 +90,18 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 	}
 	switch ns.Reason {
 	case config.NotServedValueUnparsed:
-		return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a number the exporter reads "+
-			"(e.g. `abc`, a list, `7O:critical`) or whose `:<severity>` is not `warning` or `critical` (e.g. `70:high`, "+
-			"`70:`; #3071), so /metrics serves the platform default for it instead and the "+
+		return fmt.Sprintf("value_unparsed: %s writes `%s` with a value that is not a finite number the exporter reads "+
+			"(e.g. `abc`, a list, `7O:critical`, `NaN`, `-Inf`; #3140) or whose `:<severity>` is not `warning` or "+
+			"`critical` (e.g. `70:high`, `70:`; #3071), so /metrics serves the platform default for it instead and the "+
 			"alert fires at that default, not at the written threshold. Write a number, optionally with "+
-			"`:warning` or `:critical` (e.g. `70` or `70:critical`), or `disable`.", file, k)
+			"`:warning` or `:critical` (e.g. `70` or `70:critical`), or `disable`. "+disableSuffixFix(k), file, k)
 	case config.NotServedValueUnparsedDropped:
-		return fmt.Sprintf("value_unparsed_dropped: %s writes `%s` with a value that is not a number the exporter "+
-			"reads (or whose `:<severity>` is not `warning` or `critical`, e.g. `60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier, a dimensional key or "+
-			"an `optional_overrides:` key), so /metrics serves no series for it and that alert can never fire. "+
-			"Write a number (e.g. `90`), or `disable`.", file, k)
+		return fmt.Sprintf("value_unparsed_dropped: %s writes `%s` with a value that is not a finite number the exporter "+
+			"reads (e.g. `abc`, `NaN`, `-Inf`; #3140), or whose `:<severity>` is not `warning` or `critical` (e.g. "+
+			"`60:high`, `60:`), and the key has no platform default to fall back to (a `_critical` tier, a dimensional "+
+			"key, an `optional_overrides:` key, or a key the root `defaults:` writes as a non-finite number), so "+
+			"/metrics serves no series for it and that alert can never fire. "+
+			"Write a number (e.g. `90`), or `disable`. "+disableSuffixFix(k), file, k)
 	case config.NotServedWindowInvalid:
 		return fmt.Sprintf("window_invalid: %s writes `%s` as a schedule with an override whose `window:` the "+
 			"exporter does not accept — not a UTC `HH:MM-HH:MM` (hours 00-23, minutes 00-59), missing, or a start "+

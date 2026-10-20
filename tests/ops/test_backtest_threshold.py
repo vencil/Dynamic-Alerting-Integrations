@@ -1148,30 +1148,70 @@ class TestWrittenValues:
         ("mysql_connections_critical", "95", (95.0, "critical")),
         ("mysql_connections", "disable", None),
         ("mysql_connections", None, None),
-        ("mysql_connections", "NaN", (float("nan"), "warning")),
-        # Spellings Go's ParseFloat accepts too (measured).
-        ("mysql_connections", "Inf", (float("inf"), "warning")),
-        ("mysql_connections", "-inf:critical", (float("-inf"), "critical")),
-        ("mysql_connections_critical", "+Inf", (float("inf"), "critical")),
-        ("mysql_connections", "infinity", (float("inf"), "warning")),
         ("mysql_connections", "1e-400", (0.0, "warning")),
     ])
     def test_parse_threshold_value(self, key, raw, want):
-        got = bt.parse_threshold_value(key, raw)
-        if want is None or want[0] == want[0]:
-            assert got == want
-        else:
-            assert got[0] != got[0] and got[1] == want[1]
+        assert bt.parse_threshold_value(key, raw) == want
+
+    @pytest.mark.parametrize("key,raw", [
+        ("mysql_connections", "NaN"), ("mysql_connections", "Inf"),
+        ("mysql_connections", "-inf:critical"), ("mysql_connections_critical", "+Inf"),
+        ("mysql_connections", "infinity"), ("mysql_connections", "NaN:critical"),
+    ])
+    def test_a_non_finite_number_is_refused_as_the_exporter_refuses_it(self, key, raw):
+        """#3140：Go 的 ParseFloat 讀得懂 NaN／Inf，但 exporter 不再把它當門檻送
+        （base 改送預設值、其他丟 row）。以前這裡照讀成 NaN／±Inf 回測。"""
+        with pytest.raises(bt.NonFiniteThresholdError):
+            bt.parse_threshold_value(key, raw)
+
+    @pytest.mark.parametrize("metric,old,new,want", [
+        # base key: the exporter serves the platform default (80) instead.
+        ("mysql_connections", "70", "NaN", [("mysql_connections", "70", "80")]),
+        ("mysql_connections", "70", "-Inf", [("mysql_connections", "70", "80")]),
+        # the `:critical` goes with the refused value (#2377): a warning row.
+        ("mysql_connections", "70", "-inf:critical", [("mysql_connections", "70", "80")]),
+        ("mysql_connections", "NaN", "70", [("mysql_connections", "80", "70")]),
+        ("mysql_connections", "80", "+Inf", []),
+        # no default to fall back to: no row.
+        ("mysql_connections_critical", "95", "+Inf", [("mysql_connections_critical", "95", None)]),
+        ("oracle_process_count", "70", "-Inf", [("oracle_process_count", "70", None)]),
+    ])
+    def test_tenant_reads_a_non_finite_side_as_what_the_exporter_serves(
+            self, capsys, metric, old, new, want):
+        """#3140：`--tenant` 的非有限值改用 exporter 實際送的值計算：base key
+        是平台預設值，`_critical`／`optional_overrides:` key 沒有 row。stderr
+        說明改用了什麼。"""
+        rows = bt.written_changes("t-x", metric, old, new)
+        assert [(r["metric"], r["old_value"], r["new_value"]) for r in rows] == want
+        assert "is not a finite number" in capsys.readouterr().err
+
+    def test_tenant_non_finite_on_a_key_without_a_known_default_is_not_read(self):
+        """A key the registry does not know: its default is unknown here, so
+        the change is the values as written (not backtested)."""
+        assert bt.written_changes("t-x", "no_such_key", "70", "-Inf") == [
+            {"tenant": "t-x", "metric": "no_such_key", "old_value": "70", "new_value": "-Inf"}]
+
+    def test_a_non_finite_new_value_is_backtested_at_the_default(
+            self, monkeypatch, capsys, cli_argv):
+        """#3140：70 → NaN 回測的是 exporter 改送的預設值 80（2/4 點越界），
+        不是 NaN（0 點，以前判 HIGH、rc 1）。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", "NaN")
+        assert [(r["metric"], r["old_value"], r["new_value"], r["new_breach_count"])
+                for r in rows] == [("mysql_connections", "70", "80", 2)]
+        assert rc == 0
 
     @pytest.mark.parametrize("key,raw", [
         ("mysql_connections", "7O"), ("mysql_connections", "1_000"),
         ("mysql_connections", "١٢"), ("mysql_connections_critical", "95:critical"),
         ("mysql_connections", "+nan"), ("mysql_connections", "-nan:critical"),
         ("mysql_connections", "1e400"), ("mysql_connections_critical", "-1e400"),
+        ("mysql_connections", "1e999"),
         ("mysql_connections", "0x1p4"),
         ("mysql_connections", "70:info"), ("mysql_connections", "70:"),
     ], ids=["typo", "underscore", "non-ascii-digit", "suffix-on-critical-key",
-            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "hex-float",
+            "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "overflow-1e999",
+            "hex-float",
             "unselected-severity", "empty-severity"])
     def test_values_this_backtest_cannot_read_are_refused(self, key, raw):
         """Go 也拒絕：typo、非 ASCII 數字、帶號 NaN、溢位（ErrRange）、規則不選的

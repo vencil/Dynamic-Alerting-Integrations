@@ -2027,6 +2027,17 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
+def _root_defaults_non_finite_detail(rel: str, key: str, raw: str) -> str:
+    """One FAIL line for a root threshold written as a non-finite number
+    (#3140; da-guard's root_default_non_finite says the same)."""
+    return (f"{rel}: `defaults.{key}` is `{raw}`, not a finite number — an alert "
+            f"compared against it never fires (NaN, or the infinity on the side the "
+            f"alert compares) or always fires. threshold-exporter serves no default "
+            f"row for `{key}`; only a tenant's own value is served, as for an "
+            f"`optional_overrides:` key. Write a finite number, or list `{key}` under "
+            f"`optional_overrides:` instead.")
+
+
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
 #: file (#2386); the list lives in _lib_constants (shared with the policy
 #: readers since #2115 0-B).
@@ -2575,7 +2586,19 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
             out.append((key, json.dumps(node["text"], ensure_ascii=False), dr.UNPARSEABLE))
         elif node["tag"] not in ("!!int", "!!float"):
             out.append((key, node["text"], dr.UNPARSEABLE))
+        elif node["tag"] == "!!float" and "value" not in node:
+            # #3140: parse-tree gives a `!!float` no value exactly when
+            # yaml.v3 decodes it to NaN or ±Inf (`.nan`, `.inf`, `-.inf`).
+            # The file loads; the exporter serves no default row for the key.
+            out.append((key, node["text"], _NON_FINITE))
     return out
+
+
+#: `_root_defaults_verdicts`' kind for a root threshold yaml.v3 decodes to a
+#: non-finite number (#3140): not one of deprecate_rule's kinds (the carrier
+#: loads), but a FAIL of this row, as da-guard's root_default_non_finite is an
+#: error. The oracle's `default_row: false` rows are these.
+_NON_FINITE = "non_finite"
 
 
 _CUSTOM_ALERT_CAP_HINT = (
@@ -2730,6 +2753,9 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
+    details += [_root_defaults_non_finite_detail(rel, k, r)
+                for k, r, kind in verdicts
+                if kind == _NON_FINITE and k is not None and not k.startswith("_")]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")

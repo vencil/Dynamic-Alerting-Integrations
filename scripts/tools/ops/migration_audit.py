@@ -283,7 +283,7 @@ _INT_MIN, _INT_END = -(2 ** 63), 2 ** 64
 
 def _float_text(f: float) -> str:
     """A spelling both readers read as the float `f`: `.inf` / `-.inf` /
-    `.nan`, else Python's shortest repr with a `.` in the mantissa (PyYAML's
+    `.nan` (which `rewrites` no longer offers, #3140), else Python's shortest repr with a `.` in the mantissa (PyYAML's
     YAML 1.1 float needs one: `1e+20` is a string to it, `1.0e+20` a float)."""
     if math.isnan(f):
         return ".nan"
@@ -301,8 +301,9 @@ def rewrites(py: Any, v3: dict, raw_text: bool) -> list[dict]:
     [{"meaning": "string" | "boolean" | "number" | "null", "text": <YAML>}],
     one per meaning either reader gave it (and always the quoted string).
     Each is the plain YAML to write in place of the value; none is lossy —
-    an integer neither reads exactly, a time, a non-finite float as a number
-    other than `.inf`/`.nan` get no number spelling. `raw_text`: today's
+    an integer neither reads exactly, a time get no number spelling — and a
+    non-finite float gets none either (#3140: not `.inf` / `.nan`, which no
+    threshold may be). `raw_text`: today's
     reader took this value's source text whatever its type (a `tenants:`
     list), so only a quoted string reads the same in both.
     tests/ops/test_migration_audit.py writes every one back and re-audits."""
@@ -317,7 +318,10 @@ def rewrites(py: Any, v3: dict, raw_text: bool) -> list[dict]:
         if isinstance(meaning_value, int) and not isinstance(meaning_value, bool):
             if _INT_MIN <= meaning_value < _INT_END:
                 add("number", str(meaning_value))
-        elif isinstance(meaning_value, float):
+        elif isinstance(meaning_value, float) and math.isfinite(meaning_value):
+            # #3140: no `.inf` / `.nan` — a non-finite number is no threshold
+            # the exporter serves (nor a value any other reader wants), so it
+            # gets no number spelling; the quoted string still reads alike.
             add("number", _float_text(meaning_value))
 
     # An integer past what yaml.v3 holds exactly (it reads a float): any

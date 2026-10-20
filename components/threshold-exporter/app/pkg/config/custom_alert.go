@@ -729,13 +729,14 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	if isDisabled(strings.ToLower(strings.TrimSpace(valueStr))) {
 		return nil, errCustomAlertDisabled
 	}
-	value, err := strconv.ParseFloat(valueStr, 64)
-	if err != nil {
-		return nil, fmt.Errorf("threshold value %q is not numeric: %w", valueStr, err)
-	}
-	// ParseFloat accepts "NaN"/"Inf" — reject them: a non-finite threshold would
-	// emit a nonsensical comparison series (e.g. `metric > NaN` never fires).
-	if math.IsNaN(value) || math.IsInf(value, 0) {
+	// The one threshold-number reader the row resolvers use (#3140): a
+	// non-finite number ("NaN"/"Inf", which ParseFloat accepts) would emit a
+	// nonsensical comparison series (e.g. `metric > NaN` never fires).
+	value, ok := parseThresholdNumber(valueStr)
+	if !ok {
+		if _, err := strconv.ParseFloat(valueStr, 64); err != nil {
+			return nil, fmt.Errorf("threshold value %q is not numeric: %w", valueStr, err)
+		}
 		return nil, fmt.Errorf("threshold value %q must be finite", valueStr)
 	}
 	// forecast ratio mode: the threshold is a headroom-fraction floor

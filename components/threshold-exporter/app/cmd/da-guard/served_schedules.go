@@ -97,8 +97,16 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 		for k := range expiryOf[tenant] {
 			keys[k] = true
 		}
+		// #3140: why a segment serves no row, read off the key's written
+		// value at the segment's start (nullReason).
+		canonOf := map[string]string{}
+		for ck := range cfg.Tenants[tenant] {
+			canonOf[name(tenant, ck)] = ck
+		}
+		recorded := recordedRefusals(cfg, tenant, at)
 		for k := range keys {
-			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k)}
+			why := func(minute int) string { return nullReason(cfg, tenant, canonOf[k], at, minute, recorded) }
+			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
 			if te, ok := expiryOf[tenant][k]; ok {
 				sv, written := cfg.Tenants[tenant][te.MetricKey]
 				if !written || sv.Expiry == nil {
@@ -119,14 +127,20 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 // daySegments is key k's day over the pieces [cuts[i], ends[i]), adjacent
 // pieces with the same reading (or the same Gather error) merged. A piece
 // whose gatherErrs entry is set is a segment carrying that error.
-func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gatherErrs []string, tenant, k string) []scheduleSegment {
+func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gatherErrs []string, tenant, k string,
+	why func(minute int) string,
+) []scheduleSegment {
 	var segs []scheduleSegment
 	var last reading
-	lastServed, lastErr := false, ""
+	lastServed, lastErr, lastReason := false, "", ""
 	for i, m := range cuts {
 		gerr := gatherErrs[i]
 		r, served := passes[i][tenant][k]
-		if n := len(segs); n > 0 && gerr == lastErr && served == lastServed &&
+		reason := ""
+		if gerr == "" && !served {
+			reason = why(m)
+		}
+		if n := len(segs); n > 0 && gerr == lastErr && served == lastServed && reason == lastReason &&
 			(!served || (sameFloat(r.value, last.value) && r.severity == last.severity && sameSeries(r.series, last.series))) {
 			segs[n-1].To = hhmm(ends[i])
 			continue
@@ -141,10 +155,10 @@ func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gathe
 			seg.Severity = &sev
 			seg.Series = r.series
 		default:
-			seg.Value = jsonNull
+			seg.Value, seg.Reason = jsonNull, reason
 		}
 		segs = append(segs, seg)
-		last, lastServed, lastErr = r, served, gerr
+		last, lastServed, lastErr, lastReason = r, served, gerr, reason
 	}
 	return segs
 }
@@ -247,4 +261,28 @@ func (c thresholdRows) Collect(ch chan<- prometheus.Metric) {
 // hhmm renders a minute of the day (0..1440) as "HH:MM"; 1440 is "24:00".
 func hhmm(m int) string {
 	return fmt.Sprintf("%02d:%02d", m/60, m%60)
+}
+
+// nullReason is why threshold key canon (cfg's spelling; "" for a key the
+// tenant's map does not write) serves no row from minute of the UTC day of
+// at (#3140): keyReasonDisabled for a disable written for that part of the
+// day, keyReasonValueNonFinite / keyReasonValueUnparsed for a value the
+// resolver refuses (and recorded refusing), else "" (nothing to serve: a
+// lapsed or absent value).
+func nullReason(cfg *config.ThresholdConfig, tenant, canon string, at time.Time, minute int,
+	recorded func(canon string) bool,
+) string {
+	sv, written := cfg.Tenants[tenant][canon]
+	if !written {
+		return ""
+	}
+	utc := at.UTC()
+	t := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, minute, 0, 0, time.UTC)
+	if config.DisabledAt(sv, t) {
+		return keyReasonDisabled
+	}
+	if r := config.RefusedValueAt(canon, sv, t); r != "" && recorded(canon) {
+		return refusedReason(r)
+	}
+	return ""
 }

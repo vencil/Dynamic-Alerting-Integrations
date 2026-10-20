@@ -22,7 +22,7 @@ from pathlib import Path, PurePosixPath
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import is_disabled as _is_disabled  # noqa: E402
+from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
