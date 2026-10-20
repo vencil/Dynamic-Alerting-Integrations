@@ -22,10 +22,9 @@ from factories import write_yaml
 from generate_alertmanager_routes import (  # noqa: E402
     POLICY_ERROR_PREFIX,
     check_domain_policies,
-    load_tenant_configs,
+    load_tenant_tree,
 )
 from _grar_validate import _parse_policy_duration, domain_policy_problems  # noqa: E402
-from _grar_parse import load_tenant_tree  # noqa: E402
 from _grar_validate import FIELD_TYPE_ERROR_PREFIX  # noqa: E402
 from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 
@@ -242,7 +241,7 @@ class TestStrictFailOpenClosures:
         policies = {"pol": {"tenants": "tenant-x"}}
         self._refused({}, policies, "'tenants' must be a list, got string 'tenant-x'")
 
-    # ── F3: 檔案層 fail-open（load_tenant_configs 路徑） ──
+    # ── F3: 檔案層 fail-open（load_tenant_tree 路徑） ──
     def test_broken_policy_yaml_strict_fails_loud(self):
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_domain_policy.yaml",
@@ -261,12 +260,12 @@ class TestStrictFailOpenClosures:
                 "domain_policies": {"fin": {"tenants": ["tenant-x"]}},
                 "tenants": {"tenant-x": {"cpu": "90"}},
             })
-            _, _, warnings, _, _ = load_tenant_configs(
-                d, strict_policies=True)
+            warnings = load_tenant_tree(
+                d, strict_policies=True).schema_warnings
             assert any("only _domain_policy.yaml is loaded" in w
                        and w.lstrip().startswith(POLICY_ERROR_PREFIX)
                        for w in warnings), warnings
-            _, _, lenient, _, _ = load_tenant_configs(d)
+            lenient = load_tenant_tree(d).schema_warnings
             assert not any(w.lstrip().startswith(POLICY_ERROR_PREFIX)
                            for w in lenient)
 
@@ -711,8 +710,7 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_domain_policy.yaml", body)
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=strict)
+            warnings = load_tenant_tree(d, strict_policies=strict).schema_warnings
             blocking = _policy_file_blocking(warnings)
             assert blocking, (
                 f"an unusable _domain_policy.yaml ({label}) dropped every "
@@ -732,8 +730,7 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_domain_policy.yaml", body)
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             msg = " ".join(_policy_file_blocking(warnings))
             assert "— fix:" in msg, msg
             if label == "broken-yaml":
@@ -755,8 +752,7 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
             _wy(d, "_domain_policy.yaml", {
                 "domain_policies": {"fin": {"tenants": ["tenant-x"]}}})
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             assert not [w for w in warnings
                         if "could not be used" in w], warnings
 
@@ -770,8 +766,7 @@ class TestUnusablePolicyFileIsAlwaysRecorded:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "tenant-x.yaml", "- not: a mapping\n")
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             assert not _policy_file_blocking(warnings), warnings
 
 
@@ -793,14 +788,14 @@ class TestNullValuedKeysDoNotKillTheRun:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "tenant-x.yaml", body)
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert routing == {}
 
     def test_null_defaults_block(self):
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_defaults.yaml", "defaults:\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d)
+            warnings = load_tenant_tree(d).schema_warnings
             assert isinstance(warnings, list)
 
     def test_a_populated_tenants_block_is_still_read(self):
@@ -811,7 +806,7 @@ class TestNullValuedKeysDoNotKillTheRun:
                 "_routing": {"receiver": {
                     "type": "webhook",
                     "url": "https://hooks.example.com/a"}}}}})
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert "tenant-x" in routing
 
 
@@ -853,8 +848,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
         """#3116: refused in both modes now (it was --strict only)."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, body)
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=strict)
+            warnings = load_tenant_tree(d, strict_policies=strict).schema_warnings
             blocking = _policy_file_blocking(warnings)
             assert blocking, (
                 f"{label}: every domain policy was dropped and --strict said "
@@ -871,8 +865,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
         for a syntax error in a file whose syntax is fine."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, body)
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             msg = " ".join(_policy_file_blocking(warnings))
             assert "— fix:" in msg, msg
             if label == "broken-yaml":
@@ -905,8 +898,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
             _wy(d, "_domain_policy.yaml", {
                 "domain_policies": {"fin": {"tenants": ["tenant-x"]}}})
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             assert not [w for w in warnings
                         if "could not be used" in w], warnings
 
@@ -922,8 +914,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {
                 "_routing": {"receiver": {
                     "type": "slack", "api_url": "https://h.example/a"}}}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             assert any("forbidden" in w for w in warnings), warnings
 
     def test_a_non_policy_file_with_the_same_shape_is_not_escalated(self):
@@ -933,8 +924,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "tenant-x.yaml", "- not: a mapping\n")
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             assert not _policy_file_blocking(warnings), warnings
 
     def test_measured_gap_a_policy_file_that_parses_to_nothing(self):
@@ -950,8 +940,7 @@ class TestEveryWayThePoliciesFallOnTheFloor:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_domain_policy.yaml", "# all commented out\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             assert not _policy_file_blocking(warnings), (
                 "this gap is now closed — good; update the disclosure in "
                 "_drop_unusable_policy() and this test's docstring")
@@ -982,8 +971,7 @@ class TestTheSharedReaderNamesWhatItCannotRead:
             write_yaml(d, "_domain_policy.yaml",
                        "domain_policies:\n  fin: " + "[" * 12000 + "]" * 12000 + "\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             blocking = _policy_file_blocking(warnings)
             assert blocking, (
                 "an unreadable policy file escaped the reader instead of "
@@ -1000,7 +988,7 @@ class TestTheSharedReaderNamesWhatItCannotRead:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "tenant-x.yaml", "tenants:\n  # db-a:\n  #   cpu: 9\n")
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert routing == {}
             err = capsys.readouterr().err
             assert "'tenants:' is declared but empty" in err, err
@@ -1012,7 +1000,7 @@ class TestTheSharedReaderNamesWhatItCannotRead:
         with tempfile.TemporaryDirectory() as d:
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            load_tenant_configs(d)
+            load_tenant_tree(d)
             assert "declared but empty" not in capsys.readouterr().err
 
 
@@ -1045,7 +1033,7 @@ class TestTenantsBlockShapeGuard:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "tenant-x.yaml", body)
             _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert routing == {}
             err = capsys.readouterr().err
             assert "'tenants' must be a mapping" in err, err
@@ -1059,7 +1047,7 @@ class TestTenantsBlockShapeGuard:
                 "_routing": {"receiver": {
                     "type": "webhook",
                     "url": "https://hooks.example.com/a"}}}}})
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert "tenant-x" in routing
             assert "must be a mapping" not in capsys.readouterr().err
 
@@ -1077,8 +1065,8 @@ class TestTenantsBlockShapeGuard:
                 write_yaml(d, "_domain_policy.yaml", body)
                 _wy(d, "tenant-x.yaml",
                     {"tenants": {"tenant-x": {"cpu": "90"}}})
-                _, _, warnings, _, _ = load_tenant_configs(
-                    d, strict_policies=True)
+                warnings = load_tenant_tree(
+                    d, strict_policies=True).schema_warnings
                 blocking = _policy_file_blocking(warnings)
                 assert blocking, f"body={body!r} slipped through: {warnings}"
 
@@ -1091,8 +1079,8 @@ class TestTenantsBlockShapeGuard:
                 write_yaml(d, "_domain_policy.yaml", body)
                 _wy(d, "tenant-x.yaml",
                     {"tenants": {"tenant-x": {"cpu": "90"}}})
-                _, _, warnings, _, _ = load_tenant_configs(
-                    d, strict_policies=True)
+                warnings = load_tenant_tree(
+                    d, strict_policies=True).schema_warnings
                 assert not _policy_file_blocking(warnings), body
 
     def test_a_multi_line_parser_message_stays_on_one_line(self):
@@ -1106,8 +1094,7 @@ class TestTenantsBlockShapeGuard:
             write_yaml(d, "_domain_policy.yaml",
                        "domain_policies:\n  fin: [unclosed\n")
             _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {"cpu": "90"}}})
-            _, _, warnings, _, _ = load_tenant_configs(d,
-                                                       strict_policies=True)
+            warnings = load_tenant_tree(d, strict_policies=True).schema_warnings
             blocking = _policy_file_blocking(warnings)
             assert blocking
             for w in blocking:
@@ -1198,7 +1185,7 @@ class TestTheGoAsymmetryWarningStaysTrue:
         with tempfile.TemporaryDirectory() as d:
             write_yaml(d, "_defaults.yaml",
                        "defaults:\n  cpu: 80\ntenants:\n  - alpha\n")
-            load_tenant_configs(d)
+            load_tenant_tree(d)
             err = capsys.readouterr().err
             assert "'tenants' must be a mapping" in err, err
             assert "Go exporter drops the WHOLE file" in err, (

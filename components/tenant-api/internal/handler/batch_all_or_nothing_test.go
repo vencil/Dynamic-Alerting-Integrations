@@ -94,14 +94,16 @@ func (f *aonFixture) git(t *testing.T, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// batchBranches lists the PR-mode batch branches (the push to the missing
-// origin fails, so a created branch stays local).
+// batchBranches lists the PR-mode batch branches, local and as pushed to
+// origin (the writer drops the local one once it is pushed, #641), as full
+// ref names.
 func (f *aonFixture) batchBranches(t *testing.T) []string {
 	t.Helper()
 	var out []string
-	for _, b := range strings.Fields(f.git(t, "branch", "--format=%(refname:short)")) {
+	for _, ref := range strings.Fields(f.git(t, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes/origin")) {
+		b := strings.TrimPrefix(strings.TrimPrefix(ref, "refs/heads/"), "refs/remotes/origin/")
 		if strings.HasPrefix(b, platform.BranchPrefix) {
-			out = append(out, b)
+			out = append(out, ref)
 		}
 	}
 	return out

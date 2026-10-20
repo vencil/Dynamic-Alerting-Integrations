@@ -15,12 +15,12 @@ enumeration / case-parity / strict-yaml 三道閘門同一份答案），雙向�
 每個檔，要嘛在 `_PROBES` 有一個探針，要嘛在 `_NOT_PROBED` 寫明為什麼不探；母體
 沒有的檔出現在任一表裡也是紅。
 
-還沒切換到 parse-tree 的工具，探針標 `pending`：xfail(strict=True)——它若意外
-通過就轉紅，提醒把標記拿掉。最後一支切換 PR（步驟 4d）清空 pending。
+母體裡的工具已全數切換（#2906 F1／F2），`_PROBES` 沒有標 pending 的列；第五欄
+留著給日後的新讀取端：標了 pending 的探針是 xfail(strict=True)，意外通過就轉紅。
 
 ⚠️ 這是抽樣，不是完備性證明：一支工具只量一個欄位。它量的是 ADR 真正要的性質，
 不論工具怎麼解析（包裝函式、`exec`、別名），讀法錯了就逃不過。`_NOT_PROBED` 的
-"pending, no probe yet" 那一類就是還沒量到的工具，數得出來，不是被當成通過。
+每一列寫明為什麼不探，沒有「還沒量」這一類。
 """
 from __future__ import annotations
 
@@ -97,6 +97,11 @@ _OFFBOARD_REF = {
     "yes.yaml": 'tenants:\n  "yes":\n    mysql_connections: "70"\n',
     "other.yaml": "tenants:\n  other:\n    note: {VALUE}\n",
 }
+#: A tenant's `custom_` value, read alone (`--tenant-config`): the gap report
+#: carries it as `current_value` — a string "yes", or a boolean.
+_CUSTOM_VALUE = {
+    "tenant-a.yaml": "tenants:\n  tenant-a:\n    custom_mysql_x: {VALUE}\n",
+}
 
 #: A recurring maintenance window's `reason` — printed on the ACTIVE line
 #: (`True` for a boolean). The window is "0 0 1 1 *" + 400d, so it is open on
@@ -167,6 +172,11 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
     "ops/threshold_recommend.py": (
         "ops/threshold_recommend.py", ["--config-dir", "{d}", "--dry-run", "--json"],
         _TENANT_KEY, (), ""),
+    # ── #2906 F2: both branches through da-guard — `--config-dir` served-values,
+    # `--tenant-config` parse-tree's file mode (this probe) ──
+    "ops/analyze_rule_pack_gaps.py": (
+        "ops/analyze_rule_pack_gaps.py", ["--tenant-config", "{d}/tenant-a.yaml", "--json"],
+        _CUSTOM_VALUE, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -174,8 +184,6 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
 _LIB = "library module: no CLI of its own; its callers' probes measure it"
 _NAMES = "reads conf.d names / paths / bytes, no value of a file"
 _GO = "reads conf.d values only through da-guard (served-values / effective / parse-tree)"
-_PENDING = ("pending (4c): not on parse-tree yet, or not established here whether it "
-            "reads conf.d values at all — no probe written yet")
 #: Step E1 (#2906): tools whose conf.d reads are da-guard's but which take no
 #: conf.d argument (fixed repo-relative trees), or read no value a probe can
 #: tell apart (key names only): `_GO`, and their own tests in
@@ -191,7 +199,10 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: before it is written (ADR-036 §2). They take no conf.d argument a probe can
 #: drive without a cluster or an API (patch_config: a ConfigMap via kubectl;
 #: threshold_govern: tenant-api; da_assembler: a CR), or write what they
-#: generate rather than read a value (init_project, scaffold_tenant), or read
+#: generate rather than read a value (init_project, scaffold_tenant; and since
+#: step F1 onboard_platform, migrate_rule, generate_tenant_fixture, which read
+#: no conf.d at all — their inputs are Alertmanager / rule / scrape files, and
+#: the fixture generator has none), or read
 #: a value whose yes / "yes" / true readings end the same (deprecate_rule:
 #: every non-number `defaults:` value is a dropped carrier) — their own rows
 #: are in tests/shared/test_writers_confirm_parse_tree.py.
@@ -202,9 +213,6 @@ _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes 
 _GO_BLOB = (_GO + "; reads git blobs of one fixed-name file (`git show`) in parse-tree's "
             "file mode, no conf.d argument to probe — "
             "tests/shared/test_readonly_tools_read_parse_tree.py")
-_OWNER_2115 = ("--config-dir reads served-values only; the single-file `--tenant-config` "
-               "branch stays on PyYAML by owner ruling #2115 (decision 4: not switched), "
-               "and no run mixes the two")
 #: Admitted to the population only by the K3 text net (`conf.d` / `config_dir`
 #: in a docstring, comment, help or output string); what the tool reads is
 #: named after the `;` in its row.
@@ -239,7 +247,7 @@ _NOT_PROBED: dict[str, str] = {
     "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
                                "to list where they differ (ADR-036 §8)"),
     "dx/describe_tenant.py": _GO,
-    "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _NAMES,
+    "dx/generate_tenant_fixture.py": _GO_WRITER, "dx/run_chaos_soak.py": _NAMES,
     "lint/check_account_registry_monotonic.py": _GO_BLOB,
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
@@ -261,15 +269,15 @@ _NOT_PROBED: dict[str, str] = {
         _GO_WRITER + "; --regen writes the two fixed conf.d `_defaults.yaml`, its check "
         "mode reads every surface as bytes (a text compare), no value"),
     "lint/check_threshold_unit_sanity.py": _GO_FIXED,
-    "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
+    "ops/assemble_config_dir.py": _GO,
     "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _NAMES,
     "ops/config_history.py": _NAMES, "ops/da_assembler.py": _GO_WRITER,
     "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
     "ops/drift_detect.py": _NAMES, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
-    "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _PENDING,
-    "ops/migrate_to_operator.py": _PENDING,
-    "ops/onboard_platform.py": _PENDING, "ops/operator_generate.py": _PENDING,
+    "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _GO_WRITER,
+    "ops/migrate_to_operator.py": _GO_KEYS,
+    "ops/onboard_platform.py": _GO_WRITER, "ops/operator_generate.py": _GO_KEYS,
     "ops/patch_config.py": _GO_WRITER,
     "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_WRITER,
 }

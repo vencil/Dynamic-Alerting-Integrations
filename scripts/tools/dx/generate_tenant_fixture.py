@@ -16,9 +16,16 @@ Layout modes:
 The --with-defaults flag injects _defaults.yaml files with platform-wide threshold defaults.
 In hierarchical mode, _defaults.yaml is placed at domain and env levels.
 In flat mode, a single _defaults.yaml is placed at the conf.d/ root.
+
+Before any file is written, every generated text is read back by
+`da-guard parse-tree` (file mode) at the path it is written to and must hold
+exactly what was generated, at a path a reader reads (ADR-036 §2). A refusal,
+or no usable da-guard ($DA_GUARD_BINARY / PATH), is exit 2 with nothing
+written but the output directory itself.
 """
 import argparse
 import hashlib
+import io
 import math
 import os
 import random
@@ -35,6 +42,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+import _lib_parse_tree  # noqa: E402
+import _lib_write_check  # noqa: E402  (ADR-036 §2)
 
 # ⛔ The predicate that decides whether a key can live under `defaults:` at all,
 # imported from the module that owns it rather than respelled here (#1412). A
@@ -95,11 +104,16 @@ def _seed_rng(seed: int) -> random.Random:
     return random.Random(seed)
 
 
-def _gen_threshold_value(rng: random.Random) -> str:
-    """Generate a random threshold value in various formats."""
+def _gen_threshold_value(rng: random.Random) -> int | str:
+    """Generate a random threshold value in various formats.
+
+    A plain threshold is an ``int``: `_dump_yaml` writes it unquoted, which
+    yaml.v3 reads as ``!!int`` — so that is the value this fixture means
+    (ADR-036 §2 compares the text read back with it; a ``str`` here would be
+    a ``!!str`` that the written text never was)."""
     fmt = rng.choice(["scalar", "scalar", "scalar", "severity", "disable"])
     if fmt == "scalar":
-        return str(rng.randint(50, 100000))
+        return rng.randint(50, 100000)
     elif fmt == "severity":
         val = rng.randint(100, 50000)
         sev = rng.choice(["warning", "critical"])
@@ -323,20 +337,19 @@ def generate_flat(
     with output_write(output_dir, flag=flag, action="create directory"):
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    files: list[tuple[str, dict]] = []
     if with_defaults:
-        _write_yaml(
-            output_dir / "_defaults.yaml",
-            _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
-            flag=flag,
-        )
+        files.append(("_defaults.yaml",
+                      _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
 
     for i in range(count):
         db_type = DB_TYPES[i % len(DB_TYPES)]
         domain = DOMAINS[i % len(DOMAINS)]
         tid = f"{domain}-{db_type}-{i:04d}"
         tenant_config = {"tenants": {tid: _gen_tenant_config(rng, tid, db_type)}}
-        _write_yaml(output_dir / f"{tid}.yaml", tenant_config, flag=flag)
+        files.append((f"{tid}.yaml", tenant_config))
 
+    _confirm_and_write(output_dir, files, flag=flag)
     print(f"✅ Generated {count} tenant files (flat) in {output_dir}")
 
 
@@ -369,14 +382,12 @@ def generate_hierarchical(
     remainder = count - tenants_per_slot * len(slots)
 
     idx = 0
+    files: list[tuple[str, dict]] = []
     domain_db_types: dict[str, list[str]] = {}
     for slot_i, (domain, region, env) in enumerate(slots):
         if idx >= count:
             break
         n = tenants_per_slot + (1 if slot_i < remainder else 0)
-        slot_dir = output_dir / domain / region / env
-        with output_write(slot_dir, flag=flag, action="create directory"):
-            slot_dir.mkdir(parents=True, exist_ok=True)
 
         for j in range(n):
             if idx >= count:
@@ -388,24 +399,17 @@ def generate_hierarchical(
             tenant_config["tenants"][tid]["_metadata"]["domain"] = domain
             tenant_config["tenants"][tid]["_metadata"]["region"] = region
             tenant_config["tenants"][tid]["_metadata"]["environment"] = env
-            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config, flag=flag)
+            files.append((f"{domain}/{region}/{env}/{tid}.yaml", tenant_config))
             domain_db_types.setdefault(domain, []).append(db_type)
             idx += 1
 
     # Inject _defaults.yaml at domain and env levels
     if with_defaults:
-        _write_yaml(
-            output_dir / "_defaults.yaml",
-            _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
-            flag=flag,
-        )
-        for domain in DOMAINS:
-            domain_dir = output_dir / domain
-            if domain_dir.exists():
-                db_types_in_domain = list(set(domain_db_types.get(domain, DB_TYPES[:2])))
-                _write_yaml(domain_dir / "_defaults.yaml",
-                            _gen_defaults_yaml(rng, db_types_in_domain), flag=flag)
+        files.append(("_defaults.yaml",
+                      _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
+        files.extend(_domain_defaults(rng, domain_db_types))
 
+    _confirm_and_write(output_dir, files, flag=flag)
     print(f"✅ Generated {idx} tenant files (hierarchical) in {output_dir}")
     print(f"   Structure: {len(DOMAINS)} domains × {len(REGIONS)} regions × {len(ENVIRONMENTS)} envs")
 
@@ -521,14 +525,12 @@ def generate_synthetic_v2(
     depths = _power_law_depths(count, alpha=2.0, max_depth=3, rng=rng)
 
     idx = 0
+    files: list[tuple[str, dict]] = []
     domain_db_types: dict[str, list[str]] = {}
     for slot_i, (domain, region, env) in enumerate(slots):
         if idx >= count:
             break
         n = tenants_per_slot + (1 if slot_i < remainder else 0)
-        slot_dir = output_dir / domain / region / env
-        with output_write(slot_dir, flag=flag, action="create directory"):
-            slot_dir.mkdir(parents=True, exist_ok=True)
 
         for j in range(n):
             if idx >= count:
@@ -561,30 +563,90 @@ def generate_synthetic_v2(
                     }
                     cursor = cursor[nested_key]
 
-            _write_yaml(slot_dir / f"{tid}.yaml", tenant_config, flag=flag)
+            files.append((f"{domain}/{region}/{env}/{tid}.yaml", tenant_config))
             domain_db_types.setdefault(domain, []).append(db_type)
             idx += 1
 
     if with_defaults:
-        _write_yaml(
-            output_dir / "_defaults.yaml",
-            _gen_defaults_yaml(rng, extra_defaults=extra_defaults),
-            flag=flag,
-        )
-        for domain in DOMAINS:
-            domain_dir = output_dir / domain
-            if domain_dir.exists():
-                db_types_in_domain = list(set(domain_db_types.get(domain, DB_TYPES[:2])))
-                _write_yaml(domain_dir / "_defaults.yaml",
-                            _gen_defaults_yaml(rng, db_types_in_domain), flag=flag)
+        files.append(("_defaults.yaml",
+                      _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
+        files.extend(_domain_defaults(rng, domain_db_types))
 
+    _confirm_and_write(output_dir, files, flag=flag)
     print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
     print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3)")
     print(f"   Distribution: sizes p50={sorted(sizes)[len(sizes)//2]} p99={sorted(sizes)[int(len(sizes)*0.99)] if len(sizes)>1 else sizes[0]}; depths p50={sorted(depths)[len(depths)//2]} p99={sorted(depths)[int(len(depths)*0.99)] if len(depths)>1 else depths[0]}")
 
 
-def _write_yaml(path: Path, data: dict, *, flag: str | None = OUTPUT_FLAG) -> None:
-    """Write a dict as YAML. Avoids importing yaml to keep deps minimal.
+def _domain_defaults(rng: random.Random,
+                     domain_db_types: dict[str, list[str]]) -> list[tuple[str, dict]]:
+    """The `<domain>/_defaults.yaml` of every domain that holds a tenant, in
+    `DOMAINS` order (the order the RNG is drawn in).
+
+    A domain's db types are taken in `DB_TYPES` order — the root
+    `_defaults.yaml`'s order. They were `list(set(...))`, whose order follows
+    the per-process string hash: the same seed gave different keys and values
+    from one run to the next."""
+    out = []
+    for domain in DOMAINS:
+        if domain in domain_db_types:
+            present = set(domain_db_types[domain])
+            db_types_in_domain = [d for d in DB_TYPES if d in present]
+            out.append((f"{domain}/_defaults.yaml",
+                        _gen_defaults_yaml(rng, db_types_in_domain)))
+    return out
+
+
+def _yaml_text(data: dict) -> str:
+    """The text `_dump_yaml` writes for *data*."""
+    buf = io.StringIO()
+    _dump_yaml(buf, data, indent=0)
+    return buf.getvalue()
+
+
+def _expected(obj: Any) -> Any:
+    """What the text of *obj* is meant to read back as (ADR-036 §2): the
+    `_lib_write_check.from_python` nodes, except a ``float``, which
+    `_dump_yaml` writes as ``str(v)`` (not PyYAML's spelling) and means as a
+    number — `_lib_write_check.AnyNumber` of that text."""
+    if isinstance(obj, dict):
+        return {k: _expected(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expected(v) for v in obj]
+    if isinstance(obj, float):
+        return _lib_write_check.AnyNumber(str(obj))
+    return obj
+
+
+def _confirm_and_write(output_dir: Path, files: list[tuple[str, dict]], *,
+                       flag: str | None = OUTPUT_FLAG) -> None:
+    """Write every ``(root-relative path, data)`` of one run under
+    *output_dir* — after ALL of them are confirmed (ADR-036 §2): each text,
+    read back by `da-guard parse-tree` at the path it is written to, must hold
+    exactly *data*, at a path a reader reads. The whole tree is staged and
+    read in one tree-mode run (`_lib_write_check.confirm_tree`); confirmed
+    files are then moved into *output_dir*. A refusal, or no usable da-guard,
+    ends the run with rc 2 (EXIT_CALLER_ERROR) and no file written.
+    """
+    items = [(rel, _yaml_text(data), _lib_write_check.from_python(_expected(data)))
+             for rel, data in files]
+    try:
+        with _lib_write_check.confirm_tree(output_dir, items) as staged:
+            for rel in staged.rels:
+                _place(staged, rel, output_dir / rel, flag=flag)
+    except _lib_write_check.WriteRefused as exc:
+        print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    except _lib_parse_tree.ParseTreeError as exc:
+        print(f"ERROR: cannot confirm the generated conf.d files through "
+              f"`da-guard parse-tree` (ADR-036 §2): {exc}; nothing was written",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+
+def _place(staged: "_lib_write_check.StagedTree", rel: str, path: Path, *,
+           flag: str | None = OUTPUT_FLAG) -> None:
+    """Move one confirmed, staged YAML file to *path*.
 
     #1789: every caller's *path* is inside the tree the output flag names, so
     an unusable one is that flag's value — hence the wrapper naming it rather
@@ -603,12 +665,14 @@ def _write_yaml(path: Path, data: dict, *, flag: str | None = OUTPUT_FLAG) -> No
     with output_write(path.parent, flag=flag, action="create directory"):
         path.parent.mkdir(parents=True, exist_ok=True)
     with output_write(path, flag=flag):
-        with open(path, "w", encoding="utf-8", newline="\n") as f:
-            _dump_yaml(f, data, indent=0)
+        staged.place(rel, path)
 
 
 def _dump_yaml(f, obj, indent: int = 0) -> None:  # noqa: C901 — simple recursive writer
-    """Minimal YAML serializer (avoids PyYAML dependency for fixture generation)."""
+    """Minimal YAML serializer (avoids PyYAML dependency for fixture generation).
+
+    It produces the text only; what that text reads as is confirmed by
+    `da-guard parse-tree` before it is written (`_confirm_and_write`)."""
     prefix = "  " * indent
     if isinstance(obj, dict):
         for k, v in obj.items():

@@ -40,6 +40,7 @@ import patch_config as pc
 from _lib_io import (DuplicateKeyError, load_yaml_file_for_rewrite,
                      strict_load_for_rewrite)
 from _lib_yaml_keys import RawPlain, dump_for_rewrite, load_for_rewrite
+from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
 
 REPO = Path(__file__).resolve().parents[2]
 APP = REPO / "components" / "threshold-exporter" / "app"
@@ -160,7 +161,7 @@ def test_go_present_when_required():
 @pytest.fixture(scope="module")
 def da_guard(tmp_path_factory):
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
-    env = dict(os.environ)
+    env = go_build_env()
     env.setdefault("GOTOOLCHAIN", "auto")
     subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
                     "./cmd/da-guard"], cwd=APP, env=env, check=True,

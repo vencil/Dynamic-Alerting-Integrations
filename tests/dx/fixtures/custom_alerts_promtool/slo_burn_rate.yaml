@@ -1,7 +1,7 @@
 # promtool unit test — Custom Alerts (ADR-031), SLO_BURN_RATE recipe.
 # Driven by tests/dx/test_custom_alerts_promtool.py (compiles example → temp pack).
 #
-# The shop.yaml example declares objective "99.9" (min_events default 10). The
+# The shop-a.yaml example declares objective "99.9" (min_events default 10). The
 # exporter resolves the per-severity thresholds at resolve time and feeds them
 # through the EXISTING user_threshold{severity} channel — here we feed the
 # resolved values directly: 30d period → fast thr = 14.4×(1−0.999) = 0.0144

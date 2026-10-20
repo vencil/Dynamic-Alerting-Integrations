@@ -35,6 +35,7 @@ if _DA_TOOLS_DIR not in sys.path:
 
 # ── Local imports (factories helper) ──────────────────────────────────
 from factories import populate_routing_dir  # noqa: E402
+from _da_guard_build import go_build_env  # noqa: E402  (#3174: 與出貨同形，CGO_ENABLED=0)
 
 # ── Runtime encoding gate (#2005): see tests/_encoding_gate.py ─────────
 pytest_plugins = ["_encoding_gate"]
@@ -210,7 +211,7 @@ def da_guard_binary(tmp_path_factory):
         [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
         cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600)
+        check=False, timeout=600, env=go_build_env())
     if proc.returncode != 0:
         pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -486,7 +487,7 @@ def _provide_session_da_guard() -> None:
         [go, "build", "-buildvcs=false", "-o", out, "./cmd/da-guard"],
         cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600)
+        check=False, timeout=600, env=go_build_env())
     if proc.returncode != 0:
         shutil.rmtree(d, ignore_errors=True)
         return  # da_guard_binary fails with go's message where it is asked for

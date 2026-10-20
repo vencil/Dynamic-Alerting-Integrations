@@ -1,7 +1,7 @@
 """#2519：`_routing_enforced` 的 receiver 含 `{{tenant}}` 時，per-tenant enforced route
 對產生器認得的**每一個**租戶展開，不只帶路由設定的那些。
 
-「認得的租戶」是 `load_tenant_configs` 的 `dedup_configs` 鍵——inhibit rule 用的同一個集合：
+「認得的租戶」是 `load_tenant_tree` 的 `dedup_configs` 鍵——inhibit rule 用的同一個集合：
 只有閾值、只有 `_silent_mode`、`_routing: disable` 的租戶都在裡面；id 不合法而被丟棄的
 （`skipped_entry_warning`，產生器 CLI 會整棵樹拒收）不在。Silent mode 不由產生器處理：
 它是 base config 的 inhibit rule（`tenant=~".+"`、`equal: [tenant]`），與 route 無關，

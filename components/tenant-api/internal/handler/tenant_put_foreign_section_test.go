@@ -63,13 +63,15 @@ func foreignFile(t *testing.T, f *orgEnfFixture) string {
 // fixture has no origin, so the push fails and the branch is kept.
 func foreignPRBranchFile(t *testing.T, f *orgEnfFixture) string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", f.configDir, "for-each-ref", "--format=%(refname:short)", "refs/heads").Output()
+	// The pushed branch is read from origin's tracking ref: the writer
+	// drops the local one after the push (#641, #1724).
+	out, err := exec.Command("git", "-C", f.configDir, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []string
 	for _, br := range strings.Fields(string(out)) {
-		if br == "main" {
+		if br == "refs/heads/main" {
 			continue
 		}
 		c, err := exec.Command("git", "-C", f.configDir, "show", br+":"+orgEnfTenantIn+".yaml").Output()

@@ -38,6 +38,10 @@ Checks:
   9. Tenant uniqueness — one tenant id declared by two files makes the exporter
                     reject the ENTIRE config dir (`DuplicateTenantError`), so
                     this one FAIL is about every tenant in the tree (#1577)
+  9b. Tenant file name — a tenant file's name (stem) is the one tenant id it
+                    declares; tenant-api takes the id from the name, the
+                    exporter from `tenants:`, so a mismatch (or a file that
+                    declares several tenants) is a FAIL (#3157)
   10. Root defaults — `defaults:` in the root _defaults.yaml, as the
                     exporter decodes it: a value that is not a number
                     (`"70"`, `disable`, a mapping) makes the exporter drop
@@ -125,6 +129,7 @@ from _lib_exitcodes import (  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
+    config_stem,
     duplicate_declarations,
     tenant_declarations,
     is_dir_symlink,
@@ -790,7 +795,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
 # ============================================================
 def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     """The route generator's key check: tenant config keys against the
-    declared defaults and reserved keys (`load_tenant_configs`).
+    declared defaults and reserved keys (`load_tenant_tree`).
 
     ⛔ Not a JSON Schema check — that is `json_schema` (#2695). The row keeps
     its historical name `schema` because the name is a contract (`--json`
@@ -798,7 +803,7 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     checked is in its PASS line instead.
 
     With strict=True, domain-policy (ADR-007) violations are escalated to
-    blocking ERROR lines by load_tenant_configs and reported as FAIL here —
+    blocking ERROR lines by load_tenant_tree and reported as FAIL here —
     matching `generate_alertmanager_routes.py --validate --strict` (CI).
     """
     # Import generate_alertmanager_routes in-process
@@ -807,8 +812,8 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(
-        config_dir, strict_policies=strict)
+    schema_warnings = gen.load_tenant_tree(
+        config_dir, strict_policies=strict).schema_warnings
 
     # #3116: a domain policy that cannot be used is a field-type error now
     # (refused in every mode), not a --strict ERROR line; it is still a
@@ -872,7 +877,10 @@ def check_routes(
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
+    tree = gen.load_tenant_tree(config_dir)
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
 
     # Load allowed_domains from policy (#1556: unusable value is a caller
     # error, not "no policy" — see check_policy)
@@ -1012,7 +1020,10 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
 
-    routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
+    tree = gen.load_tenant_tree(config_dir)
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
 
     import io
     old_stderr = sys.stderr
@@ -1825,6 +1836,106 @@ def check_tenant_uniqueness(config_dir: str) -> dict[str, object]:
 
     return _make_result("tenant_uniqueness", PASS, [
         f"{len(declared)} tenant(s), each declared in exactly one file"])
+
+
+# ============================================================
+# Check 9b: Tenant file name = declared tenant id (#3157)
+# ============================================================
+def check_tenant_file_name(config_dir: str) -> dict[str, object]:
+    """A tenant file's name (stem) must be the one tenant id it declares.
+
+    Two planes name a tenant from two different places: tenant-api takes the
+    id from the file NAME (``TenantIDFromFile``: `es.yaml` is tenant `es`),
+    the exporter from the keys under ``tenants:``. When they differ the same
+    tenant has one id on the API (RBAC grants, audit records, portal links)
+    and another on ``/metrics``, and tenant-api treats the tenant as
+    git-managed (``id_mismatch``), refusing every write to it. #3157 made
+    "stem = declared id" a platform invariant: such a file is a FAIL here.
+
+    A file that declares SEVERAL tenants breaks the invariant for all but at
+    most one of them, and tenant-api git-manages every tenant in it
+    (``tenant_count``, the same ``TenantFileManagement`` verdict), so it is a
+    FAIL too, worded as "split it" rather than "rename it": no name fits.
+
+    Selection is ``tenant_declarations``' — the scan ``tenant_uniqueness``
+    runs, which mirrors the exporter's walker: recursive (a file in a
+    sub-directory is checked against its own base name), ``_``-prefixed and
+    ``.``-prefixed names skipped, both extension spellings in any case. A
+    file that declares no tenant (no or an empty ``tenants:``) has nothing
+    to compare and is not listed. The comparison is case-sensitive, as the
+    stem is: ``Upper.YAML`` carries tenant ``Upper``, not ``upper``.
+
+    ⚠️ A declared id is the key's source text (``tenant_declarations``'
+    notion), not the decoded value tenant-api compares; the two differ only
+    for a tagged key such as ``? !!binary ...``, which tenant-api already
+    git-manages as ``yaml_indirection``.
+    """
+    declared, unreadable = tenant_declarations(config_dir)
+
+    by_file: dict[str, list[str]] = {}
+    for tenant_id, labels in declared.items():
+        for label in labels:
+            by_file.setdefault(label, []).append(str(tenant_id))
+
+    # tenant-api enumerates the conf.d ROOT only (`ListTenantFiles`), so its
+    # consequence is named for a root file; a file in a sub-directory is held
+    # to the same invariant (the exporter reads it) with that said instead.
+    nested_note = ("tenant-api reads only the conf.d root, but the invariant "
+                   "holds at every level: the file keeps its tenant's id "
+                   "wherever it is moved.")
+
+    details: list[str] = []
+    for label in sorted(by_file):
+        ids = sorted(by_file[label])
+        name = label.rsplit("/", 1)[-1]
+        stem = config_stem(name)
+        parent = label[: len(label) - len(name)]
+        if len(ids) > 1:
+            shown = ", ".join(f'"{printable_name(i)}"' for i in ids)
+            files = ", ".join(
+                f"{parent}{printable_name(i)}.yaml" for i in ids)
+            why = (nested_note if parent else
+                   "tenant-api treats every tenant of this file as "
+                   "git-managed (tenant_count) and refuses writes to them.")
+            details.append(
+                f"{printable_name(label)} declares {len(ids)} tenants "
+                f"({shown}): a tenant file declares exactly one tenant, the "
+                f"one its file name names — split it into one file per "
+                f"tenant ({files}). {why}")
+        elif ids[0] != stem:
+            why = (nested_note if parent else
+                   f"tenant-api names this tenant \"{printable_name(stem)}\" "
+                   f"(from the file name) and the exporter "
+                   f"\"{printable_name(ids[0])}\" (from `tenants:`), so RBAC, "
+                   f"audit records and portal links do not match its "
+                   f"metrics, and tenant-api refuses writes to it "
+                   f"(id_mismatch).")
+            details.append(
+                f"{printable_name(label)} declares tenant "
+                f"\"{printable_name(ids[0])}\", but its file name says "
+                f"\"{printable_name(stem)}\" — rename the file to "
+                f"{parent}{printable_name(ids[0])}.yaml. {why}")
+
+    if details:
+        if unreadable:
+            details.append(
+                f"{len(unreadable)} file(s) could not be read and were not "
+                f"examined, so there may be more: {', '.join(sorted(unreadable))}")
+        return _make_result("tenant_file_name", FAIL, details)
+
+    if unreadable:
+        return _make_result("tenant_file_name", WARN, [
+            f"every one of the {len(by_file)} tenant file(s) that could be "
+            f"read is named after the tenant it declares, but "
+            f"{len(unreadable)} file(s) could not be read and were not "
+            f"examined: {', '.join(sorted(unreadable))} — this is a limit on "
+            f"what was checked, not a clean result"],
+            hint="Fix the unreadable file(s) named above (yaml_syntax says why) "
+                 "and re-run.")
+
+    return _make_result("tenant_file_name", PASS, [
+        f"{len(by_file)} tenant file(s), each named after the one tenant it "
+        f"declares"])
 
 
 # ============================================================
@@ -2767,6 +2878,15 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "twice.",
         "docs/scenarios/multi-domain-conf-layout.md",
     ),
+    # #3157: each row already names the file, the declared id and the new name.
+    "tenant_file_name": (
+        "Rename each listed file to the tenant id it declares (`<id>.yaml`, in "
+        "the same directory, keeping its history), and split a file that "
+        "declares several tenants into one file per tenant. A tenant file's "
+        "name is its tenant id on tenant-api; the exporter takes the id from "
+        "`tenants:`.",
+        "docs/cli-reference.md#validate-config",
+    ),
     # #2291 / #1414: `defaults:` is for numeric thresholds; routing defaults
     # are a sibling block. Each row above already says which key and what to
     # do with it.
@@ -3435,6 +3555,11 @@ def _main() -> None:
     # finds makes the exporter refuse the whole tree, so there is no flag
     # under which a customer would want this one skipped.
     results.append(_run_check("tenant_uniqueness", check_tenant_uniqueness,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 9b. Tenant file name = declared tenant id (#3157) — unconditional: a
+    # platform invariant; tenant-api and the exporter name the tenant apart.
+    results.append(_run_check("tenant_file_name", check_tenant_file_name,
                               args.config_dir, _config_dir=args.config_dir))
 
     # 10. Root `defaults:` block (#2291) — unconditional, same reason: a

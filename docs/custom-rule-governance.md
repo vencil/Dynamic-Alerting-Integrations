@@ -445,7 +445,7 @@ value-form 比對有個共同盲點：**exporter 死掉 → series 消失 → �
 
 exporter 活著、但值是數小時前的 stale 值時，`==` 會對舊代碼觸發。用 recipe 的 `for:` 要求條件**持續**一段時間，過濾瞬時／陳舊讀數。
 
-可執行的安全配對範例見 `rule-packs/recipes/examples/conf.d/shop.yaml`（`semisync_errno_1236` 案例 + `process_status_code` 的 Shape-X 配對）。
+可執行的安全配對範例見 `rule-packs/recipes/examples/conf.d/shop-a.yaml`（`semisync_errno_1236` 案例 + `process_status_code` 的 Shape-X 配對）。
 
 ---
 

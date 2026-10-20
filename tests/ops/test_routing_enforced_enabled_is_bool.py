@@ -23,7 +23,7 @@ import sys
 import pytest
 
 import validate_config as vc
-from generate_alertmanager_routes import load_tenant_configs
+from generate_alertmanager_routes import load_tenant_tree
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -62,7 +62,8 @@ _BOOL = [("true", True), ("false", False), ("True", True), ("FALSE", False)]
 
 @pytest.mark.parametrize("enabled", _NOT_BOOL)
 def test_a_non_boolean_enabled_does_not_enable_noc(enabled, tmp_path):
-    _r, _d, warnings, enforced, _m = load_tenant_configs(_tree(tmp_path, enabled))
+    tree = load_tenant_tree(_tree(tmp_path, enabled))
+    warnings, enforced = tree.schema_warnings, tree.enforced_routing
     assert enforced is None
     hits = [w for w in warnings if "_routing_enforced" in w]
     assert len(hits) == 1, warnings
@@ -92,7 +93,8 @@ def test_render_refuses_the_tree_and_writes_nothing(enabled, tmp_path):
 @pytest.mark.parametrize("enabled,on", _BOOL)
 def test_a_boolean_enabled_is_unchanged(enabled, on, tmp_path):
     d = _tree(tmp_path, enabled)
-    _r, _d, warnings, enforced, _m = load_tenant_configs(d)
+    tree = load_tenant_tree(d)
+    warnings, enforced = tree.schema_warnings, tree.enforced_routing
     assert (enforced is not None) is on
     assert not [w for w in warnings if "_routing_enforced" in w]
     assert _gen(d, "--validate").returncode == 0

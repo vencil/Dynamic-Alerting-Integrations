@@ -82,6 +82,16 @@ const (
 // reads, and a merge key, an alias or a tagged key there can declare an id
 // its text does not show.
 func TenantFileManagement(data []byte, stem string) string {
+	parsed, err := cfg.ParseTenantFile(data)
+	return TenantFileManagementParsed(data, stem, parsed, err)
+}
+
+// TenantFileManagementParsed is TenantFileManagement for a caller that has
+// already decoded data with cfg.ParseTenantFile: parsed and parseErr MUST be
+// that call's result on these very bytes. It spares the GET /tenants listing
+// (#3157), which decodes every file anyway, a second typed decode per file;
+// the verdict is TenantFileManagement's, not a copy of it.
+func TenantFileManagementParsed(data []byte, stem string, parsed cfg.ThresholdConfig, parseErr error) string {
 	ids, reason := walkDeclaredIDs(data)
 	if reason != "" {
 		return reason
@@ -93,8 +103,8 @@ func TenantFileManagement(data []byte, stem string) string {
 	// covers this adds nothing; it stays for a shape that table misses. A
 	// file the exporter does not decode is served by no plane
 	// (config_error); the walk is what decides for it.
-	if c, err := cfg.ParseTenantFile(data); err == nil {
-		for id := range c.Tenants {
+	if parseErr == nil {
+		for id := range parsed.Tenants {
 			ids = append(ids, id)
 		}
 	}

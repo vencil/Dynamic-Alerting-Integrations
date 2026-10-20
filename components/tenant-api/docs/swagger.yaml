@@ -1034,6 +1034,23 @@ definitions:
           additionalProperties: {}
           type: object
         type: array
+      declared_elsewhere:
+        description: |-
+          DeclaredElsewhere is true when, in the tree this server reads now, a
+          conf.d file other than the tenant's own declares the tenant id (#3172)
+          — the condition the #2078 write guard (409 TENANT_DECLARED_ELSEWHERE)
+          checks, judged as /diff judges it, on /diff's walk. It is not a promise
+          of a write's answer: a write can be refused earlier for another reason,
+          and a PR-mode write judges the latest base branch. Two cases: a
+          duplicate (the own file declares the id too), which threshold-exporter
+          refuses — the whole tree stays on its last good load; or declared only
+          elsewhere (the own file declares nothing for the id), which the
+          exporter loads from the other file. One bit only: it names no file and
+          no other tenant — /effective's 409 already gives a caller with read
+          permission the duplicate case. Absent when it could not be judged (the
+          conf.d walk failed or timed out; see the server log) — absent is not
+          false.
+        type: boolean
       git_managed_reason:
         description: |-
           GitManagedReason says why the tenant is git-managed (managed_by: git):
@@ -1240,6 +1257,21 @@ definitions:
         type: string
       environment:
         type: string
+      git_managed_reason:
+        description: |-
+          GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:
+          not_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,
+          tenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's
+          other fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:
+          it names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id
+          (always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.
+        enum:
+        - not_tenant_document
+        - several_documents
+        - yaml_indirection
+        - tenant_count
+        - id_mismatch
+        type: string
       groups:
         items:
           type: string
@@ -1251,14 +1283,28 @@ definitions:
           not the tenant's state (see config_derived); omitted when config_derived
           cannot be derived.
         type: string
+      managed_by:
+        description: |-
+          ManagedBy says who changes the tenant (#3064, #3157): the verdict GET /api/v1/tenants/{id} gives for the same file
+          (confd.TenantFileManagement on the file the row's id names), with the same values — "api" for an API-shaped file,
+          "git" for any other (git_managed_reason says why; every write to it is refused with 409 TENANT_GIT_MANAGED).
+          Absent on a row whose file cannot be read at all (config_error unreadable or not_regular_file), for which GET
+          answers no tenant either.
+        enum:
+        - api
+        - git
+        type: string
       metadata_incomplete:
         description: 'Set when the row''s metadata is unknown: the conf.d root platform
           files could not be read (the metadata fields then carry only the tenant
-          file''s own `_metadata` values), or the tenant''s `_metadata` does not decode
-          (the metadata fields are then empty, as threshold-exporter reads them).
-          The row''s visibility is that of a degraded row (only callers whose matching
-          RBAC rule does not restrict environments or domains see it); the search
-          metadata filters do not match it. Absent otherwise.'
+          file''s own `_metadata` values), the tenant''s `_metadata` does not decode
+          (the metadata fields are then empty, as threshold-exporter reads them),
+          or the file is git-managed and does not declare the row''s id (git_managed_reason
+          id_mismatch, or any other git-managed file whose decoded tenants leave the
+          row''s id out; the metadata fields are then empty). The row''s visibility
+          is that of a degraded row (only callers whose matching RBAC rule does not
+          restrict environments or domains see it); the search metadata filters do
+          not match it. Absent otherwise.'
         type: boolean
       owner:
         type: string
@@ -2008,11 +2054,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before a synchronous batch finished: unlike the cases above
-            it may already be committed (a git command that hits its own deadline
-            may already have moved the ref), so refresh to see whether it was before
-            retrying'
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            batch branch to the config repository failed, a timeout included: the
+            whole batch fails, no PR/MR opened, Retry-After (the branch may be left
+            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the
+            request was cancelled or reached its deadline before a synchronous batch
+            finished: unlike the cases above it may already be committed (a git command
+            that hits its own deadline may already have moved the ref), so refresh
+            to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2076,6 +2125,12 @@ paths:
         When the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own `_metadata`
         values and the row is marked `metadata_incomplete`; its visibility is that of a degraded row.
         A row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
+        Each row carries `managed_by` (api | git) and, for git, `git_managed_reason` — the verdict and codes
+        GET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file
+        that declares one tenant under another name is listed under its name with git_managed_reason id_mismatch,
+        marked `metadata_incomplete` and with no other field: the declared id is not shown. Any git-managed row
+        whose file does not declare the row's id is marked `metadata_incomplete` the same way; its visibility is
+        that of a degraded row.
       produces:
       - application/json
       responses:
@@ -2119,6 +2174,13 @@ paths:
         source_hash empty (masked: true);
         or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
         (inside the tenant's own section: anywhere else makes the tenant git-managed).
+        declared_elsewhere (#3172), on every 200 shape: true when, in the tree this server reads now, a conf.d file
+        other than the tenant's own declares the tenant id — the condition of 409 TENANT_DECLARED_ELSEWHERE, judged
+        as /diff judges it. Not a promise of a write's answer: a write can be refused earlier for another reason, and
+        a PR-mode write judges the latest base branch. When the tenant's own file declares the id too (a duplicate),
+        threshold-exporter keeps the whole tree on its last good load; when only the other file declares it, the
+        exporter loads it from there. It names no file and no other tenant. Absent (not false) when the conf.d walk
+        behind it could not run.
       parameters:
       - description: Tenant ID
         in: path
@@ -2306,10 +2368,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before the write finished: unlike the cases above it may
-            already be committed (a git command that hits its own deadline may already
-            have moved the ref), so refresh to see whether it was before retrying'
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            feature branch to the config repository failed, a timeout included: no
+            PR/MR opened, Retry-After (the branch may be left on origin without a
+            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
+            or reached its deadline before the write finished: unlike the cases above
+            it may already be committed (a git command that hits its own deadline
+            may already have moved the ref), so refresh to see whether it was before
+            retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2962,11 +3028,15 @@ paths:
             container cannot judge (reason unreachable, bad_response, amtool_missing,
             generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment
             policy file is unusable (reason policy_unusable, or policy_unreadable
-            for tenant-api''s own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR
-            (#1535) when the request was cancelled or reached its deadline before
-            a synchronous batch finished: unlike the cases above it may already be
-            committed (a git command that hits its own deadline may already have moved
-            the ref), so refresh to see whether it was before retrying'
+            for tenant-api''s own copy); Retry-After; nothing written. In PR/MR write-back
+            mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the
+            config repository failed, a timeout included: the whole batch fails, no
+            PR/MR opened, Retry-After (the branch may be left on origin without a
+            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
+            or reached its deadline before a synchronous batch finished: unlike the
+            cases above it may already be committed (a git command that hits its own
+            deadline may already have moved the ref), so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations

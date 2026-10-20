@@ -18,22 +18,25 @@ import (
 )
 
 // degradedCases gives each conf.d state the tenant id the fixture uses for it,
-// whether it is a tenant file at all (listed), and the config_error the list
-// must report for it ("" = healthy row).
+// whether it is a tenant file at all (listed), the config_error the list
+// must report for it ("" = healthy row), and its managed_by /
+// git_managed_reason (#3157; none for a file that cannot be read at all).
 var degradedCases = []struct {
-	state  testutil.ConfdFileState
-	id     string
-	listed bool
-	reason string
+	state     testutil.ConfdFileState
+	id        string
+	listed    bool
+	reason    string
+	managedBy string
+	gitReason string
 }{
-	{testutil.ConfdGood, "t-good", true, ""},
-	{testutil.ConfdMalformedYAML, "t-malformed", true, "malformed_yaml"},
-	{testutil.ConfdInvalidConfig, "t-invalid", true, "invalid_config"},
-	{testutil.ConfdEmptyFile, "t-empty", true, ""},
-	{testutil.ConfdDanglingSymlink, "t-dangling", true, "unreadable"},
-	{testutil.ConfdSymlinkToDir, "t-symdir", true, "not_regular_file"},
-	{testutil.ConfdRealDir, "t-realdir", false, ""},
-	{testutil.ConfdUnreadable, "t-unreadable", true, "unreadable"},
+	{testutil.ConfdGood, "t-good", true, "", "api", ""},
+	{testutil.ConfdMalformedYAML, "t-malformed", true, "malformed_yaml", "git", "not_tenant_document"},
+	{testutil.ConfdInvalidConfig, "t-invalid", true, "invalid_config", "git", "not_tenant_document"},
+	{testutil.ConfdEmptyFile, "t-empty", true, "", "api", ""},
+	{testutil.ConfdDanglingSymlink, "t-dangling", true, "unreadable", "", ""},
+	{testutil.ConfdSymlinkToDir, "t-symdir", true, "not_regular_file", "", ""},
+	{testutil.ConfdRealDir, "t-realdir", false, "", "", ""},
+	{testutil.ConfdUnreadable, "t-unreadable", true, "unreadable", "", ""},
 }
 
 // buildDegradedDir writes every state into one conf.d and returns the rows
@@ -47,7 +50,7 @@ func buildDegradedDir(t *testing.T) (string, []TenantSummary) {
 			continue // unreadable-permissions under euid 0
 		}
 		if c.listed {
-			want = append(want, TenantSummary{ID: c.id, ConfigError: c.reason})
+			want = append(want, TenantSummary{ID: c.id, ConfigError: c.reason, ManagedBy: c.managedBy, GitManagedReason: c.gitReason})
 		}
 	}
 	// ReadDir order is filename order.
@@ -71,8 +74,9 @@ func TestLoadAllTenants_DegradedRows(t *testing.T) {
 	}
 }
 
-// A degraded row carries NOTHING but ID + ConfigError — in particular no
-// half-read metadata that a scope filter could mistake for a label.
+// A degraded row carries NOTHING but ID + ConfigError (and, #3157, the fixed
+// management codes GET gives the same file) — in particular no half-read
+// metadata that a scope filter could mistake for a label.
 func TestLoadAllTenants_DegradedRowHasOnlyIDAndReason(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -82,7 +86,7 @@ func TestLoadAllTenants_DegradedRowHasOnlyIDAndReason(t *testing.T) {
 		t.Fatalf("loadAllTenants: %v", err)
 	}
 	b, _ := json.Marshal(got)
-	if string(b) != `[{"id":"acme","config_error":"malformed_yaml"}]` {
+	if string(b) != `[{"id":"acme","config_error":"malformed_yaml","managed_by":"git","git_managed_reason":"not_tenant_document"}]` {
 		t.Errorf("JSON = %s", b)
 	}
 }
@@ -97,7 +101,7 @@ func TestLoadAllTenants_HealthyRowUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAllTenants: %v", err)
 	}
-	want := []TenantSummary{{ID: "acme", Environment: "production", Tier: "tier1", Domain: "db", DBType: "mariadb", Owner: "alice"}}
+	want := []TenantSummary{{ID: "acme", Environment: "production", Tier: "tier1", Domain: "db", DBType: "mariadb", Owner: "alice", ManagedBy: managedByAPI}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -291,7 +295,8 @@ func TestLoadAllTenants_DuplicateKeysAreInvalidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAllTenants: %v", err)
 	}
-	want := []TenantSummary{{ID: "acme", ConfigError: configErrorInvalidConfig}}
+	// #3157: `tenants` twice is git-managed (not_tenant_document), as on GET.
+	want := []TenantSummary{{ID: "acme", ConfigError: configErrorInvalidConfig, ManagedBy: managedByGit, GitManagedReason: "not_tenant_document"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}

@@ -1181,8 +1181,10 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
 # scans the directory itself; the walk is da-guard's, and an entry the
 # exporter cannot read fails the run (rc 2) instead of being warned about
 # (tests/shared/test_served_values_tenant_metadata_matrix.py).
+# `operator_generate` left it in #2906 for the same reason: its tenant set is
+# parse-tree's, and an entry parse-tree cannot read makes that set unknown —
+# rc 2, both entries named (`test_operator_readers_refuse_unusable_entries`).
 _WARNING_CONTRACT = {
-    "ops/operator_generate.py": ("stderr", "CRDs"),
     "ops/deprecate_rule.py": ("stderr", "Processing:"),
     "ops/offboard_tenant.py": ("stdout", "Pre-check"),
     "dx/describe_tenant.py": ("stderr", "alpha"),
@@ -1317,35 +1319,48 @@ def test_defaults_carrier_is_reported_once_not_twice(
         f"got {len(hits)}: {hits}")
 
 
-def test_operator_generate_does_not_invent_tenants_from_unusable_entries(
-        tmp_path: pathlib.Path) -> None:
-    """⛔ Why CodeRabbit's prescribed fix is wrong at THIS site.
+@pytest.mark.parametrize("tool_rel", ["ops/operator_generate.py",
+                                      "ops/migrate_to_operator.py"])
+def test_operator_readers_refuse_unusable_entries(
+        tool_rel: str, tmp_path: pathlib.Path) -> None:
+    """#2906: the operator-plane readers fail closed on an unusable entry.
 
-    `discover_tenant_configs` takes the STEM as a tenant name and never
-    opens the file, so dropping the `is_file()` filter would not "let the
-    existing error handling record them" — there is none. It would emit an
-    AlertmanagerConfig for a tenant named after a directory and one named
-    after a dangling symlink. Measured: 20 CRDs before the filter, 18 after.
+    Their tenant set is parse-tree's (`_lib_confd.tree_tenants`). A directory
+    `notes.yaml/` and a dangling `broken.yaml` are entries it cannot read
+    (`not_regular_file` / `read_failure`), so which tenants the tree declares
+    is unknown: rc 2, each entry named with its kind, and NO CRD written —
+    neither a phantom tenant invented from the entry (#1607 measured 20 CRDs
+    where 18 were right) nor a partial set that reads as complete.
     """
     tree = _unusable_tree(tmp_path / "conf.d")
     out = tmp_path / "out"
-    tool = TOOLS_DIR / "ops" / "operator_generate.py"
+    src = tmp_path / "src"
+    src.mkdir()
+    extra = ["--source-dir", str(src)] if "migrate" in tool_rel else []
     r = subprocess.run(
-        [sys.executable, "-X", "utf8", str(tool), "--config-dir", str(tree),
-         "--output-dir", str(out)],
+        [sys.executable, "-X", "utf8", str(TOOLS_DIR / tool_rel), *extra,
+         "--config-dir", str(tree), "--output-dir", str(out)],
+        capture_output=True, timeout=180, cwd=str(tmp_path),
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    stderr = r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 2, (r.returncode, stderr[:600])
+    assert "notes.yaml (not_regular_file" in stderr, stderr[:600]
+    assert "broken.yaml (read_failure" in stderr, stderr[:600]
+    produced = sorted(p.name for p in out.rglob("*.yaml")) if out.exists() else []
+    assert produced == [], f"a refused run wrote CRDs: {produced}"
+
+    # ⛔ Control: the same tree without the two entries generates, so the
+    # refusal above is the entries' doing, not a tool that cannot run here.
+    (tree / "notes.yaml").rmdir()
+    (tree / "broken.yaml").unlink()
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", str(TOOLS_DIR / tool_rel), *extra,
+         "--config-dir", str(tree), "--output-dir", str(out)],
         capture_output=True, timeout=180, cwd=str(tmp_path),
         env=dict(os.environ, PYTHONIOENCODING="utf-8"))
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:600]
     produced = sorted(p.name for p in out.rglob("*.yaml"))
-    phantom = [n for n in produced if "notes" in n or "broken" in n]
-    assert not phantom, (
-        f"generated CRDs for tenants invented from unusable entries: "
-        f"{phantom}")
-    assert any("alpha" in n for n in produced), (
-        f"fixture produced no real tenant CRD, so the assertion above is "
-        f"vacuous; got {produced}")
-
-
+    assert any("alpha" in n for n in produced), produced
 
 
 def test_each_reader_names_an_unusable_entry_exactly_once(
