@@ -788,8 +788,49 @@ def _run_as_unprivileged(argv: list[str], cwd: str):
         if probe.returncode != 0:
             pytest.skip("uid 65534 cannot run the script from this checkout: "
                         + (probe.stderr.strip().splitlines() or ["?"])[-1])
+        # #3178: the script reads conf.d through `$DA_GUARD_BINARY`, which
+        # `--help` never reaches. A da-guard `nobody` cannot execute (a 0700
+        # directory owned by root) made the child die with PermissionError
+        # and the test fail with no hint why; probe it as the same uid. Unset
+        # is not probed: then the script itself must fail, not be skipped.
+        # ⚠️ Exec it from the dropped interpreter, as the script does: measured
+        # under root, `setpriv … <da-guard>` execs a da-guard in a 0700 root
+        # directory fine, while a child of the dropped process gets EACCES.
+        da_guard = os.environ.get("DA_GUARD_BINARY", "")
+        if da_guard:
+            probe = subprocess.run(
+                [*argv[:5], "-c",
+                 "import subprocess, sys; sys.exit(subprocess.run("
+                 "[sys.argv[1], '--help'], stdout=subprocess.DEVNULL"
+                 ").returncode)", da_guard],
+                cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                timeout=60)
+            if probe.returncode != 0:
+                pytest.skip(f"uid 65534 cannot execute $DA_GUARD_BINARY "
+                            f"({da_guard}), which the script reads conf.d "
+                            "through: " + (probe.stderr.strip().splitlines()
+                                           or ["?"])[-1])
     return subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
                           encoding="utf-8", timeout=60)
+
+
+def test_the_session_da_guard_is_executable_by_the_unprivileged_uid():
+    """#3178: `_run_as_unprivileged` skips when `nobody` cannot execute the
+    da-guard, so the test below would quietly turn into a skip under root if
+    `tests/conftest.py` stopped opening the session build to other uids. This
+    pins that half: read + execute for everyone, write for no one else."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits do not apply on Windows")
+    built = os.environ.get("VIBE_TEST_DA_GUARD_BINARY", "")
+    if not built:
+        pytest.skip("the session built no da-guard (no `go` on PATH)")
+    for p in (os.path.dirname(built), built):
+        mode = os.stat(p).st_mode & 0o777
+        assert mode & 0o005 == 0o005, (
+            f"{p} is {mode:o}: uid 65534 cannot reach the da-guard the "
+            "root-run tests execute (tests/conftest.py _provide_session_da_guard)")
+        assert mode & 0o022 == 0, (
+            f"{p} is {mode:o}: another uid could replace the session's da-guard")
 
 
 def test_unreadable_directories_are_named_even_when_underscored():

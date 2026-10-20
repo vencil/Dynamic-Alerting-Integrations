@@ -490,6 +490,15 @@ def _provide_session_da_guard() -> None:
     if proc.returncode != 0:
         shutil.rmtree(d, ignore_errors=True)
         return  # da_guard_binary fails with go's message where it is asked for
+    # #3178: tests that run as root drop to `nobody` (`setpriv --reuid=65534`)
+    # so a chmod-000 directory really is unreadable, and the tool they run
+    # reaches this da-guard. `mkdtemp` makes the directory 0700 and `go build`
+    # follows the umask, so `nobody` could not execute it and the child died
+    # with PermissionError before reading conf.d. Open both to read + execute
+    # for every uid — never write: in /tmp that would let another uid swap
+    # the binary the whole session executes.
+    os.chmod(d, 0o755)
+    os.chmod(out, 0o755)
     _SESSION_DA_GUARD_DIR = d
     os.environ[_SESSION_DA_GUARD_ENV] = out
     os.environ["DA_GUARD_BINARY"] = out
