@@ -155,8 +155,14 @@ func (m *Manager) authorizeTenant(w http.ResponseWriter, r *http.Request, bPrinc
 	// through AllowedInOrgRead (records the read/visibility would-deny on
 	// axis="org", flips atomically with list+write via the same
 	// orgScopeEnforce flag). The wildcard "*" (platform-scope routes,
-	// tenantIDFn==nil) stays org-blind by design — invariant I6: org-scope does not apply to
-	// platform scope. WRITE routes (PermWrite/PermAdmin middleware) stay
+	// tenantIDFn==nil) stays org-blind by design — invariant I6: a READ, or
+	// any check that judges no tenant, has no tenant org list for the org
+	// axis to compare against. I6 covers ONLY that: it does not make an
+	// org-scoped "*" rule a platform admin: an org-scoped "*" rule passes
+	// this route gate, so a platform-admin write must bar on
+	// Manager.PlatformAdminNonOrgScoped in its handler (the federation
+	// whitelist PUT and account backfill do — #3160 — as does /audit).
+	// WRITE routes (PermWrite/PermAdmin middleware) stay
 	// org-blind here too; their org gate lives handler-side in
 	// RequireOrgWrite, one plane per site. The guard keys on the RESOLVED
 	// tenantID != "*" (not tenantIDFn != nil): TenantIDFromPath returns

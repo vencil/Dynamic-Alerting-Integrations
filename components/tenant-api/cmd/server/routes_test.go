@@ -44,10 +44,14 @@ const (
 	// gateHelperFunnel — per-tenant loop funnels through an OrgAllowed-based
 	// helper (tenantsLackingPermission / executeBatchOps / runBatchPR).
 	gateHelperFunnel = "helper funnel over OrgAllowed"
-	// gatePlatformStar — platform-scope gate Allowed(p, "*", …): org-scope
-	// deliberately does not apply to platform scope (invariant I6; the
-	// org_write_guard tripwire auto-exempts the "*" literal).
-	gatePlatformStar = "platform-\"*\" exemption"
+	// gateWritePlatformAdmin — platform-wide write (names no tenant; changes
+	// state for the whole fleet) behind the platform-admin bar
+	// rbac.PlatformAdminNonOrgScoped at the top of the handler (#3160). The
+	// per-tenant org axis has nothing to judge here, but an ORG-SCOPED "*"
+	// admin rule does not pass the bar: org-scope bounds a rule to some orgs'
+	// tenants, and a fleet-wide write is bounded to none. (Before #3160 these
+	// sites used the org-blind Allowed(p, "*", admin), which let it through.)
+	gateWritePlatformAdmin = "platform-wide write; platform-admin bar in handler (non-org-scoped)"
 	// gateReadOp — the route mutates nothing (read/preview computation via
 	// POST); no write to gate.
 	gateReadOp = "read-op exemption"
@@ -95,10 +99,10 @@ var writeRouteManifest = map[string]string{
 		" — site #6: PermAdmin on body tenant_id before token issuance (data egress)",
 	"DELETE /api/v1/federation/tokens/{id}": gateInHandler +
 		" — site #8: PermAdmin on the token record's tenant before revocation",
-	"PUT /api/v1/federation/policy/": gatePlatformStar +
-		" — platform whitelist is platform-wide config; Allowed(p, \"*\", admin) is the intended org-blind gate",
-	"POST /api/v1/federation/accounts/backfill": gatePlatformStar +
-		" — fleet-wide AccountID backfill; same platform-admin bar as the whitelist",
+	"PUT /api/v1/federation/policy/": gateWritePlatformAdmin +
+		" — platform whitelist is platform-wide config; an org-scoped \"*\" admin is refused (#3160)",
+	"POST /api/v1/federation/accounts/backfill": gateWritePlatformAdmin +
+		" — fleet-wide AccountID backfill; same platform-admin bar as the whitelist (#3160)",
 	"POST /api/v1/audit/tenants/{id}/access-report/dry-run": gateWriteOpPlatformAdmin +
 		" — what-if dry-run over a candidate _rbac.yaml; 403 byte-identical to the GET access-report bar (P7)",
 }
@@ -133,9 +137,9 @@ const (
 	// gateReadPlatformAdmin — route middleware checks read on "*" (PermRead,
 	// nil); the LOCKED authorization bar (rbac.PlatformAdminNonOrgScoped) runs
 	// at the top of the handler with a constant 403 (ADR-027 / LD-6 P6).
-	// Deliberately tighter than the federation-policy platform-"*" precedent:
-	// an org-scoped wildcard admin fails this bar.
-	gateReadPlatformAdmin = "platform-admin bar in handler (non-org-scoped; federation-policy precedent, tightened)"
+	// An org-scoped wildcard admin fails this bar — the same bar as the
+	// platform-wide writes (gateWritePlatformAdmin; #3160).
+	gateReadPlatformAdmin = "platform-admin bar in handler (non-org-scoped, constant 403)"
 )
 
 // readRouteManifest: GET pattern → its read-plane org-gate story. Same

@@ -106,10 +106,12 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	//   - platformRead / platformWrite (Middleware(perm, nil)): the permission
 	//     on the platform wildcard "*", i.e. a rule listing "*". For resources
 	//     with no per-tenant owner (saved views, until an ownership model
-	//     exists) and for routes whose handler bar is a platform admin anyway
-	//     (federation policy PUT, account backfill, the /audit surface) —
-	//     there the any-tenant gate would admit no caller the handler does not
-	//     then refuse, so they keep the narrower gate.
+	//     exists) and for routes whose handler bar is a NON-org-scoped platform
+	//     admin (rbac.PlatformAdminNonOrgScoped: federation policy PUT, account
+	//     backfill — #3160 — and the /audit surface) — there the any-tenant
+	//     gate would admit no caller the handler does not then refuse, so they
+	//     keep the narrower gate. The route gate is only a coarse first layer:
+	//     an org-scoped "*" rule passes it and is refused by the handler bar.
 	//
 	// Both keep MED-8: a configured _rbac.yaml with zero groups denies all.
 	anyTenantRead := rbacMgr.MiddlewareAnyTenant(rbac.PermRead)
@@ -285,8 +287,9 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// of token signing. GET is the metric whitelist a tenant admin needs
 		// to choose its subset (PUT /tenants/{id}/federation) — platform
 		// config naming no tenant — so any tenant reader may read it. PUT's
-		// platform-admin check is in the handler; its route keeps the "*"
-		// gate, which every platform admin passes anyway.
+		// bar — a non-org-scoped platform admin (PlatformAdminNonOrgScoped,
+		// #3160) — is in the handler; its route keeps the "*" gate, which
+		// every such admin passes anyway.
 		r.Route("/federation/policy", func(r chi.Router) {
 			r.With(anyTenantRead).
 				Get("/", federation.GetFederationPolicy(deps))
@@ -301,7 +304,8 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// checks read on "*" (federation-policy precedent above; #2520 left it
 		// there — the handler bar below implies it, so a wider gate would admit
 		// no one); the real bar — PlatformAdminNonOrgScoped, tightened vs the bare
-		// platform-"*" admin check — lives at the top of the handler with a
+		// platform-"*" admin check (the federation PUT and backfill bars were
+		// tightened to it too, #3160) — lives at the top of the handler with a
 		// constant 403 (no tenant-enumeration oracle).
 		r.With(platformRead).
 			Get("/audit/tenants/{id}/access-report", handler.GetTenantAccessReport(deps))
@@ -330,7 +334,8 @@ func buildRouter(rd routerDeps) *chi.Mux {
 
 			// v2.10.0 ADR-021 (#609): one-shot AccountID backfill for the
 			// existing fleet. Route middleware checks read on "*"; the
-			// handler enforces platform-admin (the whole-fleet bar).
+			// handler enforces the whole-fleet bar, a non-org-scoped platform
+			// admin (PlatformAdminNonOrgScoped, #3160).
 			r.With(platformRead).
 				Post("/federation/accounts/backfill", federation.BackfillAccounts(deps))
 		}

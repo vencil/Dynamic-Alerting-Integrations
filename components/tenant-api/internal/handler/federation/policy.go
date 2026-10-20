@@ -4,7 +4,7 @@ package federation
 // allowlist:
 //
 //   - GET/PUT /api/v1/federation/policy        — platform whitelist
-//     (maintainer-managed; PUT requires a platform admin).
+//     (maintainer-managed; PUT requires a non-org-scoped platform admin).
 //   - GET/PUT /api/v1/tenants/{id}/federation  — one tenant's subset
 //     (tenant-self-managed; PUT requires admin on that tenant, and the
 //     subset is rejected if it exceeds the platform whitelist).
@@ -68,9 +68,11 @@ type PutFederationPolicyRequest struct {
 // PutFederationPolicy handles PUT /api/v1/federation/policy — replaces
 // the platform federation whitelist.
 //
-// Platform-wide config: requires admin via a "*"-scoped RBAC group.
-// Allowed(p, "*", admin) is true only when a rule's tenant
-// list literally contains "*" — exactly a platform admin.
+// Platform-wide config: requires rbac.PlatformAdminNonOrgScoped — a rule
+// whose tenant list literally contains "*", that grants admin, and that
+// carries NO org-scope (#3160). An org-scoped "*" admin is refused whether
+// org-scope enforce is on or off: org-scope bounds a rule to some orgs'
+// tenants, and a fleet-wide write is not bounded to any org.
 //
 // Metrics newly added to the whitelist run through the admission
 // validator (ADR-020 IV-2e): a hard block (series lacking the tenant
@@ -94,9 +96,13 @@ type PutFederationPolicyRequest struct {
 // @Router      /api/v1/federation/policy [put]
 func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), "*", rbac.PermAdmin) {
+		// Platform-wide write: the bar is a NON-org-scoped "*" admin rule
+		// (#3160), the same bar as the /audit endpoints. The bare
+		// Allowed(p, "*", admin) is org-blind and would let an org-scoped
+		// "*" admin rewrite the whole fleet's whitelist.
+		if !d.RBAC.PlatformAdminNonOrgScoped(rbac.RequestPrincipal(r)) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
-				"platform admin permission required to edit the federation whitelist")
+				"platform admin (non-org-scoped) permission required to edit the federation whitelist")
 			return
 		}
 		email := rbac.RequestEmail(r)

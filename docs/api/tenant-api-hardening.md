@@ -156,7 +156,7 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 相對先前版本的行為改變：先前這道閘門要求對 `*` 有權限，只有規則寫了 `tenants: ["*"]` 的呼叫者過得了；單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者在 `/me`、`/tenants`、`/tenants/search`、`/groups`、`/tasks/{id}`、`/prs`、`/events`、`/federation/tokens`、`POST /tenants/batch` 一律 403。現在這些呼叫者拿得到自己租戶的內容；`/federation/tokens`、`POST /tenants/batch`、`POST /groups/{id}/batch`、`PUT`／`DELETE /groups/{id}` 照舊由 handler 逐租戶判寫入或管理權限。`GET /federation/policy`（平台的指標白名單，不點名任何租戶）也開放給至少能讀一個租戶的呼叫者，租戶管理員挑自己的子集時需要它。反方向收緊的只有一種情況：org-scoped 的 `tenants: ["*"]` 規則、呼叫者沒帶 org claim、且 org 軸是 enforce——它先前過得了閘門、拿到空列表，現在是 403。
 
-仍要求對 `*` 有權限的路由：saved views 的四個端點（見 §3.3）、`PUT /federation/policy`、`POST /federation/accounts/backfill`，以及 `/audit/...`。後三者 handler 的門檻本來就是平台管理員，換成較寬的閘門不會多放任何人進來。
+仍要求對 `*` 有權限的路由：saved views 的四個端點（見 §3.3）、`PUT /federation/policy`、`POST /federation/accounts/backfill`，以及 `/audit/...`。後三者 handler 的門檻本來就是平台管理員，換成較寬的閘門不會多放任何人進來。這裡的「平台管理員」指 `tenants: ["*"]`、帶 `admin`、**且不帶 `org-scope`** 的規則：帶 org-scope 的 `"*"` admin 規則過得了路由閘門，但在這三者的 handler 一律 403，不論 org-scope 是否 enforce（[#3160](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3160)）。org-scope 把規則限縮在某些組織的租戶，而改全平台設定、對全艦隊配發 `account_id` 不屬於任何一個組織。
 
 ### 3.2 為什麼 `?tenant=<id>` 不直接回 403
 

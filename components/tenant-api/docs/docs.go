@@ -184,7 +184,7 @@ const docTemplate = `{
         },
         "/api/v1/federation/accounts/backfill": {
             "post": {
-                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires platform admin.",
+                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires a non-org-scoped platform admin (an org-scoped \"*\" admin rule is refused).",
                 "produces": [
                     "application/json"
                 ],

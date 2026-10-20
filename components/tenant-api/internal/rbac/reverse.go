@@ -466,6 +466,8 @@ func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown 
 // passes it (Allowed evaluates the shadow component with tenantOrgs=nil, and
 // flipping org enforce changes nothing on the platform-scope query), which
 // would let a merely-org-scoped admin read the platform-wide access map.
+// The platform-wide WRITES — the federation whitelist PUT and the account
+// backfill — use this bar too (#3160).
 //
 // In both zero-group states (open_read / fail_closed_empty) no rule exists to
 // satisfy the bar, so it returns false — the endpoint answers 403 even though
