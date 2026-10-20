@@ -216,8 +216,8 @@ _NOT_PROBED: dict[str, str] = {
     "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
     "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _PENDING,
-    "ops/migrate_to_operator.py": _PENDING,
-    "ops/onboard_platform.py": _PENDING, "ops/operator_generate.py": _PENDING,
+    "ops/migrate_to_operator.py": _GO_KEYS,
+    "ops/onboard_platform.py": _PENDING, "ops/operator_generate.py": _GO_KEYS,
     "ops/patch_config.py": _GO_WRITER,
     "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_WRITER,
 }

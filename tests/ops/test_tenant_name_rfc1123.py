@@ -127,8 +127,8 @@ def test_accept_face_is_not_vacuous():
 _INVALID_STEMS = ("DB-A", "db_a", "db-a-")
 
 # ⛔ `.hidden` is NOT a name reject any more (#2066 option 1, #2067): the
-# exporter's walker never reads a dot-prefixed file, so `tenant_carriers`
-# skips it SILENTLY before the name gate runs — naming it would report the
+# exporter's walker never reads a dot-prefixed file, so parse-tree never
+# selects it and its tenant never reaches the name gate (#2906) — naming it would report the
 # loss of a tenant that was never served. It stays in the seed so a change
 # that starts handing dot-prefixed stems to the gate again (and so naming
 # them) fails here, in the opposite direction from before.
@@ -178,30 +178,27 @@ def test_discover_drops_and_names_every_rfc1123_reject(
     assert "'ok-a'" not in err, err
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="NTFS forbids control characters in file names; "
-                           "skipped so local Windows runs match CI Linux")
 @pytest.mark.parametrize("discover", [
     operator_generate.discover_tenant_configs,
     migrate_to_operator.discover_tenant_configs,
 ], ids=["operator_generate", "migrate_to_operator"])
-def test_discover_rejects_a_stem_with_a_trailing_newline(
+def test_discover_rejects_an_id_with_a_trailing_newline(
         discover, tmp_path, monkeypatch, capsys):
-    """#1779 end to end: a conf.d file literally named `evil\\n.yaml`.
+    """#1779 end to end: a tenant id literally `evil\\n`.
 
     Measured on `a0c892bb` with the `re.match` gates: both readers returned
     `['evil\\n', 'ok-a']`, i.e. the CR would have been
-    `metadata.name: da-tenant-evil\\n`. The file body is valid YAML for a
-    tenant `evil`, so the only thing wrong with this carrier is its name.
-    `safe_label` prints the newline as `?`, which is what stderr must name.
+    `metadata.name: da-tenant-evil\\n`. Since #2906 the id is the
+    `tenants:` key (a file NAME is no longer one), so the newline is written
+    as a quoted key. `safe_label` prints the newline as `?`, which is what
+    stderr must name.
     """
     monkeypatch.setenv("DA_LANG", "en")
     root = tmp_path / "conf.d"
     root.mkdir()
-    (root / "ok-a.yaml").write_text(
-        "tenants:\n  ok-a:\n    pg_connections: 90\n", encoding="utf-8")
-    (root / "evil\n.yaml").write_text(
-        "tenants:\n  evil:\n    pg_connections: 90\n", encoding="utf-8")
+    (root / "team.yaml").write_text(
+        'tenants:\n  ok-a:\n    pg_connections: 90\n'
+        '  "evil\\n":\n    pg_connections: 90\n', encoding="utf-8")
 
     tenants = discover(root)
     err = capsys.readouterr().err

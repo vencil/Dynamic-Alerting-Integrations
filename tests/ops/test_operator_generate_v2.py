@@ -526,37 +526,38 @@ def _unusable_confd(root: Path) -> Path:
 
 
 def test_discover_tenant_configs_names_unusable_entries(tmp_path, capsys):
-    """The discovery site never opens a file — it takes the stem as a tenant
-    name — so an unusable entry cannot fall into any `except`. Dropping it is
-    the correctness half; naming it is the half that keeps the signal."""
+    """#2906: a directory and a dangling symlink with config names are
+    entries parse-tree cannot read (`not_regular_file` / `read_failure`).
+    What they declare is unknown, so the tenant set is: the discovery
+    refuses (rc 2 in `main`) and names each with its kind — neither is
+    invented as a tenant (#1607) nor dropped with only a warning."""
+    from _lib_confd import TenantSetUnknown
+
     tree = _unusable_confd(tmp_path / "conf.d")
 
-    tenants = og.discover_tenant_configs(tree)
-
-    assert tenants == ["alpha"], (
-        f"a directory and a dangling symlink must not become tenants; "
-        f"got {tenants}")
-    err = capsys.readouterr().err
-    assert "notes.yaml" in err and "broken.yaml" in err, (
-        f"both unusable entries must be named on stderr; got {err!r}")
-    assert "is a directory, not a config file" in err
-    assert "is a broken symlink" in err
+    with pytest.raises(TenantSetUnknown) as exc:
+        og.discover_tenant_configs(tree)
+    msg = str(exc.value)
+    assert "notes.yaml (not_regular_file" in msg, msg
+    assert "broken.yaml (read_failure" in msg, msg
 
 
 def test_discover_tenant_configs_is_silent_about_reserved_entries(
         tmp_path, capsys):
-    """`_`-prefixed entries are dropped whatever their shape, so naming an
-    unusable one would report a loss that did not happen in this tool."""
+    """`_`-prefixed entries are never tenant files, whatever their shape, so
+    naming an unusable one would report a loss that did not happen here."""
+    from _lib_confd import TenantSetUnknown
+
     tree = _unusable_confd(tmp_path / "conf.d")
     (tree / "_defaults.yaml").unlink()
     (tree / "_defaults.yaml").mkdir()
 
-    og.discover_tenant_configs(tree)
-
-    err = capsys.readouterr().err
-    assert "_defaults.yaml" not in err, (
-        f"reported a reserved entry this function never reads; got {err!r}")
-    assert "notes.yaml" in err, "non-reserved entries must still be named"
+    with pytest.raises(TenantSetUnknown) as exc:
+        og.discover_tenant_configs(tree)
+    msg = str(exc.value)
+    assert "_defaults.yaml" not in msg, (
+        f"named a reserved entry that is no tenant file; got {msg!r}")
+    assert "notes.yaml" in msg, "non-reserved entries must still be named"
 
 
 def test_discover_tenant_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
@@ -591,15 +592,13 @@ def test_discover_tenant_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
 # ⚠️ SCOPE — the other axes are NOT covered here. Open tickets DO cover
 # parts of them (#1630, #1604), but neither is about THIS reader, so read
 # these notes rather than the ticket numbers:
-#   * Hidden names: closed by #2067 — the shared scan
-#     (`_lib_confd.tenant_carriers`) now drops dot-prefixed entries
-#     silently, as the exporter's walker does. Before, they reached the
-#     loop and were stopped only by `validate_tenant_name` (`".hidden"`
-#     fails `^[a-z0-9]`), at the price of a `Skipping invalid tenant name`
-#     warning about a file nothing reads. Pinned by the ceiling test below
-#     (both halves: not a tenant, not mentioned) and across tools by
-#     `tests/shared/test_confd_hidden_axis_across_tools.py`.
-#   * Recursion: this reader is flat (`config_dir.iterdir()`).
+#   * Hidden names: closed by #2067, and since #2906 parse-tree's answer —
+#     the exporter's walker skips dot-prefixed entries and so does the
+#     selection this reader takes its tenants from. Pinned by the ceiling
+#     test below (both halves: not a tenant, not mentioned) and across
+#     tools by `tests/shared/test_confd_hidden_axis_across_tools.py`.
+#   * Recursion: since #2906 this reader is the whole tree (parse-tree's
+#     selection) — `TestNestedTenantsAreSeen` below.
 #   * ⛔ RAW GLOBS are structurally invisible to a census keyed on literal
 #     suffix tuples, so the ones that read a conf.d are named rather than
 #     counted: the SIBLING `migrate_to_operator.discover_tenant_configs` —
@@ -660,53 +659,38 @@ class TestDiscoverTenantConfigsExtensionSpelling:
 
     def test_an_unusable_yml_carrier_is_named_and_a_json_one_is_not(
             self, tmp_path, capsys):
-        """FLOOR **and** CEILING for the second site (`unusable_config_...`).
+        """FLOOR **and** CEILING for unusable entries, both spellings.
 
-        The equality above only exercises the `has_yaml_extension` site.
-        Reverting this one alone leaves that equality green — the same gap
-        that survived the first round of the sibling fix (#1663).
+        #2906: an entry with a config name parse-tree cannot read (here a
+        DIRECTORY named like a carrier) makes the tenant set unknown — the
+        discovery refuses and names it with parse-tree's kind, for `.yml`
+        exactly as for `.yaml`. ⛔ The ceiling half: the same shape with an
+        extension the exporter never reads (`db-payload.json`) is not a
+        config entry at all and must not be named — that would be a finding
+        the operator cannot act on from this tool.
 
-        ⛔ The ceiling half is the mirror of the fix and had no witness
-        until blind review measured it: widening THIS call site to include
-        `.json` survived every test in the module. That direction is a real
-        defect, not a hypothetical — `unusable_config_entries`'s `suffixes`
-        argument exists precisely so a tool does not report what it would
-        never read, i.e. a finding the operator cannot act on.
-
-        ⛔ A DIRECTORY named like a config file, not a broken symlink: the
-        existing `_unusable_confd` helper above uses `symlink_to`, which
-        needs administrator rights on Windows, so a symlink fixture would be
+        ⛔ A DIRECTORY, not a broken symlink: `symlink_to` needs
+        administrator rights on Windows, so a symlink fixture would be
         skipped on the host most of this repo's maintainers use.
-
-        ⛔ The assertion names the REASON, not just the filename. This
-        module has other stderr stations (the RFC-1123 rejection below, and
-        `warn_nested`), and a filename-only assertion cannot tell which one
-        spoke.
         """
+        from _lib_confd import TenantSetUnknown
+
         for ext in (".yaml", ".yml"):
             root = self._seed(tmp_path / ext.lstrip("."), ext)
             (root / f"db-broken{ext}").mkdir()
             # Same shape, but an extension this tool never reads.
             (root / "db-payload.json").mkdir()
 
-            tenants = og.discover_tenant_configs(root)
-            err = capsys.readouterr().err
+            with pytest.raises(TenantSetUnknown) as exc:
+                og.discover_tenant_configs(root)
+            msg = str(exc.value)
 
-            assert tenants == ["db-a", "db-b"], (
-                f"a directory named `db-broken{ext}` became a tenant: "
-                f"{tenants}"
+            assert f"db-broken{ext} (not_regular_file" in msg, (
+                f"the unusable entry must be named with the reason it could "
+                f"not be read; got {msg!r}"
             )
-            named = [ln for ln in err.splitlines()
-                     if f"db-broken{ext}" in ln
-                     and "is a directory, not a config file" in ln]
-            assert len(named) == 1, (
-                f"the unusable entry must be named exactly once, with the "
-                f"reason it could not be used; stderr was {err!r}"
-            )
-            assert "db-payload.json" not in err, (
-                f"a carrier this tool never reads was reported as unusable "
-                f"— that is a finding the operator cannot act on from this "
-                f"tool; stderr was {err!r}"
+            assert "db-payload.json" not in msg, (
+                f"an entry this tool never reads was reported; got {msg!r}"
             )
 
     def test_carriers_the_exporter_would_not_serve_are_not_tenants(
@@ -727,18 +711,16 @@ class TestDiscoverTenantConfigsExtensionSpelling:
             change the RETURNED list at all. Blind review measured exactly
             that — before the silence assertion, this carrier could not
             testify under any single-point mutation.
-          * `.hidden.yaml` — hidden. Dropped by the shared scan since
-            #2067; before, it reached the loop and was stopped only by
-            `validate_tenant_name`. ⛔ Like `_profiles`, the stderr half
-            is what makes the hidden filter provable here: with it gone,
-            `validate_tenant_name` still keeps `.hidden` out of the
-            RETURNED list, and the only witness is the warning.
+          * `.hidden.yaml` — hidden. parse-tree never selects it (the
+            exporter's walker skips dot-prefixed entries, #2067); its
+            tenant `hidden` would be a VALID id, so the returned list is
+            the witness, and stderr must not mention it either.
 
-        ⚠️ Here the tenant id comes from the file STEM, so a `.json` carrier
-        needs no `tenants:` key to become a tenant — the opposite of the
-        oracle trap that made the sibling fix's first ceiling test vacuous
-        (#1663: there the id came from file CONTENT, so asserting on the
-        stem could never fail).
+        ⚠️ Since #2906 the tenant id comes from file CONTENT (the
+        `tenants:` keys), so each counterexample declares a tenant whose id
+        differs from every expected one — `db-json`, `hidden` — or the
+        assertion on the returned list could never fail (#1663's oracle
+        trap).
 
         ⚠️ Three samples are still three samples. Over-widening the call
         site to an extension NONE of them use (measured: `.txt`) has no
@@ -1032,58 +1014,46 @@ class TestWritingIsOptIn:
         )
 
 
-class TestNestedWarningSurvivesTheExtraction:
-    """#1604 moved this tool's flat scan into `_lib_confd.tenant_carriers`.
+class TestNestedTenantsAreSeen:
+    """#2906: the tenant set is the whole tree's, as the exporter's.
 
-    ⛔ That has a cost worth naming: `test_confd_enumeration_contract` derives
-    its subjects from the AST of each file, so once `operator_generate.py` has
-    no `iterdir`/`glob("*.y…")` of its own it stops being classified as a flat
-    reader and the gate has nothing to say about it. Measured before/after —
-    `{'flat': True, 'guarded': True}` became `{'flat': False, 'guarded': False}`.
-
-    ⚠️ No enforcement was lost (the guard travelled WITH the scan, and the gate
-    still watches `_lib_confd.py`, which is `flat=True, guarded=True`), but the
-    property is now pinned BEHAVIOURALLY here so it does not depend on which
-    file the scan happens to live in.
+    Until #2906 this reader was flat by design and named the nested files it
+    skipped (`warn_nested`, #1604): a hierarchical conf.d returned zero
+    tenants, distinguishable from an empty one only by that warning. Now
+    parse-tree selects the files at any depth, so a nested tenant IS a
+    tenant and there is nothing skipped to name.
     """
 
-    def test_a_hierarchical_confd_is_named_not_silently_empty(self, tmp_path, capsys):
-        from _lib_confd import reset_warned_for_test
-
+    def test_a_nested_tenant_is_a_tenant_and_nothing_is_warned(self, tmp_path, capsys):
         root = tmp_path / "conf.d"
         (root / "team-a").mkdir(parents=True)
         (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (root / "team-a" / "db-a.yaml").write_text(
+        (root / "team-a" / "_defaults.yaml").write_text(
+            "defaults:\n  x: 3\n", encoding="utf-8")
+        (root / "team-a" / "carrier.yaml").write_text(
             "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
 
-        reset_warned_for_test()
         tenants = og.discover_tenant_configs(root)
         err = capsys.readouterr().err
 
-        assert tenants == [], "this reader is flat by design; the nested carrier is not a tenant"
-        assert "db-a.yaml" in err, (
-            f"a flat scan of a hierarchical conf.d returns zero tenants, which "
-            f"is indistinguishable from an empty one unless the skipped files "
-            f"are NAMED. stderr was {err!r}"
-        )
+        assert tenants == ["db-a"], (
+            f"the nested tenant is served by the exporter and must get its "
+            f"AlertmanagerConfig; got {tenants}")
+        assert "subdirectories" not in err and "SKIPPED" not in err, (
+            f"nothing is skipped, so nothing may be warned about; stderr was {err!r}")
 
     def test_a_flat_confd_says_nothing(self, tmp_path, capsys):
-        """必響對照組：警告不能是無條件印出的。"""
-        from _lib_confd import reset_warned_for_test
-
+        """必響對照組：扁平樹照舊，也不印任何東西。"""
         root = tmp_path / "conf.d"
         root.mkdir()
         (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
         (root / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
 
-        reset_warned_for_test()
         tenants = og.discover_tenant_configs(root)
         err = capsys.readouterr().err
 
         assert tenants == ["db-a"]
-        assert "subdirectories" not in err, (
-            f"a FLAT conf.d must not trigger the nested warning; stderr was {err!r}"
-        )
+        assert err == "", err
 
 
 class TestSelectorLabels:

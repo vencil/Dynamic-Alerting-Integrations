@@ -1633,7 +1633,7 @@ CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
 # (module, attribute to break, reason the handler names)
 OWN_BROAD_HANDLER = {
     "config_diff": ("_render_diff", "compare", "compare_failed"),
-    "operator_generate": ("_lib_confd", "tenant_carriers", "generate_failed"),
+    "operator_generate": ("_lib_confd", "tree_tenants", "generate_failed"),
 }
 _HANDLER_WRAPPER = f"""
 import importlib, os, runpy, sys
