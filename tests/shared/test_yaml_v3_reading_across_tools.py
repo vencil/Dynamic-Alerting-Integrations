@@ -97,6 +97,11 @@ _OFFBOARD_REF = {
     "yes.yaml": 'tenants:\n  "yes":\n    mysql_connections: "70"\n',
     "other.yaml": "tenants:\n  other:\n    note: {VALUE}\n",
 }
+#: A tenant's `custom_` value, read alone (`--tenant-config`): the gap report
+#: carries it as `current_value` — a string "yes", or a boolean.
+_CUSTOM_VALUE = {
+    "tenant-a.yaml": "tenants:\n  tenant-a:\n    custom_mysql_x: {VALUE}\n",
+}
 
 _VARIANTS = {"plain": "yes", "quoted": '"yes"', "bool": "true"}
 
@@ -139,6 +144,11 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
         "dx/migrate_conf_d.py", ["--conf-d", "{d}", "--dry-run"], _META_DOMAIN, (), ""),
     "ops/offboard_tenant.py": (
         "ops/offboard_tenant.py", ["yes", "--config-dir", "{d}"], _OFFBOARD_REF, (), ""),
+    # ── #2906 F2: both branches through da-guard — `--config-dir` served-values,
+    # `--tenant-config` parse-tree's file mode (this probe) ──
+    "ops/analyze_rule_pack_gaps.py": (
+        "ops/analyze_rule_pack_gaps.py", ["--tenant-config", "{d}/tenant-a.yaml", "--json"],
+        _CUSTOM_VALUE, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -169,9 +179,6 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: are in tests/shared/test_writers_confirm_parse_tree.py.
 _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes — "
               "tests/shared/test_writers_confirm_parse_tree.py")
-_OWNER_2115 = ("--config-dir reads served-values only; the single-file `--tenant-config` "
-               "branch stays on PyYAML by owner ruling #2115 (decision 4: not switched), "
-               "and no run mixes the two")
 _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
@@ -209,7 +216,7 @@ _NOT_PROBED: dict[str, str] = {
     "lint/check_threshold_observed_map.py": _PENDING,
     "lint/check_threshold_reachability.py": _GO_FIXED,
     "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _GO_FIXED,
-    "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
+    "ops/assemble_config_dir.py": _GO,
     "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _PENDING,
     "ops/config_history.py": _PENDING, "ops/da_assembler.py": _GO_WRITER,
     "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
