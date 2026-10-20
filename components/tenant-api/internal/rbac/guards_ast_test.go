@@ -132,9 +132,11 @@ func TestVerifiedPrincipalConstructionConfinedToRBACAndTests(t *testing.T) {
 //     literal "*" — the platform-scope gate. Such a call judges no tenant, so
 //     the per-tenant org axis this tripwire protects has nothing to drop
 //     (invariant I6) and it needs no allowlist entry. ⚠️ The exemption is NOT
-//     a licence to use Allowed(p, "*", PermAdmin) as a platform-admin bar: an
-//     org-scoped rule is not a platform admin, yet it passes that call. A
-//     platform-admin decision uses rbac.PlatformAdminNonOrgScoped (#3160).
+//     a licence to use Allowed(p, "*", perm) as a platform-wide bar: an
+//     org-scoped rule is not a platform-wide grant, yet it passes that call.
+//     A platform-wide decision uses rbac.PlatformNonOrgScoped (saved views)
+//     or PlatformAdminNonOrgScoped (federation whitelist, backfill, /audit)
+//     (#3160).
 //     This tripwire does not catch that misuse.
 //   - Everything else must hit the annotated allowlist below. P4c end state:
 //     the allowlist is EMPTY. P4c converted the last three read-plane filters

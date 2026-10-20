@@ -41,8 +41,9 @@ purpose: |
       views: { [id]: View },     // current snapshot
       loading: boolean,          // true during initial load
       reachable: boolean,        // false if /api/v1/views 404s
-                                 // (e.g. demo mode); UI can hide
-                                 // the panel entirely in that case
+                                 // (e.g. demo mode) or 403s (the
+                                 // caller may not read saved views);
+                                 // UI hides the panel in that case
       reload: () => Promise<void>,
       save: (id, label, description, filters) => Promise<boolean>,
       remove: (id) => Promise<boolean>,
@@ -51,6 +52,10 @@ purpose: |
   RBAC: this hook does NOT check user permissions — orchestrator
   fetches /api/v1/me and decides whether to render the Save / Delete
   controls. A 403 response from PUT/DELETE bubbles up via onError.
+  A 403 from the LIST is not an error: since #3160 saved views need a
+  `tenants: ["*"]` rule with no org-scope, so an org-scoped caller is
+  refused by design — the hook marks the endpoint unreachable and the
+  panel hides itself, with no toast (same as a 404).
 ---
 
 import { useState, useEffect, useCallback, useRef } from "react";  // TRK-233 ESM import
@@ -82,8 +87,10 @@ function useSavedViews(onError) {
     setLoading(true);
     try {
       const resp = await fetch(VIEWS_ENDPOINT);
-      if (resp.status === 404) {
-        // Endpoint not deployed (likely demo mode / static-docs).
+      if (resp.status === 404 || resp.status === 403) {
+        // 404: endpoint not deployed (likely demo mode / static-docs).
+        // 403: the caller may not read saved views (#3160 — an
+        // org-scoped "*" rule is refused by design), not a failure.
         // Silent — panel hides itself via the `reachable` flag.
         setReachable(false);
         setViews({});

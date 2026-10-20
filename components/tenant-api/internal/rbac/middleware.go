@@ -29,10 +29,11 @@ import (
 // default) the observable behavior is byte-identical to the pre-seam version.
 //
 // tenantIDFn == nil checks `want` on the platform wildcard "*" — passed only by
-// a rule whose tenants list holds the literal "*". That is the gate for
-// platform-scope resources with no per-tenant ownership (saved views). A
-// collection route whose handler filters per tenant mounts
-// MiddlewareAnyTenant instead (#2520).
+// a rule whose tenants list holds the literal "*". That is the coarse route
+// gate for platform-scope resources with no per-tenant ownership (saved
+// views); it is org-blind, so the handler bars an org-scoped "*" rule
+// (Manager.PlatformNonOrgScoped, #3160). A collection route whose handler
+// filters per tenant mounts MiddlewareAnyTenant instead (#2520).
 func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) string) func(http.Handler) http.Handler {
 	return m.gate(func(w http.ResponseWriter, r *http.Request, bPrincipal *VerifiedPrincipal) bool {
 		return m.authorizeTenant(w, r, bPrincipal, want, tenantIDFn)
@@ -158,10 +159,12 @@ func (m *Manager) authorizeTenant(w http.ResponseWriter, r *http.Request, bPrinc
 	// tenantIDFn==nil) stays org-blind by design — invariant I6: a READ, or
 	// any check that judges no tenant, has no tenant org list for the org
 	// axis to compare against. I6 covers ONLY that: it does not make an
-	// org-scoped "*" rule a platform admin: an org-scoped "*" rule passes
-	// this route gate, so a platform-admin write must bar on
-	// Manager.PlatformAdminNonOrgScoped in its handler (the federation
-	// whitelist PUT and account backfill do — #3160 — as does /audit).
+	// org-scoped "*" rule a platform-wide grant. An org-scoped "*" rule
+	// passes this route gate, so every platform-wide write — and every read
+	// of a platform resource that belongs to no tenant (saved views) — bars
+	// on a rule WITHOUT org-scope in its handler (Manager.PlatformNonOrgScoped:
+	// saved views read/write; PlatformAdminNonOrgScoped: the federation
+	// whitelist PUT, account backfill and /audit — #3160).
 	// WRITE routes (PermWrite/PermAdmin middleware) stay
 	// org-blind here too; their org gate lives handler-side in
 	// RequireOrgWrite, one plane per site. The guard keys on the RESOLVED

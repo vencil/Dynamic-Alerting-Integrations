@@ -104,14 +104,15 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	//     or ["db-*"] passes and sees its own tenants; before #2520 these
 	//     routes demanded a literal "*" rule.
 	//   - platformRead / platformWrite (Middleware(perm, nil)): the permission
-	//     on the platform wildcard "*", i.e. a rule listing "*". For resources
-	//     with no per-tenant owner (saved views, until an ownership model
-	//     exists) and for routes whose handler bar is a NON-org-scoped platform
-	//     admin (rbac.PlatformAdminNonOrgScoped: federation policy PUT, account
-	//     backfill — #3160 — and the /audit surface) — there the any-tenant
-	//     gate would admit no caller the handler does not then refuse, so they
-	//     keep the narrower gate. The route gate is only a coarse first layer:
-	//     an org-scoped "*" rule passes it and is refused by the handler bar.
+	//     on the platform wildcard "*", i.e. a rule listing "*". For routes
+	//     whose handler bar is a NON-org-scoped "*" rule
+	//     (rbac.PlatformNonOrgScoped): saved views — read for GET (open mode
+	//     reads too), write for PUT/DELETE — and, at admin level
+	//     (PlatformAdminNonOrgScoped), federation policy PUT, account backfill
+	//     and the /audit surface (#3160) — there the any-tenant gate would
+	//     admit no caller the handler does not then refuse, so they keep the
+	//     narrower gate. The route gate is only a coarse first layer: an
+	//     org-scoped "*" rule passes it and is refused by the handler bar.
 	//
 	// Both keep MED-8: a configured _rbac.yaml with zero groups denies all.
 	anyTenantRead := rbacMgr.MiddlewareAnyTenant(rbac.PermRead)
@@ -248,10 +249,13 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		})
 
 		// Saved Views (v2.5.0 Phase C). ⛔ Platform "*" gate on purpose (#2520):
-		// a view has no owner and no per-tenant filter — the handlers return and
-		// overwrite every view as stored — so the any-tenant gate would hand
-		// every tenant-scoped caller the whole set. It moves only once views
-		// have an ownership model.
+		// a view has no owner, no org and no per-tenant filter — the handlers
+		// return and overwrite every view as stored — so the any-tenant gate
+		// would hand every tenant-scoped caller the whole set. The real bar is
+		// in each handler (#3160): a "*" rule with NO org-scope
+		// (rbac.PlatformNonOrgScoped) — read for GET, where open mode reads
+		// too, write for PUT/DELETE. An org-scoped "*" rule passes this route
+		// gate and is refused there, in enforce and shadow mode alike.
 		r.With(platformRead).
 			Get("/views", handler.ListViews(deps))
 

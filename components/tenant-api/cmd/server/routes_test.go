@@ -55,9 +55,13 @@ const (
 	// gateReadOp — the route mutates nothing (read/preview computation via
 	// POST); no write to gate.
 	gateReadOp = "read-op exemption"
-	// gateNonTenantData — the resource is not per-tenant data, so there is no
-	// tenant whose org list could scope it; route-level "*" write gate applies.
-	gateNonTenantData = "non-tenant-data exemption"
+	// gateWritePlatformNonOrg — platform-wide write to a resource that belongs
+	// to no tenant and no org (saved views), behind rbac.PlatformNonOrgScoped
+	// at write level at the top of the handler (#3160). There is no tenant
+	// whose org list could scope it, so — as for gateWritePlatformAdmin — an
+	// ORG-SCOPED "*" rule does not pass; the route's "*" write gate is only a
+	// coarse first layer (org-blind, so it admits that rule).
+	gateWritePlatformNonOrg = "platform-wide write; non-org-scoped \"*\" write bar in handler"
 	// gateWriteOpPlatformAdmin — read-op semantics (the POST computes a
 	// report and commits nothing) behind the LOCKED platform-admin bar
 	// (rbac.PlatformAdminNonOrgScoped) at the top of the handler with a
@@ -91,10 +95,10 @@ var writeRouteManifest = map[string]string{
 		" — sites #1/#2: tenantsLackingPermission(PermWrite) over the stored member list; route gate is the any-tenant WRITE gate (#2520), a hidden group is 404",
 	"POST /api/v1/groups/{id}/batch": gateHelperFunnel +
 		" — site #5: one op per member through the /tenants/batch pipeline (runBatchPR inline OrgAllowed in PR mode; executeBatchOps at execution time otherwise)",
-	"PUT /api/v1/views/{id}/": gateNonTenantData +
-		" — saved views hold filter definitions, not tenant config; no per-tenant write decision exists, so the route keeps the platform-\"*\" write gate (#2520)",
-	"DELETE /api/v1/views/{id}/": gateNonTenantData +
-		" — same as PUT: view definitions are not tenant-scoped data",
+	"PUT /api/v1/views/{id}/": gateWritePlatformNonOrg +
+		" — saved views hold filter definitions, not tenant config, and have no owner; an org-scoped \"*\" writer is refused (#3160)",
+	"DELETE /api/v1/views/{id}/": gateWritePlatformNonOrg +
+		" — same bar as PUT (#3160)",
 	"POST /api/v1/federation/tokens/": gateInHandler +
 		" — site #6: PermAdmin on body tenant_id before token issuance (data egress)",
 	"DELETE /api/v1/federation/tokens/{id}": gateInHandler +
@@ -125,9 +129,11 @@ const (
 	// lives in those filters (ScopeAllowed / OrgAllowedRead). Before #2520
 	// these routes read on "*" (the old gateReadListOrgBlind label).
 	gateReadAnyTenant = "any-tenant read gate (MiddlewareAnyTenant) — handler filters per tenant"
-	// gateReadPlatformStar — read on the platform wildcard "*" (Middleware(PermRead,
-	// nil)): only a rule listing "*" passes. For data with no per-tenant owner.
-	gateReadPlatformStar = "platform-\"*\" read gate (Middleware(PermRead, nil))"
+	// gateReadPlatformNonOrg — route middleware checks read on "*"
+	// (Middleware(PermRead, nil)); the handler's bar is readsViews: open mode,
+	// or rbac.PlatformNonOrgScoped at read level — an ORG-SCOPED "*" rule
+	// fails it (#3160). For data with no per-tenant owner and no org.
+	gateReadPlatformNonOrg = "platform-\"*\" read gate + non-org-scoped read bar in handler (open mode reads)"
 	// gateReadNoAuth — infra endpoint mounted with no RBAC middleware.
 	gateReadNoAuth = "no-auth infra endpoint"
 	// gateReadAuthenticated — identity only (MiddlewareAuthenticated): 401
@@ -160,8 +166,8 @@ var readRouteManifest = map[string]string{
 	"GET /api/v1/tenants/search":     gateReadAnyTenant + " — same filterTenantsByRBAC row filter as the list; config_derivation scoped by configDerivedMeta",
 	"GET /api/v1/groups":             gateReadAnyTenant + " — ListGroups filters members + skips inaccessible groups (hasAccessibleMember/filterAccessibleMembers, org-aware P4c)",
 	"GET /api/v1/groups/{id}/":       gateReadAnyTenant + " — single group; GetGroup filters members + hides inaccessible groups in-handler (groupVisible/filterAccessibleMembers, org-aware P4c; mirrors ListGroups)",
-	"GET /api/v1/views":              gateReadPlatformStar + " — saved views have no owner and no per-tenant filter; stays on \"*\" until an ownership model exists (#2520)",
-	"GET /api/v1/views/{id}/":        gateReadPlatformStar + " — single view; same as the list",
+	"GET /api/v1/views":              gateReadPlatformNonOrg + " — saved views have no owner, no org and no per-tenant filter; an org-scoped \"*\" reader is refused (#3160)",
+	"GET /api/v1/views/{id}/":        gateReadPlatformNonOrg + " — single view; same as the list",
 	"GET /api/v1/tasks/{id}":         gateReadAnyTenant + " — submitter-only (taskOwnedBy, else 404) + results org-filtered in-handler (filterTaskResults)",
 	"GET /api/v1/prs":                gateReadAnyTenant + " — PR list filtered in-handler (prVisible via filterAccessiblePRs / ?tenant=)",
 	"GET /api/v1/events":             gateReadAnyTenant + " — SSE stream filtered per subscriber per event (eventVisible)",
@@ -267,7 +273,7 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 // readRouteManifest, whether it is org-gated by the read-by-id middleware path
 // (gateReadByIDOrg), behind the any-tenant gate with a named handler filter
 // (gateReadAnyTenant), on the identity-only gate (gateReadAuthenticated), or
-// on a platform gate (gateReadPlatformStar / gateReadPlatformAdmin /
+// on a platform gate (gateReadPlatformNonOrg / gateReadPlatformAdmin /
 // gateReadNoAuth).
 // A new GET route missing from the manifest — a read endpoint added without a
 // conscious org-gate decision, exactly the read-by-id IDOR shape P4c closed — or

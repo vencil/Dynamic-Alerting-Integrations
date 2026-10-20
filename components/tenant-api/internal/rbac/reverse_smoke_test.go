@@ -272,3 +272,60 @@ func TestPlatformAdminNonOrgScoped_Bar(t *testing.T) {
 		t.Errorf("fail_closed_empty mode must not satisfy the bar")
 	}
 }
+
+// PlatformNonOrgScoped at read / write level (#3160 — the saved-views bar):
+// the org axis is the only one closed; environments / domains are not
+// consulted (unlike PlatformUnrestricted), and the permission level is the
+// caller's, with ruleGrants' hierarchy (admin ⊇ write ⊇ read).
+func TestPlatformNonOrgScoped_Levels(t *testing.T) {
+	cfg := &RBACConfig{Groups: []GroupRule{
+		{Name: "org-writers", Tenants: []string{"*"}, Permissions: []Permission{PermWrite}, OrgScope: "org"},
+		{Name: "platform-writers", Tenants: []string{"*"}, Permissions: []Permission{PermWrite}},
+		{Name: "platform-readers", Tenants: []string{"*"}, Permissions: []Permission{PermRead}},
+		{Name: "env-readers", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, Environments: []string{"production"}},
+		{Name: "prefix-writers", Tenants: []string{"db-*"}, Permissions: []Permission{PermWrite}},
+	}}
+	m := NewForTest(cfg)
+	for _, c := range []struct {
+		group     string
+		claims    map[string]string
+		wantRead  bool
+		wantWrite bool
+	}{
+		{"org-writers", map[string]string{"org": "ORG-1"}, false, false},
+		{"platform-writers", nil, true, true},
+		{"platform-readers", nil, true, false},
+		// Not closed on the metadata axes — the sibling that closes them is
+		// PlatformUnrestricted, cross-checked below.
+		{"env-readers", nil, true, false},
+		{"prefix-writers", nil, false, false},
+	} {
+		p := &VerifiedPrincipal{Groups: []string{c.group}, Claims: c.claims}
+		if got := m.PlatformNonOrgScoped(p, PermRead); got != c.wantRead {
+			t.Errorf("%s: PlatformNonOrgScoped(read) = %v, want %v", c.group, got, c.wantRead)
+		}
+		if got := m.PlatformNonOrgScoped(p, PermWrite); got != c.wantWrite {
+			t.Errorf("%s: PlatformNonOrgScoped(write) = %v, want %v", c.group, got, c.wantWrite)
+		}
+		if m.PlatformNonOrgScoped(p, PermAdmin) != m.PlatformAdminNonOrgScoped(p) {
+			t.Errorf("%s: PlatformAdminNonOrgScoped disagrees with PlatformNonOrgScoped(admin)", c.group)
+		}
+	}
+	if m.PlatformUnrestricted(&VerifiedPrincipal{Groups: []string{"env-readers"}}, PermRead) {
+		t.Fatalf("premise broken: PlatformUnrestricted admits an environment-restricted rule")
+	}
+	if m.PlatformNonOrgScoped(nil, PermRead) {
+		t.Errorf("anonymous caller passes PlatformNonOrgScoped(read)")
+	}
+
+	// Both zero-group states: false (open-mode read is the caller's branch).
+	open := NewForTest(&RBACConfig{})
+	if open.PlatformNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}, PermRead) {
+		t.Errorf("open_read mode must not satisfy PlatformNonOrgScoped")
+	}
+	closed := NewForTest(&RBACConfig{})
+	closed.failClosedOnEmpty = true
+	if closed.PlatformNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}, PermRead) {
+		t.Errorf("fail_closed_empty mode must not satisfy PlatformNonOrgScoped")
+	}
+}

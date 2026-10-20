@@ -11,6 +11,41 @@ import (
 	"github.com/vencil/tenant-api/internal/views"
 )
 
+// viewsEntity is the state-record entity of a saved-views write: the change
+// event's tenant_id, which eventVisible keys the views read bar off.
+const viewsEntity = "views"
+
+// requireViewsAccess is the saved-views bar (#3160), checked first in every
+// views handler, in the handler like the federation PUT / backfill bars. A
+// view belongs to no tenant and no org — the handlers return and overwrite
+// every view as stored — so the bar is a NON-org-scoped "*" rule
+// (rbac.PlatformNonOrgScoped) at want: read for GET, write for PUT/DELETE.
+// Reads also pass in open mode (readsViews); a write never does, as open mode
+// grants read only. An org-scoped "*" rule fails it in enforce and shadow mode
+// alike. A Deps without an RBAC manager is a test-only state (see
+// requireOrgWriteWithMeta) and is let through. Returns false after writing the
+// 403.
+func requireViewsAccess(w http.ResponseWriter, r *http.Request, d *Deps, want rbac.Permission) bool {
+	if d.RBAC == nil {
+		return true
+	}
+	p := rbac.RequestPrincipal(r)
+	if want == rbac.PermRead {
+		if readsViews(d.RBAC, p) {
+			return true
+		}
+		WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+			"platform read permission (non-org-scoped) required to read saved views")
+		return false
+	}
+	if d.RBAC.PlatformNonOrgScoped(p, want) {
+		return true
+	}
+	WriteJSONErrorWithCode(w, r, http.StatusForbidden, CodeForbidden,
+		"platform write permission (non-org-scoped) required to edit saved views")
+	return false
+}
+
 // ViewResponse is the response body for a single saved view.
 type ViewResponse struct {
 	ID          string            `json:"id"`
@@ -24,12 +59,18 @@ type ViewResponse struct {
 //
 // @Summary     List all saved views
 // @Description Returns all saved filter views defined in _views.yaml.
+// @Description Requires read on "*" from a rule with no org-scope (open mode
+// @Description reads them too).
 // @Tags        views
 // @Produce     json
 // @Success     200 {array}  ViewResponse
+// @Failure     403 {object} ErrorResponse
 // @Router      /api/v1/views [get]
 func ListViews(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireViewsAccess(w, r, d, rbac.PermRead) {
+			return
+		}
 		list := d.Views.ListViews()
 		resp := make([]ViewResponse, 0, len(list))
 		for _, v := range list {
@@ -53,10 +94,14 @@ func ListViews(d *Deps) http.HandlerFunc {
 // @Param       id path string true "View ID"
 // @Success     200 {object} ViewResponse
 // @Failure     400 {object} ErrorResponse
+// @Failure     403 {object} ErrorResponse
 // @Failure     404 {object} ErrorResponse
 // @Router      /api/v1/views/{id} [get]
 func GetView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireViewsAccess(w, r, d, rbac.PermRead) {
+			return
+		}
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
@@ -102,6 +147,7 @@ type PutViewRequest struct {
 // @Param       body body     PutViewRequest true "View definition"
 // @Success     200  {object} map[string]string
 // @Failure     400  {object} ErrorResponse
+// @Failure     403  {object} ErrorResponse
 // @Failure     409  {object} ErrorResponse
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
@@ -110,6 +156,9 @@ type PutViewRequest struct {
 // @Router      /api/v1/views/{id} [put]
 func PutView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireViewsAccess(w, r, d, rbac.PermWrite) {
+			return
+		}
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
@@ -147,7 +196,7 @@ func PutView(d *Deps) http.HandlerFunc {
 		// shape: one shared object, one snapshot that refreshes only on a
 		// Reload (mutateState's, after a write that succeeded or may have
 		// — #1535) or a WatchLoop tick.
-		if err := d.mutateState(r.Context(), statestore.KeyViews, "views", email,
+		if err := d.mutateState(r.Context(), statestore.KeyViews, viewsEntity, email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseViewsFile(current)
 				if perr != nil {
@@ -180,6 +229,7 @@ func PutView(d *Deps) http.HandlerFunc {
 // @Param       id path string true "View ID"
 // @Success     200 {object} map[string]string
 // @Failure     400 {object} ErrorResponse
+// @Failure     403 {object} ErrorResponse
 // @Failure     404 {object} ErrorResponse
 // @Failure     409 {object} ErrorResponse
 // @Failure     500 {object} ErrorResponse
@@ -188,6 +238,9 @@ func PutView(d *Deps) http.HandlerFunc {
 // @Router      /api/v1/views/{id} [delete]
 func DeleteView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !requireViewsAccess(w, r, d, rbac.PermWrite) {
+			return
+		}
 		viewID := chi.URLParam(r, "id")
 		if err := views.ValidateViewID(viewID); err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
@@ -204,7 +257,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 
 		// In-lock rebuild, and an already-absent target is a no-op success —
 		// same reasoning as DeleteGroup.
-		if err := d.mutateState(r.Context(), statestore.KeyViews, "views", email,
+		if err := d.mutateState(r.Context(), statestore.KeyViews, viewsEntity, email,
 			func(current []byte) ([]byte, error) {
 				vcfg, perr := parseViewsFile(current)
 				if perr != nil {
