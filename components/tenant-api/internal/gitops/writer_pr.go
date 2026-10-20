@@ -274,7 +274,15 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// first (no file touched), and only then is the tree checked out — under
 	// base's config, which the lock's check passed.
 	if err := w.checkGitDriversIn(w.gitDir); err != nil {
-		_ = w.gitExec("symbolic-ref", "HEAD", "refs/heads/"+base)
+		// If HEAD cannot be pointed back at base, the abort's reset and
+		// checkout would run under the branch's config — skip it. HEAD stays
+		// on the feature branch, so the next write's check under the lock
+		// sees the same driver and refuses before any git runs on files.
+		if serr := w.gitExec("symbolic-ref", "HEAD", "refs/heads/"+base); serr != nil {
+			slog.Error("PR-mode write: driver found on the feature branch and HEAD could not be pointed back at base; leaving the branch for the operator",
+				"branch", branchName, "base", base, "error", serr)
+			return nil, err
+		}
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
 	}
