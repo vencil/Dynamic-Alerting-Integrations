@@ -97,6 +97,11 @@ _OFFBOARD_REF = {
     "yes.yaml": 'tenants:\n  "yes":\n    mysql_connections: "70"\n',
     "other.yaml": "tenants:\n  other:\n    note: {VALUE}\n",
 }
+#: A tenant's `custom_` value, read alone (`--tenant-config`): the gap report
+#: carries it as `current_value` — a string "yes", or a boolean.
+_CUSTOM_VALUE = {
+    "tenant-a.yaml": "tenants:\n  tenant-a:\n    custom_mysql_x: {VALUE}\n",
+}
 
 #: A recurring maintenance window's `reason` — printed on the ACTIVE line
 #: (`True` for a boolean). The window is "0 0 1 1 *" + 400d, so it is open on
@@ -167,6 +172,11 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
     "ops/threshold_recommend.py": (
         "ops/threshold_recommend.py", ["--config-dir", "{d}", "--dry-run", "--json"],
         _TENANT_KEY, (), ""),
+    # ── #2906 F2: both branches through da-guard — `--config-dir` served-values,
+    # `--tenant-config` parse-tree's file mode (this probe) ──
+    "ops/analyze_rule_pack_gaps.py": (
+        "ops/analyze_rule_pack_gaps.py", ["--tenant-config", "{d}/tenant-a.yaml", "--json"],
+        _CUSTOM_VALUE, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -203,9 +213,6 @@ _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes 
 _GO_BLOB = (_GO + "; reads git blobs of one fixed-name file (`git show`) in parse-tree's "
             "file mode, no conf.d argument to probe — "
             "tests/shared/test_readonly_tools_read_parse_tree.py")
-_OWNER_2115 = ("--config-dir reads served-values only; the single-file `--tenant-config` "
-               "branch stays on PyYAML by owner ruling #2115 (decision 4: not switched), "
-               "and no run mixes the two")
 #: Admitted to the population only by the K3 text net (`conf.d` / `config_dir`
 #: in a docstring, comment, help or output string); what the tool reads is
 #: named after the `;` in its row.
@@ -262,7 +269,7 @@ _NOT_PROBED: dict[str, str] = {
         _GO_WRITER + "; --regen writes the two fixed conf.d `_defaults.yaml`, its check "
         "mode reads every surface as bytes (a text compare), no value"),
     "lint/check_threshold_unit_sanity.py": _GO_FIXED,
-    "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
+    "ops/assemble_config_dir.py": _GO,
     "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _NAMES,
     "ops/config_history.py": _NAMES, "ops/da_assembler.py": _GO_WRITER,
     "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
