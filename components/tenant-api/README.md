@@ -66,7 +66,7 @@
 | Method | Path | 說明 |
 |--------|------|------|
 | `GET` | `/health` | Liveness——永遠 200 |
-| `GET` | `/ready` | Readiness——config 目錄無法存取時回 503 |
+| `GET` | `/ready` | Readiness——config 目錄無法存取（或啟用 human socket 時其自測失敗）回 503；body 只有 `status` 與固定的 `reason`，路徑與錯誤原文只進 server log（[#2811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2811)） |
 | `GET` | `/metrics` | Prometheus 文字格式 |
 
 ### 租戶配置
