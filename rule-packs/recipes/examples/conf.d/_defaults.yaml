@@ -10,5 +10,5 @@
 # does not export the metric trivially satisfies absence and fires. A safe
 # shared absence needs a presence-guard (constrain candidates to tenants actually
 # exporting the metric); that guard is deferred (see #741 / S5 phantom-metric
-# catalog). So the absence demo lives at a tenant leaf (shop.yaml), where
+# catalog). So the absence demo lives at a tenant leaf (shop-a.yaml), where
 # self-scoping is unambiguous.
