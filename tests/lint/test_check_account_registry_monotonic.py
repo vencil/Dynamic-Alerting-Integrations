@@ -34,6 +34,9 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import check_account_registry_monotonic as mono  # noqa: E402
 
+# Each present blob is read by `da-guard parse-tree` (ADR-036).
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 # The registry path the fixtures write/stage. Kept short; the module default
 # (the real conf.d path) is exercised separately by the live-tree test.
 REL = "conf.d/_account_registry.yaml"
