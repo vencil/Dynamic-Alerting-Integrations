@@ -137,7 +137,9 @@ the tool had — 0, 1, 2 or a crash — into 120. Now:
   is its own — crash report or named reason, own code — and ``raise ...
   from None`` cuts the chain; before that own exit, the failed stream is
   quietly pointed at the null device, so bytes still buffered for it
-  cannot fail the final flush and override that line and code. The same
+  cannot fail the final flush and override that line and code (stdout's
+  failure is looked for on both links of every exception, ``__cause__``
+  and ``__context__``, #3156). The same
   errno from a socket, another fd, or
   a stderr that ``redirect_stdout`` made ``sys.stdout`` stays the tool's
   own error too.
@@ -150,6 +152,12 @@ the tool had — 0, 1, 2 or a crash — into 120. Now:
   to stdout: <reason>`` for anything else (ENOSPC, EIO) — and the process
   exits with the caller-error code (or the ``code=`` given to
   ``die_caller_error`` / ``exit_caller_error``).
+* "pointed at the null device" is a ``dup2`` onto the failed stream's fd,
+  made only while that fd still refers to what failed — the ``(st_dev,
+  st_ino)`` recorded with the failure, or "not open" then and now (#3156):
+  a tool that closed fd 1 (or ``dup2``-ed a file onto it) and whose own
+  file now holds fd 1 keeps that file — only the bytes still buffered for
+  the failed stdout are discarded, so they cannot land in it either.
 * the wrapping changes nothing a tool can see: same object, buffer, fileno,
   encoding, ``reconfigure``, return values. Measured cost: about 0.4 µs per
   ``print`` (1M lines: 0.57 s → 0.95 s).
@@ -323,7 +331,8 @@ class CallerError(Exception):
 
 
 def die_caller_error(message: str, reason: Optional[str] = None, *,
-                     code: Optional[int] = None) -> NoReturn:
+                     code: Optional[int] = None,
+                     _exc: Optional[BaseException] = None) -> NoReturn:
     """Print *message* to stderr and exit with the caller-error code.
 
     Convenience for the common "bad invocation / unusable environment"
@@ -333,14 +342,18 @@ def die_caller_error(message: str, reason: Optional[str] = None, *,
     (default ``"caller_error"``) and whose ``error`` is *message* — unless
     the tool already wrote to stdout. *code* overrides the process
     caller-error code (``set_caller_error_code``) for this one exit.
+    *_exc* (private) is the exception being handled, for a caller where
+    ``sys.exc_info()`` is empty (the module excepthook, #3156).
     """
-    _exit_if_stdout_lost(sys.exc_info()[1], code=code)
+    exc = sys.exc_info()[1] if _exc is None else _exc
+    _exit_if_stdout_lost(exc, code=code)
     _to_stderr(message)
-    exit_caller_error(message, reason, code=code)
+    exit_caller_error(message, reason, code=code, _exc=exc)
 
 
 def exit_caller_error(error: str, reason: Optional[str] = None, *,
-                      code: Optional[int] = None) -> NoReturn:
+                      code: Optional[int] = None,
+                      _exc: Optional[BaseException] = None) -> NoReturn:
     """``die_caller_error`` for a caller that already printed its own
     stderr lines: only the armed envelope (``error`` = *error*) and the
     exit. Use it when stderr carries more than the one line the envelope
@@ -350,10 +363,11 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
     from — stdout's own recorded write failure (a tool's broad handler
     around the code that prints its report), it leaves by the lost-stdout
     exit instead (#3124): stdout failed, the tool's reason does not apply.
-    *code* is honoured there too."""
-    _exit_if_stdout_lost(sys.exc_info()[1], code=code)
+    *code* is honoured there too. *_exc*: as in ``die_caller_error``."""
+    exc = sys.exc_info()[1] if _exc is None else _exc
+    _exit_if_stdout_lost(exc, code=code)
     _print_armed_envelope(reason or CallerError.reason, error)
-    _quiet_failed_streams(sys.exc_info()[1])
+    _quiet_failed_streams(exc)
     _leave(_caller_error_code if code is None else code)
 
 
@@ -457,16 +471,43 @@ def _note_stderr(text: Any) -> None:
 
 
 # The last few OSErrors stdout's own write / flush raised, with the stream
-# that raised them. This — not an errno, not a poll of some stream — is how
-# "did stdout fail?" is answered (#3124): an exception is stdout's failure
-# iff it IS one of these (or was raised from one).
-_stdout_failures: list[tuple[OSError, Any]] = []
+# that raised them and what its fd referred to then (``_fd_identity``). This
+# — not an errno, not a poll of some stream — is how "did stdout fail?" is
+# answered (#3124): an exception is stdout's failure iff it IS one of these
+# (or was raised from one).
+_stdout_failures: list[tuple[OSError, Any, Any]] = []
 _STDOUT_FAILURES_KEPT = 8
+
+# `_fd_identity` of an fd that is not open; and "no identity was recorded".
+_FD_CLOSED = "closed"
+_UNKNOWN: Any = object()
+
+
+def _fd_identity(stream: Any) -> Any:
+    """What *stream*'s fd refers to now: ``(st_dev, st_ino)``, ``_FD_CLOSED``
+    when the fd is not open (EBADF), None when there is no fd to ask about."""
+    import os
+    try:
+        st = os.fstat(stream.fileno())
+    except OSError as exc:
+        return _FD_CLOSED if exc.errno == errno.EBADF else None
+    except (AttributeError, ValueError):
+        return None
+    return st.st_dev, st.st_ino
 
 
 def _record_stdout_failure(exc: OSError, stream: Any) -> None:
-    _stdout_failures.append((exc, stream))
+    _stdout_failures.append((exc, stream, _fd_identity(stream)))
     del _stdout_failures[:-_STDOUT_FAILURES_KEPT]
+
+
+def _identity_when_failed(exc: OSError) -> Any:
+    """The ``_fd_identity`` recorded with *exc*; ``_UNKNOWN`` if it is not
+    (or no longer) among the records."""
+    for failed, _stream, ident in reversed(_stdout_failures):
+        if failed is exc:
+            return ident
+    return _UNKNOWN
 
 
 def _tap_stdout(stream: Any) -> None:
@@ -565,12 +606,24 @@ def reset_exit_state() -> None:
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
     global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope
+    held = bool(_stdout_failures) or _lost_envelope is not None or _armed_stdout is not None
     disarm_crash_envelope()
     _stdout_failures.clear()
     _stdout_closed_reported = False
     _lost_envelope = None
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
+    if held:
+        # A stream only this state kept alive (a test's fake stdout) is in a
+        # reference cycle with its tapped write / flush, so it dies at some
+        # later collection — inside the next test — and its final flush then
+        # records a stdout failure there. Collect it now and forget what that
+        # dying flush recorded.
+        import gc
+        gc.collect()
+        _stdout_failures.clear()
+        _stdout_closed_reported = False
+        _lost_envelope = None
 
 
 def _print_crash_envelope(exc: BaseException) -> None:
@@ -702,7 +755,9 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
     (``raise ... from``) — the lost / failing stdout exit (#3124).
     """
     if isinstance(exc, CallerError):
-        die_caller_error(exc.error_line, exc.reason)
+        # Explicitly: under the module excepthook sys.exc_info() is empty, and
+        # the failed stream would not be quieted (#3156).
+        die_caller_error(exc.error_line, exc.reason, _exc=exc)
     _exit_if_stdout_lost(exc)
     report_crash(exc)
     try:
@@ -838,7 +893,7 @@ def _recorded_stdout_failure(exc: Optional[BaseException]) -> Optional[tuple[OSE
     seen: set[int] = set()
     while exc is not None and id(exc) not in seen:
         seen.add(id(exc))
-        for failed, stream in reversed(_stdout_failures):
+        for failed, stream, _ident in reversed(_stdout_failures):
             if failed is exc:
                 return failed, stream
         exc = exc.__cause__
@@ -850,14 +905,22 @@ def _quiet_failed_streams(exc: Optional[BaseException]) -> None:
     *exc*, an error raised while handling stdout's failure (that failure is
     in its implicit ``__context__`` chain): point the failed stream at the
     null device, so bytes still buffered for it cannot fail the final flush
-    again and replace the tool's line and code with the stdout ones."""
+    again and replace the tool's line and code with the stdout ones.
+
+    Both links of every exception are followed — ``__cause__`` AND
+    ``__context__``: ``raise X from <unrelated>`` inside the handler puts
+    stdout's failure on the context chain only (#3156)."""
     seen: set[int] = set()
-    while exc is not None and id(exc) not in seen:
-        seen.add(id(exc))
-        for failed, stream in _stdout_failures:
-            if failed is exc:
-                _point_at_null(stream)
-        exc = exc.__cause__ or exc.__context__
+    stack: list[BaseException] = [exc] if exc is not None else []
+    while stack:
+        cur = stack.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        for failed, stream, ident in _stdout_failures:
+            if failed is cur:
+                _point_at_null(stream, ident)
+        stack.extend(e for e in (cur.__cause__, cur.__context__) if e is not None)
 
 
 def _exit_if_stdout_lost(exc: Optional[BaseException], *, code: Optional[int] = None) -> None:
@@ -867,19 +930,54 @@ def _exit_if_stdout_lost(exc: Optional[BaseException], *, code: Optional[int] = 
         _exit_stdout_failed(*found, at_exit=False, code=code)
 
 
-def _point_at_null(stream: Any) -> None:
+def _point_at_null(stream: Any, when_failed: Any = _UNKNOWN) -> None:
     """Point *stream*'s fd at the null device, so what is still buffered for
-    it cannot fail again. A stream without a real fd is left alone."""
+    it cannot fail again. A stream without a real fd is left alone.
+
+    *when_failed* is ``_fd_identity`` recorded when the stream failed (#3156).
+    While the fd still refers to that — or was closed then and still is —
+    it is redirected for good. When it now refers to something else (a tool
+    closed fd 1, or ``dup2``-ed a file onto it, and the file got fd 1), that
+    is the tool's own file: it is left in place, and only the bytes still
+    buffered for the failed stream are discarded — the fd is pointed at the
+    null device for one flush, then put back — so they cannot land in it."""
     import os
+    if when_failed is None:
+        return
     try:
         fd = stream.fileno()
-        null = os.open(os.devnull, os.O_WRONLY)
+        now = _fd_identity(stream)
+        if when_failed is _UNKNOWN or now == when_failed:
+            _dup_null_onto(fd)
+            return
+        saved = None if now == _FD_CLOSED else os.dup(fd)
         try:
-            os.dup2(null, fd)
+            _dup_null_onto(fd)
+            try:
+                stream.flush()
+            except (OSError, ValueError):
+                pass
         finally:
-            os.close(null)
+            if saved is None:
+                os.close(fd)  # it was closed: leave it closed
+            else:
+                os.dup2(saved, fd)
+                os.close(saved)
     except (AttributeError, OSError, ValueError):
         pass
+
+
+def _dup_null_onto(fd: int) -> None:
+    import os
+    null = os.open(os.devnull, os.O_WRONLY)
+    if null == fd:
+        # *fd* was closed, so the null device got that very number: it is
+        # already in place, and closing it would close *fd* again.
+        return
+    try:
+        os.dup2(null, fd)
+    finally:
+        os.close(null)
 
 
 def _exit_stdout_failed(exc: OSError, stream: Any, *, at_exit: bool,
@@ -887,7 +985,9 @@ def _exit_stdout_failed(exc: OSError, stream: Any, *, at_exit: bool,
     global _stdout_closed_reported, _crash_envelope_armed
     _crash_envelope_armed = None  # no stdout to put it on
     import os
-    _point_at_null(stream)  # the stream that FAILED — never whatever sys.stdout is now
+    # The stream that FAILED — never whatever sys.stdout is now — and only
+    # while its fd still refers to what failed.
+    _point_at_null(stream, _identity_when_failed(exc))
     if not _stdout_closed_reported:
         _stdout_closed_reported = True
         _to_stderr(STDOUT_CLOSED_MESSAGE if exc.errno in _STDOUT_LOST_ERRNOS

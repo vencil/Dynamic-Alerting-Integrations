@@ -910,6 +910,11 @@ def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
 def test_probe_sees_clean_exit_state():
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
+    # The previous test's fake stdout dies in a reference cycle (its tapped
+    # flush refers to it): collect it here, not at whatever later moment the
+    # collector happens to run, so a stale record cannot hide behind timing.
+    import gc
+    gc.collect()
     assert ec._lost_envelope is None
     assert (ec._crash_envelope_armed, ec._armed_stdout, ec._stdout_failures,
             ec._stdout_closed_reported, ec.get_crash_exit_code(),
@@ -1087,3 +1092,153 @@ def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
     assert "ERROR: At least one phase input is required." in err, err
     assert (err.count(STDOUT_CLOSED_LINE)
             + err.count("ERROR: cannot write to stdout:")) == 1, err
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #3156 — three edges of the stdout-failure handling
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize("size", sorted(_SIZES))
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_crash_raised_from_another_error_in_a_broken_pipe_handler_keeps_its_code(
+        tmp_path, buffering, size):
+    """#3156 (1): the handler's crash is ``raise ... from <unrelated>``. Its
+    ``__cause__`` is the unrelated error, so stdout's failure sits only on
+    the ``__context__`` chain; both chains must be walked to quiet the
+    failed stream, or the exit flush replaces the crash code (70) and adds
+    the stdout-closed line."""
+    body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
+            "def main():\n"
+            f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
+            "    except BrokenPipeError:\n"
+            "        raise RuntimeError('render failed') from ValueError('unrelated')\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert f"{CRASH_MARK} (RuntimeError)" in err, err
+    assert rc == 70, err
+    assert STDOUT_CLOSED_LINE not in err, err
+
+
+def test_quiet_failed_streams_walks_both_chains_and_stops_on_a_cycle(monkeypatch):
+    """#3156 (1), in-process: the failure is reached through ``__context__``
+    of a ``__cause__``; a cycle in the chain ends the walk."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    pointed: list[object] = []
+    monkeypatch.setattr(ec, "_point_at_null", lambda stream, *a, **k: pointed.append(stream))
+    failure = BrokenPipeError(32, "Broken pipe")
+    stream = object()
+    monkeypatch.setattr(ec, "_stdout_failures", [(failure, stream, None)])
+    top = RuntimeError("top")
+    cause = ValueError("unrelated")
+    cause.__context__ = top  # a cycle back to the top
+    top.__cause__ = cause
+    top.__context__ = failure  # only on the context link of the top
+    ec._quiet_failed_streams(top)
+    assert pointed == [stream]
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_still_closed_fd_1_is_still_quieted(tmp_path, buffering):
+    """#3156 (3), the other side: fd 1 was closed when stdout failed and is
+    still closed when the tool leaves with its own code (5). Redirecting it
+    loses nothing, and without it the final flush fails again and replaces
+    that code. (Also red on main before #3156: with fd 1 closed, the null
+    device opened for the redirect GOT fd 1, and closing it afterwards
+    closed fd 1 again.)"""
+    body = ("os.close(1)\n"
+            "def main():\n"
+            "    try:\n        print('x' * 100)\n        sys.stdout.flush()\n"
+            "    except OSError:\n"
+            "        try:\n            open('/nonexistent/d/f', 'w')\n"
+            "        except OSError as e:\n"
+            "            _lib_exitcodes.die_caller_error(f'ERROR: cannot write --output: {e}', "
+            "reason='output_unwritable', code=5)\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
+    err = proc.stderr.decode("utf-8", "replace")
+    assert "ERROR: cannot write --output" in err, err
+    assert proc.returncode == 5, err
+    assert STDOUT_CLOSED_LINE not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_caller_error_reaching_the_excepthook_after_a_broken_pipe_prints_one_line(
+        tmp_path, buffering):
+    """#3156 (2): a tool without ``run()`` raises ``CallerError`` while
+    handling stdout's failure; it reaches the module excepthook, where
+    ``sys.exc_info()`` is empty. The exception must be handed on explicitly,
+    so the failed stream is quieted: its own line only, its caller-error
+    code (3 here)."""
+    body = ("_lib_exitcodes.set_caller_error_code(3)\n"
+            "try:\n    print('x' * 100)\n    sys.stdout.flush()\n"
+            "except BrokenPipeError:\n"
+            "    raise _lib_exitcodes.CallerError('my own reason')\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert "ERROR: my own reason" in err, err
+    assert rc == 3, err
+    assert STDOUT_CLOSED_LINE not in err, err
+    assert CRASH_MARK not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_reused_fd_1_is_not_pointed_at_the_null_device(tmp_path, buffering):
+    """#3156 (3): stdout failed while fd 1 was closed; the tool then opened a
+    file, which got fd 1. Pointing "stdout's fd" at the null device now
+    would discard that file's output: the fd is only redirected while it
+    still refers to what failed. And the bytes still buffered for the failed
+    stdout must not land in the tool's file either: it holds its own line
+    only."""
+    out = tmp_path / "out.txt"
+    body = ("os.close(1)\n"
+            "try:\n    print('old')\n    sys.stdout.flush()\n"
+            "except OSError:\n"
+            f"    f = open({str(out)!r}, 'w')\n"
+            "    assert f.fileno() == 1, f.fileno()\n"
+            "    f.write('mine\\n')\n"
+            "    _lib_exitcodes.die_caller_error('ERROR: x')\n")
+    proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    content = out.read_text(encoding="utf-8")
+    assert "old" not in content, content
+    assert content == "mine\n", err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_file_dup2ed_onto_fd_1_after_a_broken_pipe_gets_no_stale_bytes(
+        tmp_path, buffering):
+    """#3156 (3), review F1: after stdout's EPIPE the tool ``dup2``-s a file of
+    its own onto fd 1 and writes to it. The fd is no longer what failed, so
+    it is not redirected — and the bytes still buffered for the broken
+    stdout are discarded, not flushed into that file at exit."""
+    out = tmp_path / "out.txt"
+    body = ("def main():\n"
+            "    try:\n        print('old' * 40)\n        sys.stdout.flush()\n"
+            "    except BrokenPipeError:\n"
+            f"        fd = os.open({str(out)!r}, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
+            "        os.dup2(fd, 1)\n        os.close(fd)\n"
+            "        os.write(1, b'mine\\n')\n"
+            "        _lib_exitcodes.die_caller_error('ERROR: mine', code=5)\n"
+            "    return 0\n_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 5, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    content = out.read_text(encoding="utf-8")
+    assert "old" not in content, content
+    assert content == "mine\n", err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_closed_stderr_and_a_broken_pipe_end_at_the_caller_error_code(tmp_path, buffering):
+    """#3156, review S1: fd 2 closed before the run, then stdout's reader
+    leaves. The null device opened for the redirect gets fd 2 (the lowest
+    free one); closing it after the dup2 used to close fd 2 again, so the
+    final flush failed and the process ended at the interpreter's 120."""
+    body = ("os.close(2)\n"
+            "def main():\n    print('x' * 100)\n    sys.stdout.flush()\n    return 0\n"
+            "_lib_exitcodes.run(main)\n")
+    rc, _err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 2
