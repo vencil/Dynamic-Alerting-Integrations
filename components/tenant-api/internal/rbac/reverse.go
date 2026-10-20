@@ -466,12 +466,33 @@ func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown 
 // passes it (Allowed evaluates the shadow component with tenantOrgs=nil, and
 // flipping org enforce changes nothing on the platform-scope query), which
 // would let a merely-org-scoped admin read the platform-wide access map.
+// The platform-wide WRITES — the federation whitelist PUT and the account
+// backfill — use this bar too (#3160).
 //
 // In both zero-group states (open_read / fail_closed_empty) no rule exists to
 // satisfy the bar, so it returns false — the endpoint answers 403 even though
 // open_read mode grants forward read access; the audit surface is
 // intentionally narrower than the data surface.
 func (m *Manager) PlatformAdminNonOrgScoped(p *VerifiedPrincipal) bool {
+	return m.PlatformNonOrgScoped(p, PermAdmin)
+}
+
+// PlatformNonOrgScoped is PlatformAdminNonOrgScoped for any permission level:
+// the caller passes iff at least ONE rule satisfies ruleMatches &&
+// tenantMatches(rule.Tenants, "*") && ruleGrants(rule, want) && rule.OrgScope
+// == "". Only the org axis is closed; Environments / Domains are NOT
+// consulted, exactly like its admin sibling (PlatformUnrestricted closes
+// those too).
+//
+// It is the bar for a platform-wide resource that belongs to no tenant and no
+// org: the federation whitelist / backfill (want=admin) and saved views (read
+// for GET, write for PUT/DELETE — #3160). An org-scoped "*" rule fails it
+// whatever the enforce flags say: org-scope bounds a rule to some orgs'
+// tenants, and such a resource is not bounded to any org.
+//
+// Both zero-group states return false. A caller that must keep open-mode read
+// access (GET /views) checks open mode itself before asking this.
+func (m *Manager) PlatformNonOrgScoped(p *VerifiedPrincipal, want Permission) bool {
 	cfg := m.Get()
 	subject := subjectFor(p)
 	for i := range cfg.Groups {
@@ -485,7 +506,7 @@ func (m *Manager) PlatformAdminNonOrgScoped(p *VerifiedPrincipal) bool {
 		if !tenantMatches(rule.Tenants, "*") {
 			continue
 		}
-		if !ruleGrants(rule, PermAdmin) {
+		if !ruleGrants(rule, want) {
 			continue
 		}
 		return true
