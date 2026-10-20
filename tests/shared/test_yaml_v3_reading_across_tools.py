@@ -98,6 +98,27 @@ _OFFBOARD_REF = {
     "other.yaml": "tenants:\n  other:\n    note: {VALUE}\n",
 }
 
+#: A recurring maintenance window's `reason` — printed on the ACTIVE line
+#: (`True` for a boolean). The window is "0 0 1 1 *" + 400d, so it is open on
+#: any day of any year and starts at the same instant in every run (the line
+#: prints it); only two runs straddling a New Year could see different starts.
+_MAINT_REASON = {
+    "_defaults.yaml": _DEFAULTS,
+    "tenant-a.yaml": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
+                      "    _state_maintenance:\n      recurring:\n"
+                      '        - cron: "0 0 1 1 *"\n          duration: "400d"\n'
+                      "          reason: {VALUE}\n"),
+}
+#: A tenant key with no default — threshold_recommend reports its
+#: `current_value` as-is (`"yes"` / `true`). ⛔ Not a key the defaults carry:
+#: da-guard logs a timestamped WARN for a non-numeric value of a defaulted
+#: metric, and the timestamp would make two runs differ on their own.
+_TENANT_KEY = {
+    "_defaults.yaml": _DEFAULTS,
+    "tenant-a.yaml": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
+                      "    custom_widget: {VALUE}\n"),
+}
+
 _VARIANTS = {"plain": "yes", "quoted": '"yes"', "bool": "true"}
 
 # tool → (script, argv ({d} = the conf.d, {out} = a scratch dir), tree,
@@ -139,6 +160,13 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
         "dx/migrate_conf_d.py", ["--conf-d", "{d}", "--dry-run"], _META_DOMAIN, (), ""),
     "ops/offboard_tenant.py": (
         "ops/offboard_tenant.py", ["yes", "--config-dir", "{d}"], _OFFBOARD_REF, (), ""),
+    # ── already on da-guard (effective / served-values), probed in F1 (#2906) ──
+    "ops/maintenance_scheduler.py": (
+        "ops/maintenance_scheduler.py", ["--config-dir", "{d}", "--json-output"],
+        _MAINT_REASON, (), ""),
+    "ops/threshold_recommend.py": (
+        "ops/threshold_recommend.py", ["--config-dir", "{d}", "--dry-run", "--json"],
+        _TENANT_KEY, (), ""),
 }
 
 # population file → why it has no probe. Three kinds, so the table reads as
@@ -172,6 +200,16 @@ _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes 
 _OWNER_2115 = ("--config-dir reads served-values only; the single-file `--tenant-config` "
                "branch stays on PyYAML by owner ruling #2115 (decision 4: not switched), "
                "and no run mixes the two")
+#: Admitted to the population only by the K3 text net (`conf.d` / `config_dir`
+#: in a docstring, comment, help or output string); what the tool reads is
+#: named after the `;` in its row.
+_PROSE_ONLY = ("only mentions a conf.d in prose (docstring / comment / help / output text) "
+               "— the K3 text net; reads no tenant conf.d")
+#: blast_radius reads two `describe-tenant --all --output` JSON files, never a
+#: conf.d: their values are da-guard effective's, through dx/describe_tenant.py
+#: (its own `_GO` row).
+_GO_VIA_DESCRIBE = (_GO + "; indirectly — it reads `describe-tenant --all` JSON "
+                    "(dx/describe_tenant.py), never a conf.d file")
 _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
@@ -196,24 +234,30 @@ _NOT_PROBED: dict[str, str] = {
     "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
                                "to list where they differ (ADR-036 §8)"),
     "dx/describe_tenant.py": _GO,
-    "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _PENDING,
-    "lint/check_account_registry_monotonic.py": _PENDING, "validate_all.py": _PENDING,
-    "ops/byo_check.py": _PENDING, "ops/blast_radius.py": _PENDING,
-    "ops/generate_rule_pack_split.py": _PENDING, "ops/cutover_tenant.py": _PENDING,
-    "ops/maintenance_scheduler.py": _PENDING, "ops/operator_check.py": _PENDING,
-    "ops/baseline_discovery.py": _PENDING, "ops/threshold_recommend.py": _PENDING,
+    "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _NAMES,
+    "lint/check_account_registry_monotonic.py": _PENDING,
+    "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
+                                       "conf.d readers among them have their own rows"),
+    "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",
+    "ops/blast_radius.py": _GO_VIA_DESCRIBE,
+    "ops/generate_rule_pack_split.py": _PROSE_ONLY + "; reads rule packs",
+    "ops/cutover_tenant.py": _PROSE_ONLY + "; reads a readiness JSON and drives kubectl",
+    "ops/baseline_discovery.py": _PROSE_ONLY + "; reads Prometheus",
     "ops/blind_spot_discovery.py": _GO,
     "dx/compile_custom_alerts.py": _GO,
     "dx/tenant_verify.py": _GO, 
-    "lint/check_retire_drift.py": _GO_KEYS, "lint/check_scrape_reachability.py": _PENDING,
-    "lint/check_threshold_observed_map.py": _PENDING,
+    "lint/check_retire_drift.py": _GO_KEYS,
+    "lint/check_scrape_reachability.py": (_PROSE_ONLY + "; reads Kubernetes manifests and the "
+                                          "Prometheus ConfigMap"),
+    "lint/check_threshold_observed_map.py": (_PROSE_ONLY + "; reads rule packs and "
+                                             "metric_observed_map.yaml"),
     "lint/check_threshold_reachability.py": _GO_FIXED,
     "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _GO_FIXED,
     "ops/analyze_rule_pack_gaps.py": _OWNER_2115, "ops/assemble_config_dir.py": _GO,
-    "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _PENDING,
-    "ops/config_history.py": _PENDING, "ops/da_assembler.py": _GO_WRITER,
+    "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _NAMES,
+    "ops/config_history.py": _NAMES, "ops/da_assembler.py": _GO_WRITER,
     "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
-    "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,
+    "ops/drift_detect.py": _NAMES, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
     "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _PENDING,
     "ops/migrate_to_operator.py": _PENDING,
