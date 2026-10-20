@@ -60,7 +60,7 @@ from _lib_python import (  # noqa: E402, F401
     PLATFORM_DEFAULTS,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, get_crash_exit_code)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, effective_crash_exit_code)
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
@@ -1130,7 +1130,7 @@ def main(argv: list[str] | None = None) -> None:
     findings: list[str] = []
     args: argparse.Namespace | None = None
     # #3090: what an exception other than SystemExit ends the process with.
-    code = get_crash_exit_code()
+    code = effective_crash_exit_code()
     try:
         args = parser.parse_args(argv)
         # ADR-036 step 4 (#2906): one `da-guard parse-tree` reading per run.

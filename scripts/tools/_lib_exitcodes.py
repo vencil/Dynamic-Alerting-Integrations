@@ -61,6 +61,17 @@ handed to the previous hook untouched (Ctrl-C keeps its own exit status).
 
 Overrides:
 
+* ``DA_TEST_CRASH_EXIT_CODE`` (#3092) — test suites only, never set in
+  production: an integer 3..255 in this environment variable is the crash
+  code, over every choice below (``set_crash_exit_code``, ``@main(
+  crash_exit_code=)``, ``exit_on_crash(code=)``); any other value is
+  ignored. A crash then cannot pass for a named rc-2 exit in a test that
+  only checks ``returncode == 2`` (tests/conftest.py sets it to 70 for the
+  whole run). The caller-error code — a named caller error, a closed stdout
+  — is not a crash and never reads it. ``entrypoint.py`` mirrors the rule.
+  ``effective_crash_exit_code()`` is the code a crash ends with, override
+  included (for a caller that ends a crash itself); ``get_crash_exit_code()``
+  stays the tool's own choice.
 * ``set_crash_exit_code(code)`` — per-process crash code. tenant_verify
   sets 1, because its 2 means "verification failed" (see below); it sets
   its caller-error code (``set_caller_error_code``) to 1 for the same reason.
@@ -378,6 +389,35 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 _CRASH_MESSAGE_MAX = 500
 _crash_exit_code: int = EXIT_CALLER_ERROR
 
+# #3092: set by test suites only (tests/conftest.py), read at every crash.
+TEST_CRASH_EXIT_CODE_ENV: Final[str] = "DA_TEST_CRASH_EXIT_CODE"
+
+
+def crash_exit_code_from_env() -> Optional[int]:
+    """The crash code ``DA_TEST_CRASH_EXIT_CODE`` asks for, or None.
+
+    Only ASCII digits naming 3..255 count: 0 would read as success, 1 and 2
+    as a finding and a named caller error — the very confusion the variable
+    exists to remove — and anything else (a sign, spaces, an empty value)
+    is ignored rather than guessed at. ⚠️ components/da-tools/app/entrypoint.py
+    mirrors this; tests/shared/test_entrypoint.py pins the two together.
+    """
+    import os
+    raw = os.environ.get(TEST_CRASH_EXIT_CODE_ENV)
+    if raw is None or not (raw.isascii() and raw.isdigit()):
+        return None
+    code = int(raw)
+    return code if 3 <= code <= 255 else None
+
+
+def _crash_code(code: Optional[int] = None) -> int:
+    """The code a crash ends with: the test override, else *code*, else the
+    process crash code."""
+    override = crash_exit_code_from_env()
+    if override is not None:
+        return override
+    return _crash_exit_code if code is None else code
+
 
 def set_crash_exit_code(code: int) -> None:
     """Set the exit code this process uses for an unexpected crash.
@@ -392,8 +432,18 @@ def set_crash_exit_code(code: int) -> None:
 
 
 def get_crash_exit_code() -> int:
-    """The exit code an unexpected crash ends with in this process."""
+    """The crash code this process chose (``set_crash_exit_code``) — what a
+    save / restore around a tool run must put back. The code a crash ACTUALLY
+    ends with is ``effective_crash_exit_code()``."""
     return _crash_exit_code
+
+
+def effective_crash_exit_code() -> int:
+    """The exit code an unexpected crash ends with in this process: the one
+    ``set_crash_exit_code`` chose, unless ``DA_TEST_CRASH_EXIT_CODE`` (tests
+    only, #3092) overrides it. For code that ends a crash itself instead of
+    going through ``exit_on_crash``."""
+    return _crash_code()
 
 
 def crash_message(exc: BaseException) -> str:
@@ -743,7 +793,8 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
                   ) -> NoReturn:
     """Report *exc* as an unexpected crash and exit.
 
-    Exits with *code*, else the process crash code (``set_crash_exit_code``).
+    Exits with *code*, else the process crash code (``set_crash_exit_code``);
+    ``DA_TEST_CRASH_EXIT_CODE`` (tests only, #3092) overrides both.
     *on_crash* runs after the report; without one, the envelope armed by
     ``arm_crash_envelope`` (if any) is printed instead. If that raises, it is
     reported too and the exit code is unchanged. Uses ``sys.exit`` so atexit
@@ -768,7 +819,7 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
         traceback.print_exception(type(hook_exc), hook_exc,
                                   hook_exc.__traceback__, file=sys.stderr)
     _quiet_failed_streams(exc)
-    _leave(_crash_exit_code if code is None else code)
+    _leave(_crash_code(code))
 
 
 @overload

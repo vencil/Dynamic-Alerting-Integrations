@@ -386,7 +386,9 @@ def _slot_ref(label: str, tenant: str) -> str:
 
 
 # explain-route --json crashes on these trees on main already (a YAML date
-# value in `final` is not JSON serializable; rc 2) — tracked in #3144.
+# value in `final` is not JSON serializable) — tracked in #3144. Recognised by
+# the crash line, not by rc 2: under the test suite a crash ends at
+# DA_TEST_CRASH_EXIT_CODE (#3092).
 _EXPLAIN_JSON_CRASHES = {"routing-values-yaml11"}
 
 
@@ -409,7 +411,9 @@ def test_explain_tester_and_generator_agree_across_parity_matrix(tmp_path):
             continue
         proc = _run_explain(root, "--json")
         if tree["name"] in _EXPLAIN_JSON_CRASHES:
-            assert proc.returncode == 2 and "not JSON serializable" in proc.stderr, \
+            assert proc.returncode not in (0, 1) and \
+                "unexpected internal error (TypeError)" in proc.stderr and \
+                "not JSON serializable" in proc.stderr, \
                 "fixed? drop it from _EXPLAIN_JSON_CRASHES"
             continue
         assert proc.returncode == 0, (tree["name"], proc.stderr)
