@@ -371,3 +371,106 @@ func TestDiffPreview_RunsNoExternalDiff(t *testing.T) {
 		})
 	}
 }
+
+// A conditional include applies by the context git runs in: `onbranch:` by
+// the branch HEAD names, `gitdir:` by the repository directory (a batch's
+// staging worktree has its own). Checked on base in the serving tree, such
+// a driver is invisible; it applies once a PR write is on its feature
+// branch or a batch is in its staging worktree. Each write re-checks there
+// before any file is staged or checked out: refused, the driver never runs,
+// and the tree is left as it was — on base, no branch, no worktree.
+func TestWrites_RefusedWhenConditionalIncludeAppliesLater(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	cases := []struct {
+		name, include string
+		op            func(t *testing.T, w *Writer) error
+	}{
+		{"WritePR onbranch", "onbranch:tenant-api/**",
+			func(t *testing.T, w *Writer) error { return writeVia(t, "WritePR", w, "t1") }},
+		{"WritePRBatch onbranch", "onbranch:tenant-api/**",
+			func(t *testing.T, w *Writer) error { return writeVia(t, "WritePRBatch", w, "t1") }},
+		{"WriteBatch gitdir", "gitdir:**/.git/worktrees/**",
+			func(t *testing.T, w *Writer) error {
+				_, err := w.WriteBatch(context.Background(), []BatchOp{setOp("t1", silentBody("t1", "critical"))}, "op@example.com")
+				return err
+			}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo, mark := driverRepo(t)
+			drv := filepath.Join(t.TempDir(), "drivers.gitconfig")
+			var conf strings.Builder
+			for _, key := range gitDriverKeys {
+				conf.WriteString(configFileFor(key, "\"touch '"+filepath.Join(mark, key)+"'; cat\""))
+			}
+			if err := os.WriteFile(drv, []byte(conf.String()), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, repo, "config", "includeIf."+tc.include+".path", drv)
+
+			w := newTestWriter(repo, repo)
+			if err := w.CheckGitDrivers(); err != nil {
+				t.Fatalf("fixture: the check on base already sees the driver: %v", err)
+			}
+			head := gitOut(t, repo, "rev-parse", "HEAD")
+			before, err := os.ReadFile(filepath.Join(repo, "t1.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			err = tc.op(t, w)
+			if !errors.Is(err, ErrGitDriverConfigured) {
+				t.Fatalf("%s = %v, want ErrGitDriverConfigured", tc.name, err)
+			}
+			if ran := ranPrograms(t, mark); len(ran) > 0 {
+				t.Errorf("the driver programs ran: %v", ran)
+			}
+			if got := gitOut(t, repo, "symbolic-ref", "--short", "HEAD"); got != "main" {
+				t.Errorf("HEAD is %q, want main", got)
+			}
+			if got := gitOut(t, repo, "rev-parse", "HEAD"); got != head {
+				t.Errorf("HEAD moved from %s to %s", head, got)
+			}
+			if got := gitOut(t, repo, "branch", "--list"); got != "* main" {
+				t.Errorf("branches left:\n%s", got)
+			}
+			if got := gitOut(t, repo, "worktree", "list", "--porcelain"); strings.Count(got, "worktree ") != 1 {
+				t.Errorf("a staging worktree was left:\n%s", got)
+			}
+			if got, _ := os.ReadFile(filepath.Join(repo, "t1.yaml")); string(got) != string(before) {
+				t.Errorf("t1.yaml changed:\n%s", got)
+			}
+		})
+	}
+}
+
+// HistoricalMaxUint's `git log -p` reads the blobs' own lines: a textconv
+// driver would run (git log -p applies one by default) and rewrite them.
+// The driver check refuses the key at startup; --no-textconv is the second
+// layer. (`git log -p` runs no external diff without --ext-diff, and `git
+// diff --cached --quiet` runs neither — measured with git 2.43 — so their
+// --no-ext-diff is defensive and has no test that can fail.)
+func TestHistoricalMax_RunsNoTextconv(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	repo := seedTreeRepo(t, map[string]string{
+		".gitattributes": "*.yaml diff=t\n",
+		"_reg.yaml":      "next_id: 5\n",
+	})
+	writeIn(t, repo, "_reg.yaml", "next_id: 6\n")
+	gitRun(t, repo, "commit", "-qam", "bump")
+	mark := filepath.Join(t.TempDir(), "textconv-ran")
+	w := newTestWriter(repo, repo)
+	w.gitTestEnv = []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=diff.t.textconv",
+		"GIT_CONFIG_VALUE_0=touch '" + mark + "'; cat"}
+
+	got, err := w.HistoricalMaxUint(context.Background(), "_reg.yaml", "next_id")
+	if err != nil || got != 6 {
+		t.Fatalf("HistoricalMaxUint = %d, %v; want 6", got, err)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Errorf("git log -p ran the textconv driver")
+	}
+}

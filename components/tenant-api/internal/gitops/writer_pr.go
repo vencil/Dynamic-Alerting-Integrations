@@ -267,6 +267,17 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	if err := w.gitExec("checkout", "-b", branchName, "--no-track", branchPoint); err != nil {
 		return nil, fmt.Errorf("create branch: %w", err)
 	}
+	// #3175: on the feature branch an `includeIf "onbranch:…"` the check
+	// under the lock (on base) could not see may apply. Checked before
+	// anything is written, staged or committed on it. The way back must not
+	// run git on files under the branch's config: HEAD is pointed at base
+	// first (no file touched), and only then is the tree checked out — under
+	// base's config, which the lock's check passed.
+	if err := w.checkGitDriversIn(w.gitDir); err != nil {
+		_ = w.gitExec("symbolic-ref", "HEAD", "refs/heads/"+base)
+		w.abortFeatureBranch(base, branchName)
+		return nil, err
+	}
 
 	// Step 3b–3c: resolve the tenant's file, run the caller's check and the
 	// authoritative validate — all on the fresh base as git holds it

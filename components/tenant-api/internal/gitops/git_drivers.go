@@ -93,7 +93,20 @@ func (e *GitDriverError) Is(target error) bool { return target == ErrGitDriverCo
 // the repository — so it sees what they would. Failing to read the config
 // at all refuses too: what cannot be read cannot be shown to be clean.
 func (w *Writer) CheckGitDrivers() error {
-	out, err := w.gitOutput(w.gitDir, "config", "-z", "--show-scope", "--get-regexp", gitDriverKeyPattern)
+	return w.checkGitDriversIn(w.gitDir)
+}
+
+// checkGitDriversIn is CheckGitDrivers for the git context of dir, as git
+// will be in when it runs there (F1 of #3175's review). A conditional
+// include decides by that context: `includeIf "onbranch:…"` by the branch
+// HEAD names, `includeIf "gitdir:…"` by the repository directory — a
+// linked worktree has its own. So the check runs again where the context
+// changes before files are touched: in the serving tree right after a PR
+// write's `checkout -b` (WritePRChecked), and inside a batch's staging
+// worktree after `worktree add --no-checkout`, before its index or files
+// are populated (openStaging).
+func (w *Writer) checkGitDriversIn(dir string) error {
+	out, err := w.gitOutput(dir, "config", "-z", "--show-scope", "--get-regexp", gitDriverKeyPattern)
 	if err != nil {
 		// Exit status 1: no key matched. Anything else — an unreadable or
 		// malformed config file, a missing directory, a timeout — is a
