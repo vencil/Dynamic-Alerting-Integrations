@@ -472,6 +472,7 @@ def test_control_parseable_defaults_still_verify(verify_module, conf_d, capsys, 
 # ── Crash exit code stays 1 (#3090) ────────────────────────────────
 
 
+@pytest.mark.real_crash_exit_code
 def test_crash_exits_1_not_the_verification_failed_2(tmp_path):
     """An uncaught exception in tenant-verify must end at 1 (its caller /
     usage error), not the SSOT default crash code 2 — here 2 means

@@ -86,6 +86,7 @@ def test_output_is_byte_identical_to_before_findings(tmp_path, fixture, mode):
             assert doc is not None and doc["exit_code"] == res.returncode
 
 
+@pytest.mark.real_crash_exit_code
 def test_a_crash_writes_the_exit_code_the_process_ends_with(tmp_path):
     """#3090: an exception the run does not turn into an exit ends the process
     with the crash code (2); the document says the same (#2766)."""
@@ -104,6 +105,27 @@ def test_a_crash_writes_the_exit_code_the_process_ends_with(tmp_path):
     doc = json.loads(out.read_text(encoding="utf-8"))
     assert res.returncode == 2, res.stderr
     assert doc["exit_code"] == res.returncode
+
+
+def test_a_crash_under_the_test_crash_code_writes_that_code(tmp_path):
+    """#3092: main() ends a crash itself, so it must use the EFFECTIVE crash
+    code — under the suite's DA_TEST_CRASH_EXIT_CODE (70) that is 70, in the
+    exit status and the document alike."""
+    import subprocess
+    out = tmp_path / "f.json"
+    script = tmp_path / "crash.py"
+    script.write_text(
+        f"import sys\nsys.path.insert(0, {str(OPS.parent)!r})\nsys.path.insert(0, {str(OPS)!r})\n"
+        "import generate_alertmanager_routes as gar\n"
+        "def boom(*a, **k):\n    raise RuntimeError('injected')\n"
+        "gar._run = boom\n"
+        f"gar.main(['--config-dir', {str(tmp_path)!r}, '--findings-json', {str(out)!r}])\n",
+        encoding="utf-8")
+    res = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", timeout=60)
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert res.returncode == 70, res.stderr
+    assert doc["exit_code"] == 70
 
 
 # ── 2. --findings-json: the document ─────────────────────────────────────
@@ -321,6 +343,7 @@ def test_usage_error_replaces_a_stale_document(tmp_path):
     assert [r["kind"] for r in doc["findings"]] == ["run_failed"]
 
 
+@pytest.mark.real_crash_exit_code
 def test_an_exception_still_writes_a_failing_document(tmp_path, monkeypatch):
     out = tmp_path / "f.json"
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),

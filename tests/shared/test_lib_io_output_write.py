@@ -470,6 +470,7 @@ def test_decorator_exits_2_with_one_line_and_no_traceback(tmp_path: Path, blocke
     assert proc.stdout == ""
 
 
+@pytest.mark.real_crash_exit_code
 def test_decorator_leaves_other_exceptions_alone(tmp_path: Path):
     """Broadening the decorator to ``except OSError`` (or ``Exception``) makes
     this red: an unrelated failure must stay a crash — traceback plus the
@@ -487,6 +488,7 @@ def test_decorator_leaves_other_exceptions_alone(tmp_path: Path):
     assert "ERROR: cannot " not in proc.stderr
 
 
+@pytest.mark.real_crash_exit_code
 def test_decorator_does_not_claim_a_plain_oserror(tmp_path: Path):
     """Broadening the decorator from ``OutputWriteError`` to ``OSError`` makes
     this red — and the ``ValueError`` case above does NOT catch that widening

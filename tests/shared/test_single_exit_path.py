@@ -203,6 +203,7 @@ def test_tenant_verify_ends_a_closed_stdout_at_its_own_caller_error_code():
 
 
 @pytest.mark.parametrize("entry", _ENTRIES)
+@pytest.mark.real_crash_exit_code
 def test_a_socket_broken_pipe_is_still_a_crash(tmp_path, entry):
     """Control: a BrokenPipeError whose broken end is NOT stdout is the tool's
     own failure — traceback, crash line, crash code, and stdout delivered."""
@@ -222,6 +223,7 @@ def test_a_socket_broken_pipe_is_still_a_crash(tmp_path, entry):
     assert proc.stdout == b"partial report\n"
 
 
+@pytest.mark.real_crash_exit_code
 def test_an_open_stdout_keeps_the_tools_exit_code(tmp_path):
     """Anti-vacuity for the matrix: with nobody closing stdout, each ending
     keeps its own code and no named line appears."""
@@ -363,6 +365,7 @@ def test_a_tools_own_document_is_not_doubled(tmp_path):
     assert json.loads(out) == {"status": "caller_error", "reason": "own"}
 
 
+@pytest.mark.real_crash_exit_code
 def test_a_crash_after_the_tools_own_document_adds_none(tmp_path):
     rc, out, err = _json_run(tmp_path, _armed("print('{}')\nraise RuntimeError('late')\n"))
     assert rc == 2, err
@@ -516,6 +519,7 @@ _ARMED_EXITS = {
 
 
 @pytest.mark.parametrize("how", sorted(_ARMED_EXITS))
+@pytest.mark.real_crash_exit_code
 def test_shell_closed_stdout_is_not_a_crash(tmp_path, how):
     """`tool --json >&-`: sys.stdout is None. There is nowhere to put the
     envelope; the exit must still be the tool's own (rc 2, its stderr line),
@@ -731,6 +735,7 @@ def test_a_socket_epipe_while_the_reader_is_gone_keeps_its_own_reason(tmp_path, 
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.real_crash_exit_code
 def test_a_socket_epipe_crash_while_the_reader_is_gone_is_a_crash(tmp_path, buffering):
     body = _armed(_SOCKET_EPIPE)
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
