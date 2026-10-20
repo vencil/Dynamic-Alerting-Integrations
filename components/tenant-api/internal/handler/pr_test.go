@@ -30,10 +30,10 @@ func adminRBAC(t *testing.T) *rbac.Manager {
 `)
 }
 
-// initGitConfigDir creates a temp dir that is a git repo with one commit, so
-// Writer.WritePR can create a feature branch + commit. WritePR's push to a
-// (nonexistent) origin fails and is swallowed by design, so no remote is
-// needed — the PR-creation step is exercised via the mock platform client.
+// initGitConfigDir creates a temp dir that is a git repo with one commit and
+// an empty bare origin, so Writer.WritePR can create a feature branch,
+// commit and push it (a failed push fails the write, #1724) — the
+// PR-creation step is exercised via the mock platform client.
 func initGitConfigDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -49,6 +49,7 @@ func initGitConfigDir(t *testing.T) string {
 			t.Skipf("git command %v failed: %v\n%s", args, err, string(out))
 		}
 	}
+	addBareOrigin(t, dir)
 	return dir
 }
 

@@ -60,18 +60,18 @@ func commitDanglingTenantLink(t *testing.T, repo, tenantID string) {
 // TestWritePR_DanglingTenantLinkIsReplacedAndBaseStaysClean: the tenant file
 // is a committed dangling symlink → WritePR replaces it on the feature branch
 // (#2939's repair path, not a write through the link) and still returns the
-// tree to a clean base. (No origin: the push fails and the branch is kept,
-// as #641 does on a failed push, so only the tree is checked here.)
+// tree to a clean base.
 func TestWritePR_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	repo := initRepoOnMain(t)
 	commitDanglingTenantLink(t, repo, "db-a")
+	addBareRemote(t, repo) // the push must succeed (#1724)
 	w := newTestWriter(repo, repo)
 
 	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
 		t.Fatalf("WritePR over a dangling tenant symlink: %v, want the repair accepted", err)
 	}
-	if ls := gitOut(t, repo, "ls-tree", res.BranchName, "db-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+	if ls := gitOut(t, repo, "ls-tree", originRef(res.BranchName), "db-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
 		t.Errorf("db-a.yaml on %s = %q, want a regular file", res.BranchName, ls)
 	}
 	if cur := gitOut(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
@@ -232,6 +232,7 @@ func TestWritePRBatch_SecondOpMergeFailureRollsBack(t *testing.T) {
 func TestWritePRBatch_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T) {
 	repo := initRepoOnMain(t)
 	commitDanglingTenantLink(t, repo, "db-a")
+	addBareRemote(t, repo) // the push must succeed (#1724)
 	w := newTestWriter(repo, repo)
 
 	merge := func(existing []byte) (string, error) {
@@ -242,7 +243,7 @@ func TestWritePRBatch_DanglingTenantLinkIsReplacedAndBaseStaysClean(t *testing.T
 	if err != nil {
 		t.Fatalf("WritePRBatch over a dangling tenant symlink: %v, want the repair accepted", err)
 	}
-	if ls := gitOut(t, repo, "ls-tree", res.BranchName, "db-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
+	if ls := gitOut(t, repo, "ls-tree", originRef(res.BranchName), "db-a.yaml"); !strings.HasPrefix(ls, "100644 blob ") {
 		t.Errorf("db-a.yaml on %s = %q, want a regular file", res.BranchName, ls)
 	}
 	if cur := gitOut(t, repo, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {

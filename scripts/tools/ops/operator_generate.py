@@ -4,6 +4,11 @@
 Reads rule-packs/ and conf.d/ directories, generates PrometheusRule,
 AlertmanagerConfig, and ServiceMonitor CRDs for dynamic alerting stack.
 
+One AlertmanagerConfig per tenant id the conf.d declares: the keys of each
+tenant file's `tenants:` mapping, at any depth, read through `da-guard
+parse-tree` (ADR-036) — not file names. A tenant file parse-tree cannot read,
+a tenant id declared in two files, or no usable da-guard exits 2.
+
 Usage:
     da-tools operator-generate | kubectl apply -f -   # CRDs to stdout; nothing written
     da-tools operator-generate --rule-packs-dir /path/to/rule-packs
@@ -40,10 +45,9 @@ from _lib_exitcodes import arm_crash_envelope, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, load_yaml_file  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import (  # noqa: E402
-    tenant_carriers,
-    unusable_reason,
-)
+from _lib_confd import TenantSetUnknown, tree_tenants  # noqa: E402  (#2906: parse-tree's tenant set)
+from _lib_parse_cache import parse_tree_error_line  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
@@ -56,7 +60,10 @@ _HELP = {
     "zh": {
         "desc": "生成 Prometheus + Alertmanager CRD YAML（PrometheusRule、AlertmanagerConfig、ServiceMonitor）",
         "rule_packs_dir": "Rule packs 目錄（預設 rule-packs/）",
-        "config_dir": "租户配置目錄（預設 conf.d/）",
+        "config_dir": (
+            "租户配置目錄（預設 conf.d/）。租戶是整棵樹各租戶檔 `tenants:` 的鍵"
+            "（經 da-guard parse-tree 讀，不是檔名）；租戶檔讀不了或同一租戶在兩個檔宣告時以 rc 2 結束"
+        ),
         "output_dir": "把 CRD 寫進這個目錄。不給、或帶 --dry-run，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
         "api_version": "AlertmanagerConfig API 版本（預設 v1beta1）",
@@ -77,7 +84,11 @@ _HELP = {
     "en": {
         "desc": "Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)",
         "rule_packs_dir": "Rule packs directory (default rule-packs/)",
-        "config_dir": "Tenant config directory (default conf.d/)",
+        "config_dir": (
+            "Tenant config directory (default conf.d/). Tenants are the keys of each tenant "
+            "file's `tenants:` across the whole tree (read through da-guard parse-tree, not "
+            "file names); an unreadable tenant file or a tenant declared in two files exits 2"
+        ),
         "output_dir": "Write CRDs into this directory. Omit it, or pass --dry-run, and they go to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
         "api_version": "AlertmanagerConfig API version (default v1beta1)",
@@ -524,25 +535,29 @@ def validate_tenant_name(name: str) -> bool:
 
 
 def discover_tenant_configs(config_dir: Path) -> List[str]:
-    """Discover tenant names from conf.d carriers — BOTH YAML spellings.
+    """The tenant ids the conf.d tree declares — one AlertmanagerConfig each.
 
-    ⛔ The summary used to say `conf.d/*.yaml`, which is what this function
-    did until #1603 and is no longer true: it takes `CONFIG_SUFFIXES`, the
-    same set the exporter's scanner accepts.
+    ADR-036 step 4 (#2906): `_lib_confd.tree_tenants`, i.e. the keys of the
+    `tenants:` mapping of every tenant file `da-guard parse-tree` selects,
+    at any depth, as source text — the ids threshold-exporter serves. ⛔ Not
+    the file stem: `team-a.yaml` holding `tenants: {db-a: …}` yields `db-a`,
+    a tenant in `sub/x.yaml` is found, and a file with no `tenants:` mapping
+    yields nothing (the exporter serves no tenant from the flat format).
 
-    ⚠️ The tenant id comes from the file STEM, not from the `tenants:` key
-    inside — unlike `custom_alerts/loader` and `generate_tenant_metadata`.
-    That is why widening here changes which CRDs get emitted rather than
-    which tenants get merged.
+    An id that is not a DNS-1123 label (ADR-035) is skipped with a stderr
+    warning: it cannot name a Kubernetes object.
 
     Args:
         config_dir: Directory containing tenant configs
 
     Returns:
-        Sorted list of valid tenant names
+        Sorted list of valid tenant ids
 
     Raises:
         FileNotFoundError: If directory does not exist
+        TenantSetUnknown: a tenant file parse-tree cannot read, or one id
+            declared by two files (rc 2 in `main`)
+        ParseTreeError: no usable `da-guard parse-tree` (rc 2 in `main`)
     """
     if not config_dir.is_dir():
         raise FileNotFoundError(
@@ -551,59 +566,8 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
                 f"config directory not found: {config_dir}",
             )
         )
-
-    # ⛔ The scan itself lives in `_lib_confd.tenant_carriers` since #1604:
-    # `migrate_to_operator` had a verbatim twin of the loop that used to be
-    # here, #1603/#1607 fixed only this copy, and the pair then answered
-    # differently on three axes at once. Everything below is just this tool's
-    # SINK for what that one scan found — stderr — which is the only part the
-    # two readers legitimately differ on.
-    carriers = tenant_carriers(
-        config_dir, tool="operator_generate", validate=validate_tenant_name,
-    )
-    # ⚠️ `is_file()` is a THIRD axis, beyond the extension axis this change
-    # is about and the recursion axis it deliberately leaves alone. The old
-    # `glob("*.yaml")` yielded a DIRECTORY named `notes.yaml/` (an
-    # interrupted mkdir, a ConfigMap projection) and a broken symlink.
-    #
-    # ⛔ This site NEVER OPENS the file — it takes the stem as a tenant name
-    # — so there is no `except` here for an unusable entry to fall into.
-    # Measured (#1607): before the filter, such a tree emitted 20 CRDs, two
-    # of them AlertmanagerConfigs for tenants `notes` and `broken` invented
-    # from a directory and a dangling link; after, 18 and silence. Dropping
-    # the filter would restore the phantom tenants, so the filter STAYS and
-    # the entries it drops are named here instead.
-    #
-    # ⛔ `_`-prefixed entries are excluded: the loop below drops them whatever
-    # their shape, so naming an unusable one would report a loss that did not
-    # happen here — the same false finding `suffixes` exists to prevent, one
-    # axis over. Blind review caught the first version warning about a
-    # directory-shaped `_defaults.yaml/` that this function never reads.
-    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603, the last of the four
-    # readers that ticket names). Both sites below used to pass `(".yaml",)`
-    # while the exporter's scanner (`config_hierarchy.go:195`) lowercases the
-    # entry name and accepts BOTH spellings. This reader is the one where
-    # that costs a KUBERNETES OBJECT rather than a report line — measured on
-    # two trees whose contents are byte-identical and differ only in the
-    # extension:
-    #
-    #     db-a.yaml -> 18 CRDs, including `da-tenant-db-a.yaml`   <- control
-    #     db-a.yml  -> 17 CRDs, no tenant CRD at all              <- before
-    #     db-a.yml  -> 18 CRDs, including `da-tenant-db-a.yaml`   <- after
-    #
-    # rc=0 in every row, and in the `.yml` row the string `db-a` appears in
-    # NEITHER stdout NOR stderr: the tenant the exporter is serving simply
-    # has no AlertmanagerConfig on the apply plane, and nothing says so.
-    for bad in carriers.unusable:
-        print(
-            i18n_text(
-                f"WARNING: 略過 '{safe_label(bad.name)}'——{unusable_reason(bad)}",
-                f"WARNING: Skipping '{safe_label(bad.name)}' — "
-                f"{unusable_reason(bad)}",
-            ),
-            file=sys.stderr,
-        )
-    for tenant in carriers.invalid:
+    found = tree_tenants(config_dir, validate=validate_tenant_name)
+    for tenant in found.invalid:
         print(
             i18n_text(
                 f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
@@ -612,7 +576,7 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
             ),
             file=sys.stderr,
         )
-    return carriers.tenants
+    return found.tenants
 
 
 # ---------------------------------------------------------------------------
@@ -1131,6 +1095,14 @@ def main():
             secret_key=args.secret_key,
             selector_labels=dict(args.selector_label),
         )
+    except ParseTreeError as exc:
+        # #2906: no usable `da-guard parse-tree` — the tenant set was not read.
+        # Same reason as migrate_to_operator, which reads the same tenant set.
+        die_caller_error(parse_tree_error_line(exc), reason="tenant_set_unknown")
+    except TenantSetUnknown as exc:
+        # An unreadable tenant file or a duplicate id: the set cannot be
+        # answered, named — the reason migrate_to_operator gives too.
+        die_caller_error(f"ERROR: {safe_label(exc)}", reason="tenant_set_unknown")
     except Exception as exc:  # noqa: BLE001 — the tool's own "no result"
         # #3115: through die_caller_error, so --json gets its one envelope.
         die_caller_error(f"ERROR: {safe_label(exc)}", reason="generate_failed")

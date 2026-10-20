@@ -6,7 +6,7 @@ outright, directories with `SkipDir` (`pkg/config.ScanDirTree`,
 `config_hierarchy.go`). A Python tool that reads them answers about a tree
 the exporter does not have — `generate_tenant_metadata` put `.hidden.yaml`'s
 tenant in the portal list (#2055), `describe_tenant` described tenants in
-`.snap/` (#2054), `tenant_carriers` handed `.ghost` on as a tenant or as an
+`.snap/` (#2054), the operator tools' old flat scan handed `.ghost` on as a tenant or as an
 "invalid name" warning (#2067). Each was fixed one at a time; this file is
 what stops the NEXT tool from repeating it.
 
@@ -112,12 +112,13 @@ def _names(paths: Iterable[pathlib.Path], root: pathlib.Path) -> list[str]:
     return [pathlib.Path(p).relative_to(root).as_posix() for p in paths]
 
 
-def _tenant_carriers(root):
-    from _lib_confd import tenant_carriers
-    # validate=None: the lane where a hidden stem used to come back as a
-    # TENANT. The `invalid` lane is what the operator cells below cover.
-    got = tenant_carriers(root)
-    return got.tenants + got.invalid + _names(got.unusable, root)
+def _tree_tenants(root):
+    from _lib_confd import tree_tenants
+    # validate=None: the lane where a hidden file's tenant would come back
+    # as a TENANT (#2067 measured it on the stem scan this replaced, #2906).
+    # The `invalid` lane is what the operator cells below cover.
+    got = tree_tenants(root)
+    return got.tenants + got.invalid
 
 
 def _declared_tenant_ids(root):
@@ -185,8 +186,10 @@ def _generate_tenant_metadata(root):
 
 # Cells whose reader takes the tenants (or, for check_retire_drift, #2858, the
 # db_type) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
+# The operator-plane readers take their tenant set from parse-tree (#2906).
 _SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff",
-                                  "migration_audit"})
+                                  "migration_audit", "tree_tenants", "operator_generate",
+                                  "migrate_to_operator"})
 
 
 @pytest.fixture(autouse=True)
@@ -296,7 +299,7 @@ def _migration_audit(root):
 
 # cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
-    "tenant_carriers": ("_lib_confd.py", _tenant_carriers),
+    "tree_tenants": ("_lib_confd.py", _tree_tenants),
     "declared_tenant_ids": ("_lib_confd.py", _declared_tenant_ids),
     "iter_config_files": ("_lib_confd.py", _iter_config_files),
     "list_config_tree": ("_lib_confd.py", _list_config_tree),
@@ -406,8 +409,9 @@ def test_reader_does_not_see_hidden_paths(cell, tmp_path) -> None:
         f"{cell}: reported {_leaks(seen)!r} from a `.`-prefixed path the "
         f"exporter's walker never reads. Full answer: {seen!r}"
     )
-    if cell in ("operator_generate", "migrate_to_operator", "tenant_carriers"):
-        # These three leaked through a WARNING before #2067, not a tenant.
+    if cell in ("operator_generate", "migrate_to_operator", "tree_tenants"):
+        # The operator readers leaked through a WARNING before #2067, not a
+        # tenant; their tenant set is `tree_tenants` since #2906.
         assert "ghost" not in err, (
             f"{cell}: warned about a hidden entry as if it were a lost "
             f"tenant: {err!r}"
@@ -457,8 +461,9 @@ def test_every_enumerating_reader_is_accounted_for() -> None:
     accounted = ({f for f, _ in CELLS.values()}
                  | {f for f, _ in KNOWN_OPEN.values()}
                  | set(NOT_A_CELL))
-    # `operator_generate` lists only through `tenant_carriers`, so it is not
-    # an own-enumerator; it is a cell because its leak lived in a warning.
+    # `operator_generate` / `migrate_to_operator` list no directory (their
+    # tenant set is parse-tree's, #2906), so they are not own-enumerators;
+    # they are cells because their leak lived in a warning (#2067).
     unaccounted = derived - accounted
     stale = (set(NOT_A_CELL) | {f for f, _ in KNOWN_OPEN.values()}) - derived
     assert not unaccounted, (
