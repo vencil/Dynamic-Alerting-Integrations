@@ -12,9 +12,14 @@ pytest style：使用 plain assert + conftest fixtures。
   6. load_tenant_configs() — 配置載入
   7. load_metric_dictionary() — metric dictionary 載入與反向索引
   8. print_report() — 報表輸出格式
+  9. --tenant-config — da-guard parse-tree 檔案模式讀（#2906）：yes 是字串、
+     日期原文、重複鍵 / 多文件 rc 2、缺 da-guard rc 2
 """
 
+import json
 import os
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -251,7 +256,7 @@ class TestAnalyzeGaps:
 class TestLoadTenantConfigs:
     """load_tenant_configs() 配置載入。"""
 
-    def test_load_single_file(self, config_dir):
+    def test_load_single_file(self, config_dir, da_guard_env):
         """單檔載入正確解析。"""
         write_yaml(config_dir, "test.yaml", "mysql_connections: 50\n")
         path = os.path.join(config_dir, "test.yaml")
@@ -261,7 +266,8 @@ class TestLoadTenantConfigs:
 
     # #2115：目錄分支改讀 /metrics 實際發出的閾值（da-guard served-values）。
     # 閾值要有 `defaults:` 才會發出、值是 float；平面格式檔不是租戶（R3）。
-    # 以下目錄分支的測試照此改寫，單檔分支（--tenant-config）不變。
+    # 以下目錄分支的測試照此改寫。單檔分支（--tenant-config）仍是「檔案照寫的讀」，
+    # #2906 起經 `da-guard parse-tree` 檔案模式讀（見 TestSingleFileReadsParseTree）。
 
     def test_load_directory(self, config_dir, da_guard_env):
         """目錄載入跳過 _ 前綴檔案。"""
@@ -314,7 +320,7 @@ class TestLoadTenantConfigs:
         assert "db-c" in configs
         assert configs["db-c"]["mysql_connections"] == 50.0
 
-    def test_load_single_file_wrapper_format(self, config_dir):
+    def test_load_single_file_wrapper_format(self, config_dir, da_guard_env):
         """單檔分支同樣解開 wrapper（簽名與 flat 語意保留）。"""
         path = write_yaml(config_dir, "team.yaml",
                           "tenants:\n"
@@ -324,7 +330,7 @@ class TestLoadTenantConfigs:
         assert set(configs) == {"db-a"}
         assert configs["db-a"]["custom_pg_conn"] == 100
 
-    def test_load_single_file_non_dict_yaml_yields_empty_config(self, config_dir):
+    def test_load_single_file_non_dict_yaml_yields_empty_config(self, config_dir, da_guard_env):
         """單檔非 dict yaml（list/scalar）→ {}，對齊目錄分支的 lib 行為。
 
         修前 `data or {}` 會把 truthy 的 list/scalar 原樣存入 →
@@ -335,6 +341,9 @@ class TestLoadTenantConfigs:
         configs = ag.load_tenant_configs(tenant_config=path)
         assert configs == {"weird": {}}
         assert ag.extract_custom_metrics(configs) == []
+        # #2906：parse-tree 對非 mapping 頂層回 top_level_not_mapping，這裡仍是「無鍵」
+        path = write_yaml(config_dir, "scalar.yaml", "5\n")
+        assert ag.load_tenant_configs(tenant_config=path) == {"scalar": {}}
 
     def test_wrapper_tenants_reach_gap_analysis(self, config_dir, da_guard_env):
         """端到端：wrapper 租戶的 custom_ 指標真的進到 gap 分析。"""
@@ -348,6 +357,77 @@ class TestLoadTenantConfigs:
         assert len(metrics) == 1
         assert metrics[0]["tenant"] == "db-a"
         assert metrics[0]["original_metric"] == "mysql_uptime"
+
+
+# ============================================================
+# --tenant-config：parse-tree 檔案模式（#2906 F2）
+# ============================================================
+
+_TOOL = os.path.join(os.path.dirname(os.path.abspath(ag.__file__)), "analyze_rule_pack_gaps.py")
+
+
+def _run_tool(*args, env=None):
+    return subprocess.run([sys.executable, _TOOL, *args], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=180, env=env)
+
+
+class TestSingleFileReadsParseTree:
+    """單檔模式以 yaml.v3 的讀法讀（`da-guard parse-tree` 檔案模式），不繼承。"""
+
+    def test_unquoted_yes_is_the_string_yes(self, config_dir, da_guard_env):
+        """`yes` 是字串 "yes"（yaml.v3），不是 PyYAML 的 True。"""
+        path = write_yaml(config_dir, "t.yaml", "tenants:\n  t1:\n    custom_x: yes\n")
+        configs = ag.load_tenant_configs(tenant_config=path)
+        assert configs == {"t1": {"custom_x": "yes"}}
+        p = _run_tool("--tenant-config", path, "--json")
+        assert p.returncode == 0, p.stderr
+        assert json.loads(p.stdout)[0]["current_value"] == "yes"
+
+    def test_tenant_id_is_source_text(self, config_dir, da_guard_env):
+        """租戶 id `010:` 讀成 "010"，不是整數 10 / 8。"""
+        path = write_yaml(config_dir, "t.yaml", "tenants:\n  010:\n    custom_x: 1\n")
+        assert ag.load_tenant_configs(tenant_config=path) == {"010": {"custom_x": 1}}
+
+    def test_date_value_json_is_its_source_text(self, config_dir, da_guard_env):
+        """日期值：`--json` rc 0、輸出原文（修前 PyYAML 的 date → TypeError、rc 2）；
+        文字報表與 -o 也正常。"""
+        path = write_yaml(config_dir, "t.yaml",
+                          "tenants:\n  t1:\n    custom_d: 2024-01-02\n"
+                          "    custom_n:\n      since: 2001-12-14t21:59:43.10-05:00\n")
+        p = _run_tool("--tenant-config", path, "--json")
+        assert p.returncode == 0, p.stdout + p.stderr
+        got = {r["custom_metric"]: r["current_value"] for r in json.loads(p.stdout)}
+        assert got == {"custom_d": "2024-01-02",
+                       "custom_n": {"since": "2001-12-14t21:59:43.10-05:00"}}
+        out = os.path.join(config_dir, "gaps.json")
+        p = _run_tool("--tenant-config", path, "-o", out)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "custom_d" in p.stdout
+        with open(out, encoding="utf-8") as f:
+            assert {r["custom_metric"] for r in json.load(f)} == {"custom_d", "custom_n"}
+
+    @pytest.mark.parametrize("text, kind", [
+        ('tenants:\n  123:\n    custom_x: 1\n  "123":\n    custom_x: 2\n', "duplicate_key"),
+        ("custom_x: 1\ncustom_x: 2\n", "duplicate_key"),
+        ("custom_x: 1\n---\ncustom_y: 2\n", "multiple_documents"),
+    ], ids=["int-and-quoted-key", "same-key", "two-documents"])
+    def test_unreadable_file_is_rc2_named(self, config_dir, da_guard_env, text, kind):
+        """parse-tree 讀不了的檔（`123:` 與 `"123":` 是同一個鍵）→ rc 2，指名檔與原因。"""
+        path = write_yaml(config_dir, "bad-file.yaml", text)
+        p = _run_tool("--tenant-config", path)
+        assert p.returncode == 2, p.stdout + p.stderr
+        assert "ERROR: cannot read" in p.stderr and "bad-file.yaml" in p.stderr
+        assert kind in p.stderr
+        assert "Traceback" not in p.stderr
+
+    def test_missing_da_guard_is_rc2(self, config_dir, tmp_path):
+        """單檔模式從此需要 da-guard：找不到 → rc 2、一行 ERROR，不是讀成空。"""
+        path = write_yaml(config_dir, "t.yaml", "tenants:\n  t1:\n    custom_x: 1\n")
+        env = dict(os.environ, DA_GUARD_BINARY=str(tmp_path / "no-such-da-guard"))
+        p = _run_tool("--tenant-config", path, env=env)
+        assert p.returncode == 2, p.stdout + p.stderr
+        assert "da-guard" in p.stderr and "Traceback" not in p.stderr
+        assert "Rule Pack Gap Analysis" not in p.stdout
 
 
 # ============================================================

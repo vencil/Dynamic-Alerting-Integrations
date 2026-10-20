@@ -140,8 +140,8 @@ bench-history-analyze: ## 拉最近 N 次 bench-record artifact + 算 per-bench 
 	@python3 ./scripts/tools/dx/analyze_bench_history.py $(ARGS)
 
 .PHONY: bench-e2e
-bench-e2e: ## B-1 Phase 2 e2e harness — local-only (5-8 min wall-clock). COUNT=N runs (default 30), E2E_FIXTURE_KIND=synthetic-v1|synthetic-v2|customer-anon (default synthetic-v2).
-	@bash ./scripts/ops/bench_e2e_run.sh
+bench-e2e: ## B-1 Phase 2 e2e harness — local-only (5-8 min wall-clock). COUNT=N runs (default 30), E2E_FIXTURE_KIND=synthetic-v1|synthetic-v2|customer-anon (default synthetic-v2). The synthetic fixture generator needs da-guard (DA_GUARD_BINARY; unset builds .build/da-guard).
+	@$(DA_GUARD_ENV) bash ./scripts/ops/bench_e2e_run.sh
 
 .PHONY: bench-e2e-aggregate
 bench-e2e-aggregate: ## Aggregate existing per-run-*.json under tests/e2e-bench/bench-results/ without re-running the stack. ARGS=--baseline-glob '...' --gate-threshold-pct 30
@@ -640,6 +640,10 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 DA_GUARD_PREREQ := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
 DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))"
 
+# 定義在上面、早於 DA_GUARD_PREREQ 的目標：prerequisite 在讀到規則時就展開，
+# 所以在這裡補掛（ADR-036 §2：合成 fixture 產生器寫入前經 da-guard parse-tree 確認）。
+bench-e2e: $(DA_GUARD_PREREQ)
+
 # Sharded GitOps（#2906）：assemble_config_dir 的 tenant_uniqueness 經 validate-config
 # 讀 conf.d、--validate 經 da-guard parse-tree 讀組裝結果，兩者都要 da-guard。
 .PHONY: sharded-assemble
@@ -853,8 +857,8 @@ sync-tools: ## 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP
 	@python3 ./scripts/tools/dx/sync_tool_registry.py --verbose
 
 .PHONY: generate-fixtures
-generate-fixtures: ## 產生合成 Tenant Fixture 供基準測試用 (使用: make generate-fixtures ARGS="--count 100 --layout flat")
-	@python3 ./scripts/tools/dx/generate_tenant_fixture.py $(ARGS)
+generate-fixtures: $(DA_GUARD_PREREQ) ## 產生合成 Tenant Fixture 供基準測試用 (使用: make generate-fixtures ARGS="--count 100 --layout flat"；寫入前經 da-guard parse-tree 確認：DA_GUARD_BINARY，未設就建 .build/da-guard)
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/generate_tenant_fixture.py $(ARGS)
 
 .PHONY: describe-tenant
 describe-tenant: ## 展開 Tenant 有效配置（含 _defaults.yaml 繼承）(使用: make describe-tenant ARGS="<tenant-id> --conf-d conf.d/ --show-sources")

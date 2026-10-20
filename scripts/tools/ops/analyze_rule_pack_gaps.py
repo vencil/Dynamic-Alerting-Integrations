@@ -21,6 +21,8 @@ Usage:
 需求:
   - Tenant config YAML files (from threshold-config ConfigMap or local conf.d/)
   - metric-dictionary.yaml (bundled in da-tools container)
+  - da-guard ($DA_GUARD_BINARY or PATH): --config-dir reads `served-values`,
+    --tenant-config reads the file with `parse-tree` (#2906)
 """
 import argparse
 import os
@@ -33,7 +35,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231)
+from _lib_io import YamlFileError  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (#2906: the single file through parse-tree)
+from _lib_parse_tree import FileUnreadable, Timestamp  # noqa: E402
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
@@ -70,6 +74,31 @@ RULE_PACK_PREFIXES = {
 }
 
 
+def _read_tenant_file(path):
+    """*path* as `da-guard parse-tree` reads it alone (#2906): its content,
+    or None for a top level that is not a mapping (the caller's "no keys").
+    Any other file parse-tree cannot read raises YamlFileError (``cause`` is
+    the `FileUnreadable`), so it exits 2 named, as bad syntax always did."""
+    try:
+        return _lib_parse_cache.read_file_alone(path, _lib_parse_cache.VALUES)
+    except FileUnreadable as exc:
+        if exc.kind == "top_level_not_mapping":
+            return None
+        raise YamlFileError(str(path), exc) from exc
+
+
+def _jsonable(value):
+    """*value* with every `!!timestamp` (`Timestamp`) as its source text: the
+    report is JSON, and a date is written back as it was written."""
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, Timestamp):
+        return value.text
+    return value
+
+
 def load_tenant_configs(config_dir=None, tenant_config=None):
     """Load tenant configs from directory or single file.
 
@@ -83,20 +112,26 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
       stderr is passed on line by line, each behind ``DA_GUARD_PREFIX``.
       da-guard missing or failing, or a file the load cannot decode, raises
       (the CLI exits 2).
-    - Single-file branch: unchanged — the file as written. It unwraps the
+    - Single-file branch: the file as written — nothing inherited, since one
+      file is not a tree /metrics serves (owner, #2115) — read the way the
+      exporter reads YAML (#2906): ``da-guard parse-tree`` in file mode
+      (`_lib_parse_cache.read_file_alone`, VALUES), so an unquoted ``yes``
+      is the string "yes", a tenant id is its source text (``010`` →
+      "010") and a date is a `_lib_parse_tree.Timestamp`. It unwraps the
       ``tenants:`` wrapper, and derives the flat-format tenant name via
-      ``splitext`` (so ``x.yml`` → ``x``). It is not switched (owner, #2115):
-      one file is not a tree /metrics serves.
+      ``splitext`` (so ``x.yml`` → ``x``); a top level that is not a
+      mapping (a list, a scalar) is that name with no keys. A file
+      parse-tree cannot read (bad syntax, a key written twice — ``123`` and
+      ``"123"`` are one key —, more than one document, not UTF-8) raises
+      YamlFileError naming it; no usable da-guard raises
+      `_lib_parse_tree.ParseTreeError` (the CLI exits 2 either way).
 
     Returns dict: {tenant_name: {metric_key: value, ...}}
     """
     configs = {}
 
     if tenant_config:
-        # #2114: tenant ids as source text, as the directory branch reads them.
-        # #2231: and strictly, as it does — a key written twice is a file the
-        # exporter drops, so it exits 2 like bad syntax.
-        data = load_yaml_file_strict_exporter_keys(tenant_config, default={})
+        data = _read_tenant_file(tenant_config)
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
             # Multi-tenant wrapper format (mirrors _lib_io.load_tenant_configs)
             for t_name, t_data in data["tenants"].items():
@@ -254,7 +289,7 @@ def analyze_gaps(custom_metrics, metric_dict):
             "tenant": cm["tenant"],
             "custom_metric": cm["metric_key"],
             "original_metric": original,
-            "current_value": cm["value"],
+            "current_value": _jsonable(cm["value"]),
             "best_match_pack": best_match["pack"] if best_match else None,
             "golden_name": best_match.get("golden_name") if best_match else None,
             "confidence": round(confidence, 2),
@@ -316,6 +351,7 @@ def print_report(results):
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant/dictionary file → rc 2, named
 @exit_on_served_values_error  # #2115: da-guard missing or failing → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #2906: --tenant-config with no usable parse-tree → rc 2
 def main():
     """CLI entry point: Rule Pack gap analysis for custom rules."""
     parser = argparse.ArgumentParser(
