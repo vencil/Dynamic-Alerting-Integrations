@@ -2,7 +2,7 @@
  * Unit tests for `useSavedViews` hook — TECH-DEBT-030b first-batch.
  *
  * The hook wraps /api/v1/views CRUD. Tests use Vitest's `vi.fn()` to
- * stub `global.fetch`, exercise initial load / 404 (demo mode) / save
+ * stub `global.fetch`, exercise initial load / 404 (demo mode) / 403 / save
  * / remove. Real network never touched.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -51,6 +51,31 @@ describe('useSavedViews', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.reachable).toBe(false);
     expect(result.current.views).toEqual({});
+  });
+
+  it('403 → reachable=false, no onError (caller may not read saved views, #3160)', async () => {
+    // An org-scoped "*" rule is refused by design: the panel hides
+    // itself exactly as for a 404, and no error toast is raised.
+    mockFetch(() => new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }));
+    const onError = vi.fn();
+
+    const { result } = renderHook(() => useSavedViews(onError));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.reachable).toBe(false);
+    expect(result.current.views).toEqual({});
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('500 on list → onError called, panel stays reachable (contrast to 403)', async () => {
+    mockFetch(() => new Response('boom', { status: 500 }));
+    const onError = vi.fn();
+
+    const { result } = renderHook(() => useSavedViews(onError));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.reachable).toBe(true);
+    expect(onError).toHaveBeenCalledTimes(1);
   });
 
   it('save() PUTs JSON body and reloads on success', async () => {

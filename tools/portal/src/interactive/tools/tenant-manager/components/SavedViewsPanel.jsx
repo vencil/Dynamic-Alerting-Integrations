@@ -8,6 +8,7 @@ purpose: |
     - Delete saved view (with confirmation)
     - Empty state when no views exist
     - Hidden entirely when /api/v1/views is unreachable (demo mode)
+      or refuses the caller (403: org-scoped rule, #3160)
     - RBAC-aware: write controls hidden when canWrite=false
 
   Backend was already query-criteria shaped in v2.5.0 (`View.filters:

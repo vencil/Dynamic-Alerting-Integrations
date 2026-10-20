@@ -184,7 +184,7 @@ const docTemplate = `{
         },
         "/api/v1/federation/accounts/backfill": {
             "post": {
-                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires platform admin.",
+                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires a non-org-scoped platform admin (an org-scoped \"*\" admin rule is refused).",
                 "produces": [
                     "application/json"
                 ],
@@ -1750,7 +1750,7 @@ const docTemplate = `{
         },
         "/api/v1/views": {
             "get": {
-                "description": "Returns all saved filter views defined in _views.yaml.",
+                "description": "Returns all saved filter views defined in _views.yaml.\nRequires read on \"*\" from a rule with no org-scope (open mode\nreads them too).",
                 "produces": [
                     "application/json"
                 ],
@@ -1766,6 +1766,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/internal_handler.ViewResponse"
                             }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
                         }
                     }
                 }
@@ -1798,6 +1804,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1851,6 +1863,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1916,6 +1934,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }

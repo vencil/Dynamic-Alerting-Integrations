@@ -104,12 +104,15 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	//     or ["db-*"] passes and sees its own tenants; before #2520 these
 	//     routes demanded a literal "*" rule.
 	//   - platformRead / platformWrite (Middleware(perm, nil)): the permission
-	//     on the platform wildcard "*", i.e. a rule listing "*". For resources
-	//     with no per-tenant owner (saved views, until an ownership model
-	//     exists) and for routes whose handler bar is a platform admin anyway
-	//     (federation policy PUT, account backfill, the /audit surface) —
-	//     there the any-tenant gate would admit no caller the handler does not
-	//     then refuse, so they keep the narrower gate.
+	//     on the platform wildcard "*", i.e. a rule listing "*". For routes
+	//     whose handler bar is a NON-org-scoped "*" rule
+	//     (rbac.PlatformNonOrgScoped): saved views — read for GET (open mode
+	//     reads too), write for PUT/DELETE — and, at admin level
+	//     (PlatformAdminNonOrgScoped), federation policy PUT, account backfill
+	//     and the /audit surface (#3160) — there the any-tenant gate would
+	//     admit no caller the handler does not then refuse, so they keep the
+	//     narrower gate. The route gate is only a coarse first layer: an
+	//     org-scoped "*" rule passes it and is refused by the handler bar.
 	//
 	// Both keep MED-8: a configured _rbac.yaml with zero groups denies all.
 	anyTenantRead := rbacMgr.MiddlewareAnyTenant(rbac.PermRead)
@@ -246,10 +249,13 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		})
 
 		// Saved Views (v2.5.0 Phase C). ⛔ Platform "*" gate on purpose (#2520):
-		// a view has no owner and no per-tenant filter — the handlers return and
-		// overwrite every view as stored — so the any-tenant gate would hand
-		// every tenant-scoped caller the whole set. It moves only once views
-		// have an ownership model.
+		// a view has no owner, no org and no per-tenant filter — the handlers
+		// return and overwrite every view as stored — so the any-tenant gate
+		// would hand every tenant-scoped caller the whole set. The real bar is
+		// in each handler (#3160): a "*" rule with NO org-scope
+		// (rbac.PlatformNonOrgScoped) — read for GET, where open mode reads
+		// too, write for PUT/DELETE. An org-scoped "*" rule passes this route
+		// gate and is refused there, in enforce and shadow mode alike.
 		r.With(platformRead).
 			Get("/views", handler.ListViews(deps))
 
@@ -285,8 +291,9 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// of token signing. GET is the metric whitelist a tenant admin needs
 		// to choose its subset (PUT /tenants/{id}/federation) — platform
 		// config naming no tenant — so any tenant reader may read it. PUT's
-		// platform-admin check is in the handler; its route keeps the "*"
-		// gate, which every platform admin passes anyway.
+		// bar — a non-org-scoped platform admin (PlatformAdminNonOrgScoped,
+		// #3160) — is in the handler; its route keeps the "*" gate, which
+		// every such admin passes anyway.
 		r.Route("/federation/policy", func(r chi.Router) {
 			r.With(anyTenantRead).
 				Get("/", federation.GetFederationPolicy(deps))
@@ -301,7 +308,8 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// checks read on "*" (federation-policy precedent above; #2520 left it
 		// there — the handler bar below implies it, so a wider gate would admit
 		// no one); the real bar — PlatformAdminNonOrgScoped, tightened vs the bare
-		// platform-"*" admin check — lives at the top of the handler with a
+		// platform-"*" admin check (the federation PUT and backfill bars were
+		// tightened to it too, #3160) — lives at the top of the handler with a
 		// constant 403 (no tenant-enumeration oracle).
 		r.With(platformRead).
 			Get("/audit/tenants/{id}/access-report", handler.GetTenantAccessReport(deps))
@@ -330,7 +338,8 @@ func buildRouter(rd routerDeps) *chi.Mux {
 
 			// v2.10.0 ADR-021 (#609): one-shot AccountID backfill for the
 			// existing fleet. Route middleware checks read on "*"; the
-			// handler enforces platform-admin (the whole-fleet bar).
+			// handler enforces the whole-fleet bar, a non-org-scoped platform
+			// admin (PlatformAdminNonOrgScoped, #3160).
 			r.With(platformRead).
 				Post("/federation/accounts/backfill", federation.BackfillAccounts(deps))
 		}
