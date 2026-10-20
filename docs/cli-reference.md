@@ -1768,7 +1768,6 @@ da-tools operator-check [options]
 | `--namespace <NS>` | K8s namespace 探索 | `monitoring`（自動探索） |
 | `--json` | JSON 格式輸出 | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML 目錄；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 `rule-pack-*.yaml` 數比 | `rule-packs/` |
-| `--config-dir <DIR>` | 租戶配置目錄。⚠️ 目前沒有任何檢查讀它：接受，但不影響結果 | `conf.d/` |
 | `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過 | （無） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
 | `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 不可用一律 2） | false |
