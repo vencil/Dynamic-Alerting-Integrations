@@ -631,7 +631,7 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
 
 def _module_reexports_lib_root(modname: str, attr: str) -> bool:
     """Does ``<modname>.<attr>`` resolve to the lib helper (imported, not
-    defined locally)? ``gen.load_tenant_configs`` is grar's own function;
+    defined locally)? ``arg.load_tenant_configs`` is analyze_rule_pack_gaps's own function;
     ``pe.load_yaml_file`` is the lib's, re-exported."""
     for d in (TOOLS, OPS, LINT):
         p = d / f"{modname}.py"
@@ -838,7 +838,8 @@ def test_scanner_sees_reexport_through_a_tool_module():
     assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file\n"
                      "def f(p):\n    return load_yaml_file(p)\n")
     # control: a tool's OWN function of the same name is not the lib
-    assert not _sites_of("from generate_alertmanager_routes import load_tenant_configs\ndef f(p):\n    return load_tenant_configs(p)\n")
+    assert not _sites_of("from analyze_rule_pack_gaps import load_tenant_configs\n"
+                         "def f(p):\n    return load_tenant_configs(p)\n")
 
 
 # ── per-file isolation kept where the tool already had it (blind review) ──

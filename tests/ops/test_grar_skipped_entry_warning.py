@@ -196,12 +196,11 @@ def mods():
 def _stream(gar, config_dir: Path, allowed_domains) -> list[str]:
     """The warning stream `--validate` hands the predicate, in-process."""
     tree = gar.load_tenant_tree(str(config_dir))
-    routing, dedup, schema_warnings, enforced, _md = tree.as_tuple()
     _r, _rc, route_warnings = gar.generate_routes(
-        routing, allowed_domains=allowed_domains, enforced_routing=enforced,
-        tenants=dedup)
-    _i, dedup_warnings = gar.generate_inhibit_rules(dedup)
-    return schema_warnings + route_warnings + dedup_warnings
+        tree.routing_configs, allowed_domains=allowed_domains,
+        enforced_routing=tree.enforced_routing, tenants=tree.dedup_configs)
+    _i, dedup_warnings = gar.generate_inhibit_rules(tree.dedup_configs)
+    return tree.schema_warnings + route_warnings + dedup_warnings
 
 
 # ── 1. the regression ─────────────────────────────────────────────────────

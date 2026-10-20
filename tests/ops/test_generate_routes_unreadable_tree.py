@@ -34,7 +34,6 @@ import pytest
 from factories import make_routing_config, make_tenant_yaml
 from generate_alertmanager_routes import (
     TenantTree,
-    load_tenant_configs,
     load_tenant_tree,
 )
 
@@ -96,13 +95,6 @@ class TestTheRecordIsStructural:
         assert tree.tenant_file_errors == []
         assert tree.files_skipped == []
         assert tree.files_read == 2
-
-    def test_the_tuple_form_keeps_its_shape(self, broken_tree):
-        """Dozens of callers unpack five positionals; the record rides on the
-        tree form only, so none of them changes."""
-        tup = load_tenant_configs(str(broken_tree))
-        assert len(tup) == 5
-        assert tup == load_tenant_tree(str(broken_tree)).as_tuple()
 
     def test_a_non_mapping_top_level_is_the_same_class(self, tmp_path):
         """A file that parses to a list is dropped through the same helper

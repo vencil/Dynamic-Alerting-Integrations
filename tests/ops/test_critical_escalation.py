@@ -85,7 +85,7 @@ def _tree(tmp_path: Path, tenants: list[str] | None = None,
 
 
 def _routing(d: Path) -> dict:
-    return load_tenant_tree(str(d)).as_tuple()[0]
+    return load_tenant_tree(str(d)).routing_configs
 
 
 def _policy(tenants, value=True):

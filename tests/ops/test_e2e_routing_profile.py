@@ -3,7 +3,7 @@
 End-to-end verification of:
   profile parse → four-layer merge → route generation → domain policy validation → violation
 
-These tests exercise _parse_config_files → load_tenant_configs → generate_routes
+These tests exercise _parse_config_files → load_tenant_tree → generate_routes
 → check_domain_policies as a single pipeline, verifying data contracts across modules.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(_REPO, "scripts", "tools"))
 
 from generate_alertmanager_routes import (  # noqa: E402
     _parse_config_files,
-    load_tenant_configs,
+    load_tenant_tree,
     generate_routes,
     check_domain_policies,
     merge_routing_with_defaults,
@@ -140,20 +140,20 @@ class TestProfileToRouteGeneration:
 
     def test_profile_tenant_gets_profile_receiver(self, full_pipeline_dir):
         """Tenant with _routing_profile gets the profile's receiver in route."""
-        routing_configs, dedup_configs, *_ = load_tenant_configs(
-            full_pipeline_dir)
+        routing_configs = load_tenant_tree(
+            full_pipeline_dir).routing_configs
         assert "db-finance" in routing_configs
         assert routing_configs["db-finance"]["receiver"]["type"] == "pagerduty"
 
     def test_plain_tenant_gets_defaults(self, full_pipeline_dir):
         """Tenant without profile gets _routing_defaults receiver."""
-        routing_configs, *_ = load_tenant_configs(full_pipeline_dir)
+        routing_configs = load_tenant_tree(full_pipeline_dir).routing_configs
         assert "db-plain" in routing_configs
         assert routing_configs["db-plain"]["receiver"]["type"] == "email"
 
     def test_generate_routes_includes_profile_tenants(self, full_pipeline_dir):
         """generate_routes produces routes for tenants using profiles."""
-        routing_configs, *_ = load_tenant_configs(full_pipeline_dir)
+        routing_configs = load_tenant_tree(full_pipeline_dir).routing_configs
         routes, receivers, warnings = generate_routes(routing_configs, tenants=())
 
         route_names = {r["receiver"] for r in routes}
@@ -163,7 +163,7 @@ class TestProfileToRouteGeneration:
 
     def test_profile_timing_overrides_defaults(self, full_pipeline_dir):
         """Profile timing params override _routing_defaults."""
-        routing_configs, *_ = load_tenant_configs(full_pipeline_dir)
+        routing_configs = load_tenant_tree(full_pipeline_dir).routing_configs
         # team-sre profile sets group_wait=15s, repeat_interval=2h
         cfg = routing_configs["db-standard"]
         assert cfg["group_wait"] == "15s"
@@ -200,7 +200,7 @@ class TestProfileToRouteGeneration:
                 },
             },
         })
-        routing_configs, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         cfg = routing_configs["db-x"]
         # Layer 2 receiver (profile)
         assert cfg["receiver"]["type"] == "slack"
@@ -217,7 +217,7 @@ class TestRouteToPolicyValidation:
 
     def test_compliant_tenant_no_violations(self, full_pipeline_dir):
         """Finance tenant with pagerduty profile passes finance policy."""
-        routing_configs, *_ = load_tenant_configs(full_pipeline_dir)
+        routing_configs = load_tenant_tree(full_pipeline_dir).routing_configs
         parsed = _parse_config_files(full_pipeline_dir)
         policies = parsed.get("domain_policies", {})
 
@@ -263,7 +263,7 @@ class TestRouteToPolicyValidation:
                 },
             },
         })
-        routing_configs, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         parsed = _parse_config_files(config_dir)
         policies = parsed.get("domain_policies", {})
 
@@ -297,7 +297,7 @@ class TestRouteToPolicyValidation:
                 "db-y": {"cpu": "90"},  # inherits 24h repeat_interval
             },
         })
-        routing_configs, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         parsed = _parse_config_files(config_dir)
         policies = parsed.get("domain_policies", {})
 
@@ -329,7 +329,7 @@ class TestRouteToPolicyValidation:
         _write(config_dir, "db-z.yaml", {
             "tenants": {"db-z": {"cpu": "80"}},
         })
-        routing_configs, *_ = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         parsed = _parse_config_files(config_dir)
         policies = parsed.get("domain_policies", {})
 
@@ -345,10 +345,10 @@ class TestRouteToPolicyValidation:
 class TestExplainRouteConsistency:
     """Verify explain_route's final merged result matches actual routing config."""
 
-    def test_explain_matches_load_tenant_configs(self, full_pipeline_dir):
-        """explain_route final == load_tenant_configs for same tenant."""
+    def test_explain_matches_load_tenant_tree(self, full_pipeline_dir):
+        """explain_route final == load_tenant_tree for same tenant."""
         parsed = _parse_config_files(full_pipeline_dir)
-        routing_configs, *_ = load_tenant_configs(full_pipeline_dir)
+        routing_configs = load_tenant_tree(full_pipeline_dir).routing_configs
 
         for tenant in ["db-finance", "db-standard", "db-plain"]:
             explanation = explain_tenant_routing(parsed, tenant)
