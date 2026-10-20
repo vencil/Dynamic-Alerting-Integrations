@@ -70,14 +70,19 @@ func TestLoadAllTenants_ManagementMarkers(t *testing.T) {
 			t.Errorf("%s: managed_by = %q, git_managed_reason = %q; want %q, %q", c.id, r.ManagedBy, r.GitManagedReason, c.managedBy, c.reason)
 		}
 	}
-	// The id_mismatch row: the marker and nothing else — the file's
-	// metadata is lgDeclared's, not lgStem's.
-	if got, want := rowByID(t, rows, lgStem), (TenantSummary{ID: lgStem, ManagedBy: "git", GitManagedReason: "id_mismatch"}); !reflect.DeepEqual(got, want) {
+	// The id_mismatch row: the marker, metadata unknown, nothing else —
+	// the file's metadata is lgDeclared's, not lgStem's.
+	if got, want := rowByID(t, rows, lgStem), (TenantSummary{ID: lgStem, ManagedBy: "git", GitManagedReason: "id_mismatch", MetadataIncomplete: true}); !reflect.DeepEqual(got, want) {
 		t.Errorf("id_mismatch row = %+v, want %+v", got, want)
 	}
-	// The shared file's own tenant keeps its row fields.
-	if r := rowByID(t, rows, lgShared); r.SilentMode != "warning" {
-		t.Errorf("tenant_count row lost its own fields: %+v", r)
+	// The shared file declares its own tenant: that tenant's fields are
+	// read, so its metadata is known.
+	if r := rowByID(t, rows, lgShared); r.SilentMode != "warning" || r.MetadataIncomplete {
+		t.Errorf("tenant_count row declaring its own id = %+v; want its fields, metadata_incomplete false", r)
+	}
+	// An API-shaped shell declares nothing of anyone else: unchanged.
+	if r := rowByID(t, rows, lgShell); r.MetadataIncomplete {
+		t.Errorf("empty shell row = %+v; want metadata_incomplete false", r)
 	}
 }
 
@@ -100,9 +105,10 @@ func TestListTenants_ManagementMarkersJSON(t *testing.T) {
 	for _, r := range rows {
 		byID[r["id"].(string)] = r
 	}
-	// The id_mismatch row is the marker alone: no metadata, no state, no
-	// config_derived (the exporter serves the declared id, not this one).
-	if r := byID[lgStem]; !reflect.DeepEqual(r, map[string]any{"id": lgStem, "managed_by": "git", "git_managed_reason": "id_mismatch"}) {
+	// The id_mismatch row is the marker alone, metadata unknown: no
+	// metadata, no state, no config_derived (the exporter serves the
+	// declared id, not this one).
+	if r := byID[lgStem]; !reflect.DeepEqual(r, map[string]any{"id": lgStem, "managed_by": "git", "git_managed_reason": "id_mismatch", "metadata_incomplete": true}) {
 		t.Errorf("id_mismatch row JSON = %v", r)
 	}
 	if r := byID[lgOwn]; r["managed_by"] != "api" {
@@ -165,16 +171,14 @@ func TestListTenants_ManagementMatchesGet(t *testing.T) {
 	}
 }
 
-// RBAC, pinned as it stands (#3157 did not change it): an id_mismatch row
-// carries no metadata and is NOT metadata_incomplete, so the list filter reads
-// it as an UNLABELED tenant (rbac.ScopeAllowed with empty environment /
-// domain). Under shadow metadata mode an environment- or domain-restricted
-// caller therefore sees it — although the file's content (lgDeclared's) is
-// labeled staging / web, outside both restrictions — while enforce mode hides
-// it from them. Whether such a row should instead be decided as unknown
-// metadata (ScopeAllowedUnknownMetadata, like a degraded row) is an RBAC
-// decision left to the issue, not taken here; flipping it turns the shadow
-// cases below red.
+// RBAC (#3157, owner decision A): an id_mismatch row's file holds another
+// id's metadata (lgDeclared's, labeled staging / web), so the row's own is
+// UNKNOWN, not unlabeled. The row is metadata_incomplete and the list filter
+// decides it as a degraded row (rbac.ScopeAllowedUnknownMetadata): a caller
+// restricted on environments or domains does not see it, in shadow mode as in
+// enforce mode, although shadow mode lets an unlabeled tenant through. A
+// caller whose rule restricts neither axis still sees it. Breaking against
+// the behaviour before, where shadow mode showed it to restricted callers.
 func TestListTenants_IDMismatchRowVisibility(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
@@ -187,8 +191,8 @@ func TestListTenants_IDMismatchRowVisibility(t *testing.T) {
 		want    []string
 	}{
 		{false, "all-tenants", []string{lgOwn, lgStem}},
-		{false, "prod-only", []string{lgOwn, lgStem}}, // unlabeled leniency
-		{false, "db-only", []string{lgOwn, lgStem}},   // unlabeled leniency
+		{false, "prod-only", []string{lgOwn}}, // no unlabeled leniency: unknown
+		{false, "db-only", []string{lgOwn}},
 		{true, "all-tenants", []string{lgOwn, lgStem}},
 		{true, "prod-only", []string{lgOwn}},
 		{true, "db-only", []string{lgOwn}},
@@ -208,9 +212,41 @@ func TestListTenants_IDMismatchRowVisibility(t *testing.T) {
 				t.Errorf("ids = %v, want %v", got, c.want)
 			}
 			for _, r := range rows {
-				if r.ID == lgStem && (r.MetadataIncomplete || r.Environment != "" || r.Domain != "") {
-					t.Errorf("id_mismatch row = %+v; want empty metadata, metadata_incomplete false", r)
+				if r.ID == lgStem && (!r.MetadataIncomplete || r.Environment != "" || r.Domain != "") {
+					t.Errorf("id_mismatch row = %+v; want empty metadata, metadata_incomplete true", r)
 				}
+			}
+		})
+	}
+}
+
+// Which git-managed rows are metadata_incomplete: those whose file does not
+// declare the row's id, whatever the reason — the metadata in it is other
+// ids'. One that does declare it reads its own metadata, as /metrics does.
+func TestLoadAllTenants_GitManagedMetadataIncomplete(t *testing.T) {
+	t.Parallel()
+	const id = "lg-subject"
+	for _, c := range []struct {
+		name, file, reason string
+		incomplete         bool
+	}{
+		{"id_mismatch", "tenants:\n  " + lgDeclared + ":\n    _silent_mode: \"warning\"\n", "id_mismatch", true},
+		{"tenant_count, own id declared", "tenants:\n  " + id + ": {}\n  " + lgCoTenant + ": {}\n", "tenant_count", false},
+		{"tenant_count, own id not declared", "tenants:\n  " + lgDeclared + ": {}\n  " + lgCoTenant + ": {}\n", "tenant_count", true},
+		{"several_documents, own id in the first", "tenants:\n  " + id + ": {}\n---\ntenants:\n  " + lgCoTenant + ": {}\n", "several_documents", false},
+		{"several_documents, own id only in the second", "tenants:\n  " + lgCoTenant + ": {}\n---\ntenants:\n  " + id + ": {}\n", "several_documents", true},
+		{"yaml_indirection, own id declared", "base: &b\n  x: 1\n<<: *b\ntenants:\n  " + id + ": {}\n", "yaml_indirection", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			dir := setupConfigDir(t, map[string]string{id + ".yaml": c.file})
+			rows, err := loadAllTenants(dir)
+			if err != nil {
+				t.Fatalf("loadAllTenants: %v", err)
+			}
+			r := rowByID(t, rows, id)
+			if r.GitManagedReason != c.reason || r.MetadataIncomplete != c.incomplete {
+				t.Errorf("row = %+v; want git_managed_reason %q, metadata_incomplete %v", r, c.reason, c.incomplete)
 			}
 		})
 	}

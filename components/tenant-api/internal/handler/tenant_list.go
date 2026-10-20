@@ -53,7 +53,7 @@ type TenantSummary struct {
 	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
 	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
 
-	// Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own `_metadata` values), or the tenant's `_metadata` does not decode (the metadata fields are then empty, as threshold-exporter reads them). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
+	// Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own `_metadata` values), the tenant's `_metadata` does not decode (the metadata fields are then empty, as threshold-exporter reads them), or the file is git-managed and does not declare the row's id (git_managed_reason id_mismatch, or any other git-managed file whose decoded tenants leave the row's id out; the metadata fields are then empty). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
 	MetadataIncomplete bool `json:"metadata_incomplete,omitempty"`
 
 	// ManagedBy says who changes the tenant (#3064, #3157): the verdict GET /api/v1/tenants/{id} gives for the same file
@@ -66,7 +66,8 @@ type TenantSummary struct {
 	// not_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,
 	// tenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's
 	// other fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:
-	// it names no tenant. Absent when managed_by is api.
+	// it names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id
+	// (always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.
 	GitManagedReason string `json:"git_managed_reason,omitempty" enums:"not_tenant_document,several_documents,yaml_indirection,tenant_count,id_mismatch"`
 }
 
@@ -119,8 +120,10 @@ func (t TenantSummary) metadataIsUnknown() bool {
 // @Description A row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
 // @Description Each row carries `managed_by` (api | git) and, for git, `git_managed_reason` — the verdict and codes
 // @Description GET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file
-// @Description that declares one tenant under another name is listed under its name with git_managed_reason id_mismatch
-// @Description and no other field: the declared id is not shown.
+// @Description that declares one tenant under another name is listed under its name with git_managed_reason id_mismatch,
+// @Description marked `metadata_incomplete` and with no other field: the declared id is not shown. Any git-managed row
+// @Description whose file does not declare the row's id is marked `metadata_incomplete` the same way; its visibility is
+// @Description that of a degraded row.
 // @Tags        tenants
 // @Produce     json
 // @Success     200 {array}  TenantSummary
@@ -394,12 +397,22 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		// fields (as on /metrics) and is marked metadata_incomplete, like an
 		// unreadable root platform layer.
 		decoded := true
-		if overrides, ok := partial.Tenants[tenantID]; ok {
+		overrides, declared := partial.Tenants[tenantID]
+		if declared {
 			var meta cfg.ResolvedMetadata
 			meta, decoded = metadata.Resolve(tenantID, overrides)
 			setMetadata(&summary, meta)
 		}
-		summary.MetadataIncomplete = !platformKnown || !decoded
+		// #3157: a git-managed file that does not declare the row's id
+		// (id_mismatch; tenant_count, several_documents or yaml_indirection
+		// whose decoded tenants leave this id out) holds metadata — but
+		// another id's, not this one's. The empty fields are then unknown,
+		// not unlabeled: the row is decided as a degraded row is
+		// (ScopeAllowedUnknownMetadata), so an environment- or
+		// domain-restricted caller does not see it in shadow mode either.
+		// An API-shaped file declaring no tenant yet (a shell) stays as it
+		// was: nothing in it belongs to anyone else.
+		summary.MetadataIncomplete = !platformKnown || !decoded || (gitReason != "" && !declared)
 
 		summaries = append(summaries, summary)
 	}
