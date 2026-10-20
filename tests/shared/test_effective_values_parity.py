@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
 import _lib_tenant_values as tv
 from _lib_io import YamlFileError
 from _platform_fs import (  # noqa: E402
@@ -47,7 +48,8 @@ def da_guard(tmp_path_factory) -> str:
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
     proc = subprocess.run(
         [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-        cwd=APP, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=600)
+        cwd=APP, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=600,
+        env=go_build_env())
     if proc.returncode != 0:
         pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)

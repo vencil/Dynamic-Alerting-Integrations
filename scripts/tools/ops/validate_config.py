@@ -795,7 +795,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
 # ============================================================
 def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     """The route generator's key check: tenant config keys against the
-    declared defaults and reserved keys (`load_tenant_configs`).
+    declared defaults and reserved keys (`load_tenant_tree`).
 
     ⛔ Not a JSON Schema check — that is `json_schema` (#2695). The row keeps
     its historical name `schema` because the name is a contract (`--json`
@@ -803,7 +803,7 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     checked is in its PASS line instead.
 
     With strict=True, domain-policy (ADR-007) violations are escalated to
-    blocking ERROR lines by load_tenant_configs and reported as FAIL here —
+    blocking ERROR lines by load_tenant_tree and reported as FAIL here —
     matching `generate_alertmanager_routes.py --validate --strict` (CI).
     """
     # Import generate_alertmanager_routes in-process
@@ -812,8 +812,8 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    _routing, _dedup, schema_warnings, _er, _mc = gen.load_tenant_configs(
-        config_dir, strict_policies=strict)
+    schema_warnings = gen.load_tenant_tree(
+        config_dir, strict_policies=strict).schema_warnings
 
     # #3116: a domain policy that cannot be used is a field-type error now
     # (refused in every mode), not a --strict ERROR line; it is still a
@@ -877,7 +877,10 @@ def check_routes(
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
+    tree = gen.load_tenant_tree(config_dir)
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
 
     # Load allowed_domains from policy (#1556: unusable value is a caller
     # error, not "no policy" — see check_policy)
@@ -1017,7 +1020,10 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
 
-    routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
+    tree = gen.load_tenant_tree(config_dir)
+    routing = tree.routing_configs
+    dedup = tree.dedup_configs
+    enforced_routing = tree.enforced_routing
 
     import io
     old_stderr = sys.stderr
