@@ -863,7 +863,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.\nWhen the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own ` + "`" + `_metadata` + "`" + `\nvalues and the row is marked ` + "`" + `metadata_incomplete` + "`" + `; its visibility is that of a degraded row.\nA row whose ` + "`" + `_metadata` + "`" + ` does not decode is marked ` + "`" + `metadata_incomplete` + "`" + ` the same way, with empty metadata fields.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.\nWhen the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own ` + "`" + `_metadata` + "`" + `\nvalues and the row is marked ` + "`" + `metadata_incomplete` + "`" + `; its visibility is that of a degraded row.\nA row whose ` + "`" + `_metadata` + "`" + ` does not decode is marked ` + "`" + `metadata_incomplete` + "`" + ` the same way, with empty metadata fields.\nEach row carries ` + "`" + `managed_by` + "`" + ` (api | git) and, for git, ` + "`" + `git_managed_reason` + "`" + ` — the verdict and codes\nGET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file\nthat declares one tenant under another name is listed under its name with git_managed_reason id_mismatch\nand no other field: the declared id is not shown.",
                 "produces": [
                     "application/json"
                 ],
@@ -3420,6 +3420,17 @@ const docTemplate = `{
                 "environment": {
                     "type": "string"
                 },
+                "git_managed_reason": {
+                    "description": "GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:\nnot_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,\ntenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's\nother fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:\nit names no tenant. Absent when managed_by is api.",
+                    "type": "string",
+                    "enum": [
+                        "not_tenant_document",
+                        "several_documents",
+                        "yaml_indirection",
+                        "tenant_count",
+                        "id_mismatch"
+                    ]
+                },
                 "groups": {
                     "type": "array",
                     "items": {
@@ -3432,6 +3443,14 @@ const docTemplate = `{
                 "maintenance": {
                     "description": "Raw ` + "`" + `_state_maintenance` + "`" + ` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.",
                     "type": "string"
+                },
+                "managed_by": {
+                    "description": "ManagedBy says who changes the tenant (#3064, #3157): the verdict GET /api/v1/tenants/{id} gives for the same file\n(confd.TenantFileManagement on the file the row's id names), with the same values — \"api\" for an API-shaped file,\n\"git\" for any other (git_managed_reason says why; every write to it is refused with 409 TENANT_GIT_MANAGED).\nAbsent on a row whose file cannot be read at all (config_error unreadable or not_regular_file), for which GET\nanswers no tenant either.",
+                    "type": "string",
+                    "enum": [
+                        "api",
+                        "git"
+                    ]
                 },
                 "metadata_incomplete": {
                     "description": "Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own ` + "`" + `_metadata` + "`" + ` values), or the tenant's ` + "`" + `_metadata` + "`" + ` does not decode (the metadata fields are then empty, as threshold-exporter reads them). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.",
