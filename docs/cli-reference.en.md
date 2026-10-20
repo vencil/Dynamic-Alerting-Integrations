@@ -2839,7 +2839,7 @@ da-tools guard <subcommand> [flags]
 2. `$DA_GUARD_BINARY` env var
 3. `da-guard` on `$PATH`
 
-If none resolves, prints install hints (download from `tools/v*` release / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-guard ./cmd/da-guard`).
+If none resolves, prints install hints (download from `tools/v*` release / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-guard ./cmd/da-guard`).
 
 **`defaults-impact` key flags**
 
@@ -3000,7 +3000,7 @@ da-tools batch-pr <subcommand> [flags]
 2. `$DA_BATCHPR_BINARY` env var
 3. `da-batchpr` on `$PATH`
 
-If not found, prints install hints (download from a `tools/v*` release / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`).
+If not found, prints install hints (download from a `tools/v*` release / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`).
 
 **`apply` flags (most common)**
 
@@ -3081,7 +3081,7 @@ da-tools parser <subcommand> [flags]
 2. `$DA_PARSER_BINARY` environment variable
 3. `da-parser` on `$PATH`
 
-If none resolves, prints install hints (download from `tools/v*` release / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-parser ./cmd/da-parser`).
+If none resolves, prints install hints (download from `tools/v*` release / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-parser ./cmd/da-parser`).
 
 **`import` key flags**
 

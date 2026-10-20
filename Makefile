@@ -595,7 +595,7 @@ assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assem
 	@# #2476: --render-cr 以 da-crdecode（Kubernetes client 的 YAML→JSON）解碼 CR
 	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(CURDIR)/.build/da-crdecode ./cmd/da-crdecode
 	@# ADR-036 §2（#2906）：寫入前以 da-guard parse-tree 確認渲染結果
-	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(CURDIR)/.build/da-guard ./cmd/da-guard
+	@cd components/threshold-exporter/app && $(DA_GUARD_GO_ENV) go build -buildvcs=false -o $(CURDIR)/.build/da-guard ./cmd/da-guard
 	@DA_CRDECODE_BINARY=$(CURDIR)/.build/da-crdecode DA_GUARD_BINARY=$(CURDIR)/.build/da-guard \
 		python3 ./scripts/tools/ops/da_assembler.py \
 		--render-cr $(CR) --config-dir .build/config-dir
@@ -614,6 +614,11 @@ assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 # go 的 build cache 讓沒改動時只花一秒左右，而「沿用上次建的」會在 Go 原始碼改過
 # 之後悄悄驗舊的語意。
 DA_GUARD_BUILD := $(CURDIR)/.build/da-guard
+# #3174：repo 內自建的 da-guard 與出貨版同形（da-tools 映像的 build.sh、release.yaml
+# 都是 CGO_ENABLED=0 的靜態檔）。⛔ cgo 版每條 OS thread 的 pthread stack（RLIMIT_STACK，
+# 通常 8 MiB）全數計入 RLIMIT_DATA，產生器容器的判定在 RLIMIT_DATA 下跑 da-guard——
+# 用 cgo 版跑，預算量到的是 thread 數 × stack 上限而不是判定的記憶體。
+DA_GUARD_GO_ENV := CGO_ENABLED=0
 
 .PHONY: da-guard-build
 da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（validate-config 等讀取端需要；da-tools 映像已內建）
@@ -623,7 +628,7 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 		echo "       DA_GUARD_BINARY to a da-guard binary (the da-tools image ships one)." >&2; \
 		exit 2; }
 	@mkdir -p "$(dir $(DA_GUARD_BUILD))"
-	@cd components/threshold-exporter/app && go build -buildvcs=false -o "$(DA_GUARD_BUILD)" ./cmd/da-guard
+	@cd components/threshold-exporter/app && $(DA_GUARD_GO_ENV) go build -buildvcs=false -o "$(DA_GUARD_BUILD)" ./cmd/da-guard
 
 # 用哪支 da-guard 只有兩種來源：$DA_GUARD_BINARY 已設（非空白）就用它、不建；
 # 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印

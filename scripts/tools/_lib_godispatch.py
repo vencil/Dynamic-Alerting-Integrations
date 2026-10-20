@@ -220,7 +220,7 @@ class GoBinaryDispatcher:
             "    (look for tools/v* release assets when v2.8.0 ships)\n"
             "  - Build from source:\n"
             "      cd components/threshold-exporter/app && \\\n"
-            f"          go build -o /usr/local/bin/{bn} ./cmd/{bn}\n",
+            f"          CGO_ENABLED=0 go build -o /usr/local/bin/{bn} ./cmd/{bn}\n",
             f"錯誤: 找不到 {bn} 執行檔。\n"
             "解析順序:\n"
             f"  1. {self.binary_flag} <path>\n"
@@ -234,7 +234,7 @@ class GoBinaryDispatcher:
             "    (v2.8.0 釋出後請看 tools/v* release assets)\n"
             "  - 從原始碼編譯:\n"
             "      cd components/threshold-exporter/app && \\\n"
-            f"          go build -o /usr/local/bin/{bn} ./cmd/{bn}\n"
+            f"          CGO_ENABLED=0 go build -o /usr/local/bin/{bn} ./cmd/{bn}\n"
         )
 
     # ------------------------------------------------------------------
