@@ -386,6 +386,137 @@ def test_unreadable_state_block_is_not_treated_as_clean() -> None:
     )
 
 
+# ── (c2) the diagnosis must follow the evidence, not default to isolation ────
+#
+# #3177: a package `-timeout` expiry on #2977 was narrated as "a repeat-run /
+# test-isolation failure" with "bisect -count" as step 2, directly under a
+# warning that said the cause was NOT attributed. These cases pin each prose
+# block to the evidence that licenses it.
+
+# The two phrases that ARE the isolation diagnosis. Asserted as phrases, not
+# as the word "isolation": the timeout prose legitimately says it is NOT one.
+ISOLATION_CLAIM = "This is a repeat-run / test-isolation failure"
+ISOLATION_STEP = "Bisect the repetition count"
+
+
+def _timeout_frag() -> dict:
+    """A fragment produced by the REAL parser from the real timeout fixture."""
+    from parse_go_test_json import parse_stream  # noqa: PLC0415
+
+    fixture = ROOT / "tests" / "ops" / "fixtures" / "go_test_json_package_timeout.jsonl"
+    parsed = parse_stream(fixture.read_text(encoding="utf-8").splitlines(), go_exit_code=1)
+    return _frag(**parsed, module="threshold-exporter")
+
+
+def _section(body: str, heading: str) -> str:
+    """The text under `## <heading>` up to the next `## `."""
+    m = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", body, flags=re.S | re.M)
+    return m.group(1) if m else ""
+
+
+def _body(frag: dict, green: bool = False) -> str:
+    return _strip_state_blocks(compose_body(
+        frag=frag, state=_state(tests=frag.get("failed_tests") or []),
+        run_url="https://gh/runs/999", date="2026-10-14", baseline_readable=True,
+        degraded="", green=green,
+    ))
+
+
+def test_package_timeout_gets_its_own_verdict_and_triage(tmp_path: Path) -> None:
+    frag = _timeout_frag()
+    body = _body(frag)
+    problems = []
+    if "package timeout" not in file_race_report.verdict_suffix(frag, False, "d"):
+        problems.append("the verdict does not say `package timeout`")
+    what = _section(body, "What this is")
+    if "Package timeout" not in what:
+        problems.append("`What this is` does not describe the timeout")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP):
+        if phrase in body:
+            problems.append(f"a timeout body still contains {phrase!r}")
+    if "-timeout" not in _section(body, "Triage"):
+        problems.append("Triage does not point at the package's time budget (`-timeout`)")
+    for name in frag["timeout_running_tests"]:
+        if name not in _section(body, "Package timeout"):
+            problems.append(f"running-at-deadline test {name!r} is not listed")
+    if "github.com/vencil/threshold-exporter/cmd/da-guard" not in body:
+        problems.append("the timed-out package is not named")
+    title_out = _run_report(tmp_path, frag, {}).stdout
+    if "— package timeout" not in title_out:
+        problems.append("the filed title does not carry the timeout verdict")
+    assert not problems, (
+        "a package timeout is still reported as something else:\n  "
+        + "\n  ".join(problems) + f"\n--- body ---\n{body}"
+    )
+
+
+def test_unattributed_failure_does_not_assert_a_cause() -> None:
+    """The prose must say what the warning says: we do not know."""
+    body = _body(_frag(failed_tests=[], fail_events=1, unattributed_failure=True))
+    what = _section(body, "What this is")
+    problems = []
+    if "Cause NOT attributed" not in what:
+        problems.append("`What this is` does not say the cause is unattributed")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP):
+        if phrase in body:
+            problems.append(f"an unattributed body still asserts {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_isolation_narrative_appears_only_with_failed_tests() -> None:
+    shapes = {
+        "failed tests": (_frag(), False),
+        "green": (_frag(failed=False, failed_tests=[], go_exit_code=0), True),
+        "build failure": (_frag(failed_tests=[], build_failed=True), False),
+        "data race": (_frag(had_data_race=True, race_tests=["TestR"],
+                            failed_tests=["TestR"]), False),
+        "timeout": (_timeout_frag(), False),
+        "unattributed": (_frag(failed_tests=[], unattributed_failure=True), False),
+        "missing fragment": (file_race_report.load_fragment(Path("/nonexistent"),
+                                                           "tenant-api")[0], False),
+    }
+    problems = []
+    for name, (frag, green) in shapes.items():
+        body = _body(frag, green=green)
+        has = ISOLATION_CLAIM in body or ISOLATION_STEP in body
+        want = name == "failed tests"
+        if has != want:
+            problems.append(f"{name}: isolation narrative present={has}, expected {want}")
+    assert not problems, (
+        "the isolation diagnosis is not gated on failing tests:\n  " + "\n  ".join(problems)
+    )
+
+
+def test_timeout_with_failed_tests_does_not_contradict_itself() -> None:
+    """One package can hit `-timeout` while a test fails elsewhere. The body
+    then carries both diagnoses, so the timeout one must not deny the other."""
+    frag = {**_timeout_frag(), "failed_tests": ["TestElsewhere"]}
+    body = _body(frag)
+    problems = []
+    if ISOLATION_STEP not in body:
+        problems.append("the failing test lost its isolation triage step")
+    for phrase in ("Do not bisect", "No test reported a failure"):
+        if phrase in body:
+            problems.append(f"the timeout paragraph still says {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_timed_out_round_trips_and_old_blocks_still_parse() -> None:
+    restored = parse_state(render_state(_state(timed_out=1)))
+    assert restored is not None and restored["timed_out"] == 1
+    # A block written before `timed_out` existed must stay readable — an
+    # unreadable baseline re-stamps first-seen.
+    old = ("<!-- race-state: module=tenant-api first_seen=2026-07-24 "
+           "first_run=https://gh/runs/1 last_run=https://gh/runs/2 last_green=none "
+           "streak=3 had_data_race=0 build_failed=0 unattributed=1 tests_truncated=0 "
+           "tests=[] -->")
+    old_state = parse_state(old)
+    assert old_state is not None
+    assert old_state["timed_out"] == 0
+    assert old_state["first_seen"] == "2026-07-24"
+    assert old_state["unattributed"] == 1
+
+
 def test_missing_fragment_reads_as_worse_not_clean(tmp_path: Path) -> None:
     """A leg that never uploaded has proven nothing."""
     proc = _run_report(tmp_path, None, {})

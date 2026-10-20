@@ -31,6 +31,17 @@ Contract notes measured against a real Go 1.26 run, not assumed
   is a real, expected state — it must not read as "clean".
 * Non-JSON lines do occur (toolchain download notices, stray preamble). They are
   counted, never fatal.
+* A `-timeout` expiry (measured on the nightly that read as "test-isolation" in
+  #2977, Go 1.26.8) emits NO per-test `fail` event at all. The test binary
+  panics, and each line of the panic arrives as an `output` event — attributed
+  to whichever test test2json saw last, so `Test` is present but meaningless:
+      panic: test timed out after 30m0s
+      \trunning tests:
+      \t\tTestFoo/sub (11s)
+      <blank line, then goroutine dumps>
+  followed by the package-level `{"Action":"fail"}` (no `Test`). Without
+  reading those lines the run reduces to "exit 1, nothing attributable", and
+  the report used to guess a cause for it (#3177).
 
 Fail-closed direction
 ---------------------
@@ -62,6 +73,17 @@ RACE_MARKERS = (
 )
 RACE_SUMMARY_RE = re.compile(r"found \d+ data race")
 
+# `testing` panics with exactly this line on a -timeout expiry. Anchored to the
+# whole line (not a substring) for the same reason as RACE_MARKERS: a test that
+# logs prose mentioning a timeout must not become a "package timeout" verdict.
+# t.Log output is indented, so it cannot match a line-start anchor.
+TIMEOUT_PANIC_RE = re.compile(r"^panic: test timed out after (\S+)\s*$")
+RUNNING_TESTS_HEADER = "running tests:"
+# One entry of the `running tests:` block: two tabs, the name, " (<elapsed>)".
+# Go rewrites spaces in test names to underscores, so the LAST " (" is the
+# separator even for names that contain parentheses.
+RUNNING_TEST_RE = re.compile(r"^\t\t(\S.*) \([^()]*\)\s*$")
+
 
 def parse_stream(lines, go_exit_code: int) -> dict:
     """Reduce test2json events to the fields the report job needs.
@@ -76,6 +98,20 @@ def parse_stream(lines, go_exit_code: int) -> dict:
     fail_events = 0
     non_json_lines = 0
     total_events = 0
+    # Per package: the `-timeout` value from the panic line and the tests it
+    # listed as running. Keyed by Package because one `go test ./...` stream
+    # interleaves many packages, and a name alone does not say where it ran.
+    timeout_after: dict[str, str] = {}
+    timeout_running: dict[str, set[str]] = {}
+    # Packages currently inside their `running tests:` block.
+    # A state per package, not one global flag: another package's output may
+    # interleave between two lines of the block.
+    reading_block: set[str] = set()
+    # Packages whose package-level (no `Test`) fail event arrived. A timeout is
+    # only REPORTED for these: a panic line from a stream that never reached its
+    # package verdict (job killed mid-dump) stays "unattributed", which is the
+    # fail-closed direction.
+    pkg_failed: set[str] = set()
 
     for raw in lines:
         line = raw.strip()
@@ -107,23 +143,57 @@ def parse_stream(lines, go_exit_code: int) -> dict:
             # into the sorted list and blow up on comparison.
             if isinstance(test, str) and test.strip():
                 failed.add(test.strip())
+            elif isinstance(ev.get("Package"), str):
+                pkg_failed.add(ev["Package"])
 
         elif action == "output":
             out = ev.get("Output")
             if not isinstance(out, str):
                 continue
+            pkg = ev.get("Package") if isinstance(ev.get("Package"), str) else ""
+            line_text = out.rstrip("\n")
+            tm = TIMEOUT_PANIC_RE.match(line_text)
+            if tm:
+                timeout_after[pkg] = tm.group(1)
+                timeout_running.setdefault(pkg, set())
+            elif pkg in timeout_after and line_text.strip() == RUNNING_TESTS_HEADER:
+                reading_block.add(pkg)
+            elif pkg in reading_block:
+                rm = RUNNING_TEST_RE.match(line_text)
+                if rm:
+                    timeout_running[pkg].add(rm.group(1).strip())
+                else:
+                    # The block ends at the first line that is not an entry
+                    # (measured: a blank line, then goroutine dumps).
+                    reading_block.discard(pkg)
             if any(m in out for m in RACE_MARKERS) or RACE_SUMMARY_RE.search(out):
                 had_data_race = True
                 test = ev.get("Test")
                 if isinstance(test, str) and test.strip():
                     race_tests.add(test.strip())
 
+    timeout_pkgs = sorted(p for p in timeout_after if p in pkg_failed)
+    timed_out = bool(timeout_pkgs)
+
     # A failing run we could not attribute to anything is the dangerous case:
     # the old workflow's body was exactly this state and it read as informative.
-    unattributed = bool(go_exit_code) and not failed and not build_failed and not had_data_race
+    unattributed = (bool(go_exit_code) and not failed and not build_failed
+                    and not had_data_race and not timed_out)
 
     return {
         "failed_tests": sorted(failed),
+        "timed_out": timed_out,
+        # One entry per timed-out package, so the report can say WHERE.
+        "timeout_packages": [
+            {"package": p, "after": timeout_after[p],
+             "running_tests": sorted(timeout_running.get(p, ()))}
+            for p in timeout_pkgs
+        ],
+        # Flat union, durations stripped. Running at the deadline is NOT the
+        # same as failing: these are the tests to time, not tests to fix.
+        "timeout_running_tests": sorted(
+            {t for p in timeout_pkgs for t in timeout_running.get(p, ())}
+        ),
         "race_tests": sorted(race_tests),
         "had_data_race": had_data_race,
         "build_failed": build_failed,
@@ -159,6 +229,10 @@ def build_fragment(
 
     result.update(
         {
+            # Still 1: the timeout fields (#3177) are additive, and the only
+            # consumer (file_race_report) reads every field with .get(), so a
+            # fragment without them reads as "did not time out" — which is what
+            # an older parser that could not detect timeouts actually measured.
             "schema": 1,
             "module": module,
             "workdir": workdir,
@@ -173,6 +247,7 @@ def build_fragment(
         result["failed_tests"]
         or result["had_data_race"]
         or result["build_failed"]
+        or result["timed_out"]
         or result["unattributed_failure"]
         or result["go_exit_code"]
     )
