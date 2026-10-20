@@ -553,3 +553,116 @@ def test_account_registry_absent_needs_no_da_guard(tmp_path, monkeypatch,
     (the CI path, where the file is not tracked)."""
     mono = _ar_repo(tmp_path, monkeypatch, None, None)
     assert _exit_code(mono.main) == 0
+
+
+# ── operator_generate / migrate_to_operator (the tenant set, F1) ────────
+#
+# Both take their tenants from `_lib_confd.tree_tenants`: the keys of each
+# tenant file's `tenants:` across the whole tree, as parse-tree reads them —
+# not the file stem of a flat listing. One fixture, both tools, so the two
+# operator-plane readers cannot drift apart again (#1604).
+
+_OP = {"_defaults.yaml": "defaults:\n  cpu: 80\n",
+       # file name ≠ tenant id; `010:` / `yes:` are the text "010" / "yes"
+       # (PyYAML: 8 and True)
+       "team-a.yaml": "tenants:\n  010: {cpu: '1'}\n  yes: {cpu: '2'}\n",
+       # a tenant in a subdirectory exists for the exporter
+       "sub/x.yaml": "tenants:\n  db-c: {cpu: '3'}\n",
+       # no `tenants:` wrapper: the exporter serves no tenant from it
+       "flat.yaml": "cpu: '4'\n"}
+_OP_TENANTS = ["010", "db-c", "yes"]
+
+
+def _operator_main(monkeypatch, capsys, tool: str, d: pathlib.Path,
+                   src: pathlib.Path) -> "tuple[int, list[str], str]":
+    """rc, the tenants of the emitted AlertmanagerConfigs, stderr."""
+    m = _tool(tool)
+    argv = (["og", "--config-dir", str(d), "--components", "alertmanager", "--json"]
+            if tool == "operator_generate" else
+            ["mto", "--source-dir", str(src), "--config-dir", str(d), "--dry-run", "--json"])
+    monkeypatch.setattr(sys, "argv", argv)
+    rc = _exit_code(m.main)
+    out, err = capsys.readouterr()
+    if rc != 0:
+        return rc, [], err
+    doc = json.loads(out)
+    crds = doc["crds"] if tool == "operator_generate" else doc["alertmanager_configs"]
+    tenants = sorted(
+        r["matchers"][0]["value"] for c in crds if c.get("kind") == "AlertmanagerConfig"
+        for r in [c["spec"]["route"]])
+    return rc, tenants, err
+
+
+_OPERATOR_TOOLS = ["operator_generate", "migrate_to_operator"]
+
+
+@pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
+def test_operator_tenants_are_the_declared_keys_as_text(tool, tmp_path, monkeypatch, capsys):
+    """`010:` / `yes:` are tenants "010" / "yes"; `sub/x.yaml`'s tenant is
+    seen; `team-a.yaml` and `flat.yaml` are no tenants (file names)."""
+    d = _write(tmp_path / "conf.d", _OP)
+    (tmp_path / "src").mkdir()
+    rc, tenants, err = _operator_main(monkeypatch, capsys, tool, d, tmp_path / "src")
+    assert rc == 0, err
+    assert tenants == _OP_TENANTS, (tenants, err)
+    assert "team-a" not in tenants and "flat" not in tenants
+
+
+@pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
+def test_operator_tenants_parse_no_yaml(tool, tmp_path, monkeypatch, no_yaml_parse):
+    """The tenant set is read with no PyYAML parse (the ConfigMap
+    `--source-dir` of migrate_to_operator is empty here: not conf.d)."""
+    d = _write(tmp_path / "conf.d", _OP)
+    (tmp_path / "src").mkdir()
+    m = _tool(tool)
+    assert m.discover_tenant_configs(d) == _OP_TENANTS
+
+
+@pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
+def test_operator_tools_name_an_unreadable_tenant_file_and_exit_2(
+        tool, tmp_path, monkeypatch, capsys):
+    """What `sub/bad.yaml` declares is unknown, so the AlertmanagerConfigs
+    to emit are: rc 2, the file and parse-tree's kind named."""
+    d = _write(tmp_path / "conf.d", {**_OP, "sub/bad.yaml": "tenants:\n  a: {}\n  a: {}\n"})
+    (tmp_path / "src").mkdir()
+    rc, _tenants, err = _operator_main(monkeypatch, capsys, tool, d, tmp_path / "src")
+    assert rc == 2, err
+    assert "sub/bad.yaml" in err and "duplicate_key" in err, err
+
+
+@pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
+def test_operator_tools_refuse_a_tenant_declared_in_two_files(
+        tool, tmp_path, monkeypatch, capsys):
+    """The exporter rejects a tree declaring one tenant in two files
+    (DuplicateTenantError): rc 2, both files named."""
+    d = _write(tmp_path / "conf.d", {**_OP, "sub/y.yaml": "tenants:\n  db-c: {}\n"})
+    (tmp_path / "src").mkdir()
+    rc, _tenants, err = _operator_main(monkeypatch, capsys, tool, d, tmp_path / "src")
+    assert rc == 2, err
+    assert "'db-c'" in err and "sub/x.yaml" in err and "sub/y.yaml" in err, err
+
+
+@pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
+def test_operator_tools_without_da_guard_are_exit_2(
+        tool, tmp_path, monkeypatch, capsys, no_parse_tree_binary):
+    d = _write(tmp_path / "conf.d", _OP)
+    (tmp_path / "src").mkdir()
+    rc, _tenants, err = _operator_main(monkeypatch, capsys, tool, d, tmp_path / "src")
+    assert rc == 2, err
+    assert "da-guard parse-tree" in err, err
+
+
+@pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
+def test_operator_tools_name_one_reason_for_an_unknown_tenant_set(tool, tmp_path):
+    """Run as the CLI (the `--json` envelope is armed there): both tools
+    reading the same tenant set give the same envelope `reason`."""
+    d = _write(tmp_path / "conf.d", {**_OP, "sub/y.yaml": "tenants:\n  db-c: {}\n"})
+    (tmp_path / "src").mkdir()
+    script = TOOLS / "ops" / f"{tool}.py"
+    argv = (["--config-dir", str(d), "--components", "alertmanager", "--json"]
+            if tool == "operator_generate" else
+            ["--source-dir", str(tmp_path / "src"), "--config-dir", str(d), "--dry-run", "--json"])
+    r = subprocess.run([sys.executable, str(script), *argv], capture_output=True, text=True,
+                       encoding="utf-8", timeout=120)
+    assert r.returncode == 2, r.stderr
+    assert json.loads(r.stdout)["reason"] == "tenant_set_unknown", r.stdout

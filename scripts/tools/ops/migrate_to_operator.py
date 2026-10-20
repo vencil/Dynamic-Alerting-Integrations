@@ -5,6 +5,11 @@ Reads existing Prometheus ConfigMap rules (from configmaps/ or live cluster expo
 and conf.d/ tenant configs, then produces equivalent PrometheusRule + AlertmanagerConfig
 CRDs along with a step-by-step migration checklist.
 
+The conf.d tenants are the keys of each tenant file's `tenants:` mapping, at
+any depth, read through `da-guard parse-tree` (ADR-036) — not file names. A
+tenant file parse-tree cannot read, a tenant id declared in two files, or no
+usable da-guard exits 2.
+
 Usage:
     da-tools migrate-to-operator --source-dir configmaps/ --config-dir conf.d/   # stdout; nothing written
     da-tools migrate-to-operator --source-dir configmaps/ --output-dir migration-output/   # writing is opt-in (#1582)
@@ -33,16 +38,18 @@ except ImportError:
 
 from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, load_yaml_file, write_text_secure  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
-    TenantCarriers,
+    TenantSetUnknown,
+    TreeTenants,
     has_yaml_extension,
-    tenant_carriers,
-    unusable_reason,
+    tree_tenants,
     warn_nested,
 )
+import _lib_parse_cache  # noqa: E402  (#2906: one parse-tree snapshot per run)
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 
 _RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
@@ -51,7 +58,10 @@ _HELP = {
     "zh": {
         "desc": "將 ConfigMap 式規則遷移至 Operator CRD 格式（PrometheusRule、AlertmanagerConfig）",
         "source_dir": "ConfigMap YAML 檔案來源目錄",
-        "config_dir": "租户配置目錄（預設 conf.d/）",
+        "config_dir": (
+            "租户配置目錄（預設 conf.d/）。租戶是整棵樹各租戶檔 `tenants:` 的鍵"
+            "（經 da-guard parse-tree 讀，不是檔名）；租戶檔讀不了或同一租戶在兩個檔宣告時以 rc 2 結束"
+        ),
         "output_dir": "把 CRD 與 checklist 寫進這個目錄。不給、或帶 --dry-run / --checklist-only，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
         "receiver_template": f"Receiver 模板類型（{' | '.join(_RECEIVER_TEMPLATES)}）",
@@ -64,7 +74,11 @@ _HELP = {
     "en": {
         "desc": "Migrate ConfigMap-based Prometheus rules to Operator CRD format (PrometheusRule, AlertmanagerConfig)",
         "source_dir": "Source directory with ConfigMap YAML files",
-        "config_dir": "Tenant config directory (default conf.d/)",
+        "config_dir": (
+            "Tenant config directory (default conf.d/). Tenants are the keys of each tenant "
+            "file's `tenants:` across the whole tree (read through da-guard parse-tree, not "
+            "file names); an unreadable tenant file or a tenant declared in two files exits 2"
+        ),
         "output_dir": "Write CRDs and the checklist into this directory. Omit it, or pass --dry-run / --checklist-only, and everything goes to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
         "receiver_template": f"Receiver template type ({' | '.join(_RECEIVER_TEMPLATES)})",
@@ -89,21 +103,22 @@ def validate_tenant_name(name: str) -> bool:
     return is_valid_tenant_id(name)
 
 
-def _scan_tenant_carriers(config_dir: Path) -> TenantCarriers:
-    """One scan of `config_dir`, shared with `operator_generate` (#1604).
+def _tree_tenants(config_dir: Path) -> TreeTenants:
+    """The tenant ids the conf.d tree declares, split by RFC 1123.
 
-    ⛔ This module used to carry a VERBATIM TWIN of that tool's loop. #1603
-    and #1607 widened only the other copy, and the pair then disagreed about
-    the same directory on three axes at once — measured:
+    ADR-036 step 4 (#2906): `_lib_confd.tree_tenants` — the keys of the
+    `tenants:` mapping of every tenant file `da-guard parse-tree` selects,
+    at any depth, as source text; the same answer `operator_generate` takes,
+    so the two operator-plane readers cannot disagree about one tree
+    (#1604). ⛔ Not the file stem: `team-a.yaml` holding
+    `tenants: {db-a: …}` is tenant `db-a`, a tenant in `sub/x.yaml` is
+    found, and a file with no `tenants:` mapping (the flat format) is no
+    tenant — the exporter serves none from it.
 
-        db-a.yaml (control)   operator_generate: yes   this module: yes
-        db-b.yml              operator_generate: yes   this module: NO
-        notes.yaml/  (a dir)  operator_generate: no    this module: YES
-        broken.yaml  (link)   operator_generate: no    this module: YES
-
-    The last two rows are the direction #1604 did not name: the narrow copy
-    did not merely miss `.yml`, it INVENTED tenants from a directory and a
-    dangling symlink and emitted CRDs for them without a word.
+    Raises FileNotFoundError (directory missing), `TenantSetUnknown` (a
+    tenant file parse-tree cannot read, an id declared by two files) and
+    ParseTreeError (no usable parse-tree); `main` turns the last two into
+    rc 2.
     """
     if not config_dir.is_dir():
         raise FileNotFoundError(
@@ -112,29 +127,18 @@ def _scan_tenant_carriers(config_dir: Path) -> TenantCarriers:
                 f"config directory not found: {config_dir}",
             )
         )
-    return tenant_carriers(
-        config_dir, tool="migrate_to_operator", validate=validate_tenant_name,
-    )
+    return tree_tenants(config_dir, validate=validate_tenant_name)
 
 
 def discover_tenant_configs(config_dir: Path) -> List[str]:
-    """Discover tenant names from conf.d carriers — BOTH YAML spellings.
+    """The valid tenant ids of the conf.d tree (see `_tree_tenants`).
 
-    ⚠️ Warnings go to stderr here; `analyze_migration` needs the same facts
-    as DATA for its `issues` array, so it calls `_scan_tenant_carriers`
-    directly rather than re-scanning (that second scan was #1604's `:372`).
+    ⚠️ An invalid id is warned about on stderr here; `analyze_migration`
+    needs the same fact as DATA for its `issues` array, so it calls
+    `_tree_tenants` directly.
     """
-    carriers = _scan_tenant_carriers(config_dir)
-    for bad in carriers.unusable:
-        print(
-            i18n_text(
-                f"WARNING: 略過 '{safe_label(bad.name)}'——{unusable_reason(bad)}",
-                f"WARNING: Skipping '{safe_label(bad.name)}' — "
-                f"{unusable_reason(bad)}",
-            ),
-            file=sys.stderr,
-        )
-    for tenant in carriers.invalid:
+    found = _tree_tenants(config_dir)
+    for tenant in found.invalid:
         print(
             i18n_text(
                 f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
@@ -143,7 +147,7 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
             ),
             file=sys.stderr,
         )
-    return carriers.tenants
+    return found.tenants
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,9 +187,9 @@ def parse_configmap_rules(source_dir: Path) -> List[dict]:
     # disagreement with itself, which is the shape #1604 is about.
     # `kubectl get cm -o yaml > rules.yml` is an ordinary way to produce
     # exactly the input this scan reads.
-    # ⚠️ A DIFFERENT TREE from the conf.d scan — these are ConfigMap dumps,
-    # so `tenant_carriers` (which takes a file STEM as a tenant id) does not
-    # apply here; only the extension axis is shared.
+    # ⚠️ A DIFFERENT TREE from conf.d — these are ConfigMap dumps, not
+    # tenant files, so parse-tree's tenant set does not apply here; only the
+    # extension axis is shared.
     for yaml_file in sorted(
         p for p in source_dir.iterdir()
         if p.is_file() and has_yaml_extension(p.name)
@@ -406,46 +410,21 @@ def analyze_migration(source_dir: Path, config_dir: Path) -> dict:
         ))
 
     try:
-        # ⛔ ONE scan, two consumers (#1604). This used to scan `config_dir`
-        # itself AND then call `discover_tenant_configs`, which scanned again
-        # — two listings of one directory, and the second one was the twin
-        # that had drifted. The shared scan hands back the classification, so
-        # invalid names become `issues` entries here and the caller-facing
-        # stderr warnings stay in `discover_tenant_configs`.
-        carriers = _scan_tenant_carriers(config_dir)
-        for raw_name in carriers.invalid:
+        # ⛔ The tenant set is parse-tree's (#2906); an invalid id becomes an
+        # `issues` entry here — `--json` consumers do not see the stderr
+        # warnings `discover_tenant_configs` prints. A tenant file
+        # parse-tree cannot read, or an id declared by two files, is not an
+        # issue but no answer: `TenantSetUnknown` reaches `main` (rc 2).
+        found = _tree_tenants(config_dir)
+        for raw_name in found.invalid:
             analysis["issues"].append(
                 i18n_text(
                     f"無效租戶名稱: {raw_name}（不符合 RFC 1123）",
                     f"Invalid tenant name: {raw_name} (not RFC 1123 compliant)",
                 )
             )
-        # ⛔ `unusable` belongs in the report too (CodeRabbit, PR #1750). These
-        # are the entries #1604 is ABOUT — a directory named `notes.yaml/` and a
-        # dangling `broken.yaml` used to be turned into tenants here. Now they
-        # are correctly skipped, and a caller reading only this JSON would
-        # otherwise never learn that anything was skipped: `--json` consumers
-        # do not see the stderr warnings `discover_tenant_configs` prints, and
-        # THIS path deliberately does not call it (that was the second scan).
-        for bad in carriers.unusable:
-            analysis["issues"].append(
-                i18n_text(
-                    f"略過無法讀取的項目 '{safe_label(bad.name)}'：{unusable_reason(bad)}",
-                    f"Skipped unusable entry '{safe_label(bad.name)}': "
-                    f"{unusable_reason(bad)}",
-                )
-            )
-        analysis["tenants"] = len(carriers.tenants)
+        analysis["tenants"] = len(found.tenants)
     except OSError as exc:
-        # ⚠️ `OSError`, not just `FileNotFoundError` (CodeRabbit, PR #1750):
-        # `is_dir()` succeeding does not make `iterdir()` safe — the directory
-        # can vanish or become unreadable in between. Measured: on a directory
-        # removed after the check, `iterdir()` raises while the `glob("*.yaml")`
-        # this function used BEFORE #1604 returned `[]` silently.
-        # ⛔ Widening the CATCH is the fix, not swallowing the error inside the
-        # scan: returning an empty classification would restore exactly the
-        # silent zero `_lib_confd` exists against — "reporting nothing looks
-        # exactly like finding nothing".
         analysis["issues"].append(i18n_text(
             f"配置目錄錯誤: {exc}",
             f"Config directory error: {exc}",
@@ -900,6 +879,24 @@ def plan_stdout(
     return docs
 
 
+def _tenant_set_or_exit(fn, *args, **kwargs):
+    """*fn*'s result; a conf.d whose tenant set cannot be answered exits 2.
+
+    ⛔ Fail-closed (#2906): a tenant file `da-guard parse-tree` cannot read,
+    or one id declared by two files, leaves the set of AlertmanagerConfigs
+    to emit unknown — an `issues` line next to a partial set would read as
+    a migration plan. No usable parse-tree is the same: nothing was read.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except ParseTreeError as exc:
+        die_caller_error(_lib_parse_cache.parse_tree_error_line(exc),
+                         reason="tenant_set_unknown")
+    except TenantSetUnknown as exc:
+        die_caller_error(f"ERROR: {safe_label(exc)}", reason="tenant_set_unknown")
+
+
+@_lib_parse_cache.session()  # analysis and generation read ONE parse-tree snapshot
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -997,7 +994,7 @@ def main():
         ),
         file=sys.stderr,
     )
-    analysis = analyze_migration(source_dir, config_dir)
+    analysis = _tenant_set_or_exit(analyze_migration, source_dir, config_dir)
 
     if analysis["issues"]:
         for issue in analysis["issues"]:
@@ -1020,7 +1017,8 @@ def main():
             ),
             file=sys.stderr,
         )
-        result = generate_migration(
+        result = _tenant_set_or_exit(
+            generate_migration,
             source_dir,
             config_dir,
             output_dir,

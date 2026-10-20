@@ -293,8 +293,8 @@ keys:
     value: 50
     unit: count
     desc: 'Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
-      catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded
-      but absent from scaffold'
+      catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent
+      from scaffold'
     metric_class: state
   es_search_latency_ms:
     pack: elasticsearch

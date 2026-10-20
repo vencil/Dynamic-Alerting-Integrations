@@ -41,6 +41,7 @@ func TestBatchTenants_PRMode_PreservesExistingKeys(t *testing.T) {
 			t.Skipf("git %v: %v\n%s", args, err, out)
 		}
 	}
+	addBareOrigin(t, configDir) // the push must succeed (#1724)
 
 	rbacMgr := adminRBAC(t)
 	mockClient := &mockPlatformClient{
@@ -73,12 +74,13 @@ func TestBatchTenants_PRMode_PreservesExistingKeys(t *testing.T) {
 		t.Fatalf("status = %q, want pending_review; body: %s", resp.Status, w.Body.String())
 	}
 
-	// Push failed (no origin, swallowed) → the batch branch is retained. Inspect
-	// its committed db-a.yaml: the real merge must have preserved the other keys.
-	branches, _ := exec.Command("git", "-C", configDir, "branch", "--format=%(refname:short)").Output()
+	// Inspect the pushed batch branch's committed db-a.yaml (origin's
+	// tracking ref: the local branch is dropped after the push): the real
+	// merge must have preserved the other keys.
+	branches, _ := exec.Command("git", "-C", configDir, "branch", "-r", "--format=%(refname)").Output()
 	var branch string
 	for _, ln := range strings.Split(string(branches), "\n") {
-		if ln = strings.TrimSpace(ln); strings.HasPrefix(ln, "tenant-api/batch/") {
+		if ln = strings.TrimSpace(ln); strings.HasPrefix(ln, prBranchRef("tenant-api/batch/")) {
 			branch = ln
 			break
 		}

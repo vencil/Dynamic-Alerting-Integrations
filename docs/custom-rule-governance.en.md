@@ -412,7 +412,7 @@ Two `absence` properties to know up front: (1) it **respects maintenance** mode 
 
 When the exporter is alive but the value is hours-old stale, `==` fires on the old code. Use the recipe's `for:` to require the condition to **persist**, filtering transient/stale reads.
 
-A runnable safe-pairing example lives in `rule-packs/recipes/examples/conf.d/shop.yaml` (the `semisync_errno_1236` case + the `process_status_code` Shape-X pairing).
+A runnable safe-pairing example lives in `rule-packs/recipes/examples/conf.d/shop-a.yaml` (the `semisync_errno_1236` case + the `process_status_code` Shape-X pairing).
 
 ---
 
