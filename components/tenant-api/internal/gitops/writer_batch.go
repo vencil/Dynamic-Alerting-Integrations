@@ -622,7 +622,12 @@ func (w *Writer) commitStaging(st *stagingTree, before, authorEmail string) (str
 //     the batch ran. Nothing was written; refresh and retry.
 //   - outcomes, *BatchCommittedError: the batch IS committed, but the write
 //     did not finish cleanly (see the type).
-//   - nil, other err: the batch could not run or commit. Nothing was written.
+//   - nil, *WriteOutcomeUnknownError: the ref update failed and the branch
+//     could not be read back (#3173). The batch may be on the branch; the
+//     publish marker is kept for RecoverBatchPublish.
+//   - nil, other err: the batch could not run or commit. Nothing was
+//     written — a git command past its own deadline (ErrGitTimeout)
+//     included (publishBatch reads the branch back to know).
 func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail string) ([]BatchOpOutcome, error) {
 	if len(ops) == 0 {
 		return nil, fmt.Errorf("empty batch operations")
@@ -699,24 +704,40 @@ func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail stri
 // them committed content. A process killed between the ref update and the
 // file sync leaves the worktree behind the branch; the marker makes the next
 // writer (or startup, RecoverBatchPublish) reset those paths to the branch.
+//
+// A ref update that reports an error is decided by where the branch is
+// afterwards (#3173; refAfterFailedUpdate reads the branch ref itself when
+// HEAD cannot be read): at commit, published; at headBefore, nothing
+// written (the marker goes; a timeout wraps ErrGitTimeout); elsewhere,
+// ErrConflict. When neither can be read, *WriteOutcomeUnknownError and the
+// marker STAYS: if the branch did move, the marker is the only record of
+// which serving paths are behind it, and RecoverBatchPublish (the next
+// write, or startup) decides once the branch can be read.
 func (w *Writer) publishBatch(st *stagingTree, headBefore, commit string) error {
+	branchRef := w.headBranchRef()
 	if err := w.writePublishMarker(commit, st.order); err != nil {
 		return fmt.Errorf("record the batch publish: %w", err)
 	}
 	if err := w.gitExec("update-ref", "-m", "tenant-api: batch", "HEAD", commit, headBefore); err != nil {
-		now, herr := w.currentHEAD()
+		now, herr := w.refAfterFailedUpdate(branchRef)
 		switch {
 		case herr == nil && now == commit:
 			// The ref moved although git reported an error: it is published.
 			slog.Warn("gitops: batch ref update reported an error after it took effect", "commit", commit, "error", err)
-		case herr == nil && now != headBefore:
+		case herr == nil && now == headBefore:
+			// The ref did not move: nothing written.
+			w.removePublishMarker()
+			return fmt.Errorf("advance the serving branch: %w", err)
+		case herr == nil:
 			w.removePublishMarker()
 			slog.Warn("gitops: serving branch moved outside tenant-api during a batch — nothing written",
 				"expected", headBefore, "actual", now)
 			return ErrConflict
 		default:
-			w.removePublishMarker()
-			return fmt.Errorf("advance the serving branch: %w", err)
+			slog.Error("gitops: the serving branch cannot be read after a failed batch ref update; whether the batch was published is unknown — the publish marker is kept",
+				"commit", commit, "error", err, "read_error", herr)
+			return &WriteOutcomeUnknownError{Commit: commit,
+				Cause: fmt.Errorf("advance the serving branch: %w; read the branch back: %w", err, herr)}
 		}
 	}
 	// From here on the batch IS committed; a failure leaves the marker, so the

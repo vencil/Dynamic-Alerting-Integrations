@@ -88,6 +88,17 @@ func fetchTimeoutFromEnv() time.Duration {
 	return d
 }
 
+// SetGitTimeout overrides, for this Writer only, the per-command git
+// deadline NewWriter read from TENANT_API_GIT_TIMEOUT; a non-positive d is
+// ignored. Set it before the Writer serves. Tests outside this package use
+// it to make a git command time out (#3173) without changing the
+// process-wide environment.
+func (w *Writer) SetGitTimeout(d time.Duration) {
+	if d > 0 {
+		w.gitTimeout = d
+	}
+}
+
 // gitCmd builds a git *exec.Cmd bounded by the writer's per-command timeout
 // (#630). The caller MUST defer the returned cancel — it stops the deadline
 // timer and kills the child if it's still running. The context is returned so
@@ -280,6 +291,9 @@ func literalPathspec(p string) string {
 // gitErr renders a git failure. A deadline kill is reported LOUDLY and flags that
 // the write lock is released as the caller returns (the whole point of #630), so
 // a stuck push surfaces as a clear timeout instead of a silent global write freeze.
+// It wraps ErrGitTimeout, not context.DeadlineExceeded (#3173): the deadline is
+// the command's own, and whether the write it was part of reached the branch is
+// the writer's to decide (write_outcome.go), not the caller's to guess.
 func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		// #638: a SIGKILL'd git leaves its write-locks behind (no signal cleanup).
@@ -291,7 +305,7 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 			timeout = defaultGitTimeout
 		}
 		return fmt.Errorf("git %s timed out after %s — write lock released: %w — %s",
-			op, timeout, context.DeadlineExceeded, string(out))
+			op, timeout, ErrGitTimeout, string(out))
 	}
 	// Lock CONTENTION (a live competitor holds index.lock right now), NOT the
 	// stale lock the timeout branch above sweeps: map to ErrWriteOverloaded so
@@ -311,7 +325,8 @@ func (w *Writer) gitErr(ctx context.Context, op string, err error, out []byte) e
 // --no-optional-locks takes no lock, so a lock present when it times out was
 // taken by someone else — a concurrent write, an operator's shell — and is
 // not this reader's to delete. Nor does a reader hold the write lock, so the
-// message does not claim to release one.
+// message does not claim to release one. A timeout wraps ErrGitTimeout, as
+// gitErr's does.
 func (w *Writer) gitReadErr(ctx context.Context, op string, err error, out []byte) error {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		timeout := w.gitTimeout
@@ -319,7 +334,7 @@ func (w *Writer) gitReadErr(ctx context.Context, op string, err error, out []byt
 			timeout = defaultGitTimeout
 		}
 		return fmt.Errorf("git %s (read-only) timed out after %s: %w — %s",
-			op, timeout, context.DeadlineExceeded, string(out))
+			op, timeout, ErrGitTimeout, string(out))
 	}
 	return fmt.Errorf("git %s: %w — %s", op, err, string(out))
 }

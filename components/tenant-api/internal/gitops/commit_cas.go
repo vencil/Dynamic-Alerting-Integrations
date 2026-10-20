@@ -152,7 +152,10 @@ func (w *Writer) PruneCommitIndexes() error {
 // ErrConflict: HEAD moved — nothing was published; the caller puts the
 // serving file back (restoreFromHEAD). A ref update that reports an error
 // after HEAD reached the commit (git killed by its timeout once the ref was
-// written) is a commit: committed is true. Caller holds w.mu.
+// written) is a commit: committed is true; one after which neither HEAD
+// nor the branch can be read is *WriteOutcomeUnknownError (#3173). Any
+// other error — a git timeout before or at the ref update included, when
+// the branch is read back unmoved — published nothing. Caller holds w.mu.
 //
 // ⛔ THE COMMIT HOLDS THIS PATH AND NOTHING ELSE (#1535). Its tree is
 // written from a TEMPORARY index (GIT_INDEX_FILE): base's tree read into
@@ -237,14 +240,16 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 		return false, err
 	}
 
+	branchRef := w.headBranchRef()
 	if w.beforeCASAdvance != nil {
 		w.beforeCASAdvance()
 	}
 	if err := w.gitExec("update-ref", "-m", "tenant-api: tenant/"+tenantID, "HEAD", commit, base); err != nil {
 		// An error does not mean the ref did not move: git can be killed
-		// (the per-command timeout) after it wrote the ref. Where HEAD is
-		// now decides, as in publishBatch.
-		now, herr := w.currentHEAD()
+		// (the per-command timeout) after it wrote the ref. Where the branch
+		// is now decides (#3173), as in publishBatch: HEAD, or the branch
+		// ref itself when HEAD cannot be read.
+		now, herr := w.refAfterFailedUpdate(branchRef)
 		switch {
 		case herr == nil && now == commit:
 			// Published. The real index already agrees with the commit (it
@@ -253,7 +258,8 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 				"tenant", tenantID, "commit", commit, "error", err)
 			return true, nil
 		case herr == nil && now == base:
-			// The ref did not move: nothing was published.
+			// The ref did not move: nothing was published — a timeout
+			// included (it wraps ErrGitTimeout: not committed, retry).
 			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
 			return false, fmt.Errorf("advance HEAD: %w", err)
 		case herr == nil:
@@ -262,17 +268,20 @@ func (w *Writer) gitCommitOnto(filePath, tenantID, authorEmail string, validated
 				"tenant", tenantID, "judged_base", base, "head", now)
 			return false, ErrConflict
 		default:
-			// HEAD unreadable: whether the commit was published is unknown.
-			// unsyncIndexEntry still only undoes the sync while HEAD does
-			// not hold the written blob (it cannot tell either: then it
-			// undoes it), and the caller treats the write as not committed.
-			// Either way the index can be wrong — a staged revert of a
-			// published commit, or a staged unjudged write — so the operator
-			// has to look: logged as an error, naming the commit.
+			// Neither HEAD nor the branch can be read: whether the commit
+			// was published is unknown (#3173), and the caller says so
+			// (*WriteOutcomeUnknownError). unsyncIndexEntry still only
+			// undoes the sync while HEAD does not hold the written blob (it
+			// cannot tell either: then it undoes it), and the caller puts
+			// the serving file back as HEAD has it. Either way the index can
+			// be wrong — a staged revert of a published commit, or a staged
+			// unjudged write — so the operator has to look: logged as an
+			// error, naming the commit.
 			w.unsyncIndexEntry(tenantID, filePath, idxPath, zeroOID, committedEntry, priorEntries)
 			slog.Error("gitops: HEAD unreadable after a failed HEAD update; whether the write was published is unknown — check HEAD and the index",
 				"tenant", tenantID, "commit", commit, "path", idxPath, "error", herr)
-			return false, fmt.Errorf("advance HEAD: %w", err)
+			return false, &WriteOutcomeUnknownError{Commit: commit,
+				Cause: fmt.Errorf("advance HEAD: %w; read the branch back: %w", err, herr)}
 		}
 	}
 	return true, nil

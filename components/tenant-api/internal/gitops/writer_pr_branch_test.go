@@ -203,9 +203,9 @@ func TestWritePRBatch_PushFailureFailsAndDropsBranch(t *testing.T) {
 }
 
 // A push that times out is a failed push too: *PushError, and it does NOT
-// unwrap to context.DeadlineExceeded — the handler answers it as
-// GIT_PUSH_FAILED, not as the generic cancelled-write 503 — while the cause
-// still records the deadline for the log.
+// unwrap to ErrGitTimeout (nor context.DeadlineExceeded) — the handler
+// answers it as GIT_PUSH_FAILED, not as the "nothing written" 503 of a git
+// timeout (#3173) — while the cause still records the timeout for the log.
 func TestWritePR_PushTimeoutIsPushError(t *testing.T) {
 	t.Parallel()
 	dir := initRepoOnMain(t)
@@ -224,11 +224,13 @@ func TestWritePR_PushTimeoutIsPushError(t *testing.T) {
 	if !errors.As(err, &pe) {
 		t.Fatalf("err = %v, want a *PushError", err)
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("a push timeout unwraps to context.DeadlineExceeded: %v", err)
+	// #3173: a git timeout is ErrGitTimeout, never context.DeadlineExceeded;
+	// the push's stays in Cause and does not reach the caller's errors.Is.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrGitTimeout) {
+		t.Errorf("a push timeout unwraps to a timeout sentinel: %v", err)
 	}
-	if !errors.Is(pe.Cause, context.DeadlineExceeded) {
-		t.Errorf("PushError.Cause = %v, want the deadline", pe.Cause)
+	if !errors.Is(pe.Cause, ErrGitTimeout) {
+		t.Errorf("PushError.Cause = %v, want the git timeout", pe.Cause)
 	}
 	if b := gitOut(t, dir, "branch", "--list", "tenant-api/*"); b != "" {
 		t.Errorf("local branch left after the timed-out push:\n%s", b)
