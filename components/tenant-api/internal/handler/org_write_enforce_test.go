@@ -110,6 +110,7 @@ func newOrgEnfFixture(t *testing.T, files map[string]string) *orgEnfFixture {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git branch -M main: %v\n%s", err, out)
 	}
+	addBareOrigin(t, configDir) // a PR-mode write's push must succeed (#1724)
 
 	f := &orgEnfFixture{configDir: configDir}
 	f.writer = newTestWriter(configDir)

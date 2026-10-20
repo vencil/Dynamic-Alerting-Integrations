@@ -192,6 +192,7 @@ func TestWritePR_DeprecatedKeyBody_ResultCarriesNotices(t *testing.T) {
 	t.Parallel()
 	dir := newNameDefaultsDir(t)
 	initMainBranchRepo(t, dir)
+	addBareRemote(t, dir) // the push must succeed (#1724)
 	w := newTestWriter(dir, dir)
 
 	res, err := w.WritePR(context.Background(), "db-a", "op@example.com",
@@ -206,6 +207,7 @@ func TestWritePRBatch_DeprecatedKeyOps_AggregatesNotices(t *testing.T) {
 	t.Parallel()
 	dir := newNameDefaultsDir(t)
 	initMainBranchRepo(t, dir)
+	addBareRemote(t, dir) // the push must succeed (#1724)
 	w := newTestWriter(dir, dir)
 
 	ops := []PRBatchOp{{

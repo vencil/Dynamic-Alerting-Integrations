@@ -543,6 +543,14 @@ type Writer struct {
 	afterBaseSample func()
 	afterTenantRead func()
 
+	// prBranchClock and prBranchSuffix are TEST-ONLY seams (#1724):
+	// prBranchName takes the time from prBranchClock and the random suffix
+	// from prBranchSuffix when they are non-nil, so a test can put two writes
+	// in the same second, or give them the same name. Always nil in
+	// production (time.Now, crypto/rand).
+	prBranchClock  func() time.Time
+	prBranchSuffix func() string
+
 	// onBatchStaging is a TEST-ONLY seam (#2900): openStaging calls it, when
 	// non-nil, with each staging tree it opened. Always nil in production.
 	onBatchStaging func(*stagingTree)

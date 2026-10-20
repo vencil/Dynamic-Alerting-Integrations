@@ -416,7 +416,7 @@ tenant_orgs:
 | `pr` / `pr-github` | 建 feature branch + GitHub PR | GitHub.com / Enterprise |
 | `pr-gitlab` | 建 feature branch + GitLab MR | GitLab.com / 自託管 |
 
-PR 模式啟動時會驗證 token + 連線;失敗只印 WARN(後續開 PR 會回 503)。範例:
+PR 模式啟動時會驗證 token + 連線;失敗只印 WARN(後續開 PR 會回 503)。分支名是 `tenant-api/<租戶>/<UTC 秒>-<12 位十六進位亂數>`(批次 `tenant-api/batch/<UTC 秒>-<亂數>`);分支推不上 origin(被拒、連不上、逾時)時回 503 `GIT_PUSH_FAILED` + `Retry-After`、不開 PR,可直接重試;push 逾時但遠端已收下時 origin 可能留下沒有 PR 的分支,需人工清理([#1724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1724),詳見 [hardening §5.5](../../docs/api/tenant-api-hardening.md))。範例:
 
 ```bash
 # GitHub Enterprise
