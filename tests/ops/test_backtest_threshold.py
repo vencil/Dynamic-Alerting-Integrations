@@ -493,33 +493,33 @@ class TestQueryRange:
         def mock_get(url, timeout=30):
             return {
                 "status": "success",
-                "data": {"result": [{"values": [[1, "42"]]}]},
+                "data": {"resultType": "matrix", "result": [{"values": [[1, "42"]]}]},
             }, None
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         result = bt.query_range("http://prom", "up", 3600)
         assert len(result) == 1
 
     def test_http_error_raises(self, monkeypatch):
-        """#3059：HTTP 錯誤丟 PrometheusQueryError、帶錯誤原文，不再回空清單
+        """#3059：HTTP 錯誤丟 QueryError、帶錯誤原文，不再回空清單
         （以前回 []，被報成 no_data、rc 0）。"""
         def mock_get(url, timeout=30):
             return None, "connection refused"
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
-        with pytest.raises(bt.PrometheusQueryError, match="^connection refused$"):
+        with pytest.raises(bt.QueryError, match="^connection refused$"):
             bt.query_range("http://prom", "up", 3600)
 
     def test_api_error_raises(self, monkeypatch):
-        """#3059：API 錯誤狀態（含沒有 error 欄位）丟 PrometheusQueryError。"""
+        """#3059：API 錯誤狀態（含沒有 error 欄位）丟 QueryError。"""
         def mock_get(url, timeout=30):
             return {"status": "error"}, None
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
-        with pytest.raises(bt.PrometheusQueryError, match="Unknown Prometheus error"):
+        with pytest.raises(bt.QueryError, match="Unknown Prometheus error"):
             bt.query_range("http://prom", "bad{", 3600)
 
     def test_empty_result_is_still_empty(self, monkeypatch):
         """control：查詢成功但沒有 series 仍是 []（no_data 那條路）。"""
         def mock_get(url, timeout=30):
-            return {"status": "success", "data": {"result": []}}, None
+            return {"status": "success", "data": {"resultType": "matrix", "result": []}}, None
         monkeypatch.setattr("_lib_prometheus.http_get_json", mock_get)
         assert bt.query_range("http://prom", "up", 3600) == []
 
@@ -1444,7 +1444,7 @@ class TestQueryError:
 
     def test_message_is_escaped_and_truncated(self, monkeypatch, cpu_mapped):
         def failing(*a, **kw):
-            raise bt.PrometheusQueryError("line1\nFAKE [PASS]\x1b[2J" + "x" * 1000)
+            raise bt.QueryError("line1\nFAKE [PASS]\x1b[2J" + "x" * 1000)
         monkeypatch.setattr(bt, "query_range", failing)
         r = bt.backtest_change("http://prom", {"tenant": "t", "metric": "cpu",
                                                "old_value": "70", "new_value": "50"}, 86400)

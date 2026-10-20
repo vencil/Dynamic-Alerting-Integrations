@@ -48,18 +48,20 @@ try:
         detect_cli_lang,
         format_json_report,
         parse_duration_seconds,
+        prometheus_range,
         query_prometheus_instant,
-        query_prometheus_range,
         safe_label,
+        QueryError,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
         format_json_report,
         parse_duration_seconds,
+        prometheus_range,
         query_prometheus_instant,
-        query_prometheus_range,
         safe_label,
+        QueryError,
     )
 
 # ---------------------------------------------------------------------------
@@ -209,14 +211,6 @@ def compute_days_to_limit(
 # ---------------------------------------------------------------------------
 # Prometheus queries
 # ---------------------------------------------------------------------------
-class PrometheusQueryError(RuntimeError):
-    """Prometheus 查詢失敗（#3065）。
-
-    以前兩支查詢都收斂成 ``{}``，main 把它與「查詢成功但沒有資料」報成同一個
-    reason ``no_cardinality_data``。現在往上拋，訊息是錯誤原文。
-    """
-
-
 def query_cardinality_range(
     prometheus_url: str,
     lookback: str = DEFAULT_LOOKBACK,
@@ -236,7 +230,8 @@ def query_cardinality_range(
         {tenant: [(timestamp, cardinality), ...]}。
 
     Raises:
-        PrometheusQueryError: 查詢失敗（#3065）。
+        QueryError: 查詢沒量成（#3065），含成功回應但形狀不對（#3133：缺
+            ``data``、列沒有 ``values``⋯以前讀成「沒有資料」或略過該列）。
     """
     lookback_secs = parse_duration_seconds(lookback)
     if lookback_secs is None:
@@ -253,14 +248,12 @@ def query_cardinality_range(
     # #1112: PromQL contains spaces/braces/quotes — it MUST be percent-encoded.
     # An f-string interpolation raises `InvalidURL: URL can't contain control
     # characters` against a real Prometheus. The encoding now lives in
-    # `_lib_prometheus.query_prometheus_range` (ROI r3 W1). #3065: an error
-    # is raised, not collapsed into {} — main must tell it apart from an
-    # empty result. timeout=10 preserves the pre-consolidation behaviour
-    # (this site used http_get_json's default).
-    result, err = query_prometheus_range(
-        prometheus_url, query, start, end, step, timeout=10)
-    if err:
-        raise PrometheusQueryError(err)
+    # `_lib_prometheus.prometheus_range` (ROI r3 W1). #3065 / #3133: a
+    # query not answered — or answered with a body that is not a matrix —
+    # raises QueryError, never collapsed into {}: main must tell it apart
+    # from an empty result. timeout=10 preserves the pre-consolidation
+    # behaviour (this site used http_get_json's default).
+    result = prometheus_range(prometheus_url, query, start, end, step, timeout=10)
 
     results: dict[str, list[tuple[float, float]]] = {}
     for series in result:
@@ -287,7 +280,7 @@ def query_scrape_series_added(
         {tenant: current_scrape_series_added}。
 
     Raises:
-        PrometheusQueryError: 查詢失敗（#3065）。
+        QueryError: 查詢失敗（#3065）。
     """
     query = 'sum by (tenant)(scrape_series_added)'
     # #1112: percent-encode — delegated to
@@ -295,7 +288,7 @@ def query_scrape_series_added(
     # timeout=10 matches this site's pre-consolidation http_get_json default).
     result, err = query_prometheus_instant(prometheus_url, query)
     if err:
-        raise PrometheusQueryError(err)
+        raise QueryError(err)
 
     results: dict[str, float] = {}
     for series in result:
@@ -633,7 +626,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cardinality_data = query_cardinality_range(
             args.prometheus, args.lookback
         )
-    except PrometheusQueryError as exc:
+    except QueryError as exc:
         # #3065: a failed query is not "no data" — distinct reason, raw error.
         if lang == "zh":
             print(f"錯誤：Prometheus 查詢失敗：{safe_label(str(exc))}",
