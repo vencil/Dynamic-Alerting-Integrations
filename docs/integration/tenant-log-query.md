@@ -76,7 +76,8 @@ flowchart LR
   的最大值；之後 registry 不在 git 裡，計數器只靠 allocator 單調遞增，以及「帳上任一 id ≥ 計數器
   就拒絕配發」的完整性檢查——直接編輯 ConfigMap、把配發與計數器一起改小，這兩道都擋不住。
 - **配發方式**：onboarding 時 tenant-api 自動配（首次簽 logs token 即配）；或對既有租戶批次
-  補配 `POST /api/v1/federation/accounts/backfill`（admin-only、冪等）。
+  補配 `POST /api/v1/federation/accounts/backfill`（冪等；限平台管理員，即 `tenants: ["*"]`、
+  帶 `admin` 且不帶 `org-scope` 的規則，見 [#3160](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3160)）。
 
 ### 2.2 把配發投影進 `tenantProjections`（GitOps，對照 registry）
 

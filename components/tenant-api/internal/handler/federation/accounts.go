@@ -43,12 +43,13 @@ type BackfillAccountsResponse struct {
 //
 // Assigns a monotonic account_id to every tenant in conf.d that does not
 // already have one, in a single committed registry write. Idempotent: a
-// second call allocates nothing. Requires PLATFORM admin (a "*"-scoped
-// RBAC group) — it touches the whole fleet's partitioning, the same bar as
-// editing the platform federation whitelist.
+// second call allocates nothing. Requires a NON-org-scoped PLATFORM admin
+// (rbac.PlatformAdminNonOrgScoped: a "*"-scoped admin rule with no
+// org-scope; #3160) — it touches the whole fleet's partitioning, the same
+// bar as editing the platform federation whitelist.
 //
 // @Summary     Backfill account IDs for all existing tenants
-// @Description Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires platform admin.
+// @Description Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires a non-org-scoped platform admin (an org-scoped "*" admin rule is refused).
 // @Tags        federation
 // @Produce     json
 // @Success     200 {object} BackfillAccountsResponse
@@ -59,11 +60,13 @@ type BackfillAccountsResponse struct {
 // @Router      /api/v1/federation/accounts/backfill [post]
 func BackfillAccounts(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Platform-wide change — require admin via a "*"-scoped group, the
-		// same gate as PutFederationPolicy.
-		if !d.RBAC.Allowed(rbac.RequestPrincipal(r), "*", rbac.PermAdmin) {
+		// Platform-wide change — require a NON-org-scoped "*" admin rule
+		// (#3160), the same bar as PutFederationPolicy and the /audit
+		// endpoints. An org-scoped "*" admin must not touch every tenant's
+		// AccountID.
+		if !d.RBAC.PlatformAdminNonOrgScoped(rbac.RequestPrincipal(r)) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, handler.CodeForbidden,
-				"platform admin permission required to backfill account IDs")
+				"platform admin (non-org-scoped) permission required to backfill account IDs")
 			return
 		}
 		if d.Accounts == nil {

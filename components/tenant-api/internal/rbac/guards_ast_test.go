@@ -129,16 +129,22 @@ func TestVerifiedPrincipalConstructionConfinedToRBACAndTests(t *testing.T) {
 // inspects every `Allowed` call:
 //
 //   - AUTO-EXEMPT: a call whose tenant argument (2nd arg) is the basic
-//     literal "*" — the platform-scope gate. Org-scope deliberately does not
-//     apply to platform scope (invariant I6: an org-scoped rule is not a
-//     platform admin), so these sites stay on the org-blind Allowed by
-//     design and need no allowlist entry.
+//     literal "*" — the platform-scope gate. Such a call judges no tenant, so
+//     the per-tenant org axis this tripwire protects has nothing to drop
+//     (invariant I6) and it needs no allowlist entry. ⚠️ The exemption is NOT
+//     a licence to use Allowed(p, "*", perm) as a platform-wide bar: an
+//     org-scoped rule is not a platform-wide grant, yet it passes that call.
+//     A platform-wide decision uses rbac.PlatformNonOrgScoped (saved views)
+//     or PlatformAdminNonOrgScoped (federation whitelist, backfill, /audit)
+//     (#3160).
+//     This tripwire does not catch that misuse.
 //   - Everything else must hit the annotated allowlist below. P4c end state:
 //     the allowlist is EMPTY. P4c converted the last three read-plane filters
 //     (filterByRBAC / hasAccessibleMember / ListPRs) to the org-aware
-//     handler.OrgAllowedRead, so outside internal/rbac the ONLY remaining
-//     org-blind Allowed calls are the "*"-literal platform gates (auto-exempt).
-//     A new non-"*" org-blind Allowed anywhere is now a hard violation.
+//     handler.OrgAllowedRead; #3160 moved the last two "*"-literal handler
+//     gates (federation whitelist PUT, account backfill) to
+//     PlatformAdminNonOrgScoped. A new non-"*" org-blind Allowed anywhere is
+//     a hard violation.
 //
 // A stale allowlist entry (no longer matching any call site) FAILS the test:
 // an exemption must stay demonstrably necessary (#1067 discipline), or a

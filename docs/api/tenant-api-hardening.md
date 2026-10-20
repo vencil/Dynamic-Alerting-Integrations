@@ -131,7 +131,7 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 | `POST /api/v1/groups/{id}/batch` | 回應列出 group 的全部成員 | `results[]` 只列 caller 可讀的成員，`summary` 也只算這些（[#1530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1530)；同步、非同步、PR 模式皆同）；caller 看不到的 group 回 404 |
 | `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 只有提交者看得到自己的 task；其他人一律拿到與「task 不存在」逐位元組相同的 404。task id 是 128-bit 隨機值。提交者看到的 `Results[]` 仍依其**當下**的讀取權限過濾，`summary` 依過濾後的結果重算（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
 | `GET /api/v1/prs` | 回傳所有 pending PR/MR | bulk 模式：自動過濾不可讀租戶；`?tenant=<id>` 模式：不可讀回**空列表**（不 403，避免 existence oracle）。批次 PR/MR 只給讀得到它涵蓋的**每個**租戶的 caller；不知道涵蓋哪些租戶的（例如重啟前開的）只給讀得到全部租戶的 caller（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
-| `GET /api/v1/events` | 每筆寫入都推給每個訂閱者 | 每個訂閱者只收到它讀得到的租戶的事件，事件送出當下以最新的 RBAC 判斷；不屬於單一租戶的 state 紀錄（groups、views、federation policy、AccountID 帳本）只送給讀得到全部租戶的 caller（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
+| `GET /api/v1/events` | 每筆寫入都推給每個訂閱者 | 每個訂閱者只收到它讀得到的租戶的事件，事件送出當下以最新的 RBAC 判斷；不屬於單一租戶的 state 紀錄（groups、federation policy、AccountID 帳本）只送給讀得到全部租戶的 caller（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）；views 的事件送給讀得到 saved views 的 caller，與 `GET /views` 同一道門檻（見 §3.3，[#3160](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3160)）|
 | `DELETE /api/v1/federation/tokens/{id}` | 無權撤銷時回 403，訊息帶 token 所屬租戶 | 無權撤銷時回與「token 不存在」逐位元組相同的 404（[#3123](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3123)）|
 | `PUT /api/v1/tenants/{id}` | 只要求對 `{id}` 有寫入權限，body 整檔寫入 `{id}` 所在的檔；同檔其他租戶的段落可被刪掉或改寫 | 只寫「API 管理」的租戶：`{id}` 的檔只屬於它自己。共用檔等其他形狀的租戶改由 git 管理，所有寫入一律 409 `TENANT_GIT_MANAGED`（**breaking**，[#3064](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3064)，見下方「API 管理與 git 管理」）|
 
@@ -158,7 +158,7 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 相對先前版本的行為改變：先前這道閘門要求對 `*` 有權限，只有規則寫了 `tenants: ["*"]` 的呼叫者過得了；單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者在 `/me`、`/tenants`、`/tenants/search`、`/groups`、`/tasks/{id}`、`/prs`、`/events`、`/federation/tokens`、`POST /tenants/batch` 一律 403。現在這些呼叫者拿得到自己租戶的內容；`/federation/tokens`、`POST /tenants/batch`、`POST /groups/{id}/batch`、`PUT`／`DELETE /groups/{id}` 照舊由 handler 逐租戶判寫入或管理權限。`GET /federation/policy`（平台的指標白名單，不點名任何租戶）也開放給至少能讀一個租戶的呼叫者，租戶管理員挑自己的子集時需要它。反方向收緊的只有一種情況：org-scoped 的 `tenants: ["*"]` 規則、呼叫者沒帶 org claim、且 org 軸是 enforce——它先前過得了閘門、拿到空列表，現在是 403。
 
-仍要求對 `*` 有權限的路由：saved views 的四個端點（見 §3.3）、`PUT /federation/policy`、`POST /federation/accounts/backfill`，以及 `/audit/...`。後三者 handler 的門檻本來就是平台管理員，換成較寬的閘門不會多放任何人進來。
+仍要求對 `*` 有權限的路由：saved views 的四個端點（見 §3.3）、`PUT /federation/policy`、`POST /federation/accounts/backfill`，以及 `/audit/...`。後三者 handler 的門檻本來就是平台管理員，換成較寬的閘門不會多放任何人進來。這裡的「平台管理員」指 `tenants: ["*"]`、帶 `admin`、**且不帶 `org-scope`** 的規則：帶 org-scope 的 `"*"` admin 規則過得了路由閘門，但在這三者的 handler 一律 403，不論 org-scope 是否 enforce（[#3160](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3160)）。org-scope 把規則限縮在某些組織的租戶，而改全平台設定、對全艦隊配發 `account_id` 不屬於任何一個組織。
 
 ### 3.2 為什麼 `?tenant=<id>` 不直接回 403
 
@@ -172,7 +172,9 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 → Views 留待未來如果加「filter 必須為 tenant ID 列表」型別約束時再補。
 
-同理，views 沒有擁有者，handler 也不按租戶過濾，所以四個 view 端點的路由閘門仍要求對 `*` 有權限（[#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)），直到有擁有者模型為止；否則任何讀得到一個租戶的人都看得到、改得到每個 view。
+同理，views 沒有擁有者，handler 也不按租戶過濾，所以四個 view 端點的路由閘門仍要求對 `*` 有權限（[#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)）；否則任何讀得到一個租戶的人都看得到、改得到每個 view。
+
+views 也不屬於任何組織，所以 handler 另外要求那條 `"*"` 規則**不帶 `org-scope`**（[#3160](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3160)）：`GET /views`、`GET /views/{id}` 要讀取權限，`PUT`／`DELETE /views/{id}` 要寫入權限，不看 environments／domains。帶 org-scope 的 `"*"` 規則過得了路由閘門，但這四個端點一律 403，不論 org-scope 是否 enforce。open mode（沒有 `_rbac.yaml`）照舊讀得到、寫不了；設定了 `_rbac.yaml` 但零條規則時照舊全部 403。views 改變的事件（`GET /events`）送給同一批讀得到 views 的 caller。portal 讀 views 拿到 403 時隱藏 saved views 面板，不跳錯誤。依 org 分區的 views 不在本次範圍，有 org-scoped 使用者需要時再議。
 
 ### 3.4 為什麼 `_metadata` 路徑推斷不在範圍內
 

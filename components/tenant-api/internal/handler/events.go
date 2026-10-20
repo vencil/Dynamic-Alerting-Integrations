@@ -74,15 +74,19 @@ func eventFilterFor(d *Deps) ws.FilterFor {
 
 // eventVisible decides one event for one subscriber: an event addressed to a
 // tenant goes to callers who may read that tenant (OrgAllowedRead — the
-// predicate every list filter uses); an event addressed to no tenant goes only
-// to callers who read every tenant (readsEveryTenant), since there is no
-// tenant to judge it by. Open mode reads every tenant, so it keeps receiving
-// everything.
+// predicate every list filter uses); a saved-views write goes to callers who
+// may GET the views (readsViews — the same bar, #3160); any other event
+// addressed to no tenant goes only to callers who read every tenant
+// (readsEveryTenant), since there is no tenant to judge it by. Open mode reads
+// every tenant and every view, so it keeps receiving everything.
 func eventVisible(d *Deps, p *rbac.VerifiedPrincipal, evt ws.Event) bool {
 	if d.RBAC == nil {
 		return false
 	}
 	if evt.Tenant == "" {
+		if evt.TenantID == viewsEntity {
+			return readsViews(d.RBAC, p)
+		}
 		return readsEveryTenant(d.RBAC, p)
 	}
 	return OrgAllowedRead(d.RBAC, d.TenantOrg, p, evt.Tenant, rbac.PermRead)
@@ -100,11 +104,29 @@ func eventVisible(d *Deps, p *rbac.VerifiedPrincipal, evt ws.Event) bool {
 // here is only the existence of a change or a PR, and a caller with
 // unrestricted read can already list every tenant and every PR.
 func readsEveryTenant(m *rbac.Manager, p *rbac.VerifiedPrincipal) bool {
-	if m == nil {
-		return false
-	}
+	return m != nil && readsPlatform(m, p, m.PlatformUnrestricted)
+}
+
+// readsViews reports whether p may read the saved views (GET /views, GET
+// /views/{id}, a views change event): open mode, or a rule granting read on
+// the literal "*" with no org-scope (rbac.PlatformNonOrgScoped, #3160). A view
+// belongs to no tenant and no org, so an org-scoped "*" rule does not reach
+// it; environments / domains are not consulted — a view's filters name label
+// values, not tenants, and the write bar ignores those axes the same way.
+func readsViews(m *rbac.Manager, p *rbac.VerifiedPrincipal) bool {
+	return m != nil && readsPlatform(m, p, m.PlatformNonOrgScoped)
+}
+
+// readsPlatform is the shape every platform-level READ bar shares: with no
+// rules it is open mode's answer (read everything) unless the manager is in
+// the fail-closed-empty state (MED-8: a configured _rbac.yaml with zero groups
+// denies all); with rules it is bar at read level. The rule predicates
+// themselves return false in both zero-group states, so open-mode read access
+// has to be decided here, before them.
+func readsPlatform(m *rbac.Manager, p *rbac.VerifiedPrincipal,
+	bar func(*rbac.VerifiedPrincipal, rbac.Permission) bool) bool {
 	if len(m.Get().Groups) == 0 {
 		return !m.FailClosedOnEmpty()
 	}
-	return m.PlatformUnrestricted(p, rbac.PermRead)
+	return bar(p, rbac.PermRead)
 }
