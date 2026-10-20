@@ -91,7 +91,9 @@ func (w *Writer) stagePaths(dir string, env, paths []string, validated map[strin
 		return false, err
 	}
 	// Exit 0 means nothing is staged — nothing to commit.
-	diffArgs := []string{"-C", dir, "diff", "--cached", "--quiet"}
+	// --no-ext-diff / --no-textconv (#3175): no program from config or the
+	// environment runs here, whatever --quiet does with them.
+	diffArgs := []string{"-C", dir, "diff", "--cached", "--quiet", "--no-ext-diff", "--no-textconv"}
 	if against != "" {
 		diffArgs = append(diffArgs, against)
 	}

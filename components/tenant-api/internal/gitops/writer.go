@@ -1683,7 +1683,11 @@ func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed strin
 		}
 	}
 
-	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", diffCurrentFile, diffProposedFile)
+	// #3175: --no-ext-diff keeps diff.external / GIT_EXTERNAL_DIFF (a
+	// program named only by config or the environment, which the driver
+	// check does not cover) from running for a preview; --no-textconv is a
+	// second layer behind that check's refusal of diff.*.textconv.
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--no-ext-diff", "--no-textconv", "--", diffCurrentFile, diffProposedFile)
 	defer cancel()
 	cmd.Dir = dir
 	// git diff exits 1 when there are differences — that's expected, so the error

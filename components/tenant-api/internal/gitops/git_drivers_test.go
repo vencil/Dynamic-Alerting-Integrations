@@ -314,3 +314,60 @@ func TestGitCommands_RunNoFSMonitor(t *testing.T) {
 		t.Errorf("a tenant-api git command ran core.fsmonitor")
 	}
 }
+
+// diff.external and GIT_EXTERNAL_DIFF name a program from config or the
+// environment alone — no .gitattributes needed, and not a driver key the
+// check refuses — so the /diff preview's `git diff --no-index` passes
+// --no-ext-diff. Each source gets a control: a plain `git diff --no-index`
+// in the same environment does run the program.
+func TestDiffPreview_RunsNoExternalDiff(t *testing.T) {
+	t.Parallel()
+	skipOnWindows(t)
+	for _, src := range []string{"diff.external", "GIT_EXTERNAL_DIFF"} {
+		t.Run(src, func(t *testing.T) {
+			t.Parallel()
+			repo := seedTreeRepo(t, map[string]string{"t1.yaml": tenantBody("t1")})
+			mark := filepath.Join(t.TempDir(), "ext-diff-ran")
+			prog := filepath.Join(t.TempDir(), "extdiff.sh")
+			if err := os.WriteFile(prog, []byte("#!/bin/sh\ntouch '"+mark+"'\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			env := []string{"GIT_EXTERNAL_DIFF=" + prog}
+			if src == "diff.external" {
+				env = []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=diff.external", "GIT_CONFIG_VALUE_0=" + prog}
+			}
+			w := newTestWriter(repo, repo)
+			w.gitTestEnv = env
+
+			// Control: the fixture's program runs for a plain diff.
+			ctl := t.TempDir()
+			writeIn(t, ctl, "a", "x\n")
+			writeIn(t, ctl, "b", "y\n")
+			cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", "a", "b")
+			cmd.Dir = ctl
+			_, _ = cmd.Output()
+			cancel()
+			if _, err := os.Stat(mark); err != nil {
+				t.Fatalf("control: a plain git diff --no-index did not run the %s program: %v", src, err)
+			}
+			if err := os.Remove(mark); err != nil {
+				t.Fatal(err)
+			}
+
+			res, errs, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical"))
+			if err != nil || len(errs) > 0 {
+				t.Fatalf("PreviewPut: %v %v", err, errs)
+			}
+			diff, err := w.DiffTexts("t1", string(res.Existing), res.Exists, res.Content)
+			if err != nil {
+				t.Fatalf("DiffTexts: %v", err)
+			}
+			if !strings.Contains(diff, "\n+") {
+				t.Errorf("the preview shows no diff: %q", diff)
+			}
+			if _, err := os.Stat(mark); err == nil {
+				t.Errorf("the /diff preview ran the %s program", src)
+			}
+		})
+	}
+}
