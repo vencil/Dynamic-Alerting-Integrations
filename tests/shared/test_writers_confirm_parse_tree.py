@@ -21,6 +21,12 @@ deprecate_rule 的封閉清單表）照留，這裡是逐工具、同一張表�
 不以舊檔為基礎（舊檔不讀），檔名是 DNS-1123 名稱加 `.yaml`，不會是隱藏或 `_` 名；
 init_project／scaffold_tenant 的第 3、4 列——只寫新產生的 `_defaults.yaml` 與
 `<tenant>.yaml`（init 的既有檔規則見 tests/ops/test_init_project_existing_carriers.py）。
+onboard_platform／migrate_rule／generate_tenant_fixture（#2906 F1）同屬「產生新檔」：
+沒有第 3 列（不讀原檔）；第 4 列只有 onboard_platform 有——它的檔名是租戶 id，
+CLI 先以 ADR-035 擋下不合法的 id，函式層呼叫則由確認擋下；migrate_rule 的兩個檔名
+固定，generate_tenant_fixture 的檔名是 `<domain>-<db>-<NNNN>.yaml` 與
+`_defaults.yaml`。第 6 列對產生新檔的工具就是第 2 列：預期內容是工具要寫的資料，
+判定是 yaml.v3 讀回的型別。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -556,3 +562,272 @@ def test_patch_config_refuses_keys_that_differ_only_in_case():
                    "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n"}}
     with pytest.raises(pc.ConfigMapShapeError, match="differ only in case"):
         pc.build_patch(cm, "multi-file", "tenant-a", "cpu", "6")
+
+
+# ── onboard_platform（#2906 F1：Phase 1 的 <tenant>.yaml、Phase 2 的 _defaults 建議）──
+
+_OB_AM = ("route:\n  receiver: d\n  routes:\n"
+          "  - matchers: ['tenant=\"tenant-a\"']\n    receiver: a\n    group_wait: {GW}\n"
+          "receivers:\n- name: d\n- name: a\n  webhook_configs:\n"
+          "  - url: https://hook.example/a\n")
+
+
+def _onb(tmp_path, group_wait, env=None):
+    am = tmp_path / "am.yml"
+    am.write_text(_OB_AM.replace("{GW}", group_wait), encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/onboard_platform.py", "--alertmanager-config", str(am),
+             "-o", str(out), env=env)
+    return r, out
+
+
+def test_onboard_platform_writes_what_reads_back(tmp_path):
+    r, out = _onb(tmp_path, "30s")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "group_wait: 30s" in (out / "phase1-routing" / "tenant-a.yaml").read_text(
+        encoding="utf-8")
+
+
+def test_onboard_platform_refuses_a_generated_text_that_reads_back_differently(tmp_path):
+    # The string '1e3' is dumped plain by PyYAML (not a float in YAML 1.1) and
+    # read by yaml.v3 as !!float: no file of the run is written, not even the
+    # CSV or the hints.
+    r, out = _onb(tmp_path, "'1e3'")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "phase1-routing/tenant-a.yaml" in r.stderr and "group_wait" in r.stderr, r.stderr
+    assert not out.exists() or _bytes(out) == {}
+
+
+def test_onboard_platform_does_not_write_a_path_no_reader_reads(tmp_path):
+    # The CLI refuses an invalid tenant id first (ADR-035); a library caller
+    # reaches the confirmation, which refuses the hidden path.
+    import onboard_platform as op
+    out = tmp_path / "out"
+    with pytest.raises(SystemExit) as exc:
+        op.write_outputs(str(out), phase1_results=(
+            {".hidden": {"receiver": {"type": "webhook", "url": "https://h.example/x"}}},
+            {"dedup_tenants": {}}))
+    assert exc.value.code == 2
+    assert not out.exists() or _bytes(out) == {}
+
+
+def test_onboard_platform_without_da_guard_is_exit_2(tmp_path):
+    r, out = _onb(tmp_path, "30s", env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "da-guard" in r.stderr, r.stderr
+    assert not out.exists() or _bytes(out) == {}
+
+
+def test_onboard_platform_defaults_suggestion_is_numbers_the_exporter_reads(tmp_path):
+    # The suggestion is "merge into conf.d/_defaults.yaml"; the exporter decodes
+    # `defaults:` into float64, so a quoted '80' dropped the whole block. Put
+    # the generated file into a tree as `_defaults.yaml`: da-guard serves it.
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n"
+                     "  - alert: Deep\n    expr: app_queue_depth > 1e3\n"
+                     "    labels: {severity: warning}\n"
+                     "  - alert: Ratio\n    expr: app_err_ratio > 0.5\n"
+                     "    labels: {severity: warning}\n", encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/onboard_platform.py", "--rule-files", str(rules), "-o", str(out))
+    assert r.returncode == 0, r.stdout + r.stderr
+    tree = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    (tree / "_defaults.yaml").write_bytes(
+        (out / "phase2-rules" / "_defaults-suggestion.yaml").read_bytes())
+    sv = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
+                         str(tree)], capture_output=True, text=True, encoding="utf-8",
+                        timeout=120)
+    doc = json.loads(sv.stdout)
+    assert doc["parse_failed"] == [], sv.stderr
+    values = doc["tenants"]["tenant-a"]["values"]
+    assert (values["app_queue_depth"], values["app_err_ratio"]) == (1000, 0.5), values
+
+
+def test_onboard_platform_leaves_a_non_number_out_of_defaults(tmp_path):
+    import onboard_platform as op
+    [(rel, text, data)] = op._phase2_confd(([
+        {"status": "perfect", "metric_key": "a_b", "severity": "warning",
+         "threshold_value": "1.2.3"},
+        {"status": "perfect", "metric_key": "c_d", "severity": "warning",
+         "threshold_value": "70"}], [], {}))
+    assert "a_b: threshold '1.2.3' is not a number" in text, text
+    assert list(data["defaults"]) == ["c_d"], data
+
+
+# ── migrate_rule（#2906 F1：tenant-config.yaml、defaults-snippet.yaml）──────
+
+def _mr(tmp_path, threshold, env=None):
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     f"    expr: app_queue_depth > {threshold}\n"
+                     "    labels: {severity: warning}\n", encoding="utf-8")
+    out = tmp_path / "out"
+    return _run("ops/migrate_rule.py", str(rules), "-o", str(out), env=env), out
+
+
+def test_migrate_rule_writes_what_reads_back(tmp_path):
+    r, out = _mr(tmp_path, "1e3")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert 'custom_app_queue_depth: "1e3"' in (out / "tenant-config.yaml").read_text(
+        encoding="utf-8")
+    assert "custom_app_queue_depth: 1000" in (out / "defaults-snippet.yaml").read_text(
+        encoding="utf-8")
+
+
+def test_migrate_rule_refuses_a_generated_text_that_reads_back_differently(tmp_path):
+    # tenant-config.yaml writes each key as it is: a prefix holding ` #`
+    # turns the line into a comment, the file into a bare scalar. No file of
+    # the run is written (rule packs and report included).
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     "    expr: app_queue_depth > 80\n", encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/migrate_rule.py", str(rules), "--prefix", "team #", "-o", str(out))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "tenant-config.yaml" in r.stderr and "text_unreadable" in r.stderr, r.stderr
+    assert not out.exists() or _bytes(out) == {}
+
+
+def test_migrate_rule_writes_a_default_past_int64(tmp_path):
+    # 1e20 is the int 100000000000000000000, which yaml.v3 reads as !!float:
+    # a number either way to the exporter's float64 `defaults:` — written.
+    r, out = _mr(tmp_path, "1e20")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "custom_app_queue_depth: 100000000000000000000" in (
+        out / "defaults-snippet.yaml").read_text(encoding="utf-8")
+
+
+def test_migrate_rule_without_da_guard_is_exit_2(tmp_path):
+    r, out = _mr(tmp_path, "80", env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "da-guard" in r.stderr, r.stderr
+    assert not out.exists() or _bytes(out) == {}
+
+
+def test_migrate_rule_dry_run_and_triage_need_no_da_guard(tmp_path):
+    # Neither writes a conf.d file, so neither asks da-guard.
+    for mode in ("--dry-run", "--triage"):
+        rules = tmp_path / "rules.yml"
+        rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                         "    expr: app_queue_depth > 80\n", encoding="utf-8")
+        r = _run("ops/migrate_rule.py", str(rules), mode, "-o", str(tmp_path / mode),
+                 env=_no_da_guard(tmp_path))
+        assert r.returncode == 0, (mode, r.stdout + r.stderr)
+
+
+# ── generate_tenant_fixture（#2906 F1：整棵 conf.d 測試樹）─────────────────
+
+def _fx(out, *extra, env=None):
+    return _run("dx/generate_tenant_fixture.py", "-n", "5", "--layout", "hierarchical",
+                "--with-defaults", "-o", str(out), *extra, env=env)
+
+
+def test_generate_tenant_fixture_writes_what_reads_back(tmp_path):
+    out = tmp_path / "conf.d"
+    r = _fx(out, "--extra-defaults", "bench_trigger=50",
+            "--extra-defaults", "bench_ratio=1.5")
+    assert r.returncode == 0, r.stdout + r.stderr
+    tree = _lib_parse_tree.load(out, None, 120)
+    assert not tree.unreadable and len(tree.selected) == len(_bytes(out)), tree.not_read
+    assert tree.node("_defaults.yaml")["defaults"]["bench_ratio"]["tag"] == "!!float"
+
+
+def test_generate_tenant_fixture_refuses_a_generated_text_that_reads_back_differently(
+        tmp_path):
+    # `inf` is a Python float written `inf`, which yaml.v3 reads as the
+    # string "inf" (the exporter would drop the whole `defaults:` block).
+    # All or none: the output directory holds nothing but itself — no
+    # tenant file, no domain directory, no staging directory beside it.
+    out = tmp_path / "conf.d"
+    r = _fx(out, "--extra-defaults", "bench_trigger=inf")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "_defaults.yaml" in r.stderr and "bench_trigger" in r.stderr, r.stderr
+    assert list(out.iterdir()) == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d"]
+
+
+def test_generate_tenant_fixture_is_the_same_bytes_whatever_the_hash_seed(tmp_path):
+    # The domain `_defaults.yaml` took its db types from a `set`: their order
+    # (and so the values the seeded RNG gave them) changed with the
+    # per-process string hash.
+    trees = []
+    for hash_seed in ("1", "2"):
+        out = tmp_path / hash_seed
+        r = _fx(out, env={**os.environ, "PYTHONHASHSEED": hash_seed})
+        assert r.returncode == 0, r.stdout + r.stderr
+        trees.append(_bytes(out))
+    assert trees[0] == trees[1]
+    assert any(k.endswith("/_defaults.yaml") for k in trees[0]), sorted(trees[0])
+
+
+def test_generate_tenant_fixture_without_da_guard_is_exit_2(tmp_path):
+    out = tmp_path / "conf.d"
+    r = _fx(out, env=_no_da_guard(tmp_path))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "da-guard" in r.stderr, r.stderr
+    assert _bytes(out) == {}
+
+
+def test_generate_tenant_fixture_plain_thresholds_are_numbers(tmp_path):
+    # The written `key: 123` is a yaml.v3 !!int; the data now says so too —
+    # a `str` here would be a !!str expectation the text never meets.
+    import generate_tenant_fixture as gtf
+    import random
+    rng = random.Random(7)
+    vals = [gtf._gen_threshold_value(rng) for _ in range(200)]
+    assert {type(v) for v in vals} == {int, str}
+    assert all(not v.isdigit() for v in vals if isinstance(v, str))
+
+
+# ── _lib_write_check.confirm_tree（批次：一次 tree mode）──────────────────
+
+def test_confirm_tree_moves_only_after_every_file_reads_back(tmp_path):
+    import _lib_write_check as wc
+    root = tmp_path / "out"
+    good = ("tenant-a.yaml", "tenants:\n  tenant-a:\n    k: '1'\n",
+            wc.from_python({"tenants": {"tenant-a": {"k": "1"}}}))
+    bad = ("tenant-b.yaml", "tenants:\n  tenant-b:\n    k: 1e3\n",
+           wc.from_python({"tenants": {"tenant-b": {"k": "1e3"}}}))
+    with pytest.raises(wc.WriteRefused) as exc:
+        with wc.confirm_tree(root, [good, bad]):
+            raise AssertionError("entered despite a refusal")
+    assert exc.value.reason == wc.CONTENT_DIFFERS and exc.value.rel == "tenant-b.yaml"
+    assert sorted(p.name for p in tmp_path.iterdir()) == []  # no staging left
+    root.mkdir()
+    with wc.confirm_tree(root, [good]) as staged:
+        staged.place("tenant-a.yaml", root / "tenant-a.yaml")
+    assert (root / "tenant-a.yaml").read_text(encoding="utf-8") == good[1]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["out"]
+
+
+def test_confirm_tree_refuses_a_path_no_reader_reads(tmp_path):
+    import _lib_write_check as wc
+    with pytest.raises(wc.WriteRefused) as exc:
+        with wc.confirm_tree(tmp_path / "out", [
+                (".hidden.yaml", "tenants: {}\n", {"tenants": {}})]):
+            pass
+    assert exc.value.reason == wc.NOT_READ
+
+
+def test_confirm_tree_judges_against_a_non_empty_root_in_file_mode(tmp_path):
+    # With files already in root the staged tree is not the tree the run
+    # leaves: beside an existing `_defaults.yaml`, a new `_defaults.yml` is a
+    # spelling the directory does not select (alone in the staged tree it
+    # would be) — refused as file mode does.
+    import _lib_write_check as wc
+    root = _tree(tmp_path / "out", {"_defaults.yaml": "defaults:\n  k: 1\n"})
+    with pytest.raises(wc.WriteRefused) as exc:
+        with wc.confirm_tree(root, [("_defaults.yml", "defaults:\n  k: 2\n",
+                                     wc.from_python({"defaults": {"k": 2}}))]):
+            pass
+    assert exc.value.reason == wc.NOT_READ, exc.value
+
+
+def test_confirm_tree_without_da_guard_raises(tmp_path, monkeypatch):
+    import _lib_write_check as wc
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    with pytest.raises(_lib_parse_tree.ParseTreeError):
+        with wc.confirm_tree(tmp_path / "out", [
+                ("t.yaml", "tenants: {}\n", {"tenants": {}})]):
+            pass
+    assert sorted(p.name for p in tmp_path.iterdir()) == []

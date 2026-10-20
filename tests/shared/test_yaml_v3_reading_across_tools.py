@@ -163,7 +163,10 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: before it is written (ADR-036 §2). They take no conf.d argument a probe can
 #: drive without a cluster or an API (patch_config: a ConfigMap via kubectl;
 #: threshold_govern: tenant-api; da_assembler: a CR), or write what they
-#: generate rather than read a value (init_project, scaffold_tenant), or read
+#: generate rather than read a value (init_project, scaffold_tenant; and since
+#: step F1 onboard_platform, migrate_rule, generate_tenant_fixture, which read
+#: no conf.d at all — their inputs are Alertmanager / rule / scrape files, and
+#: the fixture generator has none), or read
 #: a value whose yes / "yes" / true readings end the same (deprecate_rule:
 #: every non-number `defaults:` value is a dropped carrier) — their own rows
 #: are in tests/shared/test_writers_confirm_parse_tree.py.
@@ -196,7 +199,7 @@ _NOT_PROBED: dict[str, str] = {
     "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
                                "to list where they differ (ADR-036 §8)"),
     "dx/describe_tenant.py": _GO,
-    "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _PENDING,
+    "dx/generate_tenant_fixture.py": _GO_WRITER, "dx/run_chaos_soak.py": _PENDING,
     "lint/check_account_registry_monotonic.py": _PENDING, "validate_all.py": _PENDING,
     "ops/byo_check.py": _PENDING, "ops/blast_radius.py": _PENDING,
     "ops/generate_rule_pack_split.py": _PENDING, "ops/cutover_tenant.py": _PENDING,
@@ -215,9 +218,9 @@ _NOT_PROBED: dict[str, str] = {
     "ops/deprecate_rule.py": _GO_WRITER, "ops/diagnose.py": _GO,
     "ops/drift_detect.py": _PENDING, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
-    "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _PENDING,
+    "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _GO_WRITER,
     "ops/migrate_to_operator.py": _PENDING,
-    "ops/onboard_platform.py": _PENDING, "ops/operator_generate.py": _PENDING,
+    "ops/onboard_platform.py": _GO_WRITER, "ops/operator_generate.py": _PENDING,
     "ops/patch_config.py": _GO_WRITER,
     "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_WRITER,
 }
