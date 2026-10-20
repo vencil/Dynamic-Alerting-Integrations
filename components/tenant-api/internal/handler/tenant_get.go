@@ -101,15 +101,20 @@ type TenantDetail struct {
 	// tenants), id_mismatch (the one tenant is not the file's name). A
 	// fixed code: it names no tenant. Absent when managed_by is api.
 	GitManagedReason string `json:"git_managed_reason,omitempty" enums:"not_tenant_document,several_documents,yaml_indirection,tenant_count,id_mismatch"`
-	// DeclaredElsewhere is true when a conf.d file other than the tenant's
-	// own declares the tenant id too (#3172): every write to the tenant is
-	// then refused with 409 TENANT_DECLARED_ELSEWHERE, and threshold-exporter
-	// refuses a tree that declares an id twice (the whole tree stays on its
-	// last good load, so an edit here does not take effect). The same verdict
-	// /diff and PUT give, on /diff's walk. One bit only: it names no file
-	// and no other tenant — the bit /effective's 409 already gives a caller
-	// with read permission. Absent when it could not be judged (the conf.d
-	// walk failed or timed out; see the server log) — absent is not false.
+	// DeclaredElsewhere is true when, in the tree this server reads now, a
+	// conf.d file other than the tenant's own declares the tenant id (#3172)
+	// — the condition the #2078 write guard (409 TENANT_DECLARED_ELSEWHERE)
+	// checks, judged as /diff judges it, on /diff's walk. It is not a promise
+	// of a write's answer: a write can be refused earlier for another reason,
+	// and a PR-mode write judges the latest base branch. Two cases: a
+	// duplicate (the own file declares the id too), which threshold-exporter
+	// refuses — the whole tree stays on its last good load; or declared only
+	// elsewhere (the own file declares nothing for the id), which the
+	// exporter loads from the other file. One bit only: it names no file and
+	// no other tenant — /effective's 409 already gives a caller with read
+	// permission the duplicate case. Absent when it could not be judged (the
+	// conf.d walk failed or timed out; see the server log) — absent is not
+	// false.
 	DeclaredElsewhere *bool `json:"declared_elsewhere,omitempty"`
 }
 
@@ -209,10 +214,13 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Description source_hash empty (masked: true);
 // @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
 // @Description (inside the tenant's own section: anywhere else makes the tenant git-managed).
-// @Description declared_elsewhere (#3172), on every 200 shape: true when a conf.d file other than the tenant's own also
-// @Description declares the tenant id — every write to the tenant is then refused with 409 TENANT_DECLARED_ELSEWHERE (the
-// @Description verdict /diff gives), and threshold-exporter keeps the whole tree on its last good load. It names no file
-// @Description and no other tenant. Absent (not false) when the conf.d walk behind it could not run.
+// @Description declared_elsewhere (#3172), on every 200 shape: true when, in the tree this server reads now, a conf.d file
+// @Description other than the tenant's own declares the tenant id — the condition of 409 TENANT_DECLARED_ELSEWHERE, judged
+// @Description as /diff judges it. Not a promise of a write's answer: a write can be refused earlier for another reason, and
+// @Description a PR-mode write judges the latest base branch. When the tenant's own file declares the id too (a duplicate),
+// @Description threshold-exporter keeps the whole tree on its last good load; when only the other file declares it, the
+// @Description exporter loads it from there. It names no file and no other tenant. Absent (not false) when the conf.d walk
+// @Description behind it could not run.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -261,9 +269,9 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// #3172: whether another conf.d file declares the id too — PUT's and
-		// /diff's TENANT_DECLARED_ELSEWHERE verdict, on the Writer's shared
-		// read walk. Carried on every 200 shape below.
+		// #3172: whether another conf.d file declares the id — the #2078
+		// guard's condition as /diff judges it, on the Writer's shared read
+		// walk. Carried on every 200 shape below.
 		elsewhere := declaredElsewhereFor(d, tenantID)
 
 		// #2373: a file threshold-exporter rejects whole (cfg.ParseTenantFile
@@ -417,8 +425,8 @@ func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenant
 }
 
 // declaredElsewhereFor is GET's declared_elsewhere (#3172): the Writer's
-// judgement (gitops.Writer.DeclaredElsewhere — the #2078 guard PUT and /diff
-// refuse on, on the shared read walk), or nil when it cannot be given: no
+// judgement (gitops.Writer.DeclaredElsewhere — the #2078 guard's condition,
+// on the shared read walk), or nil when it cannot be given: no
 // Writer (handler-test literals), or a walk that failed or timed out. A nil
 // is omitted from the body, so an unjudged tree never reads as "no". The
 // walk's error carries server paths: log only.

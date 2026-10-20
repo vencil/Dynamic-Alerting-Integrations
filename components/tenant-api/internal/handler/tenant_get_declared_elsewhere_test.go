@@ -1,9 +1,9 @@
 package handler
 
 // #3172: GET /tenants/{id} carries declared_elsewhere — whether a conf.d file
-// other than the tenant's own declares the id too — so a reader learns from
-// the GET what PUT and /diff refuse on (409 TENANT_DECLARED_ELSEWHERE) and
-// what /effective answers 409 for. ⛔ One bit: the body never names the other
+// other than the tenant's own declares the id — the condition of the #2078
+// guard's 409 TENANT_DECLARED_ELSEWHERE, and, when the own file declares the
+// id too, of /effective's 409. ⛔ One bit: the body never names the other
 // file or the other tenants it declares.
 
 import (
@@ -115,7 +115,8 @@ func TestGetTenant_DeclaredElsewhereAgreesWithEffectiveAndDiff(t *testing.T) {
 // The flag is the write guard's verdict, which is wider than /effective's
 // duplicate: an own file that declares nothing for the id (a `tenants: {}`
 // shell) while another file does is no duplicate — /effective serves the
-// other file's declaration — but every write is refused, and GET says so.
+// other file's declaration — but the #2078 guard refuses a write into the
+// own file (/diff answers its 409 here), and GET says so.
 func TestGetTenant_DeclaredElsewhereWhenOwnFileIsAShell(t *testing.T) {
 	t.Parallel()
 	dir := deTree(t, "tenants: {}\n", true)

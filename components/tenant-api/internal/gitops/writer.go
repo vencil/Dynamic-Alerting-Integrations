@@ -1091,11 +1091,16 @@ func (w *Writer) JudgeWrite(tenantID string) error {
 	return err
 }
 
-// DeclaredElsewhere reports whether a conf.d file other than tenantID's own
-// top-level file declares tenantID — the condition a write of tenantID is
-// refused on with ErrTenantDeclaredElsewhere (#3172). GET /tenants/{id}
-// carries it so that a reader learns from the GET what PUT and /diff would
-// answer, instead of from a 409.
+// DeclaredElsewhere reports whether, in the tree this server reads now, a
+// conf.d file other than tenantID's own top-level file declares tenantID
+// (#3172) — the #2078 guard's condition (ErrTenantDeclaredElsewhere). GET
+// /tenants/{id} carries it so that a reader can see that condition without
+// a 409.
+//
+// It is NOT a promise of what a write answers: a write may be refused
+// earlier in its sequence for another reason (write scope, the body, a
+// tenant file that is not a regular file), and a PR-mode write judges the
+// latest base branch, which can differ from the tree read here.
 //
 // Same judgement, same walk as the previews: ensureNotDeclaredElsewhereIn on
 // scanTreeForRead (the shared read walk on the prior, no lock), against the
@@ -1106,11 +1111,13 @@ func (w *Writer) JudgeWrite(tenantID string) error {
 // checks) are not, so an unreadable entry elsewhere does not make this an
 // error.
 //
-// ⚠️ Superset of /effective's 409: that is the walker's duplicate verdict
-// (two files declare the id). This is also true when the tenant's own file
-// declares nothing for the id (a `tenants: {}` shell, a file the walker
-// cannot decode) and another file does — /effective then serves the other
-// file's declaration, while every write is refused.
+// ⚠️ Two cases, only one a duplicate. A true duplicate (the own file and
+// another both declare the id) is /effective's 409, and threshold-exporter
+// refuses to reload the whole tree. Declared only elsewhere (the own file
+// declares nothing for the id — a `tenants: {}` shell, a file the walker
+// cannot decode — and one other file does) is no duplicate: the exporter
+// loads it and /effective serves the other file's declaration; this is true
+// all the same, since the #2078 guard refuses a write into the own file.
 //
 // A walk that cannot run (ErrTenantTreeScan, wrapped) is returned as an
 // error: the answer is unknown, not false.
