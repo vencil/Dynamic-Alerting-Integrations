@@ -607,25 +607,20 @@ def test_oracle_cap_fails_loudly(monkeypatch) -> None:
 
 
 
-# The ADR-036 §9 window that step 4 (#2906) closed: files only PyYAML
-# refuses, in a tenant file of a tree with no routing key. da-guard's default
-# run passes such a tree (exit 0, nothing undetermined); before step 4 the
-# generator (PyYAML) refused the whole file, so CI had to run both. The rows
-# are defined by the corpus, not by a hand-copied list: category pyyaml_only
-# and a file name not starting with `_` (an `_` file the generator reads is
-# undetermined evidence by name). The Go half,
-# TestPyYAMLOnlyRows_PassDaGuardDefaultRun in
-# components/threshold-exporter/app/cmd/da-guard/pyyaml_only_window_test.go,
-# MEASURES the rows da-guard passes and asserts they are exactly this set;
-# this half asserts the generator, reading parse-tree's JSON since step 4,
-# now reads each of them too — the two agree, so the window is gone.
-_WINDOW_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
-_WINDOW_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
+# Files only PyYAML refuses (corpus category `pyyaml_only`), as a tenant file
+# of a tree with no routing key: the route generator reads conf.d through
+# da-guard parse-tree (ADR-036), so it must read each of them as yaml.v3
+# does, not refuse it the way a PyYAML read would. The rows are defined by
+# the corpus, not by a hand-copied list: category pyyaml_only and a file
+# name not starting with `_` (an `_` file the generator reads is
+# undetermined evidence by name, so it cannot stand for "a tenant file").
+_PYYAML_ONLY_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_PYYAML_ONLY_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
 _GENERATE_ROUTES = REPO_ROOT / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 
 
-def in_pyyaml_only_window(row: dict) -> bool:
-    """The corpus's definition of the window (same predicate as the Go half)."""
+def is_pyyaml_only_tenant_file(row: dict) -> bool:
+    """A corpus row only PyYAML refuses, written as a tenant file."""
     return row["category"] == "pyyaml_only" and not row["file"].startswith("_")
 
 
@@ -633,8 +628,8 @@ def _generate_routes_strict(extra: dict[str, bytes] | None) -> tuple[int, str]:
     with tempfile.TemporaryDirectory() as d:
         confd = Path(d) / "conf.d"
         confd.mkdir()
-        (confd / "_defaults.yaml").write_text(_WINDOW_DEFAULTS, encoding="utf-8")
-        (confd / "tenant-x.yaml").write_text(_WINDOW_TENANT, encoding="utf-8")
+        (confd / "_defaults.yaml").write_text(_PYYAML_ONLY_DEFAULTS, encoding="utf-8")
+        (confd / "tenant-x.yaml").write_text(_PYYAML_ONLY_TENANT, encoding="utf-8")
         for name, data in (extra or {}).items():
             (confd / name).write_bytes(data)
         p = subprocess.run([sys.executable, str(_GENERATE_ROUTES), "--config-dir", str(confd),
@@ -643,18 +638,23 @@ def _generate_routes_strict(extra: dict[str, bytes] | None) -> tuple[int, str]:
         return p.returncode, p.stdout + p.stderr
 
 
-def test_pyyaml_only_rows_are_read_by_generate_routes() -> None:
+def test_generate_routes_reads_files_only_pyyaml_refuses() -> None:
+    """`generate-routes --validate --strict` accepts every pyyaml_only
+    tenant-file row: what it reads is parse-tree's, so a file yaml.v3 reads
+    is a file it reads. A PyYAML read slipping back into the generator's
+    conf.d path turns these rows red."""
     rows = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["rows"]
-    window = [r for r in rows if in_pyyaml_only_window(r)]
+    pyyaml_only = [r for r in rows if is_pyyaml_only_tenant_file(r)]
     # Known members, so an emptied or renamed set cannot pass vacuously.
-    assert {"duplicate-anchor", "tab-after-colon"} <= {r["name"] for r in window}
+    assert {"duplicate-anchor", "tab-after-colon"} <= {r["name"] for r in pyyaml_only}
     code, out = _generate_routes_strict(None)
     assert code == 0, f"control tree (no corpus file) refused, rc {code}:\n{out}"
-    for r in window:
-        # Frozen: the generator before step 4 refused it (PyYAML).
+    for r in pyyaml_only:
+        # The corpus's frozen verdict: a PyYAML read refuses this file, so
+        # the row does measure "not read the PyYAML way".
         assert r["generator"] == "rejected", r["name"]
         assert r["file"] not in ("_defaults.yaml", "tenant-x.yaml"), r["name"]
         code, out = _generate_routes_strict({r["file"]: _encode(r["doc"], r.get("encoding"))})
         assert code == 0, (f"{r['name']}: generate-routes --validate --strict refuses a file "
-                           f"da-guard's run passes (rc {code}) — the generator does not read "
+                           f"only PyYAML refuses (rc {code}) — the generator does not read "
                            f"what parse-tree reads:\n{out}")

@@ -129,8 +129,8 @@ _TOOLS = {
     "generate_tenant_mapping_rules_validate": ("ops/generate_tenant_mapping_rules.py",
                                                ["--config-dir", "{d}", "--validate",
                                                 "--dry-run"], _T, False),
-    # The `--config-dir` branch reads through load_tenant_configs (strict
-    # since #2123); the single-file branch is its own read.
+    # The `--config-dir` branch reads `da-guard served-values`; the
+    # single-file branch reads the file through `da-guard parse-tree`.
     "analyze_rule_pack_gaps_file": ("ops/analyze_rule_pack_gaps.py",
                                     ["--tenant-config", "{d}/tenant-a.yaml"], _T, False),
     "migrate_conf_d": ("dx/migrate_conf_d.py", ["--conf-d", "{d}"], _T, False),

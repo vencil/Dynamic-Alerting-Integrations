@@ -128,8 +128,6 @@ _TWO_SPELLINGS = 'tenants:\n  123:\n    a: 1\n  "123":\n    a: 2\n'
 STRICT_LOADS = {
     "strict_load_exporter_keys":
         lambda s: _lib_io.strict_load_exporter_keys(io.StringIO(s)),
-    "strict_load_all_exporter_keys":
-        lambda s: next(_lib_io.strict_load_all_exporter_keys(io.StringIO(s))),
 }
 
 
