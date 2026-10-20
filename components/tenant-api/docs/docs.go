@@ -184,7 +184,7 @@ const docTemplate = `{
         },
         "/api/v1/federation/accounts/backfill": {
             "post": {
-                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires platform admin.",
+                "description": "Assigns a monotonic account_id (ADR-021) to every conf.d tenant lacking one, in one committed registry write. Idempotent. Requires a non-org-scoped platform admin (an org-scoped \"*\" admin rule is refused).",
                 "produces": [
                     "application/json"
                 ],
@@ -799,7 +799,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before a synchronous batch finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before a synchronous batch finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -863,7 +863,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.\nWhen the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own ` + "`" + `_metadata` + "`" + `\nvalues and the row is marked ` + "`" + `metadata_incomplete` + "`" + `; its visibility is that of a degraded row.\nA row whose ` + "`" + `_metadata` + "`" + ` does not decode is marked ` + "`" + `metadata_incomplete` + "`" + ` the same way, with empty metadata fields.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.\nWhen the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own ` + "`" + `_metadata` + "`" + `\nvalues and the row is marked ` + "`" + `metadata_incomplete` + "`" + `; its visibility is that of a degraded row.\nA row whose ` + "`" + `_metadata` + "`" + ` does not decode is marked ` + "`" + `metadata_incomplete` + "`" + ` the same way, with empty metadata fields.\nEach row carries ` + "`" + `managed_by` + "`" + ` (api | git) and, for git, ` + "`" + `git_managed_reason` + "`" + ` — the verdict and codes\nGET /api/v1/tenants/{id} gives for the same file (absent on an unreadable / not_regular_file row). A file\nthat declares one tenant under another name is listed under its name with git_managed_reason id_mismatch,\nmarked ` + "`" + `metadata_incomplete` + "`" + ` and with no other field: the declared id is not shown. Any git-managed row\nwhose file does not declare the row's id is marked ` + "`" + `metadata_incomplete` + "`" + ` the same way; its visibility is\nthat of a degraded row.",
                 "produces": [
                     "application/json"
                 ],
@@ -977,7 +977,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before a synchronous batch finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before a synchronous batch finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1081,7 +1081,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}": {
             "get": {
-                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nmanaged_by says who changes the tenant (#3064). \"api\": its conf.d file (located by its name) is API-shaped —\none YAML document declaring only this tenant (or none yet), with no anchor, alias, merge key (\u003c\u003c) or tagged\nkey at the top level or directly under tenants: — so raw_yaml, source_hash and custom_alerts are that\ntenant's alone. \"git\": any other file (shared with other tenants, a name that is not the declared id, several\ndocuments, YAML indirection where tenants are declared, not YAML), with git_managed_reason; the answer is the\neffective view only — resolved_thresholds and validation_warnings / validation_notices, or config_error —\nand raw_yaml, source_hash and custom_alerts are ABSENT, for every caller. Every write to such a tenant is\nrefused with 409 TENANT_GIT_MANAGED; change it in git.\nWhen an API-managed tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml\nand source_hash, plus ` + "`" + `config_error` + "`" + ` (invalid_config, as on the list row); threshold-exporter skips such a\nfile, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty: the file's\ncontent is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until it is\nrepaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's\ntenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] granting\nwrite and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused\nwith 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so\na body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,\na directory) refuses the write.\nA caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by\n\"\u003cmasked: write permission required\u003e\" and comments removed, custom_alerts masked the same way and\nsource_hash empty (masked: true);\nor raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias\n(inside the tenant's own section: anywhere else makes the tenant git-managed).",
+                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nmanaged_by says who changes the tenant (#3064). \"api\": its conf.d file (located by its name) is API-shaped —\none YAML document declaring only this tenant (or none yet), with no anchor, alias, merge key (\u003c\u003c) or tagged\nkey at the top level or directly under tenants: — so raw_yaml, source_hash and custom_alerts are that\ntenant's alone. \"git\": any other file (shared with other tenants, a name that is not the declared id, several\ndocuments, YAML indirection where tenants are declared, not YAML), with git_managed_reason; the answer is the\neffective view only — resolved_thresholds and validation_warnings / validation_notices, or config_error —\nand raw_yaml, source_hash and custom_alerts are ABSENT, for every caller. Every write to such a tenant is\nrefused with 409 TENANT_GIT_MANAGED; change it in git.\nWhen an API-managed tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml\nand source_hash, plus ` + "`" + `config_error` + "`" + ` (invalid_config, as on the list row); threshold-exporter skips such a\nfile, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty: the file's\ncontent is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until it is\nrepaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's\ntenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] granting\nwrite and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused\nwith 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so\na body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,\na directory) refuses the write.\nA caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by\n\"\u003cmasked: write permission required\u003e\" and comments removed, custom_alerts masked the same way and\nsource_hash empty (masked: true);\nor raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias\n(inside the tenant's own section: anywhere else makes the tenant git-managed).\ndeclared_elsewhere (#3172), on every 200 shape: true when, in the tree this server reads now, a conf.d file\nother than the tenant's own declares the tenant id — the condition of 409 TENANT_DECLARED_ELSEWHERE, judged\nas /diff judges it. Not a promise of a write's answer: a write can be refused earlier for another reason, and\na PR-mode write judges the latest base branch. When the tenant's own file declares the id too (a duplicate),\nthreshold-exporter keeps the whole tree on its last good load; when only the other file declares it, the\nexporter loads it from there. It names no file and no other tenant. Absent (not false) when the conf.d walk\nbehind it could not run.",
                 "produces": [
                     "application/json"
                 ],
@@ -1229,7 +1229,7 @@ const docTemplate = `{
                         }
                     },
                     "503": {
-                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before the write finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the feature branch to the config repository failed, a timeout included: no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached its deadline before the write finished: unlike the cases above it may already be committed (a git command that hits its own deadline may already have moved the ref), so refresh to see whether it was before retrying",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1750,7 +1750,7 @@ const docTemplate = `{
         },
         "/api/v1/views": {
             "get": {
-                "description": "Returns all saved filter views defined in _views.yaml.",
+                "description": "Returns all saved filter views defined in _views.yaml.\nRequires read on \"*\" from a rule with no org-scope (open mode\nreads them too).",
                 "produces": [
                     "application/json"
                 ],
@@ -1766,6 +1766,12 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/internal_handler.ViewResponse"
                             }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
                         }
                     }
                 }
@@ -1798,6 +1804,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1851,6 +1863,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1916,6 +1934,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -3239,6 +3263,10 @@ const docTemplate = `{
                         "additionalProperties": {}
                     }
                 },
+                "declared_elsewhere": {
+                    "description": "DeclaredElsewhere is true when, in the tree this server reads now, a\nconf.d file other than the tenant's own declares the tenant id (#3172)\n— the condition the #2078 write guard (409 TENANT_DECLARED_ELSEWHERE)\nchecks, judged as /diff judges it, on /diff's walk. It is not a promise\nof a write's answer: a write can be refused earlier for another reason,\nand a PR-mode write judges the latest base branch. Two cases: a\nduplicate (the own file declares the id too), which threshold-exporter\nrefuses — the whole tree stays on its last good load; or declared only\nelsewhere (the own file declares nothing for the id), which the\nexporter loads from the other file. One bit only: it names no file and\nno other tenant — /effective's 409 already gives a caller with read\npermission the duplicate case. Absent when it could not be judged (the\nconf.d walk failed or timed out; see the server log) — absent is not\nfalse.",
+                    "type": "boolean"
+                },
                 "git_managed_reason": {
                     "description": "GitManagedReason says why the tenant is git-managed (managed_by: git):\nnot_tenant_document (not YAML, or its root or tenants: is not a\nmapping), several_documents, yaml_indirection, tenant_count (several\ntenants), id_mismatch (the one tenant is not the file's name). A\nfixed code: it names no tenant. Absent when managed_by is api.",
                     "type": "string",
@@ -3396,6 +3424,17 @@ const docTemplate = `{
                 "environment": {
                     "type": "string"
                 },
+                "git_managed_reason": {
+                    "description": "GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:\nnot_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,\ntenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's\nother fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:\nit names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id\n(always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.",
+                    "type": "string",
+                    "enum": [
+                        "not_tenant_document",
+                        "several_documents",
+                        "yaml_indirection",
+                        "tenant_count",
+                        "id_mismatch"
+                    ]
+                },
                 "groups": {
                     "type": "array",
                     "items": {
@@ -3409,8 +3448,16 @@ const docTemplate = `{
                     "description": "Raw ` + "`" + `_state_maintenance` + "`" + ` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.",
                     "type": "string"
                 },
+                "managed_by": {
+                    "description": "ManagedBy says who changes the tenant (#3064, #3157): the verdict GET /api/v1/tenants/{id} gives for the same file\n(confd.TenantFileManagement on the file the row's id names), with the same values — \"api\" for an API-shaped file,\n\"git\" for any other (git_managed_reason says why; every write to it is refused with 409 TENANT_GIT_MANAGED).\nAbsent on a row whose file cannot be read at all (config_error unreadable or not_regular_file), for which GET\nanswers no tenant either.",
+                    "type": "string",
+                    "enum": [
+                        "api",
+                        "git"
+                    ]
+                },
                 "metadata_incomplete": {
-                    "description": "Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own ` + "`" + `_metadata` + "`" + ` values), or the tenant's ` + "`" + `_metadata` + "`" + ` does not decode (the metadata fields are then empty, as threshold-exporter reads them). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.",
+                    "description": "Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own ` + "`" + `_metadata` + "`" + ` values), the tenant's ` + "`" + `_metadata` + "`" + ` does not decode (the metadata fields are then empty, as threshold-exporter reads them), or the file is git-managed and does not declare the row's id (git_managed_reason id_mismatch, or any other git-managed file whose decoded tenants leave the row's id out; the metadata fields are then empty). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.",
                     "type": "boolean"
                 },
                 "owner": {

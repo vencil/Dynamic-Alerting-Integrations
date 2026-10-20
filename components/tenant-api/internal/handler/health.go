@@ -2,10 +2,24 @@ package handler
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
+)
+
+// Ready's fixed failure reasons. The /ready body carries only "status" and one
+// of these (#2811): /ready answers without authentication, so the config dir,
+// the socket path and the error text — which carries paths too — go to the
+// server log under the request_id, never to the caller. The kubelet reads only
+// the status code.
+const (
+	readyReasonConfigDirUnavailable = "config_dir_unavailable"
+	readyReasonConfigDirNotADir     = "config_dir_not_a_directory"
+	readyReasonHumanSocketDown      = "human_socket_down"
 )
 
 // humanSocketDialTimeout bounds the readiness self-dial over the human-plane
@@ -32,23 +46,18 @@ func Health(w http.ResponseWriter, r *http.Request) {
 // the pod stays Ready). Failing readiness here makes the pod NotReady → the
 // Service stops routing to it → the failure is visible, not silent. The dial
 // result also drives the tenant_api_human_socket_up gauge for alerting.
+//
+// The body is {"status":"ready"} or {"status":"not_ready","reason":<fixed
+// code>}; the details are logged by readyNotReady.
 func Ready(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info, err := os.Stat(d.ConfigDir)
 		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"status":     "not_ready",
-				"config_dir": d.ConfigDir,
-				"error":      err.Error(),
-			})
+			readyNotReady(w, r, d, readyReasonConfigDirUnavailable, "error", err)
 			return
 		}
 		if !info.IsDir() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"status":     "not_ready",
-				"config_dir": d.ConfigDir,
-				"error":      "config_dir is not a directory",
-			})
+			readyNotReady(w, r, d, readyReasonConfigDirNotADir)
 			return
 		}
 
@@ -56,23 +65,33 @@ func Ready(d *Deps) http.HandlerFunc {
 		if d.HumanSocketPath != "" {
 			if err := dialHumanSocket(r.Context(), d.HumanSocketPath); err != nil {
 				SetHumanSocketUp(false)
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-					"status":       "not_ready",
-					"config_dir":   d.ConfigDir,
-					"reason":       "human_socket_down",
-					"human_socket": d.HumanSocketPath,
-					"error":        err.Error(),
-				})
+				readyNotReady(w, r, d, readyReasonHumanSocketDown,
+					"human_socket", d.HumanSocketPath, "error", err)
 				return
 			}
 			SetHumanSocketUp(true)
 		}
 
-		writeJSON(w, http.StatusOK, map[string]string{
-			"status":     "ready",
-			"config_dir": d.ConfigDir,
-		})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	}
+}
+
+// readyNotReady logs why /ready failed — the config dir, the request_id and
+// the branch's own details (attrs) — and answers 503 with the fixed reason only.
+func readyNotReady(w http.ResponseWriter, r *http.Request, d *Deps, reason string, attrs ...any) {
+	log := d.readyLog
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Warn("readiness check failed", append([]any{
+		"reason", reason,
+		"config_dir", d.ConfigDir,
+		"request_id", middleware.GetReqID(r.Context()),
+	}, attrs...)...)
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"status": "not_ready",
+		"reason": reason,
+	})
 }
 
 // dialHumanSocket performs a bounded GET /health over the pod-internal human

@@ -1,7 +1,7 @@
 """A directory symlink in conf.d is named, not dropped in silence (#1972).
 
 kubelet's AtomicWriter projects a ConfigMap `items[].path` that has a
-sub-directory (`team-a/x.yaml`) as ONE top-level DIRECTORY link,
+sub-directory (`team-a/t-sym.yaml`) as ONE top-level DIRECTORY link,
 `team-a -> ..data/team-a`. Neither walker follows a directory link — the
 exporter's `filepath.WalkDir` nor `os.walk(followlinks=False)` — so every
 tenant under it is lost. Measured on main before this fix, the loss was
@@ -68,11 +68,11 @@ def _kubelet_tree(root: Path, *, nested: bool) -> Path:
     symlink_or_skip("..data/_defaults.yaml", root / "_defaults.yaml")
     if nested:
         (payload / "team-a").mkdir()
-        (payload / "team-a" / "x.yaml").write_text(TENANT, encoding="utf-8")
+        (payload / "team-a" / "t-sym.yaml").write_text(TENANT, encoding="utf-8")
         symlink_or_skip("..data/team-a", root / "team-a")
     else:
-        (payload / "x.yaml").write_text(TENANT, encoding="utf-8")
-        symlink_or_skip("..data/x.yaml", root / "x.yaml")
+        (payload / "t-sym.yaml").write_text(TENANT, encoding="utf-8")
+        symlink_or_skip("..data/t-sym.yaml", root / "t-sym.yaml")
     return root
 
 
@@ -88,11 +88,11 @@ def flat(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def alias(tmp_path: Path) -> Path:
-    """`alias/current -> team-b`, `alias/team-b/x.yaml` a real file."""
+    """`alias/current -> team-b`, `alias/team-b/t-sym.yaml` a real file."""
     root = tmp_path / "alias-root"
     (root / "alias" / "team-b").mkdir(parents=True)
     (root / "_defaults.yaml").write_text(DEFAULTS, encoding="utf-8")
-    (root / "alias" / "team-b" / "x.yaml").write_text(TENANT, encoding="utf-8")
+    (root / "alias" / "team-b" / "t-sym.yaml").write_text(TENANT, encoding="utf-8")
     symlink_or_skip("team-b", root / "alias" / "current")
     return root
 
@@ -103,7 +103,7 @@ def shared(tmp_path: Path) -> Path:
     root = tmp_path / "shared-root"
     (root / ".payload" / "_shared").mkdir(parents=True)
     (root / "_defaults.yaml").write_text(DEFAULTS, encoding="utf-8")
-    (root / ".payload" / "_shared" / "x.yaml").write_text(TENANT, encoding="utf-8")
+    (root / ".payload" / "_shared" / "t-sym.yaml").write_text(TENANT, encoding="utf-8")
     symlink_or_skip(".payload/_shared", root / "_shared")
     return root
 
@@ -128,7 +128,7 @@ def test_list_config_tree_names_the_directory_link(nested: Path):
 
 def test_list_config_tree_flat_kubelet_layout_is_unchanged(flat: Path):
     listing = list_config_tree(flat)
-    assert [p.name for p in listing.files] == ["_defaults.yaml", "x.yaml"]
+    assert [p.name for p in listing.files] == ["_defaults.yaml", "t-sym.yaml"]
     assert listing.unusable == [], (
         "the kubelet flat layout (and its `..data` link) must not be "
         "reported: that is every ConfigMap volume")
@@ -138,7 +138,7 @@ def test_list_config_tree_flat_kubelet_layout_is_unchanged(flat: Path):
 def test_list_config_tree_alias_to_a_walked_directory_is_not_unusable(alias: Path):
     listing = list_config_tree(alias)
     assert [p.relative_to(alias).as_posix() for p in listing.files] == [
-        "_defaults.yaml", "alias/team-b/x.yaml"]
+        "_defaults.yaml", "alias/team-b/t-sym.yaml"]
     assert listing.unusable == [], (
         "a link to a directory the walk reaches anyway loses nothing")
 
@@ -147,7 +147,7 @@ def test_list_config_tree_link_outside_the_root_is_unusable(tmp_path: Path):
     root = tmp_path / "root"
     root.mkdir()
     (tmp_path / "elsewhere").mkdir()
-    (tmp_path / "elsewhere" / "x.yaml").write_text(TENANT, encoding="utf-8")
+    (tmp_path / "elsewhere" / "t-sym.yaml").write_text(TENANT, encoding="utf-8")
     symlink_or_skip(tmp_path / "elsewhere", root / "ext")
     assert [p.name for p in list_config_tree(root).unusable] == ["ext"]
 

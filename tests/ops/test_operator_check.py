@@ -26,7 +26,6 @@ def _make_args(**overrides) -> SimpleNamespace:
     defaults = dict(
         namespace="monitoring",
         rule_packs_dir="rule-packs",
-        config_dir="conf.d",
         prometheus=None,
         kubeconfig=None,
         json=False,

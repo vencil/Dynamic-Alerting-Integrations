@@ -1128,6 +1128,16 @@ def test_no_zombies_are_left_after_a_deadline(tmp_path, world):
         assert svc.metrics()["da_generator_orphans_reaped_total"] >= 6
 
 
+def _outcome_of(pending) -> str:
+    """What a submitted ``svc.validate`` came to, for a failure message."""
+    if not pending.done():
+        return "still running"
+    try:
+        return repr(pending.result())
+    except Exception as exc:  # noqa: BLE001 — reported, not handled
+        return f"raised {exc!r}"
+
+
 def test_shutdown_ends_the_running_judgement(tmp_path, world):
     """#2901 R7 (N19): SIGTERM while judging ends the judgement's whole group."""
     bin_dir = tmp_path / "bin"
@@ -1139,8 +1149,16 @@ def test_shutdown_ends_the_running_judgement(tmp_path, world):
     with ThreadPoolExecutor(1) as pool:
         pending = pool.submit(svc.validate, world["commits"]["clean"])
         end = time.monotonic() + 30
-        while not (pid_dir / "grandchild.pid").exists() and time.monotonic() < end:
+        while not (pid_dir / "grandchild.pid").exists() and not pending.done() \
+                and time.monotonic() < end:
             time.sleep(0.05)
+        if not (pid_dir / "grandchild.pid").exists():
+            # #3174: a judgement that never reached amtool (e.g. rejected
+            # before it) says why here, instead of a FileNotFoundError below.
+            svc.stop()
+            pytest.fail("amtool's child never started; the judgement: "
+                        + _outcome_of(pending) + "; service log: "
+                        + svc.log.read_text(encoding="utf-8", errors="replace")[-2000:])
         pids = [int((pid_dir / n).read_text().strip())
                 for n in ("amtool.pid", "grandchild.pid")]
         svc.stop()

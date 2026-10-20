@@ -2,6 +2,7 @@ package gitops
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,7 @@ func initRepoOnMain(t *testing.T) string {
 func TestWritePR_BranchesFromBaseNotStuckBranch(t *testing.T) {
 	dir := initRepoOnMain(t)
 	w := newTestWriter(dir, dir) // baseBranch defaults to "main"
+	addBareRemote(t, dir)        // the push must succeed (#1724)
 
 	mainHead := gitOut(t, dir, "rev-parse", "main")
 
@@ -66,14 +68,13 @@ func TestWritePR_BranchesFromBaseNotStuckBranch(t *testing.T) {
 	gitRun(t, dir, "checkout", "-b", "tenant-api/other/stuck")
 	gitRun(t, dir, "commit", "--allow-empty", "-m", "other tenant's unpushed work")
 
-	// WritePR for db-a (push to a nonexistent origin fails and is swallowed).
 	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
 	if err != nil {
 		t.Fatalf("WritePR: %v", err)
 	}
 
 	// The feature branch's parent MUST be main's tip, NOT the stuck branch's.
-	if parent := gitOut(t, dir, "rev-parse", res.BranchName+"~1"); parent != mainHead {
+	if parent := gitOut(t, dir, "rev-parse", originRef(res.BranchName)+"~1"); parent != mainHead {
 		t.Errorf("feature branch parent = %s, want main %s — branched from the stuck feature branch (cross-tenant leak)", parent, mainHead)
 	}
 	// And the tree must be returned to main (explicit anchor), not left on the feature branch.
@@ -103,6 +104,7 @@ func TestWritePR_AbortsWhenBaseMissing(t *testing.T) {
 // write. The ironclad checkoutBaseClean (reset --hard + checkout -f) must recover.
 func TestWritePR_RecoversFromDirtyTree(t *testing.T) {
 	dir := initRepoOnMain(t)
+	addBareRemote(t, dir) // the push must succeed (#1724)
 	w := newTestWriter(dir, dir)
 	cfgPath := filepath.Join(dir, "db-a.yaml")
 	write := func(mode string) {
@@ -129,7 +131,7 @@ func TestWritePR_RecoversFromDirtyTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WritePR did not recover from a dirty tree: %v", err)
 	}
-	if parent := gitOut(t, dir, "rev-parse", res.BranchName+"~1"); parent != mainHead {
+	if parent := gitOut(t, dir, "rev-parse", originRef(res.BranchName)+"~1"); parent != mainHead {
 		t.Errorf("feature branch parent = %s, want main %s", parent, mainHead)
 	}
 	if cur := gitOut(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
@@ -203,9 +205,14 @@ func TestGitExecTimeout_SelfHealsIndexLock(t *testing.T) {
 	}
 }
 
+// originRef is the remote-tracking ref a successful push of branch leaves
+// in the pushing repo — where a test reads a PR branch once the write has
+// deleted the local one (#641, #1724).
+func originRef(branch string) string { return "refs/remotes/origin/" + branch }
+
 // addBareRemote points repoDir's "origin" at a fresh bare local repo, so
-// `git push` actually succeeds in tests (needed to exercise the post-push
-// cleanup path in #641).
+// `git push` actually succeeds in tests: a PR-mode write whose push fails
+// is a failed write (#1724).
 func addBareRemote(t *testing.T, repoDir string) {
 	t.Helper()
 	remoteDir := t.TempDir()
@@ -238,20 +245,40 @@ func TestWritePR_DeletesLocalBranchAfterConfirmedPush(t *testing.T) {
 	gitOut(t, dir, "rev-parse", "--verify", "refs/remotes/origin/"+res.BranchName)
 }
 
-// TestWritePR_KeepsLocalBranchOnPushFailure: when push FAILS (no remote here),
-// the local feature branch must PERSIST — it's the only copy of the commit. The
-// #641 cleanup must only fire on a confirmed push, never on failure.
-func TestWritePR_KeepsLocalBranchOnPushFailure(t *testing.T) {
+// TestWritePR_PushFailureFailsAndDropsBranch (#1724): when the push FAILS (no
+// remote here) the write fails with *PushError — it used to log a WARN and
+// return success, so the handler opened a PR/MR on a head origin did not
+// hold — and the local feature branch is DROPPED, with the tree back on a
+// clean base. #641 kept the branch as "the only copy of the commit"; a retry
+// rebuilds the commit, and the kept branch is what a same-named later write
+// collided with.
+func TestWritePR_PushFailureFailsAndDropsBranch(t *testing.T) {
 	dir := initRepoOnMain(t)
 	// NO remote configured → push fails.
 	w := newTestWriter(dir, dir)
+	mainHead := gitOut(t, dir, "rev-parse", "main")
 
 	res, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
-	if err != nil {
-		t.Fatalf("WritePR: %v", err)
+	if res != nil {
+		t.Errorf("result = %+v, want nil on a failed push", res)
 	}
-
-	if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+res.BranchName).Run(); err != nil {
-		t.Errorf("local feature branch %s missing after FAILED push — must persist as the only commit copy", res.BranchName)
+	var pe *PushError
+	if !errors.As(err, &pe) || !errors.Is(err, ErrPushFailed) {
+		t.Fatalf("err = %v, want a *PushError wrapping ErrPushFailed", err)
+	}
+	if !strings.HasPrefix(pe.Branch, "tenant-api/db-a/") || pe.Cause == nil {
+		t.Errorf("PushError = {Branch: %q, Cause: %v}, want the db-a branch and the git error", pe.Branch, pe.Cause)
+	}
+	if b := gitOut(t, dir, "branch", "--list", "tenant-api/*"); b != "" {
+		t.Errorf("local feature branch left after a FAILED push:\n%s", b)
+	}
+	if cur := gitOut(t, dir, "rev-parse", "--abbrev-ref", "HEAD"); cur != "main" {
+		t.Errorf("HEAD on %q, want main", cur)
+	}
+	if head := gitOut(t, dir, "rev-parse", "main"); head != mainHead {
+		t.Errorf("main moved to %s, want %s", head, mainHead)
+	}
+	if st := gitOut(t, dir, "status", "--porcelain"); st != "" {
+		t.Errorf("working tree dirty after the failed write:\n%s", st)
 	}
 }

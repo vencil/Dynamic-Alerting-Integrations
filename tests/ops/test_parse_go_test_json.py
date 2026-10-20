@@ -179,3 +179,110 @@ def test_failed_flag_is_the_single_branch_point() -> None:
     clean = build_fragment(input_path=Path("nope"), go_exit_code=0, **base)
     assert clean["failed"] is True  # missing raw file — fail closed
     assert parse_stream([], go_exit_code=0)["unattributed_failure"] is False
+
+
+# ── -timeout expiry (#3177) ──────────────────────────────────────────────────
+#
+# The fixture is the REAL nightly stream that #2977 misread as a test-isolation
+# failure (run 38627373961, Go 1.26.8), cut down to the lines that matter: the
+# package start, one unrelated passing package, the timeout panic with its
+# `running tests:` block and the first goroutine header, and the package-level
+# FAIL. GitHub's per-line timestamp prefix was stripped; every JSON line is
+# otherwise byte-for-byte what `go test -json` emitted. Note the panic lines DO
+# carry a `Test` (test2json attributes them to the last test it saw), so a
+# timeout cannot be recognised by "output with no Test".
+TIMEOUT_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "go_test_json_package_timeout.jsonl"
+TIMEOUT_PKG = "github.com/vencil/threshold-exporter/cmd/da-guard"
+_RUNNING = "TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings/cCnullL31/"
+
+
+def _timeout_lines() -> list[str]:
+    return TIMEOUT_FIXTURE.read_text(encoding="utf-8").splitlines()
+
+
+def _pkg_output(pkg: str, text: str, test: str | None = None) -> str:
+    ev: dict = {"Action": "output", "Package": pkg, "Output": text}
+    if test is not None:
+        ev["Test"] = test
+    return json.dumps(ev)
+
+
+def test_real_timeout_stream_is_attributed_to_the_timeout() -> None:
+    """The exact shape that read as "exit 1, nothing attributable" on #2977."""
+    res = parse_stream(_timeout_lines(), go_exit_code=1)
+    problems = []
+    if res["timed_out"] is not True:
+        problems.append(f"timed_out is {res['timed_out']!r} on a real timeout stream")
+    if res["unattributed_failure"] is not False:
+        problems.append("a recognised timeout still reads as unattributed")
+    if res["failed_tests"] != []:
+        problems.append(
+            f"failed_tests is {res['failed_tests']!r} — a timeout emits no per-test "
+            "fail, and running is not failing"
+        )
+    expected = [_RUNNING + s for s in ("pBoth", "pC50", "pCnull", "pLnull")]
+    if res["timeout_running_tests"] != expected:
+        problems.append(
+            f"running tests {res['timeout_running_tests']!r} != {expected!r} "
+            "(names must come without the `(Ns)` suffix)"
+        )
+    if res["timeout_packages"] != [
+        {"package": TIMEOUT_PKG, "after": "30m0s", "running_tests": expected}
+    ]:
+        problems.append(f"timeout_packages wrong: {res['timeout_packages']!r}")
+    assert not problems, "timeout reduction is wrong:\n  " + "\n  ".join(problems)
+
+
+def test_timeout_fragment_is_failed(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.jsonl"
+    raw.write_text(TIMEOUT_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    frag = build_fragment(module="m", input_path=raw, go_exit_code=1,
+                          run_url="u", workdir="w", packages="./...")
+    assert frag["failed"] is True
+    assert frag["timed_out"] is True
+
+
+def test_timeout_panic_without_the_package_verdict_stays_unattributed() -> None:
+    """Fail closed: a stream cut off mid-dump has not proven what happened."""
+    lines = [ln for ln in _timeout_lines() if '"Action":"fail"' not in ln]
+    res = parse_stream(lines, go_exit_code=1)
+    assert res["timed_out"] is False
+    assert res["unattributed_failure"] is True
+
+
+def test_prose_mentioning_a_timeout_does_not_flip_the_verdict() -> None:
+    """A t.Log line is indented, so the line-anchored panic pattern cannot match it."""
+    lines = [
+        _pkg_output("p", "    x_test.go:9: panic: test timed out after 1s\n", "TestX"),
+        _pkg_output("p", "retrying after the request timed out\n", "TestX"),
+        _fail(None, pkg="p"),
+    ]
+    res = parse_stream(lines, go_exit_code=1)
+    assert res["timed_out"] is False
+    assert res["unattributed_failure"] is True
+
+
+def test_interleaved_packages_keep_their_own_running_tests() -> None:
+    """`go test ./...` interleaves packages; a name must stay with its package."""
+    lines = [
+        _pkg_output("a", "panic: test timed out after 10m0s\n", "TestA1"),
+        _pkg_output("b", "panic: test timed out after 30m0s\n", "TestB"),
+        _pkg_output("a", "\trunning tests:\n", "TestA1"),
+        _pkg_output("b", "\trunning tests:\n", "TestB"),
+        _pkg_output("a", "\t\tTestA1 (9m59s)\n", "TestA1"),
+        _pkg_output("b", "\t\tTestB/sub (2s)\n", "TestB"),
+        _pkg_output("a", "\t\tTestA2 (1s)\n", "TestA1"),
+        _pkg_output("a", "\n", "TestA1"),
+        # After the block ends, a line that merely looks like an entry is not one.
+        _pkg_output("a", "\t\tTestNotRunning (1s)\n", "TestA1"),
+        _pkg_output("b", "\n", "TestB"),
+        _fail(None, pkg="a"),
+        _fail(None, pkg="b"),
+        _pkg_output("c", "ok  \tc\t0.1s\n"),
+    ]
+    res = parse_stream(lines, go_exit_code=1)
+    assert res["timeout_packages"] == [
+        {"package": "a", "after": "10m0s", "running_tests": ["TestA1", "TestA2"]},
+        {"package": "b", "after": "30m0s", "running_tests": ["TestB/sub"]},
+    ]
+    assert res["timeout_running_tests"] == ["TestA1", "TestA2", "TestB/sub"]

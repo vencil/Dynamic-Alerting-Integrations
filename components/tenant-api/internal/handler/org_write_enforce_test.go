@@ -110,6 +110,7 @@ func newOrgEnfFixture(t *testing.T, files map[string]string) *orgEnfFixture {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git branch -M main: %v\n%s", err, out)
 	}
+	addBareOrigin(t, configDir) // a PR-mode write's push must succeed (#1724)
 
 	f := &orgEnfFixture{configDir: configDir}
 	f.writer = newTestWriter(configDir)
@@ -797,26 +798,12 @@ func TestOrgWriteEnforce_GroupBatch_Async(t *testing.T) {
 	orgEnfCheckGroupBatchVisible(t, visible, polled.Summary)
 }
 
-// Saved views are NOT tenant data — no per-tenant write decision exists, so
-// the org axis must not affect a view write even in enforce mode (the route
-// manifest carries the same exemption).
-func TestOrgWriteEnforce_StarSemantics_ViewsWriteUnchanged(t *testing.T) {
-	t.Parallel()
-	f := newOrgEnfFixture(t, nil)
-	body := bytes.NewBufferString(`{"label":"My view","filters":{"environment":"production"}}`)
-	req := newRequestWithChiParam("PUT", "/api/v1/views/v1", "id", "v1", body)
-	// Even the OUTSIDER org caller may write a view: nothing tenant-scoped.
-	req = orgEnfIdentity(req, orgEnfOutsiderOrg)
-	w := httptest.NewRecorder()
-	wrapWithRBACMiddleware(PutView(f.deps()), f.rbacMgr, rbac.PermWrite, nil).ServeHTTP(w, req)
-
-	if w.Code == http.StatusForbidden {
-		t.Fatalf("view write denied under enforce — org axis leaked into a non-tenant surface: %s", w.Body.String())
-	}
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-}
+// Saved views are NOT tenant data, but they are not exempt from the org axis
+// either: an org-scoped "*" rule may neither write nor read them, in enforce
+// and shadow mode alike (#3160). TestViewsBar_OrgScopedStarRefused
+// (views_bar_test.go) pins it; it replaced the I6 pin that used to live here
+// (TestOrgWriteEnforce_StarSemantics_ViewsWriteUnchanged), which asserted the
+// opposite.
 
 // #3039 (#1530): a file can declare several tenants, and validation reads the
 // whole file. A message about a tenant the caller may not read names neither

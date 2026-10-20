@@ -99,7 +99,8 @@ jobs:
       - name: Build da-guard
         run: |
           cd components/threshold-exporter/app
-          go build -buildvcs=false \
+          # #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
+          CGO_ENABLED=0 go build -buildvcs=false \
               -ldflags "-X main.Version=ci-$GITHUB_SHA" \
               -o "$RUNNER_TEMP/da-guard" \
               ./cmd/da-guard

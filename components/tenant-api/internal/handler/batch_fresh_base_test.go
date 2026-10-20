@@ -39,7 +39,7 @@ func newStaleFixture(t *testing.T, local, originFiles map[string]string) *staleF
 	dir := seedGitTree(t, local)
 	bare := t.TempDir()
 	runGit(t, bare, "init", "--bare", "-b", "main")
-	runGit(t, dir, "remote", "add", "origin", bare)
+	runGit(t, dir, "remote", "set-url", "origin", bare) // seedGitTree added an empty one
 	runGit(t, dir, "push", "origin", "main")
 	if len(originFiles) > 0 {
 		other := t.TempDir()
