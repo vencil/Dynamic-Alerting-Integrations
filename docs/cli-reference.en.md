@@ -2254,7 +2254,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 |------|-------------|
 | `0` | Success |
 | `1` | Only an uncaught exception (traceback) returns 1. A missing input file or a YAML syntax error is 2, but an empty file, a top level that is not a mapping, or non-UTF-8 content currently ends in a traceback at 1 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: bad arguments, an input file that cannot be read or is not valid YAML, or the output path given to `-o/--output-dir` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, an input file that cannot be read or is not valid YAML, or the output path given to `-o/--output-dir` cannot be written (#1641); before any file is written, `tenant-config.yaml` and `defaults-snippet.yaml` are read back by `da-guard parse-tree` at the path they are written to, and if either does not hold what was generated (for example a `--prefix` holding ` #`, which turns the line into a comment) no file is written ([ADR-036](adr/036-single-parser-effective-config.en.md) §2, #2906); in the standard mode no usable da-guard is also 2 (`--dry-run` and `--triage` do not need it) |
 
 ---
 
@@ -2555,7 +2555,7 @@ Progress and the `Found N tenant route(s)` / `SKIP` lines go to stderr. Under `-
 | `phase1-routing/routing-summary.csv` | Phase 1 | Per tenant route: receiver type, `group_wait` / `group_interval` / `repeat_interval`, severity-dedup verdict |
 | `phase1-routing/<tenant>.yaml` | Phase 1 | Routing snippet to merge into `conf.d/<tenant>.yaml` |
 | `phase2-rules/migration-plan.csv` | Phase 2 | Per alert rule: metric, threshold, operator, suggested aggregation, and whether it converts automatically (`perfect` / `complex` / `unparseable`) |
-| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | Defaults inferred from the rule thresholds, to merge into `conf.d/_defaults.yaml`. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; not written when every rule is `unparseable` |
+| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | Defaults inferred from the rule thresholds, to merge into `conf.d/_defaults.yaml`. Values are written as numbers (the exporter reads `defaults:` as float64, and a quoted string drops the whole block); a threshold that is not a number is left out of `defaults:` and listed in a comment. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; not written when every rule is `unparseable` |
 | `phase3-scrape/scrape-analysis.yaml`, `<job>-relabel-suggestion.yaml` | Phase 3 | Whether each job maps to a tenant, and suggested `relabel_configs` |
 | `onboard-hints.json` | Phase 1 (plus DB types inferred in Phase 2) | Tenant list, routing hints, and DB types — ⚠️ every DB type Phase 2 infers is attached to **every** tenant (one shared union), so `scaffold --from-onboard` enables the same packs for all tenants; not written when Phase 1 finds no tenant route, or under `--dry-run` / `--json` |
 
@@ -2576,7 +2576,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 |------|-------------|
 | `0` | At least one phase produced results (Phase 1 with no tenant route counts; it just writes no `onboard-hints.json`) |
 | `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs`. ⚠️ A `--scrape-config` file that does not exist is 1 too (a missing `--alertmanager-config` is 2) |
-| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654); a tenant label value in the Alertmanager config that is not a DNS-1123 label ([ADR-035](adr/035-tenant-id-single-source.en.md); `--dry-run` / `--json` too, nothing is written). ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1. ⚠️ The v2.9.0 image does not check tenant ids <!-- image-caveat: v2.9.0 --> |
+| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654); a tenant label value in the Alertmanager config that is not a DNS-1123 label ([ADR-035](adr/035-tenant-id-single-source.en.md); `--dry-run` / `--json` too, nothing is written); before any file is written, `phase1-routing/<tenant>.yaml` and `phase2-rules/_defaults-suggestion.yaml` are read back by `da-guard parse-tree` at the path they are written to, and if one does not hold what was generated (for example the string `'1e3'`, written unquoted, which yaml.v3 reads as a number) no file is written ([ADR-036](adr/036-single-parser-effective-config.en.md) §2, #2906); when those files are to be written, no usable da-guard is also 2. ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1. ⚠️ The v2.9.0 image does not check tenant ids <!-- image-caveat: v2.9.0 --> |
 
 ---
 

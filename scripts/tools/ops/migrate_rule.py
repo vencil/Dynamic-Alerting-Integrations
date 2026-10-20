@@ -10,6 +10,10 @@
 6. Prefix Mapping           → migration_output/prefix-mapping.yaml
 7. Defaults 片段            → migration_output/defaults-snippet.yaml
 
+1 與 7 是 conf.d 內容：寫任何檔之前先以 `da-guard parse-tree` 在它要寫入的路徑
+讀回，必須與產生的內容完全相同（ADR-036 §2）；否則、或沒有可用的 da-guard
+（$DA_GUARD_BINARY / PATH），結束碼 2、一個檔都不寫。
+
 用法:
   python3 migrate_rule.py <legacy_rules.yml>                    # 預設檔案輸出
   python3 migrate_rule.py <legacy_rules.yml> --dry-run          # 僅顯示報告，不產生檔案
@@ -1047,6 +1051,19 @@ def _dedup_recording_rules(results):
     return deduplicated_rules
 
 
+def tenant_config_doc(results):
+    """tenant-config.yaml 寫出的鍵與值 (純函式，無 IO)：每個 key 取第一條規則
+    的值、一律是字串——`render_tenant_config` 以 `key: "value"` 寫出的就是這份，
+    寫入前以 parse-tree 讀回比對（ADR-036 §2）。"""
+    doc = {}
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        for k, v in r.tenant_config.items():
+            doc.setdefault(k, str(v))
+    return doc
+
+
 def render_tenant_config(results):
     """組出 tenant-config.yaml 內容字串 (純函式，無 IO)。"""
     # --- tenant-config.yaml (含 boilerplate 範例) ---
@@ -1125,19 +1142,7 @@ def render_defaults_snippet(results):
     （值同 critical）；migrate 沒有產出讀 base key 的 warning 告警，這列不會
     觸發任何告警。
     """
-    defaults = {}
-    critical_bases = {}
-    for r in results:
-        if r.status == "unparseable" or r.triage_action == "use_golden":
-            continue
-        for k, v in r.tenant_config.items():
-            if k.endswith("_critical"):
-                critical_bases.setdefault(k[:-len("_critical")], _defaults_value(v))
-            else:
-                # 與 tenant-config 相同：第一條規則的值勝出（衝突另行點名）
-                defaults.setdefault(k, _defaults_value(v))
-    for base, v in critical_bases.items():
-        defaults.setdefault(base, v)
+    defaults = defaults_snippet_doc(results)["defaults"]
 
     buf = io.StringIO()
     buf.write("# ============================================================\n")
@@ -1160,6 +1165,26 @@ def render_defaults_snippet(results):
     buf.write(yaml.safe_dump({"defaults": defaults}, default_flow_style=False,
                              allow_unicode=True, sort_keys=False))
     return buf.getvalue()
+
+
+def defaults_snippet_doc(results):
+    """defaults-snippet.yaml 寫出的內容 (純函式，無 IO)：``{"defaults": {...}}``，
+    `render_defaults_snippet` 寫的就是這份，寫入前以 parse-tree 讀回比對
+    （ADR-036 §2）。取值規則見 `render_defaults_snippet`。"""
+    defaults = {}
+    critical_bases = {}
+    for r in results:
+        if r.status == "unparseable" or r.triage_action == "use_golden":
+            continue
+        for k, v in r.tenant_config.items():
+            if k.endswith("_critical"):
+                critical_bases.setdefault(k[:-len("_critical")], _defaults_value(v))
+            else:
+                # 與 tenant-config 相同：第一條規則的值勝出（衝突另行點名）
+                defaults.setdefault(k, _defaults_value(v))
+    for base, v in critical_bases.items():
+        defaults.setdefault(base, v)
+    return {"defaults": defaults}
 
 
 def render_recording_rules(results, prefix="custom_"):
@@ -1358,16 +1383,55 @@ def render_report(results):
     return buf.getvalue()
 
 
+def _confirm_confd_files(output_dir, items):
+    """寫入前確認每個 ``(-o 下的路徑, 文字, 預期內容)``（ADR-036 §2）：讀回不符、
+    路徑沒有讀取端、或沒有可用的 da-guard ⇒ 結束碼 2（EXIT_CALLER_ERROR）、
+    一個檔都不寫。"""
+    import _lib_parse_tree
+    import _lib_write_check
+    try:
+        _lib_write_check.confirm_all(output_dir, [
+            (rel, text, _lib_write_check.from_python(data))
+            for rel, text, data in items])
+    except _lib_write_check.WriteRefused as exc:
+        print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    except _lib_parse_tree.ParseTreeError as exc:
+        print(f"ERROR: cannot confirm the generated conf.d files through "
+              f"`da-guard parse-tree` (ADR-036 §2): {exc}; nothing was written",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+
 def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
     """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
 
     序列化邏輯已抽成 render_* 純函式；本函式僅負責路徑組裝與落盤 (thin writer)。
+
+    ADR-036 §2（#2906）：兩個 conf.d 內容檔（tenant-config.yaml、
+    defaults-snippet.yaml）在寫任何檔之前，以 `da-guard parse-tree` 在它要寫入
+    的路徑（-o 當 conf.d 根）讀回，必須與產生的內容完全相同；否則、或沒有可用的
+    da-guard，結束碼 2、一個檔都不寫。rule pack、報表、CSV、prefix mapping 不是
+    conf.d 檔。
     """
+    import _lib_write_check
+    tenant_config_text = render_tenant_config(results)
+    defaults_text = render_defaults_snippet(results)
+    # `defaults:` values are float64 to the exporter: `!!int` and `!!float` are
+    # both the number meant (an integer past int64 is read as `!!float`).
+    defaults_expected = {"defaults": {
+        k: _lib_write_check.any_number(v)
+        for k, v in defaults_snippet_doc(results)["defaults"].items()}}
+    _confirm_confd_files(output_dir, [
+        ("tenant-config.yaml", tenant_config_text, tenant_config_doc(results)),
+        ("defaults-snippet.yaml", defaults_text, defaults_expected),
+    ])
+
     ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG)
 
     # --- tenant-config.yaml (含 boilerplate 範例) ---
     tenant_config_path = str(Path(output_dir) / "tenant-config.yaml")
-    write_text_or_die(tenant_config_path, render_tenant_config(results), flag=_OUTPUT_FLAG)
+    write_text_or_die(tenant_config_path, tenant_config_text, flag=_OUTPUT_FLAG)
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
@@ -1390,7 +1454,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
 
     # --- defaults-snippet.yaml (exporter 只發射 defaults 宣告過的 key) ---
     defaults_path = str(Path(output_dir) / "defaults-snippet.yaml")
-    write_text_or_die(defaults_path, render_defaults_snippet(results), flag=_OUTPUT_FLAG)
+    write_text_or_die(defaults_path, defaults_text, flag=_OUTPUT_FLAG)
 
     # 桶計數 (回傳值) — 自 results 獨立純計算，與 render_report 內部一致。
     perfect = [r for r in results if r.status == "perfect"]
