@@ -185,6 +185,7 @@ func parityServe(t *testing.T, c parityCase, pr bool, ep putEndpoint) *httptest.
 	if out, err := exec.Command("git", "-C", dir, "branch", "-M", "main").CombinedOutput(); err != nil {
 		t.Fatalf("git branch -M main: %v\n%s", err, out)
 	}
+	addBareOrigin(t, dir) // a PR-mode write's push must succeed (#1724)
 	if c.setup != nil {
 		c.setup(t, dir)
 	}

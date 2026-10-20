@@ -1034,6 +1034,23 @@ definitions:
           additionalProperties: {}
           type: object
         type: array
+      declared_elsewhere:
+        description: |-
+          DeclaredElsewhere is true when, in the tree this server reads now, a
+          conf.d file other than the tenant's own declares the tenant id (#3172)
+          — the condition the #2078 write guard (409 TENANT_DECLARED_ELSEWHERE)
+          checks, judged as /diff judges it, on /diff's walk. It is not a promise
+          of a write's answer: a write can be refused earlier for another reason,
+          and a PR-mode write judges the latest base branch. Two cases: a
+          duplicate (the own file declares the id too), which threshold-exporter
+          refuses — the whole tree stays on its last good load; or declared only
+          elsewhere (the own file declares nothing for the id), which the
+          exporter loads from the other file. One bit only: it names no file and
+          no other tenant — /effective's 409 already gives a caller with read
+          permission the duplicate case. Absent when it could not be judged (the
+          conf.d walk failed or timed out; see the server log) — absent is not
+          false.
+        type: boolean
       git_managed_reason:
         description: |-
           GitManagedReason says why the tenant is git-managed (managed_by: git):
@@ -2008,11 +2025,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before a synchronous batch finished: unlike the cases above
-            it may already be committed (a git command that hits its own deadline
-            may already have moved the ref), so refresh to see whether it was before
-            retrying'
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            batch branch to the config repository failed, a timeout included: the
+            whole batch fails, no PR/MR opened, Retry-After (the branch may be left
+            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535) when the
+            request was cancelled or reached its deadline before a synchronous batch
+            finished: unlike the cases above it may already be committed (a git command
+            that hits its own deadline may already have moved the ref), so refresh
+            to see whether it was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch operation on group members
@@ -2119,6 +2139,13 @@ paths:
         source_hash empty (masked: true);
         or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias
         (inside the tenant's own section: anywhere else makes the tenant git-managed).
+        declared_elsewhere (#3172), on every 200 shape: true when, in the tree this server reads now, a conf.d file
+        other than the tenant's own declares the tenant id — the condition of 409 TENANT_DECLARED_ELSEWHERE, judged
+        as /diff judges it. Not a promise of a write's answer: a write can be refused earlier for another reason, and
+        a PR-mode write judges the latest base branch. When the tenant's own file declares the id too (a duplicate),
+        threshold-exporter keeps the whole tree on its last good load; when only the other file declares it, the
+        exporter loads it from there. It names no file and no other tenant. Absent (not false) when the conf.d walk
+        behind it could not run.
       parameters:
       - description: Tenant ID
         in: path
@@ -2306,10 +2333,14 @@ paths:
             amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535) when the request was cancelled or reached
-            its deadline before the write finished: unlike the cases above it may
-            already be committed (a git command that hits its own deadline may already
-            have moved the ref), so refresh to see whether it was before retrying'
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            feature branch to the config repository failed, a timeout included: no
+            PR/MR opened, Retry-After (the branch may be left on origin without a
+            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
+            or reached its deadline before the write finished: unlike the cases above
+            it may already be committed (a git command that hits its own deadline
+            may already have moved the ref), so refresh to see whether it was before
+            retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Update tenant config
@@ -2962,11 +2993,15 @@ paths:
             container cannot judge (reason unreachable, bad_response, amtool_missing,
             generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment
             policy file is unusable (reason policy_unusable, or policy_unreadable
-            for tenant-api''s own copy); Retry-After; nothing written. Also code UPSTREAM_ERROR
-            (#1535) when the request was cancelled or reached its deadline before
-            a synchronous batch finished: unlike the cases above it may already be
-            committed (a git command that hits its own deadline may already have moved
-            the ref), so refresh to see whether it was before retrying'
+            for tenant-api''s own copy); Retry-After; nothing written. In PR/MR write-back
+            mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the
+            config repository failed, a timeout included: the whole batch fails, no
+            PR/MR opened, Retry-After (the branch may be left on origin without a
+            PR/MR). Also code UPSTREAM_ERROR (#1535) when the request was cancelled
+            or reached its deadline before a synchronous batch finished: unlike the
+            cases above it may already be committed (a git command that hits its own
+            deadline may already have moved the ref), so refresh to see whether it
+            was before retrying'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations
