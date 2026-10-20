@@ -61,7 +61,7 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 | `Go Tests (1.26)` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑拆成數條 `go-tests-*` leg，一個 module 一條（權威清單是 `ci.yml` 裡這個 gate 的 `needs:`，本表刻意不複述——舊版寫「三腿」時已經漏掉兩條），同受 `detect-changes` path gate |
 | `Smoke Tests (Chromium)` (Playwright E2E workflow) | `tests/e2e/*.spec.ts`（排除 `@visual` tag） |
 | `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（ESM Option C；monorepo restructure 後從 tests/portal/ 搬入） |
-| `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10`，advisory only |
+| `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10 -short`，advisory only（`-short` 讓窮舉矩陣跑縮小版；完整矩陣由 PR CI 的 `-race -count=1` 跑，#2977） |
 | `Lint Documentation` (ci.yml) | `make lint-docs`（含 changelog / link / structure check） |
 | `Visual Regression Baseline Update` (visual-baseline.yaml) | manual `workflow_dispatch`，重產 visual.spec.ts 基線（限 Ubuntu CI） |
 

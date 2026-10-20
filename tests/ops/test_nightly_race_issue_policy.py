@@ -865,3 +865,110 @@ def test_raw_stream_is_uploaded_for_human_triage() -> None:
         "The parsed fragment is lossy by design; without the raw stream a human has "
         "no race report, panic, or build error to read."
     )
+
+
+# ---------------------------------------------------------------------------
+# -short split between nightly and PR CI (#2977 option A, #3180)
+# ---------------------------------------------------------------------------
+# cmd/da-guard's exhaustive matrices honour testing.Short(). Nightly runs them
+# reduced (otherwise -count=10 blows the 30m per-package timeout); PR CI runs
+# them in full, once per PR. Both halves are pinned here, because each half
+# alone is a silent regression: nightly losing -short times out again, and PR
+# CI gaining -short drops the full matrix from EVERY gate with nothing red.
+
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+EXPORTER_WORKDIR = "components/threshold-exporter/app"
+_SHORT_FLAG_RE = re.compile(r"^--?short(?:=(.*))?$")
+
+
+def _go_test_commands(run: str) -> list[list[str]]:
+    """Every `go test ...` invocation in a run block, as whitespace tokens.
+
+    Backslash continuations are joined first so a flag on a continuation line
+    still belongs to its command; a command ends at a newline, `|`, `;` or `&&`.
+    """
+    joined = re.sub(r"\\\n", " ", run)
+    cmds = []
+    for line in joined.splitlines():
+        for segment in re.split(r"\|\|?|;|&&", line):
+            tokens = segment.split()
+            for i in range(len(tokens) - 1):
+                if tokens[i] == "go" and tokens[i + 1] == "test":
+                    cmds.append(tokens[i + 2:])
+                    break
+    return cmds
+
+
+# Package patterns that include cmd/da-guard, where the exhaustive matrices
+# live. A narrower scope (`./internal/...`) keeps the step green while the
+# matrices silently stop running in PR CI.
+_DA_GUARD_PACKAGES = ("./...", "./cmd/...", "./cmd/da-guard", "./cmd/da-guard/...")
+
+
+def _covers_da_guard(tokens: list[str]) -> bool:
+    return any(tok in _DA_GUARD_PACKAGES for tok in tokens if tok.startswith("./"))
+
+
+def _has_short(tokens: list[str]) -> bool:
+    for tok in tokens:
+        m = _SHORT_FLAG_RE.match(tok)
+        if m and (m.group(1) is None or m.group(1).lower() in ("1", "t", "true")):
+            return True
+    return False
+
+
+def _load_workflow(path: Path) -> dict:
+    """Parse a workflow; unreadable means unmeasured, never clean."""
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise AssertionError(f"cannot parse {path.relative_to(ROOT)}: {exc}") from exc
+    assert isinstance(doc, dict) and isinstance(doc.get("jobs"), dict), (
+        f"{path.relative_to(ROOT)} has no `jobs:` mapping — cannot locate the go test step"
+    )
+    return doc
+
+
+def test_nightly_go_test_runs_with_short() -> None:
+    steps = (_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
+    cmds = [c for s in steps for c in _go_test_commands(str(s.get("run") or ""))]
+    assert cmds, "no `go test` command found in nightly-race.yaml's race job"
+    missing = [" ".join(c) for c in cmds if not _has_short(c)]
+    assert not missing, (
+        "nightly go test lost -short (#2977). Without it cmd/da-guard's exhaustive "
+        "matrices run in full x10 and hit the 30m per-package timeout:\n  "
+        + "\n  ".join(missing)
+    )
+
+
+def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
+    """#2977 acceptance 3: PR CI keeps the exhaustive matrix (no -short)."""
+    jobs = _load_workflow(CI_WORKFLOW)["jobs"]
+    found, shorted, narrowed = [], [], []
+    for job_id, job in jobs.items():
+        for step in (job or {}).get("steps") or []:
+            if str(step.get("working-directory") or "").rstrip("/") != EXPORTER_WORKDIR:
+                continue
+            for cmd in _go_test_commands(str(step.get("run") or "")):
+                if "-race" not in cmd:
+                    continue
+                where = f"{job_id} / {step.get('name')!r}"
+                found.append(where)
+                if _has_short(cmd):
+                    shorted.append(f"{where}: go test {' '.join(cmd)}")
+                if not _covers_da_guard(cmd):
+                    narrowed.append(f"{where}: go test {' '.join(cmd)}")
+    assert found, (
+        f"no `go test ... -race` step with working-directory {EXPORTER_WORKDIR} in "
+        "ci.yml — the step moved or was renamed; re-anchor this guard, do not delete it"
+    )
+    assert not shorted, (
+        "PR CI's threshold-exporter race step runs with -short, so the exhaustive "
+        "cmd/da-guard matrices are reduced in EVERY gate (#2977 acceptance 3; make "
+        "them cheaper instead, #3180):\n  " + "\n  ".join(shorted)
+    )
+    assert not narrowed, (
+        "PR CI's threshold-exporter race step no longer includes cmd/da-guard, so "
+        "its exhaustive matrices run in no gate at all (#2977 acceptance 3):\n  "
+        + "\n  ".join(narrowed)
+    )

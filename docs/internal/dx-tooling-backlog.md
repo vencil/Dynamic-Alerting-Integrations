@@ -164,6 +164,20 @@ PR-portal-11 ([#213](https://github.com/vencil/Dynamic-Alerting-Integrations/pul
 
 ## 候選 — 測試品質
 
+### TRK-3180: da-guard 窮舉矩陣測試在 -race 下太貴，讓矩陣本身變便宜
+```yaml
+id: TRK-3180
+tracking_kind: tech-debt
+status: proposed
+domain: exporter
+created_at: 2026-10-18
+updated_at: 2026-10-18
+```
+
+**來源**：[#3180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3180)（[#2977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2977) 的方案 B）。`cmd/da-guard` 的兩支窮舉矩陣（`TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings`、`TestGuard_NullOverrideIsNoWriteOnEveryLayer`）讓該 package 在 `-race -count=1` 下要 138 s（本機 4 核；加 `-short` 為 53–58 s），nightly `-count=10` 兩度撞上 30m 上限。
+
+方案 A（nightly 帶 `-short`）已止血 nightly，但 PR CI（`-race -count=1`，不帶 `-short`）每支碰到 exporter 的 PR 仍付完整矩陣成本，且會隨新矩陣繼續成長。本項是在不降覆蓋的前提下讓矩陣本身變便宜；驗收條件（含前後量測與反事實）見 #3180。
+
 ### Snapshot test 擴展
 
 為 `generate_report()` / `generate_markdown()` / `print_text_report()` 輸出加入 JSON snapshot 穩定性測試，防止格式意外變更。v2.3.0 已建立 snapshot 基礎設施，可擴展覆蓋範圍。
