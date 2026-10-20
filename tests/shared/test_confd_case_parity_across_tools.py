@@ -295,6 +295,9 @@ def _observed(tool: pathlib.Path, flag: str,
 # the insensitive path and fails the casing comparison on a difference
 # that has nothing to do with the conf.d. Locally (no kubectl at all) the
 # same tool always skipped, so the gate's answer depended on the machine.
+# (`operator_check` itself left the sweep in #2906: its `--config-dir` was
+# declared but never read, and the flag was removed. The stub stays — any
+# tool in the sweep that reaches for kubectl gets the same answer.)
 #
 # A stub that refuses immediately, first on PATH, makes every run take the
 # same branch on every POSIX host — and keeps the sweep off a real cluster
@@ -702,7 +705,6 @@ KNOWN_INSENSITIVE: set[str] = {
     "da_assembler.py",
     "generate_tenant_mapping_rules.py",
     "maintenance_scheduler.py",
-    "operator_check.py",
     "tenant_verify.py",
     "threshold_govern.py",
 }

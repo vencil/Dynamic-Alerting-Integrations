@@ -1771,7 +1771,6 @@ da-tools operator-check [options]
 | `--namespace <NS>` | K8s namespace to explore | `monitoring` (auto-discover) |
 | `--json` | JSON format output | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML directory; the PrometheusRule check compares the number loaded in the cluster with the `rule-pack-*.yaml` files here | `rule-packs/` |
-| `--config-dir <DIR>` | Tenant config directory. ⚠️ No check reads it today: accepted, with no effect on the result | `conf.d/` |
 | `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise | (none) |
 | `--kubeconfig <FILE>` | kubeconfig path | (none) |
 | `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl unavailable is always 2) | false |
