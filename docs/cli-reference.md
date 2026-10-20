@@ -2827,7 +2827,7 @@ da-tools guard <subcommand> [flags]
 2. `$DA_GUARD_BINARY` 環境變數
 3. `$PATH` 上的 `da-guard`
 
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-guard ./cmd/da-guard`）。
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-guard ./cmd/da-guard`）。
 
 **`defaults-impact` 主要 flags**
 
@@ -2988,7 +2988,7 @@ da-tools batch-pr <subcommand> [flags]
 2. `$DA_BATCHPR_BINARY` 環境變數
 3. `$PATH` 上的 `da-batchpr`
 
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`）。
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`）。
 
 **`apply` 主要 flags**
 
@@ -3069,7 +3069,7 @@ da-tools parser <subcommand> [flags]
 2. `$DA_PARSER_BINARY` 環境變數
 3. `$PATH` 上的 `da-parser`
 
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-parser ./cmd/da-parser`）。
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-parser ./cmd/da-parser`）。
 
 **`import` 主要 flags**
 

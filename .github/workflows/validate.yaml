@@ -513,7 +513,8 @@ jobs:
       - name: Build da-guard
         run: |
           cd components/threshold-exporter/app
-          go build -buildvcs=false -o "$RUNNER_TEMP/da-guard" ./cmd/da-guard
+          # #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
+          CGO_ENABLED=0 go build -buildvcs=false -o "$RUNNER_TEMP/da-guard" ./cmd/da-guard
           echo "DA_GUARD_BINARY=$RUNNER_TEMP/da-guard" >> "$GITHUB_ENV"
 
       # Schema validation + routing validation + webhook domain allowlist.
