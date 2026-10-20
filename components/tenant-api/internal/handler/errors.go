@@ -115,6 +115,15 @@ const (
 	// branch. Nothing was committed or pushed, so a retry is safe — and once
 	// the tree is back on base, it is the retry that succeeds.
 	CodeTreeNotOnBase = "TREE_NOT_ON_BASE"
+	// CodeGitPushFailed marks an HTTP 503 from a PR-mode write (PUT
+	// /tenants/{id}, a tenant or group batch) whose feature branch could not
+	// be pushed to origin — rejected, unreachable or timed out (#1724,
+	// gitops.ErrPushFailed). No PR/MR was opened and the local branch was
+	// dropped, so a retry cuts a new branch; the branch may still have reached
+	// origin (a push that timed out after the remote took it), where it is
+	// left with no PR/MR. The text is fixed; the git error goes to the log
+	// under the request_id.
+	CodeGitPushFailed = "GIT_PUSH_FAILED"
 	// CodeCandidateInvalid marks a 400 whose candidate _rbac.yaml failed the
 	// live parse/validation pipeline (POST …/access-report/dry-run, ADR-027 /
 	// LD-6 P7). Distinct from BAD_REQUEST so a client can render the echoed
@@ -904,6 +913,40 @@ func writeFreshBaseScopeViolation(w http.ResponseWriter, r *http.Request, e *fre
 // fixed hint, not a derived value: the forge's actual recovery time is unknowable,
 // so this only paces an automated retry (it doesn't promise readiness at T+5s).
 const forgeDegradedRetryAfterS = 5
+
+// gitPushFailedRetryAfterS is the Retry-After hint (seconds) on the 503 for
+// gitops.ErrPushFailed (#1724). Same coarse pacing as the forge-degraded 503:
+// what failed is a round-trip to the config repository's remote, whose
+// recovery time is unknowable.
+const gitPushFailedRetryAfterS = 5
+
+// msgGitPushFailed is the fixed text of the GIT_PUSH_FAILED 503. It names no
+// remote, branch or git output (#1700); those go to the log.
+const msgGitPushFailed = "pushing the change to the config repository failed; no PR/MR was opened — please retry"
+
+// writePushFailed answers a PR-mode write whose push failed (#1724,
+// *gitops.PushError) with 503 GIT_PUSH_FAILED + Retry-After, and reports
+// whether err was one. The git error — the remote's URL or path, its stderr —
+// goes to the log under the request_id, never to the client.
+func writePushFailed(w http.ResponseWriter, r *http.Request, err error) bool {
+	var pe *gitops.PushError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	var reqID string
+	if r != nil {
+		reqID = middleware.GetReqID(r.Context())
+	}
+	slog.Error("PR-mode write: push of the feature branch failed; no PR/MR opened (#1724)",
+		"request_id", reqID, "branch", pe.Branch, "error", err)
+	w.Header().Set("Retry-After", strconv.Itoa(gitPushFailedRetryAfterS))
+	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
+		Error:       msgGitPushFailed,
+		Code:        CodeGitPushFailed,
+		RetryAfterS: gitPushFailedRetryAfterS,
+	})
+	return true
+}
 
 // writeForgeDegraded renders the canonical 503 for a forge base-fetch timeout
 // (TRK-318). It mirrors the rate-limiter's machine-actionable shape — a standard

@@ -1198,11 +1198,9 @@ RECIPES: list[Recipe] = [
 
     # ── operator_check ─────────────────────────────────────────────────────
     R("operator_check", "check",
-      lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D), "--json"], needs_kubectl=True),
+      lambda t, s: ["--rule-packs-dir", str(RULE_PACKS), "--json"], needs_kubectl=True),
     R("operator_check", "with-target-health",
       lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D),
                     "--prometheus", s, "--json"], needs_kubectl=True),
 
     # ── operator_generate  (⚠ known multi-mode trap: kustomize branch) ─────
@@ -1633,7 +1631,7 @@ CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
 # (module, attribute to break, reason the handler names)
 OWN_BROAD_HANDLER = {
     "config_diff": ("_render_diff", "compare", "compare_failed"),
-    "operator_generate": ("_lib_confd", "tenant_carriers", "generate_failed"),
+    "operator_generate": ("_lib_confd", "tree_tenants", "generate_failed"),
 }
 _HANDLER_WRAPPER = f"""
 import importlib, os, runpy, sys

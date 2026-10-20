@@ -74,8 +74,7 @@ defaults:
   # — carrying 15 into a used-% rule would fire permanently
   es_disk_usage_percent: 85
   # count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
-  # catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded but absent from
-  # scaffold
+  # catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold
   es_pending_tasks: 50
   # ms — Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 =
   # Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) —

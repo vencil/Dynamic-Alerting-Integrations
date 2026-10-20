@@ -241,11 +241,10 @@ class TestAnalyzeMigration:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
 
-            # Create invalid tenant name (starts with hyphen)
-            (tmppath / "-invalid.yaml").write_text("tenants: {}")
-
-            # Create valid tenant name
-            (tmppath / "valid-tenant.yaml").write_text("tenants: {}")
+            # One invalid tenant id (starts with hyphen) and one valid one:
+            # the ids are the `tenants:` keys, not file names (#2906).
+            (tmppath / "team.yaml").write_text(
+                'tenants:\n  "-invalid": {}\n  valid-tenant: {}\n')
 
             analysis = mto.analyze_migration(temp_configmap_dir, tmppath)
 
@@ -969,24 +968,28 @@ class TestWritingIsOptIn:
 class TestDiscoveryParityWithOperatorGenerate:
     """The two operator-plane readers must answer the SAME for one tree.
 
-    ⛔ This is the assertion the ticket exists for. `migrate_to_operator` and
+    ⛔ This is the assertion #1604 exists for. `migrate_to_operator` and
     `operator_generate` carried verbatim twins of one scan; #1603/#1607 fixed
     only the second, and nothing compared them, so the pair drifted on three
-    axes at once and stayed green for months.
+    axes at once and stayed green for months. Since #2906 both take
+    `_lib_confd.tree_tenants` (parse-tree's tenant set); this class keeps
+    pinning that they agree, and on the exporter's answer.
 
-    ⚠️ The fixture below is built so that a fix on ONE axis is not enough:
-    each entry is a different axis, and a narrow reader fails differently on
-    each (misses `.yml`, invents `notes`, invents `broken`).
+    ⚠️ The fixture is built so that a fix on ONE axis is not enough: each
+    entry is a different axis (spelling, depth, id vs file name, the flat
+    format), and a stem-based or flat reader fails differently on each.
     """
 
     @staticmethod
     def _tree(root):
         """One carrier per divergence axis, plus a control that both always see."""
-        root.mkdir(parents=True, exist_ok=True)
+        (root / "sub").mkdir(parents=True, exist_ok=True)
         (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
         (root / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
         (root / "db-b.yml").write_text("tenants:\n  db-b:\n    x: 2\n", encoding="utf-8")
-        (root / "notes.yaml").mkdir()                      # directory, not a file
+        (root / "sub" / "x.yaml").write_text("tenants:\n  db-c:\n    x: 2\n", encoding="utf-8")
+        (root / "team.yaml").write_text("tenants:\n  db-d:\n    x: 2\n", encoding="utf-8")
+        (root / "flat.yaml").write_text("x: 2\n", encoding="utf-8")
         return root
 
     def test_both_readers_return_the_same_tenants(self, tmp_path):
@@ -1005,58 +1008,96 @@ class TestDiscoveryParityWithOperatorGenerate:
             f"  only in operator   : {sorted(set(theirs) - set(mine))}"
         )
         # ⛔ Equality alone would also hold if BOTH became blind. Pin the
-        # content: the control must be present and each axis must be decided
-        # the way the exporter decides it.
-        assert "db-a" in mine, "control carrier vanished — both readers went blind"
-        assert "db-b" in mine, ".yml is a tenant carrier (#1603); both must see it"
-        assert "notes" not in mine, "a DIRECTORY named *.yaml is not a tenant"
+        # content: each axis decided the way the exporter decides it.
+        assert mine == ["db-a", "db-b", "db-c", "db-d"], mine
+        assert "team" not in mine, "a file NAME is not a tenant id (#2906)"
+        assert "flat" not in mine, "a file with no `tenants:` declares no tenant"
+
+    def test_both_readers_refuse_a_directory_named_like_a_carrier(self, tmp_path):
+        """`notes.yaml/` (a directory) is parse-tree's `not_regular_file`:
+        both refuse the tree alike, naming it — neither invents `notes`."""
+        import operator_generate as og
+        from _lib_confd import TenantSetUnknown
+
+        root = self._tree(tmp_path / "conf.d")
+        (root / "notes.yaml").mkdir()
+        for discover in (mto.discover_tenant_configs, og.discover_tenant_configs):
+            with pytest.raises(TenantSetUnknown, match=r"notes\.yaml \(not_regular_file"):
+                discover(root)
 
     def test_a_narrow_reader_would_be_caught(self, tmp_path, monkeypatch):
-        """Counterfactual: restore the pre-#1604 scan and this class reddens.
+        """Counterfactual: restore the pre-#2906 stem scan and this class reddens.
 
         Without this, "the two agree" could be satisfied by a fix that made
         them agree on the WRONG answer.
         """
         root = self._tree(tmp_path / "conf.d")
-        narrow = sorted(
-            p.stem for p in root.glob("*.yaml") if not p.name.startswith("_")
+        stems = sorted(
+            p.stem for p in root.iterdir()
+            if p.is_file() and p.suffix in (".yaml", ".yml") and not p.name.startswith("_")
         )
-        assert narrow != mto.discover_tenant_configs(root), (
-            "the old flat `glob('*.yaml')` scan and the fixed reader return the "
+        assert stems != mto.discover_tenant_configs(root), (
+            "the old flat stem scan and the fixed reader return the "
             "same list on this fixture, so the fixture cannot show the defect"
         )
 
 
 class TestAnalyzeMigrationScansOnce:
-    """`analyze_migration` used to scan `config_dir` twice (#1604 `:372`)."""
+    """`analyze_migration` used to scan `config_dir` twice (#1604 `:372`);
+    one run reads ONE parse-tree snapshot (#2906)."""
 
     def test_invalid_names_are_reported_without_a_second_scan(self, tmp_path, monkeypatch):
         confd = tmp_path / "conf.d"
         confd.mkdir()
         (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
         (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-        (confd / "UPPER.yaml").write_text("tenants:\n  u:\n    x: 2\n", encoding="utf-8")
+        (confd / "upper.yaml").write_text("tenants:\n  UPPER:\n    x: 2\n", encoding="utf-8")
         src = tmp_path / "src"
         src.mkdir()
 
         calls = []
-        real = mto.tenant_carriers
+        real = mto.tree_tenants
 
         def counting(*a, **kw):
             calls.append(a[0])
             return real(*a, **kw)
 
-        monkeypatch.setattr(mto, "tenant_carriers", counting)
+        monkeypatch.setattr(mto, "tree_tenants", counting)
         analysis = mto.analyze_migration(src, confd)
 
         assert len([c for c in calls if str(c) == str(confd)]) == 1, (
-            f"config_dir must be listed ONCE; the shared scan was called "
+            f"config_dir must be read ONCE; the tenant set was asked for "
             f"{len(calls)} times: {calls}"
         )
         assert any("UPPER" in i for i in analysis["issues"]), (
             f"the invalid name must still reach `issues`; got {analysis['issues']}"
         )
         assert analysis["tenants"] == 1, "only `db-a` is a valid tenant here"
+
+    def test_a_run_reads_one_parse_tree_snapshot(self, tmp_path, monkeypatch, capsys):
+        """Analysis and generation both ask for the tenant set; `main` runs
+        them in one `_lib_parse_cache.session`, so da-guard parse-tree runs
+        once and both answer from the same snapshot of the tree."""
+        import _lib_parse_tree
+
+        confd = tmp_path / "conf.d"
+        confd.mkdir()
+        (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
+        src = tmp_path / "src"
+        src.mkdir()
+        loads = []
+        real = _lib_parse_tree.load
+
+        def counting(*a, **kw):
+            loads.append(a[0])
+            return real(*a, **kw)
+
+        monkeypatch.setattr(_lib_parse_tree, "load", counting)
+        monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(src),
+                                          "--config-dir", str(confd), "--dry-run"])
+        mto.main()
+        assert len(loads) == 1, loads
+        assert "1 tenants" in capsys.readouterr().err
 
 
 class TestConfigMapScanAcceptsBothSpellings:
@@ -1089,16 +1130,22 @@ class TestConfigMapScanAcceptsBothSpellings:
 
 
 class TestAnalyzeMigrationReportsWhatItSkipped:
-    """`--json` 消費端看不到 stderr，所以跳過了什麼必須進 `issues`（PR #1750）。
+    """`--json` 消費端看不到 stderr，所以「沒讀到什麼」不能只印在 stderr（PR #1750）。
 
-    ⛔ 這正是 #1604 的那批項目：一個名為 `notes.yaml/` 的目錄先前會被變成租戶。
-    現在它被正確跳過了 —— 但「正確跳過」與「根本沒有這個項目」對只讀 JSON 的
-    呼叫端是同一個畫面，除非把它寫進報告。⚠️ `analyze_migration` 這條路徑
-    **刻意不呼叫** `discover_tenant_configs`（那就是被拿掉的第二次掃描），所以
-    它拿不到那邊印的 stderr 警告。
+    ⛔ #1604 的那批項目：一個名為 `notes.yaml/` 的目錄先前會被變成租戶，後來改成
+    略過並寫進 `issues`。#2906 起租戶集合是 parse-tree 的答案，讀不了的項目
+    讓集合答不出來 ⇒ 不再是 `issues` 一行，而是 fail-closed（rc 2、指名）。
     """
 
-    def test_a_directory_shaped_carrier_is_named_in_issues(self, tmp_path):
+    def test_a_directory_shaped_carrier_refuses_the_analysis(self, tmp_path):
+        """#2906: `notes.yaml/` 是 parse-tree 的 `not_regular_file`——租戶集合答不出來。
+
+        先前它只是 `issues` 裡的一行、旁邊照樣給出部分租戶；現在 fail-closed：
+        `analyze_migration` 拋 `TenantSetUnknown`（`main` 以 rc 2 結束），並指名
+        該項目與 kind，呼叫端不會拿到一份看起來完整的遷移計畫。
+        """
+        from _lib_confd import TenantSetUnknown
+
         confd = tmp_path / "conf.d"
         confd.mkdir()
         (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
@@ -1108,13 +1155,8 @@ class TestAnalyzeMigrationReportsWhatItSkipped:
         src = tmp_path / "src"
         src.mkdir()
 
-        analysis = mto.analyze_migration(src, confd)
-
-        assert analysis["tenants"] == 1, "只有 db-a 是租戶"
-        assert any("notes.yaml" in i for i in analysis["issues"]), (
-            f"被跳過的項目必須進 issues，否則只讀 JSON 的呼叫端不會知道；"
-            f"issues = {analysis['issues']}"
-        )
+        with pytest.raises(TenantSetUnknown, match=r"notes\.yaml \(not_regular_file"):
+            mto.analyze_migration(src, confd)
 
     def test_a_clean_tree_produces_no_skip_issue(self, tmp_path):
         """必響對照組：這則 issue 不能是無條件產生的。"""
@@ -1151,7 +1193,7 @@ class TestAnalyzeMigrationReportsWhatItSkipped:
         def boom(_config_dir):
             raise PermissionError(13, "Permission denied", str(confd))
 
-        monkeypatch.setattr(mto, "_scan_tenant_carriers", boom)
+        monkeypatch.setattr(mto, "_tree_tenants", boom)
         analysis = mto.analyze_migration(src, confd)
 
         assert any("Permission denied" in i or "配置目錄錯誤" in i

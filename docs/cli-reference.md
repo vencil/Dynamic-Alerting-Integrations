@@ -1610,7 +1610,7 @@ da-tools operator-generate [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 | `rule-packs/` |
-| `--config-dir <DIR>` | 租戶配置目錄路徑 | `conf.d/` |
+| `--config-dir <DIR>` | 租戶配置目錄路徑。每個租戶一份 AlertmanagerConfig；租戶是整棵樹（含子目錄）各租戶檔 `tenants:` 的鍵，經 `da-guard parse-tree` 讀，**不是檔名**——`team-a.yaml` 裡寫 `tenants: {db-a: …}` 的租戶是 `db-a`，沒有 `tenants:` 的平面格式檔不產生租戶。⚠️ 有 parse-tree 讀不了的租戶檔（逐一指名檔與 kind）、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`，一個 CRD 也不產出（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 印警告後略過 | `conf.d/` |
 | `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--api-version <VER>` | AlertmanagerConfig API 版本（`v1alpha1` / `v1beta1`） | `v1beta1` |
@@ -1675,7 +1675,7 @@ da-tools migrate-to-operator [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄 | （必填） |
-| `--config-dir <DIR>` | 租戶配置目錄 | `conf.d` |
+| `--config-dir <DIR>` | 租戶配置目錄。租戶的認定與 `operator-generate` 相同：整棵樹各租戶檔 `tenants:` 的鍵（經 `da-guard parse-tree`），不是檔名。⚠️ 有讀不了的租戶檔、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 進 `issues` 並略過 | `conf.d` |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--receiver-template <TYPE>` | Receiver 類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
@@ -1768,7 +1768,6 @@ da-tools operator-check [options]
 | `--namespace <NS>` | K8s namespace 探索 | `monitoring`（自動探索） |
 | `--json` | JSON 格式輸出 | false |
 | `--rule-packs-dir <DIR>` | Rule Pack YAML 目錄；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 `rule-pack-*.yaml` 數比 | `rule-packs/` |
-| `--config-dir <DIR>` | 租戶配置目錄。⚠️ 目前沒有任何檢查讀它：接受，但不影響結果 | `conf.d/` |
 | `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過 | （無） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
 | `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 不可用一律 2） | false |
@@ -2243,7 +2242,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 |------|------|
 | `0` | 成功 |
 | `1` | 只有未捕捉例外（traceback）會回 1。輸入檔不存在或 YAML 語法錯是 2，但空檔、頂層不是 mapping、不是 UTF-8 目前會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；寫出任何檔之前，`tenant-config.yaml` 與 `defaults-snippet.yaml` 先以 `da-guard parse-tree` 在要寫入的路徑讀回，內容不是產生的內容（例如 `--prefix` 含 ` #`，那一行變成註解）就一個檔都不寫（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）；標準模式找不到可用的 da-guard 也是 2（`--dry-run`、`--triage` 不需要） |
 
 ---
 
@@ -2293,6 +2292,7 @@ da-tools validate-config --config-dir <path> [options]
 - 版號一致性——**只在給了 `--version-check` 時**
 - Policy-as-Code DSL 評估（`_defaults.yaml` 的 `_policies`，或 `--policy-dsl`）；規則讀不懂（見 `evaluate-policy` 結束碼 `2` 那一列，#2961）時不評估任何規則：寫在 `_defaults.yaml` 的這一列 FAIL、結束碼 1，寫在 `--policy-dsl` 檔的（含 `policies:` 以外的頂層鍵）是呼叫端錯誤、結束碼 2；規則讀的值與 `evaluate-policy` 相同（閾值看 `/metrics` 發出的數字，見該節，#2115），租戶讀不到時這一列 FAIL 並附 da-guard 的原因（空的 `--config-dir`、找不到 da-guard 或 da-guard 本身失敗時結束碼 `2`，`yaml_syntax` 列另有點名的無法使用檔案（其 `unusable_files`）時為 `1`，同 Profile 參照）。`/metrics` 沒有送出任何閾值（例如根目錄沒有 `defaults:`），或有設定了卻沒送出的閾值值（served-values 的 `unserved`）時，明細另起一行點名；判定不變，閾值規則只比 `/metrics` 實際送出的數字（[#2725](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2725)）
 - **租戶宣告唯一性**：同一個租戶 id 被**兩個檔案**同時宣告時 FAIL。⚠️ exporter 對這個狀態的回應是**拒載整個 config dir**（`DuplicateTenantError`），所以後果不是「那一個租戶失去告警」，而是**這棵樹裡每一個租戶都失去告警**，而且發生在部署／重啟當下、CI 通過之後。最常見的成因是編輯器在 `db-a.yaml` 旁邊留下一份 `db-a.yml`，但判準是「一個 id、兩個檔」——換成 `archive/db-a.yaml` 一樣會擋（#1577）。⚠️ **v2.9.0 映像沒有這一項**：同一棵樹在那顆映像上回報 `Result: PASS`、exit 0 <!-- image-caveat: v2.9.0 -->
+- **租戶檔名**（`tenant_file_name`，[#3157](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3157)）：租戶檔的檔名（去掉 `.yaml`／`.yml`）必須就是它在 `tenants:` 底下宣告的那一個租戶 id——tenant-api 以檔名當租戶 id，exporter 以 `tenants:` 的 key 當 id，所以 `es.yaml` 宣告 `es-prod` 等於同一個租戶有兩個 id（RBAC、稽核紀錄與 portal 連結對不上它的 metric，tenant-api 也以 `id_mismatch` 拒絕寫入）。FAIL、結束碼 1，每個檔一行，寫出宣告的 id 與該改成的檔名；一個檔宣告多個租戶也 FAIL，建議拆成一個租戶一個檔。挑檔方式與 exporter 相同：整棵樹都看（子目錄的檔以它自己的檔名比對），`_`、`.` 開頭的檔不看；沒有宣告租戶的檔不比對；比對分大小寫。⚠️ **變嚴格**：檔名與租戶 id 不同的樹過去會通過；把每個檔改名為 `<id>.yaml`（宣告的 id 就是 `/metrics` 已在用的那個）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - **根目錄 defaults**（`root_defaults`）：依 exporter 的解法檢查**根目錄** `_defaults.yaml` 的 `defaults:`，三類 FAIL。其一是值：exporter 把根目錄 `defaults:` 當 `map[string]float64` 解，**解不成數字的值**（`"70"`、`disable`、mapping、list、布林、日期等）會讓 exporter **丟掉整個 `defaults:` 區塊**、所有平台閾值一起失效，而載入照樣回報成功；**空值**（`k:`、`~`、`null`）會被指出沒有值。[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518) 之前它被當成 0 閾值送出；現在它實際改變什麼，取決於樹的其他部分（另一種拼法、`optional_overrides:`、`<<:` 合併），這一列不下判斷。判定與 `deprecate` 的載體體檢共用同一個 yaml.v3 鏡射（#1414）。其二是路由：`defaults:` 底下出現 `_routing` 或任何 `_routing` 前綴的鍵，不論值為何都 FAIL。`defaults:` 只放數值閾值；路由預設值寫在頂層的 `_routing_defaults:`。⚠️ 在這裡放一個 `_routing` mapping，損失的不只是路由：exporter 把根目錄的 `defaults:` 當成純數值讀取，解不進去就**整個區塊丟棄——所有平台閾值一起失效**，而載入本身照樣回報成功；路由產生器也從不讀 `defaults:`。其三是包裝（[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）：根目錄 `_defaults.yaml` 的 `defaults:` 不是 mapping（沒有這個鍵，或有鍵沒有值）時，defaults 合併讀整份文件，`/effective` 顯示頂層的鍵，而 exporter 的根目錄解析只從 `defaults:` mapping 讀閾值、其他頂層鍵沒有對應欄位，`/metrics` 不會從這個檔帶出它們；頂層有下列鍵就 FAIL 並列出：閾值（不以 `_` 開頭的鍵）與 `_routing` 開頭以外的保留鍵（例如 `_severity_dedup`、`_silent_mode`、`_state_*`）。不列入：exporter 根目錄設定結構的欄位（例如 `state_filters`、`max_metrics_per_tenant`）、其他工具從頂層讀的 `_routing_defaults`／`_routing_enforced`、defaults 合併在每一層都丟掉的 `_metadata`、`_routing` 開頭的鍵（route generator 不從 defaults 檔讀 routing，寫錯位置由 `routing_in_unread_location` 報）、其他 `_` 開頭的鍵（例如只用來掛 YAML anchor 的 `_x: &x`）。實測：頂層閾值不出現在 `/metrics`；頂層 `_severity_dedup: disable` 在 `/effective` 顯示 `disable`、`/metrics` 送 `enable`。子目錄的 `_defaults.yaml` 不在這一列的判定範圍（#2291）。另外，`defaults:` 底下其他 `_` 開頭、值是數字的鍵（例如 `_metadata: 1`、`_namespaces: 5`）列為 WARN：`_` 鍵都不是閾值，exporter 不為它產生閾值列，其他讀取端也不在 `defaults:` 底下讀它，等於沒寫（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）；值解不成數字的照上面的值規則 FAIL，不另列。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - **defaults 包裝**（`defaults_wrapper`，[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）：每一層的 `_defaults.yaml`（每個目錄取 exporter 選用的那一份）中，`defaults:` 是 mapping（`{}` 也算，YAML `!!set` 也算：exporter 把它解成 mapping）、頂層又有會進入 `/effective` 合併結果的鍵就 FAIL，列出檔案與鍵。這些鍵是：閾值（不以 `_` 開頭的鍵）與 `_routing` 開頭以外的保留鍵（例如 `_severity_dedup`、`_silent_mode`、`_state_*`）。不列入：exporter 根目錄設定結構的欄位（例如 `state_filters`、`max_metrics_per_tenant`）、其他工具從頂層讀的 `_routing_defaults`／`_routing_enforced`、defaults 合併在每一層都丟掉的 `_metadata`、`_routing` 開頭的鍵（route generator 不從 defaults 檔讀 routing，寫錯位置由 `routing_in_unread_location` 報）、其他 `_` 開頭的鍵（例如只用來掛 YAML anchor 的 `_x: &x`）。`defaults:` 是 mapping 時，defaults 合併只讀這個 mapping，頂層這些鍵不會出現在任何租戶的 `/effective`；沒有 `defaults:`、或 `defaults:` 沒有值時，合併讀整份文件，不報。實測（子目錄）：包成 mapping 後，頂層的閾值與 `_severity_dedup` 不再出現在 `/metrics`；`_silent_mode`、`_state_*` 只影響 `/effective`，任何寫法都不出現在 `/metrics`。子目錄檔的保留鍵不建議移進 `defaults:`（子目錄 defaults 不支援保留鍵），訊息改請你從該檔刪掉，是否改寫在租戶條目由 da-guard 的 `subtree_default_reserved_key` 依鍵判斷（此時 Suggested action 也不再建議「讓 `defaults:` 不給值」）（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - **排程裡的 null**（`schedule_null`，[#2708](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2708)）：閾值寫成帶時段覆寫的排程、而排程裡有 null（某個時段是 null、時段的 `window:` 或 `value:` 是 null，或 `default:` 是 null 而旁邊有時段）就 FAIL，列出檔案、位置與 null 在哪。檢查的位置：每個租戶檔的 `tenants:`、每個目錄選用的 `_defaults.yaml` 的 defaults 區塊（沒有 `defaults:` mapping 時是整份文件）、根目錄 `_` 檔（未選用的 defaults 載體除外）的 `tenants:` 與 `profiles:`；子目錄裡不是 defaults 載體的 `_` 檔不檢查。沒有時段、`default:` 是 null 的排程不在這一列。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
@@ -2543,7 +2543,7 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 | `phase1-routing/routing-summary.csv` | Phase 1 | 每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval`、severity dedup 判定 |
 | `phase1-routing/<tenant>.yaml` | Phase 1 | 可併入 `conf.d/<tenant>.yaml` 的路由片段 |
 | `phase2-rules/migration-plan.csv` | Phase 2 | 每條告警規則的 metric、閾值、運算子、建議聚合方式與可否自動轉換（`perfect`／`complex`／`unparseable`） |
-| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | 由規則閾值推得、可併入 `conf.d/_defaults.yaml` 的預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不寫這個檔 |
+| `phase2-rules/_defaults-suggestion.yaml` | Phase 2 | 由規則閾值推得、可併入 `conf.d/_defaults.yaml` 的預設值建議。值寫成數字（exporter 以 float64 讀 `defaults:`，加引號的字串會讓整個區塊被丟掉）；不是數字的閾值不放進 `defaults:`，以註解列出。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不寫這個檔 |
 | `phase3-scrape/scrape-analysis.yaml`、`<job>-relabel-suggestion.yaml` | Phase 3 | 各 job 有無租戶對映，以及建議的 `relabel_configs` |
 | `onboard-hints.json` | Phase 1（加上 Phase 2 推得的 DB 類型） | 租戶清單、路由提示，以及 DB 類型——⚠️ Phase 2 推得的每一種 DB 類型都掛到**每一個**租戶上（所有租戶共用同一份聯集），`scaffold --from-onboard` 因此會替每個租戶開同一組 pack；Phase 1 沒找到任何租戶 route、或帶 `--dry-run`／`--json` 時不寫 |
 
@@ -2564,7 +2564,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 |------|------|
 | `0` | 至少一個 phase 產出結果（Phase 1 沒找到租戶 route 也算，只是不寫 `onboard-hints.json`） |
 | `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs`。⚠️ `--scrape-config` 檔案不存在也是 1（`--alertmanager-config` 不存在則是 2） |
-| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；Alertmanager config 裡的租戶 label 值不是 DNS-1123 label（[ADR-035](adr/035-tenant-id-single-source.md)；含 `--dry-run`／`--json`，什麼都不寫）。⚠️ 例外：ConfigMap 包裝裡內嵌的 YAML 壞掉時是 traceback、回 1。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；Alertmanager config 裡的租戶 label 值不是 DNS-1123 label（[ADR-035](adr/035-tenant-id-single-source.md)；含 `--dry-run`／`--json`，什麼都不寫）；寫出任何檔之前，`phase1-routing/<tenant>.yaml` 與 `phase2-rules/_defaults-suggestion.yaml` 先以 `da-guard parse-tree` 在要寫入的路徑讀回，內容不是產生的內容（例如字串 `'1e3'` 寫出後未加引號、yaml.v3 讀成數字）就一個檔都不寫（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906），要寫這兩種檔時找不到可用的 da-guard 也是 2。⚠️ 例外：ConfigMap 包裝裡內嵌的 YAML 壞掉時是 traceback、回 1。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2595,7 +2595,9 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | `--json` | stdout 只印 JSON | false |
 | `--metric-dictionary <FILE>` | 指標字典；給了但檔案不存在時結束碼 2 | 工具同層的 `metric-dictionary.yaml`（映像），或上一層（repo 的 `scripts/tools/`） |
 
-`--config-dir` 讀的是 exporter 的 `/metrics` 對每個租戶實際發出的閾值與其值（經 `da-guard served-values`，#2115）：繼承來的 `custom_` 閾值也列入，`disable` 的鍵、沒有預設值而不會發出的鍵不列；沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；exporter 讀不到的檔或子目錄（權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束、`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`），指向目錄的 symlink 例外（exporter 本來就不跟進，只跳過、不影響結束碼）；da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）；因檔案解析失敗或讀不到而結束時，`ERROR` 行下面附的 da-guard 訊息寫的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。`--tenant-config` 照舊讀單一檔案的原文。
+`--config-dir` 讀的是 exporter 的 `/metrics` 對每個租戶實際發出的閾值與其值（經 `da-guard served-values`，#2115）：繼承來的 `custom_` 閾值也列入，`disable` 的鍵、沒有預設值而不會發出的鍵不列；沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；exporter 讀不到的檔或子目錄（權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束、`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`），指向目錄的 symlink 例外（exporter 本來就不跟進，只跳過、不影響結束碼）；da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）；因檔案解析失敗或讀不到而結束時，`ERROR` 行下面附的 da-guard 訊息寫的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
+
+`--tenant-config` 讀單一檔案寫了什麼，不繼承 `defaults:` 或其他檔；有 `tenants:` 就逐一列出其下的租戶，沒有就以檔名（去掉副檔名）當租戶 id，頂層不是 mapping 時當成沒有鍵。讀法是 exporter 的 yaml.v3（經 `da-guard parse-tree` 的單檔模式，#2906）：未加引號的 `yes` 是字串 `"yes"`、日期在 `--json` 的 `current_value` 是原文、租戶 id `010` 就是 `"010"`；同一 mapping 寫兩次同一個鍵（`123` 與 `"123"` 算同一個鍵）或一個檔有多份文件時，以結束碼 2 結束並指名該檔。一樣需要 da-guard。
 
 兩個預設位置都找不到字典時，stderr 印一行 `WARN`，比對退回名稱前綴與字詞重疊（`match_type: "prefix"`、`confidence: 0.7`）。⚠️ v2.9.0 映像不受影響（字典與工具同層）；但在 repo 裡用那個版本的程式直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時找不到字典，而且不會警告，請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。 <!-- image-caveat: v2.9.0 -->
 
@@ -2614,7 +2616,7 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `2` | 呼叫端錯誤：參數錯誤；`--config-dir`／`--tenant-config`／`--metric-dictionary` 指到不存在的路徑（訊息指名是哪一個旗標）；`-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔或讀不到的檔或子目錄（權限不足、懸空 symlink；指向目錄的 symlink 除外；`ERROR` 行指名哪一檔，da-guard 的 stderr 逐行附在下面，每行加固定前綴，見上方說明）、整棵樹被 exporter 拒收，或找不到 da-guard／da-guard 執行失敗（#2115）。⚠️ v2.9.0 映像對不存在的輸入路徑回 `0`，當成沒有 `custom_` 指標 <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：參數錯誤；`--config-dir`／`--tenant-config`／`--metric-dictionary` 指到不存在的路徑（訊息指名是哪一個旗標）；`-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；`--tenant-config` 的檔另含重複鍵、多份文件；訊息指名哪一檔，#1654、#2906）；`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔或讀不到的檔或子目錄（權限不足、懸空 symlink；指向目錄的 symlink 除外；`ERROR` 行指名哪一檔，da-guard 的 stderr 逐行附在下面，每行加固定前綴，見上方說明）、整棵樹被 exporter 拒收，或找不到 da-guard／da-guard 執行失敗（#2115；`--tenant-config` 亦同，#2906）。⚠️ v2.9.0 映像對不存在的輸入路徑回 `0`，當成沒有 `custom_` 指標 <!-- image-caveat: v2.9.0 --> |
 
 `walk_error` 不看目錄裡有沒有設定檔：`--config-dir` 底下任何一個執行身分列不出內容的子目錄（例如權限不足的 `docs/`，或 conf.d 剛好是 ext4 volume 根目錄、以非 root 執行時的 `lost+found`）都會讓本工具以 2 結束；以 `.` 開頭的目錄（例如 `.git`）不算，exporter 的載入本來就不進去。解法是把 `--config-dir` 指向不含該目錄的子路徑，或調整權限讓執行身分可以列出它。
 
@@ -2825,7 +2827,7 @@ da-tools guard <subcommand> [flags]
 2. `$DA_GUARD_BINARY` 環境變數
 3. `$PATH` 上的 `da-guard`
 
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-guard ./cmd/da-guard`）。
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-guard ./cmd/da-guard`）。
 
 **`defaults-impact` 主要 flags**
 
@@ -2986,7 +2988,7 @@ da-tools batch-pr <subcommand> [flags]
 2. `$DA_BATCHPR_BINARY` 環境變數
 3. `$PATH` 上的 `da-batchpr`
 
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`）。
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-batchpr ./cmd/da-batchpr`）。
 
 **`apply` 主要 flags**
 
@@ -3067,7 +3069,7 @@ da-tools parser <subcommand> [flags]
 2. `$DA_PARSER_BINARY` 環境變數
 3. `$PATH` 上的 `da-parser`
 
-找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && go build -o /usr/local/bin/da-parser ./cmd/da-parser`）。
+找不到時印出安裝指引（從 `tools/v*` release 下載 / `cd components/threshold-exporter/app && CGO_ENABLED=0 go build -o /usr/local/bin/da-parser ./cmd/da-parser`）。
 
 **`import` 主要 flags**
 

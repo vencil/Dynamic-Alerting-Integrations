@@ -206,13 +206,18 @@ func TestWritePR_FetchTimeout_ReturnsForgeDegraded(t *testing.T) {
 }
 
 // TestWritePR_NoOriginSkipsFetch guards the dev/local path: with no origin remote
-// configured, WritePR must NOT fail (nothing to be stale against) — it branches
-// from the local base exactly as before TRK-318.
+// configured, the base fetch must NOT fail the write (nothing to be stale
+// against) — it branches from the local base exactly as before TRK-318. The
+// write still fails later, at the push (#1724: a failed push is no success),
+// so what is asserted is that it got that far: the error is a *PushError, not
+// a fetch failure.
 func TestWritePR_NoOriginSkipsFetch(t *testing.T) {
 	dir := initRepoOnMain(t)
 	w := newTestWriter(dir, dir) // no remote added
 
-	if _, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML); err != nil {
-		t.Fatalf("WritePR without an origin remote should skip the fetch and succeed, got: %v", err)
+	_, err := w.WritePR(context.Background(), "db-a", "alice@example.com", validTenantYAML)
+	var pe *PushError
+	if !errors.As(err, &pe) {
+		t.Fatalf("WritePR without an origin remote should skip the fetch and fail only at the push, got: %v", err)
 	}
 }

@@ -39,7 +39,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     _validate_profile_refs,
     check_domain_policies,
     expand_routing_overrides,
-    load_tenant_configs,
+    load_tenant_tree,
     _extract_host,
     load_policy,
     PolicyInputError,
@@ -497,7 +497,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
+        routing = load_tenant_tree(config_dir).routing_configs
         assert "db-a" in routing
         assert routing["db-a"]["receiver"]["type"] == "email"
         assert routing["db-a"]["group_wait"] == "30s"
@@ -521,7 +521,7 @@ tenants:
         type: "slack"
         api_url: "https://hooks.slack.com/x"
 """)
-        routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
+        routing = load_tenant_tree(config_dir).routing_configs
         assert routing["db-b"]["receiver"]["type"] == "slack"
         assert routing["db-b"]["group_wait"] == "30s"
         assert routing["db-b"]["repeat_interval"] == "4h"
@@ -540,7 +540,7 @@ tenants:
   db-c:
     _routing: "disable"
 """)
-        routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
+        routing = load_tenant_tree(config_dir).routing_configs
         assert "db-c" not in routing
 
     def test_tenant_template_substitution(self, config_dir):
@@ -559,7 +559,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
+        routing = load_tenant_tree(config_dir).routing_configs
         # channel is in the receiver dict (metadata, not AM config)
         assert routing["db-a"]["receiver"]["channel"] == "#alerts-db-a"
 
@@ -571,14 +571,16 @@ tenants:
     _routing: "disable"
     _severity_dedup: "enable"
 """)
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert "db-c" not in routing  # routing disabled
         assert dedup["db-c"] == "enable"  # dedup still tracked
 
     def test_no_defaults_no_routing(self, config_dir):
         """無 _routing_defaults 也無 _routing → 不產出路由。"""
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert len(routing) == 0
         assert dedup["db-a"] == "enable"
 
@@ -594,7 +596,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-        routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
+        routing = load_tenant_tree(config_dir).routing_configs
         # db-a should NOT have routing from its own _routing_defaults
         assert len(routing) == 0
 
@@ -613,7 +615,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        routing, _, _sw, _er, _mc = load_tenant_configs(config_dir)
+        routing = load_tenant_tree(config_dir).routing_configs
         assert routing["db-a"]["receiver"]["to"] == ["db-a-team@example.com"]
 class TestValidateTenantKeys:
     """Tenant config reserved key 驗證測試。"""
@@ -779,7 +781,7 @@ class TestOptionalOverridesMembership:
     def test_optional_overrides_is_threaded_from_the_platform_file(self, config_dir):
         """⭐ 有參數 ≠ 有人傳。
 
-        membership 放寬只在 load_tenant_configs 真的把解析出來的清單交給
+        membership 放寬只在 load_tenant_tree 真的把解析出來的清單交給
         validator 時才存在；預設值 None 讓「解析了但沒接上」可以無聲通過，
         所以端到端釘住這條線。
         """
@@ -795,7 +797,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert schema_warnings == []
 
     def test_optional_overrides_in_a_tenant_file_is_ignored(self, config_dir):
@@ -813,7 +815,7 @@ tenants:
   db-a:
     anything_i_want: "5"
 """)
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert any("anything_i_want" in w and "not in defaults" in w
                    for w in schema_warnings), schema_warnings
 
@@ -1172,7 +1174,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert len(schema_warnings) == 1
         assert "unknown reserved key" in schema_warnings[0]
         assert "_silence_mode" in schema_warnings[0]
@@ -1189,7 +1191,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert len(schema_warnings) == 1
         assert "not in defaults" in schema_warnings[0]
         assert "postgres_connections" in schema_warnings[0]
@@ -1206,7 +1208,7 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert schema_warnings == []
 
     def test_state_prefix_valid(self, config_dir):
@@ -1215,13 +1217,13 @@ tenants:
         # #1982: a platform file only supplies defaults for a tenant a
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert schema_warnings == []
 
     def test_no_defaults_all_metric_keys_warn(self, config_dir):
         """No defaults section → any non-reserved tenant key warns."""
         write_yaml(config_dir, "t.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-        _, _, schema_warnings, _er, _mc = load_tenant_configs(config_dir)
+        schema_warnings = load_tenant_tree(config_dir).schema_warnings
         assert len(schema_warnings) == 1
         assert "not in defaults" in schema_warnings[0]
 
@@ -1483,7 +1485,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-        _, _, _, enforced, _mc = load_tenant_configs(config_dir)
+        enforced = load_tenant_tree(config_dir).enforced_routing
         assert enforced is not None
         assert enforced["enabled"]
         assert enforced["receiver"]["url"] == "https://noc.example.com/alerts"
@@ -1500,7 +1502,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-        _, _, _, enforced, _mc = load_tenant_configs(config_dir)
+        enforced = load_tenant_tree(config_dir).enforced_routing
         assert enforced is None
 
     def test_enforced_ignored_in_tenant_file(self, config_dir):
@@ -1515,7 +1517,7 @@ tenants:
   db-a:
     mysql_connections: "70"
 """)
-        _, _, _, enforced, _mc = load_tenant_configs(config_dir)
+        enforced = load_tenant_tree(config_dir).enforced_routing
         assert enforced is None
 
     def test_enforced_route_first_with_continue(self):
@@ -1622,7 +1624,8 @@ tenants:
         # tenant file declares; it cannot create one.
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
         write_yaml(config_dir, "db-b.yaml", "tenants:\n  db-b: {}\n")
-        routing, dedup, _sw, enforced, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, enforced = tree.routing_configs, tree.enforced_routing
         assert enforced is not None
         routes, receivers, _ = generate_routes(
             routing, enforced_routing=enforced, tenants=())
@@ -1989,17 +1992,17 @@ class TestMergeTenantRouting:
 
 
 # ============================================================
-# load_tenant_configs (整合測試，使用臨時目錄)
+# load_tenant_tree (整合測試，使用臨時目錄)
 # ============================================================
 class TestLoadTenantConfigs:
-    """load_tenant_configs() 整合測試。"""
+    """load_tenant_tree() 整合測試。"""
 
     def test_basic_tenant_routing(self, config_dir):
         """基本 tenant routing 正確載入。"""
         routing = {"receiver": make_receiver()}
         write_yaml(config_dir, "db-a.yaml",
                    make_tenant_yaml("db-a", routing=routing))
-        routing_configs, dedup, warnings, enforced, metadata = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         assert "db-a" in routing_configs
 
     def test_reserved_file_skipped(self, config_dir):
@@ -2009,12 +2012,12 @@ class TestLoadTenantConfigs:
         routing = {"receiver": make_receiver()}
         write_yaml(config_dir, "db-a.yaml",
                    make_tenant_yaml("db-a", routing=routing))
-        routing_configs, dedup, warnings, enforced, metadata = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         assert "db-a" in routing_configs
 
     def test_empty_dir(self, config_dir):
         """空目錄回傳空結果。"""
-        routing_configs, dedup, warnings, enforced, metadata = load_tenant_configs(config_dir)
+        routing_configs = load_tenant_tree(config_dir).routing_configs
         assert routing_configs == {}
 
     def test_severity_dedup(self, config_dir):
@@ -2022,7 +2025,7 @@ class TestLoadTenantConfigs:
         routing = {"receiver": make_receiver()}
         write_yaml(config_dir, "db-a.yaml",
                    make_tenant_yaml("db-a", routing=routing, severity_dedup="disable"))
-        routing_configs, dedup, warnings, enforced, metadata = load_tenant_configs(config_dir)
+        dedup = load_tenant_tree(config_dir).dedup_configs
         assert dedup.get("db-a") == "disable"
 
     def test_routing_and_default_dedup(self, config_dir):
@@ -2037,7 +2040,8 @@ tenants:
         url: "https://webhook.example.com/alerts"
       group_wait: "30s"
 """)
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert routing["db-a"]["receiver"]["type"] == "webhook"
         assert routing["db-a"]["receiver"]["url"] == "https://webhook.example.com/alerts"
         assert dedup["db-a"] == "enable"
@@ -2049,7 +2053,8 @@ tenants:
   db-b:
     mysql_connections: "80"
 """)
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert len(routing) == 0
         assert dedup["db-b"] == "enable"
 
@@ -2057,28 +2062,30 @@ tenants:
         """載入多個配置檔案。"""
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://a.example.com'\n")
         write_yaml(config_dir, "db-b.yaml", "tenants:\n  db-b:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'https://b.example.com'\n")
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert len(routing) == 2
         assert len(dedup) == 2
 
     def test_skips_dotfiles(self, config_dir):
         """跳過隱藏檔案（以點開頭）。"""
         write_yaml(config_dir, ".hidden.yaml", "tenants:\n  hidden:\n    _routing:\n      receiver:\n        type: webhook\n        url: 'x'\n")
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert len(routing) == 0
         assert len(dedup) == 0
 
     def test_dedup_disable_explicit(self, config_dir):
         """顯式禁用 severity dedup。"""
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a:\n    _severity_dedup: 'disable'\n")
-        _, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        dedup = load_tenant_tree(config_dir).dedup_configs
         assert dedup["db-a"] == "disable"
 
     def test_dedup_mixed_tenants(self, config_dir):
         """enable (default) + disable → dedup dict 正確區分。"""
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
         write_yaml(config_dir, "db-b.yaml", "tenants:\n  db-b:\n    _severity_dedup: 'disable'\n")
-        _, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        dedup = load_tenant_tree(config_dir).dedup_configs
         assert dedup["db-a"] == "enable"
         assert dedup["db-b"] == "disable"
 
@@ -2093,14 +2100,15 @@ tenants:
   t3:
     _severity_dedup: "false"
 """)
-        _, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        dedup = load_tenant_tree(config_dir).dedup_configs
         for t in ("t1", "t2", "t3"):
             assert dedup[t] == "disable", f"{t}"
 
     def test_dedup_only_no_routing_produces_inhibit(self, config_dir):
         """無 _routing 的 tenant 仍可產出 inhibit rule（E2E 驗證）。"""
         write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: '70'\n")
-        routing, dedup, _sw, _er, _mc = load_tenant_configs(config_dir)
+        tree = load_tenant_tree(config_dir)
+        routing, dedup = tree.routing_configs, tree.dedup_configs
         assert len(routing) == 0
         rules, _ = generate_inhibit_rules(dedup)
         assert len(rules) == 1
@@ -2180,7 +2188,7 @@ class TestRoutingProfiles:
                     "_routing": {"repeat_interval": "2h"},  # tenant override
                 }}
             })
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             rc = routing["db-a"]
             # group_wait: profile overrides defaults
             assert rc["group_wait"] == "30s"
@@ -2203,7 +2211,7 @@ class TestRoutingProfiles:
             _wy(d,"db-a.yaml", {
                 "tenants": {"db-a": {"_routing_profile": "team-sre"}}
             })
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert "db-a" in routing
             assert routing["db-a"]["group_wait"] == "45s"
 
@@ -2234,7 +2242,7 @@ class TestRoutingProfiles:
             _wy(d,"db-b.yaml", {
                 "tenants": {"db-b": {"_routing_profile": "team-shared"}}
             })
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             assert routing["db-a"]["group_wait"] == "20s"
             assert routing["db-b"]["group_wait"] == "20s"
 
@@ -2255,7 +2263,7 @@ class TestRoutingProfiles:
             _wy(d,"db-a.yaml", {
                 "tenants": {"db-a": {"cpu": "80"}}
             })
-            routing, _, _, _, _ = load_tenant_configs(d)
+            routing = load_tenant_tree(d).routing_configs
             # Should use defaults, not profile
             assert routing["db-a"]["group_wait"] == "15s"
 
@@ -2502,7 +2510,7 @@ class TestDomainPolicies:
             _wy(d,"db-a.yaml", {
                 "tenants": {"db-a": {"_routing_profile": "team-sre"}}
             })
-            _, _, warnings, _, _ = load_tenant_configs(d)
+            warnings = load_tenant_tree(d).schema_warnings
             # Should have warnings about slack forbidden + repeat_interval
             slack_warns = [w for w in warnings if "slack" in w and "forbidden" in w]
             repeat_warns = [w for w in warnings if "repeat_interval" in w]

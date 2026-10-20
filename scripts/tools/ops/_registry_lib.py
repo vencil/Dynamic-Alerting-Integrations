@@ -498,12 +498,44 @@ def write_registry(
     from _lib_python import write_text_secure  # noqa: E402
 
     out = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
+    doc, text = render_registry(rule_packs)
+    write_text_secure(out, text)
+    return {"path": out, "packs": len(doc["packs"]), "keys": len(doc["keys"])}
+
+
+def render_registry(rule_packs: Optional[dict] = None) -> tuple[dict, str]:
+    """(doc, text): the registry extracted from RULE_PACKS and the exact
+    text ``write_registry`` writes for it. Writes nothing."""
+    if yaml is None:
+        raise RuntimeError("pyyaml required")
     doc = build_registry_doc(rule_packs)
     body = yaml.safe_dump(
         doc, sort_keys=False, allow_unicode=True, default_flow_style=False
     )
-    write_text_secure(out, _REGISTRY_HEADER + body)
-    return {"path": out, "packs": len(doc["packs"]), "keys": len(doc["keys"])}
+    return doc, _REGISTRY_HEADER + body
+
+
+def regen(path: Optional[str] = None, rule_packs: Optional[dict] = None
+          ) -> tuple[dict, list[str]]:
+    """``--regen``: the registry AND every generated surface, all or none.
+
+    The registry text is rendered, the surfaces are planned from the
+    registry as that text reads back (what a later ``load_registry`` sees),
+    and every conf.d surface is confirmed (`plan_surfaces`) — all before
+    anything is written. Only then are the registry and the changed surfaces
+    written, in that order; a refusal (ConfdWriteRefused, ValueError,
+    `_lib_parse_tree.ParseTreeError`) leaves every file as it was.
+    Returns (``write_registry``'s summary, the touched surface paths)."""
+    sys.path.insert(0, _THIS_DIR)
+    sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+    from _lib_python import write_text_secure  # noqa: E402
+
+    out = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
+    doc, text = render_registry(rule_packs)
+    planned = plan_surfaces(yaml.safe_load(text) or {})
+    write_text_secure(out, text)
+    touched = write_planned(planned)
+    return {"path": out, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
 # ---------------------------------------------------------------------------
@@ -1157,8 +1189,7 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     suggested value) is appended so the hand-written hints the old copies
     carried are reproduced mechanically.
     """
-    return _render_defaults_lines(
-        doc, indent, lambda pack, entry: bool(entry.get("chart_default")))
+    return _render_defaults_lines(doc, indent, _chart_default_keep)
 
 
 # The packs whose `defaults`-tier keys the dev template's SECOND defaults block
@@ -1183,11 +1214,31 @@ def render_dev_example_defaults_lines(doc: dict, indent: int) -> list[str]:
     ``render_chart_defaults_lines``, so the counter-example and ``_critical``
     hints come out of one code path.
     """
-    return _render_defaults_lines(
-        doc, indent,
-        lambda pack, entry: (pack in DEV_EXAMPLE_PACKS
-                             and entry.get("tier") == "defaults"
-                             and not entry.get("chart_default")))
+    return _render_defaults_lines(doc, indent, _dev_example_keep)
+
+
+def _chart_default_keep(pack: str, entry: dict) -> bool:
+    return bool(entry.get("chart_default"))
+
+
+def _dev_example_keep(pack: str, entry: dict) -> bool:
+    return (pack in DEV_EXAMPLE_PACKS and entry.get("tier") == "defaults"
+            and not entry.get("chart_default"))
+
+
+def _defaults_by_pack(doc: dict, keep) -> list[tuple[str, dict, list]]:
+    """[(pack_name, pack_meta, [(key, entry), …]), …] — the keys
+    ``keep(pack, entry)`` admits, grouped by pack in registry order; packs
+    with none are omitted. The one traversal behind both the rendered block
+    and the entries ``regen_surfaces`` expects it to hold."""
+    grouped = keys_by_pack(doc)
+    out: list[tuple[str, dict, list]] = []
+    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
+        pairs = [(k, e) for k, e in grouped.get(pack_name, {}).items()
+                 if keep(pack_name, e)]
+        if pairs:
+            out.append((pack_name, pack_meta, pairs))
+    return out
 
 
 def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
@@ -1195,15 +1246,7 @@ def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
     grouped by pack in registry order."""
     ind = " " * indent
     lines: list[str] = []
-    grouped = keys_by_pack(doc)
-    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
-        chart_keys = [
-            (k, e)
-            for k, e in grouped.get(pack_name, {}).items()
-            if keep(pack_name, e)
-        ]
-        if not chart_keys:
-            continue
+    for pack_name, pack_meta, chart_keys in _defaults_by_pack(doc, keep):
         lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
         for key, entry in chart_keys:
             meta = f"{entry['unit']} — {entry['desc']}"
@@ -1338,8 +1381,9 @@ def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
     columns (``_entry_lines`` house style — the wrapping itself is
     ``_append_wrapped_comment``, shared with the tenant stub renderer).
     Everything added is a comment, so the block still parses as a plain list of
-    key names — ``regen_surfaces`` ``yaml.safe_load``s the spliced document
-    before writing, which would catch a regression here.
+    key names — ``regen_surfaces`` reads each spliced conf.d file back through
+    ``da-guard parse-tree`` before writing and refuses one that does not read
+    as exactly these names, which would catch a regression here.
     """
     ind = " " * indent
     cont = f"{ind}  # "
@@ -1731,6 +1775,20 @@ def append_tenant_declared_stub(
     return text + "\n".join(lines) + "\n"
 
 
+def _confd_mapping(doc: dict, keep) -> dict:
+    """``confd`` of a ``defaults`` block: [(key, registry value), …] in the
+    order the block renders them."""
+    return {"carrier": "defaults", "shape": "mapping",
+            "entries": [(k, e["value"]) for _n, _m, pairs in _defaults_by_pack(doc, keep)
+                        for k, e in pairs]}
+
+
+def _confd_sequence(doc: dict) -> dict:
+    """``confd`` of an ``optional_overrides`` block: the key names it lists."""
+    return {"carrier": "optional_overrides", "shape": "sequence",
+            "entries": optional_override_list_keys(doc)}
+
+
 def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> str:
     """Full generated block text (markers + body), newline-joined."""
     return "\n".join(
@@ -1747,8 +1805,14 @@ def surface_specs(doc: dict) -> list[dict]:
     threshold pack (packs without threshold keys —
     liveness/operational/custom-alerts — carry no generated block).
 
-    Two surfaces per file is fine: ``regen_surfaces`` re-reads each file inside
-    the loop, so the second splice sees the first one's write.
+    Two surfaces per file is fine: ``regen_surfaces`` splices a file's
+    surfaces one after another on the same text, so the second splice sees
+    the first one's result.
+
+    A surface that is a conf.d file (the dev template, the try-local seed)
+    also carries ``confd``: the top-level key its block's entries belong to,
+    that key's shape, and the entries the block is meant to hold (what
+    ``regen_surfaces`` expects the written file to read back as, ADR-036 §2).
     """
     root = _repo_path_or_raise(_REPO_ROOT, "the generated surfaces")
     specs = [
@@ -1763,6 +1827,7 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_chart_defaults_lines(doc, 2),
+            "confd": _confd_mapping(doc, _chart_default_keep),
         },
         {
             # The example tenants' packs (#3014): a second block in the same
@@ -1772,6 +1837,7 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_dev_example_defaults_lines(doc, 2),
+            "confd": _confd_mapping(doc, _dev_example_keep),
         },
         {
             # thresholdConfig.optional_overrides — key at indent 2, list items
@@ -1787,6 +1853,7 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_optional_overrides_lines(doc, 2),
+            "confd": _confd_sequence(doc),
         },
         {
             # try-local ships its own conf.d; same list, same shape.
@@ -1794,6 +1861,7 @@ def surface_specs(doc: dict) -> list[dict]:
             "path": TRY_LOCAL_DEFAULTS_PATH,
             "indent": " " * 2,
             "body": render_optional_overrides_lines(doc, 2),
+            "confd": _confd_sequence(doc),
         },
     ]
     grouped = keys_by_pack(doc)
@@ -1853,17 +1921,161 @@ def splice_surface(text: str, spec: dict) -> str:
     return "\n".join(lines[:b] + spec["block"].split("\n") + lines[e + 1 :])
 
 
-def regen_surfaces(doc: Optional[dict] = None) -> list[str]:
-    """Splice every generated surface in place. Returns touched paths."""
-    sys.path.insert(0, _THIS_DIR)
-    sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-    from _lib_python import write_text_secure  # noqa: E402
+class ConfdWriteRefused(Exception):
+    """A generated conf.d surface ``regen_surfaces`` refuses to write
+    (ADR-036 §2): the message names the file and why; nothing was written."""
 
+
+def _block_text(text: str, spec: dict) -> str:
+    """The generated block of *spec* in *text*, markers included."""
+    lines = text.split("\n")
+    found = _find_block(lines, spec["id"], spec["indent"])
+    if isinstance(found, str):
+        raise ValueError(f"{spec['path']}: {found}")
+    b, e = found
+    return "\n".join(lines[b : e + 1])
+
+
+def _block_entries(wc: Any, rel: str, carrier: str, block: str) -> Any:
+    """What a generated block holds, as parse-tree reads it: the block's
+    lines under ``<carrier>:`` read on their own (file mode, in an empty
+    directory). A block holding nothing reads as a null scalar."""
+    import tempfile  # noqa: PLC0415
+    data = f"{carrier}:\n{block}\n".encode("utf-8")
+    with tempfile.TemporaryDirectory(prefix="da-regen-block-") as empty:
+        tree = wc.read_as(empty, "_defaults.yaml", data)
+    try:
+        return tree.node("_defaults.yaml")[carrier]
+    except wc.FileUnreadable as exc:
+        raise wc.WriteRefused(
+            rel, wc.ORIGINAL_UNREADABLE,
+            f"parse-tree cannot read the file's current generated block "
+            f"({exc.kind}: {exc.message})") from None
+
+
+def _is_null(node: Any) -> bool:
+    import _lib_parse_tree  # noqa: PLC0415
+    return _lib_parse_tree.is_scalar(node) and node["tag"] == "!!null"
+
+
+def _is_mapping(node: Any) -> bool:
+    import _lib_parse_tree  # noqa: PLC0415
+    return isinstance(node, dict) and not _lib_parse_tree.is_scalar(node)
+
+
+_EMPTY_NULL = {"text": "", "tag": "!!null", "value": None}
+
+
+def _expected_confd(wc: Any, rel: str, original: Any, blocks: list) -> Any:
+    """The original file's parse-tree nodes with every generated block's
+    entries swapped for the ones the registry gives: in a ``defaults``
+    mapping the old block's keys are removed and the new keys set (each a
+    number written as `_fmt_value` spells it — the exporter reads
+    ``defaults`` as ``map[string]float64``); in an ``optional_overrides``
+    list the old block's run of items is replaced in place by the new names
+    (each a ``!!str``). A block whose old entries are not what the file
+    holds at its key is refused. A key left holding nothing reads as the
+    null its bare ``key:`` line is."""
+    def change(tree: Any) -> Any:
+        if not isinstance(tree, dict):
+            raise wc.WriteRefused(rel, wc.CONTENT_DIFFERS,
+                                  "the original file's top level is not a mapping")
+        touched = set()
+        for spec, block in blocks:
+            confd = spec["confd"]
+            carrier, shape = confd["carrier"], confd["shape"]
+            old = _block_entries(wc, rel, carrier, block)
+            cur = tree.get(carrier)
+            empty: Any = {} if shape == "mapping" else []
+            if _is_null(old):
+                old = empty
+            if cur is None or _is_null(cur):
+                cur = empty
+            where = f"the generated block {spec['id']!r} under {carrier!r}"
+            if shape == "mapping":
+                if not (_is_mapping(cur) and _is_mapping(old)):
+                    raise wc.WriteRefused(rel, wc.CONTENT_DIFFERS,
+                                          f"{where}: {carrier!r} is not a mapping")
+                for k, node in old.items():
+                    if k not in cur or wc.first_difference(node, cur[k]) is not None:
+                        raise wc.WriteRefused(
+                            rel, wc.CONTENT_DIFFERS,
+                            f"{where}: its key {k!r} is not what the file holds there")
+                    del cur[k]
+                for k, v in confd["entries"]:
+                    cur[k] = wc.AnyNumber(_fmt_value(v))
+            else:
+                if not isinstance(cur, list) or not isinstance(old, list):
+                    raise wc.WriteRefused(rel, wc.CONTENT_DIFFERS,
+                                          f"{where}: {carrier!r} is not a list")
+                n = len(old)
+                if n == 0:
+                    if cur:
+                        raise wc.WriteRefused(
+                            rel, wc.CONTENT_DIFFERS,
+                            f"{where}: the block is empty and {carrier!r} holds other "
+                            "items — where its items go cannot be read from the file")
+                    at = 0
+                else:
+                    runs = [i for i in range(len(cur) - n + 1)
+                            if all(wc.first_difference(o, c) is None
+                                   for o, c in zip(old, cur[i : i + n]))]
+                    if len(runs) != 1:
+                        raise wc.WriteRefused(
+                            rel, wc.CONTENT_DIFFERS,
+                            f"{where}: its items occur {len(runs)} times in the file's "
+                            f"{carrier!r}, not once")
+                    at = runs[0]
+                cur[at : at + n] = [wc.scalar(k) for k in confd["entries"]]
+            tree[carrier] = cur
+            touched.add(carrier)
+        for carrier in touched:
+            if tree[carrier] in ({}, []):
+                tree[carrier] = dict(_EMPTY_NULL)
+        return tree
+
+    return wc.with_change(original, change)
+
+
+def _confirm_confd(path: str, old: str, new: str, blocks: list) -> None:
+    """ADR-036 §2 for one generated conf.d file: the original read by
+    parse-tree (refused when it cannot be read), the expected content
+    derived from it, and *new* read back at the file's own path in its own
+    conf.d — refused unless it reads as expected. Raises ConfdWriteRefused
+    and `_lib_parse_tree.ParseTreeError` (no usable da-guard)."""
+    import _lib_write_check as wc  # noqa: PLC0415
+    root, rel = os.path.dirname(path), os.path.basename(path)
+    try:
+        original = wc.original(root, rel, old.encode("utf-8"))
+        expected = _expected_confd(wc, rel, original, blocks)
+        wc.confirm(root, rel, new, expected)
+    except wc.WriteRefused as exc:
+        raise ConfdWriteRefused(
+            f"{path}: refusing to write ({exc.reason}): {exc.detail} — "
+            "no generated surface was written") from None
+
+
+def regen_surfaces(doc: Optional[dict] = None) -> list[str]:
+    """Splice every generated surface in place (`plan_surfaces`, then
+    `write_planned`): all or none. Returns the touched paths."""
     if doc is None:
         doc = load_registry()
-    touched = []
+    return write_planned(plan_surfaces(doc))
+
+
+def plan_surfaces(doc: dict) -> list[tuple[str, str]]:
+    """[(path, new text), …] for every generated surface the registry *doc*
+    changes, written nowhere. Every surface is spliced in memory; a conf.d
+    surface (``confd`` in its spec — the dev template, the try-local seed)
+    is confirmed through ``da-guard parse-tree`` (ADR-036 §2,
+    `_confirm_confd`) and any other YAML file is checked to still parse.
+    Raises ConfdWriteRefused, ValueError, and `_lib_parse_tree.ParseTreeError`
+    when a conf.d file changes and there is no usable da-guard (a run that
+    changes no conf.d file needs none)."""
     repo_root = os.path.realpath(
         _repo_path_or_raise(_REPO_ROOT, "the generated surfaces"))
+    # path -> [original text, spliced text, [(conf.d spec, its old block)]]
+    planned: dict[str, list] = {}
     for spec in surface_specs(doc):
         # Containment: surface paths derive from committed registry fields
         # (e.g. rule_pack_file) that --regen consumes WITHOUT schema
@@ -1874,19 +2086,37 @@ def regen_surfaces(doc: Optional[dict] = None) -> list[str]:
             raise ValueError(
                 f"generated-surface path escapes repo root: {spec['path']!r}"
             )
-        with open(spec["path"], encoding="utf-8") as fh:
-            old = fh.read()
-        new = splice_surface(old, spec)
-        if new != old:
+        if spec["path"] not in planned:
+            with open(spec["path"], encoding="utf-8") as fh:
+                old = fh.read()
+            planned[spec["path"]] = [old, old, []]
+        entry = planned[spec["path"]]
+        if spec.get("confd"):
+            entry[2].append((spec, _block_text(entry[1], spec)))
+        entry[1] = splice_surface(entry[1], spec)
+    changed = [(p, e) for p, e in planned.items() if e[1] != e[0]]
+    for path, (old, new, blocks) in changed:
+        if blocks:
+            _confirm_confd(path, old, new, blocks)
+        elif path.endswith((".yaml", ".yml")):
             # A spliced block that breaks the host document must fail loud
             # BEFORE the write: the freshness gate string-compares and would
             # not catch invalid YAML (burned once — a two-element heading
-            # emitted a bare comment continuation line into 13 packs).
-            if spec["path"].endswith((".yaml", ".yml")):
-                yaml.safe_load(new)
-            write_text_secure(spec["path"], new)
-            touched.append(spec["path"])
-    return touched
+            # emitted a bare comment continuation line into 13 packs). These
+            # files (helm values, rule packs) are not conf.d.
+            yaml.safe_load(new)
+    return [(path, e[1]) for path, e in changed]
+
+
+def write_planned(planned: list[tuple[str, str]]) -> list[str]:
+    """Write each ``(path, text)`` of `plan_surfaces`; returns the paths."""
+    sys.path.insert(0, _THIS_DIR)
+    sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+    from _lib_python import write_text_secure  # noqa: E402
+
+    for path, new in planned:
+        write_text_secure(path, new)
+    return [p for p, _new in planned]
 
 
 # ---------------------------------------------------------------------------

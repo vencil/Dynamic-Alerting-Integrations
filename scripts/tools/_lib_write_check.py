@@ -17,7 +17,10 @@ read back by `parse-tree` in file mode, at the path it will be written to:
 This module is that confirmation. :func:`original` reads the original bytes
 (``None`` for a new file), :func:`confirm` judges one generated text, and
 :func:`confirm_all` judges every file of one run before the caller writes
-any of them (a tool that writes several files writes all or none).
+any of them (a tool that writes several files writes all or none), and
+:func:`confirm_tree` does the same for a whole new tree with one tree-mode
+run over a staged copy (the batch form; its docstring says why it is file
+mode's equivalent).
 A refusal is :class:`WriteRefused`; no usable `da-guard` is
 `_lib_parse_tree.ParseTreeError` (callers give it exit 2, as for any
 missing or failing da-guard).
@@ -106,6 +109,16 @@ class AnyNumber:
 
 
 _NUMBER_TAGS = ("!!int", "!!float")
+
+
+def any_number(value: "int | float") -> AnyNumber:
+    """:class:`AnyNumber` of the text PyYAML writes for the ``int`` or
+    ``float`` *value* — for a `defaults:` value the exporter decodes into
+    float64, where `!!int` and `!!float` are both the number meant (an
+    integer past int64 is written as digits yaml.v3 reads as `!!float`)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"not a number: {value!r}")
+    return AnyNumber(scalar(value)["text"])
 
 
 def scalar(value: Any) -> dict:
@@ -370,3 +383,113 @@ def confirm_all(root: "str | os.PathLike[str]",
     the caller writes any; raises at the first refusal."""
     for rel, text, expected in items:
         confirm(root, rel, text, expected, binary=binary, timeout=timeout)
+
+
+def _judge(tree: "_lib_parse_tree.Tree", rel: str, expected: Any) -> None:
+    """:func:`confirm`'s three refusals, for *rel* of an already-read tree."""
+    if not _readers(tree, rel):
+        raise WriteRefused(rel, NOT_READ, _not_read_detail(tree, rel))
+    try:
+        got = tree.node(rel)
+    except FileUnreadable as exc:
+        raise WriteRefused(rel, TEXT_UNREADABLE,
+                           f"parse-tree cannot read the text this tool generated "
+                           f"({exc.kind}: {exc.message})") from None
+    diff = first_difference(expected, got)
+    if diff is not None:
+        raise WriteRefused(
+            rel, CONTENT_DIFFERS,
+            f"the generated text does not read back as intended {diff} — the "
+            f"text this tool writes is read differently by yaml.v3; quote or "
+            f"respell the value, then re-run")
+
+
+def _is_empty_dir(p: Path) -> bool:
+    """*p* is a directory with nothing in it, at any depth."""
+    return p.is_dir() and not any(p.rglob("*"))
+
+
+def _staging_parent(root: Path) -> Optional[Path]:
+    """Where the staged tree goes: beside *root* (its parent, or the nearest
+    existing directory above a *root* not created yet), so a staged file is
+    moved into place by a rename on the same file system."""
+    p = root.parent if root.exists() else root
+    while not p.is_dir():
+        if p.parent == p:
+            return None
+        p = p.parent
+    return p
+
+
+class StagedTree:
+    """The files of one run, written under :attr:`dir` and confirmed;
+    :meth:`place` moves one into the output tree."""
+
+    def __init__(self, directory: Path, rels: "tuple[str, ...]") -> None:
+        self.dir = directory
+        self.rels = rels
+
+    def place(self, rel: str, dest: "str | os.PathLike[str]") -> None:
+        """Move the staged *rel* to *dest* (its parent must exist): a rename on
+        the same file system, otherwise a copy. Raises OSError."""
+        src = self.dir / rel
+        try:
+            os.replace(src, dest)
+        except OSError as exc:
+            import errno
+            if exc.errno != errno.EXDEV:
+                raise
+            import shutil
+            shutil.copyfile(src, dest)
+
+
+@contextlib.contextmanager
+def confirm_tree(root: "str | os.PathLike[str]",
+                 items: "Sequence[tuple[str, str | bytes, Any]]", *,
+                 binary: Optional[str] = None,
+                 timeout: float = DEFAULT_TIMEOUT) -> Iterator[StagedTree]:
+    """Batch :func:`confirm_all` for a writer that creates a whole new tree
+    (thousands of files: one file-mode run each costs ~10 ms of process start).
+
+    Every ``(rel, text, expected)`` is written under a staging directory, and
+    `da-guard parse-tree` reads that directory ONCE in tree mode. Each *rel*
+    is then judged by the same rules as :func:`confirm` — a reader selects
+    it (:data:`NOT_READ`), parse-tree reads it (:data:`TEXT_UNREADABLE`),
+    its nodes equal *expected* (:data:`CONTENT_DIFFERS`) — and the first
+    refusal raises before the context is entered: nothing reaches *root*.
+
+    Why this is file mode's equivalent: file mode reads one text "as the file
+    at *rel*, in the tree as it is once that file is written"; tree mode on
+    the staged directory reads every text in the tree as it is once ALL of
+    them are written — which is the tree the run leaves behind when *root* is
+    empty or absent (the staged directory is that tree). When *root* already
+    holds anything, its files take part in which reader reads what, and the
+    staged tree is not that tree: each item is then judged by file mode
+    against *root* (:func:`confirm_all`) instead.
+
+    On success the context yields a :class:`StagedTree`; the caller moves each
+    file into place with :meth:`StagedTree.place` (wrapping it in its own
+    write-error handling). The staging directory is removed on exit, whatever
+    happened. Raises WriteRefused and ParseTreeError (no usable da-guard)."""
+    root = Path(root)
+    rels = tuple(rel for rel, _t, _e in items)
+    parent = _staging_parent(root)
+    try:
+        staging = Path(tempfile.mkdtemp(prefix=".da-write-check-", dir=parent))
+    except OSError:
+        staging = Path(tempfile.mkdtemp(prefix="da-write-check-"))
+    try:
+        for rel, text, _e in items:
+            p = staging / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(text.encode("utf-8") if isinstance(text, str) else text)
+        if root.exists() and not _is_empty_dir(root):
+            confirm_all(root, items, binary=binary, timeout=timeout)
+        elif items:
+            tree = _lib_parse_tree.load(staging, binary, timeout)
+            for rel, _t, expected in items:
+                _judge(tree, rel, expected)
+        yield StagedTree(staging, rels)
+    finally:
+        import shutil
+        shutil.rmtree(staging, ignore_errors=True)

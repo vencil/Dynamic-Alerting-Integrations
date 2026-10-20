@@ -93,8 +93,8 @@ def test_a_domain_policy_tenant_list_meets_the_text_ids(tmp_path):
             "domain_policies:\n  p:\n    tenants: [010]\n"
             "    constraints:\n      forbidden_receiver_types: [webhook]\n"),
         "t.yaml": "tenants:\n  010:\n" + _ROUTING})
-    _r, _d, warnings, _e, _m = _grar_parse.load_tenant_configs(
-        str(d), strict_policies=True)
+    warnings = _grar_parse.load_tenant_tree(
+        str(d), strict_policies=True).schema_warnings
     hits = [w for w in warnings if "tenant '010'" in w and "forbidden" in w]
     assert hits, warnings
 

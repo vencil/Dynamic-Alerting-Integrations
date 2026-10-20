@@ -26,10 +26,13 @@ gate catches the entire human-error class that the runtime cannot.
 
 What it compares
 ----------------
-The registry file's ``next_account_id`` (parsed with ``yaml.safe_load`` — a
-count is a structured claim, never grep, per
-docs/internal/dev-rules.md / feedback_count_structured_via_parse_not_grep) at
-two git revisions:
+The registry file's ``next_account_id`` at two git revisions, as yaml.v3 —
+the parser tenant-api's ``account.Parse`` decodes it with — reads it: each
+blob is read by ``da-guard parse-tree`` in file mode (ADR-036; a count is a
+structured claim, never grep). PyYAML's YAML 1.1 reading differs on spellings
+yaml.v3 decodes as an integer: ``0o2000`` is 1024 to tenant-api and was the
+string "0o2000" here (a false fail-closed); ``yes`` is the string "yes" to
+both now (no longer PyYAML's ``True``). The comparison is:
 
   - pre-commit (default): INCOMING = the staged blob (``git show :<path>``)
     vs BASELINE = the committed blob (``git show HEAD:<path>``). Catches the
@@ -48,6 +51,12 @@ Decision table (current = incoming next_account_id, prev = baseline):
     equal is fine — a no-counter-change commit).
   - either present blob unparseable / malformed counter    → FAIL CLOSED (a
     registry we cannot trust must not pass a safety gate; never fail-open).
+    Malformed = parse-tree cannot read the blob (bad syntax, a key written
+    twice, a top level that is not a mapping, …), or ``next_account_id`` is
+    missing or not an integer tenant-api's ``uint32`` takes (a ``!!int`` in
+    0..4294967295). Stricter than tenant-api on purpose: a null or missing
+    counter (which tenant-api primes at 1000) and a float (which it truncates)
+    fail closed here.
 
 Registry path assumption
 -------------------------
@@ -72,8 +81,10 @@ Exit codes (per scripts/tools/_lib_exitcodes.py)
 - ``0`` — monotonic (or report-only / file absent / not git-tracked).
 - ``1`` — DECREASE detected under ``--ci``, OR a present-but-unparseable
   registry (fail-closed).
-- ``2`` — cannot run: not a git repo, git unavailable, or a resolvable but
-  missing ``--base`` ref (caller/environment error).
+- ``2`` — cannot run: not a git repo, git unavailable, a resolvable but
+  missing ``--base`` ref, or no usable ``da-guard`` when a blob has to be
+  read (caller/environment error). A registry absent at either revision
+  needs no da-guard: nothing is read.
 """
 from __future__ import annotations
 
@@ -83,8 +94,6 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
-
-import yaml
 
 # Pull shared compat (UTF-8 stdout) + exit-code constants from scripts/tools/.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -96,6 +105,8 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import FileUnreadable  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -129,14 +140,17 @@ def _is_git_repo() -> bool:
 
 
 def _show_blob(rev: str, rel_path: str):
-    """Return the bytes-as-text of ``<rev>:<rel_path>`` or ``_ABSENT``.
+    """Return the bytes of ``<rev>:<rel_path>`` or ``_ABSENT``.
 
     ``rev`` of ``""`` selects the INDEX (staged) copy via ``git show :<path>``.
     A non-zero git exit means the path does not exist at that revision (new
-    file, deleted file, or an unborn HEAD) → ``_ABSENT``.
+    file, deleted file, or an unborn HEAD) → ``_ABSENT``. Bytes, not text:
+    a blob that is not UTF-8 is parse-tree's to refuse, not ours to repair.
     """
     spec = f"{rev}:{rel_path}"
-    res = _run_git(["show", spec])
+    res = subprocess.run(
+        ["git", "show", spec], cwd=str(PROJECT_ROOT), capture_output=True,
+        check=False, timeout=30)
     if res.returncode != 0:
         return _ABSENT
     return res.stdout
@@ -151,33 +165,61 @@ class RegistryParseError(ValueError):
     """A present registry blob could not be parsed / has no usable counter."""
 
 
-def parse_next_account_id(text: str) -> int:
-    """Extract ``next_account_id`` from registry YAML text (structured parse).
+#: The name a blob is read under. tenant-api reads the registry by its path,
+#: not through the exporter's tree walk, so which directory or name the file
+#: has is no part of how its content reads: it is judged on its own, in an
+#: empty directory, under the registry's own name.
+_BLOB_NAME = "_account_registry.yaml"
+
+#: tenant-api decodes the counter into a ``uint32``.
+_UINT32_MAX = 2**32 - 1
+
+
+def _read_registry(data: bytes) -> object:
+    """*data* as yaml.v3 reads it (``da-guard parse-tree`` file mode).
+    Raises FileUnreadable and ParseTreeError (no usable da-guard)."""
+    import tempfile  # noqa: PLC0415
+    with tempfile.TemporaryDirectory(prefix="da-account-registry-") as empty:
+        return _lib_parse_cache.read_text_as(empty, _BLOB_NAME, data)
+
+
+def parse_next_account_id(text: "str | bytes") -> int:
+    """Extract ``next_account_id`` from registry YAML (structured parse,
+    yaml.v3 through ``da-guard parse-tree``).
 
     A blank/whitespace document is the brand-new-file state the GitOps layer
     has not written yet: account/registry.go primes it at the reserved floor
     (1000), so we mirror that — blank → 1000 (the lowest legitimate counter),
-    NOT a parse error. Any other malformed shape (non-mapping, missing /
-    non-integer / boolean ``next_account_id``) is fail-closed.
+    NOT a parse error, and no da-guard is needed for it. Any other malformed
+    shape (a document parse-tree cannot read, a non-mapping top level, a
+    missing / non-integer / boolean / out-of-``uint32`` ``next_account_id``)
+    is fail-closed. Raises RegistryParseError, and ParseTreeError when there
+    is no usable da-guard.
     """
-    if text is None or not text.strip():
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    if data is None or not data.strip():
         # Mirror account.newRegistry(): blank primes at FirstTenantAccountID.
         return 1000
     try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise RegistryParseError(f"registry YAML does not parse: {exc}") from exc
-    if not isinstance(data, dict):
+        doc = _read_registry(data)
+    except FileUnreadable as exc:
+        raise RegistryParseError(
+            f"registry YAML does not parse (da-guard parse-tree: {exc.kind}: "
+            f"{exc.message})") from exc
+    if not isinstance(doc, dict):  # pragma: no cover - parse-tree refuses it first
         raise RegistryParseError("registry root is not a mapping")
-    if "next_account_id" not in data:
+    if "next_account_id" not in doc:
         raise RegistryParseError("registry has no next_account_id key")
-    val = data["next_account_id"]
+    val = doc["next_account_id"]
     # bool is an int subclass in Python — reject it explicitly so `true` does
     # not silently read as 1.
     if isinstance(val, bool) or not isinstance(val, int):
         raise RegistryParseError(
             f"next_account_id is {val!r} ({type(val).__name__}), want an integer"
         )
+    if not 0 <= val <= _UINT32_MAX:
+        raise RegistryParseError(
+            f"next_account_id is {val}, outside the uint32 tenant-api decodes it into")
     return val
 
 
@@ -249,6 +291,7 @@ def evaluate(registry_rel: str, base: Optional[str]) -> dict:
     }
 
 
+@_lib_parse_cache.exit_on_parse_tree_error
 def main() -> int:
     """CLI entry point: cross-commit monotonic guard for _account_registry.yaml."""
     try_utf8_stdout()

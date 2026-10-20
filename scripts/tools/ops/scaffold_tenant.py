@@ -285,7 +285,7 @@ RULE_PACKS = {
         "defaults": {
             "es_heap_usage_percent": {"value": 85, "unit": "%", "desc": "JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert demands es_heap_usage_percent) — unwired dead key, no alias", "metric_class": "saturation"},
             "es_disk_usage_percent": {"value": 85, "unit": "%", "desc": "Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying 15 into a used-% rule would fire permanently"},
-            "es_pending_tasks": {"value": 50, "unit": "count", "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/elasticsearch-tenant.yaml); #1196 D: key was alert-demanded but absent from scaffold"},
+            "es_pending_tasks": {"value": 50, "unit": "count", "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold"},
             "es_search_latency_ms": {"value": 1000, "unit": "ms", "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)"},
         },
         "dimensional_example": {

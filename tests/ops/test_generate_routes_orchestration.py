@@ -39,7 +39,7 @@ from generate_alertmanager_routes import (
     load_base_config,
     assemble_configmap,
     apply_to_configmap,
-    load_tenant_configs,
+    load_tenant_tree,
     generate_routes,
     generate_inhibit_rules,
     _build_enforced_routes,
@@ -1340,7 +1340,7 @@ class TestCustomSubtreeTenantDelivery:
             {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"}]
 
     def test_disabled_tenant_falls_back_to_firehose(self, tmp_path):
-        # e2e: conf.d → load_tenant_configs → generate_routes → assemble. A
+        # e2e: conf.d → load_tenant_tree → generate_routes → assemble. A
         # tenant with _routing: "disable" has no main tenant route → no child
         # (its custom alerts stay on the parent firehose); the routed tenant
         # keeps its child.
@@ -1352,7 +1352,8 @@ class TestCustomSubtreeTenantDelivery:
             make_tenant_yaml("db-a", routing=make_routing_config()), encoding="utf-8")
         (d / "db-b.yaml").write_text(
             make_tenant_yaml("db-b", routing="disable"), encoding="utf-8")
-        routing_configs, _dedup, _sw, enforced, _mc = load_tenant_configs(str(d))
+        tree = load_tenant_tree(str(d))
+        routing_configs, enforced = tree.routing_configs, tree.enforced_routing
         routes, receivers, _rw = generate_routes(
             routing_configs, enforced_routing=enforced, tenants=())
         cm_yaml = assemble_configmap(load_base_config(None), routes, receivers, [])

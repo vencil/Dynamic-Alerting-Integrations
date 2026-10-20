@@ -1,4 +1,4 @@
-# redis-tenant.yaml — 範例: Redis 租戶閾值設定 (維度標籤)
+# redis-prod.yaml — 範例: Redis 租戶閾值設定 (維度標籤)
 # 來源參考: Oliver006/redis_exporter + Prometheus Community redis rules
 #
 # 📌 基本閾值: 適用所有維度 (全域)

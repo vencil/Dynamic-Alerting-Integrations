@@ -405,7 +405,9 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # parse reason when effective refuses a file.
 # ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
 _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
-                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant"}
+                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
+                    # #2906 F2: the single file through parse-tree's file mode
+                    "analyze_gaps --tenant-config"}
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
@@ -629,7 +631,7 @@ def _module_aliases(tree: ast.Module) -> dict[str, str]:
 
 def _module_reexports_lib_root(modname: str, attr: str) -> bool:
     """Does ``<modname>.<attr>`` resolve to the lib helper (imported, not
-    defined locally)? ``gen.load_tenant_configs`` is grar's own function;
+    defined locally)? ``arg.load_tenant_configs`` is analyze_rule_pack_gaps's own function;
     ``pe.load_yaml_file`` is the lib's, re-exported."""
     for d in (TOOLS, OPS, LINT):
         p = d / f"{modname}.py"
@@ -826,16 +828,18 @@ def test_scanner_still_flags_a_handler_that_does_not_catch_it():
 
 def test_scanner_sees_reexport_through_a_tool_module():
     """`from generate_tenant_mapping_rules import load_yaml_file` resolves to
-    the lib helper (the tool imports it and does not define its own). #2114:
-    so does the strict exporter-key sibling `analyze_rule_pack_gaps` reads
-    its single file with. (policy_engine was the example until #2906 moved
-    its policy reads to parse-tree.)"""
+    the lib helper (the tool imports it and does not define its own); so
+    does `analyze_rule_pack_gaps`'s, which reads the metric dictionary with
+    it. (policy_engine was the example until #2906 moved its policy reads to
+    parse-tree; analyze_rule_pack_gaps's strict exporter-key read left with
+    its `--tenant-config` file, #2906 F2.)"""
     assert _sites_of("from generate_tenant_mapping_rules import load_yaml_file\n"
                      "def f(p):\n    return load_yaml_file(p)\n")
-    assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file_strict_exporter_keys\n"
-                     "def f(p):\n    return load_yaml_file_strict_exporter_keys(p)\n")
+    assert _sites_of("from analyze_rule_pack_gaps import load_yaml_file\n"
+                     "def f(p):\n    return load_yaml_file(p)\n")
     # control: a tool's OWN function of the same name is not the lib
-    assert not _sites_of("from generate_alertmanager_routes import load_tenant_configs\ndef f(p):\n    return load_tenant_configs(p)\n")
+    assert not _sites_of("from analyze_rule_pack_gaps import load_tenant_configs\n"
+                         "def f(p):\n    return load_tenant_configs(p)\n")
 
 
 # ── per-file isolation kept where the tool already had it (blind review) ──

@@ -35,7 +35,19 @@ drifting), so every copy relationship is gated:
      tokens (``key{...}``) are exempt. This kills the "header-only claim"
      class where prose advertises keys that exist nowhere.
 
-Exit codes (_lib_exitcodes): 0 clean / 1 violation (--ci) / 2 caller error.
+``--regen`` WRITES two conf.d files (the dev template and the try-local
+seed ``_defaults.yaml``), so it follows ADR-036 §2: each changed one is read
+back through ``da-guard parse-tree`` before anything is written and must read
+as the original file's content with its generated blocks' entries swapped
+for the registry's (``_registry_lib.regen``). The registry text and every
+surface are computed and confirmed before anything is written; on a refusal
+nothing is written — neither the registry nor any surface — and the run
+exits 2, as it does when a conf.d file would change and there is no usable
+da-guard. The check mode reads every surface as bytes
+(a text compare of the generated blocks) and parses no conf.d.
+
+Exit codes (_lib_exitcodes): 0 clean / 1 violation (--ci) / 2 caller error
+(including a refused or unconfirmable ``--regen``).
 """
 from __future__ import annotations
 
@@ -57,6 +69,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+from _lib_parse_cache import parse_tree_error_line  # noqa: E402
+from _lib_parse_tree import ParseTreeError as _ParseTreeError  # noqa: E402
 
 _REGEN_HINT = (
     "fix: edit scaffold_tenant.RULE_PACKS (the operative copy until PR-3) "
@@ -207,8 +221,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.regen:
         try:
-            summary = registry_lib.write_registry()
-            touched = registry_lib.regen_surfaces()
+            summary, touched = registry_lib.regen()
+        except registry_lib.ConfdWriteRefused as exc:
+            print(f"ERROR: regen refused: {exc}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        except _ParseTreeError as exc:
+            print(parse_tree_error_line(exc), file=sys.stderr)
+            return EXIT_CALLER_ERROR
         except Exception as exc:  # noqa: BLE001 — caller error, not a violation
             print(f"ERROR: regen failed: {exc}", file=sys.stderr)
             return EXIT_CALLER_ERROR
