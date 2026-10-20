@@ -207,6 +207,11 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: are in tests/shared/test_writers_confirm_parse_tree.py.
 _GO_WRITER = (_GO + "; a conf.d writer confirmed by parse-tree before it writes — "
               "tests/shared/test_writers_confirm_parse_tree.py")
+#: A conf.d file read from `git show` blobs (parse-tree's file mode), one
+#: fixed name at two revisions — no conf.d tree or argument a probe can drive.
+_GO_BLOB = (_GO + "; reads git blobs of one fixed-name file (`git show`) in parse-tree's "
+            "file mode, no conf.d argument to probe — "
+            "tests/shared/test_readonly_tools_read_parse_tree.py")
 #: Admitted to the population only by the K3 text net (`conf.d` / `config_dir`
 #: in a docstring, comment, help or output string); what the tool reads is
 #: named after the `;` in its row.
@@ -242,7 +247,7 @@ _NOT_PROBED: dict[str, str] = {
                                "to list where they differ (ADR-036 §8)"),
     "dx/describe_tenant.py": _GO,
     "dx/generate_tenant_fixture.py": _PENDING, "dx/run_chaos_soak.py": _NAMES,
-    "lint/check_account_registry_monotonic.py": _PENDING,
+    "lint/check_account_registry_monotonic.py": _GO_BLOB,
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
     "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",
@@ -259,7 +264,10 @@ _NOT_PROBED: dict[str, str] = {
     "lint/check_threshold_observed_map.py": (_PROSE_ONLY + "; reads rule packs and "
                                              "metric_observed_map.yaml"),
     "lint/check_threshold_reachability.py": _GO_FIXED,
-    "lint/check_threshold_registry.py": _PENDING, "lint/check_threshold_unit_sanity.py": _GO_FIXED,
+    "lint/check_threshold_registry.py": (
+        _GO_WRITER + "; --regen writes the two fixed conf.d `_defaults.yaml`, its check "
+        "mode reads every surface as bytes (a text compare), no value"),
+    "lint/check_threshold_unit_sanity.py": _GO_FIXED,
     "ops/assemble_config_dir.py": _GO,
     "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _NAMES,
     "ops/config_history.py": _NAMES, "ops/da_assembler.py": _GO_WRITER,

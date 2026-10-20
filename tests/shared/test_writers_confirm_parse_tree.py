@@ -20,7 +20,9 @@ deprecate_rule 的封閉清單表）照留，這裡是逐工具、同一張表�
 目錄裡這樣的名字一定有讀取端；da_assembler 的第 3、4 列——它從 CR 整份重新產生檔案、
 不以舊檔為基礎（舊檔不讀），檔名是 DNS-1123 名稱加 `.yaml`，不會是隱藏或 `_` 名；
 init_project／scaffold_tenant 的第 3、4 列——只寫新產生的 `_defaults.yaml` 與
-`<tenant>.yaml`（init 的既有檔規則見 tests/ops/test_init_project_existing_carriers.py）。
+`<tenant>.yaml`（init 的既有檔規則見 tests/ops/test_init_project_existing_carriers.py）；
+check_threshold_registry `--regen` 的第 4 列——它只寫兩個固定路徑、各在自己 conf.d 根目錄的
+`_defaults.yaml`，一定有讀取端。
 
 Tenant ids are fixture names (CLAUDE.md #9).
 """
@@ -556,3 +558,141 @@ def test_patch_config_refuses_keys_that_differ_only_in_case():
                    "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n"}}
     with pytest.raises(pc.ConfigMapShapeError, match="differ only in case"):
         pc.build_patch(cm, "multi-file", "tenant-a", "cpu", "6")
+
+
+# ── check_threshold_registry --regen (two conf.d `_defaults.yaml`) ───────
+# `--regen` splices generated blocks into the dev template and the try-local
+# seed. The rows run `regen_surfaces` on copies of the two real files in a
+# tmp repo root, with only the conf.d surfaces (the pack headers and helm
+# values are not conf.d, and would be the real files). The two files sit at
+# their conf.d roots under fixed names, so there is no row 4.
+
+_DEV_REL = "components/threshold-exporter/config/conf.d/_defaults.yaml"
+_SEED_REL = "try-local/seed/conf.d/_defaults.yaml"
+
+
+def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
+    """(lib, dev path, seed path): copies of the two files (made stale, so a
+    regen has something to write) and `regen_surfaces` aimed at them."""
+    import _registry_lib as lib
+    root = tmp_path / "repo"
+    dev, seed = root / "dev" / "conf.d" / "_defaults.yaml", root / "seed" / "conf.d" / "_defaults.yaml"
+    for p, rel, text in ((dev, _DEV_REL, dev_text), (seed, _SEED_REL, seed_text)):
+        p.parent.mkdir(parents=True)
+        p.write_text(text if text is not None else
+                     (REPO / rel).read_text(encoding="utf-8"), encoding="utf-8")
+    # The registry too, made stale (a comment line): a `--regen` that wrote it
+    # would change its bytes.
+    registry = root / "rule-packs" / "threshold-registry.yaml"
+    registry.parent.mkdir(parents=True)
+    registry.write_text((REPO / "rule-packs" / "threshold-registry.yaml").read_text(
+        encoding="utf-8") + "# stale\n", encoding="utf-8")
+    monkeypatch.setattr(lib, "REGISTRY_PATH", str(registry))
+    monkeypatch.setattr(lib, "_REPO_ROOT", str(root))
+    monkeypatch.setattr(lib, "DEV_DEFAULTS_PATH", str(dev))
+    monkeypatch.setattr(lib, "TRY_LOCAL_DEFAULTS_PATH", str(seed))
+    real = lib.surface_specs
+    monkeypatch.setattr(lib, "surface_specs",
+                        lambda doc: [s for s in real(doc) if s.get("confd")])
+    return lib, dev, seed
+
+
+def _stale(rel, old, new):
+    text = (REPO / rel).read_text(encoding="utf-8")
+    assert text.count(old) == 1, old
+    return text.replace(old, new)
+
+
+_DEV_STALE = ("  container_cpu: 80\n", "  container_cpu: 81\n  gone_key: 1\n")
+_SEED_STALE = ("  - oracle_wait_time_rate   # s/s — Wait time rate (5m)\n",
+               "  - oracle_wait_time_rate   # s/s — Wait time rate (5m)\n  - gone_key\n")
+
+
+def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
+    """A stale value and a key the registry no longer has, in both files:
+    the regen writes them back to the committed bytes."""
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    touched = lib.regen_surfaces(lib.build_registry_doc())
+    assert sorted(touched) == sorted([str(dev), str(seed)])
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert seed.read_bytes() == (REPO / _SEED_REL).read_bytes()
+
+
+def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
+        tmp_path, monkeypatch):
+    # A registry value of +inf renders `inf`, a string to yaml.v3 — not the
+    # number the exporter's `defaults` takes. Neither file is written (the
+    # seed's change alone would read back fine: all or none).
+    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                  _stale(_SEED_REL, *_SEED_STALE))
+    before = _bytes(tmp_path / "repo")
+    doc = lib.build_registry_doc()
+    doc["keys"]["container_cpu"]["value"] = float("inf")
+    with pytest.raises(lib.ConfdWriteRefused) as exc:
+        lib.regen_surfaces(doc)
+    assert "content_differs" in str(exc.value) and "defaults.container_cpu" in str(exc.value)
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_does_not_write_an_unreadable_original(tmp_path, monkeypatch):
+    # A key written twice outside the generated block: PyYAML kept the last
+    # one and the regen wrote; yaml.v3 refuses the file.
+    text = _stale(_DEV_REL, *_DEV_STALE) + "flag: 1\nflag: 2\n"
+    lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, text)
+    before = _bytes(tmp_path / "repo")
+    with pytest.raises(lib.ConfdWriteRefused, match="original_unreadable.*duplicate_key"):
+        lib.regen_surfaces(lib.build_registry_doc())
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    before = _bytes(tmp_path / "repo")
+    assert gate.main(["--regen"]) == 2
+    assert "da-guard parse-tree" in capsys.readouterr().err
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_judges_the_value_by_yaml_v3(tmp_path, monkeypatch):
+    # 1e20 renders `1e+20`: a float to yaml.v3 (the exporter reads it as a
+    # number), a string to PyYAML's YAML 1.1 — written.
+    lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
+    doc = lib.build_registry_doc()
+    doc["keys"]["container_cpu"]["value"] = 1e20
+    lib.regen_surfaces(doc)
+    assert "  container_cpu: 1e+20\n" in dev.read_text(encoding="utf-8")
+
+
+def test_threshold_registry_regen_refused_writes_not_even_the_registry(
+        tmp_path, monkeypatch, capsys):
+    """A refused conf.d surface: rc 2 and every file — the registry and both
+    `_defaults.yaml` — keeps its bytes (the registry used to be written
+    before the surfaces were judged)."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    _lib, _dev, _seed = _regen_setup(
+        tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE) + "flag: 1\nflag: 2\n",
+        _stale(_SEED_REL, *_SEED_STALE))
+    before = _bytes(tmp_path / "repo")
+    assert gate.main(["--regen"]) == 2
+    assert "original_unreadable" in capsys.readouterr().err
+    assert _bytes(tmp_path / "repo") == before
+
+
+def test_threshold_registry_regen_writes_the_registry_and_surfaces(tmp_path, monkeypatch):
+    """The same run without the refusal writes all three back to the
+    committed bytes — so the row above is not passing on a run that writes
+    nothing anyway."""
+    monkeypatch.syspath_prepend(str(TOOLS / "lint"))
+    import check_threshold_registry as gate
+    _lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
+                                   _stale(_SEED_REL, *_SEED_STALE))
+    assert gate.main(["--regen"]) == 0
+    registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
+    assert registry.read_bytes() == (REPO / "rule-packs" / "threshold-registry.yaml").read_bytes()
+    assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
+    assert seed.read_bytes() == (REPO / _SEED_REL).read_bytes()
