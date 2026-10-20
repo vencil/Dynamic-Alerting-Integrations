@@ -55,8 +55,9 @@ downgrade from "clean" to "skipped".
   the owner ruled they stay. But a green run of this file — "N passed" — says
   **nothing whatsoever** about those seven. Do not cite it for them.
 
-* ``operator_check.py`` is a separate case: it is not patched, and grepping it
-  turns up no site that renders a config-derived name at all.
+* ``operator_check.py`` is no longer in the population: its ``--config-dir``
+  was declared but never read and was removed (#2906 / #3137). It was never
+  patched — no site in it renders a config-derived name.
 * The **uncaught-traceback** channel is out of #1538's scope and is NOT fixed:
   when ``yaml.safe_load`` raises, the ``YAMLError`` message embeds the full
   file path, and Python prints it to stderr as a crash dump that no print-site
