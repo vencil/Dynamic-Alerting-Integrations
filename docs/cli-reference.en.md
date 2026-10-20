@@ -1613,7 +1613,7 @@ da-tools operator-generate [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--rule-packs-dir <DIR>` | Rule Pack directory path | `rule-packs/` |
-| `--config-dir <DIR>` | Tenant configuration directory path | `conf.d/` |
+| `--config-dir <DIR>` | Tenant configuration directory path. One AlertmanagerConfig per tenant; the tenants are the keys of each tenant file's `tenants:` across the whole tree (subdirectories included), read through `da-guard parse-tree` — **not file names**: the tenant in `team-a.yaml` holding `tenants: {db-a: …}` is `db-a`, and a flat-format file with no `tenants:` yields no tenant. ⚠️ A tenant file parse-tree cannot read (each named with its kind), one tenant declared in two files, or no usable da-guard ⇒ exit `2` and no CRD at all (`--json` envelope `reason`: `tenant_set_unknown`). A tenant id that is not RFC 1123 is warned about and skipped | `conf.d/` |
 | `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
 | `--api-version <VER>` | AlertmanagerConfig API version (`v1alpha1` / `v1beta1`) | `v1beta1` |
@@ -1678,7 +1678,7 @@ da-tools migrate-to-operator [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--source-dir <DIR>` | Directory containing ConfigMap YAML files | (required) |
-| `--config-dir <DIR>` | Tenant config directory | `conf.d` |
+| `--config-dir <DIR>` | Tenant config directory. Tenants are found as in `operator-generate`: the keys of each tenant file's `tenants:` across the whole tree (through `da-guard parse-tree`), not file names. ⚠️ An unreadable tenant file, one tenant declared in two files, or no usable da-guard ⇒ exit `2` (`--json` envelope `reason`: `tenant_set_unknown`). A tenant id that is not RFC 1123 goes into `issues` and is skipped | `conf.d` |
 | `--output-dir <DIR>` | Write CRDs and the checklist into this directory. ⚠️ **Writing requires all three: this flag set, no `--dry-run`, and no `--checklist-only`** (the same discriminators as the `--json` envelope below); if any fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
 | `--receiver-template <TYPE>` | Receiver type (`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`) | — |

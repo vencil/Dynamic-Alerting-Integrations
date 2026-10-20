@@ -1610,7 +1610,7 @@ da-tools operator-generate [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄路徑 | `rule-packs/` |
-| `--config-dir <DIR>` | 租戶配置目錄路徑 | `conf.d/` |
+| `--config-dir <DIR>` | 租戶配置目錄路徑。每個租戶一份 AlertmanagerConfig；租戶是整棵樹（含子目錄）各租戶檔 `tenants:` 的鍵，經 `da-guard parse-tree` 讀，**不是檔名**——`team-a.yaml` 裡寫 `tenants: {db-a: …}` 的租戶是 `db-a`，沒有 `tenants:` 的平面格式檔不產生租戶。⚠️ 有 parse-tree 讀不了的租戶檔（逐一指名檔與 kind）、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`，一個 CRD 也不產出（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 印警告後略過 | `conf.d/` |
 | `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--api-version <VER>` | AlertmanagerConfig API 版本（`v1alpha1` / `v1beta1`） | `v1beta1` |
@@ -1675,7 +1675,7 @@ da-tools migrate-to-operator [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄 | （必填） |
-| `--config-dir <DIR>` | 租戶配置目錄 | `conf.d` |
+| `--config-dir <DIR>` | 租戶配置目錄。租戶的認定與 `operator-generate` 相同：整棵樹各租戶檔 `tenants:` 的鍵（經 `da-guard parse-tree`），不是檔名。⚠️ 有讀不了的租戶檔、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 進 `issues` 並略過 | `conf.d` |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--receiver-template <TYPE>` | Receiver 類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
