@@ -1694,6 +1694,7 @@ def test_a_crash_caught_by_the_tools_own_handler_still_emits_one_envelope(
 
 
 @pytest.mark.parametrize("recipe", CRASH_RECIPES, ids=[r.tool for r in CRASH_RECIPES])
+@pytest.mark.real_crash_exit_code
 def test_crash_in_json_mode_emits_one_envelope(
     recipe: Recipe, tmp_path: Path, stub_url: str, sandbox_repo: Path,
     fake_kubectl_dir: Path,
